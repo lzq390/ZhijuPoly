@@ -3,6 +3,7 @@ import {
   cancelMonomerMdJob,
   createMonomerMdJob,
   deleteMonomerMdArtifacts,
+  deleteMonomerMdJob,
   fetchMonomerMdJob,
   fetchMonomerMdJobs,
   fetchMonomerMdProtocols,
@@ -45,6 +46,8 @@ type MonomerMdSimulationState = {
   isHistoryLoading: boolean;
   historyError: string | null;
   cancellingJobIds: string[];
+  deletingJobIds: string[];
+  deleteJobErrors: Record<string, string>;
 };
 
 const POLL_INTERVAL_MS = 1400;
@@ -151,7 +154,9 @@ export function useMonomerMdSimulation() {
     history: null,
     isHistoryLoading: false,
     historyError: null,
-    cancellingJobIds: []
+    cancellingJobIds: [],
+    deletingJobIds: [],
+    deleteJobErrors: {}
   });
   const pollTokenRef = useRef(0);
   const pollAbortRef = useRef<AbortController | null>(null);
@@ -159,9 +164,10 @@ export function useMonomerMdSimulation() {
   const activeRequestRef = useRef(0);
   const historyRequestRef = useRef(0);
   const historyQueryRef = useRef(historyQuery);
-  const selectedJobIdRef = useRef<string | null>(state.job?.job_id ?? null);
+  const selectedJobIdRef = useRef<string | null>(null);
+  const deleteControllersRef = useRef(new Map<string, AbortController>());
+  const deleteRevisionsRef = useRef(new Map<string, number>());
   historyQueryRef.current = historyQuery;
-  selectedJobIdRef.current = state.job?.job_id ?? null;
   const statusLoaderRef = useRef<MonomerMdStatusLoader | null>(null);
   if (statusLoaderRef.current === null) {
     statusLoaderRef.current = new MonomerMdStatusLoader(fetchMonomerMdStatus, fetchMonomerMdProtocols);
@@ -225,8 +231,18 @@ export function useMonomerMdSimulation() {
     historyRequestRef.current = requestId;
     setState((current) => ({ ...current, isHistoryLoading: true, historyError: null }));
     try {
-      const page = await fetchMonomerMdJobs({ ...effectiveQuery, run_mode: "formal", active_only: false });
+      let page = await fetchMonomerMdJobs({ ...effectiveQuery, run_mode: "formal", active_only: false });
       if (historyRequestRef.current !== requestId) return;
+      const currentPage = effectiveQuery.page ?? 1;
+      const pageSize = effectiveQuery.page_size ?? 20;
+      const lastPage = Math.max(1, Math.ceil(page.total / pageSize));
+      if (currentPage > lastPage) {
+        const correctedQuery = { ...effectiveQuery, page: lastPage, page_size: pageSize };
+        historyQueryRef.current = correctedQuery;
+        setHistoryQuery(correctedQuery);
+        page = await fetchMonomerMdJobs({ ...correctedQuery, run_mode: "formal", active_only: false });
+        if (historyRequestRef.current !== requestId) return;
+      }
       setState((current) => ({
         ...current,
         history: page,
@@ -266,6 +282,7 @@ export function useMonomerMdSimulation() {
       statusLoaderRef.current?.cancel();
       activeRequestRef.current += 1;
       historyRequestRef.current += 1;
+      for (const controller of deleteControllersRef.current.values()) controller.abort();
     };
   }, [refreshStatus]);
 
@@ -321,7 +338,7 @@ export function useMonomerMdSimulation() {
               ...current,
               isLoading: false,
               isJobLoading: false,
-              error: "单体 MD 任务不存在或已过期，请重新提交。"
+              error: "该单体 MD 任务已被删除或已按保留策略到期清理。"
             }));
           }
         },
@@ -355,6 +372,7 @@ export function useMonomerMdSimulation() {
     jobId: string,
     pollingContext?: { token: number; controller: AbortController }
   ) => {
+    selectedJobIdRef.current = jobId;
     let token: number;
     let controller: AbortController;
     if (pollingContext) {
@@ -434,6 +452,7 @@ export function useMonomerMdSimulation() {
         submitRequestRef.current !== submitRequestId ||
         controller.signal.aborted
       ) return;
+      selectedJobIdRef.current = createdJob.job_id;
       setState((current) => ({
         ...current,
         isLoading: runMode === "demo",
@@ -476,6 +495,7 @@ export function useMonomerMdSimulation() {
     pollTokenRef.current += 1;
     pollAbortRef.current?.abort();
     pollAbortRef.current = null;
+    selectedJobIdRef.current = null;
     setState((current) => ({
       ...current,
       isLoading: false,
@@ -545,6 +565,77 @@ export function useMonomerMdSimulation() {
     }
   }
 
+  async function deleteJobRecord(target: MonomerMdJobResponse) {
+    if (!TERMINAL_STATUSES.has(target.status)) return;
+    const jobId = target.job_id;
+    const revision = (deleteRevisionsRef.current.get(jobId) ?? 0) + 1;
+    deleteRevisionsRef.current.set(jobId, revision);
+    deleteControllersRef.current.get(jobId)?.abort();
+    const controller = new AbortController();
+    deleteControllersRef.current.set(jobId, controller);
+    setState((current) => ({
+      ...current,
+      deletingJobIds: current.deletingJobIds.includes(jobId)
+        ? current.deletingJobIds
+        : [...current.deletingJobIds, jobId],
+      deleteJobErrors: Object.fromEntries(
+        Object.entries(current.deleteJobErrors).filter(([id]) => id !== jobId)
+      )
+    }));
+    try {
+      await deleteMonomerMdJob(jobId, controller.signal);
+      if (
+        controller.signal.aborted ||
+        deleteRevisionsRef.current.get(jobId) !== revision
+      ) return;
+      if (selectedJobIdRef.current === jobId) {
+        pollTokenRef.current += 1;
+        pollAbortRef.current?.abort();
+        pollAbortRef.current = null;
+        selectedJobIdRef.current = null;
+      }
+      setState((current) => ({
+        ...current,
+        job: current.job?.job_id === jobId ? null : current.job,
+        data: current.job?.job_id === jobId ? null : current.data,
+        isLoading: current.job?.job_id === jobId ? false : current.isLoading,
+        isJobLoading: current.job?.job_id === jobId ? false : current.isJobLoading,
+        error: current.job?.job_id === jobId ? null : current.error,
+        activeJobs: current.activeJobs.filter((item) => item.job_id !== jobId),
+        history: current.history ? {
+          ...current.history,
+          total: Math.max(0, current.history.total - 1),
+          items: current.history.items.filter((item) => item.job_id !== jobId)
+        } : current.history
+      }));
+      await Promise.allSettled([
+        refreshActiveJobs(),
+        refreshHistory(),
+        refreshStatus()
+      ]);
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        isAbortError(error) ||
+        deleteRevisionsRef.current.get(jobId) !== revision
+      ) return;
+      const message = errorText(error, "删除单体 MD 任务失败。");
+      setState((current) => ({
+        ...current,
+        error: current.job?.job_id === jobId ? message : current.error,
+        deleteJobErrors: { ...current.deleteJobErrors, [jobId]: message }
+      }));
+    } finally {
+      if (deleteRevisionsRef.current.get(jobId) === revision) {
+        deleteControllersRef.current.delete(jobId);
+        setState((current) => ({
+          ...current,
+          deletingJobIds: current.deletingJobIds.filter((id) => id !== jobId)
+        }));
+      }
+    }
+  }
+
   return {
     smiles,
     setSmiles,
@@ -565,6 +656,7 @@ export function useMonomerMdSimulation() {
     cancelJob,
     changeHistoryQuery,
     loadProtocolTemplate,
-    deleteArtifacts
+    deleteArtifacts,
+    deleteJobRecord
   };
 }

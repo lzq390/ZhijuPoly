@@ -412,6 +412,16 @@ export function deleteMonomerDftArtifacts(
   });
 }
 
+export function deleteMonomerDftJob(
+  jobId: string,
+  signal?: AbortSignal
+): Promise<void> {
+  return monomerDftRequest(`/monomer-dft/jobs/${encodeURIComponent(jobId)}`, {
+    method: "DELETE",
+    signal
+  });
+}
+
 export async function deleteMonomerDftArtifactsAndReloadJob(
   jobId: string,
   signal?: AbortSignal
@@ -498,6 +508,19 @@ export async function deleteMonomerMdArtifacts(jobId: string): Promise<MonomerMd
   }
 
   return normalizeMonomerMdJob((await response.json()) as MonomerMdJobResponse);
+}
+
+export async function deleteMonomerMdJob(
+  jobId: string,
+  signal?: AbortSignal
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/monomer-md/jobs/${encodeURIComponent(jobId)}`,
+    { method: "DELETE", signal }
+  );
+  if (!response.ok) {
+    throw new Error(await errorMessageFromResponse(response));
+  }
 }
 
 export function searchKnowledge(payload: KnowledgeSearchRequest): Promise<KnowledgeSearchResponse> {

@@ -22,6 +22,7 @@ TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 ALL_STATUSES = ACTIVE_STATUSES | TERMINAL_STATUSES
 CAPACITY_ADVISORY_LOCK_ID = 742_128_925_057_013
 RECONCILER_ADVISORY_LOCK_ID = 742_128_925_057_014
+RETENTION_ADVISORY_LOCK_ID = 742_128_925_057_016
 _SAFE_ARTIFACT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SAFE_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_ERROR_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -391,6 +392,24 @@ class MonomerDftRepository:
                         (RECONCILER_ADVISORY_LOCK_ID,),
                     )
 
+    @contextmanager
+    def retention_leader(self):
+        """Hold the DFT retention session lock, isolated from reconciliation."""
+        with self._connection_factory(self._dsn) as connection:
+            row = connection.execute(
+                "SELECT pg_try_advisory_lock(%s) AS acquired",
+                (RETENTION_ADVISORY_LOCK_ID,),
+            ).fetchone()
+            acquired = bool(row and row["acquired"])
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    connection.execute(
+                        "SELECT pg_advisory_unlock(%s)",
+                        (RETENTION_ADVISORY_LOCK_ID,),
+                    )
+
     def create_job(
         self,
         prepared: PreparedMonomerDftRequest,
@@ -494,6 +513,71 @@ class MonomerDftRepository:
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self._connection_factory(self._dsn) as connection:
             return self._get_job(connection, job_id)
+
+    def list_expired_jobs(
+        self,
+        *,
+        retention_days: int,
+        limit: int,
+        after_terminal_at: datetime | None = None,
+        after_job_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        cursor_sql = ""
+        params: list[Any] = [
+            list(TERMINAL_STATUSES),
+            retention_days,
+            retention_days,
+        ]
+        if after_terminal_at is not None and after_job_id is not None:
+            cursor_sql = """
+              AND (COALESCE(finished_at, updated_at), job_id) >
+                  (%s, %s::uuid)
+            """
+            params.extend((after_terminal_at, after_job_id))
+        params.append(limit)
+        with self._connection_factory(self._dsn) as connection:
+            rows = connection.execute(
+                f"""
+                {self._job_select_sql()}
+                WHERE status = ANY(%s)
+                  AND created_at <= now() - (%s * interval '1 day')
+                  AND COALESCE(finished_at, updated_at) <=
+                      now() - (%s * interval '1 day')
+                  {cursor_sql}
+                ORDER BY COALESCE(finished_at, updated_at), job_id
+                LIMIT %s
+                """,
+                tuple(params),
+            ).fetchall()
+            return [self._row_to_job(row, []) for row in rows]
+
+    def delete_job_cas(self, expected: dict[str, Any]) -> bool:
+        with self._connection_factory(self._dsn) as connection:
+            row = connection.execute(
+                """
+                DELETE FROM monomer_dft.jobs
+                WHERE job_id = %s::uuid
+                  AND status = %s
+                  AND status = ANY(%s)
+                  AND attempt_token = %s
+                  AND request_sha256 = %s
+                  AND enqueue_sequence = %s
+                  AND finished_at IS NOT DISTINCT FROM %s
+                  AND updated_at IS NOT DISTINCT FROM %s
+                RETURNING job_id
+                """,
+                (
+                    expected["job_id"],
+                    expected["status"],
+                    list(TERMINAL_STATUSES),
+                    expected["_attempt_token"],
+                    expected["request_sha256"],
+                    expected["_enqueue_sequence"],
+                    expected["finished_at"],
+                    expected["updated_at"],
+                ),
+            ).fetchone()
+            return row is not None
 
     def list_jobs(
         self,

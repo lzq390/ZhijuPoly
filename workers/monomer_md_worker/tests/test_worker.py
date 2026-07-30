@@ -1004,39 +1004,39 @@ def test_delete_job_artifacts_removes_output_directory(tmp_path: Path, monkeypat
         original_fsync_directory(path)
 
     monkeypatch.setattr(worker_main, "_fsync_directory", record_fsync)
-    output_dir = settings.job_root / "job-1"
+    job_id = "a" * 32
+    output_dir = settings.job_root / job_id
     output_dir.mkdir(parents=True)
     (output_dir / "density_demo_results.json").write_text("{}", encoding="utf-8")
 
     client = TestClient(worker_main.app)
-    response = client.delete("/jobs/job-1/artifacts")
+    response = client.delete(f"/jobs/{job_id}/artifacts")
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["deleted"] is True
+    assert payload["storage_state"] == "absent"
     assert not output_dir.exists()
-    assert fsync_directories == [settings.job_root]
+    assert fsync_directories == [settings.job_root, settings.job_root]
 
-    repeated = client.delete("/jobs/job-1/artifacts")
+    repeated = client.delete(f"/jobs/{job_id}/artifacts")
     assert repeated.status_code == 200
     assert repeated.json()["deleted"] is False
-    assert fsync_directories == [settings.job_root, settings.job_root]
+    assert repeated.json()["storage_state"] == "absent"
+    assert fsync_directories == [settings.job_root] * 4
 
     outside = tmp_path / "outside-artifacts"
     outside.mkdir()
     (outside / "must-remain.txt").write_text("preserved", encoding="utf-8")
     output_dir.symlink_to(outside, target_is_directory=True)
-    symlink_cleanup = client.delete("/jobs/job-1/artifacts")
-    assert symlink_cleanup.status_code == 200
-    assert symlink_cleanup.json()["deleted"] is True
-    assert not output_dir.exists()
-    assert not output_dir.is_symlink()
+    symlink_cleanup = TestClient(
+        worker_main.app,
+        raise_server_exceptions=False,
+    ).delete(f"/jobs/{job_id}/artifacts")
+    assert symlink_cleanup.status_code == 503
+    assert output_dir.is_symlink()
     assert (outside / "must-remain.txt").read_text(encoding="utf-8") == "preserved"
-    assert fsync_directories == [
-        settings.job_root,
-        settings.job_root,
-        settings.job_root,
-    ]
+    assert fsync_directories == [settings.job_root] * 4
 
 
 def test_delete_job_artifacts_refuses_active_exact_job(
@@ -1051,15 +1051,38 @@ def test_delete_job_artifacts_refuses_active_exact_job(
         worker_main.MonomerMdRunner(settings),
     )
     active_task = object()
-    monkeypatch.setattr(worker_main, "active_jobs", {"job-1": active_task})
-    output_dir = settings.job_root / "job-1"
+    job_id = "b" * 32
+    monkeypatch.setattr(worker_main, "active_jobs", {job_id: active_task})
+    output_dir = settings.job_root / job_id
     output_dir.mkdir(parents=True)
     (output_dir / "active.txt").write_text("active", encoding="utf-8")
 
-    response = TestClient(worker_main.app).delete("/jobs/job-1/artifacts")
+    response = TestClient(worker_main.app).delete(f"/jobs/{job_id}/artifacts")
 
     assert response.status_code == 409
     assert (output_dir / "active.txt").read_text(encoding="utf-8") == "active"
+
+
+def test_storage_tombstone_recovery_is_strict_and_idempotent(
+    tmp_path: Path,
+    monkeypatch,
+):
+    settings = _settings(tmp_path, app_postgres_dsn=None)
+    monkeypatch.setattr(worker_main, "settings", settings)
+    settings.job_root.mkdir(parents=True, exist_ok=True)
+    job_id = "c" * 32
+    tombstone = settings.job_root / f".purge-{job_id}"
+    tombstone.mkdir()
+    (tombstone / "partial.txt").write_text("partial", encoding="utf-8")
+
+    worker_main._recover_storage_tombstones()
+    worker_main._recover_storage_tombstones()
+
+    assert not tombstone.exists()
+    unsafe = settings.job_root / ".purge-invalid"
+    unsafe.mkdir()
+    with pytest.raises(RuntimeError, match="unsafe monomer MD purge tombstone name"):
+        worker_main._recover_storage_tombstones()
 
 
 def test_repository_update_query_guards_terminal_statuses():

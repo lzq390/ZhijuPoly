@@ -234,6 +234,13 @@ class InternalWorkerArtifactDeletionResponse(InternalWorkerModel):
         return self
 
 
+class InternalWorkerJobPurgeResponse(InternalWorkerModel):
+    job_id: str = Field(pattern=_UUID_PATTERN)
+    storage_state: Literal["absent"]
+    deleted: bool
+    message: str = Field(min_length=1, max_length=1_000)
+
+
 class InternalResultInput(InternalWorkerModel):
     input_type: Literal["smiles", "psmiles_close", "psmiles_cap"]
     canonical_smiles: str = Field(min_length=1, max_length=2_048)

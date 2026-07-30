@@ -1410,6 +1410,12 @@ class MonomerMdStatusResponse(BaseModel):
     formal_max_running_jobs: int = Field(default=1, ge=1)
     formal_max_queued_jobs: int = Field(default=2, ge=0)
     formal_can_submit: bool = False
+    job_retention_enabled: bool = False
+    job_retention_days: int = Field(default=30, ge=1, le=3650)
+    job_retention_status: Literal[
+        "disabled", "standby", "ready", "degraded"
+    ] = "disabled"
+    job_retention_last_sweep_at: datetime | None = None
     protocols: dict[str, Any] = Field(default_factory=dict)
     message: str
 

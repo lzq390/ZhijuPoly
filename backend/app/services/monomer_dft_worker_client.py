@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from .monomer_dft_internal_models import (
     InternalWorkerArtifactDeletionResponse,
     InternalWorkerJobList,
+    InternalWorkerJobPurgeResponse,
     InternalWorkerRequest,
     InternalWorkerSnapshot,
 )
@@ -239,6 +240,29 @@ class MonomerDftWorkerClient:
             raise self._invalid_response("artifact deletion") from exc
         if deletion.job_id != job_id:
             raise self._invalid_response("artifact deletion")
+        return deletion.model_dump(mode="json")
+
+    async def purge_job(self, job: dict[str, Any]) -> dict[str, Any]:
+        validated_request, _ = self._validated_job_request(job)
+        response = await self._json_request(
+            "POST",
+            f"/jobs/{self._job_segment(validated_request.job_id)}/purge",
+            operation="job storage deletion",
+            json={
+                "attempt_token": validated_request.attempt_token,
+                "request_sha256": validated_request.request_sha256,
+                "enqueue_sequence": validated_request.enqueue_sequence,
+            },
+        )
+        try:
+            deletion = InternalWorkerJobPurgeResponse.model_validate(response)
+        except ValidationError as exc:
+            raise self._invalid_response("job storage deletion") from exc
+        if (
+            deletion.job_id != validated_request.job_id
+            or deletion.storage_state != "absent"
+        ):
+            raise self._invalid_response("job storage deletion")
         return deletion.model_dump(mode="json")
 
     async def stream_artifact(self, job_id: str, artifact_id: str) -> MonomerDftWorkerStream:

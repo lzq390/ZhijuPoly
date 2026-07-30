@@ -325,7 +325,7 @@ export function MonomerDftResults({ job, onDeleteArtifacts, isDeletingArtifacts 
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
         {hasAvailableArtifacts ? <a href={getMonomerDftBundleUrl(job.job_id)} download className="inline-flex h-9 items-center rounded-md bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800"><FileArchive className="mr-1.5 h-3.5 w-3.5" />下载完整 ZIP</a> : <span aria-disabled="true" className="inline-flex h-9 items-center rounded-md bg-slate-900 px-3 text-xs font-medium text-white opacity-40"><FileArchive className="mr-1.5 h-3.5 w-3.5" />下载完整 ZIP</span>}
-        <Button type="button" variant="outline" className="h-9 rounded-md border-red-200 px-3 text-xs text-red-700 hover:bg-red-50" disabled={isDeletingArtifacts || artifactsState === "delete_requested" || !hasAvailableArtifacts} onClick={onDeleteArtifacts}><Trash2 className="mr-1.5 h-3.5 w-3.5" />{isDeletingArtifacts || artifactsState === "delete_requested" ? "正在删除" : "删除服务器产物"}</Button>
+        <Button type="button" variant="outline" className="h-9 rounded-md border-red-200 px-3 text-xs text-red-700 hover:bg-red-50" disabled={isDeletingArtifacts || artifactsState === "delete_requested" || !hasAvailableArtifacts} onClick={onDeleteArtifacts}><Trash2 className="mr-1.5 h-3.5 w-3.5" />{isDeletingArtifacts || artifactsState === "delete_requested" ? "正在删除" : "删除输出文件"}</Button>
       </div>
     </Panel>
   </div>;

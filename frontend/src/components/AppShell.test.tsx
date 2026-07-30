@@ -142,7 +142,7 @@ describe("AppShell 侧边栏", () => {
     expect(screen.getAllByRole("button", { name: "智聚万物" })).toHaveLength(1);
   });
 
-  it("业务模块组初始收起，并且一次最多展开一个", () => {
+  it("业务模块组初始收起，并且每组可独立展开和收起", () => {
     renderShell();
 
     const dataGroup = screen.getByRole("button", { name: "数据与知识" });
@@ -157,6 +157,12 @@ describe("AppShell 侧边栏", () => {
     expect(screen.getByRole("button", { name: "数据库查询" })).not.toBeNull();
 
     fireEvent.click(designGroup);
+    expect(dataGroup.getAttribute("aria-expanded")).toBe("true");
+    expect(designGroup.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "数据库查询" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "逆向设计" })).not.toBeNull();
+
+    fireEvent.click(dataGroup);
     expect(dataGroup.getAttribute("aria-expanded")).toBe("false");
     expect(designGroup.getAttribute("aria-expanded")).toBe("true");
     expect(screen.queryByRole("button", { name: "数据库查询" })).toBeNull();
@@ -167,8 +173,12 @@ describe("AppShell 侧边栏", () => {
     expect(screen.queryByRole("button", { name: "逆向设计" })).toBeNull();
   });
 
-  it("进入业务模块时自动展开它所属的模块组", () => {
+  it("进入业务模块时自动展开所属组并保留其他已展开组", () => {
     const view = renderShell();
+
+    const designGroup = screen.getByRole("button", { name: "设计与生成" });
+    fireEvent.click(designGroup);
+    expect(designGroup.getAttribute("aria-expanded")).toBe("true");
 
     view.rerender(
       <AppShell
@@ -198,8 +208,45 @@ describe("AppShell 侧边栏", () => {
     );
 
     expect(screen.getByRole("button", { name: "数据与知识" }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "设计与生成" }).getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: "知识检索" })).not.toBeNull();
-    expect(screen.queryByRole("button", { name: "逆向设计" })).toBeNull();
+    expect(screen.getByRole("button", { name: "逆向设计" })).not.toBeNull();
+  });
+
+  it("业务模块、项目和对话按内容高度顺序平铺并共用侧栏滚动", () => {
+    renderShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "数据与知识" }));
+    fireEvent.click(screen.getByRole("button", { name: "设计与生成" }));
+    fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
+
+    const moduleNavigation = screen.getByRole("navigation", { name: "业务模块" });
+    const projectSection = screen.getByRole("heading", { name: "项目" }).closest("section");
+    const generalSessionSection = screen.getByRole("heading", { name: "对话" }).closest("section");
+    const scrollRegion = moduleNavigation.parentElement;
+    const brandHeader = screen.getByRole("button", { name: "智聚万物" }).parentElement;
+
+    if (!projectSection || !generalSessionSection || !scrollRegion || !brandHeader) {
+      throw new Error("未找到完整的侧边栏内容流");
+    }
+
+    expect(brandHeader.parentElement).toBe(scrollRegion.parentElement);
+    expect(brandHeader.classList.contains("shrink-0")).toBe(true);
+    expect(scrollRegion.contains(brandHeader)).toBe(false);
+    expect(projectSection.parentElement).toBe(scrollRegion);
+    expect(generalSessionSection.parentElement).toBe(scrollRegion);
+
+    const children = Array.from(scrollRegion.children);
+    expect(children.indexOf(moduleNavigation)).toBeLessThan(children.indexOf(projectSection));
+    expect(children.indexOf(projectSection)).toBeLessThan(children.indexOf(generalSessionSection));
+
+    expect(scrollRegion.classList.contains("min-h-0")).toBe(true);
+    expect(scrollRegion.classList.contains("flex-1")).toBe(true);
+    expect(scrollRegion.classList.contains("overflow-y-auto")).toBe(true);
+    expect(scrollRegion.querySelector(".overflow-y-auto")).toBeNull();
+    expect(Array.from(moduleNavigation.classList).some((name) => name.startsWith("max-h-"))).toBe(false);
+    expect(Array.from(projectSection.classList).some((name) => name.startsWith("max-h-"))).toBe(false);
+    expect(generalSessionSection.classList.contains("flex-1")).toBe(false);
   });
 
   it("项目区域默认折叠，展开后按快照顺序显示项目", () => {

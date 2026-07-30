@@ -11,7 +11,9 @@ import requests
 
 
 class MonomerMdWorkerError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int = 503) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,8 +112,16 @@ class MonomerMdWorkerClient:
 
         if response.status_code >= 400:
             detail = _safe_response_detail(response)
-            raise MonomerMdWorkerError(f"monomer MD worker rejected artifact deletion: {detail}")
-        return _response_json_object(response, "artifact deletion")
+            raise MonomerMdWorkerError(
+                f"monomer MD worker rejected artifact deletion: {detail}",
+                status_code=response.status_code,
+            )
+        payload = _response_json_object(response, "artifact deletion")
+        if payload.get("job_id") != job_id or payload.get("storage_state") != "absent":
+            raise MonomerMdWorkerError(
+                "monomer MD worker returned invalid storage deletion proof"
+            )
+        return payload
 
     def cancel_job(self, job_id: str) -> dict[str, Any]:
         try:

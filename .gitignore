@@ -87,6 +87,7 @@ nexpoly-release-*.tar.gz
 !/backend/tests/test_monomer_md.py
 !/backend/tests/test_monomer_dft_backend.py
 !/backend/tests/test_monomer_dft_repository_postgres.py
+!/backend/tests/test_monomer_job_retention.py
 !/backend/tests/fixtures/
 !/backend/tests/fixtures/monomer_dft_scientific_result_v1_legacy.json
 !/backend/tests/test_monomer_polymerization.py

@@ -47,6 +47,7 @@ from app.services.monomer_dft_repository import (
     TERMINAL_STATUSES,
 )
 from app.services.monomer_dft_worker_client import MonomerDftWorkerClient, MonomerDftWorkerError
+from app.services.monomer_job_retention import MonomerJobDeletionError
 
 
 logger = logging.getLogger(__name__)
@@ -348,6 +349,21 @@ async def get_status(request: Request) -> MonomerDftStatusResponse:
         message = "monomer DFT runtime is not ready"
     else:
         message = "monomer DFT worker is unavailable"
+    reaper = getattr(request.app.state, "monomer_dft_retention_reaper", None)
+    retention = (
+        reaper.snapshot()
+        if reaper is not None
+        else {
+            "job_retention_enabled": settings.monomer_dft_job_retention_enabled,
+            "job_retention_days": settings.monomer_dft_job_retention_days,
+            "job_retention_status": (
+                "standby"
+                if settings.monomer_dft_job_retention_enabled
+                else "disabled"
+            ),
+            "job_retention_last_sweep_at": None,
+        }
+    )
     return MonomerDftStatusResponse(
         enabled=enabled,
         available=available,
@@ -357,6 +373,7 @@ async def get_status(request: Request) -> MonomerDftStatusResponse:
         draining=health.get("draining") if isinstance(health.get("draining"), bool) else None,
         active_jobs=active_jobs,
         max_active_jobs=settings.monomer_dft_max_active_jobs,
+        **retention,
         message=message,
     )
 
@@ -840,3 +857,26 @@ async def delete_artifacts(
         deleted_artifacts=0,
         message="DFT artifact deletion was requested",
     )
+
+
+@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_job(request: Request, job_id: str) -> Response:
+    job_id = _validate_job_id(job_id)
+    await _require_schema_ready(request)
+    service = request.app.state.monomer_dft_job_deletion_service
+    try:
+        await service.delete(job_id)
+    except MonomerJobDeletionError as exc:
+        if exc.status_code == 409:
+            raise _public_error(
+                409,
+                code="job_not_terminal",
+                message=str(exc),
+            ) from exc
+        raise _public_error(
+            503,
+            code="storage_cleanup_unavailable",
+            message=str(exc),
+            retryable=True,
+        ) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

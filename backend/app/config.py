@@ -23,6 +23,20 @@ def _first_non_blank(*values: str | None, default: str = "") -> str:
             return value.strip()
     return default
 
+
+def _strict_bool(name: str, value: bool | str) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{name} must be one of true/false, 1/0, yes/no, or on/off"
+    )
+
+
 def _resolve_from_root(value: str) -> str:
     windows_drive_match = re.match(r"^([A-Za-z]):[\\/](.*)$", value)
     if windows_drive_match and os.name != "nt":
@@ -86,6 +100,8 @@ class Settings:
         monomer_md_rate_limit_per_ip_per_minute: int | None = None,
         monomer_md_rate_limit_window_seconds: int | None = None,
         monomer_md_max_active_jobs: int | None = None,
+        monomer_md_job_retention_enabled: bool | None = None,
+        monomer_md_job_retention_days: int | None = None,
         monomer_dft_worker_base_url: str | None = None,
         monomer_dft_worker_uds: str | None = None,
         monomer_dft_worker_timeout_seconds: float | None = None,
@@ -93,6 +109,8 @@ class Settings:
         monomer_dft_max_active_jobs: int | None = None,
         monomer_dft_reconcile_interval_seconds: float | None = None,
         monomer_dft_artifact_retention_days: int | None = None,
+        monomer_dft_job_retention_enabled: bool | None = None,
+        monomer_dft_job_retention_days: int | None = None,
         monomer_dft_validation_concurrency: int | None = None,
         monomer_dft_download_max_concurrent: int | None = None,
         monomer_dft_download_spool_root: str | None = None,
@@ -352,6 +370,27 @@ class Settings:
                 str(env_values.get("MONOMER_MD_MAX_ACTIVE_JOBS", "3")),
             )
         )
+        raw_monomer_md_job_retention_enabled: bool | str = (
+            monomer_md_job_retention_enabled
+            if monomer_md_job_retention_enabled is not None
+            else os.getenv(
+                "MONOMER_MD_JOB_RETENTION_ENABLED",
+                str(
+                    env_values.get(
+                        "MONOMER_MD_JOB_RETENTION_ENABLED",
+                        "false",
+                    )
+                ),
+            )
+        )
+        raw_monomer_md_job_retention_days = (
+            str(monomer_md_job_retention_days)
+            if monomer_md_job_retention_days is not None
+            else os.getenv(
+                "MONOMER_MD_JOB_RETENTION_DAYS",
+                str(env_values.get("MONOMER_MD_JOB_RETENTION_DAYS", "30")),
+            )
+        )
         raw_monomer_dft_worker_base_url = monomer_dft_worker_base_url
         if raw_monomer_dft_worker_base_url is None:
             raw_monomer_dft_worker_base_url = os.getenv(
@@ -400,6 +439,27 @@ class Settings:
             else os.getenv(
                 "MONOMER_DFT_ARTIFACT_RETENTION_DAYS",
                 str(env_values.get("MONOMER_DFT_ARTIFACT_RETENTION_DAYS", "30")),
+            )
+        )
+        raw_monomer_dft_job_retention_enabled: bool | str = (
+            monomer_dft_job_retention_enabled
+            if monomer_dft_job_retention_enabled is not None
+            else os.getenv(
+                "MONOMER_DFT_JOB_RETENTION_ENABLED",
+                str(
+                    env_values.get(
+                        "MONOMER_DFT_JOB_RETENTION_ENABLED",
+                        "false",
+                    )
+                ),
+            )
+        )
+        raw_monomer_dft_job_retention_days = (
+            str(monomer_dft_job_retention_days)
+            if monomer_dft_job_retention_days is not None
+            else os.getenv(
+                "MONOMER_DFT_JOB_RETENTION_DAYS",
+                str(env_values.get("MONOMER_DFT_JOB_RETENTION_DAYS", "30")),
             )
         )
         raw_monomer_dft_validation_concurrency = (
@@ -814,6 +874,17 @@ class Settings:
         self.monomer_md_rate_limit_per_ip_per_minute = max(1, int(raw_monomer_md_rate_limit_per_ip_per_minute))
         self.monomer_md_rate_limit_window_seconds = max(1, int(raw_monomer_md_rate_limit_window_seconds))
         self.monomer_md_max_active_jobs = max(1, int(raw_monomer_md_max_active_jobs))
+        self.monomer_md_job_retention_enabled = _strict_bool(
+            "MONOMER_MD_JOB_RETENTION_ENABLED",
+            raw_monomer_md_job_retention_enabled,
+        )
+        self.monomer_md_job_retention_days = int(
+            raw_monomer_md_job_retention_days
+        )
+        if not 1 <= self.monomer_md_job_retention_days <= 3650:
+            raise ValueError(
+                "MONOMER_MD_JOB_RETENTION_DAYS must be between 1 and 3650"
+            )
         self.monomer_dft_worker_base_url = raw_monomer_dft_worker_base_url.strip().rstrip("/")
         self.monomer_dft_worker_uds = (
             _absolute_from_root(raw_monomer_dft_worker_uds.strip())
@@ -836,6 +907,17 @@ class Settings:
         self.monomer_dft_artifact_retention_days = max(
             1, int(raw_monomer_dft_artifact_retention_days)
         )
+        self.monomer_dft_job_retention_enabled = _strict_bool(
+            "MONOMER_DFT_JOB_RETENTION_ENABLED",
+            raw_monomer_dft_job_retention_enabled,
+        )
+        self.monomer_dft_job_retention_days = int(
+            raw_monomer_dft_job_retention_days
+        )
+        if not 1 <= self.monomer_dft_job_retention_days <= 3650:
+            raise ValueError(
+                "MONOMER_DFT_JOB_RETENTION_DAYS must be between 1 and 3650"
+            )
         self.monomer_dft_validation_concurrency = int(
             raw_monomer_dft_validation_concurrency
         )

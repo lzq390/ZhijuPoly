@@ -260,6 +260,12 @@ class MonomerDftStatusResponse(StrictApiModel):
     draining: StrictBool | None = None
     active_jobs: Annotated[StrictInt, Field(ge=0)]
     max_active_jobs: Annotated[StrictInt, Field(ge=1)]
+    job_retention_enabled: StrictBool = False
+    job_retention_days: Annotated[StrictInt, Field(ge=1, le=3650)] = 30
+    job_retention_status: Literal[
+        "disabled", "standby", "ready", "degraded"
+    ] = "disabled"
+    job_retention_last_sweep_at: datetime | None = None
     message: StrictStr
 
 

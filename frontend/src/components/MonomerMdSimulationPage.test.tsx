@@ -94,6 +94,8 @@ function simulationState(overrides: Partial<Simulation> = {}): Simulation {
     isHistoryLoading: false,
     historyError: null,
     cancellingJobIds: [],
+    deletingJobIds: [],
+    deleteJobErrors: {},
     submit: vi.fn(),
     reset: vi.fn(),
     refreshStatus: vi.fn(),
@@ -104,6 +106,7 @@ function simulationState(overrides: Partial<Simulation> = {}): Simulation {
     changeHistoryQuery: vi.fn(),
     loadProtocolTemplate: vi.fn(),
     deleteArtifacts: vi.fn(),
+    deleteJobRecord: vi.fn(),
     ...overrides
   };
 }
@@ -162,5 +165,30 @@ describe("MonomerMdSimulationPage formal queue", () => {
     fireEvent.click(cancel);
     expect(simulation.cancelJob).toHaveBeenCalledOnce();
     expect(simulation.cancelJob).toHaveBeenCalledWith(queuedJob);
+  });
+
+  it("requires confirmation before deleting a terminal record", () => {
+    const terminalJob: MonomerMdJobResponse = {
+      ...queuedJob,
+      status: "completed",
+      queue_position: null,
+      progress_percent: 100
+    };
+    const simulation = simulationState({
+      job: terminalJob,
+      history: { items: [], total: 0, page: 1, page_size: 20 }
+    });
+    hook.useMonomerMdSimulation.mockReturnValue(simulation);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    render(<MonomerMdSimulationPage onBackHome={vi.fn()} />);
+    const button = screen.getByRole("button", { name: "删除记录" });
+    fireEvent.click(button);
+    expect(simulation.deleteJobRecord).not.toHaveBeenCalled();
+    fireEvent.click(button);
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(simulation.deleteJobRecord).toHaveBeenCalledTimes(1);
+    expect(simulation.deleteJobRecord).toHaveBeenCalledWith(terminalJob);
   });
 });

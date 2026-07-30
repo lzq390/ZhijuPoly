@@ -1,12 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelMonomerMdJob,
+  deleteMonomerMdJob,
   fetchDevGpuSessionStatus,
   fetchMonomerMdJobs,
   fetchPolytaoJob,
   fetchPolytaoStatus,
   recoverDevGpuSession
 } from "./api";
+
+describe("deleteMonomerMdJob", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("does not parse the empty 204 response body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteMonomerMdJob("a".repeat(32))).resolves.toBeUndefined();
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("DELETE");
+  });
+});
 
 describe("fetchPolytaoStatus", () => {
   afterEach(() => {
