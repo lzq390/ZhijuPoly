@@ -65,7 +65,9 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         self.assertEqual(failures, [])
 
         login = "Log in for the exact private B images"
-        transition = "Run real B-schema and F/0013-schema transition smoke"
+        transition = (
+            "Run real B-schema through F/0013 and F/0014 transition smoke"
+        )
         changed = CI_TEXT.replace(login, "TEMPORARY", 1)
         changed = changed.replace(transition, login, 1)
         changed = changed.replace("TEMPORARY", transition, 1)

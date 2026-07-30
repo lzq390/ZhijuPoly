@@ -25,10 +25,15 @@ git merge-base --is-ancestor "$B_SHA" "$candidate_sha"
 readonly F_BACKEND_IMAGE="nexpoly-f-bridge-ci:${candidate_sha}"
 readonly CONTAINER_PREFIX="nexpoly-bridge-ci-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 managed_containers=()
+managed_temp_directories=()
+F_0013_MIGRATIONS_DIR=""
 
 cleanup() {
   if ((${#managed_containers[@]})); then
     docker rm -f "${managed_containers[@]}" >/dev/null 2>&1 || true
+  fi
+  if ((${#managed_temp_directories[@]})); then
+    rm -rf -- "${managed_temp_directories[@]}"
   fi
 }
 trap cleanup EXIT
@@ -38,26 +43,83 @@ database_dsn() {
   printf 'postgresql://nexpoly_bridge:nexpoly_bridge@127.0.0.1:5432/%s' "$database"
 }
 
+_run_backend_command() {
+  local image="$1"
+  local database="$2"
+  local migrations_dir="$3"
+  shift 3
+  local dsn
+  dsn="$(database_dsn "$database")"
+  local -a docker_command=(
+    docker run --rm --network host
+    -e "APP_POSTGRES_DSN=$dsn"
+    -e "PI_POSTGRES_DSN=$dsn"
+    -e "LAB_DATA_POSTGRES_DSN=$dsn"
+    -e STRUCTURED_DATA_BACKEND=postgres
+    -e MODEL_ENABLED=false
+    -e OCSR_ENABLED=false
+    -e GEN_MODEL_ENABLED=false
+    -e POLYTAO_ENABLED=false
+    -e RETRO_MODEL_ENABLED=false
+    -e MONOMER_MD_SUBMIT_ENABLED=false
+    -e MONOMER_DFT_SUBMIT_ENABLED=false
+    -e MONOMER_DFT_WORKER_UDS=
+  )
+  if [[ -n "$migrations_dir" ]]; then
+    docker_command+=(
+      --volume "$migrations_dir:/tmp/nexpoly-migrations:ro"
+    )
+  fi
+  docker_command+=("$image" "$@")
+  "${docker_command[@]}"
+}
+
 run_backend_command() {
   local image="$1"
   local database="$2"
   shift 2
-  local dsn
-  dsn="$(database_dsn "$database")"
-  docker run --rm --network host \
-    -e "APP_POSTGRES_DSN=$dsn" \
-    -e "PI_POSTGRES_DSN=$dsn" \
-    -e "LAB_DATA_POSTGRES_DSN=$dsn" \
-    -e STRUCTURED_DATA_BACKEND=postgres \
-    -e MODEL_ENABLED=false \
-    -e OCSR_ENABLED=false \
-    -e GEN_MODEL_ENABLED=false \
-    -e POLYTAO_ENABLED=false \
-    -e RETRO_MODEL_ENABLED=false \
-    -e MONOMER_MD_SUBMIT_ENABLED=false \
-    -e MONOMER_DFT_SUBMIT_ENABLED=false \
-    -e MONOMER_DFT_WORKER_UDS= \
-    "$image" "$@"
+  _run_backend_command "$image" "$database" "" "$@"
+}
+
+run_backend_command_with_migrations() {
+  local image="$1"
+  local database="$2"
+  local migrations_dir="$3"
+  shift 3
+  _run_backend_command "$image" "$database" "$migrations_dir" "$@"
+}
+
+prepare_f_0013_migrations() {
+  F_0013_MIGRATIONS_DIR="$(mktemp -d)"
+  managed_temp_directories+=("$F_0013_MIGRATIONS_DIR")
+  python3 - \
+    "$REPOSITORY_ROOT/backend/migrations/postgres" \
+    "$F_0013_MIGRATIONS_DIR" <<'PY'
+import json
+import pathlib
+import shutil
+import sys
+
+source = pathlib.Path(sys.argv[1])
+destination = pathlib.Path(sys.argv[2])
+manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
+records = []
+for record in manifest["migrations"]:
+    records.append(record)
+    shutil.copy2(
+        source / f"{record['version']}.sql",
+        destination / f"{record['version']}.sql",
+    )
+    if record["version"] == "0013_monomer_dft_jobs":
+        break
+assert records[-1]["version"] == "0013_monomer_dft_jobs"
+assert len(records) + 1 == len(manifest["migrations"])
+manifest["migrations"] = records
+(destination / "manifest.json").write_text(
+    json.dumps(manifest, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
 }
 
 wait_for_backend() {
@@ -241,8 +303,11 @@ SELECT jsonb_build_object(
     (SELECT jsonb_agg(to_jsonb(row) ORDER BY history_id)
        FROM (SELECT * FROM online_knowledge.history ORDER BY history_id) AS row),
   'md_jobs',
-    (SELECT jsonb_agg(to_jsonb(row) ORDER BY job_id)
-       FROM (SELECT * FROM md.monomer_md_jobs ORDER BY job_id) AS row),
+    (SELECT jsonb_agg(
+              to_jsonb(row) - 'cancel_requested_at' - 'queue_sequence'
+              ORDER BY job_id
+            )
+       FROM md.monomer_md_jobs AS row),
   'lab_test_projects',
     (SELECT jsonb_agg(to_jsonb(row) ORDER BY id)
        FROM (SELECT * FROM lab.test_projects ORDER BY id) AS row),
@@ -473,6 +538,9 @@ docker build \
     --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
 )" == "$candidate_sha" ]]
 
+prepare_f_0013_migrations
+readonly F_0013_MIGRATIONS_DIR
+
 for database in "$B_DATABASE" "$F_DATABASE"; do
   psql -X -v ON_ERROR_STOP=1 "$BRIDGE_DB_ADMIN_DSN" \
     --command "CREATE DATABASE ${database};" >/dev/null
@@ -493,8 +561,9 @@ stop_backend "$b_schema_f_name"
 
 # Seed online/MD/lab business rows before F creates any DFT table. This is the
 # actual future transition: an exact B/post-0012 database is upgraded in place
-# by F applying only 0013. Neither the mutable rows nor their sequences may
-# change while the migration ledger advances.
+# through the B-compatible 0013 checkpoint and then the final 0014 authority
+# schema. Neither the mutable rows nor their existing sequences may change
+# while the migration ledger advances.
 psql -X -v ON_ERROR_STOP=1 "$(database_dsn "$B_DATABASE")" <<'SQL' >/dev/null
 BEGIN;
 INSERT INTO online_knowledge.jobs (
@@ -544,10 +613,10 @@ b_transition_before="$(pre_dft_mutable_digest "$B_DATABASE")"
 readonly b_transition_before
 [[ "$b_transition_before" =~ ^[0-9a-f]{64}$ ]]
 
-run_backend_command "$F_BACKEND_IMAGE" "$B_DATABASE" \
-  python -m app.postgres_migrations --mode expand
-run_backend_command "$F_BACKEND_IMAGE" "$B_DATABASE" \
-  python -m app.postgres_preflight --mode schema --strict >/dev/null
+run_backend_command_with_migrations \
+  "$F_BACKEND_IMAGE" "$B_DATABASE" "$F_0013_MIGRATIONS_DIR" \
+  python -m app.postgres_migrations --mode expand \
+    --migrations-dir /tmp/nexpoly-migrations
 [[ "$(
   psql -X -v ON_ERROR_STOP=1 -At "$(database_dsn "$B_DATABASE")" \
     --command "SELECT version || ':' || checksum FROM governance.schema_migrations ORDER BY version DESC LIMIT 1"
@@ -560,13 +629,46 @@ assert_dft_state 18106 true
 stop_backend "$b_transition_f_name"
 [[ "$(pre_dft_mutable_digest "$B_DATABASE")" == "$b_transition_before" ]]
 
-# The same transitioned database must remain readable by exact B and then F
-# again without rewriting the forward 0013 ledger or business state.
+# The intermediate 0013 database remains readable by exact B and then F again
+# without rewriting the ledger or business state.
 run_backend_command "$B_BACKEND_IMAGE" "$B_DATABASE" \
   python -m app.postgres_preflight --mode schema --strict >/dev/null
 b_transition_b_name="${CONTAINER_PREFIX}-b-after-0013"
 start_backend "$B_BACKEND_IMAGE" "$B_DATABASE" "$b_transition_b_name" 18107
 stop_backend "$b_transition_b_name"
+[[ "$(pre_dft_mutable_digest "$B_DATABASE")" == "$b_transition_before" ]]
+
+b_transition_return_name="${CONTAINER_PREFIX}-f-returned-to-0013"
+start_backend \
+  "$F_BACKEND_IMAGE" "$B_DATABASE" "$b_transition_return_name" 18109
+assert_dft_state 18109 true
+stop_backend "$b_transition_return_name"
+[[ "$(pre_dft_mutable_digest "$B_DATABASE")" == "$b_transition_before" ]]
+
+# F now applies the remaining canonical 0014 queue/cancellation expansion.
+# Exact B must reject that newer ledger without mutating it; returning to F
+# must still pass strict preflight and preserve every pre-0014 business field.
+run_backend_command "$F_BACKEND_IMAGE" "$B_DATABASE" \
+  python -m app.postgres_migrations --mode expand
+run_backend_command "$F_BACKEND_IMAGE" "$B_DATABASE" \
+  python -m app.postgres_preflight --mode schema --strict >/dev/null
+[[ "$(
+  psql -X -v ON_ERROR_STOP=1 -At "$(database_dsn "$B_DATABASE")" \
+    --command "SELECT version || ':' || checksum FROM governance.schema_migrations ORDER BY version DESC LIMIT 1"
+)" == "0014_monomer_md_task_queue_cancel:7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6" ]]
+[[ "$(pre_dft_mutable_digest "$B_DATABASE")" == "$b_transition_before" ]]
+
+b_transition_final_name="${CONTAINER_PREFIX}-f-after-0014"
+start_backend "$F_BACKEND_IMAGE" "$B_DATABASE" "$b_transition_final_name" 18108
+assert_dft_state 18108 true
+stop_backend "$b_transition_final_name"
+[[ "$(pre_dft_mutable_digest "$B_DATABASE")" == "$b_transition_before" ]]
+
+if run_backend_command "$B_BACKEND_IMAGE" "$B_DATABASE" \
+  python -m app.postgres_preflight --mode schema --strict >/dev/null 2>&1; then
+  echo "Exact B unexpectedly accepted the canonical 0014 ledger" >&2
+  exit 1
+fi
 [[ "$(pre_dft_mutable_digest "$B_DATABASE")" == "$b_transition_before" ]]
 run_backend_command "$F_BACKEND_IMAGE" "$B_DATABASE" \
   python -m app.postgres_preflight --mode schema --strict >/dev/null
@@ -669,16 +771,17 @@ assert_dft_state 18102 true
 stop_backend "$f_before_name"
 [[ "$(business_digest "$F_DATABASE")" == "$before_digest" ]]
 
-# Exact B must accept the canonical forward 0013 ledger without applying,
+# Exact B must fail closed on the canonical 0014 ledger without applying,
 # rewriting, or truncating any mutable row.
-run_backend_command "$B_BACKEND_IMAGE" "$F_DATABASE" \
-  python -m app.postgres_preflight --mode schema --strict >/dev/null
-b_forward_name="${CONTAINER_PREFIX}-b-forward"
-start_backend "$B_BACKEND_IMAGE" "$F_DATABASE" "$b_forward_name" 18103
-stop_backend "$b_forward_name"
+if run_backend_command "$B_BACKEND_IMAGE" "$F_DATABASE" \
+  python -m app.postgres_preflight --mode schema --strict >/dev/null 2>&1; then
+  echo "Exact B unexpectedly accepted the fresh canonical 0014 ledger" >&2
+  exit 1
+fi
 [[ "$(business_digest "$F_DATABASE")" == "$before_digest" ]]
 
-# Returning to F must preserve the same ledger and all business rows.
+# Returning to F after the rejected B preflight must preserve the same ledger
+# and all business rows.
 run_backend_command "$F_BACKEND_IMAGE" "$F_DATABASE" \
   python -m app.postgres_preflight --mode schema --strict >/dev/null
 f_after_name="${CONTAINER_PREFIX}-f-after"

@@ -883,7 +883,7 @@ def validate_exact_b_transition(text: str, failures: list[str]) -> None:
         text,
         start="pre_dft_mutable_digest() {",
         end="business_digest() {",
-        label="exact-B pre-0013 mutable digest",
+        label="exact-B pre-0014 mutable digest",
         failures=failures,
     )
     if digest_function is not None:
@@ -898,7 +898,7 @@ def validate_exact_b_transition(text: str, failures: list[str]) -> None:
         for key, expected_count in expected_key_counts.items():
             if digest_function.count(key) != expected_count:
                 failures.append(
-                    "exact-B pre-0013 mutable digest has an incomplete or "
+                    "exact-B pre-0014 mutable digest has an incomplete or "
                     f"duplicated governed key: {key}"
                 )
         require_ordered_markers(
@@ -916,7 +916,7 @@ def validate_exact_b_transition(text: str, failures: list[str]) -> None:
                 ("lab measurement sequence", "'lab_sample_measurements'"),
                 ("snapshot commit", "COMMIT;"),
             ),
-            label="exact-B pre-0013 mutable digest",
+            label="exact-B pre-0014 mutable digest",
             failures=failures,
         )
 
@@ -927,7 +927,10 @@ def validate_exact_b_transition(text: str, failures: list[str]) -> None:
             'run_backend_command "$F_BACKEND_IMAGE" "$F_DATABASE" \\\n'
             "  python -m app.postgres_migrations --mode bootstrap"
         ),
-        label="exact-B B/post-0012 to F/0013 to B to F transition",
+        label=(
+            "exact-B B/post-0012 through F/0013 compatibility and "
+            "F/0014 authority transition"
+        ),
         failures=failures,
     )
     if transition is None:
@@ -944,23 +947,26 @@ def validate_exact_b_transition(text: str, failures: list[str]) -> None:
                 'b_transition_before="$(pre_dft_mutable_digest "$B_DATABASE")"',
             ),
             (
-                "F applies only expand migrations to B",
-                'run_backend_command "$F_BACKEND_IMAGE" "$B_DATABASE" \\\n'
-                "  python -m app.postgres_migrations --mode expand",
+                "F applies the exact 0013 prefix to B",
+                "run_backend_command_with_migrations \\\n"
+                '  "$F_BACKEND_IMAGE" "$B_DATABASE" '
+                '"$F_0013_MIGRATIONS_DIR" \\\n'
+                "  python -m app.postgres_migrations --mode expand \\\n"
+                "    --migrations-dir /tmp/nexpoly-migrations",
             ),
             (
-                "exact final 0013 ledger",
+                "exact intermediate 0013 ledger",
                 "0013_monomer_dft_jobs:"
                 "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc",
             ),
-            ("post-migration mutable digest", mutable_unchanged),
+            ("post-0013 mutable digest", mutable_unchanged),
             (
-                "F starts on the transitioned database",
+                "F starts on the intermediate 0013 database",
                 'start_backend "$F_BACKEND_IMAGE" "$B_DATABASE" '
                 '"$b_transition_f_name" 18106',
             ),
-            ("F reports schema ready", "assert_dft_state 18106 true"),
-            ("post-F mutable digest", mutable_unchanged),
+            ("F reports the 0013 schema ready", "assert_dft_state 18106 true"),
+            ("post-0013 F mutable digest", mutable_unchanged),
             (
                 "B accepts the forward 0013 schema",
                 'run_backend_command "$B_BACKEND_IMAGE" "$B_DATABASE" \\\n'
@@ -971,15 +977,54 @@ def validate_exact_b_transition(text: str, failures: list[str]) -> None:
                 'start_backend "$B_BACKEND_IMAGE" "$B_DATABASE" '
                 '"$b_transition_b_name" 18107',
             ),
-            ("post-B mutable digest", mutable_unchanged),
+            ("post-0013 B mutable digest", mutable_unchanged),
             (
-                "F accepts the database after B",
+                "F restarts on the 0013 database after B",
+                "start_backend \\\n"
+                '  "$F_BACKEND_IMAGE" "$B_DATABASE" '
+                '"$b_transition_return_name" 18109',
+            ),
+            ("returned F reports the 0013 schema ready", "assert_dft_state 18109 true"),
+            ("post-return-to-F 0013 mutable digest", mutable_unchanged),
+            (
+                "F applies the remaining canonical 0014 migration",
+                'run_backend_command "$F_BACKEND_IMAGE" "$B_DATABASE" \\\n'
+                "  python -m app.postgres_migrations --mode expand",
+            ),
+            (
+                "exact final 0014 ledger",
+                "0014_monomer_md_task_queue_cancel:"
+                "7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6",
+            ),
+            ("post-0014 mutable digest", mutable_unchanged),
+            (
+                "F starts on the final 0014 database",
+                'start_backend "$F_BACKEND_IMAGE" "$B_DATABASE" '
+                '"$b_transition_final_name" 18108',
+            ),
+            ("F reports the 0014 schema ready", "assert_dft_state 18108 true"),
+            ("post-0014 F mutable digest", mutable_unchanged),
+            (
+                "B preflight is required to reject 0014",
+                'if run_backend_command "$B_BACKEND_IMAGE" "$B_DATABASE" \\\n'
+                "  python -m app.postgres_preflight --mode schema --strict",
+            ),
+            (
+                "B rejection is explicit",
+                "Exact B unexpectedly accepted the canonical 0014 ledger",
+            ),
+            ("post-rejected-B mutable digest", mutable_unchanged),
+            (
+                "F accepts the database after rejected B preflight",
                 'run_backend_command "$F_BACKEND_IMAGE" "$B_DATABASE" \\\n'
                 "  python -m app.postgres_preflight --mode schema --strict",
             ),
-            ("post-return-to-F mutable digest", mutable_unchanged),
+            ("final post-return-to-F mutable digest", mutable_unchanged),
         ),
-        label="exact-B B/post-0012 to F/0013 to B to F transition",
+        label=(
+            "exact-B B/post-0012 through F/0013 compatibility and "
+            "F/0014 authority transition"
+        ),
         failures=failures,
     )
 
@@ -996,7 +1041,7 @@ def validate_exact_b_job(ci_text: str, failures: list[str]) -> None:
             ("private B image login", "Log in for the exact private B images"),
             (
                 "real transition step",
-                "Run real B-schema and F/0013-schema transition smoke",
+                "Run real B-schema through F/0013 and F/0014 transition smoke",
             ),
             ("exact transition script", "run: scripts/ci/test_exact_b_bridge.sh"),
         ),
@@ -1172,7 +1217,7 @@ def main() -> int:
             "    name: exact-B bridge compatibility\n"
             "    needs: resolve-sha\n"
             "    runs-on: ubuntu-24.04",
-            "Run real B-schema and F/0013-schema transition smoke",
+            "Run real B-schema through F/0013 and F/0014 transition smoke",
             "scripts/ci/test_exact_b_bridge.sh",
             "name: ci-gate",
             "  release:\n"
