@@ -17,6 +17,7 @@ import { StructureSvg } from "./StructureSvg";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Select } from "./ui/select";
 import {
   DEFAULT_POLYTAO_DESCRIPTORS,
   EMPTY_POLYTAO_DESCRIPTORS,
@@ -48,7 +49,7 @@ type PolytaoGenerationPageProps = {
 type DescriptorGroup = {
   title: string;
   detail: string;
-  descriptors: PolytaoDescriptorName[];
+  descriptors: [PolytaoDescriptorName, ...PolytaoDescriptorName[]];
   accentClassName: string;
 };
 
@@ -117,7 +118,6 @@ function copyText(value: string) {
 export function PolytaoGenerationPage({ structure, onEditStructure, onBackHome }: PolytaoGenerationPageProps) {
   const polytao = usePolytaoGeneration();
   const [descriptorError, setDescriptorError] = useState<string | null>(null);
-  const [descriptorSource, setDescriptorSource] = useState<string | null>(null);
   const [isDescriptorLoading, setIsDescriptorLoading] = useState(false);
   const currentPrompt = useMemo(() => descriptorPrompt(polytao.request.descriptors), [polytao.request.descriptors]);
   const hasStructure = structure.smiles.trim().length > 0;
@@ -143,12 +143,10 @@ export function PolytaoGenerationPage({ structure, onEditStructure, onBackHome }
       },
       input_smiles: null
     });
-    setDescriptorSource(null);
   }
 
   async function handleDescriptorPrefill() {
     setDescriptorError(null);
-    setDescriptorSource(null);
     setIsDescriptorLoading(true);
     try {
       const currentSmiles = (await structure.getCurrentSmiles()).trim();
@@ -163,7 +161,6 @@ export function PolytaoGenerationPage({ structure, onEditStructure, onBackHome }
         descriptors,
         input_smiles: response.canonical_smiles
       });
-      setDescriptorSource(`${response.canonical_smiles} | ${response.prompt}`);
     } catch (error) {
       setDescriptorError(error instanceof Error ? error.message : "Failed to calculate PolyTAO descriptors.");
     } finally {
@@ -250,11 +247,9 @@ export function PolytaoGenerationPage({ structure, onEditStructure, onBackHome }
           <StructureSourcePanel
             structure={structure}
             hasStructure={hasStructure}
-            inputSmiles={polytao.request.input_smiles ?? null}
             onEditStructure={onEditStructure}
             onPrefill={() => void handleDescriptorPrefill()}
             isPrefilling={isDescriptorLoading}
-            descriptorSource={descriptorSource}
             descriptorError={descriptorError}
           />
 
@@ -264,12 +259,10 @@ export function PolytaoGenerationPage({ structure, onEditStructure, onBackHome }
             onDescriptorChange={updateDescriptor}
             onLoadSample={() => {
               updateRequest({ descriptors: { ...DEFAULT_POLYTAO_DESCRIPTORS }, input_smiles: null });
-              setDescriptorSource("Sample vector loaded | 264,19,0,4,1,0,1,0,0,0,4,0,6,5,1");
               setDescriptorError(null);
             }}
             onClear={() => {
               updateRequest({ descriptors: { ...EMPTY_POLYTAO_DESCRIPTORS }, input_smiles: null });
-              setDescriptorSource(null);
               setDescriptorError(null);
             }}
           />
@@ -398,20 +391,16 @@ function Panel({
 function StructureSourcePanel({
   structure,
   hasStructure,
-  inputSmiles,
   onEditStructure,
   onPrefill,
   isPrefilling,
-  descriptorSource,
   descriptorError
 }: {
   structure: StructureWorkspaceContext;
   hasStructure: boolean;
-  inputSmiles: string | null;
   onEditStructure: () => void;
   onPrefill: () => void;
   isPrefilling: boolean;
-  descriptorSource: string | null;
   descriptorError: string | null;
 }) {
   return (
@@ -460,16 +449,6 @@ function StructureSourcePanel({
           </Button>
         </div>
 
-        {inputSmiles ? (
-          <div className="break-all rounded-[10px] border border-sky-100 bg-sky-50 px-3 py-2 font-mono-ui text-xs leading-5 text-sky-800">
-            Source: {inputSmiles}
-          </div>
-        ) : null}
-        {descriptorSource ? (
-          <div className="break-all rounded-[10px] border border-emerald-100 bg-emerald-50 px-3 py-2 font-mono-ui text-xs leading-5 text-emerald-800">
-            {descriptorSource}
-          </div>
-        ) : null}
         {descriptorError ? <AlertBox tone="danger" title={descriptorError} /> : null}
       </div>
     </Panel>
@@ -535,29 +514,78 @@ function DescriptorEditorPanel({
 
         <div className="grid gap-x-5 gap-y-6 lg:grid-cols-2">
           {DESCRIPTOR_GROUPS.map((group) => (
-            <div key={group.title} className="min-w-0 border-l-2 border-slate-200 pl-3">
-              <div>
-                <Badge className={cn("rounded-[8px] px-2 py-1 text-[10px] tracking-[0.08em] shadow-none", group.accentClassName)}>
-                  {group.title}
-                </Badge>
-                <div className="mt-2 text-xs leading-5 text-slate-500">{group.detail}</div>
-              </div>
-              <div className="mt-3 grid gap-2">
-                {group.descriptors.map((name) => (
-                  <NumberField
-                    key={name}
-                    label={name}
-                    value={descriptors[name]}
-                    step={name === "MolWt" ? 0.1 : 1}
-                    onChange={(value) => onDescriptorChange(name, value)}
-                  />
-                ))}
-              </div>
-            </div>
+            <DescriptorGroupEditor
+              key={group.title}
+              group={group}
+              descriptors={descriptors}
+              onDescriptorChange={onDescriptorChange}
+            />
           ))}
         </div>
       </div>
     </Panel>
+  );
+}
+
+function DescriptorGroupEditor({
+  group,
+  descriptors,
+  onDescriptorChange
+}: {
+  group: DescriptorGroup;
+  descriptors: PolytaoDescriptorMap;
+  onDescriptorChange: (name: PolytaoDescriptorName, value: number) => void;
+}) {
+  const [selectedDescriptor, setSelectedDescriptor] = useState<PolytaoDescriptorName>(group.descriptors[0]);
+  const filledCount = group.descriptors.reduce(
+    (count, name) => count + (Number.isFinite(descriptors[name]) ? 1 : 0),
+    0
+  );
+
+  return (
+    <div className="min-w-0 border-l-2 border-slate-200 pl-3">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge
+            className={cn(
+              "rounded-[8px] px-2 py-1 text-[10px] tracking-[0.08em] shadow-none",
+              group.accentClassName
+            )}
+          >
+            {group.title}
+          </Badge>
+          <span className="rounded-[8px] border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold tracking-[0.08em] text-slate-600">
+            Filled {filledCount}/{group.descriptors.length}
+          </span>
+        </div>
+        <div className="mt-2 text-xs leading-5 text-slate-500">{group.detail}</div>
+      </div>
+      <div className="mt-3 grid gap-2">
+        <label className="grid gap-1.5">
+          <span className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+            Descriptor
+          </span>
+          <Select
+            aria-label={`${group.title} descriptor`}
+            value={selectedDescriptor}
+            onChange={(event) => setSelectedDescriptor(event.target.value as PolytaoDescriptorName)}
+            className="h-9 rounded-[8px] border-slate-200 bg-white px-3 shadow-none"
+          >
+            {group.descriptors.map((name) => (
+              <option key={name} value={name}>
+                {name} — {Number.isFinite(descriptors[name]) ? "Filled" : "Empty"}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <NumberField
+          label={selectedDescriptor}
+          value={descriptors[selectedDescriptor]}
+          step={selectedDescriptor === "MolWt" ? 0.1 : 1}
+          onChange={(value) => onDescriptorChange(selectedDescriptor, value)}
+        />
+      </div>
+    </div>
   );
 }
 
