@@ -37,6 +37,8 @@ import type {
   MonomerDftServiceStatusResponse,
   MonomerMdJobCreateRequest,
   MonomerMdJobCreateResponse,
+  MonomerMdJobListQuery,
+  MonomerMdJobPageResponse,
   MonomerMdJobResponse,
   MonomerMdProtocolCatalogResponse,
   MonomerMdServiceStatusResponse,
@@ -456,6 +458,33 @@ export function createMonomerMdJob(
 
 export async function fetchMonomerMdJob(jobId: string, signal?: AbortSignal): Promise<MonomerMdJobResponse> {
   const job = await getJSON<MonomerMdJobResponse>(`/monomer-md/jobs/${encodeURIComponent(jobId)}`, { signal });
+  return normalizeMonomerMdJob(job);
+}
+
+export async function fetchMonomerMdJobs(
+  query: MonomerMdJobListQuery,
+  signal?: AbortSignal
+): Promise<MonomerMdJobPageResponse> {
+  const params = new URLSearchParams();
+  if (query.run_mode) params.set("run_mode", query.run_mode);
+  if (query.active_only != null) params.set("active_only", String(query.active_only));
+  if (query.protocol) params.set("protocol", query.protocol);
+  if (query.status) params.set("status", query.status);
+  if (query.page != null) params.set("page", String(query.page));
+  if (query.page_size != null) params.set("page_size", String(query.page_size));
+  const page = await getJSON<MonomerMdJobPageResponse>(`/monomer-md/jobs?${params.toString()}`, { signal });
+  return { ...page, items: page.items.map(normalizeMonomerMdJob) };
+}
+
+export async function cancelMonomerMdJob(
+  jobId: string,
+  signal?: AbortSignal
+): Promise<MonomerMdJobResponse> {
+  const job = await postJSON<MonomerMdJobResponse>(
+    `/monomer-md/jobs/${encodeURIComponent(jobId)}/cancel`,
+    {},
+    signal
+  );
   return normalizeMonomerMdJob(job);
 }
 

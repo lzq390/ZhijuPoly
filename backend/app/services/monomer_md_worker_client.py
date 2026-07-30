@@ -113,6 +113,21 @@ class MonomerMdWorkerClient:
             raise MonomerMdWorkerError(f"monomer MD worker rejected artifact deletion: {detail}")
         return _response_json_object(response, "artifact deletion")
 
+    def cancel_job(self, job_id: str) -> dict[str, Any]:
+        try:
+            response = self.session.post(
+                f"{self.base_url}/jobs/{job_id}/cancel",
+                json={},
+                timeout=self.timeout_seconds,
+            )
+        except requests.RequestException as exc:
+            raise MonomerMdWorkerError("monomer MD worker is not reachable") from exc
+
+        if response.status_code >= 400:
+            detail = _safe_response_detail(response)
+            raise MonomerMdWorkerError(f"monomer MD worker rejected cancellation: {detail}")
+        return _response_json_object(response, "job cancellation")
+
 
 def _safe_response_detail(response: requests.Response) -> str:
     try:

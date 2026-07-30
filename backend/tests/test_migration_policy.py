@@ -18,6 +18,7 @@ from app.migration_policy import (
 )
 from app.migration_compatibility import (
     FORWARD_COMPATIBLE_MIGRATION,
+    FORWARD_COMPATIBLE_MIGRATIONS,
     compatible_forward_versions,
     require_known_or_exact_forward_ledger,
 )
@@ -119,6 +120,7 @@ def test_repository_migration_manifest_classifies_every_sql_file() -> None:
     assert kinds["0011_monomer_md_demo_steps"] == "expand"
     assert kinds["0012_drop_polytao_jobs"] == "contract"
     assert kinds["0013_monomer_dft_jobs"] == "expand"
+    assert kinds["0014_monomer_md_task_queue_cancel"] == "expand"
     assert set(kinds) == {path.stem for path in MIGRATIONS_DIR.glob("*.sql")}
     assert {entry.manifest_schema_version for entry in entries} == {2}
     assert {entry.epoch for entry in entries} == {1, 2}
@@ -136,6 +138,14 @@ def test_repository_migration_manifest_classifies_every_sql_file() -> None:
         (requirement.version, requirement.checksum)
         for requirement in dft.requires_contracts
     ] == [("0012_drop_polytao_jobs", POLYTAO_CONTRACT_CHECKSUM)]
+    md_queue = next(
+        entry for entry in entries
+        if entry.version == "0014_monomer_md_task_queue_cancel"
+    )
+    assert md_queue.epoch == 2
+    assert md_queue.checksum == (
+        "7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6"
+    )
 
 
 def test_manifest_rejects_unclassified_sql_migration(tmp_path: Path) -> None:
@@ -452,7 +462,7 @@ def test_unknown_ledger_version_is_rejected_before_any_migration_sql(
     assert not any(body in query for body in migration_bodies for query in connection.queries)
 
 
-def test_bridge_b_accepts_only_complete_checksum_exact_0013_ledger(
+def test_bridge_b_accepts_only_complete_checksum_exact_0013_0014_prefixes(
     monkeypatch,
 ) -> None:
     entries = validate_migration_manifest_entries(MIGRATIONS_DIR)
@@ -463,7 +473,9 @@ def test_bridge_b_accepts_only_complete_checksum_exact_0013_ledger(
     canonical = {
         version: checksum
         for version, checksum in local_canonical.items()
-        if version != FORWARD_COMPATIBLE_MIGRATION["version"]
+        if version not in {
+            record["version"] for record in FORWARD_COMPATIBLE_MIGRATIONS
+        }
     }
     applied = {
         **canonical,
@@ -477,11 +489,25 @@ def test_bridge_b_accepts_only_complete_checksum_exact_0013_ledger(
     assert require_known_or_exact_forward_ledger(applied, canonical) == {
         FORWARD_COMPATIBLE_MIGRATION["version"]
     }
+    fully_applied = {
+        **canonical,
+        **{
+            record["version"]: record["checksum"]
+            for record in FORWARD_COMPATIBLE_MIGRATIONS
+        },
+    }
+    assert compatible_forward_versions(fully_applied, canonical) == {
+        record["version"] for record in FORWARD_COMPATIBLE_MIGRATIONS
+    }
+    assert require_known_or_exact_forward_ledger(
+        fully_applied,
+        canonical,
+    ) == {record["version"] for record in FORWARD_COMPATIBLE_MIGRATIONS}
 
     connection = _LedgerConnection(
         [
             {"version": version, "checksum": checksum}
-            for version, checksum in sorted(applied.items())
+            for version, checksum in sorted(fully_applied.items())
         ]
     )
 
@@ -509,7 +535,11 @@ def test_bridge_b_accepts_only_complete_checksum_exact_0013_ledger(
             for key, value in applied.items()
             if key != "0012_drop_polytao_jobs"
         },
-        {**applied, "0014_future": "e" * 64},
+        {
+            **fully_applied,
+            FORWARD_COMPATIBLE_MIGRATIONS[-1]["version"]: "f" * 64,
+        },
+        {**fully_applied, "0015_future": "e" * 64},
     ):
         assert compatible_forward_versions(changed, canonical) == set()
         with pytest.raises(RuntimeError, match="absent from the canonical manifest"):

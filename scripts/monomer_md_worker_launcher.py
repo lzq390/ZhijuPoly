@@ -118,7 +118,7 @@ def expected_environment(
         "MONOMER_MD_WORKER_UDS": str(socket),
         "MONOMER_MD_WORKER_MODE": "real",
         "MONOMER_MD_WORKER_ID": "monomer-md-production-worker",
-        "MONOMER_MD_MAX_ACTIVE_JOBS": "1",
+        "MONOMER_MD_MAX_ACTIVE_JOBS": "3",
         "MONOMER_MD_MAX_CONCURRENT_JOBS": "1",
         "MONOMER_MD_DEFAULT_STEPS": "300",
         "MONOMER_MD_MAX_STEPS": "300",

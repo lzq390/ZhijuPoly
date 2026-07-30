@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class JobUpdateResult(str, Enum):
     UPDATED = "updated"
     ALREADY_TERMINAL = "already_terminal"
+    CANCEL_REQUESTED = "cancel_requested"
     MISSING = "missing"
 
 
@@ -47,6 +48,7 @@ class PostgresJobRepository:
         gpu_device: str | None = None,
         error_category: str | None = None,
         worker_instance_id: str | None = None,
+        allow_cancel_requested_failure: bool = False,
     ) -> JobUpdateResult:
         if not self._settings.db_configured:
             return JobUpdateResult.MISSING
@@ -70,6 +72,7 @@ class PostgresJobRepository:
             gpu_device,
             error_category,
             worker_instance_id,
+            allow_cancel_requested_failure,
         )
         with psycopg.connect(self._settings.app_postgres_dsn) as conn:
             with conn.cursor() as cur:
@@ -90,6 +93,8 @@ class PostgresJobRepository:
                 current_status = row[0] if not isinstance(row, dict) else row[self._settings.status_column]
                 if current_status in {"completed", "failed", "cancelled"}:
                     return JobUpdateResult.ALREADY_TERMINAL
+                if current_status == "cancel_requested":
+                    return JobUpdateResult.CANCEL_REQUESTED
                 logger.error(
                     "monomer MD job update matched no row while status remained active: %s (%s)",
                     job_id,
@@ -115,6 +120,7 @@ class PostgresJobRepository:
         gpu_device: str | None,
         error_category: str | None,
         worker_instance_id: str | None,
+        allow_cancel_requested_failure: bool,
     ) -> tuple[Any, list[Any]]:
         settings = self._settings
         assignments: list[Any] = []
@@ -174,7 +180,8 @@ class PostgresJobRepository:
                     sql.Identifier(settings.started_at_column),
                 )
             )
-        if status in {"completed", "failed"}:
+        if status in {"completed", "failed", "cancelled"}:
+            assignments.append(sql.SQL("{} = NULL").format(sql.Identifier("queue_sequence")))
             assignments.append(
                 sql.SQL("{} = now()").format(sql.Identifier(settings.finished_at_column))
             )
@@ -188,9 +195,20 @@ class PostgresJobRepository:
             sql.SQL("{} = now()").format(sql.Identifier(settings.updated_at_column))
         )
 
-        params.append(job_id)
+        failed_statuses = (
+            ("pending", "submitted", "running", "cancel_requested")
+            if allow_cancel_requested_failure
+            else ("pending", "submitted", "running")
+        )
+        allowed_statuses = {
+            "submitted": ("pending", "submitted"),
+            "running": ("submitted", "running"),
+            "completed": ("running",),
+            "failed": failed_statuses,
+            "cancelled": ("cancel_requested",),
+        }.get(status, (status,))
         query = sql.SQL(
-            "UPDATE {} SET {} WHERE {} = %s AND {} NOT IN ('completed', 'failed', 'cancelled') RETURNING {}"
+            "UPDATE {} SET {} WHERE {} = %s AND {} = ANY(%s) RETURNING {}"
         ).format(
             _qualified_identifier(settings.job_table),
             sql.SQL(", ").join(assignments),
@@ -198,7 +216,133 @@ class PostgresJobRepository:
             sql.Identifier(settings.status_column),
             sql.Identifier(settings.status_column),
         )
+        params.extend((job_id, list(allowed_statuses)))
         return query, params
+
+    def accept_job(
+        self,
+        job_id: str,
+        worker_instance_id: str,
+        *,
+        queued: bool,
+    ) -> JobUpdateResult:
+        if not self._settings.db_configured:
+            return JobUpdateResult.UPDATED
+        if psycopg is None or sql is None:
+            raise RuntimeError("psycopg is required when APP_POSTGRES_DSN is configured")
+        settings = self._settings
+        queue_expression = (
+            sql.SQL("nextval('md.monomer_md_queue_sequence_seq')")
+            if queued
+            else sql.SQL("NULL")
+        )
+        query = sql.SQL(
+            "UPDATE {} SET {} = 'submitted', {} = %s, {} = %s, {} = %s, "
+            "{} = %s, {} = %s, {} = {}, {} = now(), {} = now(), "
+            "{} = now() + make_interval(secs => %s) "
+            "WHERE {} = %s AND {} IN ('pending', 'submitted') RETURNING {}"
+        ).format(
+            _qualified_identifier(settings.job_table),
+            sql.Identifier(settings.status_column),
+            sql.Identifier(settings.worker_id_column),
+            sql.Identifier(settings.worker_job_id_column),
+            sql.Identifier(settings.worker_version_column),
+            sql.Identifier(settings.worker_instance_id_column),
+            sql.Identifier(settings.progress_stage_column),
+            sql.Identifier("queue_sequence"),
+            queue_expression,
+            sql.Identifier(settings.updated_at_column),
+            sql.Identifier(settings.heartbeat_at_column),
+            sql.Identifier(settings.lease_expires_at_column),
+            sql.Identifier(settings.job_id_column),
+            sql.Identifier(settings.status_column),
+            sql.Identifier(settings.status_column),
+        )
+        progress_stage = "queued" if queued else "acquiring_gpu"
+        params = (
+            settings.worker_id,
+            job_id,
+            settings.worker_version,
+            worker_instance_id,
+            progress_stage,
+            settings.lease_seconds,
+            job_id,
+        )
+        with psycopg.connect(settings.app_postgres_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                if cur.fetchone() is not None:
+                    message = (
+                        "Queued for the formal monomer MD execution slot."
+                        if queued
+                        else "Waiting to acquire GPU execution capacity."
+                    )
+                    cur.execute(
+                        sql.SQL(
+                            "UPDATE {} SET {} = %s WHERE {} = %s"
+                        ).format(
+                            _qualified_identifier(settings.job_table),
+                            sql.Identifier(settings.progress_message_column),
+                            sql.Identifier(settings.job_id_column),
+                        ),
+                        (message, job_id),
+                    )
+                    return JobUpdateResult.UPDATED
+        return self._current_update_result(job_id)
+
+    def promote_queued_job(self, job_id: str) -> JobUpdateResult:
+        if not self._settings.db_configured:
+            return JobUpdateResult.UPDATED
+        if psycopg is None or sql is None:
+            raise RuntimeError("psycopg is required when APP_POSTGRES_DSN is configured")
+        settings = self._settings
+        query = sql.SQL(
+            "UPDATE {} SET {} = NULL, {} = 'acquiring_gpu', {} = %s, {} = now() "
+            "WHERE {} = %s AND {} = 'submitted' AND {} IS NOT NULL RETURNING {}"
+        ).format(
+            _qualified_identifier(settings.job_table),
+            sql.Identifier("queue_sequence"),
+            sql.Identifier(settings.progress_stage_column),
+            sql.Identifier(settings.progress_message_column),
+            sql.Identifier(settings.updated_at_column),
+            sql.Identifier(settings.job_id_column),
+            sql.Identifier(settings.status_column),
+            sql.Identifier("queue_sequence"),
+            sql.Identifier(settings.status_column),
+        )
+        with psycopg.connect(settings.app_postgres_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    ("Waiting to acquire GPU execution capacity.", job_id),
+                )
+                if cur.fetchone() is not None:
+                    return JobUpdateResult.UPDATED
+        return self._current_update_result(job_id)
+
+    def _current_update_result(self, job_id: str) -> JobUpdateResult:
+        if psycopg is None or sql is None:
+            raise RuntimeError("psycopg is required when APP_POSTGRES_DSN is configured")
+        settings = self._settings
+        with psycopg.connect(settings.app_postgres_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL("SELECT {} FROM {} WHERE {} = %s").format(
+                        sql.Identifier(settings.status_column),
+                        _qualified_identifier(settings.job_table),
+                        sql.Identifier(settings.job_id_column),
+                    ),
+                    (job_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return JobUpdateResult.MISSING
+        current_status = row[0] if not isinstance(row, dict) else row[settings.status_column]
+        if current_status in {"completed", "failed", "cancelled"}:
+            return JobUpdateResult.ALREADY_TERMINAL
+        if current_status == "cancel_requested":
+            return JobUpdateResult.CANCEL_REQUESTED
+        return JobUpdateResult.MISSING
 
     def heartbeat(self, job_ids: list[str], worker_instance_id: str) -> int:
         if not job_ids or not self._settings.db_configured:
@@ -208,7 +352,7 @@ class PostgresJobRepository:
         settings = self._settings
         query = sql.SQL(
             "UPDATE {} SET {} = now(), {} = now() + make_interval(secs => %s), {} = now() "
-            "WHERE {} = ANY(%s) AND {} = %s AND {} IN ('submitted', 'running')"
+            "WHERE {} = ANY(%s) AND {} = %s AND {} IN ('submitted', 'running', 'cancel_requested')"
         ).format(
             _qualified_identifier(settings.job_table),
             sql.Identifier(settings.heartbeat_at_column),
@@ -233,6 +377,35 @@ class PostgresJobRepository:
             error_category="worker_restarted",
             different_instance=True,
         )
+
+    def reconcile_cancel_requested_jobs(self) -> int:
+        if not self._settings.db_configured:
+            return 0
+        if psycopg is None or sql is None:
+            raise RuntimeError("psycopg is required when APP_POSTGRES_DSN is configured")
+        settings = self._settings
+        query = sql.SQL(
+            "UPDATE {} SET {} = 'cancelled', {} = 'cancelled', {} = %s, "
+            "{} = NULL, {} = now(), {} = now(), {} = now() "
+            "WHERE {} = 'cancel_requested'"
+        ).format(
+            _qualified_identifier(settings.job_table),
+            sql.Identifier(settings.status_column),
+            sql.Identifier(settings.progress_stage_column),
+            sql.Identifier(settings.progress_message_column),
+            sql.Identifier("queue_sequence"),
+            sql.Identifier(settings.updated_at_column),
+            sql.Identifier(settings.finished_at_column),
+            sql.Identifier(settings.heartbeat_at_column),
+            sql.Identifier(settings.status_column),
+        )
+        with psycopg.connect(settings.app_postgres_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    ("Cancellation completed while recovering the monomer MD worker.",),
+                )
+                return cur.rowcount or 0
 
     def fail_instance_jobs(
         self,

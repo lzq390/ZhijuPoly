@@ -2,10 +2,14 @@ import {
   Activity,
   ArrowLeft,
   Atom,
+  Ban,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Database,
   FileJson,
   Gauge,
+  History,
   Loader2,
   Play,
   RotateCw,
@@ -33,6 +37,7 @@ import type {
 import { isGenericMonomerMdDemoWarning, monomerMdDemoNotice, monomerMdServiceCanSubmit } from "../utils/monomerMdPresentation";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Select } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 
 type MonomerMdSimulationPageProps = {
@@ -48,6 +53,7 @@ const STATUS_LABELS: Record<MonomerMdJobStatus, string> = {
   pending: "等待提交",
   submitted: "已提交",
   running: "运行中",
+  cancel_requested: "终止中",
   completed: "已完成",
   failed: "失败",
   cancelled: "已取消"
@@ -103,6 +109,7 @@ const UI_MESSAGE_TRANSLATIONS: Record<string, string> = {
   "monomer MD worker runtime is not ready": "单体 MD worker 运行环境尚未就绪。",
   "monomer MD submit rate limit exceeded; please wait before submitting another job": "提交过于频繁，请稍后再试。",
   "monomer MD job capacity is full; please wait for the active job to finish": "当前已有单体 MD 任务在运行，请等待完成后再提交。",
+  "formal ByteFF2 monomer MD capacity is full; please wait for the current formal job to finish": "正式单体 MD 的执行和排队容量已满，请等待任务完成。",
   "monomer MD job capacity is full; please wait for the current demo job to finish": "当前已有单体 MD 任务在运行，请等待完成后再提交。",
   "monomer MD worker is draining for deployment": "单体 MD worker 正在等待现有任务完成并进行部署升级。",
   "monomer MD worker is not accepting jobs": "单体 MD worker 当前暂不接收新任务。",
@@ -137,6 +144,12 @@ function numericValue(value: unknown): number | null {
 
 function formatNumber(value: number, digits = 2) {
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: digits }).format(value);
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "--";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
 }
 
 function formatValue(value: unknown) {
@@ -260,6 +273,7 @@ function progressValue(status: MonomerMdJobStatus | null, progress: number | nul
   }
   if (status === "completed") return 100;
   if (status === "running") return 62;
+  if (status === "cancel_requested") return 90;
   if (status === "submitted") return 24;
   if (status === "pending") return 10;
   if (status === "failed" || status === "cancelled") return 100;
@@ -329,7 +343,7 @@ function StatusBadge({ status }: { status: MonomerMdJobStatus | null }) {
     <span className={cn("inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold", statusTone(status))}>
       {status === "completed" ? <CheckCircle2 className="h-3.5 w-3.5" /> : null}
       {status === "failed" || status === "cancelled" ? <XCircle className="h-3.5 w-3.5" /> : null}
-      {status === "pending" || status === "submitted" || status === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+      {status === "pending" || status === "submitted" || status === "running" || status === "cancel_requested" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
       {status ? STATUS_LABELS[status] : "未提交"}
     </span>
   );
@@ -544,10 +558,14 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
   const formalReady = simulation.runMode !== "formal" || selectedProtocolInfo?.runtime_ready === true;
   const formalUnavailable = simulation.runMode === "formal" && selectedProtocolInfo?.runtime_ready === false;
   const formalUnknown = simulation.runMode === "formal" && selectedProtocolInfo?.runtime_ready !== true && !formalUnavailable;
-  const canSubmit = !simulation.isLoading
+  const modeCanSubmit = simulation.runMode === "formal"
+    ? simulation.serviceStatus?.formal_can_submit === true
+    : serviceCanSubmit;
+  const formLocked = simulation.isSubmitting || (simulation.runMode === "demo" && simulation.isLoading);
+  const canSubmit = !formLocked
     && !validationError
     && !serviceUnavailable
-    && serviceCanSubmit
+    && modeCanSubmit
     && formalReady;
   const currentStatus = simulation.job?.status ?? null;
   const progress = progressValue(currentStatus, simulation.job?.progress);
@@ -557,6 +575,7 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
   const resultRunMode = result?.run_mode ?? simulation.job?.run_mode ?? simulation.runMode;
   const hasSeries = Boolean(result?.density_series || result?.temperature_series || result?.energy_series);
   const showSeriesCards = !result || hasSeries || resultRunMode === "demo";
+  const historyPageCount = Math.max(1, Math.ceil((simulation.history?.total ?? 0) / (simulation.history?.page_size ?? 20)));
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -587,13 +606,13 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
             <form onSubmit={handleSubmit} className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] font-semibold uppercase text-slate-400">输入</div><h1 className="mt-1 text-base font-semibold text-slate-950">ByteFF2 {currentModeLabel}</h1></div><span className="rounded-md bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700">{simulation.runMode === "formal" ? simulation.selectedProtocol : "演示"}</span></div>
               <div className="mt-4 grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
-                <Button type="button" variant="outline" onClick={() => simulation.setRunMode("demo")} disabled={simulation.isLoading} className={cn("h-9 rounded-md border-transparent text-sm shadow-none", simulation.runMode === "demo" ? "bg-white text-slate-950 shadow-sm" : "bg-transparent text-slate-600 hover:bg-white/70")}>DensityDemo</Button>
-                <Button type="button" variant="outline" onClick={() => simulation.setRunMode("formal")} disabled={simulation.isLoading} className={cn("h-9 rounded-md border-transparent text-sm shadow-none", simulation.runMode === "formal" ? "bg-white text-slate-950 shadow-sm" : "bg-transparent text-slate-600 hover:bg-white/70")}>正式模块</Button>
+                <Button type="button" variant="outline" onClick={() => simulation.setRunMode("demo")} disabled={formLocked} className={cn("h-9 rounded-md border-transparent text-sm shadow-none", simulation.runMode === "demo" ? "bg-white text-slate-950 shadow-sm" : "bg-transparent text-slate-600 hover:bg-white/70")}>DensityDemo</Button>
+                <Button type="button" variant="outline" onClick={() => simulation.setRunMode("formal")} disabled={formLocked} className={cn("h-9 rounded-md border-transparent text-sm shadow-none", simulation.runMode === "formal" ? "bg-white text-slate-950 shadow-sm" : "bg-transparent text-slate-600 hover:bg-white/70")}>正式模块</Button>
               </div>
 
               {simulation.runMode === "demo" ? (
                 <>
-                  <label className="mt-4 block space-y-2"><span className="text-xs font-medium text-slate-600">SMILES</span><Textarea value={simulation.smiles} onChange={(event) => simulation.setSmiles(event.target.value)} placeholder="示例：CCOC(=O)c1ccc(N)cc1" spellCheck={false} className="min-h-[96px] rounded-lg border-slate-200 bg-white font-mono text-[13px] leading-5 text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-sky-200" disabled={simulation.isLoading} /></label>
+                  <label className="mt-4 block space-y-2"><span className="text-xs font-medium text-slate-600">SMILES</span><Textarea value={simulation.smiles} onChange={(event) => simulation.setSmiles(event.target.value)} placeholder="示例：CCOC(=O)c1ccc(N)cc1" spellCheck={false} className="min-h-[96px] rounded-lg border-slate-200 bg-white font-mono text-[13px] leading-5 text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-sky-200" disabled={formLocked} /></label>
                   <div className="mt-2 min-h-[20px] text-xs text-slate-500">{validationError ? <span className="text-red-600">{validationError}</span> : "可输入任意普通单分子 SMILES；不要输入带 * 的聚合物重复单元。"}</div>
                   <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">第一阶段只运行 300 步演示。结果尚未达到平衡，不能作为真实物理密度结论。</div>
                 </>
@@ -605,26 +624,70 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
                       const isSelected = simulation.selectedProtocol === protocol;
                       const isReady = protocolInfo?.runtime_ready;
                       return (
-                        <Button key={protocol} type="button" variant="outline" onClick={() => { simulation.setSelectedProtocol(protocol); simulation.loadProtocolTemplate(protocol); }} disabled={simulation.isLoading} className={cn("h-auto min-h-[54px] justify-between rounded-lg border px-3 py-2 text-left shadow-none", isSelected ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")}>
+                        <Button key={protocol} type="button" variant="outline" onClick={() => { simulation.setSelectedProtocol(protocol); simulation.loadProtocolTemplate(protocol); }} disabled={simulation.isSubmitting} className={cn("h-auto min-h-[54px] justify-between rounded-lg border px-3 py-2 text-left shadow-none", isSelected ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")}>
                           <span className="font-semibold">{PROTOCOL_LABELS[protocol]}</span>
                           <span className={cn("ml-3 shrink-0 rounded-md px-1.5 py-0.5 text-[11px]", isReady ? "bg-emerald-50 text-emerald-700" : protocolInfo ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-500")}>{isReady ? "ready" : protocolInfo ? "blocked" : "unknown"}</span>
                         </Button>
                       );
                     })}
                   </div>
-                  <div className="mt-4 flex items-center justify-between gap-3"><span className="text-xs font-medium text-slate-600">ByteFF2 config JSON</span><Button type="button" variant="outline" onClick={() => simulation.loadProtocolTemplate()} disabled={simulation.isLoading} className="h-8 rounded-md border-slate-200 bg-white px-2.5 text-xs text-slate-700 shadow-none hover:bg-slate-50"><FileJson className="mr-1.5 h-3.5 w-3.5" />载入模板</Button></div>
-                  <Textarea value={simulation.configText} onChange={(event) => simulation.setConfigText(event.target.value)} spellCheck={false} className="mt-2 min-h-[300px] rounded-lg border-slate-200 bg-white font-mono text-xs leading-5 text-slate-900 shadow-none focus-visible:ring-sky-200" disabled={simulation.isLoading} />
+                  <div className="mt-4 flex items-center justify-between gap-3"><span className="text-xs font-medium text-slate-600">ByteFF2 config JSON</span><Button type="button" variant="outline" onClick={() => simulation.loadProtocolTemplate()} disabled={simulation.isSubmitting} className="h-8 rounded-md border-slate-200 bg-white px-2.5 text-xs text-slate-700 shadow-none hover:bg-slate-50"><FileJson className="mr-1.5 h-3.5 w-3.5" />载入模板</Button></div>
+                  <Textarea value={simulation.configText} onChange={(event) => simulation.setConfigText(event.target.value)} spellCheck={false} className="mt-2 min-h-[300px] rounded-lg border-slate-200 bg-white font-mono text-xs leading-5 text-slate-900 shadow-none focus-visible:ring-sky-200" disabled={simulation.isSubmitting} />
                   {formalUnavailable ? <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">当前协议运行环境未就绪：{translateRuntimeDetail(String(selectedProtocolInfo?.runtime_error ?? "runtime not ready"))}</div> : null}
                   {formalUnknown ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">正在等待该协议的运行环境 readiness，确认前不可提交正式任务。</div> : null}
                   {simulation.protocolsError ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">协议列表不可用：{translateUiMessage(simulation.protocolsError)}</div> : null}
                 </>
               )}
-              <div className="mt-4 flex flex-wrap items-center gap-2"><Button type="submit" disabled={!canSubmit} className="h-10 rounded-md px-4 shadow-none disabled:opacity-[0.45]">{simulation.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}{simulation.isLoading ? "运行中" : simulation.runMode === "formal" ? "提交正式任务" : "提交演示"}</Button><Button type="button" variant="outline" onClick={simulation.reset} disabled={simulation.isLoading} className="h-10 rounded-md border-slate-200 bg-white px-4 text-slate-700 shadow-none hover:bg-slate-50">清空结果</Button></div>
+              <div className="mt-4 flex flex-wrap items-center gap-2"><Button type="submit" disabled={!canSubmit} className="h-10 rounded-md px-4 shadow-none disabled:opacity-[0.45]">{simulation.isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}{simulation.isSubmitting ? "正在提交" : simulation.runMode === "formal" ? "提交正式任务" : simulation.isLoading ? "运行中" : "提交演示"}</Button><Button type="button" variant="outline" onClick={simulation.reset} disabled={formLocked} className="h-10 rounded-md border-slate-200 bg-white px-4 text-slate-700 shadow-none hover:bg-slate-50">清空结果</Button></div>
+              {simulation.runMode === "formal" ? <div className="mt-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900">全局共享队列：{simulation.serviceStatus?.formal_running_jobs ?? 0} / {simulation.serviceStatus?.formal_max_running_jobs ?? 1} 个执行槽，{simulation.serviceStatus?.formal_queued_jobs ?? 0} / {simulation.serviceStatus?.formal_max_queued_jobs ?? 2} 个排队槽。可信单租户环境中的访问者可查看和终止这些任务。</div> : null}
               {serviceUnavailable ? <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">{simulation.serviceStatus?.message ? translateUiMessage(simulation.serviceStatus.message) : "后端报告单体 MD 服务当前不可用。"}</div> : null}
               {!serviceUnavailable && serviceDraining ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">单体 MD worker 正在等待现有任务完成并进行部署升级，升级完成后会自动恢复提交。</div> : null}
               {!serviceUnavailable && !serviceDraining && serviceBusy ? <div className="mt-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">当前已有单体 MD 任务运行，任务完成后会自动释放提交容量。</div> : null}
               {simulation.statusError ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">状态接口不可用：{translateUiMessage(simulation.statusError)}</div> : null}
             </form>
+
+            {simulation.runMode === "formal" ? (
+              <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Activity className="h-4 w-4 text-sky-600" />当前正式任务</div>
+                  <Button type="button" variant="outline" onClick={() => void simulation.refreshActiveJobs()} disabled={simulation.isActiveJobsLoading} className="h-8 w-8 rounded-md p-0" aria-label="刷新当前正式任务"><RotateCw className={cn("h-3.5 w-3.5", simulation.isActiveJobsLoading && "animate-spin")} /></Button>
+                </div>
+                {simulation.activeJobsError ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">{translateUiMessage(simulation.activeJobsError)}</div> : null}
+                <div className="mt-3 space-y-2">
+                  {simulation.activeJobs.length ? simulation.activeJobs.map((job) => {
+                    const queued = job.queue_position != null;
+                    const cancelling = simulation.cancellingJobIds.includes(job.job_id) || job.status === "cancel_requested";
+                    return (
+                      <div key={job.job_id} className={cn("rounded-lg border p-3", simulation.job?.job_id === job.job_id ? "border-sky-300 bg-sky-50" : "border-slate-100 bg-slate-50")}>
+                        <button type="button" onClick={() => void simulation.loadJob(job.job_id)} className="w-full text-left">
+                          <div className="flex items-center justify-between gap-2"><span className="truncate font-mono text-[11px] text-slate-600">{job.job_id}</span><StatusBadge status={job.status} /></div>
+                          <div className="mt-2 flex items-center justify-between gap-2 text-xs"><span className="font-semibold text-slate-900">{job.protocol ? PROTOCOL_LABELS[job.protocol] : "--"}</span><span className="text-slate-500">{queued ? `队列第 ${job.queue_position} 位` : job.progress_stage === "acquiring_gpu" ? "等待 GPU" : "执行槽"}</span></div>
+                          <div className="mt-1 text-[11px] text-slate-500">{formatDate(job.created_at)} · {formatNumber(progressValue(job.status, job.progress), 0)}%</div>
+                        </button>
+                        <Button type="button" variant="outline" disabled={cancelling || job.status === "pending"} onClick={() => { if (window.confirm(queued ? "确定取消这个排队任务吗？" : "确定终止这个正在进行的任务吗？终止会安全清理进程和 GPU 资源。")) void simulation.cancelJob(job); }} className="mt-2 h-8 rounded-md border-red-200 px-2.5 text-xs text-red-700 hover:bg-red-50">
+                          {cancelling ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Ban className="mr-1.5 h-3.5 w-3.5" />}{cancelling ? "终止中…" : job.status === "pending" ? "等待 Worker 接收" : queued ? "取消排队" : "终止任务"}
+                        </Button>
+                      </div>
+                    );
+                  }) : <div className="rounded-lg border border-dashed border-slate-200 p-5 text-center text-xs text-slate-500">{simulation.isActiveJobsLoading ? "读取当前任务…" : "当前没有正式任务"}</div>}
+                </div>
+              </section>
+            ) : null}
+
+            {simulation.runMode === "formal" ? (
+              <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><History className="h-4 w-4 text-violet-600" />正式任务历史</div><Button type="button" variant="outline" onClick={() => void simulation.refreshHistory()} disabled={simulation.isHistoryLoading} className="h-8 w-8 rounded-md p-0" aria-label="刷新正式任务历史"><RotateCw className={cn("h-3.5 w-3.5", simulation.isHistoryLoading && "animate-spin")} /></Button></div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <Select value={simulation.historyQuery.protocol ?? ""} onChange={(event) => simulation.changeHistoryQuery({ page: 1, protocol: event.target.value as MonomerMdProtocol | "" })} className="h-9 rounded-md border-slate-200 bg-white px-2 text-xs"><option value="">全部协议</option>{FORMAL_PROTOCOLS.map((protocol) => <option key={protocol} value={protocol}>{PROTOCOL_LABELS[protocol]}</option>)}</Select>
+                  <Select value={simulation.historyQuery.status ?? ""} onChange={(event) => simulation.changeHistoryQuery({ page: 1, status: event.target.value as MonomerMdJobStatus | "" })} className="h-9 rounded-md border-slate-200 bg-white px-2 text-xs"><option value="">全部状态</option>{Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>
+                </div>
+                {simulation.historyError ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">{translateUiMessage(simulation.historyError)}</div> : null}
+                <div className="mt-3 max-h-[390px] space-y-2 overflow-auto pr-1">
+                  {simulation.history?.items.length ? simulation.history.items.map((job) => <button key={job.job_id} type="button" onClick={() => void simulation.loadJob(job.job_id)} className={cn("w-full rounded-lg border p-3 text-left hover:bg-slate-50", simulation.job?.job_id === job.job_id ? "border-sky-300 bg-sky-50" : "border-slate-100 bg-white")}><div className="flex items-center justify-between gap-2"><span className="truncate font-mono text-[11px] text-slate-600">{job.job_id}</span><StatusBadge status={job.status} /></div><div className="mt-2 text-xs font-semibold text-slate-900">{job.protocol ? PROTOCOL_LABELS[job.protocol] : "--"}{job.queue_position != null ? ` · 队列第 ${job.queue_position} 位` : ""}</div><div className="mt-1 text-[11px] text-slate-500">{formatDate(job.created_at)}</div></button>) : <div className="rounded-lg border border-dashed border-slate-200 p-5 text-center text-xs text-slate-500">{simulation.isHistoryLoading ? "读取历史…" : "没有符合条件的正式任务"}</div>}
+                </div>
+                <div className="mt-3 flex items-center justify-between text-xs text-slate-500"><Button type="button" variant="outline" aria-label="上一页" className="h-8 w-8 rounded-md p-0" disabled={(simulation.historyQuery.page ?? 1) <= 1} onClick={() => simulation.changeHistoryQuery({ page: (simulation.historyQuery.page ?? 1) - 1 })}><ChevronLeft className="h-3.5 w-3.5" /></Button><span>第 {simulation.historyQuery.page ?? 1} / {historyPageCount} 页 · 共 {simulation.history?.total ?? 0} 项</span><Button type="button" variant="outline" aria-label="下一页" className="h-8 w-8 rounded-md p-0" disabled={(simulation.historyQuery.page ?? 1) >= historyPageCount} onClick={() => simulation.changeHistoryQuery({ page: (simulation.historyQuery.page ?? 1) + 1 })}><ChevronRight className="h-3.5 w-3.5" /></Button></div>
+              </section>
+            ) : null}
 
             <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Timer className="h-4 w-4 text-slate-600" />任务状态</div><StatusBadge status={currentStatus} /></div>
@@ -636,6 +699,8 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
                 </div>
                 <div><div className="mb-1 flex items-center justify-between text-xs text-slate-500"><span>{currentStatus ? STATUS_LABELS[currentStatus] : "提交后开始轮询后端任务。"}</span><span className="tabular-nums">{formatNumber(progress, 0)}%</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className={cn("h-full rounded-full transition-all", currentStatus === "failed" || currentStatus === "cancelled" ? "bg-red-500" : "bg-sky-500")} style={{ width: `${progress}%` }} /></div></div>
                 <div className="grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-1">{STATUS_STEPS.map((status) => { const active = currentStatus === status; const complete = STATUS_STEPS.indexOf(currentStatus ?? "pending") > STATUS_STEPS.indexOf(status) || currentStatus === "completed"; return <div key={status} className={cn("flex items-center justify-between rounded-lg border px-3 py-2", active ? "border-sky-200 bg-sky-50 text-sky-800" : complete ? "border-emerald-100 bg-emerald-50 text-emerald-800" : "border-slate-100 bg-slate-50 text-slate-500")}><span>{STATUS_LABELS[status]}</span>{complete ? <CheckCircle2 className="h-3.5 w-3.5" /> : active ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span className="h-3.5 w-3.5 rounded-full border border-slate-200" />}</div>; })}</div>
+                {simulation.job?.queue_position != null ? <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">当前排队位置：第 {simulation.job.queue_position} 位</div> : null}
+                {simulation.job && simulation.job.run_mode === "formal" && !["completed", "failed", "cancelled"].includes(simulation.job.status) ? <Button type="button" variant="outline" disabled={simulation.job.status === "pending" || simulation.job.status === "cancel_requested" || simulation.cancellingJobIds.includes(simulation.job.job_id)} onClick={() => { const selectedJob = simulation.job; if (!selectedJob) return; const queued = selectedJob.queue_position != null; if (window.confirm(queued ? "确定取消这个排队任务吗？" : "确定终止这个正在进行的任务吗？")) void simulation.cancelJob(selectedJob); }} className="h-9 rounded-md border-red-200 px-3 text-xs text-red-700 hover:bg-red-50"><Ban className="mr-1.5 h-3.5 w-3.5" />{simulation.job.status === "pending" ? "等待 Worker 接收" : simulation.job.status === "cancel_requested" ? "终止中…" : simulation.job.queue_position != null ? "取消排队" : "终止任务"}</Button> : null}
                 {simulation.error ? <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700"><span className="inline-flex items-start gap-2"><TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />{translateUiMessage(simulation.error)}</span></div> : null}
               </div>
             </section>
@@ -647,9 +712,9 @@ export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageP
             <MetricsPanel result={result} />
             {showSeriesCards ? (
               <div className="grid gap-4 lg:grid-cols-3">
-                <SeriesCard title="密度" chartLabel="密度曲线" series={result?.density_series} unit="g/cm3" color="#0ea5e9" valueKeys={["density", "density_g_cm3", "rho"]} isLoading={simulation.isLoading} />
-                <SeriesCard title="温度" chartLabel="温度曲线" series={result?.temperature_series} unit="K" color="#10b981" valueKeys={["temperature", "temperature_k", "temp"]} isLoading={simulation.isLoading} />
-                <SeriesCard title="能量" chartLabel="能量曲线" series={result?.energy_series} unit="kcal/mol" color="#6366f1" valueKeys={["energy", "total_energy", "total_energy_kcal_mol", "potential_energy"]} isLoading={simulation.isLoading} />
+                <SeriesCard title="密度" chartLabel="密度曲线" series={result?.density_series} unit="g/cm3" color="#0ea5e9" valueKeys={["density", "density_g_cm3", "rho"]} isLoading={simulation.isJobLoading || simulation.isSubmitting} />
+                <SeriesCard title="温度" chartLabel="温度曲线" series={result?.temperature_series} unit="K" color="#10b981" valueKeys={["temperature", "temperature_k", "temp"]} isLoading={simulation.isJobLoading || simulation.isSubmitting} />
+                <SeriesCard title="能量" chartLabel="能量曲线" series={result?.energy_series} unit="kcal/mol" color="#6366f1" valueKeys={["energy", "total_energy", "total_energy_kcal_mol", "potential_energy"]} isLoading={simulation.isJobLoading || simulation.isSubmitting} />
               </div>
             ) : (
               <section className="rounded-[14px] border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm">正式协议结果已写入摘要和输出文件；该协议未返回前端曲线数据。</section>

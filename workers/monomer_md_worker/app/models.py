@@ -107,3 +107,9 @@ class ArtifactDeletionResponse(BaseModel):
     deleted: bool
     artifact_root: str
     message: str
+
+
+class JobCancellationResponse(BaseModel):
+    job_id: str
+    status: Literal["cancel_requested", "cancelled"]
+    message: str

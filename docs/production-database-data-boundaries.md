@@ -2,7 +2,7 @@
 
 The deployment controller captures one PostgreSQL `REPEATABLE READ`, read-only,
 deferrable snapshot after admission is drained and again before admission is
-reopened. Every table introduced by migrations 0001–0013 belongs to exactly one
+reopened. Every table introduced by migrations 0001–0014 belongs to exactly one
 of the following boundaries.
 
 ## Business-mutable data
@@ -19,6 +19,11 @@ or migration maintenance:
 Migration 0013 may only change the three DFT relations from absent to present
 and empty. Its `monomer_dft.jobs_enqueue_sequence_seq` must be newly present,
 at its start value, and not called.
+
+Migration 0014 may only add nullable `cancel_requested_at` and
+`queue_sequence` columns to `md.monomer_md_jobs`, widen its status constraint,
+and create the formal-history, active-queue, unique-queue, and owned queue
+sequence objects. It does not rewrite existing business rows.
 
 ## Governed controls
 
@@ -49,8 +54,8 @@ truncate or overwrite any business-mutable relation.
 ## Migration ledger and the sole destructive exception
 
 `governance.schema_migrations` must be the exact ordered, checksum-pinned
-0001–0011, 0001–0012, or 0001–0013 ledger. The only destructive exception is
-`generation.polytao_jobs` during 0012:
+0001–0011, 0001–0012, 0001–0013, or 0001–0014 ledger. The only destructive
+exception is `generation.polytao_jobs` during 0012:
 
 1. capture its live row count and schema/content digests under the persistent
    0012 operation ID;
@@ -68,5 +73,6 @@ its pre-maintenance state.
 
 The snapshot also binds every data-bearing serial, identity, and explicit
 sequence owned by the classified tables. All sequence state is unchanged
-except the pristine 0013 DFT sequence creation described above. This prevents
-an apparently unchanged row digest from hiding a future identity collision.
+except the pristine 0013 DFT and 0014 MD queue sequence creation described
+above. This prevents an apparently unchanged row digest from hiding a future
+identity collision.

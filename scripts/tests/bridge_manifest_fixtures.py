@@ -1,7 +1,7 @@
 """Exact frozen-B and current-F migration fixtures for bridge tests.
 
 The bridge is intentionally asymmetric: B ends at 0012 while F is the unique
-B-plus-0013 extension. Reading B from its pinned Git object prevents a current
+B-plus-0013/0014 extension. Reading B from its pinned Git object prevents a current
 F checkout from being mistaken for the historical bridge target.
 """
 
@@ -23,24 +23,42 @@ B_MANIFEST_SHA256 = (
     "sha256:3f149c17e596c9dfe7c88245894c36e3e2d22ab67cf38375c84f2b1d7d7224fa"
 )
 F_MANIFEST_SHA256 = (
-    "sha256:f3dc3ae7b5cf835af3d8ff0090e472b768bd1ad8056b3791979014e270983a3e"
+    "sha256:b2b466641e3216edb67032c13355627524b70560629dc2bde58c0de5f61af501"
 )
-FINAL_MIGRATION_RECORD = {
-    "version": "0013_monomer_dft_jobs",
-    "kind": "expand",
-    "epoch": 2,
-    "checksum": (
-        "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc"
-    ),
-    "requires_contracts": [
-        {
-            "version": "0012_drop_polytao_jobs",
-            "checksum": (
-                "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
-            ),
-        }
-    ],
-}
+FINAL_MIGRATION_RECORDS = [
+    {
+        "version": "0013_monomer_dft_jobs",
+        "kind": "expand",
+        "epoch": 2,
+        "checksum": (
+            "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc"
+        ),
+        "requires_contracts": [
+            {
+                "version": "0012_drop_polytao_jobs",
+                "checksum": (
+                    "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+                ),
+            }
+        ],
+    },
+    {
+        "version": "0014_monomer_md_task_queue_cancel",
+        "kind": "expand",
+        "epoch": 2,
+        "checksum": (
+            "7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6"
+        ),
+        "requires_contracts": [
+            {
+                "version": "0012_drop_polytao_jobs",
+                "checksum": (
+                    "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+                ),
+            }
+        ],
+    },
+]
 
 
 def _git(*arguments: str) -> bytes:
@@ -124,9 +142,9 @@ F_MANIFEST_PAYLOAD = (REPOSITORY_ROOT / MANIFEST_PATH).read_bytes()
 if _sha256(F_MANIFEST_PAYLOAD) != F_MANIFEST_SHA256:
     raise RuntimeError("current F migration manifest differs from its reviewed digest")
 F_MANIFEST_RECORDS = _manifest_records(F_MANIFEST_PAYLOAD, label="current F")
-if F_MANIFEST_RECORDS != [*B_MANIFEST_RECORDS, FINAL_MIGRATION_RECORD]:
+if F_MANIFEST_RECORDS != [*B_MANIFEST_RECORDS, *FINAL_MIGRATION_RECORDS]:
     raise RuntimeError(
-        "current F migration manifest is not the unique frozen-B plus 0013 extension"
+        "current F migration manifest is not the unique frozen-B plus 0013/0014 extension"
     )
 
 

@@ -474,7 +474,7 @@ def _lock_capacity(connection: Any) -> None:
     )
 
 
-def _require_no_owned_sequence(connection: Any) -> None:
+def _require_exact_owned_sequence(connection: Any) -> None:
     rows = connection.execute(
         """
         SELECT sequence_namespace.nspname AS schema_name,
@@ -495,9 +495,15 @@ def _require_no_owned_sequence(connection: Any) -> None:
         ORDER BY sequence_namespace.nspname, sequence_relation.relname
         """
     ).fetchall()
-    if rows:
+    owned_sequences = [
+        (str(row["schema_name"]), str(row["sequence_name"]))
+        for row in rows
+    ]
+    if owned_sequences != [
+        ("md", "monomer_md_queue_sequence_seq"),
+    ]:
         raise DeploymentMonomerMdCanaryError(
-            "monomer MD canary table unexpectedly owns a sequence"
+            "monomer MD canary table owned-sequence contract differs"
         )
 
 
@@ -656,7 +662,7 @@ def _create_or_load_owned_row(
 ) -> dict[str, Any]:
     with connection_factory(dsn) as connection:
         _lock_capacity(connection)
-        _require_no_owned_sequence(connection)
+        _require_exact_owned_sequence(connection)
         existing = _row_document(connection, marker["job_id"], lock=True)
         if existing is None:
             if _active_count(connection) >= max_active_jobs:
@@ -692,7 +698,7 @@ def _load_owned_row(
     with connection_factory(dsn) as connection:
         if lock:
             _lock_capacity(connection)
-        _require_no_owned_sequence(connection)
+        _require_exact_owned_sequence(connection)
         row = _row_document(connection, marker["job_id"], lock=lock)
         return _validate_owned_row(row, marker) if row is not None else None
 
@@ -753,7 +759,7 @@ def _validate_worker_ready(
         or health.get("db_configured") is not True
         or health.get("runtime_ready") is not True
         or health.get("active_jobs") != 0
-        or health.get("max_active_jobs") != 1
+        or health.get("max_active_jobs") != 3
         or health.get("default_steps") != EXPECTED_STEPS
         or health.get("max_steps") != EXPECTED_STEPS
         or not isinstance(health.get("job_root"), str)
@@ -805,10 +811,10 @@ def submit_canary(
     if (
         not isinstance(max_active_jobs, int)
         or isinstance(max_active_jobs, bool)
-        or max_active_jobs != 1
+        or max_active_jobs != 3
     ):
         raise DeploymentMonomerMdCanaryError(
-            "deployment canary requires exact Monomer-MD capacity one"
+            "deployment canary requires exact Monomer-MD capacity three"
         )
     state_directory = _require_private_state_directory(state_directory)
     with _operation_lock(state_directory):
@@ -956,7 +962,7 @@ def validate_completed_canary(
             )
         with connection_factory(dsn) as connection:
             _lock_capacity(connection)
-            _require_no_owned_sequence(connection)
+            _require_exact_owned_sequence(connection)
             row = _row_document(connection, marker["job_id"], lock=True)
             if row is None:
                 raise DeploymentMonomerMdCanaryError(
@@ -1080,7 +1086,7 @@ def _preflight_cleanup_row(
 ) -> dict[str, Any] | None:
     with connection_factory(dsn) as connection:
         _lock_capacity(connection)
-        _require_no_owned_sequence(connection)
+        _require_exact_owned_sequence(connection)
         row = _row_document(connection, marker["job_id"], lock=True)
         if row is None:
             if marker["phase"] == "validated":
@@ -1120,7 +1126,7 @@ def _delete_owned_row_with_intent(
 ) -> dict[str, Any]:
     with connection_factory(dsn) as connection:
         _lock_capacity(connection)
-        _require_no_owned_sequence(connection)
+        _require_exact_owned_sequence(connection)
         row = _row_document(connection, marker["job_id"], lock=True)
         row_sha256: str | None = None
         if row is not None:
@@ -1166,7 +1172,7 @@ def _delete_owned_row_with_intent(
                 raise DeploymentMonomerMdCanaryError(
                     "canary row CAS deletion did not remove exactly one owned row"
                 )
-        _require_no_owned_sequence(connection)
+        _require_exact_owned_sequence(connection)
     return marker
 
 
@@ -1178,7 +1184,7 @@ def _prove_database_row_absent(
 ) -> None:
     with connection_factory(dsn) as connection:
         _lock_capacity(connection)
-        _require_no_owned_sequence(connection)
+        _require_exact_owned_sequence(connection)
         if _row_document(connection, marker["job_id"], lock=True) is not None:
             raise DeploymentMonomerMdCanaryError(
                 "canary database row remains after cleanup"

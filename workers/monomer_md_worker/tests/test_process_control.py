@@ -182,7 +182,7 @@ def test_signal_failure_quarantines_gpu_and_keeps_lease_fail_closed(monkeypatch)
     assert lease.failed_closed is True
 
 
-def test_cancel_during_host_registration_closes_exec_gate_and_collects_child() -> None:
+def test_cancel_during_host_registration_keeps_gate_until_pid_is_registered() -> None:
     started = threading.Event()
     allow_registration = threading.Event()
 
@@ -218,6 +218,8 @@ def test_cancel_during_host_registration_closes_exec_gate_and_collects_child() -
         task.cancel()
         await asyncio.sleep(0)
         task.cancel()
+        assert lease.workload_pid is not None
+        assert process_control._process_group_alive(lease.workload_pid) is True
         allow_registration.set()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -227,7 +229,7 @@ def test_cancel_during_host_registration_closes_exec_gate_and_collects_child() -
     assert process_control._process_group_alive(lease.workload_pid) is False
 
 
-def test_cancel_during_scope_transition_never_registers_or_opens_exec_gate() -> None:
+def test_cancel_during_scope_transition_registers_before_cleanup_without_opening_gate() -> None:
     transition_started = threading.Event()
     allow_transition = threading.Event()
     transitioned_pid: list[int] = []
@@ -263,9 +265,60 @@ def test_cancel_during_scope_transition_never_registers_or_opens_exec_gate() -> 
             await task
 
     asyncio.run(scenario())
-    assert registrations == []
+    assert registrations == transitioned_pid
     assert len(transitioned_pid) == 1
     assert process_control._process_group_alive(transitioned_pid[0]) is False
+
+
+def test_cancel_during_subprocess_creation_collects_and_registers_gated_child(
+    monkeypatch,
+) -> None:
+    real_create_subprocess_exec = asyncio.create_subprocess_exec
+    spawn_created = threading.Event()
+    allow_spawn_result = asyncio.Event()
+    spawned_pid: list[int] = []
+    registrations: list[int] = []
+
+    class Lease:
+        lease = SimpleNamespace(lease_id="a" * 32)
+
+        def register_workload(self, workload_pid: int) -> None:
+            registrations.append(workload_pid)
+
+    async def delayed_create_subprocess_exec(*args, **kwargs):
+        process = await real_create_subprocess_exec(*args, **kwargs)
+        spawned_pid.append(process.pid)
+        spawn_created.set()
+        await allow_spawn_result.wait()
+        return process
+
+    monkeypatch.setattr(
+        process_control.asyncio,
+        "create_subprocess_exec",
+        delayed_create_subprocess_exec,
+    )
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            process_control.create_fenced_subprocess_exec(
+                [sys.executable, "-c", "raise AssertionError('gate opened')"],
+                execution_lease=Lease(),  # type: ignore[arg-type]
+                scope_command_builder=_identity_scope_command,
+                scope_membership_waiter=_identity_scope_membership,
+            )
+        )
+        assert await asyncio.to_thread(spawn_created.wait, 1)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        allow_spawn_result.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert registrations == spawned_pid
+    assert len(spawned_pid) == 1
+    assert process_control._process_group_alive(spawned_pid[0]) is False
 
 
 def test_fenced_spawn_does_not_run_sitecustomize_before_registration(
@@ -476,6 +529,71 @@ def test_repeated_cancel_waits_for_mps_and_process_cleanup(monkeypatch) -> None:
     asyncio.run(scenario())
     assert events == ["mps-terminate-client", signal.SIGTERM]
     assert lease.failed_closed is False
+
+
+def test_job_cancel_waits_for_new_mps_client_before_safe_termination(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        process_control,
+        "MPS_CLIENT_CANCELLATION_STABILIZATION_SECONDS",
+        0.03,
+    )
+    termination_calls: list[tuple[float, bool]] = []
+
+    class BlockingProcess:
+        pid = 43_211
+        returncode = None
+
+        def __init__(self) -> None:
+            self.finished = asyncio.Event()
+
+        async def wait(self) -> int:
+            await self.finished.wait()
+            return -signal.SIGTERM
+
+    async def fake_terminate(
+        process,
+        *,
+        process_already_waited,
+        execution_lease,
+    ) -> None:
+        assert execution_lease is not None
+        termination_calls.append(
+            (time.monotonic(), process_already_waited)
+        )
+        process.returncode = -signal.SIGTERM
+        process.finished.set()
+
+    monkeypatch.setattr(
+        process_control,
+        "_terminate_process_group",
+        fake_terminate,
+    )
+
+    async def scenario() -> float:
+        process = BlockingProcess()
+        task = asyncio.create_task(
+            process_control.wait_for_process_group(
+                process,  # type: ignore[arg-type]
+                timeout_seconds=10,
+                execution_lease=_Lease([]),  # type: ignore[arg-type]
+            )
+        )
+        await asyncio.sleep(0)
+        cancelled_at = time.monotonic()
+        task.cancel()
+        await asyncio.sleep(0.005)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return time.monotonic() - cancelled_at
+
+    elapsed = asyncio.run(scenario())
+
+    assert 0.025 <= elapsed < 0.25
+    assert len(termination_calls) == 1
+    assert termination_calls[0][1] is False
 
 
 def test_process_group_deadline_constants_bound_real_cleanup(

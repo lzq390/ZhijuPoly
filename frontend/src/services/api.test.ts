@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  cancelMonomerMdJob,
   fetchDevGpuSessionStatus,
+  fetchMonomerMdJobs,
   fetchPolytaoJob,
   fetchPolytaoStatus,
   recoverDevGpuSession
@@ -107,6 +109,113 @@ describe("development GPU session API", () => {
         signal: controller.signal
       })
     );
+  });
+});
+
+describe("monomer MD queue API", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("encodes every queue filter and forwards the caller AbortSignal", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          items: [
+            {
+              job_id: "formal-a",
+              status: "cancel_requested",
+              input_smiles: "CO",
+              progress_percent: 25,
+              progress_message: "cancelling"
+            }
+          ],
+          total: 21,
+          page: 2,
+          page_size: 10
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const page = await fetchMonomerMdJobs(
+      {
+        run_mode: "formal",
+        active_only: false,
+        protocol: "Density",
+        status: "cancel_requested",
+        page: 2,
+        page_size: 10
+      },
+      controller.signal
+    );
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/monomer-md/jobs?run_mode=formal&active_only=false&protocol=Density&status=cancel_requested&page=2&page_size=10",
+      expect.objectContaining({ signal: controller.signal })
+    );
+    expect(page.items[0]).toMatchObject({
+      smiles: "CO",
+      progress: 25,
+      message: "cancelling"
+    });
+  });
+
+  it.each([200, 202])(
+    "sends one abort-aware cancellation POST and accepts HTTP %i",
+    async (status) => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            job_id: "formal/a b",
+            status: "cancel_requested",
+            progress_percent: 90
+          }),
+          { status, headers: { "Content-Type": "application/json" } }
+        )
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const controller = new AbortController();
+
+      const job = await cancelMonomerMdJob("formal/a b", controller.signal);
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/monomer-md/jobs/formal%2Fa%20b/cancel",
+        expect.objectContaining({
+          method: "POST",
+          body: "{}",
+          signal: controller.signal
+        })
+      );
+      expect(job).toMatchObject({
+        job_id: "formal/a b",
+        status: "cancel_requested",
+        progress: 90
+      });
+    }
+  );
+
+  it.each([404, 409])("preserves HTTP %i cancellation failures", async (status) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: `cancel failed: ${status}` }), {
+          status,
+          headers: { "Content-Type": "application/json" }
+        })
+      )
+    );
+
+    await expect(cancelMonomerMdJob("formal-a")).rejects.toMatchObject({
+      name: "ApiRequestError",
+      status,
+      message: `cancel failed: ${status}`
+    });
   });
 });
 

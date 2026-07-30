@@ -143,14 +143,14 @@ def load_settings() -> WorkerSettings:
     max_concurrent_jobs = _get_int("MONOMER_MD_MAX_CONCURRENT_JOBS", 1)
     max_active_jobs = _get_int(
         "MONOMER_MD_MAX_ACTIVE_JOBS",
-        max_concurrent_jobs,
+        3,
     )
     if gpu_broker_enabled and (
-        max_concurrent_jobs != 1 or max_active_jobs != 1
+        max_concurrent_jobs != 1 or max_active_jobs != 3
     ):
         raise ValueError(
             "Broker-governed MD requires MONOMER_MD_MAX_CONCURRENT_JOBS=1 "
-            "and MONOMER_MD_MAX_ACTIVE_JOBS=1"
+            "and MONOMER_MD_MAX_ACTIVE_JOBS=3"
         )
     gpu_scope_launcher = os.getenv(
         "MONOMER_MD_GPU_SCOPE_LAUNCHER", ""

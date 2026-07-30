@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 import sys
@@ -17,6 +18,7 @@ from gpu_resource import (
 
 
 _CleanupResult = TypeVar("_CleanupResult")
+logger = logging.getLogger("monomer_md_worker.process_control")
 
 
 async def await_safety_cleanup(
@@ -98,13 +100,33 @@ async def create_fenced_subprocess_exec(
                 execution_lease.lease.lease_id,
                 gated_command,
             )
-            process = await asyncio.create_subprocess_exec(
-                *scoped_command,
-                env=env,
-                pass_fds=(gate_reader,),
-                start_new_session=True,
-                **kwargs,
+            spawn_task = asyncio.create_task(
+                asyncio.create_subprocess_exec(
+                    *scoped_command,
+                    env=env,
+                    pass_fds=(gate_reader,),
+                    start_new_session=True,
+                    **kwargs,
+                )
             )
+            try:
+                process = await asyncio.shield(spawn_task)
+            except BaseException:
+                # asyncio can deliver cancellation after the OS child exists
+                # but before create_subprocess_exec publishes its Process
+                # object. Collect that result and fence the still-gated child;
+                # otherwise an exact systemd scope and GPU lease are orphaned.
+                cleanup_gate_writer = gate_writer
+                gate_writer = -1
+                await await_safety_cleanup(
+                    _cleanup_cancelled_spawn(
+                        spawn_task,
+                        execution_lease,
+                        cleanup_gate_writer,
+                        scope_membership_waiter,
+                    )
+                )
+                raise
         except BaseException:
             _close_fd(gate_writer)
             raise
@@ -122,12 +144,15 @@ async def create_fenced_subprocess_exec(
     except BaseException:
         # create_subprocess_exec can return before systemd has moved and exec'd
         # the same PID. Keep the CUDA gate closed until the exact transition
-        # is proven, and collect the unregistered scope on any failure.
-        _close_fd(gate_writer)
+        # is proven. If the transition won the cancellation race, register the
+        # still-gated PID before collecting it so Broker release can use the
+        # exact cgroup instead of an unregistered, whole-card MPS audit.
         await await_safety_cleanup(
-            _cleanup_unregistered_scope_transition(
+            _cleanup_cancelled_scope_transition(
                 process,
                 scope_transition_task,
+                execution_lease,
+                gate_writer,
             )
         )
         raise
@@ -140,12 +165,14 @@ async def create_fenced_subprocess_exec(
         # Cancellation cannot cancel the host-side registration thread.  Keep
         # the exec gate closed, collect the authoritative registration result,
         # and prove the dedicated cgroup empty before returning control.
-        _close_fd(gate_writer)
+        cleanup_gate_writer = gate_writer
+        gate_writer = -1
         await await_safety_cleanup(
             _cleanup_failed_fenced_spawn(
                 process,
                 registration_task,
                 execution_lease,
+                cleanup_gate_writer,
             )
         )
         raise
@@ -168,6 +195,8 @@ async def wait_for_process_group(
     timeout_seconds: float,
     execution_lease: ManagedGpuLease | None,
 ) -> int:
+    loop = asyncio.get_running_loop()
+    process_started_at = loop.time()
     process_wait = asyncio.create_task(process.wait())
     lease_wait: asyncio.Task[None] | None = None
     if execution_lease is not None:
@@ -206,9 +235,13 @@ async def wait_for_process_group(
             execution_lease.assert_healthy()
         return return_code
     except asyncio.CancelledError:
-        await terminate_process_group(
-            process,
-            execution_lease=execution_lease,
+        await await_safety_cleanup(
+            _terminate_cancelled_process_group(
+                process,
+                process_wait=process_wait,
+                process_started_at=process_started_at,
+                execution_lease=execution_lease,
+            )
         )
         raise
     finally:
@@ -223,6 +256,37 @@ async def wait_for_process_group(
 MAX_TERMINATION_GRACE_SECONDS = 10.0
 PROCESS_GROUP_POLL_SECONDS = 0.05
 PROCESS_GROUP_KILL_OBSERVE_SECONDS = 1.0
+MPS_CLIENT_CANCELLATION_STABILIZATION_SECONDS = 30.0
+
+
+async def _terminate_cancelled_process_group(
+    process: asyncio.subprocess.Process,
+    *,
+    process_wait: asyncio.Task[int],
+    process_started_at: float,
+    execution_lease: ManagedGpuLease | None,
+) -> None:
+    """Delay user cancellation until a new MPS client can service teardown."""
+
+    if execution_lease is not None and not process_wait.done():
+        loop = asyncio.get_running_loop()
+        remaining = (
+            process_started_at
+            + MPS_CLIENT_CANCELLATION_STABILIZATION_SECONDS
+            - loop.time()
+        )
+        if remaining > 0:
+            await asyncio.wait({process_wait}, timeout=remaining)
+    process_already_waited = (
+        process_wait.done()
+        and not process_wait.cancelled()
+        and process_wait.exception() is None
+    )
+    await _terminate_process_group(
+        process,
+        process_already_waited=process_already_waited,
+        execution_lease=execution_lease,
+    )
 
 
 async def _wait_for_process_group_exit(
@@ -371,13 +435,22 @@ async def _cleanup_failed_fenced_spawn(
     process: asyncio.subprocess.Process,
     registration_task: asyncio.Task[Any],
     execution_lease: ManagedGpuLease,
+    gate_writer: int,
 ) -> None:
     registered = False
     try:
         await registration_task
         registered = True
     except Exception:
-        pass
+        logger.warning(
+            "fenced subprocess host registration failed during cleanup",
+            exc_info=True,
+        )
+    finally:
+        # Do not let the gated PID disappear while the host-side Broker call
+        # is still resolving its exact cgroup identity. EOF makes exec_gate
+        # exit with 126, so the unadmitted target command never runs.
+        _close_fd(gate_writer)
     try:
         await asyncio.wait_for(process.wait(), timeout=2.0)
     except asyncio.TimeoutError:
@@ -391,14 +464,75 @@ async def _cleanup_failed_fenced_spawn(
         await process.wait()
 
 
-async def _cleanup_unregistered_scope_transition(
+async def _cleanup_cancelled_scope_transition(
     process: asyncio.subprocess.Process,
     transition_task: asyncio.Task[Any],
+    execution_lease: ManagedGpuLease,
+    gate_writer: int,
 ) -> None:
+    transitioned = False
     try:
         await transition_task
+        transitioned = True
     except Exception:
-        pass
+        logger.warning(
+            "cancelled fenced subprocess did not complete scope transition",
+            exc_info=True,
+        )
+    if transitioned:
+        try:
+            # The writer remains open while host registration runs, so the
+            # exec gate cannot disappear or import CUDA before the Broker has
+            # bound this exact process identity and scope.
+            await asyncio.to_thread(execution_lease.register_workload, process.pid)
+        except Exception:
+            logger.warning(
+                "cancelled fenced subprocess could not register its exact scope",
+                exc_info=True,
+            )
+            _close_fd(gate_writer)
+            await _cleanup_unregistered_process(process)
+            return
+        _close_fd(gate_writer)
+        await _cleanup_registered_fenced_spawn(process, execution_lease)
+        return
+    _close_fd(gate_writer)
+    await _cleanup_unregistered_process(process)
+
+
+async def _cleanup_cancelled_spawn(
+    spawn_task: asyncio.Task[asyncio.subprocess.Process],
+    execution_lease: ManagedGpuLease,
+    gate_writer: int,
+    scope_membership_waiter,
+) -> None:
+    try:
+        process = await spawn_task
+    except BaseException:
+        _close_fd(gate_writer)
+        logger.warning(
+            "cancelled fenced subprocess creation did not publish a process",
+            exc_info=True,
+        )
+        return
+    transition_task = asyncio.create_task(
+        asyncio.to_thread(
+            scope_membership_waiter,
+            process.pid,
+            execution_lease.lease.lease_id,
+        )
+    )
+    await _cleanup_cancelled_scope_transition(
+        process,
+        transition_task,
+        execution_lease,
+        gate_writer,
+    )
+
+
+async def _cleanup_unregistered_process(
+    process: asyncio.subprocess.Process,
+) -> None:
     try:
         await asyncio.wait_for(process.wait(), timeout=2.0)
     except asyncio.TimeoutError:

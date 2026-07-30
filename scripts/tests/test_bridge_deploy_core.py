@@ -231,13 +231,13 @@ class BridgePolicyTests(unittest.TestCase):
                     authority_records=authority_records,
                 )
 
-    def test_registry_matches_only_exact_pre_post_0012_and_post_0013(self) -> None:
+    def test_registry_matches_only_exact_supported_migration_prefixes(self) -> None:
         registry = policy()["accepted_migration_ledgers"]
         assert isinstance(registry, list)
         for name, records in (
             ("pre-0012", TARGET_RECORDS[:-1]),
             ("post-0012", TARGET_RECORDS),
-            ("post-0013", AUTHORITY_RECORDS),
+            ("post-0013", AUTHORITY_RECORDS[:-1]),
         ):
             self.assertEqual(
                 BRIDGE.match_migration_ledger(registry, records)["name"],
@@ -248,8 +248,9 @@ class BridgePolicyTests(unittest.TestCase):
                 registry,
                 [
                     *TARGET_RECORDS,
+                    BRIDGE.DFT_MIGRATION_RECORD,
                     {
-                        **BRIDGE.FINAL_MIGRATION_RECORD,
+                        **BRIDGE.QUEUE_MIGRATION_RECORD,
                         "checksum": "e" * 64,
                     },
                 ],

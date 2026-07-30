@@ -89,7 +89,7 @@ def count_active_monomer_md_jobs_postgres(connection: Any) -> int:
         """
         SELECT count(*) AS count
         FROM md.monomer_md_jobs
-        WHERE status IN ('pending', 'submitted', 'running')
+        WHERE status IN ('pending', 'submitted', 'running', 'cancel_requested')
         """
     ).fetchone()
     return int(row["count"] if row is not None else 0)
@@ -102,7 +102,7 @@ def get_active_monomer_md_capacity_postgres(connection: Any) -> tuple[int, int |
                floor(extract(epoch FROM now() - min(COALESCE(heartbeat_at, updated_at))))::bigint
                  AS oldest_heartbeat_age_seconds
         FROM md.monomer_md_jobs
-        WHERE status IN ('pending', 'submitted', 'running')
+        WHERE status IN ('pending', 'submitted', 'running', 'cancel_requested')
         """
     ).fetchone()
     if row is None:
@@ -127,11 +127,41 @@ def count_active_formal_monomer_md_jobs_postgres(connection: Any) -> int:
         """
         SELECT count(*) AS count
         FROM md.monomer_md_jobs
-        WHERE status IN ('pending', 'submitted', 'running')
+        WHERE status IN ('pending', 'submitted', 'running', 'cancel_requested')
           AND run_mode = 'formal'
         """
     ).fetchone()
     return int(row["count"] if row is not None else 0)
+
+
+def get_monomer_md_mode_capacity_postgres(connection: Any) -> dict[str, int]:
+    row = connection.execute(
+        """
+        SELECT
+          count(*) FILTER (
+            WHERE run_mode = 'demo'
+              AND status IN ('pending', 'submitted', 'running', 'cancel_requested')
+          ) AS demo_active,
+          count(*) FILTER (
+            WHERE run_mode = 'formal'
+              AND status IN ('pending', 'submitted', 'running', 'cancel_requested')
+              AND queue_sequence IS NULL
+          ) AS formal_running,
+          count(*) FILTER (
+            WHERE run_mode = 'formal'
+              AND status IN ('pending', 'submitted', 'running', 'cancel_requested')
+              AND queue_sequence IS NOT NULL
+          ) AS formal_queued
+        FROM md.monomer_md_jobs
+        """
+    ).fetchone()
+    if row is None:
+        return {"demo_active": 0, "formal_running": 0, "formal_queued": 0}
+    return {
+        "demo_active": int(row["demo_active"]),
+        "formal_running": int(row["formal_running"]),
+        "formal_queued": int(row["formal_queued"]),
+    }
 
 
 def mark_monomer_md_job_submitted_postgres(connection: Any, *, job_id: str, worker_id: str | None = None, worker_job_id: str | None = None, worker_version: str | None = None) -> None:
@@ -142,7 +172,8 @@ def mark_monomer_md_job_submitted_postgres(connection: Any, *, job_id: str, work
             progress_stage = CASE WHEN status = 'pending' THEN 'submitted' ELSE progress_stage END,
             progress_message = CASE WHEN status = 'pending' THEN 'Submitted to the monomer MD worker.' ELSE progress_message END,
             worker_id = %s, worker_job_id = %s, worker_version = %s, updated_at = now()
-        WHERE job_id = %s AND status NOT IN ('completed', 'failed', 'cancelled')
+        WHERE job_id = %s
+          AND status NOT IN ('completed', 'failed', 'cancelled', 'cancel_requested')
         """,
         (worker_id, worker_job_id, worker_version, job_id),
     )
@@ -171,7 +202,8 @@ def mark_monomer_md_job_completed_postgres(
             artifacts = %s::jsonb, artifact_manifest = %s::jsonb, result_summary = %s::jsonb,
             result_data = %s::jsonb, byteff2_git_sha = COALESCE(%s, byteff2_git_sha), gpu_device = COALESCE(%s, gpu_device),
             error_message = NULL, error_category = NULL, updated_at = now(), finished_at = now()
-        WHERE job_id = %s AND status NOT IN ('completed', 'failed', 'cancelled')
+        WHERE job_id = %s
+          AND status NOT IN ('completed', 'failed', 'cancelled', 'cancel_requested')
         """,
         (
             completed_steps,
@@ -193,7 +225,8 @@ def mark_monomer_md_job_failed_postgres(connection: Any, job_id: str, error_mess
         UPDATE md.monomer_md_jobs
         SET status = 'failed', progress_stage = 'failed', progress_message = %s, error_message = %s,
             error_category = %s, updated_at = now(), finished_at = now()
-        WHERE job_id = %s AND status NOT IN ('completed', 'failed', 'cancelled')
+        WHERE job_id = %s
+          AND status NOT IN ('completed', 'failed', 'cancelled', 'cancel_requested')
         """,
         (error_message, error_message, error_category, job_id),
     )
@@ -213,7 +246,7 @@ def mark_monomer_md_artifacts_deleted_postgres(connection: Any, *, job_id: str, 
             ),
             updated_at = now()
         WHERE job_id = %s
-          AND status NOT IN ('pending', 'submitted', 'running')
+          AND status NOT IN ('pending', 'submitted', 'running', 'cancel_requested')
         """,
         (message, job_id),
     )
@@ -227,14 +260,116 @@ def get_monomer_md_job_postgres(connection: Any, job_id: str) -> dict[str, Any] 
                progress_stage, progress_message, worker_id, worker_job_id, worker_version, engine, artifact_root,
                artifacts, artifact_manifest, artifact_deleted_at, artifact_delete_message, result_summary,
                byteff2_git_sha, gpu_device, error_category, result_data, error_message,
-               created_at, updated_at, started_at, finished_at
-        FROM md.monomer_md_jobs
+               created_at, updated_at, started_at, finished_at, cancel_requested_at, queue_sequence,
+               CASE
+                 WHEN queue_sequence IS NULL THEN NULL
+                 ELSE (
+                   SELECT count(*) + 1
+                   FROM md.monomer_md_jobs queued
+                   WHERE queued.run_mode = 'formal'
+                     AND queued.status IN ('pending', 'submitted', 'running', 'cancel_requested')
+                     AND queued.queue_sequence IS NOT NULL
+                     AND queued.queue_sequence < job.queue_sequence
+                 )
+               END AS queue_position
+        FROM md.monomer_md_jobs job
         WHERE job_id = %s
         """,
         (job_id,),
     ).fetchone()
     if row is None:
         return None
+    return _monomer_md_job_from_row(row)
+
+
+def list_monomer_md_jobs_postgres(
+    connection: Any,
+    *,
+    run_mode: str | None = None,
+    active_only: bool = False,
+    protocol: str | None = None,
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[dict[str, Any]], int]:
+    where_parts = ["TRUE"]
+    params: list[Any] = []
+    if run_mode is not None:
+        where_parts.append("job.run_mode = %s")
+        params.append(run_mode)
+    if protocol is not None:
+        where_parts.append("job.protocol = %s")
+        params.append(protocol)
+    if status is not None:
+        where_parts.append("job.status = %s")
+        params.append(status)
+    if active_only:
+        where_parts.append("job.status IN ('pending', 'submitted', 'running', 'cancel_requested')")
+    where_sql = " AND ".join(where_parts)
+    total_row = connection.execute(
+        f"SELECT count(*) AS count FROM md.monomer_md_jobs job WHERE {where_sql}",
+        tuple(params),
+    ).fetchone()
+    total = int(total_row["count"] if total_row is not None else 0)
+    rows = connection.execute(
+        f"""
+        SELECT job_id, status, input_smiles, canonical_smiles, protocol, run_mode, config_json, components,
+               requested_steps, completed_steps, progress_percent,
+               progress_stage, progress_message, worker_id, worker_job_id, worker_version, engine, artifact_root,
+               artifacts, artifact_manifest, artifact_deleted_at, artifact_delete_message, result_summary,
+               byteff2_git_sha, gpu_device, error_category, result_data, error_message,
+               created_at, updated_at, started_at, finished_at, cancel_requested_at, queue_sequence,
+               CASE
+                 WHEN queue_sequence IS NULL THEN NULL
+                 ELSE (
+                   SELECT count(*) + 1
+                   FROM md.monomer_md_jobs queued
+                   WHERE queued.run_mode = 'formal'
+                     AND queued.status IN ('pending', 'submitted', 'running', 'cancel_requested')
+                     AND queued.queue_sequence IS NOT NULL
+                     AND queued.queue_sequence < job.queue_sequence
+                 )
+               END AS queue_position
+        FROM md.monomer_md_jobs job
+        WHERE {where_sql}
+        ORDER BY
+          CASE WHEN %s AND job.status IN ('pending', 'submitted', 'running', 'cancel_requested')
+               THEN CASE WHEN job.queue_sequence IS NULL THEN 0 ELSE 1 END
+               ELSE 2 END,
+          CASE WHEN %s THEN job.queue_sequence END NULLS FIRST,
+          job.created_at DESC,
+          job.job_id DESC
+        LIMIT %s OFFSET %s
+        """,
+        tuple(params + [active_only, active_only, page_size, (page - 1) * page_size]),
+    ).fetchall()
+    return [_monomer_md_job_from_row(row) for row in rows], total
+
+
+def request_monomer_md_job_cancel_postgres(
+    connection: Any,
+    *,
+    job_id: str,
+) -> tuple[dict[str, Any] | None, bool]:
+    cursor = connection.execute(
+        """
+        UPDATE md.monomer_md_jobs
+        SET status = 'cancel_requested',
+            cancel_requested_at = COALESCE(cancel_requested_at, now()),
+            progress_stage = 'cancel_requested',
+            progress_message = 'Cancellation requested; waiting for worker cleanup.',
+            updated_at = now()
+        WHERE job_id = %s
+          AND status IN ('submitted', 'running')
+        RETURNING job_id
+        """,
+        (job_id,),
+    )
+    changed = cursor.fetchone() is not None
+    return get_monomer_md_job_postgres(connection, job_id), changed
+
+
+def _monomer_md_job_from_row(row: Any) -> dict[str, Any]:
     result_data = _as_dict(row["result_data"])
     return {
         "job_id": row["job_id"],
@@ -250,6 +385,8 @@ def get_monomer_md_job_postgres(connection: Any, job_id: str) -> dict[str, Any] 
         "progress_percent": int(row["progress_percent"]),
         "progress_stage": row["progress_stage"],
         "progress_message": row["progress_message"],
+        "queue_position": int(row["queue_position"]) if row["queue_position"] is not None else None,
+        "cancel_requested_at": _timestamp(row["cancel_requested_at"]),
         "created_at": _timestamp(row["created_at"]),
         "updated_at": _timestamp(row["updated_at"]),
         "started_at": _timestamp(row["started_at"]),

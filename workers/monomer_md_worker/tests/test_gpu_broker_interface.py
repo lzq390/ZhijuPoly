@@ -197,7 +197,7 @@ def test_broker_governed_worker_rejects_invalid_boolean_and_parallel_jobs(
         load_settings()
 
     monkeypatch.setenv("MONOMER_MD_MAX_CONCURRENT_JOBS", "1")
-    monkeypatch.setenv("MONOMER_MD_MAX_ACTIVE_JOBS", "1")
+    monkeypatch.setenv("MONOMER_MD_MAX_ACTIVE_JOBS", "3")
     with pytest.raises(ValueError, match="host-only"):
         load_settings()
 

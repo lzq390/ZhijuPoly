@@ -94,7 +94,8 @@ def mutable_data_evidence(
             ),
         }
 
-    dft_ready = ledger_length == 13
+    dft_ready = ledger_length >= 13
+    md_queue_ready = ledger_length >= 14
     contract_applied = ledger_length >= 12
     controls_ready = ledger_length >= 10
     business_tables = [
@@ -128,6 +129,14 @@ def mutable_data_evidence(
                     CONTROLLER._site_helper_contracts
                     .EMPTY_POSTGRES_COPY_SHA256
                 )
+    if md_queue_ready:
+        md_jobs = next(
+            record
+            for record in business_tables
+            if (record["schema"], record["table"])
+            == ("md", "monomer_md_jobs")
+        )
+        md_jobs["schema_sha256"] = "sha256:" + "e" * 64
     static_tables = [
         table_record(schema, table, index + 8)
         for index, (schema, table) in enumerate(
@@ -156,7 +165,19 @@ def mutable_data_evidence(
             strict=True,
         )
     ):
-        present = schema != "monomer_dft" or dft_ready
+        is_dft_sequence = schema == "monomer_dft"
+        is_md_queue_sequence = (
+            schema == "md"
+            and sequence == "monomer_md_queue_sequence_seq"
+        )
+        present = (
+            not is_dft_sequence
+            and not is_md_queue_sequence
+            or is_dft_sequence
+            and dft_ready
+            or is_md_queue_sequence
+            and md_queue_ready
+        )
         sequences.append(
             {
                 "schema": schema,
@@ -183,7 +204,8 @@ def mutable_data_evidence(
                 "last_value": 1 if present else None,
                 "is_called": (
                     False
-                    if present and schema == "monomer_dft"
+                    if present
+                    and (is_dft_sequence or is_md_queue_sequence)
                     else (True if present else None)
                 ),
             }
@@ -4156,6 +4178,58 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 descriptor_sha256=descriptor_sha256,
             )
 
+    def test_external_database_revalidation_allows_only_exact_0014_expansion(
+        self,
+    ) -> None:
+        controller = self.controller()
+        canonical = [
+            {"version": version, "checksum": checksum}
+            for version, checksum in (
+                CONTROLLER._site_helper_contracts.CANONICAL_MIGRATION_LEDGER
+            )
+        ]
+        post_0013 = external_database_binding_state(
+            external_database_audit_binding(controller.runtime_root),
+            production_ledger=canonical[:13],
+            legacy_relation_present=False,
+            captured_at="2026-07-17T00:05:00Z",
+        )
+        post_0014 = external_database_binding_state(
+            post_0013,
+            production_ledger=canonical[:14],
+            legacy_relation_present=False,
+            captured_at="2026-07-17T00:06:00Z",
+        )
+        policy = {
+            **CONTROLLER._bridge_core.EXTERNAL_DATABASE_AUDIT_POLICY,
+            "media_authority_rules_sha256": post_0013[
+                "authority_rules"
+            ]["sha256"],
+            "audit_role_sql_sha256": post_0013["role_sql"]["sha256"],
+        }
+
+        with mock.patch.object(
+            controller,
+            "external_database_audit_evidence",
+            return_value=post_0014,
+        ):
+            self.assertEqual(
+                controller._revalidate_external_database_binding(
+                    post_0013,
+                    policy=policy,
+                    allow_queue_expansion=True,
+                ),
+                post_0014,
+            )
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "changed after its sealed transition",
+            ):
+                controller._revalidate_external_database_binding(
+                    post_0013,
+                    policy=policy,
+                )
+
     def test_bridge_prepare_binds_static_rules_dynamic_registry_and_fresh_audit(
         self,
     ) -> None:
@@ -4422,7 +4496,8 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         for name, rows in (
             ("pre-0012", manifest[:-1]),
             ("post-0012", manifest),
-            ("post-0013", F_MANIFEST_RECORDS),
+            ("post-0013", F_MANIFEST_RECORDS[:-1]),
+            ("post-0014", F_MANIFEST_RECORDS),
         ):
             history = CONTROLLER.canonical_ledger_history(
                 [
@@ -4441,7 +4516,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 descriptor["bridge"]["policy"],
                 code_manifest_sha256=(
                     F_MANIFEST_DIGEST
-                    if name == "post-0013"
+                    if name in {"post-0013", "post-0014"}
                     else B_MANIFEST_DIGEST
                 ),
                 migrations=history,
@@ -4472,7 +4547,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
 
     def test_b_state_can_truthfully_record_f_0013_ledger(self) -> None:
         descriptor = self.bridge_descriptor(self.controller())
-        migrations = json.loads(json.dumps(F_MANIFEST_RECORDS))
+        migrations = json.loads(json.dumps(F_MANIFEST_RECORDS[:-1]))
         compatibility = CONTROLLER.build_migration_compatibility_state(
             descriptor["bridge"]["policy"],
             code_manifest_sha256=B_MANIFEST_DIGEST,
@@ -4484,7 +4559,9 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         )
         self.assertEqual(
             compatibility["ledger_manifest_sha256"],
-            F_MANIFEST_DIGEST,
+            descriptor["bridge"]["policy"]["accepted_migration_ledgers"][-1][
+                "manifest_sha256"
+            ],
         )
         self.assertEqual(
             compatibility["ledger_state"]["name"],
@@ -4939,6 +5016,62 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             "DFT creation evidence is not pristine",
         ):
             CONTROLLER.build_mutable_data_pair(before, advanced)
+
+    def test_mutable_data_allows_only_pristine_0014_expansion(self) -> None:
+        before = mutable_data_evidence(ledger_length=13)
+        after = mutable_data_evidence(ledger_length=14)
+
+        pair = CONTROLLER.build_mutable_data_pair(before, after)
+
+        self.assertEqual(pair["transition"]["kind"], "expand-0014")
+        md_before = next(
+            record
+            for record in before["business_tables"]
+            if (record["schema"], record["table"])
+            == ("md", "monomer_md_jobs")
+        )
+        md_after = next(
+            record
+            for record in after["business_tables"]
+            if (record["schema"], record["table"])
+            == ("md", "monomer_md_jobs")
+        )
+        self.assertEqual(md_before["row_count"], md_after["row_count"])
+        self.assertNotEqual(
+            md_before["schema_sha256"],
+            md_after["schema_sha256"],
+        )
+
+        advanced = json.loads(json.dumps(after))
+        queue_sequence = next(
+            record
+            for record in advanced["sequences"]
+            if (record["schema"], record["sequence"])
+            == ("md", "monomer_md_queue_sequence_seq")
+        )
+        queue_sequence["is_called"] = True
+        reseal_mutable_data_evidence(advanced)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "queue sequence is not pristine",
+        ):
+            CONTROLLER.build_mutable_data_pair(before, advanced)
+
+        changed_rows = json.loads(json.dumps(after))
+        md_jobs = next(
+            record
+            for record in changed_rows["business_tables"]
+            if (record["schema"], record["table"])
+            == ("md", "monomer_md_jobs")
+        )
+        md_jobs["row_count"] += 1
+        changed_rows["bridge_projection"]["row_count"] += 1
+        reseal_mutable_data_evidence(changed_rows)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "preserve the MD job table",
+        ):
+            CONTROLLER.build_mutable_data_pair(before, changed_rows)
 
     def test_mutable_data_rejects_static_control_and_analytics_drift(self) -> None:
         before = mutable_data_evidence()
@@ -7959,7 +8092,7 @@ class StrictLifecycleEvidenceTests(unittest.TestCase):
                 "python_executable": str(python.resolve(strict=True)),
                 "db_configured": True,
                 "runtime_ready": True,
-                "max_active_jobs": 1,
+                "max_active_jobs": 3,
                 "default_steps": 300,
                 "max_steps": 300,
                 "cuda_visible_devices": "2",

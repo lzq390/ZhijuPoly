@@ -81,7 +81,8 @@ def _mutable_data_evidence(
             ),
         }
 
-    dft_ready = ledger_length == 13
+    dft_ready = ledger_length >= 13
+    md_queue_ready = ledger_length >= 14
     contract_applied = ledger_length >= 12
     controls_ready = ledger_length >= 10
     business_tables = [
@@ -118,7 +119,13 @@ def _mutable_data_evidence(
         helpers.DATA_SEQUENCE_OWNERSHIP,
         strict=True,
     ):
-        present = schema != "monomer_dft" or dft_ready
+        present = (
+            schema != "monomer_dft" or dft_ready
+        ) and (
+            schema != "md"
+            or sequence != "monomer_md_queue_sequence_seq"
+            or md_queue_ready
+        )
         sequences.append(
             {
                 "schema": schema,

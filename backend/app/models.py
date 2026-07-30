@@ -1348,7 +1348,15 @@ class LabDataSummaryRead(BaseModel):
     total_count: int = Field(alias="totalCount", ge=0)
     by_project: list[LabDataProjectStatsRead] = Field(alias="byProject")
 
-MonomerMdJobStatus = Literal["pending", "submitted", "running", "completed", "failed", "cancelled"]
+MonomerMdJobStatus = Literal[
+    "pending",
+    "submitted",
+    "running",
+    "cancel_requested",
+    "completed",
+    "failed",
+    "cancelled",
+]
 MonomerMdProtocol = Literal["DensityDemo", "Density", "Transport", "HVap", "Dielectric", "Compressibility"]
 MonomerMdRunMode = Literal["demo", "formal"]
 
@@ -1397,6 +1405,11 @@ class MonomerMdStatusResponse(BaseModel):
     draining: bool = False
     busy: bool = False
     can_submit: bool = False
+    formal_running_jobs: int = Field(default=0, ge=0)
+    formal_queued_jobs: int = Field(default=0, ge=0)
+    formal_max_running_jobs: int = Field(default=1, ge=1)
+    formal_max_queued_jobs: int = Field(default=2, ge=0)
+    formal_can_submit: bool = False
     protocols: dict[str, Any] = Field(default_factory=dict)
     message: str
 
@@ -1433,6 +1446,8 @@ class MonomerMdJobStatusResponse(BaseModel):
     progress_percent: int = Field(ge=0, le=100)
     progress_stage: str
     progress_message: str
+    queue_position: int | None = Field(default=None, ge=1)
+    cancel_requested_at: str | None = None
     created_at: str
     updated_at: str
     started_at: str | None = None
@@ -1452,3 +1467,12 @@ class MonomerMdJobStatusResponse(BaseModel):
     error_category: str | None = None
     error_message: str | None = None
     result: dict[str, Any] | None = None
+
+
+class MonomerMdJobPageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[MonomerMdJobStatusResponse]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)

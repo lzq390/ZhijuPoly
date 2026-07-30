@@ -96,6 +96,18 @@
           "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
         }
       ]
+    },
+    {
+      "version": "0014_monomer_md_task_queue_cancel",
+      "kind": "expand",
+      "epoch": 2,
+      "checksum": "7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6",
+      "requires_contracts": [
+        {
+          "version": "0012_drop_polytao_jobs",
+          "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+        }
+      ]
     }
   ]
 }
