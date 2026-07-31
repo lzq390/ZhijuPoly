@@ -1,214 +1,97 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Atom, BookOpen, ChevronLeft, ChevronRight, Database, LoaderCircle, SearchX, Target, Timer, TriangleAlert } from "lucide-react";
+import { useEffect, useId, useState } from "react";
+import {
+  Atom,
+  BookOpen,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Database,
+  LoaderCircle,
+  SearchX,
+  TriangleAlert
+} from "lucide-react";
 import type {
   KnowledgeNavigationRequest,
   ReverseDesignTgCandidate,
   ReverseDesignTgJobStatusResponse,
+  ReverseDesignTgRequest,
   ReverseDesignTgResponse
 } from "../types";
 import { StructureSvg } from "./StructureSvg";
-import { Alert } from "./ui/alert";
-import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 
 type ReverseDesignResultsProps = {
   data: ReverseDesignTgResponse | null;
   error: string | null;
   isLoading?: boolean;
   job?: ReverseDesignTgJobStatusResponse | null;
-  targetCandidateSize?: number;
+  submittedRequest: ReverseDesignTgRequest | null;
   onOpenKnowledge: (request: KnowledgeNavigationRequest) => void;
 };
 
-type KnowledgeMenuPlacement = "left" | "right";
-
-const KNOWLEDGE_MENU_WIDTH = 144;
-const KNOWLEDGE_MENU_GAP = 8;
-const KNOWLEDGE_MENU_MARGIN = 12;
-const RESULTS_PAGE_SIZE = 20;
-
-function getCandidateColumnCount() {
-  if (typeof window === "undefined") {
-    return 1;
-  }
-
-  if (window.innerWidth >= 1280) {
-    return 4;
-  }
-
-  if (window.innerWidth >= 1024) {
-    return 3;
-  }
-
-  if (window.innerWidth >= 640) {
-    return 2;
-  }
-
-  return 1;
-}
+const RESULTS_PAGE_SIZE = 5;
 
 function formatInteger(value: number | null | undefined) {
   return value == null ? "0" : value.toLocaleString();
 }
 
-function formatOptionalNumber(value: number | null | undefined, digits = 2) {
-  return value == null ? "待定" : value.toFixed(digits);
-}
-
-function EmptyPanel({
+function ResultState({
   icon,
   title,
-  description
+  description,
+  tone = "default"
 }: {
-  icon: ReactNode;
+  icon: React.ReactNode;
   title: string;
   description: string;
+  tone?: "default" | "danger";
 }) {
   return (
-    <div className="flex min-h-[320px] flex-col items-center justify-center rounded-[24px] border border-dashed border-white bg-[linear-gradient(180deg,rgba(255,255,255,0.72)_0%,rgba(244,248,249,0.78)_100%)] px-6 py-12 text-center">
-      <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white bg-white/85 text-slate-600 shadow-sm">
-        {icon}
-      </div>
-      <div className="mt-5 text-lg font-semibold text-slate-900">{title}</div>
-      <div className="mt-2 max-w-xl text-sm leading-6 text-mutedForeground">{description}</div>
+    <div className={`tg-result-state${tone === "danger" ? " is-danger" : ""}`}>
+      <span className="tg-result-state-icon">{icon}</span>
+      <strong>{title}</strong>
+      <p>{description}</p>
     </div>
   );
 }
 
-function ResultsPagination({
-  currentPage,
+function ResultPagination({
+  page,
   totalPages,
-  startIndex,
-  endIndex,
+  start,
+  end,
   total,
-  onPageChange
+  onChange
 }: {
-  currentPage: number;
+  page: number;
   totalPages: number;
-  startIndex: number;
-  endIndex: number;
+  start: number;
+  end: number;
   total: number;
-  onPageChange: (page: number) => void;
+  onChange: (page: number) => void;
 }) {
   if (total <= RESULTS_PAGE_SIZE) {
     return null;
   }
-
   return (
-    <div className="flex flex-col gap-3 rounded-[20px] border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-      <div className="font-medium text-slate-700">
-        {`${formatInteger(startIndex + 1)}-${formatInteger(endIndex)} / 共 ${formatInteger(total)}`}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          className="min-h-[38px] px-3 text-xs"
-          onClick={() => onPageChange(currentPage - 1)}
-          disabled={currentPage <= 1}
-          aria-label="上一页"
-        >
-          <ChevronLeft className="mr-1.5 h-4 w-4" />
-          上一页
-        </Button>
-        <Badge className="text-slate-700">{`第 ${currentPage} / ${totalPages} 页`}</Badge>
-        <Button
-          type="button"
-          variant="outline"
-          className="min-h-[38px] px-3 text-xs"
-          onClick={() => onPageChange(currentPage + 1)}
-          disabled={currentPage >= totalPages}
-          aria-label="下一页"
-        >
-          下一页
-          <ChevronRight className="ml-1.5 h-4 w-4" />
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function MonomerSmilesPreview({
-  label,
-  smiles,
-  structureSvg
-}: {
-  label: string;
-  smiles: string;
-  structureSvg: string | null;
-}) {
-  if (!smiles) {
-    return <div className="font-mono-ui break-all text-mutedForeground">暂无数据</div>;
-  }
-
-  return (
-    <div className="group relative">
-      <div
-        tabIndex={0}
-        className="cursor-default rounded-[10px] px-1 py-0.5 font-mono-ui break-all text-mutedForeground outline-none transition-colors hover:bg-teal-50 hover:text-teal-800 focus:bg-teal-50 focus:text-teal-800"
+    <div className="tg-result-pagination" aria-label="候选结果分页">
+      <button
+        type="button"
+        onClick={() => onChange(page - 1)}
+        disabled={page <= 1}
+        aria-label="上一页"
       >
-        {smiles}
-      </div>
-      <div className="pointer-events-auto absolute bottom-full left-1/2 z-50 mb-2 hidden w-72 max-w-[calc(100vw-3rem)] rounded-[18px] border border-white/80 bg-white/95 p-3 text-left shadow-[0_18px_45px_rgba(8,17,31,0.18)] backdrop-blur group-hover:block group-focus-within:block">
-        <div className="mb-2 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">
-          <span>单体 {label}</span>
-          <span>2D</span>
-        </div>
-        {structureSvg ? (
-          <StructureSvg
-            svg={structureSvg}
-            alt={`2D structure for monomer ${label}`}
-            className="rounded-[14px] border border-slate-200/70 bg-white p-2"
-            imageClassName="max-h-[180px]"
-          />
-        ) : (
-          <div className="flex min-h-28 items-center justify-center rounded-[14px] border border-slate-200/70 bg-slate-50 px-3 text-center text-xs text-mutedForeground">
-            暂无 2D 结构
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function CandidateMasonryGrid({
-  candidates,
-  onOpenKnowledge
-}: {
-  candidates: ReverseDesignTgCandidate[];
-  onOpenKnowledge: (request: KnowledgeNavigationRequest) => void;
-}) {
-  const [columnCount, setColumnCount] = useState(getCandidateColumnCount);
-  const columns = Array.from({ length: columnCount }, () => [] as ReverseDesignTgCandidate[]);
-
-  candidates.forEach((candidate, index) => {
-    columns[index % columnCount].push(candidate);
-  });
-
-  useEffect(() => {
-    function handleResize() {
-      setColumnCount(getCandidateColumnCount());
-    }
-
-    handleResize();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
-  return (
-    <div className="grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      {columns.map((columnCandidates, columnIndex) => (
-        <div key={columnIndex} className="flex min-w-0 flex-col gap-4">
-          {columnCandidates.map((candidate) => (
-            <CandidateCard
-              key={candidate.pi_id}
-              candidate={candidate}
-              onOpenKnowledge={onOpenKnowledge}
-            />
-          ))}
-        </div>
-      ))}
+        <ChevronLeft />
+      </button>
+      <span>{`${start + 1}–${end} / ${total}`}</span>
+      <strong>{`${page} / ${totalPages}`}</strong>
+      <button
+        type="button"
+        onClick={() => onChange(page + 1)}
+        disabled={page >= totalPages}
+        aria-label="下一页"
+      >
+        <ChevronRight />
+      </button>
     </div>
   );
 }
@@ -220,231 +103,150 @@ function CandidateCard({
   candidate: ReverseDesignTgCandidate;
   onOpenKnowledge: (request: KnowledgeNavigationRequest) => void;
 }) {
+  const menuId = useId();
   const [showIupac, setShowIupac] = useState(false);
-  const [knowledgeMenuOpen, setKnowledgeMenuOpen] = useState(false);
-  const [knowledgeMenuPlacement, setKnowledgeMenuPlacement] = useState<KnowledgeMenuPlacement>("right");
-  const knowledgeMenuRef = useRef<HTMLDivElement | null>(null);
-  const knowledgeMenuPanelRef = useRef<HTMLDivElement | null>(null);
+  const [showKnowledge, setShowKnowledge] = useState(false);
   const displaySmiles = candidate.canonical_polym || candidate.polymer_smiles;
-  const monomerATerm = candidate.monomer_a_iupac?.trim() || candidate.monomer_a_smiles.trim();
-  const monomerBTerm = candidate.monomer_b_iupac?.trim() || candidate.monomer_b_smiles.trim();
-  const pairTerms = [monomerATerm, monomerBTerm].filter((value) => value.length > 0);
-  const knowledgeMenuId = `knowledge-menu-${candidate.pi_id}`;
+  const monomerATerm =
+    candidate.monomer_a_iupac?.trim() || candidate.monomer_a_smiles.trim();
+  const monomerBTerm =
+    candidate.monomer_b_iupac?.trim() || candidate.monomer_b_smiles.trim();
 
   function openKnowledge(terms: string[]) {
-    setKnowledgeMenuOpen(false);
+    const normalizedTerms = terms.filter(Boolean);
+    if (normalizedTerms.length === 0) {
+      return;
+    }
+    setShowKnowledge(false);
     onOpenKnowledge({
-      query: terms.join(" OR "),
-      terms
+      query: normalizedTerms.join(" OR "),
+      terms: normalizedTerms
     });
   }
 
-  function updateKnowledgeMenuPlacement() {
-    const triggerRect = knowledgeMenuRef.current?.getBoundingClientRect();
-    if (!triggerRect) {
-      return;
-    }
-
-    const viewportWidth = window.innerWidth;
-    const rightLeft = triggerRect.right + KNOWLEDGE_MENU_GAP;
-    const leftLeft = triggerRect.left - KNOWLEDGE_MENU_GAP - KNOWLEDGE_MENU_WIDTH;
-    const fitsRight = rightLeft + KNOWLEDGE_MENU_WIDTH <= viewportWidth - KNOWLEDGE_MENU_MARGIN;
-    const fitsLeft = leftLeft >= KNOWLEDGE_MENU_MARGIN;
-    const placement = fitsRight || !fitsLeft ? "right" : "left";
-
-    setKnowledgeMenuPlacement(placement);
-  }
-
-  useEffect(() => {
-    if (!knowledgeMenuOpen) {
-      return;
-    }
-
-    updateKnowledgeMenuPlacement();
-    window.addEventListener("resize", updateKnowledgeMenuPlacement);
-    window.addEventListener("scroll", updateKnowledgeMenuPlacement, true);
-
-    return () => {
-      window.removeEventListener("resize", updateKnowledgeMenuPlacement);
-      window.removeEventListener("scroll", updateKnowledgeMenuPlacement, true);
-    };
-  }, [knowledgeMenuOpen]);
-
-  useEffect(() => {
-    if (!knowledgeMenuOpen) {
-      return;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      const target = event.target;
-      if (
-        !(target instanceof Node) ||
-        knowledgeMenuRef.current?.contains(target) ||
-        knowledgeMenuPanelRef.current?.contains(target)
-      ) {
-        return;
-      }
-
-      setKnowledgeMenuOpen(false);
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [knowledgeMenuOpen]);
-
   return (
-    <Card
-      className={[
-        "relative z-0 self-start overflow-visible rounded-[24px] border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)] p-3 hover:z-[70] focus-within:z-[70]",
-        knowledgeMenuOpen ? "z-[80]" : ""
-      ].join(" ")}
-    >
-      <div className="overflow-hidden rounded-[18px] border border-white/80 bg-white/90 p-2.5 shadow-sm">
-        <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.18em] text-mutedForeground">
-          <span className="inline-flex items-center gap-2">
-            <Atom className="h-3.5 w-3.5 text-teal-600" />
-            PI #{candidate.pi_id}
-          </span>
-          <Badge className="bg-teal-50 text-teal-800">排名 {candidate.rank}</Badge>
-        </div>
+    <article className="tg-candidate-card">
+      <header className="tg-candidate-card-header">
+        <span className="tg-candidate-rank">{`#${candidate.rank}`}</span>
+        <span className="tg-candidate-id">{`PI ${candidate.pi_id}`}</span>
+        <span className="tg-candidate-score">
+          {`${Math.round(candidate.similarity_score * 100)}%`}
+        </span>
+      </header>
+
+      <div className="tg-candidate-structure">
         {candidate.structure_svg ? (
           <StructureSvg
             svg={candidate.structure_svg}
             alt={`PI candidate ${candidate.pi_id}`}
-            imageClassName="max-h-[170px]"
+            imageClassName="max-h-[150px]"
           />
         ) : (
-          <div className="flex min-h-[150px] items-center justify-center rounded-[14px] bg-slate-50 px-3 text-center font-mono-ui text-xs leading-5 text-mutedForeground">
-            {displaySmiles}
-          </div>
+          <p>{displaySmiles}</p>
         )}
       </div>
 
-      <div className="mt-2.5 space-y-2 rounded-[16px] border border-white/80 bg-white/75 px-3 py-2.5 shadow-sm">
-        <div className="font-mono-ui break-all text-xs leading-5 text-slate-800">{displaySmiles}</div>
-        <div className="grid gap-2 text-xs">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-mutedForeground">Tg</span>
-            <span className="text-right font-semibold text-slate-800">
-              {candidate.tg_value.toFixed(2)} {candidate.tg_unit}
-            </span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-mutedForeground">Tg 差值</span>
-            <span className="text-right font-semibold text-teal-700">{candidate.tg_difference.toFixed(2)} °C</span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-mutedForeground">相似度</span>
-            <span className="text-right font-semibold text-slate-800">{candidate.similarity_score.toFixed(3)}</span>
-          </div>
+      <div className="tg-candidate-metrics">
+        <div>
+          <span>Tg</span>
+          <strong>{`${candidate.tg_value.toFixed(1)} ${candidate.tg_unit}`}</strong>
+        </div>
+        <div>
+          <span>差值</span>
+          <strong className="is-accent">{`${candidate.tg_difference >= 0 ? "+" : ""}${candidate.tg_difference.toFixed(1)} °C`}</strong>
+        </div>
+        <div>
+          <span>相似度</span>
+          <strong>{candidate.similarity_score.toFixed(3)}</strong>
         </div>
       </div>
 
-      <div className="mt-2.5 rounded-[16px] border border-white/80 bg-white/75 px-3 py-2.5 shadow-sm">
-        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">单体</div>
-        <div className="mt-2 space-y-3 text-xs leading-5 text-slate-800">
-          <div className="space-y-1">
-            <div className="font-semibold text-slate-700">A</div>
-            {showIupac ? (
-              <div className="break-words text-slate-900">{candidate.monomer_a_iupac || "暂无 IUPAC"}</div>
-            ) : null}
-            <MonomerSmilesPreview
-              label="A"
-              smiles={candidate.monomer_a_smiles}
-              structureSvg={candidate.monomer_a_structure_svg}
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="font-semibold text-slate-700">B</div>
-            {showIupac ? (
-              <div className="break-words text-slate-900">{candidate.monomer_b_iupac || "暂无 IUPAC"}</div>
-            ) : null}
-            <MonomerSmilesPreview
-              label="B"
-              smiles={candidate.monomer_b_smiles}
-              structureSvg={candidate.monomer_b_structure_svg}
-            />
-          </div>
-        </div>
-        <div className="mt-3 grid grid-cols-[minmax(5.5rem,0.72fr)_minmax(9.5rem,1.28fr)] gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            className="min-h-[38px] whitespace-nowrap px-3 text-xs"
-            onClick={() => setShowIupac((current) => !current)}
-          >
-            <Atom className="mr-1.5 h-4 w-4 shrink-0" />
-            {showIupac ? "隐藏" : "IUPAC"}
-          </Button>
-          <div className="relative" ref={knowledgeMenuRef}>
-            <Button
-              type="button"
-              variant="outline"
-              className="min-h-[38px] w-full whitespace-nowrap px-3 text-xs"
-              onClick={() => setKnowledgeMenuOpen((current) => !current)}
-              disabled={pairTerms.length === 0}
-              aria-expanded={knowledgeMenuOpen}
-              aria-controls={knowledgeMenuId}
-            >
-              <BookOpen className="mr-1.5 h-4 w-4 shrink-0" />
-              知识检索
-              <ChevronRight
-                className={[
-                  "ml-1.5 h-4 w-4 shrink-0 transition-transform",
-                  knowledgeMenuOpen && knowledgeMenuPlacement === "left"
-                    ? "rotate-180"
-                    : knowledgeMenuOpen
-                      ? "translate-x-0.5"
-                      : ""
-                ].join(" ")}
+      <details className="tg-candidate-details">
+        <summary>
+          <span>单体与结构信息</span>
+          <ChevronDown />
+        </summary>
+        <div className="tg-candidate-detail-body">
+          <div className="tg-monomer-block">
+            <span>单体 A</span>
+            {candidate.monomer_a_structure_svg ? (
+              <StructureSvg
+                svg={candidate.monomer_a_structure_svg}
+                alt={`Monomer A for PI ${candidate.pi_id}`}
+                imageClassName="max-h-[96px]"
               />
-            </Button>
-            {knowledgeMenuOpen ? (
-              <div
-                id={knowledgeMenuId}
-                ref={knowledgeMenuPanelRef}
-                role="menu"
-                className={[
-                  "absolute top-1/2 z-50 w-36 -translate-y-1/2 rounded-[18px] border border-white/80 bg-white/95 p-1.5 shadow-[0_18px_45px_rgba(8,17,31,0.18)] backdrop-blur",
-                  knowledgeMenuPlacement === "left" ? "right-full mr-2" : "left-full ml-2"
-                ].join(" ")}
-              >
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="flex min-h-9 w-full items-center rounded-[14px] px-3 text-left text-xs font-semibold text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-800 disabled:pointer-events-none disabled:opacity-45"
-                  onClick={() => openKnowledge([monomerATerm])}
-                  disabled={!monomerATerm}
-                  title="检索单体 A"
-                >
-                  单体 A
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="flex min-h-9 w-full items-center rounded-[14px] px-3 text-left text-xs font-semibold text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-800 disabled:pointer-events-none disabled:opacity-45"
-                  onClick={() => openKnowledge([monomerBTerm])}
-                  disabled={!monomerBTerm}
-                  title="检索单体 B"
-                >
-                  单体 B
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="flex min-h-9 w-full items-center rounded-[14px] px-3 text-left text-xs font-semibold text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-800 disabled:pointer-events-none disabled:opacity-45"
-                  onClick={() => openKnowledge(pairTerms)}
-                  disabled={pairTerms.length === 0}
-                  title="检索单体 A 和 B"
-                >
-                  A + B
-                </button>
-              </div>
+            ) : null}
+            <code>{candidate.monomer_a_smiles || "暂无数据"}</code>
+            {showIupac ? (
+              <p>{candidate.monomer_a_iupac || "暂无 IUPAC 名称"}</p>
             ) : null}
           </div>
+          <div className="tg-monomer-block">
+            <span>单体 B</span>
+            {candidate.monomer_b_structure_svg ? (
+              <StructureSvg
+                svg={candidate.monomer_b_structure_svg}
+                alt={`Monomer B for PI ${candidate.pi_id}`}
+                imageClassName="max-h-[96px]"
+              />
+            ) : null}
+            <code>{candidate.monomer_b_smiles || "暂无数据"}</code>
+            {showIupac ? (
+              <p>{candidate.monomer_b_iupac || "暂无 IUPAC 名称"}</p>
+            ) : null}
+          </div>
+          <code className="tg-polymer-smiles">{displaySmiles}</code>
         </div>
-      </div>
-    </Card>
+      </details>
+
+      <footer className="tg-candidate-actions">
+        <button type="button" onClick={() => setShowIupac((current) => !current)}>
+          <Atom />
+          {showIupac ? "隐藏 IUPAC" : "IUPAC"}
+        </button>
+        <div className="tg-knowledge-menu">
+          <button
+            type="button"
+            onClick={() => setShowKnowledge((current) => !current)}
+            aria-expanded={showKnowledge}
+            aria-controls={menuId}
+            disabled={!monomerATerm && !monomerBTerm}
+          >
+            <BookOpen />
+            知识检索
+            <ChevronDown />
+          </button>
+          {showKnowledge ? (
+            <div id={menuId} role="menu" className="tg-knowledge-menu-panel">
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!monomerATerm}
+                onClick={() => openKnowledge([monomerATerm])}
+              >
+                单体 A
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!monomerBTerm}
+                onClick={() => openKnowledge([monomerBTerm])}
+              >
+                单体 B
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!monomerATerm && !monomerBTerm}
+                onClick={() => openKnowledge([monomerATerm, monomerBTerm])}
+              >
+                A + B
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </footer>
+    </article>
   );
 }
 
@@ -453,185 +255,121 @@ export function ReverseDesignResults({
   error,
   isLoading = false,
   job,
-  targetCandidateSize,
+  submittedRequest,
   onOpenKnowledge
 }: ReverseDesignResultsProps) {
-  const [resultPage, setResultPage] = useState(1);
-  const totalResultCount = data?.results.length ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalResultCount / RESULTS_PAGE_SIZE));
-  const currentPage = Math.min(resultPage, totalPages);
-  const startIndex = (currentPage - 1) * RESULTS_PAGE_SIZE;
-  const endIndex = Math.min(startIndex + RESULTS_PAGE_SIZE, totalResultCount);
-  const visibleResults = data?.results.slice(startIndex, endIndex) ?? [];
+  const [page, setPage] = useState(1);
+  const total = data?.results.length ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / RESULTS_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const start = (currentPage - 1) * RESULTS_PAGE_SIZE;
+  const end = Math.min(start + RESULTS_PAGE_SIZE, total);
+  const results = data?.results.slice(start, end) ?? [];
 
   useEffect(() => {
-    setResultPage(1);
+    setPage(1);
   }, [data]);
-
-  function updateResultPage(page: number) {
-    setResultPage(Math.min(Math.max(page, 1), totalPages));
-  }
 
   if (error) {
     return (
-      <Card className="overflow-hidden rounded-[28px] border-destructive/20 shadow-none">
-        <CardHeader className="min-h-[112px] border-b border-destructive/10 bg-destructiveForeground">
-          <CardTitle className="flex items-center gap-2 text-lg text-destructive">
-            <TriangleAlert className="h-5 w-5" />
-            逆向设计失败
-          </CardTitle>
-          <CardDescription>Tg 搜索未完成，请检查目标 Tg、结构或 PI 数据库状态。</CardDescription>
-        </CardHeader>
-        <CardContent className="pt-5">
-          <Alert variant="destructive">{error}</Alert>
-        </CardContent>
-      </Card>
+      <ResultState
+        tone="danger"
+        icon={<TriangleAlert />}
+        title="Tg 搜索失败"
+        description={error}
+      />
     );
   }
 
   if (isLoading) {
     return (
-      <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
-        <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Tg 逆向设计结果</CardTitle>
-          <CardDescription>
-            {targetCandidateSize
-              ? `按 Tg 距离扫描 PI 候选，直到找到 ${targetCandidateSize} 个满足阈值的结果。`
-              : "按 Tg 距离扫描 PI 候选，直到找到设定数量的满足阈值结果。"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="pt-5">
-          <div className="space-y-4 rounded-[20px] border border-white/80 bg-white/80 px-4 py-4 text-sm text-slate-700">
-            <div className="flex items-center gap-3">
-              <LoaderCircle className="h-4 w-4 animate-spin" />
-              正在搜索 PI 候选。
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="rounded-[16px] border border-slate-200/70 bg-slate-50/80 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">已扫描</div>
-                <div className="mt-1 text-lg font-semibold text-slate-950">{formatInteger(job?.scanned_rows)}</div>
-              </div>
-              <div className="rounded-[16px] border border-slate-200/70 bg-slate-50/80 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">已命中</div>
-                <div className="mt-1 text-lg font-semibold text-slate-950">{formatInteger(job?.matched_count)}</div>
-              </div>
-              <div className="rounded-[16px] border border-slate-200/70 bg-slate-50/80 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">Tg 半径</div>
-                <div className="mt-1 text-lg font-semibold text-slate-950">
-                  {job?.current_tg_radius == null ? "待定" : `±${job.current_tg_radius.toFixed(2)} °C`}
-                </div>
-              </div>
-              <div className="rounded-[16px] border border-slate-200/70 bg-slate-50/80 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-mutedForeground">最佳相似度</div>
-                <div className="mt-1 text-lg font-semibold text-slate-950">{formatOptionalNumber(job?.best_similarity_score, 3)}</div>
-              </div>
-            </div>
+      <div className="tg-result-loading">
+        <div className="tg-result-loading-title">
+          <LoaderCircle className="animate-spin" />
+          <div>
+            <strong>正在搜索 PI 候选</strong>
+            <span>{job?.message || "按 Tg 距离和结构相似度扫描候选库…"}</span>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+        <div className="tg-result-loading-grid">
+          <div><span>已扫描</span><strong>{formatInteger(job?.scanned_rows)}</strong></div>
+          <div><span>已命中</span><strong>{formatInteger(job?.matched_count)}</strong></div>
+          <div>
+            <span>Tg 半径</span>
+            <strong>{job?.current_tg_radius == null ? "—" : `±${job.current_tg_radius.toFixed(1)}`}</strong>
+          </div>
+          <div>
+            <span>最佳相似度</span>
+            <strong>{job?.best_similarity_score == null ? "—" : job.best_similarity_score.toFixed(3)}</strong>
+          </div>
+        </div>
+        <div className="tg-result-skeleton-list" aria-hidden="true">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <span key={index} />
+          ))}
+        </div>
+      </div>
     );
   }
 
   if (!data) {
     return (
-      <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
-        <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Tg 逆向设计结果</CardTitle>
-          <CardDescription>暂无逆向设计结果。</CardDescription>
-        </CardHeader>
-        <CardContent className="pt-5">
-          <EmptyPanel
-            icon={<Database className="h-6 w-6" />}
-            title="逆向设计已就绪"
-            description="输入目标 Tg 并运行 Tg 搜索，即可查看相似 PI 候选。"
-          />
-        </CardContent>
-      </Card>
+      <ResultState
+        icon={<Database />}
+        title="候选搜索已就绪"
+        description="设置搜索参数后运行，即可在这里查看真实 PI 候选。"
+      />
     );
   }
 
-  if (data.total === 0) {
+  if (data.total === 0 || data.results.length === 0) {
     return (
-      <Card className="overflow-hidden rounded-[28px] border-white/70 shadow-none">
-        <CardHeader className="min-h-[112px] border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-          <CardTitle className="text-xl">Tg 逆向设计结果</CardTitle>
-          <CardDescription>PI 数据库扫描已完成，但没有候选满足相似度阈值。</CardDescription>
-        </CardHeader>
-        <CardContent className="pt-5">
-          <EmptyPanel
-            icon={<SearchX className="h-6 w-6" />}
-            title="未找到候选"
-            description="可以尝试降低相似度阈值，或检查绘制的聚合物结构。"
-          />
-        </CardContent>
-      </Card>
+      <ResultState
+        icon={<SearchX />}
+        title="没有找到候选"
+        description="可以降低相似度阈值、扩大候选数量，或检查当前聚合物结构。"
+      />
     );
   }
 
   return (
-    <Card className="overflow-visible rounded-[28px] border-white/70 shadow-none">
-      <CardHeader className="min-h-[120px] gap-4 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,248,249,0.88)_100%)]">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="space-y-2">
-            <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">PI 候选搜索</div>
-            <CardTitle className="text-[1.4rem] tracking-tight">Tg 逆向设计结果</CardTitle>
-            <CardDescription>相似 PI 候选按与目标 Tg 的距离排序。</CardDescription>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge>{`显示 ${visibleResults.length} 个`}</Badge>
-            <Badge className="text-slate-700">{`共 ${data.total} 个`}</Badge>
-            <Badge className="text-slate-700">{`候选池 ${data.candidate_pool_size} 个`}</Badge>
-            {job?.scanned_rows != null ? (
-              <Badge className="text-slate-700">{`已扫描 ${formatInteger(job.scanned_rows)} 行`}</Badge>
-            ) : null}
-            <Badge className="text-slate-700">{`${data.query_time_ms.toFixed(1)} ms`}</Badge>
-          </div>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-[18px] border border-white/80 bg-white/80 p-4 shadow-sm">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">
-              <Target className="h-4 w-4 text-teal-600" />
-              目标 Tg
-            </div>
-            <div className="mt-2 text-xl font-semibold text-slate-950">{data.target_tg.toFixed(2)} °C</div>
-          </div>
-          <div className="rounded-[18px] border border-white/80 bg-white/80 p-4 shadow-sm">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">候选池</div>
-            <div className="mt-2 text-xl font-semibold text-slate-950">{data.candidate_pool_size}</div>
-          </div>
-          <div className="rounded-[18px] border border-white/80 bg-white/80 p-4 shadow-sm">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-mutedForeground">
-              <Timer className="h-4 w-4 text-teal-600" />
-              耗时
-            </div>
-            <div className="mt-2 text-xl font-semibold text-slate-950">{data.query_time_ms.toFixed(1)} ms</div>
-          </div>
-        </div>
-      </CardHeader>
-
-      <CardContent className="space-y-4 pt-5">
-        <ResultsPagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          startIndex={startIndex}
-          endIndex={endIndex}
-          total={totalResultCount}
-          onPageChange={updateResultPage}
-        />
-        <CandidateMasonryGrid
-          candidates={visibleResults}
-          onOpenKnowledge={onOpenKnowledge}
-        />
-        <ResultsPagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          startIndex={startIndex}
-          endIndex={endIndex}
-          total={totalResultCount}
-          onPageChange={updateResultPage}
-        />
-      </CardContent>
-    </Card>
+    <div className="tg-result-success">
+      <section className="tg-result-summary" aria-label="本次搜索摘要">
+        <div><span>目标 Tg</span><strong>{`${submittedRequest?.target_tg ?? data.target_tg} °C`}</strong></div>
+        <div><span>阈值</span><strong>{submittedRequest?.similarity_threshold.toFixed(2) ?? "—"}</strong></div>
+        <div><span>候选</span><strong>{data.total}</strong></div>
+        <div><span>已扫描</span><strong>{formatInteger(job?.scanned_rows)}</strong></div>
+      </section>
+      <div className="tg-result-meta">
+        <span>{`候选池 ${data.candidate_pool_size.toLocaleString()}`}</span>
+        <span>{`${data.query_time_ms.toFixed(1)} ms`}</span>
+        <span>{`每页 ${RESULTS_PAGE_SIZE} 条`}</span>
+      </div>
+      <ResultPagination
+        page={currentPage}
+        totalPages={totalPages}
+        start={start}
+        end={end}
+        total={total}
+        onChange={(nextPage) => setPage(Math.min(Math.max(1, nextPage), totalPages))}
+      />
+      <div className="tg-candidate-list">
+        {results.map((candidate) => (
+          <CandidateCard
+            key={candidate.pi_id}
+            candidate={candidate}
+            onOpenKnowledge={onOpenKnowledge}
+          />
+        ))}
+      </div>
+      <ResultPagination
+        page={currentPage}
+        totalPages={totalPages}
+        start={start}
+        end={end}
+        total={total}
+        onChange={(nextPage) => setPage(Math.min(Math.max(1, nextPage), totalPages))}
+      />
+    </div>
   );
 }

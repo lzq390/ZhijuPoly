@@ -808,7 +808,14 @@ export default function App() {
     activeModule === "mdSimulationDemo" ||
     activeModule === "monomerMdSimulation" ||
     activeModule === "monomerDft";
-  const shouldKeepStructureWorkbenchMounted = hasMountedStructureWorkbench && activeModule !== "explorer" && activeModule !== "databaseQuery";
+  const isReverseDesignKetcherOwner =
+    activeModule === "reverseDesign" ||
+    (activeModule === "knowledge" && preserveReverseDesignForKnowledge);
+  const shouldKeepStructureWorkbenchMounted =
+    hasMountedStructureWorkbench &&
+    activeModule !== "explorer" &&
+    activeModule !== "databaseQuery" &&
+    !isReverseDesignKetcherOwner;
 
   return (
     <AppShell
@@ -957,7 +964,6 @@ export default function App() {
         >
           <ReverseDesignPage
             structure={structureWorkspace}
-            onEditStructure={openStructureWorkbench}
             onOpenKnowledge={openKnowledge}
           />
         </div>

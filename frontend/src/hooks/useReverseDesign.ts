@@ -49,6 +49,7 @@ const DEFAULT_REQUEST: ReverseDesignTgRequest = {
 
 export function useReverseDesign() {
   const [request, setRequest] = useState<ReverseDesignTgRequest>(DEFAULT_REQUEST);
+  const [submittedRequest, setSubmittedRequest] = useState<ReverseDesignTgRequest | null>(null);
   const [state, setState] = useState<ReverseDesignState>({
     isLoading: false,
     error: null,
@@ -101,6 +102,7 @@ export function useReverseDesign() {
     pollTokenRef.current += 1;
     pollAbortRef.current?.abort();
     pollAbortRef.current = null;
+    setSubmittedRequest(null);
     setState((current) => ({
       ...current,
       isLoading: false,
@@ -140,6 +142,7 @@ export function useReverseDesign() {
       smiles: normalizedSmiles
     };
     setRequest(requestForSearch);
+    setSubmittedRequest(requestForSearch);
 
     pollAbortRef.current?.abort();
     const token = pollTokenRef.current + 1;
@@ -197,11 +200,26 @@ export function useReverseDesign() {
     }
   }
 
+  function reset() {
+    pollTokenRef.current += 1;
+    pollAbortRef.current?.abort();
+    pollAbortRef.current = null;
+    setSubmittedRequest(null);
+    setState({
+      isLoading: false,
+      error: null,
+      data: null,
+      job: null
+    });
+  }
+
   return {
     request,
     setRequest,
+    submittedRequest,
     ...state,
     submit,
-    reportError
+    reportError,
+    reset
   };
 }
