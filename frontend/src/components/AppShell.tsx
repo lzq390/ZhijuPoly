@@ -94,9 +94,11 @@ export function AppShell({
   const gpuSessionControl = useDevGpuSessionControl(DEV_GPU_SESSION_CONTROL_ENABLED);
   const isHome = activeModule === "home";
   const isReverseDesignWorkbench = activeModule === "reverseDesign";
+  const isStructureWorkbench = activeModule === "structureWorkbench";
   const isResearchWorkbench =
     activeModule === "explorer" ||
     activeModule === "databaseQuery" ||
+    isStructureWorkbench ||
     activeModule === "reverseDesign";
   const activeGroupTitle =
     moduleGroups.find((group) => group.items.some((item) => item.isActive))?.title ?? null;
@@ -234,7 +236,7 @@ export function AppShell({
           <div className="h-10 w-10" />
         </header>
 
-        <main className={isHome ? "min-h-0 flex-1 overflow-hidden" : isResearchWorkbench ? `min-h-0 flex-1 overflow-hidden ${isReverseDesignWorkbench ? "p-0" : "py-5 md:py-8"}` : "flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-8"}>
+        <main className={isHome ? "min-h-0 flex-1 overflow-hidden" : isResearchWorkbench ? `min-h-0 flex-1 overflow-hidden ${isReverseDesignWorkbench || isStructureWorkbench ? "p-0" : "py-5 md:py-8"}` : "flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-8"}>
           <div className={isHome ? "h-full" : ["relative mx-auto flex flex-col", isResearchWorkbench ? "h-full gap-0" : "gap-8", fullBleed ? "max-w-none" : "max-w-[1480px]"].join(" ")}>
             {children}
           </div>

@@ -53,6 +53,7 @@ export function useTgStructureCanvas({
   const [isFlipped, setIsFlipped] = useState(false);
   const [isFlipping, setIsFlipping] = useState(false);
   const [isImportingImage, setIsImportingImage] = useState(false);
+  const [isLoadingStructure, setIsLoadingStructure] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -380,6 +381,72 @@ export function useTgStructureCanvas({
     }
   }
 
+  async function loadStructure(sourceSmiles: string) {
+    const normalizedSource = sourceSmiles.trim();
+    if (!normalizedSource) {
+      setFeedback("没有可加载的结构。");
+      return false;
+    }
+
+    const ketcher = await waitForKetcher();
+    if (!ketcher) {
+      structure.setIsReady(false);
+      setFeedback("结构编辑器尚未就绪，请稍后重试。");
+      return false;
+    }
+
+    const previousFlipped = isFlipped;
+    const previousSnapshot = await captureEditorSnapshot(ketcher);
+    setIsLoadingStructure(true);
+    setFeedback("正在加载结构...");
+
+    try {
+      let editorSmiles = "";
+      let lastError: unknown = null;
+      for (const candidate of getEditorLoadCandidates(normalizedSource)) {
+        try {
+          editorSmiles = await writeImageStructure(ketcher, candidate);
+          break;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (!editorSmiles) {
+        throw lastError instanceof Error
+          ? lastError
+          : new Error("Ketcher 未接受待加载结构。");
+      }
+
+      const nextSmiles = shouldAdoptEditorSmiles(normalizedSource, editorSmiles)
+        ? editorSmiles
+        : normalizedSource;
+      setIsFlipped(false);
+      applySmiles(nextSmiles);
+      structure.setIsReady(true);
+      setFeedback(
+        nextSmiles === editorSmiles
+          ? "结构已加载到 2D 画布。"
+          : "结构已加载，并保留共享 SMILES 中的聚合物端基。"
+      );
+      return true;
+    } catch (error) {
+      console.error("Failed to load structure into Tg Ketcher canvas", error);
+      const message = error instanceof Error ? error.message : "结构加载失败。";
+      try {
+        await restoreEditorSnapshot(ketcher, previousSnapshot);
+        setIsFlipped(previousFlipped);
+        structure.setIsReady(true);
+        setFeedback(`${message} 已恢复原画布。`);
+      } catch (restoreError) {
+        console.error("Failed to restore Tg Ketcher canvas", restoreError);
+        setFeedback(`${message} 原画布恢复失败，请手动检查。`);
+      }
+      return false;
+    } finally {
+      setIsLoadingStructure(false);
+    }
+  }
+
   async function importImageFile(file: File) {
     if (!file.type.startsWith("image/")) {
       setFeedback("请选择图片文件。");
@@ -507,7 +574,12 @@ export function useTgStructureCanvas({
     }
   }
 
-  const isBusy = isImportingImage || isClearing || isSyncing || isFlipping;
+  const isBusy =
+    isImportingImage ||
+    isLoadingStructure ||
+    isClearing ||
+    isSyncing ||
+    isFlipping;
 
   return {
     fileInputRef,
@@ -516,12 +588,14 @@ export function useTgStructureCanvas({
     isFlipped,
     isFlipping,
     isImportingImage,
+    isLoadingStructure,
     isClearing,
     isSyncing,
     isBusy,
     feedback,
     setFeedback,
     copyState,
+    loadStructure,
     clearCanvas,
     importImageFile,
     syncSmilesFromCanvas,
