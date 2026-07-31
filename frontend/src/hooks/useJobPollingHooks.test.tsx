@@ -219,6 +219,40 @@ describe("job polling hook wiring", () => {
     await Promise.all([first, second]);
   });
 
+  it("keeps the submitted Reverse Design request snapshot until reset", async () => {
+    const signals: AbortSignal[] = [];
+    apiMocks.createReverse.mockResolvedValue({ job_id: "reverse-snapshot", status: "pending" });
+    apiMocks.fetchReverse.mockImplementation(pendingUntilAbort(signals));
+    const request: ReverseDesignTgRequest = {
+      target_tg: 450,
+      smiles: "*CC*",
+      similarity_threshold: 0.7,
+      candidate_size: 25
+    };
+
+    const { result, unmount } = renderHook(() => useReverseDesign());
+    let submission!: Promise<void>;
+    act(() => {
+      submission = result.current.submit(request);
+    });
+    await flush();
+
+    expect(result.current.submittedRequest).toEqual(request);
+    expect(result.current.isLoading).toBe(true);
+
+    act(() => {
+      result.current.reset();
+    });
+    expect(signals[0].aborted).toBe(true);
+    expect(result.current.submittedRequest).toBeNull();
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.data).toBeNull();
+    expect(result.current.job).toBeNull();
+
+    await submission;
+    unmount();
+  });
+
   it("aborts Monomer MD polling on reset and on unmount", async () => {
     const signals: AbortSignal[] = [];
     apiMocks.createMonomerMd
