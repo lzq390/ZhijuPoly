@@ -4,6 +4,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 try:
     from dotenv import dotenv_values
@@ -61,6 +62,25 @@ def _absolute_from_root(value: str) -> str:
     if not path.is_absolute():
         path = PROJECT_ROOT / path
     return os.path.abspath(path)
+
+
+def _normalize_http_proxy_url(name: str, value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        return ""
+
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"{name} must be an absolute HTTP(S) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{name} must not contain a username or password")
+    if parsed.path or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError(f"{name} must not contain a path, query, or fragment")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{name} must contain a valid port") from exc
+    return normalized
 
 
 class Settings:
@@ -125,6 +145,7 @@ class Settings:
         online_knowledge_base_url: str | None = None,
         online_knowledge_model: str | None = None,
         online_knowledge_max_papers: int | None = None,
+        online_knowledge_proxy_url: str | None = None,
         assistant_api_key: str | None = None,
         assistant_base_url: str | None = None,
         assistant_model: str | None = None,
@@ -555,6 +576,12 @@ class Settings:
                 str(env_values.get("ONLINE_KNOWLEDGE_MAX_PAPERS", "20")),
             )
         )
+        raw_online_knowledge_proxy_url = online_knowledge_proxy_url
+        if raw_online_knowledge_proxy_url is None:
+            raw_online_knowledge_proxy_url = os.getenv(
+                "ONLINE_KNOWLEDGE_PROXY_URL",
+                env_values.get("ONLINE_KNOWLEDGE_PROXY_URL", ""),
+            )
         raw_assistant_api_key = _first_non_blank(
             assistant_api_key,
             os.getenv("ASSISTANT_API_KEY"),
@@ -964,6 +991,10 @@ class Settings:
         self.online_knowledge_base_url = raw_online_knowledge_base_url.strip()
         self.online_knowledge_model = raw_online_knowledge_model.strip()
         self.online_knowledge_max_papers = min(2000, max(1, int(raw_online_knowledge_max_papers)))
+        self.online_knowledge_proxy_url = _normalize_http_proxy_url(
+            "ONLINE_KNOWLEDGE_PROXY_URL",
+            raw_online_knowledge_proxy_url,
+        )
         self.assistant_api_key = raw_assistant_api_key.strip()
         self.assistant_base_url = raw_assistant_base_url.strip()
         self.assistant_model = raw_assistant_model.strip()
