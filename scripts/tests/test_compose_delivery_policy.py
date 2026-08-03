@@ -15,6 +15,21 @@ DIGEST_B = "ghcr.io/lzq390/nexpoly-web@sha256:" + "b" * 64
 
 
 class ComposeDeliveryPolicyTests(unittest.TestCase):
+    def test_nexpoly_compose_does_not_set_global_outbound_proxy(self) -> None:
+        compose = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in REPOSITORY_ROOT.glob("docker-compose*.yml")
+        )
+        for variable in (
+            "HTTP_PROXY:",
+            "HTTPS_PROXY:",
+            "ALL_PROXY:",
+            "http_proxy:",
+            "https_proxy:",
+            "all_proxy:",
+        ):
+            self.assertNotIn(variable, compose)
+
     def test_frontend_image_defaults_to_dormant_openscience_workspace(self) -> None:
         dockerfile = (REPOSITORY_ROOT / "frontend" / "Dockerfile").read_text(
             encoding="utf-8"

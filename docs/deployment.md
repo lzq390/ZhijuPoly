@@ -122,6 +122,31 @@ different child port is still a separate Origin. If NexPoly moves to HTTPS, an
 HTTP iframe on `9011` will be blocked as mixed content and OpenScience must gain
 an HTTPS endpoint before activation.
 
+### Development tunnel proxy
+
+Online knowledge model extraction can use the optional
+`ONLINE_KNOWLEDGE_PROXY_URL` setting. It configures only that OpenAI-compatible
+client: the client disables inherited proxy variables, literature discovery
+remains direct, and the proxy URL is never returned by the default-config API.
+An empty value keeps direct access. The URL must be an absolute HTTP(S) URL
+without credentials, path, query, or fragment.
+
+For the current development server, each container uses port `17892` on its
+own approved Docker bridge gateway (for example,
+`http://172.28.0.1:17892`). Do not assume that
+`host.docker.internal:host-gateway` resolves to that gateway on Linux; it may
+resolve to the unrelated default bridge instead. A root-managed, bridge-only
+TCP relay forwards the gateway endpoints to the active loopback SSH/Codex
+proxy. The relay must listen only on the exact Docker gateway addresses and
+the firewall must admit only their corresponding bridge subnets; never bind
+this unauthenticated development proxy to `0.0.0.0` or the server's public
+address.
+
+This is a development-only facility. If the upstream loopback tunnel is absent,
+online model extraction may fail while Backend health and all non-model APIs
+remain available. Production must use an independently governed outbound proxy
+instead of relying on an interactive tunnel.
+
 ## Operator workflow
 
 The stable entry point is installed outside the checkout:

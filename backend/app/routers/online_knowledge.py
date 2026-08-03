@@ -56,6 +56,7 @@ class OnlineModelAccess:
     api_key: str
     base_url: str
     model: str
+    proxy_url: str
 
 
 @router.get("/default-config", response_model=OnlineKnowledgeDefaultConfigResponse)
@@ -227,6 +228,7 @@ def _run_search_from_request(
         model=model_access.model,
         max_papers=request_body.max_papers,
         extraction_delay_seconds=request_body.extraction_delay_seconds,
+        proxy_url=model_access.proxy_url,
     )
 
 
@@ -244,6 +246,7 @@ def resolve_online_model_access(
         api_key=api_key,
         base_url=request_body.base_url,
         model=request_body.model,
+        proxy_url=settings.online_knowledge_proxy_url,
     )
     validate_model_access(
         api_key=access.api_key,
@@ -287,6 +290,7 @@ def _run_online_knowledge_job(
             model=model_access.model,
             max_papers=request_body.max_papers,
             extraction_delay_seconds=request_body.extraction_delay_seconds,
+            proxy_url=model_access.proxy_url,
             progress_callback=report_progress,
         )
         result_data["query_time_ms"] = (perf_counter() - started_at) * 1000

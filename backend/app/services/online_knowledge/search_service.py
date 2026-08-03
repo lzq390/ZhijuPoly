@@ -42,6 +42,7 @@ def run_online_knowledge_search(
     model: str,
     max_papers: int,
     extraction_delay_seconds: float,
+    proxy_url: str = "",
     progress_callback: Callable[[str, str, int, int], None] | None = None,
 ) -> dict[str, Any]:
     validate_model_access(api_key=api_key, base_url=base_url, model=model)
@@ -87,7 +88,12 @@ def run_online_knowledge_search(
         papers = create_example_data(material, mode)
         example_used = True
 
-    extractor = PolymerExtractor(api_key=api_key, base_url=base_url, model_name=model)
+    extractor = PolymerExtractor(
+        api_key=api_key,
+        base_url=base_url,
+        model_name=model,
+        proxy_url=proxy_url,
+    )
     extraction_total = len([paper for paper in papers if paper.get("abstract")])
     _report_progress(
         progress_callback,
@@ -96,19 +102,22 @@ def run_online_knowledge_search(
         0,
         extraction_total,
     )
-    extraction_results = extractor.process_papers(
-        papers,
-        mode=mode,
-        delay=extraction_delay_seconds,
-        progress_callback=lambda processed, total: _report_progress(
-            progress_callback,
-            "extracting",
-            _extraction_progress_message(processed, total),
-            processed,
-            total,
-        ),
-    )
-    rows = extractor.convert_to_rows(mode=mode)
+    try:
+        extraction_results = extractor.process_papers(
+            papers,
+            mode=mode,
+            delay=extraction_delay_seconds,
+            progress_callback=lambda processed, total: _report_progress(
+                progress_callback,
+                "extracting",
+                _extraction_progress_message(processed, total),
+                processed,
+                total,
+            ),
+        )
+        rows = extractor.convert_to_rows(mode=mode)
+    finally:
+        extractor.close()
     if extraction_results and all(result.get("error") for result in extraction_results):
         first_error = str(extraction_results[0].get("error") or "model call failed")
         raise OnlineKnowledgeModelError(first_error)

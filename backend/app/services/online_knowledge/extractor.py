@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from openai import OpenAI
+from openai import DefaultHttpxClient, OpenAI
 
 
 Paper = dict[str, Any]
@@ -14,10 +14,26 @@ SynthesisRow = dict[str, Any]
 
 
 class PolymerExtractor:
-    def __init__(self, api_key: str, base_url: str, model_name: str) -> None:
-        self.client = OpenAI(api_key=api_key, base_url=base_url.rstrip("/"))
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model_name: str,
+        proxy_url: str = "",
+    ) -> None:
+        http_client_options: dict[str, Any] = {"trust_env": False}
+        if proxy_url:
+            http_client_options["proxy"] = proxy_url
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url.rstrip("/"),
+            http_client=DefaultHttpxClient(**http_client_options),
+        )
         self.model_name = model_name
         self.results: list[ExtractionResult] = []
+
+    def close(self) -> None:
+        self.client.close()
 
     def create_extraction_prompt(self, title: str, abstract: str, mode: str) -> str:
         if mode == "synthesis":
