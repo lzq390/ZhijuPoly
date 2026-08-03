@@ -45,10 +45,55 @@ import urllib.parse
 import urllib.request
 
 
-def _validated_executable_sibling(name: str) -> Path:
-    """Validate a sibling before importing any of its Python payload."""
+_PRODUCTION_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
+_CONTROLLER_FILENAME = "pull_deploy_controller.py"
+_CONTROL_RELEASE_ID_RE = re.compile(r"[0-9a-f]{64}")
 
-    controller = Path(__file__).absolute()
+
+def _controller_execution_context(
+    controller: Path,
+    *,
+    runtime_root: Path,
+) -> tuple[str, str | None]:
+    """Classify a controller by its trusted location, never by its mode."""
+
+    controller = controller.absolute()
+    runtime_root = runtime_root.absolute()
+    if controller == runtime_root / "bin" / _CONTROLLER_FILENAME:
+        return "stable-install", None
+
+    releases_root = runtime_root / "control-releases"
+    try:
+        relative = controller.relative_to(releases_root)
+    except ValueError:
+        try:
+            controller.relative_to(runtime_root)
+        except ValueError:
+            return "source", None
+        raise RuntimeError("controller runtime location is unsafe") from None
+
+    if (
+        len(relative.parts) != 2
+        or relative.parts[1] != _CONTROLLER_FILENAME
+        or _CONTROL_RELEASE_ID_RE.fullmatch(relative.parts[0]) is None
+    ):
+        raise RuntimeError("controller runtime location is unsafe")
+    return "control-release", relative.parts[0]
+
+
+def _validate_executable_sibling(
+    controller: Path,
+    name: str,
+    *,
+    runtime_root: Path,
+    environment: Mapping[str, str],
+) -> Path:
+    """Validate one sibling using path-bound installed-runtime policy."""
+
+    if not name or Path(name).name != name:
+        raise RuntimeError(f"required controller sibling is unsafe: {name}")
+    controller = controller.absolute()
+    runtime_root = runtime_root.absolute()
     parent = controller.parent
     path = parent / name
     try:
@@ -57,17 +102,24 @@ def _validated_executable_sibling(name: str) -> Path:
         metadata = path.lstat()
     except OSError as exc:
         raise RuntimeError(f"required controller sibling is missing: {name}") from exc
-    installed = (
-        controller
-        == Path("/data/lzq/gith/nexpoly-runtime/bin/pull_deploy_controller.py")
-        or stat.S_IMODE(controller_metadata.st_mode) == 0o700
+
+    context, release_id = _controller_execution_context(
+        controller,
+        runtime_root=runtime_root,
     )
-    expected_mode = 0o700 if installed else None
-    if (
+    installed = context != "source"
+    if context == "control-release" and (
+        environment.get("NEXPOLY_ACTIVE_CONTROL_ROOT") != str(parent)
+        or environment.get("NEXPOLY_ACTIVE_CONTROL_RELEASE_ID") != release_id
+    ):
+        raise RuntimeError("controller release selector binding is unsafe")
+
+    unsafe = (
         not stat.S_ISREG(controller_metadata.st_mode)
         or controller.is_symlink()
         or controller_metadata.st_uid != os.geteuid()
         or controller_metadata.st_mode & 0o022
+        or (installed and stat.S_IMODE(controller_metadata.st_mode) != 0o700)
         or not stat.S_ISDIR(parent_metadata.st_mode)
         or parent.is_symlink()
         or parent_metadata.st_uid != os.geteuid()
@@ -77,13 +129,53 @@ def _validated_executable_sibling(name: str) -> Path:
         or path.is_symlink()
         or metadata.st_uid != os.geteuid()
         or metadata.st_mode & 0o022
-        or (
-            expected_mode is not None
-            and stat.S_IMODE(metadata.st_mode) != expected_mode
-        )
-    ):
+        or (installed and stat.S_IMODE(metadata.st_mode) != 0o700)
+    )
+    private_source = (
+        not installed
+        and stat.S_IMODE(controller_metadata.st_mode) == 0o700
+        and stat.S_IMODE(parent_metadata.st_mode) == 0o700
+    )
+    if private_source and stat.S_IMODE(metadata.st_mode) != 0o700:
+        unsafe = True
+
+    if installed:
+        installed_directories = [runtime_root]
+        if context == "stable-install":
+            installed_directories.append(runtime_root / "bin")
+        else:
+            installed_directories.extend(
+                (runtime_root / "control-releases", parent)
+            )
+        for directory in installed_directories:
+            try:
+                directory_metadata = directory.lstat()
+            except OSError:
+                unsafe = True
+                break
+            if (
+                not stat.S_ISDIR(directory_metadata.st_mode)
+                or directory.is_symlink()
+                or directory_metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(directory_metadata.st_mode) != 0o700
+            ):
+                unsafe = True
+                break
+
+    if unsafe:
         raise RuntimeError(f"required controller sibling is unsafe: {name}")
     return path
+
+
+def _validated_executable_sibling(name: str) -> Path:
+    """Validate a sibling before importing any of its Python payload."""
+
+    return _validate_executable_sibling(
+        Path(__file__),
+        name,
+        runtime_root=_PRODUCTION_RUNTIME_ROOT,
+        environment=os.environ,
+    )
 
 
 def _load_worker_slot_runtime() -> Any:
@@ -325,7 +417,7 @@ SLOT_RECORD_SCHEMA_VERSION = _worker_slot_runtime.SLOT_RECORD_SCHEMA_VERSION
 
 
 PRODUCTION_ROOT = Path("/data/lzq/gith/nexpoly")
-RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
+RUNTIME_ROOT = _PRODUCTION_RUNTIME_ROOT
 REPOSITORY_SSH_URL = "git@github.com:lzq390/ZhijuPoly.git"
 REPOSITORY_HTTPS_URL = "https://github.com/lzq390/ZhijuPoly.git"
 REPOSITORY_API_ROOT = "https://api.github.com/repos/lzq390/ZhijuPoly"

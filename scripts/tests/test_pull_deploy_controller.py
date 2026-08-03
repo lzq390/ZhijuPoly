@@ -955,6 +955,166 @@ def seed_completed_alias_gate(
     CONTROLLER.atomic_json(marker_path, marker)
 
 
+class ControllerSiblingValidationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.runtime = self.root / "runtime"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    @staticmethod
+    def make_directory(path: Path, mode: int) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        os.chmod(path, mode)
+
+    @staticmethod
+    def make_file(path: Path, mode: int) -> None:
+        path.write_text("# test control payload\n", encoding="utf-8")
+        os.chmod(path, mode)
+
+    def validate(
+        self,
+        controller: Path,
+        *,
+        environment: dict[str, str] | None = None,
+    ) -> Path:
+        return CONTROLLER._validate_executable_sibling(
+            controller,
+            "worker_slot_runtime.py",
+            runtime_root=self.runtime,
+            environment=environment or {},
+        )
+
+    def test_source_checkout_accepts_mixed_git_materialization_modes(
+        self,
+    ) -> None:
+        scripts = self.root / "checkout" / "scripts"
+        self.make_directory(scripts, 0o755)
+        controller = scripts / "pull_deploy_controller.py"
+        sibling = scripts / "worker_slot_runtime.py"
+        self.make_file(controller, 0o700)
+        self.make_file(sibling, 0o755)
+
+        self.assertEqual(self.validate(controller), sibling)
+
+    def test_private_source_checkout_keeps_executable_cohort_private(
+        self,
+    ) -> None:
+        scripts = self.root / "private-checkout" / "scripts"
+        self.make_directory(scripts, 0o700)
+        controller = scripts / "pull_deploy_controller.py"
+        sibling = scripts / "worker_slot_runtime.py"
+        self.make_file(controller, 0o700)
+        self.make_file(sibling, 0o755)
+
+        with self.assertRaisesRegex(RuntimeError, "sibling is unsafe"):
+            self.validate(controller)
+        os.chmod(sibling, 0o700)
+        self.assertEqual(self.validate(controller), sibling)
+
+    def test_source_checkout_rejects_writable_or_linked_sibling(self) -> None:
+        scripts = self.root / "unsafe-checkout" / "scripts"
+        self.make_directory(scripts, 0o755)
+        controller = scripts / "pull_deploy_controller.py"
+        sibling = scripts / "worker_slot_runtime.py"
+        self.make_file(controller, 0o755)
+        self.make_file(sibling, 0o775)
+
+        with self.assertRaisesRegex(RuntimeError, "sibling is unsafe"):
+            self.validate(controller)
+
+        sibling.unlink()
+        target = self.root / "external-worker-slot.py"
+        self.make_file(target, 0o755)
+        sibling.symlink_to(target)
+        with self.assertRaisesRegex(RuntimeError, "sibling is unsafe"):
+            self.validate(controller)
+
+    def test_stable_install_requires_exact_private_modes(self) -> None:
+        binary_directory = self.runtime / "bin"
+        self.make_directory(self.runtime, 0o700)
+        self.make_directory(binary_directory, 0o700)
+        controller = binary_directory / "pull_deploy_controller.py"
+        sibling = binary_directory / "worker_slot_runtime.py"
+        self.make_file(controller, 0o700)
+        self.make_file(sibling, 0o700)
+
+        self.assertEqual(self.validate(controller), sibling)
+        for path in (self.runtime, binary_directory, controller, sibling):
+            with self.subTest(path=path):
+                os.chmod(path, 0o755)
+                with self.assertRaisesRegex(RuntimeError, "sibling is unsafe"):
+                    self.validate(controller)
+                os.chmod(path, 0o700)
+
+    def test_control_release_requires_selector_binding_and_private_modes(
+        self,
+    ) -> None:
+        release_id = "a" * 64
+        releases = self.runtime / "control-releases"
+        release = releases / release_id
+        self.make_directory(self.runtime, 0o700)
+        self.make_directory(releases, 0o700)
+        self.make_directory(release, 0o700)
+        controller = release / "pull_deploy_controller.py"
+        sibling = release / "worker_slot_runtime.py"
+        self.make_file(controller, 0o700)
+        self.make_file(sibling, 0o700)
+        environment = {
+            "NEXPOLY_ACTIVE_CONTROL_ROOT": str(release),
+            "NEXPOLY_ACTIVE_CONTROL_RELEASE_ID": release_id,
+        }
+
+        self.assertEqual(
+            self.validate(controller, environment=environment),
+            sibling,
+        )
+        for invalid_environment in (
+            {},
+            {
+                **environment,
+                "NEXPOLY_ACTIVE_CONTROL_ROOT": str(releases / ("b" * 64)),
+            },
+            {
+                **environment,
+                "NEXPOLY_ACTIVE_CONTROL_RELEASE_ID": "b" * 64,
+            },
+        ):
+            with self.subTest(environment=invalid_environment):
+                with self.assertRaisesRegex(RuntimeError, "selector binding"):
+                    self.validate(
+                        controller,
+                        environment=invalid_environment,
+                    )
+
+        for path in (self.runtime, releases, release, controller, sibling):
+            with self.subTest(path=path):
+                os.chmod(path, 0o755)
+                with self.assertRaisesRegex(RuntimeError, "sibling is unsafe"):
+                    self.validate(controller, environment=environment)
+                os.chmod(path, 0o700)
+
+    def test_unrecognized_runtime_locations_do_not_fall_back_to_source(
+        self,
+    ) -> None:
+        self.make_directory(self.runtime, 0o700)
+        locations = (
+            self.runtime / "control-releases" / "not-a-release",
+            self.runtime / "checkout" / "scripts",
+        )
+        for location in locations:
+            with self.subTest(location=location):
+                self.make_directory(location, 0o700)
+                controller = location / "pull_deploy_controller.py"
+                sibling = location / "worker_slot_runtime.py"
+                self.make_file(controller, 0o700)
+                self.make_file(sibling, 0o700)
+                with self.assertRaisesRegex(RuntimeError, "runtime location"):
+                    self.validate(controller)
+
+
 class GitRunner:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
@@ -7389,6 +7549,13 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 OPERATION_ID,
                 f_sha,
             ],
+            env={
+                **os.environ,
+                "NEXPOLY_ACTIVE_CONTROL_ROOT": str(f_root),
+                "NEXPOLY_ACTIVE_CONTROL_RELEASE_ID": str(
+                    f_manifest["release_id"]
+                ),
+            },
             check=False,
             capture_output=True,
             text=True,
