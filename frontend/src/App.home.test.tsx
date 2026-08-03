@@ -23,7 +23,8 @@ afterEach(() => {
 
 describe("智聚万物首页", () => {
   it("未配置工作台时只显示同步占位且不挂载 iframe", () => {
-    vi.unstubAllEnvs();
+    // unstubAllEnvs restores the process value, which may be configured in dev.
+    vi.stubEnv("VITE_AGENT_WORKSPACE_URL", undefined);
     render(<App />);
 
     expect(screen.queryByText("今天研究什么聚合物问题？")).toBeNull();

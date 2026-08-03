@@ -302,6 +302,8 @@ jobs:
         run: npm ci
       - name: Run Vitest
         working-directory: frontend
+        env:
+          VITE_AGENT_WORKSPACE_URL: https://workspace.ci.invalid/
         run: npm test
       - name: Build frontend
         working-directory: frontend
