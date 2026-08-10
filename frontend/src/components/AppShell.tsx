@@ -44,6 +44,7 @@ export type AppShellModuleGroup = {
 type AppShellProps = {
   activeModule: string;
   fullBleed?: boolean;
+  standaloneModules: AppShellModuleItem[];
   moduleGroups: AppShellModuleGroup[];
   onOpenHome: () => void;
   projects: OpenScienceProjectSummary[];
@@ -69,6 +70,7 @@ type AppShellProps = {
 export function AppShell({
   activeModule,
   fullBleed = false,
+  standaloneModules,
   moduleGroups,
   onOpenHome,
   projects,
@@ -143,6 +145,7 @@ export function AppShell({
     <div className="flex h-screen overflow-hidden bg-[#f4f6f8] text-slate-950">
       <aside className="hidden w-[276px] shrink-0 border-r border-slate-200/80 bg-[#f7f8fa] px-2.5 py-2 lg:block">
         <SidebarContent
+          standaloneModules={standaloneModules}
           moduleGroups={moduleGroups}
           onOpenHome={() => handleNavigate(onOpenHome)}
           onNavigate={handleNavigate}
@@ -180,6 +183,7 @@ export function AppShell({
           />
           <aside className="relative h-full w-[86vw] max-w-[340px] border-r border-slate-200 bg-[#f7f8fa] px-2.5 py-2 shadow-2xl">
             <SidebarContent
+              standaloneModules={standaloneModules}
               moduleGroups={moduleGroups}
               onOpenHome={() => handleNavigate(onOpenHome)}
               onNavigate={handleNavigate}
@@ -247,6 +251,7 @@ export function AppShell({
 }
 
 type SidebarContentProps = {
+  standaloneModules: AppShellModuleItem[];
   moduleGroups: AppShellModuleGroup[];
   onOpenHome: () => void;
   onNavigate: (action: () => void) => void;
@@ -275,6 +280,7 @@ type SidebarContentProps = {
 };
 
 function SidebarContent({
+  standaloneModules,
   moduleGroups,
   onOpenHome,
   onNavigate,
@@ -341,59 +347,57 @@ function SidebarContent({
       <div className="project-list-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
         <nav aria-label="业务模块">
           <div className="flex flex-col gap-1 pb-2 pt-1">
+            {standaloneModules.length > 0 ? (
+              <div className="space-y-0.5 border-b border-slate-200/80 pb-1.5">
+                {standaloneModules.map((item) => (
+                  <SidebarModuleButton key={item.id} item={item} onNavigate={onNavigate} />
+                ))}
+              </div>
+            ) : null}
+
             {moduleGroups.map((group) => {
-              const isExpanded = expandedGroupTitles.has(group.title);
+              const hasItems = group.items.length > 0;
+              const isExpanded = hasItems && expandedGroupTitles.has(group.title);
 
               return (
                 <section key={group.title} className="space-y-0.5">
                   <button
                     type="button"
+                    aria-label={group.title}
                     aria-expanded={isExpanded}
+                    disabled={!hasItems}
                     className={[
-                      "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs font-semibold uppercase tracking-[0.08em] transition-colors",
+                      "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs font-semibold tracking-[0.04em] transition-colors",
                       isExpanded
                         ? "bg-slate-200/70 text-slate-800"
-                        : "text-slate-600 hover:bg-slate-200/60 hover:text-slate-900"
+                        : "text-slate-600 hover:bg-slate-200/60 hover:text-slate-900",
+                      "disabled:cursor-default disabled:text-slate-500 disabled:hover:bg-transparent disabled:hover:text-slate-500"
                     ].join(" ")}
                     onClick={() => onToggleGroup(group.title)}
                   >
                     <span className="truncate">{group.title}</span>
-                    <ChevronDown
-                      aria-hidden="true"
-                      className={[
-                        "h-3.5 w-3.5 shrink-0 transition-transform",
-                        isExpanded ? "rotate-0" : "-rotate-90"
-                      ].join(" ")}
-                    />
+                    {hasItems ? (
+                      <ChevronDown
+                        aria-hidden="true"
+                        className={[
+                          "h-3.5 w-3.5 shrink-0 transition-transform",
+                          isExpanded ? "rotate-0" : "-rotate-90"
+                        ].join(" ")}
+                      />
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className="shrink-0 text-[10px] font-medium text-slate-400"
+                      >
+                        暂无模块
+                      </span>
+                    )}
                   </button>
 
                   {isExpanded ? (
                     <div className="space-y-0.5 pl-1">
                       {group.items.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          aria-current={item.isActive ? "page" : undefined}
-                          className={[
-                            "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors",
-                            item.isActive
-                              ? "bg-teal-50/80 text-teal-950"
-                              : "text-slate-600 hover:bg-white/78 hover:text-slate-950"
-                          ].join(" ")}
-                          onClick={() => onNavigate(item.onClick)}
-                        >
-                          <span
-                            className={[
-                              "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-colors",
-                              item.isActive
-                                ? "border-teal-200 bg-teal-50 text-teal-700"
-                                : "border-slate-200 bg-white/70 text-slate-500 group-hover:text-teal-700"
-                            ].join(" ")}
-                          >
-                            {item.icon}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{item.label}</span>
-                        </button>
+                        <SidebarModuleButton key={item.id} item={item} onNavigate={onNavigate} />
                       ))}
                     </div>
                   ) : null}
@@ -597,6 +601,41 @@ function SidebarContent({
         </section>
       </div>
     </div>
+  );
+}
+
+function SidebarModuleButton({
+  item,
+  onNavigate
+}: {
+  item: AppShellModuleItem;
+  onNavigate: (action: () => void) => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-module-id={item.id}
+      aria-current={item.isActive ? "page" : undefined}
+      className={[
+        "group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors",
+        item.isActive
+          ? "bg-teal-50/80 text-teal-950"
+          : "text-slate-600 hover:bg-white/78 hover:text-slate-950"
+      ].join(" ")}
+      onClick={() => onNavigate(item.onClick)}
+    >
+      <span
+        className={[
+          "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-colors",
+          item.isActive
+            ? "border-teal-200 bg-teal-50 text-teal-700"
+            : "border-slate-200 bg-white/70 text-slate-500 group-hover:text-teal-700"
+        ].join(" ")}
+      >
+        {item.icon}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{item.label}</span>
+    </button>
   );
 }
 

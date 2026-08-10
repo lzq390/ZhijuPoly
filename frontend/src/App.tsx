@@ -11,7 +11,11 @@ import {
   Search,
   Sparkles
 } from "lucide-react";
-import { AppShell, type AppShellModuleGroup } from "./components/AppShell";
+import {
+  AppShell,
+  type AppShellModuleGroup,
+  type AppShellModuleItem
+} from "./components/AppShell";
 import { AgentWorkspaceHomePage, agentWorkspaceUrl } from "./components/AgentWorkspaceHomePage";
 import { ConditionalGenerationPage } from "./components/ConditionalGenerationPage";
 import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
@@ -657,24 +661,48 @@ export default function App() {
     generalSessionBridge.openSession(sessionID);
   }
 
+  const standaloneModules: AppShellModuleItem[] = [
+    {
+      id: "structureWorkbench",
+      label: "结构工作台",
+      description: "统一绘制、输入和预览当前共享结构。",
+      route: "/structure-workbench",
+      icon: <Grid2X2 className="h-4 w-4" />,
+      isActive: activeModule === "structureWorkbench",
+      onClick: openStructureWorkbench
+    }
+  ];
   const moduleGroups: AppShellModuleGroup[] = [
     {
-      title: "结构",
+      title: "材料发现 Discover",
       items: [
         {
-          id: "structureWorkbench",
-          label: "结构工作台",
-          description: "统一绘制、输入和预览当前共享结构。",
-          route: "/structure-workbench",
-          icon: <Grid2X2 className="h-4 w-4" />,
-          isActive: activeModule === "structureWorkbench",
-          onClick: openStructureWorkbench
-        }
-      ]
-    },
-    {
-      title: "数据与知识",
-      items: [
+          id: "knowledge",
+          label: "知识检索",
+          description: "检索聚合物文献、摘要和合成知识。",
+          route: "/knowledge",
+          icon: <BookOpen className="h-4 w-4" />,
+          isActive: activeModule === "knowledge",
+          onClick: () => openKnowledge()
+        },
+        {
+          id: "polytaoGeneration",
+          label: "PolyTAO 生成",
+          description: "按 15 个 RDKit 描述符调用 PolyTAO 生成候选重复单元。",
+          route: POLYTAO_ROUTE,
+          icon: <Sparkles className="h-4 w-4" />,
+          isActive: activeModule === "polytaoGeneration",
+          onClick: openPolytaoGeneration
+        },
+        {
+          id: "explorer",
+          label: "聚合物性能探索",
+          description: "编辑结构、相似匹配、3D 预览和性能预测。",
+          route: "/explorer",
+          icon: <Atom className="h-4 w-4" />,
+          isActive: activeModule === "explorer",
+          onClick: openExplorer
+        },
         {
           id: "databaseQuery",
           label: "数据库查询",
@@ -692,29 +720,20 @@ export default function App() {
           icon: <Database className="h-4 w-4" />,
           isActive: activeModule === "database",
           onClick: openDatabase
-        },
-        {
-          id: "knowledge",
-          label: "知识检索",
-          description: "检索聚合物文献、摘要和合成知识。",
-          route: "/knowledge",
-          icon: <BookOpen className="h-4 w-4" />,
-          isActive: activeModule === "knowledge",
-          onClick: () => openKnowledge()
         }
       ]
     },
     {
-      title: "性能探索",
+      title: "材料设计 Build",
       items: [
         {
-          id: "explorer",
-          label: "聚合物性能探索",
-          description: "编辑结构、相似匹配、3D 预览和性能预测。",
-          route: "/explorer",
-          icon: <Atom className="h-4 w-4" />,
-          isActive: activeModule === "explorer",
-          onClick: openExplorer
+          id: "monomerPolymerization",
+          label: "单体正向聚合",
+          description: "用 SMiPoly 规则对一个或两个单体生成少量聚合物候选。",
+          route: "/monomer-polymerization",
+          icon: <FlaskConical className="h-4 w-4" />,
+          isActive: activeModule === "monomerPolymerization",
+          onClick: openMonomerPolymerization
         },
         {
           id: "mdSimulationDemo",
@@ -727,7 +746,7 @@ export default function App() {
         },
         {
           id: "monomerMdSimulation",
-          label: "\u5355\u4f53 MD \u6a21\u62df",
+          label: "单体 MD 模拟",
           description: "Submit ordinary monomer SMILES and track MD worker job results.",
           route: "/monomer-md-simulation",
           icon: <Microscope className="h-4 w-4" />,
@@ -742,29 +761,6 @@ export default function App() {
           icon: <FlaskConical className="h-4 w-4" />,
           isActive: activeModule === "monomerDft",
           onClick: () => openMonomerDft()
-        }
-      ]
-    },
-    {
-      title: "聚合物设计",
-      items: [
-        {
-          id: "monomerPolymerization",
-          label: "单体正向聚合",
-          description: "用 SMiPoly 规则对一个或两个单体生成少量聚合物候选。",
-          route: "/monomer-polymerization",
-          icon: <FlaskConical className="h-4 w-4" />,
-          isActive: activeModule === "monomerPolymerization",
-          onClick: openMonomerPolymerization
-        },
-        {
-          id: "reverseDesign",
-          label: "Tg 逆向设计",
-          description: "按目标玻璃化转变温度筛选候选结构。",
-          route: "/reverse-design",
-          icon: <Sparkles className="h-4 w-4" />,
-          isActive: activeModule === "reverseDesign",
-          onClick: openReverseDesign
         },
         {
           id: "conditionalGeneration",
@@ -774,15 +770,20 @@ export default function App() {
           icon: <Microscope className="h-4 w-4" />,
           isActive: activeModule === "conditionalGeneration",
           onClick: openConditionalGeneration
-        },
+        }
+      ]
+    },
+    {
+      title: "实验优化 Optimize",
+      items: [
         {
-          id: "polytaoGeneration",
-          label: "PolyTAO 生成",
-          description: "按 15 个 RDKit 描述符调用 PolyTAO 生成候选重复单元。",
-          route: POLYTAO_ROUTE,
+          id: "reverseDesign",
+          label: "Tg 逆向设计",
+          description: "按目标玻璃化转变温度筛选候选结构。",
+          route: "/reverse-design",
           icon: <Sparkles className="h-4 w-4" />,
-          isActive: activeModule === "polytaoGeneration",
-          onClick: openPolytaoGeneration
+          isActive: activeModule === "reverseDesign",
+          onClick: openReverseDesign
         },
         {
           id: "highThroughputWorkflowDemo",
@@ -794,6 +795,10 @@ export default function App() {
           onClick: openHighThroughputWorkflowDemo
         }
       ]
+    },
+    {
+      title: "数据管理 Data",
+      items: []
     }
   ];
   const isFullBleedModule =
@@ -821,6 +826,7 @@ export default function App() {
     <AppShell
       activeModule={activeModule}
       fullBleed={isFullBleedModule}
+      standaloneModules={standaloneModules}
       moduleGroups={moduleGroups}
       onOpenHome={openGeneralWorkspace}
       projects={projectSnapshot?.projects ?? []}

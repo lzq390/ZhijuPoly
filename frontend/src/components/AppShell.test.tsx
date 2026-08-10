@@ -2,7 +2,11 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AppShell, type AppShellModuleGroup } from "./AppShell";
+import {
+  AppShell,
+  type AppShellModuleGroup,
+  type AppShellModuleItem
+} from "./AppShell";
 import type { OpenScienceGeneralSessionSummary } from "../lib/openScienceGeneralSessionBridge";
 import type { OpenScienceProjectSummary } from "../lib/openScienceProjectBridge";
 
@@ -11,34 +15,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function createStandaloneModules(activeId?: string): AppShellModuleItem[] {
+  return [
+    {
+      id: "structureWorkbench",
+      label: "结构工作台",
+      description: "编辑共享结构",
+      route: "/structure-workbench",
+      icon: <span aria-hidden="true">S</span>,
+      isActive: activeId === "structureWorkbench",
+      onClick: vi.fn()
+    }
+  ];
+}
+
 function createModuleGroups(activeId?: string): AppShellModuleGroup[] {
   return [
     {
-      title: "结构",
+      title: "材料发现 Discover",
       items: [
-        {
-          id: "structureWorkbench",
-          label: "结构工作台",
-          description: "编辑共享结构",
-          route: "/structure-workbench",
-          icon: <span aria-hidden="true">S</span>,
-          isActive: activeId === "structureWorkbench",
-          onClick: vi.fn()
-        }
-      ]
-    },
-    {
-      title: "数据与知识",
-      items: [
-        {
-          id: "databaseQuery",
-          label: "数据库查询",
-          description: "查询数据库",
-          route: "/database-query",
-          icon: <span aria-hidden="true">Q</span>,
-          isActive: activeId === "databaseQuery",
-          onClick: vi.fn()
-        },
         {
           id: "knowledge",
           label: "知识检索",
@@ -47,15 +42,38 @@ function createModuleGroups(activeId?: string): AppShellModuleGroup[] {
           icon: <span aria-hidden="true">K</span>,
           isActive: activeId === "knowledge",
           onClick: vi.fn()
+        },
+        {
+          id: "databaseQuery",
+          label: "数据库查询",
+          description: "查询数据库",
+          route: "/database-query",
+          icon: <span aria-hidden="true">Q</span>,
+          isActive: activeId === "databaseQuery",
+          onClick: vi.fn()
         }
       ]
     },
     {
-      title: "设计与生成",
+      title: "材料设计 Build",
+      items: [
+        {
+          id: "monomerPolymerization",
+          label: "单体正向聚合",
+          description: "正向聚合",
+          route: "/monomer-polymerization",
+          icon: <span aria-hidden="true">B</span>,
+          isActive: activeId === "monomerPolymerization",
+          onClick: vi.fn()
+        }
+      ]
+    },
+    {
+      title: "实验优化 Optimize",
       items: [
         {
           id: "reverseDesign",
-          label: "逆向设计",
+          label: "Tg 逆向设计",
           description: "逆向设计",
           route: "/reverse-design",
           icon: <span aria-hidden="true">D</span>,
@@ -63,6 +81,10 @@ function createModuleGroups(activeId?: string): AppShellModuleGroup[] {
           onClick: vi.fn()
         }
       ]
+    },
+    {
+      title: "数据管理 Data",
+      items: []
     }
   ];
 }
@@ -114,6 +136,7 @@ function renderShell(
   return render(
     <AppShell
       activeModule={activeModule}
+      standaloneModules={createStandaloneModules(activeModule)}
       moduleGroups={createModuleGroups(activeModule)}
       onOpenHome={vi.fn()}
       projects={options?.projects ?? projects}
@@ -156,47 +179,77 @@ describe("AppShell 侧边栏", () => {
     expect(screen.getAllByRole("button", { name: "智聚万物" })).toHaveLength(1);
   });
 
+  it("结构工作台独立置顶，四个业务分类按研发流程排列", () => {
+    renderShell();
+
+    const navigation = screen.getByRole("navigation", { name: "业务模块" });
+    const structureWorkbench = screen.getByRole("button", {
+      name: "结构工作台"
+    }) as HTMLButtonElement;
+    const groups: HTMLButtonElement[] = [
+      screen.getByRole("button", { name: "材料发现 Discover" }) as HTMLButtonElement,
+      screen.getByRole("button", { name: "材料设计 Build" }) as HTMLButtonElement,
+      screen.getByRole("button", { name: "实验优化 Optimize" }) as HTMLButtonElement,
+      screen.getByRole("button", { name: "数据管理 Data" }) as HTMLButtonElement
+    ];
+    const navigationButtons = Array.from(navigation.querySelectorAll("button"));
+    const groupIndices = groups.map((group) => navigationButtons.indexOf(group));
+
+    expect(structureWorkbench.closest("section")).toBeNull();
+    expect(navigationButtons.indexOf(structureWorkbench)).toBeLessThan(
+      navigationButtons.indexOf(groups[0])
+    );
+    expect(groupIndices).toEqual([...groupIndices].sort((a, b) => a - b));
+
+    const dataGroup = groups[3];
+    expect(dataGroup.disabled).toBe(true);
+    expect(dataGroup.getAttribute("aria-expanded")).toBe("false");
+    expect(dataGroup.closest("section")?.querySelectorAll("[data-module-id]")).toHaveLength(0);
+    expect(screen.getByText("暂无模块")).not.toBeNull();
+  });
+
   it("业务模块组初始收起，并且每组可独立展开和收起", () => {
     renderShell();
 
-    const dataGroup = screen.getByRole("button", { name: "数据与知识" });
-    const designGroup = screen.getByRole("button", { name: "设计与生成" });
+    const discoverGroup = screen.getByRole("button", { name: "材料发现 Discover" });
+    const optimizeGroup = screen.getByRole("button", { name: "实验优化 Optimize" });
 
-    expect(dataGroup.getAttribute("aria-expanded")).toBe("false");
-    expect(designGroup.getAttribute("aria-expanded")).toBe("false");
+    expect(discoverGroup.getAttribute("aria-expanded")).toBe("false");
+    expect(optimizeGroup.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByRole("button", { name: "数据库查询" })).toBeNull();
 
-    fireEvent.click(dataGroup);
-    expect(dataGroup.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(discoverGroup);
+    expect(discoverGroup.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: "数据库查询" })).not.toBeNull();
 
-    fireEvent.click(designGroup);
-    expect(dataGroup.getAttribute("aria-expanded")).toBe("true");
-    expect(designGroup.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(optimizeGroup);
+    expect(discoverGroup.getAttribute("aria-expanded")).toBe("true");
+    expect(optimizeGroup.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: "数据库查询" })).not.toBeNull();
-    expect(screen.getByRole("button", { name: "逆向设计" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Tg 逆向设计" })).not.toBeNull();
 
-    fireEvent.click(dataGroup);
-    expect(dataGroup.getAttribute("aria-expanded")).toBe("false");
-    expect(designGroup.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(discoverGroup);
+    expect(discoverGroup.getAttribute("aria-expanded")).toBe("false");
+    expect(optimizeGroup.getAttribute("aria-expanded")).toBe("true");
     expect(screen.queryByRole("button", { name: "数据库查询" })).toBeNull();
-    expect(screen.getByRole("button", { name: "逆向设计" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Tg 逆向设计" })).not.toBeNull();
 
-    fireEvent.click(designGroup);
-    expect(designGroup.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("button", { name: "逆向设计" })).toBeNull();
+    fireEvent.click(optimizeGroup);
+    expect(optimizeGroup.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: "Tg 逆向设计" })).toBeNull();
   });
 
   it("进入业务模块时自动展开所属组并保留其他已展开组", () => {
     const view = renderShell();
 
-    const designGroup = screen.getByRole("button", { name: "设计与生成" });
-    fireEvent.click(designGroup);
-    expect(designGroup.getAttribute("aria-expanded")).toBe("true");
+    const optimizeGroup = screen.getByRole("button", { name: "实验优化 Optimize" });
+    fireEvent.click(optimizeGroup);
+    expect(optimizeGroup.getAttribute("aria-expanded")).toBe("true");
 
     view.rerender(
       <AppShell
         activeModule="knowledge"
+        standaloneModules={createStandaloneModules("knowledge")}
         moduleGroups={createModuleGroups("knowledge")}
         onOpenHome={vi.fn()}
         projects={projects}
@@ -221,15 +274,15 @@ describe("AppShell 侧边栏", () => {
       </AppShell>
     );
 
-    expect(screen.getByRole("button", { name: "数据与知识" }).getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByRole("button", { name: "设计与生成" }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "材料发现 Discover" }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "实验优化 Optimize" }).getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: "知识检索" })).not.toBeNull();
-    expect(screen.getByRole("button", { name: "逆向设计" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Tg 逆向设计" })).not.toBeNull();
   });
 
   it("业务模块选中态使用与普通条目一致的扁平布局", () => {
     renderShell("structureWorkbench");
-    fireEvent.click(screen.getByRole("button", { name: "数据与知识" }));
+    fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
 
     const activeItem = screen.getByRole("button", { name: "结构工作台" });
     const inactiveItem = screen.getByRole("button", { name: "数据库查询" });
@@ -246,8 +299,8 @@ describe("AppShell 侧边栏", () => {
   it("业务模块、项目和对话按内容高度顺序平铺并共用侧栏滚动", () => {
     renderShell();
 
-    fireEvent.click(screen.getByRole("button", { name: "数据与知识" }));
-    fireEvent.click(screen.getByRole("button", { name: "设计与生成" }));
+    fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
+    fireEvent.click(screen.getByRole("button", { name: "实验优化 Optimize" }));
     fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
 
     const moduleNavigation = screen.getByRole("navigation", { name: "业务模块" });
