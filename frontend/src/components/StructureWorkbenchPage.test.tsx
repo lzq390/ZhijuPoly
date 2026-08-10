@@ -95,6 +95,12 @@ describe("StructureWorkbenchPage", () => {
       "",
       ""
     ]);
+    expect(
+      toolbarButtons.map((button) => button.dataset.workbenchTool)
+    ).toEqual(["load", "import", "clear", "sync", "3d", "modules", "assistant"]);
+    expect(
+      toolbarButtons.every((button) => button.classList.contains("sw-toolbar-action"))
+    ).toBe(true);
     expect(view.container.querySelector(".tg-structure-surface")).toBeTruthy();
     expect(view.container.querySelector(".tg-smiles-capsule")).toBeTruthy();
 
