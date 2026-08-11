@@ -813,7 +813,14 @@ class SiteHelperContractTests(unittest.TestCase):
             )
         )
         static_tables = [
-            table_record(relation, index + 8)
+            table_record(
+                relation,
+                index + 8,
+                present=(
+                    relation
+                    != ("governance", "property_filter_options_snapshots")
+                ),
+            )
             for index, relation in enumerate(CONTRACTS.STATIC_IMPORT_TABLES)
         ]
         deployment_table = table_record(

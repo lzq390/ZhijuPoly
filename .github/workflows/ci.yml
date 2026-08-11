@@ -566,7 +566,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Run real B-schema through F/0013 and F/0014 transition smoke
+      - name: Run real B-schema through F/0013, F/0014 and F/0015 transition smoke
         run: scripts/ci/test_exact_b_bridge.sh
 
   ci-gate:

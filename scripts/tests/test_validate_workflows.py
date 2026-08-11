@@ -66,7 +66,7 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
 
         login = "Log in for the exact private B images"
         transition = (
-            "Run real B-schema through F/0013 and F/0014 transition smoke"
+            "Run real B-schema through F/0013, F/0014 and F/0015 transition smoke"
         )
         changed = CI_TEXT.replace(login, "TEMPORARY", 1)
         changed = changed.replace(transition, login, 1)

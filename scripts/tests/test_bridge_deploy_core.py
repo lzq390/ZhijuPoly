@@ -237,7 +237,7 @@ class BridgePolicyTests(unittest.TestCase):
         for name, records in (
             ("pre-0012", TARGET_RECORDS[:-1]),
             ("post-0012", TARGET_RECORDS),
-            ("post-0013", AUTHORITY_RECORDS[:-1]),
+            ("post-0013", [*TARGET_RECORDS, BRIDGE.DFT_MIGRATION_RECORD]),
         ):
             self.assertEqual(
                 BRIDGE.match_migration_ledger(registry, records)["name"],

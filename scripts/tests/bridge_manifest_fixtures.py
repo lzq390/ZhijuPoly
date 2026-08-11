@@ -1,8 +1,8 @@
 """Exact frozen-B and current-F migration fixtures for bridge tests.
 
 The bridge is intentionally asymmetric: B ends at 0012 while F is the unique
-B-plus-0013/0014 extension. Reading B from its pinned Git object prevents a current
-F checkout from being mistaken for the historical bridge target.
+B-plus-0013/0014/0015 extension. Reading B from its pinned Git object prevents a
+current F checkout from being mistaken for the historical bridge target.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ B_MANIFEST_SHA256 = (
     "sha256:3f149c17e596c9dfe7c88245894c36e3e2d22ab67cf38375c84f2b1d7d7224fa"
 )
 F_MANIFEST_SHA256 = (
-    "sha256:b2b466641e3216edb67032c13355627524b70560629dc2bde58c0de5f61af501"
+    "sha256:0c1ccfe4bc4515b4558e33b3c06524c6d79451a51b0bc1d2e1e14ec4a50ad26b"
 )
 FINAL_MIGRATION_RECORDS = [
     {
@@ -48,6 +48,22 @@ FINAL_MIGRATION_RECORDS = [
         "epoch": 2,
         "checksum": (
             "7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6"
+        ),
+        "requires_contracts": [
+            {
+                "version": "0012_drop_polytao_jobs",
+                "checksum": (
+                    "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+                ),
+            }
+        ],
+    },
+    {
+        "version": "0015_property_filter_performance",
+        "kind": "expand",
+        "epoch": 2,
+        "checksum": (
+            "e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732"
         ),
         "requires_contracts": [
             {
@@ -144,7 +160,8 @@ if _sha256(F_MANIFEST_PAYLOAD) != F_MANIFEST_SHA256:
 F_MANIFEST_RECORDS = _manifest_records(F_MANIFEST_PAYLOAD, label="current F")
 if F_MANIFEST_RECORDS != [*B_MANIFEST_RECORDS, *FINAL_MIGRATION_RECORDS]:
     raise RuntimeError(
-        "current F migration manifest is not the unique frozen-B plus 0013/0014 extension"
+        "current F migration manifest is not the unique frozen-B plus "
+        "0013/0014/0015 extension"
     )
 
 
