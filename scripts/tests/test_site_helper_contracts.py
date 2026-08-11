@@ -1249,6 +1249,8 @@ class SiteHelperContractTests(unittest.TestCase):
             "JOIN pg_catalog.pg_depend AS dependency",
             "'ordinal',owner_attribute.attnum",
             "'deptype',dependency.deptype",
+            "to_regclass('governance.property_filter_options_snapshots')",
+            "property_filter_options_snapshots_present",
         ):
             self.assertIn(required, helper)
 
