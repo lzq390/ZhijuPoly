@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
 from app.postgres_database import postgres_connection
 from app.services.analytics_snapshot_store import save_analytics_snapshot
-from app.services.postgres_database_browser import get_property_filter_options_postgres
+from app.services.postgres_database_browser import get_database_analytics_postgres, get_property_filter_options_postgres
 from app.services.property_filter_catalog import (
     load_property_filter_catalog,
     rebuild_property_filter_catalog,
@@ -78,6 +78,120 @@ def test_database_browser_live_analytics_includes_property_filter_counts(test_ap
     assert property_filter["standardizedProperties"] == 2
     assert property_filter["rawProperties"] == 1
     assert property_filter["uniqueSmiles"] == 2
+
+
+def test_database_browser_refresh_reuses_unchanged_snapshot(test_app, monkeypatch) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        datasets = get_database_analytics_postgres(connection)
+        stored = save_analytics_snapshot(connection, datasets)
+
+    def fail_if_recomputed(_connection):
+        raise AssertionError("unchanged analytics snapshot must not be recomputed")
+
+    monkeypatch.setattr(
+        "app.routers.database_browser.get_database_analytics_postgres",
+        fail_if_recomputed,
+    )
+    response = TestClient(test_app).get("/api/v1/database-browser/datasets/analytics?refresh=true")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "snapshot"
+    assert payload["refresh_status"] == "unchanged"
+    assert payload["generated_at"] == stored.generated_at.isoformat()
+    assert payload["datasets"] == datasets
+
+
+def test_database_browser_refresh_recomputes_new_import_once(test_app, monkeypatch) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        datasets = get_database_analytics_postgres(connection)
+        save_analytics_snapshot(
+            connection,
+            datasets,
+            generated_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+        connection.execute(
+            """
+            INSERT INTO governance.import_batches (
+              dataset_key, finished_at, status, row_count
+            ) VALUES ('core', now(), 'completed', 6)
+            """
+        )
+
+    original = get_database_analytics_postgres
+    recompute_calls = 0
+
+    def count_recompute(connection):
+        nonlocal recompute_calls
+        recompute_calls += 1
+        return original(connection)
+
+    monkeypatch.setattr(
+        "app.routers.database_browser.get_database_analytics_postgres",
+        count_recompute,
+    )
+    client = TestClient(test_app)
+    refreshed = client.get("/api/v1/database-browser/datasets/analytics?refresh=true")
+    unchanged = client.get("/api/v1/database-browser/datasets/analytics?refresh=true")
+
+    assert refreshed.status_code == 200
+    assert refreshed.json()["source"] == "live"
+    assert refreshed.json()["refresh_status"] == "recomputed"
+    assert unchanged.status_code == 200
+    assert unchanged.json()["source"] == "snapshot"
+    assert unchanged.json()["refresh_status"] == "unchanged"
+    assert recompute_calls == 1
+
+
+def test_database_browser_refresh_detects_direct_row_count_change(test_app) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        datasets = get_database_analytics_postgres(connection)
+        save_analytics_snapshot(connection, datasets)
+        connection.execute(
+            """
+            INSERT INTO experimental.process_records (
+              source_file, source_row_number, polymer_name,
+              process_flow_original_text, material_original_text
+            ) VALUES ('manual-change.csv', 1, 'Poly A', 'heated and stirred', 'ODA')
+            """
+        )
+
+    response = TestClient(test_app).get("/api/v1/database-browser/datasets/analytics?refresh=true")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "live"
+    assert payload["refresh_status"] == "recomputed"
+    assert payload["datasets"]["process"]["rows"] == datasets["process"]["rows"] + 1
+
+
+def test_database_browser_refresh_replaces_invalid_snapshot(test_app) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        connection.execute(
+            """
+            INSERT INTO governance.database_analytics_snapshots (
+              snapshot_key, generated_at, datasets
+            ) VALUES ('database-browser', now(), '{"process": {"rows": 0}}'::jsonb)
+            """
+        )
+
+    client = TestClient(test_app)
+    refreshed = client.get("/api/v1/database-browser/datasets/analytics?refresh=true")
+    stored = client.get("/api/v1/database-browser/datasets/analytics")
+
+    assert refreshed.status_code == 200
+    assert refreshed.json()["source"] == "live"
+    assert refreshed.json()["refresh_status"] == "recomputed"
+    assert stored.status_code == 200
+    assert stored.json()["source"] == "snapshot"
+    assert set(stored.json()["datasets"]) == {
+        "process",
+        "property",
+        "structureEffect",
+        "propertyFilter",
+        "dft",
+        "formulation",
+    }
 
 
 def test_database_browser_snapshot_never_falls_back_to_checked_in_python(test_app) -> None:

@@ -1618,6 +1618,7 @@ export type DatabaseAnalyticsResponse = {
   query_time_ms: number;
   backend: string;
   source: string;
+  refresh_status?: "unchanged" | "recomputed" | null;
   generated_at: string | null;
   datasets: Record<string, unknown>;
 };

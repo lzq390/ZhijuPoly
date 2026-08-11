@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from app.services.property_filter_catalog import aggregate_property_filter_catalog
@@ -1258,6 +1259,67 @@ def _formulation_analytics(connection: Any) -> dict[str, Any]:
         "topSolvents": _ranked_metric_rows(connection, "SELECT NULLIF(TRIM(solvent), '') AS label, COUNT(*) AS value FROM knowledge.formulation_records WHERE NULLIF(TRIM(solvent), '') IS NOT NULL GROUP BY label ORDER BY value DESC, label ASC LIMIT 10"),
         "examples": examples,
     }
+
+
+def database_analytics_sources_changed_postgres(
+    connection: Any,
+    *,
+    generated_at: datetime,
+    datasets: dict[str, Any],
+) -> bool:
+    """Return whether governed imports or source row counts changed after a snapshot."""
+    latest_import = connection.execute(
+        """
+        SELECT EXISTS (
+          SELECT 1
+          FROM governance.import_batches
+          WHERE dataset_key IN (
+            'core', 'knowledge', 'dft', 'experimental_process',
+            'experimental_property', 'property_filter'
+          )
+            AND finished_at IS NOT NULL
+            AND finished_at > %s
+            AND status NOT IN ('running', 'failed')
+        ) AS changed
+        """,
+        (generated_at,),
+    ).fetchone()
+    if bool(latest_import["changed"]):
+        return True
+
+    current = connection.execute(
+        """
+        SELECT
+          (SELECT COUNT(*) FROM experimental.process_records) AS process_rows,
+          (SELECT COUNT(*) FROM experimental.property_records) AS property_rows,
+          (SELECT COUNT(*) FROM core.polymer_properties) AS structure_effect_rows,
+          (SELECT COUNT(*) FROM core.polymer_property_filter_records) AS property_filter_rows,
+          (SELECT COUNT(*) FROM dft.energy_trace) AS dft_rows,
+          (SELECT COUNT(*) FROM dft.molecule_final) AS dft_molecules,
+          (SELECT COUNT(*) FROM knowledge.formulation_records) AS formulation_rows,
+          (SELECT COUNT(DISTINCT source_file) FROM knowledge.formulation_records) AS formulation_files
+        """
+    ).fetchone()
+    comparisons = (
+        ("process", "rows", "process_rows"),
+        ("property", "rows", "property_rows"),
+        ("structureEffect", "rows", "structure_effect_rows"),
+        ("propertyFilter", "rows", "property_filter_rows"),
+        ("dft", "rows", "dft_rows"),
+        ("dft", "molCount", "dft_molecules"),
+        ("formulation", "rows", "formulation_rows"),
+        ("formulation", "files", "formulation_files"),
+    )
+    for dataset_key, metric_key, current_key in comparisons:
+        dataset = datasets.get(dataset_key)
+        expected = dataset.get(metric_key) if isinstance(dataset, dict) else None
+        if (
+            isinstance(expected, int)
+            and not isinstance(expected, bool)
+            and expected != int(current[current_key] or 0)
+        ):
+            return True
+    return False
 
 
 def get_database_analytics_postgres(connection: Any) -> dict[str, Any]:

@@ -649,6 +649,7 @@ class DatabaseAnalyticsResponse(BaseModel):
     query_time_ms: float = Field(ge=0.0)
     backend: str
     source: str = "snapshot"
+    refresh_status: Literal["unchanged", "recomputed"] | None = None
     generated_at: str | None = None
     datasets: dict[str, Any] = Field(default_factory=dict)
 

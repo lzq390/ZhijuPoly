@@ -295,12 +295,26 @@ describe("数据库分析工作台", () => {
     const refreshButton = screen.getByRole("button", { name: "刷新中" });
     expect(refreshButton.getAttribute("aria-busy")).toBe("true");
     expect(refreshButton.classList.contains("is-refreshing")).toBe(true);
-    expect(await screen.findByText(/正在按当前数据库实时重算/)).not.toBeNull();
+    expect(await screen.findByText(/正在检查数据表变更/)).not.toBeNull();
     expect(screen.getByText("过程关键词")).not.toBeNull();
 
     resolveRefresh?.({ ...analyticsResponse, source: "live", generated_at: null });
     expect(await screen.findByText(/已按当前数据库完成实时重算/)).not.toBeNull();
     expect(screen.getByText("实时重算")).not.toBeNull();
+  });
+
+  it("数据表未变化时跳过重算并保留快照", async () => {
+    mockAnalytics
+      .mockResolvedValueOnce(analyticsResponse)
+      .mockResolvedValueOnce({ ...analyticsResponse, refresh_status: "unchanged" });
+    renderAnalysis("process");
+    expect(await screen.findByText("过程关键词")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新数据" }));
+
+    expect(await screen.findByText(/数据表未发生变化，无需重新计算/)).not.toBeNull();
+    expect(screen.getByText("预计算统计")).not.toBeNull();
+    expect(screen.getByText("过程关键词")).not.toBeNull();
   });
 
   it("刷新失败时保留旧内容、使用中文错误并支持重试", async () => {

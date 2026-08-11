@@ -183,7 +183,8 @@ function useDatabaseAnalytics() {
         source: response.source,
         generatedAt: response.generated_at ?? new Date().toISOString()
       });
-      return true;
+      if (!refresh) return "loaded";
+      return response.refresh_status ?? (response.source === "snapshot" ? "unchanged" : "recomputed");
     } catch (nextError) {
       if (controller.signal.aborted) return false;
       setState((current) => ({
@@ -284,9 +285,11 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
 
   async function handleRefresh() {
     setTransientMessage(null);
-    const succeeded = await analyticsState.refresh();
-    if (!succeeded) return;
-    setTransientMessage("已按当前数据库完成实时重算，当前数据集和浏览位置保持不变。");
+    const outcome = await analyticsState.refresh();
+    if (!outcome) return;
+    setTransientMessage(outcome === "unchanged"
+      ? "数据表未发生变化，无需重新计算；已保留当前统计结果。"
+      : "已按当前数据库完成实时重算，当前数据集和浏览位置保持不变。");
     if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current);
     messageTimerRef.current = window.setTimeout(() => setTransientMessage(null), 2600);
   }
@@ -311,7 +314,10 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
   }
 
   const banner = analyticsState.refreshing
-    ? { tone: "info", message: "正在按当前数据库实时重算；旧数据会保留到新结果准备完成。" }
+    ? {
+        tone: "info",
+        message: "正在检查数据表变更；检测到更新后才会重新计算，期间保留当前结果。"
+      }
     : analyticsState.error
       ? { tone: "error", message: analyticsState.analytics ? `统计更新失败，仍显示上次成功结果：${analyticsState.error}` : analyticsState.error }
       : summaryState.error

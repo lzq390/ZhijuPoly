@@ -37,7 +37,7 @@ from app.models import (
     StructurePropertyRecord,
 )
 from app.postgres_database import PostgresUnavailableError
-from app.services.analytics_snapshot_store import load_analytics_snapshot
+from app.services.analytics_snapshot_store import load_analytics_snapshot, save_analytics_snapshot
 from app.services.property_filter_catalog import (
     PropertyFilterCatalog,
     load_property_filter_catalog,
@@ -50,6 +50,7 @@ from app.services.postgres_database_browser import (
     browse_experimental_property_records_postgres,
     browse_formulation_records_postgres,
     browse_structure_property_records_postgres,
+    database_analytics_sources_changed_postgres,
     get_property_filter_options_postgres,
     get_database_analytics_postgres,
     get_dft_browser_summary_postgres,
@@ -365,12 +366,38 @@ def get_dataset_analytics(request: Request, refresh: bool = Query(default=False)
     settings = request.app.state.settings
     try:
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            try:
+                stored_snapshot = load_analytics_snapshot(connection)
+            except RuntimeError:
+                logger.exception("database analytics snapshot validation failed; rebuilding")
+                stored_snapshot = None
+            if stored_snapshot is not None and not database_analytics_sources_changed_postgres(
+                connection,
+                generated_at=stored_snapshot.generated_at,
+                datasets=stored_snapshot.datasets,
+            ):
+                return DatabaseAnalyticsResponse(
+                    query_time_ms=(perf_counter() - started_at) * 1000,
+                    backend="postgres",
+                    source="snapshot",
+                    refresh_status="unchanged",
+                    generated_at=stored_snapshot.generated_at.isoformat(),
+                    datasets=stored_snapshot.datasets,
+                )
+
+            datasets = get_database_analytics_postgres(connection)
+            refreshed_snapshot = save_analytics_snapshot(
+                connection,
+                datasets,
+                source_sha=stored_snapshot.source_sha if stored_snapshot is not None else None,
+            )
             return DatabaseAnalyticsResponse(
                 query_time_ms=(perf_counter() - started_at) * 1000,
                 backend="postgres",
                 source="live",
-                generated_at=None,
-                datasets=get_database_analytics_postgres(connection),
+                refresh_status="recomputed",
+                generated_at=refreshed_snapshot.generated_at.isoformat(),
+                datasets=refreshed_snapshot.datasets,
             )
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
