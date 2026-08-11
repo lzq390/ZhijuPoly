@@ -95,6 +95,21 @@ QUEUE_MIGRATION_RECORD = {
     "epoch": 2,
     "requires_contracts": [dict(CONTRACT_MIGRATION)],
 }
+PROPERTY_FILTER_MIGRATION = {
+    "version": "0015_property_filter_performance",
+    "checksum": (
+        "e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732"
+    ),
+}
+PROPERTY_FILTER_MIGRATION_RECORD = {
+    **PROPERTY_FILTER_MIGRATION,
+    "kind": "expand",
+    "epoch": 2,
+    "requires_contracts": [dict(CONTRACT_MIGRATION)],
+}
+PROPERTY_FILTER_AUTHORITY_MANIFEST_SHA256 = (
+    "sha256:0c1ccfe4bc4515b4558e33b3c06524c6d79451a51b0bc1d2e1e14ec4a50ad26b"
+)
 TOKEN_STATUSES = {
     "reserved",
     "prepared",
@@ -259,12 +274,15 @@ def expected_migration_registry(
             "bridge target manifest lacks the exact trailing 0012 contract"
         )
     policy_authority = [*target, DFT_MIGRATION_RECORD]
+    queue_authority = [*policy_authority, QUEUE_MIGRATION_RECORD]
     if authority not in (
         policy_authority,
-        [*policy_authority, QUEUE_MIGRATION_RECORD],
+        queue_authority,
+        [*queue_authority, PROPERTY_FILTER_MIGRATION_RECORD],
     ):
         raise BridgeDeployError(
-            "bridge authority manifest is not the unique B plus 0013/0014 extension"
+            "bridge authority manifest is not the unique B plus "
+            "0013/0014/0015 extension"
         )
     policy_authority_digest = authority_digest
     if authority != policy_authority:

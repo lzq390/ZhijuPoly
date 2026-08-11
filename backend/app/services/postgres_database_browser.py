@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+
+from app.services.property_filter_catalog import aggregate_property_filter_catalog
 
 
 def postgres_table_exists(connection: Any, schema: str, table: str) -> bool:
@@ -123,31 +126,6 @@ PROPERTY_FILTER_RECORD_COLUMNS = (
     "soft_quality_flags",
     "duplicate_flag",
 )
-
-PROPERTY_FILTER_SELECT_COLUMNS = """
-  filter_record_id,
-  source_row_number,
-  polymer_name,
-  smiles,
-  canonical_smiles,
-  property_category,
-  property_name,
-  property_value,
-  property_value_num,
-  property_unit_raw,
-  property_unit_clean,
-  property_key,
-  property_label,
-  canonical_value,
-  canonical_unit,
-  unit_conversion_status,
-  value_origin,
-  label_source,
-  reliable_score,
-  soft_quality_flags,
-  duplicate_flag
-"""
-
 
 def lookup_polymer_smiles_postgres(
     connection: Any,
@@ -452,80 +430,7 @@ def browse_structure_property_records_postgres(
 
 
 def get_property_filter_options_postgres(connection: Any) -> tuple[int, int, int, list[dict[str, Any]]]:
-    summary = connection.execute(
-        """
-        SELECT
-          COUNT(*) AS total_records,
-          COUNT(*) FILTER (WHERE property_key IS NOT NULL) AS mapped_records,
-          COUNT(*) FILTER (WHERE property_key IS NULL) AS raw_records
-        FROM core.polymer_property_filter_records
-        """
-    ).fetchone()
-    rows = connection.execute(
-        """
-        WITH standardized AS (
-          SELECT
-            'standardized'::text AS filter_type,
-            'std:' || property_key || ':' || COALESCE(canonical_unit, '') AS option_key,
-            COALESCE(NULLIF(MIN(NULLIF(property_label, '')), ''), property_key) AS label,
-            property_key,
-            NULL::text AS property_name,
-            NULL::text AS property_unit_clean,
-            canonical_unit,
-            COUNT(*) AS rows,
-            COUNT(DISTINCT COALESCE(NULLIF(smiles, ''), NULLIF(canonical_smiles, ''))) AS unique_smiles,
-            MIN(canonical_value) AS min_value,
-            percentile_cont(0.05) WITHIN GROUP (ORDER BY canonical_value) AS p5_value,
-            percentile_cont(0.5) WITHIN GROUP (ORDER BY canonical_value) AS median_value,
-            percentile_cont(0.95) WITHIN GROUP (ORDER BY canonical_value) AS p95_value,
-            MAX(canonical_value) AS max_value
-          FROM core.polymer_property_filter_records
-          WHERE property_key IS NOT NULL
-            AND canonical_value IS NOT NULL
-          GROUP BY property_key, canonical_unit
-        ),
-        raw AS (
-          SELECT
-            'raw'::text AS filter_type,
-            'raw:' || md5(property_name || '|' || COALESCE(property_unit_clean, '')) AS option_key,
-            CASE
-              WHEN COALESCE(NULLIF(property_unit_clean, ''), '') = '' THEN property_name
-              ELSE property_name || ' (' || property_unit_clean || ')'
-            END AS label,
-            NULL::text AS property_key,
-            property_name,
-            property_unit_clean,
-            NULL::text AS canonical_unit,
-            COUNT(*) AS rows,
-            COUNT(DISTINCT COALESCE(NULLIF(smiles, ''), NULLIF(canonical_smiles, ''))) AS unique_smiles,
-            MIN(property_value_num) AS min_value,
-            percentile_cont(0.05) WITHIN GROUP (ORDER BY property_value_num) AS p5_value,
-            percentile_cont(0.5) WITHIN GROUP (ORDER BY property_value_num) AS median_value,
-            percentile_cont(0.95) WITHIN GROUP (ORDER BY property_value_num) AS p95_value,
-            MAX(property_value_num) AS max_value
-          FROM core.polymer_property_filter_records
-          WHERE property_key IS NULL
-            AND property_value_num IS NOT NULL
-          GROUP BY property_name, property_unit_clean
-        )
-        SELECT *
-        FROM (
-          SELECT * FROM standardized
-          UNION ALL
-          SELECT * FROM raw
-        ) options
-        ORDER BY
-          CASE filter_type WHEN 'standardized' THEN 0 ELSE 1 END,
-          rows DESC,
-          label ASC
-        """
-    ).fetchall()
-    return (
-        int(summary["total_records"] or 0),
-        int(summary["mapped_records"] or 0),
-        int(summary["raw_records"] or 0),
-        list(rows),
-    )
+    return aggregate_property_filter_catalog(connection)
 
 
 def _property_filter_search_clause(query: str, params: list[Any]) -> str:
@@ -577,8 +482,8 @@ def _property_filter_condition_select(filter_index: int, condition: Any, query: 
         f"""
         SELECT
           %s::int AS filter_index,
-          COALESCE(NULLIF(smiles, ''), NULLIF(canonical_smiles, ''), 'record:' || filter_record_id::text) AS group_key,
-          {PROPERTY_FILTER_SELECT_COLUMNS}
+          COALESCE(NULLIF(canonical_smiles, ''), NULLIF(smiles, ''), 'record:' || filter_record_id::text) AS group_key,
+          filter_record_id
         FROM core.polymer_property_filter_records
         WHERE {where_sql}
         {search_clause}
@@ -595,7 +500,6 @@ def search_property_filter_records_postgres(
     page: int,
     page_size: int,
 ) -> tuple[int, int, list[dict[str, Any]]]:
-    total_records = int(connection.execute("SELECT COUNT(*) AS count FROM core.polymer_property_filter_records").fetchone()["count"])
     candidate_sql_parts: list[str] = []
     candidate_params: list[Any] = []
     for filter_index, condition in enumerate(conditions):
@@ -604,60 +508,115 @@ def search_property_filter_records_postgres(
         candidate_params.extend(condition_params)
     candidate_sql = "\nUNION ALL\n".join(candidate_sql_parts)
     filter_count = len(conditions)
-    matched_records = int(
-        connection.execute(
-            f"""
-            WITH candidate_matches AS (
-              {candidate_sql}
-            ),
-            matched_groups AS (
-              SELECT group_key
-              FROM candidate_matches
-              GROUP BY group_key
-              HAVING COUNT(DISTINCT filter_index) = %s
-            )
-            SELECT COUNT(*) AS count
-            FROM matched_groups
-            """,
-            [*candidate_params, filter_count],
-        ).fetchone()["count"]
-    )
     offset = (page - 1) * page_size
-    rows = connection.execute(
+    record_columns = ",\n          ".join(
+        f"records.{column}" for column in PROPERTY_FILTER_RECORD_COLUMNS
+    )
+    query_rows = connection.execute(
         f"""
-        WITH candidate_matches AS (
+        WITH candidate_records AS MATERIALIZED (
           {candidate_sql}
         ),
-        matched_groups AS (
+        matched_groups AS MATERIALIZED (
           SELECT group_key
-          FROM candidate_matches
+          FROM candidate_records
           GROUP BY group_key
           HAVING COUNT(DISTINCT filter_index) = %s
+        ),
+        matched_summary AS (
+          SELECT COUNT(*)::bigint AS matched_records
+          FROM matched_groups
+        ),
+        catalog_snapshot AS MATERIALIZED (
+          SELECT snapshot.total_records
+          FROM governance.property_filter_options_snapshots snapshot
+          WHERE snapshot.snapshot_key = 'current'
+            AND snapshot.schema_version = 1
+            AND (
+              (
+                snapshot.import_batch_id IS NULL
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM governance.import_batches batches
+                  WHERE batches.dataset_key = 'property_filter'
+                    AND batches.status IN ('completed', 'empty')
+                )
+              )
+              OR (
+                snapshot.import_batch_id IS NOT NULL
+                AND NOT EXISTS (
+                SELECT 1
+                FROM governance.import_batches batches
+                WHERE batches.dataset_key = 'property_filter'
+                  AND batches.status IN ('completed', 'empty')
+                  AND batches.import_batch_id > snapshot.import_batch_id
+                )
+              )
+            )
+        ),
+        total_summary AS MATERIALIZED (
+          SELECT total_records
+          FROM catalog_snapshot
+          UNION ALL
+          SELECT COUNT(*)::bigint AS total_records
+          FROM core.polymer_property_filter_records
+          HAVING NOT EXISTS (SELECT 1 FROM catalog_snapshot)
         ),
         page_groups AS (
           SELECT group_key
           FROM matched_groups
           ORDER BY group_key ASC
           LIMIT %s OFFSET %s
+        ),
+        page_records AS (
+          SELECT candidates.filter_index, candidates.group_key, candidates.filter_record_id
+          FROM candidate_records candidates
+          JOIN page_groups ON page_groups.group_key = candidates.group_key
+        ),
+        ordered_records AS (
+          SELECT
+            page_records.filter_index,
+            page_records.group_key,
+            {record_columns}
+          FROM page_records
+          JOIN core.polymer_property_filter_records records
+            ON records.filter_record_id = page_records.filter_record_id
         )
-        SELECT candidate_matches.*
-        FROM candidate_matches
-        JOIN page_groups ON page_groups.group_key = candidate_matches.group_key
+        SELECT
+          total_summary.total_records AS result_total_records,
+          matched_summary.matched_records AS result_matched_records,
+          ordered_records.*
+        FROM total_summary
+        CROSS JOIN matched_summary
+        LEFT JOIN ordered_records ON true
         ORDER BY
-          candidate_matches.group_key ASC,
-          candidate_matches.filter_index ASC,
-          CASE lower(COALESCE(candidate_matches.value_origin, ''))
+          ordered_records.group_key ASC NULLS LAST,
+          ordered_records.filter_index ASC NULLS LAST,
+          CASE lower(COALESCE(ordered_records.value_origin, ''))
             WHEN 'observed' THEN 0
             WHEN 'median' THEN 1
             WHEN 'impute' THEN 2
             ELSE 3
           END ASC,
-          candidate_matches.reliable_score DESC NULLS LAST,
-          candidate_matches.filter_record_id ASC
+          ordered_records.reliable_score DESC NULLS LAST,
+          ordered_records.filter_record_id ASC NULLS LAST
         """,
         [*candidate_params, filter_count, page_size, offset],
     ).fetchall()
-    return total_records, matched_records, list(rows)
+    if not query_rows:
+        return 0, 0, []
+    total_records = int(query_rows[0]["result_total_records"] or 0)
+    matched_records = int(query_rows[0]["result_matched_records"] or 0)
+    rows = [
+        {
+            key: value
+            for key, value in row.items()
+            if key not in {"result_total_records", "result_matched_records"}
+        }
+        for row in query_rows
+        if row["filter_record_id"] is not None
+    ]
+    return total_records, matched_records, rows
 
 
 def get_dft_browser_summary_postgres(connection: Any) -> tuple[int, int, float, int]:
@@ -948,7 +907,11 @@ def _property_filter_analytics(connection: Any) -> dict[str, Any]:
           COUNT(*) FILTER (WHERE property_key IS NULL) AS raw_rows,
           COUNT(DISTINCT property_key) FILTER (WHERE property_key IS NOT NULL) AS standardized_properties,
           COUNT(DISTINCT property_name) FILTER (WHERE property_key IS NULL) AS raw_properties,
-          COUNT(DISTINCT COALESCE(NULLIF(smiles, ''), NULLIF(canonical_smiles, ''))) AS unique_smiles
+          COUNT(DISTINCT COALESCE(
+            NULLIF(canonical_smiles, ''),
+            NULLIF(smiles, ''),
+            'record:' || filter_record_id::text
+          )) AS unique_smiles
         FROM core.polymer_property_filter_records
         """
     ).fetchone()
@@ -1296,6 +1259,67 @@ def _formulation_analytics(connection: Any) -> dict[str, Any]:
         "topSolvents": _ranked_metric_rows(connection, "SELECT NULLIF(TRIM(solvent), '') AS label, COUNT(*) AS value FROM knowledge.formulation_records WHERE NULLIF(TRIM(solvent), '') IS NOT NULL GROUP BY label ORDER BY value DESC, label ASC LIMIT 10"),
         "examples": examples,
     }
+
+
+def database_analytics_sources_changed_postgres(
+    connection: Any,
+    *,
+    generated_at: datetime,
+    datasets: dict[str, Any],
+) -> bool:
+    """Return whether governed imports or source row counts changed after a snapshot."""
+    latest_import = connection.execute(
+        """
+        SELECT EXISTS (
+          SELECT 1
+          FROM governance.import_batches
+          WHERE dataset_key IN (
+            'core', 'knowledge', 'dft', 'experimental_process',
+            'experimental_property', 'property_filter'
+          )
+            AND finished_at IS NOT NULL
+            AND finished_at > %s
+            AND status NOT IN ('running', 'failed')
+        ) AS changed
+        """,
+        (generated_at,),
+    ).fetchone()
+    if bool(latest_import["changed"]):
+        return True
+
+    current = connection.execute(
+        """
+        SELECT
+          (SELECT COUNT(*) FROM experimental.process_records) AS process_rows,
+          (SELECT COUNT(*) FROM experimental.property_records) AS property_rows,
+          (SELECT COUNT(*) FROM core.polymer_properties) AS structure_effect_rows,
+          (SELECT COUNT(*) FROM core.polymer_property_filter_records) AS property_filter_rows,
+          (SELECT COUNT(*) FROM dft.energy_trace) AS dft_rows,
+          (SELECT COUNT(*) FROM dft.molecule_final) AS dft_molecules,
+          (SELECT COUNT(*) FROM knowledge.formulation_records) AS formulation_rows,
+          (SELECT COUNT(DISTINCT source_file) FROM knowledge.formulation_records) AS formulation_files
+        """
+    ).fetchone()
+    comparisons = (
+        ("process", "rows", "process_rows"),
+        ("property", "rows", "property_rows"),
+        ("structureEffect", "rows", "structure_effect_rows"),
+        ("propertyFilter", "rows", "property_filter_rows"),
+        ("dft", "rows", "dft_rows"),
+        ("dft", "molCount", "dft_molecules"),
+        ("formulation", "rows", "formulation_rows"),
+        ("formulation", "files", "formulation_files"),
+    )
+    for dataset_key, metric_key, current_key in comparisons:
+        dataset = datasets.get(dataset_key)
+        expected = dataset.get(metric_key) if isinstance(dataset, dict) else None
+        if (
+            isinstance(expected, int)
+            and not isinstance(expected, bool)
+            and expected != int(current[current_key] or 0)
+        ):
+            return True
+    return False
 
 
 def get_database_analytics_postgres(connection: Any) -> dict[str, Any]:

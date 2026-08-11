@@ -96,6 +96,7 @@ def mutable_data_evidence(
 
     dft_ready = ledger_length >= 13
     md_queue_ready = ledger_length >= 14
+    property_filter_ready = ledger_length >= 15
     contract_applied = ledger_length >= 12
     controls_ready = ledger_length >= 10
     business_tables = [
@@ -137,12 +138,27 @@ def mutable_data_evidence(
             == ("md", "monomer_md_jobs")
         )
         md_jobs["schema_sha256"] = "sha256:" + "e" * 64
-    static_tables = [
-        table_record(schema, table, index + 8)
-        for index, (schema, table) in enumerate(
-            CONTROLLER._site_helper_contracts.STATIC_IMPORT_TABLES
+    static_tables = []
+    for index, (schema, table) in enumerate(
+        CONTROLLER._site_helper_contracts.STATIC_IMPORT_TABLES
+    ):
+        is_property_filter_snapshot = (
+            schema,
+            table,
+        ) == ("governance", "property_filter_options_snapshots")
+        static_tables.append(
+            table_record(
+                schema,
+                table,
+                index + 8,
+                present=(
+                    property_filter_ready
+                    if is_property_filter_snapshot
+                    else True
+                ),
+                rows=(1 if is_property_filter_snapshot else None),
+            )
         )
-    ]
     deployment_table = table_record(
         "governance",
         "deployment_control",
@@ -4656,8 +4672,19 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         for name, rows in (
             ("pre-0012", manifest[:-1]),
             ("post-0012", manifest),
-            ("post-0013", F_MANIFEST_RECORDS[:-1]),
-            ("post-0014", F_MANIFEST_RECORDS),
+            (
+                "post-0013",
+                [*manifest, CONTROLLER._bridge_core.DFT_MIGRATION_RECORD],
+            ),
+            (
+                "post-0014",
+                [
+                    *manifest,
+                    CONTROLLER._bridge_core.DFT_MIGRATION_RECORD,
+                    CONTROLLER._bridge_core.QUEUE_MIGRATION_RECORD,
+                ],
+            ),
+            ("post-0015", F_MANIFEST_RECORDS),
         ):
             history = CONTROLLER.canonical_ledger_history(
                 [
@@ -4676,7 +4703,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 descriptor["bridge"]["policy"],
                 code_manifest_sha256=(
                     F_MANIFEST_DIGEST
-                    if name in {"post-0013", "post-0014"}
+                    if name in {"post-0013", "post-0014", "post-0015"}
                     else B_MANIFEST_DIGEST
                 ),
                 migrations=history,
@@ -4707,7 +4734,14 @@ class SlotAndDescriptorTests(PullDeployTestCase):
 
     def test_b_state_can_truthfully_record_f_0013_ledger(self) -> None:
         descriptor = self.bridge_descriptor(self.controller())
-        migrations = json.loads(json.dumps(F_MANIFEST_RECORDS[:-1]))
+        migrations = json.loads(
+            json.dumps(
+                [
+                    *descriptor["migrations"]["records"],
+                    CONTROLLER._bridge_core.DFT_MIGRATION_RECORD,
+                ]
+            )
+        )
         compatibility = CONTROLLER.build_migration_compatibility_state(
             descriptor["bridge"]["policy"],
             code_manifest_sha256=B_MANIFEST_DIGEST,
@@ -5232,6 +5266,36 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             "preserve the MD job table",
         ):
             CONTROLLER.build_mutable_data_pair(before, changed_rows)
+
+    def test_mutable_data_allows_only_pristine_0015_expansion(self) -> None:
+        before = mutable_data_evidence(ledger_length=14)
+        after = mutable_data_evidence(ledger_length=15)
+
+        pair = CONTROLLER.build_mutable_data_pair(before, after)
+
+        self.assertEqual(pair["transition"]["kind"], "expand-0015")
+        snapshot = next(
+            record
+            for record in after["static_tables"]
+            if (record["schema"], record["table"])
+            == ("governance", "property_filter_options_snapshots")
+        )
+        self.assertEqual(snapshot["row_count"], 1)
+
+        noncanonical = json.loads(json.dumps(after))
+        snapshot = next(
+            record
+            for record in noncanonical["static_tables"]
+            if (record["schema"], record["table"])
+            == ("governance", "property_filter_options_snapshots")
+        )
+        snapshot["row_count"] = 2
+        reseal_mutable_data_evidence(noncanonical)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "one property-filter catalog snapshot",
+        ):
+            CONTROLLER.build_mutable_data_pair(before, noncanonical)
 
     def test_mutable_data_rejects_static_control_and_analytics_drift(self) -> None:
         before = mutable_data_evidence()

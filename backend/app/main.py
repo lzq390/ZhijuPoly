@@ -389,6 +389,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["ETag", "Server-Timing"],
     )
     app.add_middleware(BrowserCrossSiteProtectionMiddleware)
     app.add_middleware(DeploymentDrainMiddleware)

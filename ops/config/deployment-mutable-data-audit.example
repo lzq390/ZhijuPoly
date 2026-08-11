@@ -53,6 +53,12 @@ tables = (
     ),
     ("governance", "source_files", "source_file_id", None),
     ("governance", "import_batches", "import_batch_id", None),
+    (
+        "governance",
+        "property_filter_options_snapshots",
+        "snapshot_key",
+        "property_filter_options_snapshots_present",
+    ),
     ("core", "polymers", "polymer_id", None),
     ("core", "polymer_properties", "property_id", None),
     ("core", "polymer_property_filter_records", "filter_record_id", None),
@@ -529,6 +535,11 @@ commands = [
         "IS NOT NULL) AS database_analytics_snapshots_present \\gset"
     ),
     (
+        "SELECT (to_regclass('governance.property_filter_options_snapshots') "
+        "IS NOT NULL) "
+        "AS property_filter_options_snapshots_present \\gset"
+    ),
+    (
         "\\copy (SELECT jsonb_build_object('version',version,"
         "'checksum',checksum)::text FROM governance.schema_migrations "
         f"ORDER BY version) TO '{literal(root / 'migration_ledger.rows')}'"
@@ -750,6 +761,7 @@ business = (
 static = (
     ("governance", "source_files"),
     ("governance", "import_batches"),
+    ("governance", "property_filter_options_snapshots"),
     ("core", "polymers"),
     ("core", "polymer_properties"),
     ("core", "polymer_property_filter_records"),

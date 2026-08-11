@@ -16,6 +16,7 @@ from app.config import PROJECT_ROOT, Settings
 from app.postgres_database import postgres_connection
 from app.postgres_migrations import apply_postgres_migrations
 from app.services.fingerprint import fingerprint_to_bytes, generate
+from app.services.property_filter_catalog import rebuild_property_filter_catalog
 
 
 def _safe_dsn_label(dsn: str) -> str:
@@ -164,6 +165,7 @@ def reset_postgres_fixture(dsn: str) -> None:
             """
             TRUNCATE
               governance.database_analytics_snapshots,
+              governance.property_filter_options_snapshots,
               governance.import_batches,
               governance.source_files,
               core.polymer_property_filter_records,
@@ -191,6 +193,7 @@ def reset_postgres_fixture(dsn: str) -> None:
         _seed_governance(connection)
         _seed_core_polymers(connection)
         _seed_property_filter_records(connection)
+        rebuild_property_filter_catalog(connection)
         _seed_pi_candidates(connection)
         _seed_dft(connection)
 

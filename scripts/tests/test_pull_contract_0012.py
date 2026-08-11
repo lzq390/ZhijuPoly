@@ -83,6 +83,7 @@ def _mutable_data_evidence(
 
     dft_ready = ledger_length >= 13
     md_queue_ready = ledger_length >= 14
+    property_filter_ready = ledger_length >= 15
     contract_applied = ledger_length >= 12
     controls_ready = ledger_length >= 10
     business_tables = [
@@ -107,7 +108,15 @@ def _mutable_data_evidence(
             )
         business_tables.append(record)
     static_tables = [
-        table_record(relation, index + 8)
+        table_record(
+            relation,
+            index + 8,
+            present=(
+                property_filter_ready
+                or relation
+                != ("governance", "property_filter_options_snapshots")
+            ),
+        )
         for index, relation in enumerate(helpers.STATIC_IMPORT_TABLES)
     ]
     sequences: list[dict[str, object]] = []

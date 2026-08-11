@@ -4,6 +4,10 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
+vi.mock("./components/DatabaseFilterPage", () => ({
+  DatabaseFilterPage: () => <div data-testid="database-filter-page">数据库筛选页面</div>
+}));
+
 const WORKSPACE_ORIGIN = "http://workspace.example.test:9011";
 const WORKSPACE_URL = `${WORKSPACE_ORIGIN}/`;
 
@@ -22,6 +26,71 @@ afterEach(() => {
 });
 
 describe("智聚万物首页", () => {
+  it("侧栏按研发阶段组织模块，并将结构工作台独立置顶", () => {
+    render(<App />);
+
+    const navigation = screen.getByRole("navigation", { name: "业务模块" });
+    const structureWorkbench = screen.getByRole("button", { name: "结构工作台" });
+    const groupTitles = Array.from(
+      navigation.querySelectorAll<HTMLButtonElement>("section > button")
+    ).map((button) => button.getAttribute("aria-label"));
+
+    expect(structureWorkbench.closest("section")).toBeNull();
+    expect(groupTitles).toEqual([
+      "材料发现 Discover",
+      "材料设计 Build",
+      "实验优化 Optimize",
+      "数据管理 Data"
+    ]);
+
+    const expectedModules = new Map([
+      [
+        "材料发现 Discover",
+        ["知识检索", "PolyTAO 生成", "聚合物性能探索", "数据库查询", "数据库筛选", "数据库分析"]
+      ],
+      [
+        "材料设计 Build",
+        ["单体正向聚合", "MD 模拟", "单体 MD 模拟", "单体 DFT（AIMNet2）", "条件聚合物生成"]
+      ],
+      ["实验优化 Optimize", ["Tg 逆向设计", "高通量优化演示"]]
+    ]);
+
+    expectedModules.forEach((labels, title) => {
+      const toggle = screen.getByRole("button", { name: title });
+      fireEvent.click(toggle);
+      expect(
+        Array.from(
+          toggle.closest("section")?.querySelectorAll<HTMLElement>("[data-module-id]") ?? []
+        ).map((item) => item.textContent?.trim())
+      ).toEqual(labels);
+    });
+
+    const dataGroup = screen.getByRole("button", { name: "数据管理 Data" }) as HTMLButtonElement;
+    expect(dataGroup.disabled).toBe(true);
+    expect(dataGroup.closest("section")?.querySelectorAll("[data-module-id]")).toHaveLength(0);
+  });
+
+  it("支持数据库筛选规范路由，并将旧地址历史替换到新路由", () => {
+    window.history.replaceState({}, "", "/database-filter");
+    const canonical = render(<App />);
+
+    expect(screen.getByTestId("database-filter-page")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "数据库筛选" }).getAttribute("aria-current")).toBe("page");
+
+    window.history.pushState({}, "", "/database");
+    fireEvent(window, new PopStateEvent("popstate"));
+    expect(screen.queryByTestId("database-filter-page")).toBeNull();
+    window.history.pushState({}, "", "/database-filter");
+    fireEvent(window, new PopStateEvent("popstate"));
+    expect(screen.getByTestId("database-filter-page")).not.toBeNull();
+    canonical.unmount();
+
+    window.history.replaceState({}, "", "/database/property-filter");
+    render(<App />);
+    expect(window.location.pathname).toBe("/database-filter");
+    expect(screen.getByTestId("database-filter-page")).not.toBeNull();
+  });
+
   it("未配置工作台时只显示同步占位且不挂载 iframe", () => {
     // unstubAllEnvs restores the process value, which may be configured in dev.
     vi.stubEnv("VITE_AGENT_WORKSPACE_URL", undefined);
@@ -399,7 +468,7 @@ describe("智聚万物首页", () => {
     const conversationEntry = screen.getByRole("button", { name: "对话" });
     expect(conversationEntry.getAttribute("aria-current")).toBe("page");
 
-    fireEvent.click(screen.getByRole("button", { name: "数据与知识" }));
+    fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
     fireEvent.click(screen.getByRole("button", { name: "知识检索" }));
 
     expect(conversationEntry.getAttribute("aria-current")).toBeNull();
@@ -446,7 +515,7 @@ describe("智聚万物首页", () => {
       expect(activeProject?.getAttribute("aria-current")).toBe("page");
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "数据与知识" }));
+    fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
     fireEvent.click(screen.getByRole("button", { name: "知识检索" }));
     fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
 

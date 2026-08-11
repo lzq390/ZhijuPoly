@@ -274,6 +274,7 @@ GOVERNED_CONTROL_TABLES = (
 STATIC_IMPORT_TABLES = (
     ("governance", "source_files"),
     ("governance", "import_batches"),
+    ("governance", "property_filter_options_snapshots"),
     ("core", "polymers"),
     ("core", "polymer_properties"),
     ("core", "polymer_property_filter_records"),
@@ -433,6 +434,10 @@ CANONICAL_MIGRATION_LEDGER = (
     (
         "0014_monomer_md_task_queue_cancel",
         "7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6",
+    ),
+    (
+        "0015_property_filter_performance",
+        "e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732",
     ),
 )
 
@@ -5131,7 +5136,14 @@ def _validate_polytao_archive_evidence(
 
 
 def _validate_mutable_ledger(records: object) -> list[dict[str, str]]:
-    if not isinstance(records, list) or len(records) not in {8, 11, 12, 13, 14}:
+    if not isinstance(records, list) or len(records) not in {
+        8,
+        11,
+        12,
+        13,
+        14,
+        15,
+    }:
         raise SiteHelperContractError(
             "mutable-data audit migration ledger is not a governed B/F state"
         )
@@ -5705,6 +5717,7 @@ def _validate_mutable_data_audit(
     leases_ready = "0009_monomer_md_job_leases" in versions
     dft_ready = "0013_monomer_dft_jobs" in versions
     md_queue_ready = "0014_monomer_md_task_queue_cancel" in versions
+    property_filter_ready = "0015_property_filter_performance" in versions
     contract_applied = "0012_drop_polytao_jobs" in versions
     business_relations = (
         BUSINESS_MUTABLE_TABLES + POST_0013_BUSINESS_MUTABLE_TABLES
@@ -5738,6 +5751,13 @@ def _validate_mutable_data_audit(
     static_tables = _validate_table_inventory(
         document.get("static_tables"),
         STATIC_IMPORT_TABLES,
+        absent_relations=(
+            frozenset()
+            if property_filter_ready
+            else frozenset(
+                {("governance", "property_filter_options_snapshots")}
+            )
+        ),
     )
     migration_exception = _validate_table_inventory(
         [document.get("migration_exception")],

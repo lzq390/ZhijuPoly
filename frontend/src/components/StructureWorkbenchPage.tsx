@@ -742,7 +742,8 @@ export function StructureWorkbenchPage({
             <div className="header-actions tg-toolbar" aria-label="结构工作台工具栏">
               <button
                 type="button"
-                className="btn btn--outline btn--sm tg-tool-button"
+                className="btn btn--outline btn--sm tg-tool-button sw-toolbar-action"
+                data-workbench-tool="load"
                 onClick={() => void canvas.loadStructure(REVERSE_DESIGN_DEMO_SMILES)}
                 disabled={operationBusy}
               >
@@ -755,7 +756,8 @@ export function StructureWorkbenchPage({
               </button>
               <button
                 type="button"
-                className="btn btn--outline btn--sm tg-tool-button"
+                className="btn btn--outline btn--sm tg-tool-button sw-toolbar-action"
+                data-workbench-tool="import"
                 onClick={() => canvas.fileInputRef.current?.click()}
                 disabled={operationBusy}
               >
@@ -768,7 +770,8 @@ export function StructureWorkbenchPage({
               </button>
               <button
                 type="button"
-                className="btn btn--outline btn--sm tg-tool-button"
+                className="btn btn--outline btn--sm tg-tool-button sw-toolbar-action"
+                data-workbench-tool="clear"
                 onClick={() => void canvas.clearCanvas()}
                 disabled={operationBusy || !canvas.isEditorReady}
               >
@@ -777,7 +780,8 @@ export function StructureWorkbenchPage({
               </button>
               <button
                 type="button"
-                className="btn btn--outline btn--sm tg-tool-button"
+                className="btn btn--outline btn--sm tg-tool-button sw-toolbar-action"
+                data-workbench-tool="sync"
                 onClick={() => void canvas.syncSmilesFromCanvas()}
                 disabled={operationBusy || !canvas.isEditorReady}
               >
@@ -790,7 +794,8 @@ export function StructureWorkbenchPage({
               </button>
               <button
                 type="button"
-                className={`btn btn--outline btn--sm tg-tool-button${canvas.isFlipped ? " active" : ""}`}
+                className={`btn btn--outline btn--sm tg-tool-button sw-toolbar-action${canvas.isFlipped ? " active" : ""}`}
+                data-workbench-tool="3d"
                 id="btn-toggle-3d"
                 onClick={() => void canvas.toggle3D()}
                 disabled={operationBusy || !canvas.isEditorReady}
@@ -802,7 +807,8 @@ export function StructureWorkbenchPage({
               <button
                 ref={moduleButtonRef}
                 type="button"
-                className={`btn btn--outline btn--sm tg-icon-tool${openPanel === "modules" ? " is-active" : ""}`}
+                className={`btn btn--outline btn--sm tg-icon-tool sw-toolbar-action${openPanel === "modules" ? " is-active" : ""}`}
+                data-workbench-tool="modules"
                 aria-label="功能参数"
                 title="功能参数"
                 aria-expanded={openPanel === "modules"}
@@ -814,7 +820,8 @@ export function StructureWorkbenchPage({
               <button
                 ref={assistantButtonRef}
                 type="button"
-                className={`btn btn--outline btn--sm tg-icon-tool${openPanel === "assistant" ? " is-active" : ""}`}
+                className={`btn btn--outline btn--sm tg-icon-tool sw-toolbar-action${openPanel === "assistant" ? " is-active" : ""}`}
+                data-workbench-tool="assistant"
                 aria-label="AI 助手"
                 title="AI 助手"
                 aria-expanded={openPanel === "assistant"}

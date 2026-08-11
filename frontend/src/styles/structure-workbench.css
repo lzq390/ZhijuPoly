@@ -7,6 +7,79 @@
   outline-offset: 2px;
 }
 
+/* 结构工具栏：为七个入口提供一致的颜色反馈和各自的图标微动效。 */
+.structure-workbench-page .sw-toolbar-action:not(:disabled):is(:hover, :focus-visible) {
+  border-color: rgba(77, 149, 255, 0.3) !important;
+  background: var(--color-primary-light) !important;
+  color: var(--color-primary) !important;
+  box-shadow: 0 4px 12px rgba(49, 94, 251, 0.08) !important;
+}
+
+.structure-workbench-page
+  .sw-toolbar-action[data-workbench-tool="load"]:not(:disabled):is(:hover, :focus-visible)
+  svg:not(.animate-spin) {
+  transform: rotate(24deg) scale(1.08) !important;
+}
+
+.structure-workbench-page
+  .sw-toolbar-action[data-workbench-tool="import"]:not(:disabled):is(:hover, :focus-visible)
+  svg:not(.animate-spin) {
+  transform: translateY(-1.5px) scale(1.06) !important;
+}
+
+.structure-workbench-page
+  .sw-toolbar-action[data-workbench-tool="clear"]:not(:disabled):is(:hover, :focus-visible) {
+  border-color: rgba(239, 68, 68, 0.3) !important;
+  background: var(--color-danger-light) !important;
+  color: var(--color-danger) !important;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.08) !important;
+}
+
+.structure-workbench-page
+  .sw-toolbar-action[data-workbench-tool="clear"]:not(:disabled):is(:hover, :focus-visible)
+  svg:not(.animate-spin) {
+  transform: rotate(-10deg) scale(1.06) !important;
+}
+
+.structure-workbench-page
+  .sw-toolbar-action[data-workbench-tool="sync"]:not(:disabled):is(:hover, :focus-visible) {
+  border-color: rgba(16, 185, 129, 0.3) !important;
+  background: var(--color-success-light) !important;
+  color: var(--color-success) !important;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.08) !important;
+}
+
+.structure-workbench-page
+  .sw-toolbar-action[data-workbench-tool="sync"]:not(:disabled):is(:hover, :focus-visible)
+  svg:not(.animate-spin) {
+  transform: rotate(180deg) scale(1.06) !important;
+}
+
+.structure-workbench-page
+  .sw-toolbar-action[data-workbench-tool="modules"]:not(:disabled):is(:hover, :focus-visible)
+  svg,
+.structure-workbench-page
+  .sw-toolbar-action[data-workbench-tool="modules"].is-active
+  svg {
+  transform: rotate(90deg) scale(1.06) !important;
+}
+
+.structure-workbench-page
+  .sw-toolbar-action[data-workbench-tool="assistant"]:not(:disabled):is(:hover, :focus-visible)
+  svg,
+.structure-workbench-page
+  .sw-toolbar-action[data-workbench-tool="assistant"].is-active
+  svg {
+  transform: rotate(12deg) scale(1.12) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .structure-workbench-page .sw-toolbar-action svg:not(.animate-spin) {
+    transition-duration: 0.01ms !important;
+    transform: none !important;
+  }
+}
+
 .structure-workbench-page .sw-module-panel {
   right: 38px;
   width: min(480px, calc(100vw - 48px));

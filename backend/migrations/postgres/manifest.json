@@ -108,6 +108,18 @@
           "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
         }
       ]
+    },
+    {
+      "version": "0015_property_filter_performance",
+      "kind": "expand",
+      "epoch": 2,
+      "checksum": "e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732",
+      "requires_contracts": [
+        {
+          "version": "0012_drop_polytao_jobs",
+          "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+        }
+      ]
     }
   ]
 }

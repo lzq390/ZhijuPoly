@@ -2,12 +2,171 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelMonomerMdJob,
   deleteMonomerMdJob,
+  browseExperimentalProcessRecords,
+  fetchDatabaseAnalytics,
+  fetchDatabaseDatasetSummary,
   fetchDevGpuSessionStatus,
   fetchMonomerMdJobs,
+  fetchPropertyFilterOptions,
   fetchPolytaoJob,
   fetchPolytaoStatus,
-  recoverDevGpuSession
+  recoverDevGpuSession,
+  searchPropertyFilterRecords
 } from "./api";
+
+describe("database analysis API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("forwards AbortSignal to summary and refresh requests", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ query_time_ms: 1, backend: "postgres", datasets: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ query_time_ms: 2, backend: "postgres", source: "live", generated_at: null, datasets: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await fetchDatabaseDatasetSummary(controller.signal);
+    await fetchDatabaseAnalytics({ refresh: true, signal: controller.signal });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/database-browser/datasets/summary", { signal: controller.signal });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/database-browser/datasets/analytics?refresh=true", { signal: controller.signal });
+  });
+
+  it("keeps record query contracts and forwards AbortSignal", async () => {
+    const response = {
+      query: "polyimide",
+      page: 2,
+      page_size: 10,
+      query_time_ms: 1,
+      total_records: 100,
+      matched_records: 12,
+      data_source: "postgres",
+      source_status: "ready",
+      source_message: null,
+      results: []
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await browseExperimentalProcessRecords({ q: "polyimide", page: 2, page_size: 10 }, controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/database-browser/experimental-process?q=polyimide&page=2&page_size=10",
+      { signal: controller.signal }
+    );
+  });
+});
+
+describe("property filter API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("uses the fixed options route and forwards AbortSignal", async () => {
+    const payload = {
+      query_time_ms: 1,
+      total_records: 0,
+      mapped_records: 0,
+      raw_records: 0,
+      data_source: "postgres",
+      source_status: "empty",
+      source_message: null,
+      options: []
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const result = await fetchPropertyFilterOptions({ signal: controller.signal });
+
+    expect(result).toEqual({ status: "success", data: payload, etag: null });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/database-browser/property-filter/options",
+      expect.objectContaining({
+        cache: "no-cache",
+        headers: expect.any(Headers),
+        signal: controller.signal
+      })
+    );
+  });
+
+  it("sends the cached ETag and handles a 304 without parsing JSON", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, { status: 304, headers: { ETag: 'W/"pf-options-v1-2"' } })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchPropertyFilterOptions({ etag: 'W/"pf-options-v1-1"' });
+
+    expect(result).toEqual({
+      status: "not-modified",
+      data: null,
+      etag: 'W/"pf-options-v1-2"'
+    });
+    const requestInit = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(new Headers(requestInit.headers).get("If-None-Match")).toBe('W/"pf-options-v1-1"');
+  });
+
+  it("posts the unchanged search contract and forwards AbortSignal", async () => {
+    const response = {
+      query: "poly",
+      page: 1,
+      page_size: 25,
+      query_time_ms: 2,
+      total_records: 10,
+      matched_records: 0,
+      data_source: "postgres",
+      source_status: "ready",
+      source_message: null,
+      results: []
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const payload = {
+      filters: [
+        {
+          filter_type: "standardized" as const,
+          property_key: "tg",
+          canonical_unit: "C",
+          min_value: 100,
+          max_value: 200
+        }
+      ],
+      q: "poly",
+      page: 1,
+      page_size: 25
+    };
+
+    await searchPropertyFilterRecords(payload, controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/database-browser/property-filter/search",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      })
+    );
+  });
+});
 
 describe("deleteMonomerMdJob", () => {
   afterEach(() => vi.unstubAllGlobals());

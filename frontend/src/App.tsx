@@ -5,16 +5,22 @@ import {
   BarChart3,
   BookOpen,
   Database,
+  Filter,
   FlaskConical,
   Grid2X2,
   Microscope,
   Search,
   Sparkles
 } from "lucide-react";
-import { AppShell, type AppShellModuleGroup } from "./components/AppShell";
+import {
+  AppShell,
+  type AppShellModuleGroup,
+  type AppShellModuleItem
+} from "./components/AppShell";
 import { AgentWorkspaceHomePage, agentWorkspaceUrl } from "./components/AgentWorkspaceHomePage";
 import { ConditionalGenerationPage } from "./components/ConditionalGenerationPage";
 import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
+import { DatabaseFilterPage } from "./components/DatabaseFilterPage";
 import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
 import { ExperimentWorkflowDemoPage } from "./components/ExperimentWorkflowDemoPage";
 import { HighThroughputWorkflowDemoPage } from "./components/HighThroughputWorkflowDemoPage";
@@ -59,6 +65,7 @@ type ActiveModule =
   | "conditionalGeneration"
   | "polytaoGeneration"
   | "databaseQuery"
+  | "databaseFilter"
   | "database"
   | "knowledge"
   | "labData"
@@ -75,12 +82,13 @@ type KnowledgeNavigationInput = string | KnowledgeNavigationRequest;
 type AgentWorkspaceView = "general" | "projects" | "project";
 const POLYTAO_ROUTE = "/polytao-generation";
 const LEGACY_POLYTAO_ROUTE = "/conditional-generation/polytao";
+const DATABASE_FILTER_ROUTE = "/database-filter";
+const LEGACY_DATABASE_FILTER_ROUTE = "/database/property-filter";
 
 const datasetPathByKey: Record<DatasetKey, string> = {
   process: "/database/process",
   property: "/database/property",
   structureEffect: "/database/structure-effect",
-  propertyFilter: "/database/property-filter",
   dft: "/database/dft",
   formulation: "/database/formulation"
 };
@@ -135,6 +143,10 @@ function routeFromPath(pathname: string): AppRoute {
 
   if (path === "/database-query") {
     return { module: "databaseQuery", datasetKey: null };
+  }
+
+  if (path === DATABASE_FILTER_ROUTE || path === LEGACY_DATABASE_FILTER_ROUTE) {
+    return { module: "databaseFilter", datasetKey: null };
   }
 
   if (path === "/knowledge") {
@@ -210,6 +222,10 @@ function pathFromRoute(route: AppRoute) {
     return "/database-query";
   }
 
+  if (route.module === "databaseFilter") {
+    return DATABASE_FILTER_ROUTE;
+  }
+
   if (route.module === "knowledge") {
     return "/knowledge";
   }
@@ -241,6 +257,8 @@ function getInitialRoute() {
   const route = routeFromPath(window.location.pathname);
   if (normalizePath(window.location.pathname) === LEGACY_POLYTAO_ROUTE) {
     window.history.replaceState(route, "", POLYTAO_ROUTE);
+  } else if (normalizePath(window.location.pathname) === LEGACY_DATABASE_FILTER_ROUTE) {
+    window.history.replaceState(route, "", DATABASE_FILTER_ROUTE);
   }
   return route;
 }
@@ -435,6 +453,8 @@ export default function App() {
       const route = routeFromPath(window.location.pathname);
       if (normalizePath(window.location.pathname) === LEGACY_POLYTAO_ROUTE) {
         window.history.replaceState(route, "", POLYTAO_ROUTE);
+      } else if (normalizePath(window.location.pathname) === LEGACY_DATABASE_FILTER_ROUTE) {
+        window.history.replaceState(route, "", DATABASE_FILTER_ROUTE);
       }
       if (route.module === "knowledge") {
         setKnowledgeInitialQuery(new URLSearchParams(window.location.search).get("q") ?? "");
@@ -507,6 +527,10 @@ export default function App() {
     navigate({ module: "databaseQuery", datasetKey: null });
   }
 
+  function openDatabaseFilter() {
+    navigate({ module: "databaseFilter", datasetKey: null });
+  }
+
   function openDatabase() {
     navigate({ module: "database", datasetKey: null });
   }
@@ -556,6 +580,9 @@ export default function App() {
         break;
       case "databaseQuery":
         openDatabaseQuery();
+        break;
+      case "databaseFilter":
+        openDatabaseFilter();
         break;
       case "database":
         openDatabase();
@@ -657,24 +684,48 @@ export default function App() {
     generalSessionBridge.openSession(sessionID);
   }
 
+  const standaloneModules: AppShellModuleItem[] = [
+    {
+      id: "structureWorkbench",
+      label: "结构工作台",
+      description: "统一绘制、输入和预览当前共享结构。",
+      route: "/structure-workbench",
+      icon: <Grid2X2 className="h-4 w-4" />,
+      isActive: activeModule === "structureWorkbench",
+      onClick: openStructureWorkbench
+    }
+  ];
   const moduleGroups: AppShellModuleGroup[] = [
     {
-      title: "结构",
+      title: "材料发现 Discover",
       items: [
         {
-          id: "structureWorkbench",
-          label: "结构工作台",
-          description: "统一绘制、输入和预览当前共享结构。",
-          route: "/structure-workbench",
-          icon: <Grid2X2 className="h-4 w-4" />,
-          isActive: activeModule === "structureWorkbench",
-          onClick: openStructureWorkbench
-        }
-      ]
-    },
-    {
-      title: "数据与知识",
-      items: [
+          id: "knowledge",
+          label: "知识检索",
+          description: "检索聚合物文献、摘要和合成知识。",
+          route: "/knowledge",
+          icon: <BookOpen className="h-4 w-4" />,
+          isActive: activeModule === "knowledge",
+          onClick: () => openKnowledge()
+        },
+        {
+          id: "polytaoGeneration",
+          label: "PolyTAO 生成",
+          description: "按 15 个 RDKit 描述符调用 PolyTAO 生成候选重复单元。",
+          route: POLYTAO_ROUTE,
+          icon: <Sparkles className="h-4 w-4" />,
+          isActive: activeModule === "polytaoGeneration",
+          onClick: openPolytaoGeneration
+        },
+        {
+          id: "explorer",
+          label: "聚合物性能探索",
+          description: "编辑结构、相似匹配、3D 预览和性能预测。",
+          route: "/explorer",
+          icon: <Atom className="h-4 w-4" />,
+          isActive: activeModule === "explorer",
+          onClick: openExplorer
+        },
         {
           id: "databaseQuery",
           label: "数据库查询",
@@ -685,6 +736,15 @@ export default function App() {
           onClick: openDatabaseQuery
         },
         {
+          id: "databaseFilter",
+          label: "数据库筛选",
+          description: "按多个性质阈值组合筛选聚合物记录。",
+          route: DATABASE_FILTER_ROUTE,
+          icon: <Filter className="h-4 w-4" />,
+          isActive: activeModule === "databaseFilter",
+          onClick: openDatabaseFilter
+        },
+        {
           id: "database",
           label: "数据库分析",
           description: "浏览过程、性能、DFT 与结构数据集。",
@@ -692,29 +752,20 @@ export default function App() {
           icon: <Database className="h-4 w-4" />,
           isActive: activeModule === "database",
           onClick: openDatabase
-        },
-        {
-          id: "knowledge",
-          label: "知识检索",
-          description: "检索聚合物文献、摘要和合成知识。",
-          route: "/knowledge",
-          icon: <BookOpen className="h-4 w-4" />,
-          isActive: activeModule === "knowledge",
-          onClick: () => openKnowledge()
         }
       ]
     },
     {
-      title: "性能探索",
+      title: "材料设计 Build",
       items: [
         {
-          id: "explorer",
-          label: "聚合物性能探索",
-          description: "编辑结构、相似匹配、3D 预览和性能预测。",
-          route: "/explorer",
-          icon: <Atom className="h-4 w-4" />,
-          isActive: activeModule === "explorer",
-          onClick: openExplorer
+          id: "monomerPolymerization",
+          label: "单体正向聚合",
+          description: "用 SMiPoly 规则对一个或两个单体生成少量聚合物候选。",
+          route: "/monomer-polymerization",
+          icon: <FlaskConical className="h-4 w-4" />,
+          isActive: activeModule === "monomerPolymerization",
+          onClick: openMonomerPolymerization
         },
         {
           id: "mdSimulationDemo",
@@ -727,7 +778,7 @@ export default function App() {
         },
         {
           id: "monomerMdSimulation",
-          label: "\u5355\u4f53 MD \u6a21\u62df",
+          label: "单体 MD 模拟",
           description: "Submit ordinary monomer SMILES and track MD worker job results.",
           route: "/monomer-md-simulation",
           icon: <Microscope className="h-4 w-4" />,
@@ -742,29 +793,6 @@ export default function App() {
           icon: <FlaskConical className="h-4 w-4" />,
           isActive: activeModule === "monomerDft",
           onClick: () => openMonomerDft()
-        }
-      ]
-    },
-    {
-      title: "聚合物设计",
-      items: [
-        {
-          id: "monomerPolymerization",
-          label: "单体正向聚合",
-          description: "用 SMiPoly 规则对一个或两个单体生成少量聚合物候选。",
-          route: "/monomer-polymerization",
-          icon: <FlaskConical className="h-4 w-4" />,
-          isActive: activeModule === "monomerPolymerization",
-          onClick: openMonomerPolymerization
-        },
-        {
-          id: "reverseDesign",
-          label: "Tg 逆向设计",
-          description: "按目标玻璃化转变温度筛选候选结构。",
-          route: "/reverse-design",
-          icon: <Sparkles className="h-4 w-4" />,
-          isActive: activeModule === "reverseDesign",
-          onClick: openReverseDesign
         },
         {
           id: "conditionalGeneration",
@@ -774,15 +802,20 @@ export default function App() {
           icon: <Microscope className="h-4 w-4" />,
           isActive: activeModule === "conditionalGeneration",
           onClick: openConditionalGeneration
-        },
+        }
+      ]
+    },
+    {
+      title: "实验优化 Optimize",
+      items: [
         {
-          id: "polytaoGeneration",
-          label: "PolyTAO 生成",
-          description: "按 15 个 RDKit 描述符调用 PolyTAO 生成候选重复单元。",
-          route: POLYTAO_ROUTE,
+          id: "reverseDesign",
+          label: "Tg 逆向设计",
+          description: "按目标玻璃化转变温度筛选候选结构。",
+          route: "/reverse-design",
           icon: <Sparkles className="h-4 w-4" />,
-          isActive: activeModule === "polytaoGeneration",
-          onClick: openPolytaoGeneration
+          isActive: activeModule === "reverseDesign",
+          onClick: openReverseDesign
         },
         {
           id: "highThroughputWorkflowDemo",
@@ -794,11 +827,17 @@ export default function App() {
           onClick: openHighThroughputWorkflowDemo
         }
       ]
+    },
+    {
+      title: "数据管理 Data",
+      items: []
     }
   ];
   const isFullBleedModule =
     activeModule === "explorer" ||
     activeModule === "databaseQuery" ||
+    activeModule === "databaseFilter" ||
+    activeModule === "database" ||
     activeModule === "structureWorkbench" ||
     activeModule === "monomerPolymerization" ||
     activeModule === "polytaoGeneration" ||
@@ -821,6 +860,7 @@ export default function App() {
     <AppShell
       activeModule={activeModule}
       fullBleed={isFullBleedModule}
+      standaloneModules={standaloneModules}
       moduleGroups={moduleGroups}
       onOpenHome={openGeneralWorkspace}
       projects={projectSnapshot?.projects ?? []}
@@ -868,6 +908,8 @@ export default function App() {
           onBackHome={() => navigate({ module: "home", datasetKey: null })}
         />
       ) : null}
+
+      {activeModule === "databaseFilter" ? <DatabaseFilterPage /> : null}
 
       {shouldKeepStructureWorkbenchMounted ? (
         <div
