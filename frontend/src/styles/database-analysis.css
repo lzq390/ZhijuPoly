@@ -74,9 +74,9 @@
 }
 
 .dba-pagebar {
-  width: min(100%, 1180px);
+  width: 100%;
   min-height: 32px;
-  margin: 0 auto 14px;
+  margin: 0 0 14px;
   display: flex;
   align-items: center;
   flex: none;

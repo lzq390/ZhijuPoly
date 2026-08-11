@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import datetime
+from math import isfinite
+from threading import Lock
 from typing import Any
 
 from psycopg import sql
@@ -12,7 +16,24 @@ from app.models import PropertyFilterOption
 
 
 PROPERTY_FILTER_SNAPSHOT_KEY = "current"
+# Histogram payloads are additive: schema-v1 snapshots without them stay valid and
+# the selected option is computed on demand until the next atomic data import.
 PROPERTY_FILTER_SNAPSHOT_SCHEMA_VERSION = 1
+PROPERTY_FILTER_HISTOGRAM_BIN_COUNT = 18
+PROPERTY_FILTER_HISTOGRAM_ROBUST_MIN_ROWS = 40
+PROPERTY_FILTER_HISTOGRAM_CACHE_MAX_ENTRIES = 512
+
+
+PropertyFilterHistogramCacheKey = tuple[int, datetime, int | None, str | None, str]
+_property_filter_histogram_cache: OrderedDict[
+    PropertyFilterHistogramCacheKey,
+    dict[str, Any],
+] = OrderedDict()
+_property_filter_histogram_in_flight: dict[
+    PropertyFilterHistogramCacheKey,
+    Future[dict[str, Any]],
+] = {}
+_property_filter_histogram_cache_lock = Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +53,247 @@ def _relation(schema: str | None, table: str) -> sql.Composed:
     if schema:
         return sql.SQL(".").join((sql.Identifier(schema), sql.Identifier(table)))
     return sql.Identifier(table)
+
+
+def _finite_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if isfinite(normalized) else None
+
+
+def _histogram_domain(option: dict[str, Any]) -> tuple[float, float, int, str] | None:
+    minimum = _finite_float(option.get("min_value"))
+    maximum = _finite_float(option.get("max_value"))
+    if minimum is None or maximum is None or minimum > maximum:
+        return None
+    p5 = _finite_float(option.get("p5_value"))
+    p95 = _finite_float(option.get("p95_value"))
+    row_count = int(option.get("rows") or 0)
+    if (
+        row_count >= PROPERTY_FILTER_HISTOGRAM_ROBUST_MIN_ROWS
+        and p5 is not None
+        and p95 is not None
+        and p5 < p95
+    ):
+        return p5, p95, PROPERTY_FILTER_HISTOGRAM_BIN_COUNT, "p5_p95"
+    if minimum < maximum:
+        return minimum, maximum, PROPERTY_FILTER_HISTOGRAM_BIN_COUNT, "full_range"
+    return minimum, maximum, 1, "full_range"
+
+
+def aggregate_property_filter_histograms(
+    connection: Any,
+    options: list[dict[str, Any]],
+    *,
+    schema: str | None = "core",
+    table: str = "polymer_property_filter_records",
+) -> dict[str, dict[str, Any]]:
+    domains: list[tuple[Any, ...]] = []
+    histograms: dict[str, dict[str, Any]] = {}
+    for option in options:
+        domain = _histogram_domain(option)
+        option_key = str(option.get("option_key") or "")
+        filter_type = option.get("filter_type")
+        if not option_key or domain is None or filter_type not in {"standardized", "raw"}:
+            continue
+        domain_min, domain_max, bin_count, domain_kind = domain
+        unit = (
+            option.get("canonical_unit")
+            if filter_type == "standardized"
+            else option.get("property_unit_clean")
+        )
+        domains.append(
+            (
+                option_key,
+                filter_type,
+                option.get("property_key"),
+                option.get("property_name"),
+                unit or "",
+                domain_min,
+                domain_max,
+                bin_count,
+            )
+        )
+        histograms[option_key] = {
+            "domain_min": domain_min,
+            "domain_max": domain_max,
+            "domain_kind": domain_kind,
+            "bin_count": bin_count,
+            "counts": [0] * bin_count,
+            "underflow_count": 0,
+            "overflow_count": 0,
+            "total_count": 0,
+        }
+    if not domains:
+        return histograms
+
+    relation = _relation(schema, table)
+    domain_rows = sql.SQL(", ").join(
+        sql.SQL("(%s, %s, %s, %s, %s, %s, %s, %s)") for _ in domains
+    )
+    params = [value for domain in domains for value in domain]
+    bucket_rows = connection.execute(
+        sql.SQL(
+            """
+            WITH domains (
+              option_key, filter_type, property_key, property_name, unit_value,
+              domain_min, domain_max, bin_count
+            ) AS (VALUES {domain_rows}),
+            measurements AS (
+              SELECT
+                domains.option_key,
+                domains.domain_min,
+                domains.domain_max,
+                domains.bin_count,
+                records.canonical_value AS value
+              FROM domains
+              JOIN {relation} records
+                ON domains.filter_type = 'standardized'
+               AND records.property_key = domains.property_key
+               AND COALESCE(records.canonical_unit, '') = domains.unit_value
+              WHERE records.canonical_value IS NOT NULL
+
+              UNION ALL
+
+              SELECT
+                domains.option_key,
+                domains.domain_min,
+                domains.domain_max,
+                domains.bin_count,
+                records.property_value_num AS value
+              FROM domains
+              JOIN {relation} records
+                ON domains.filter_type = 'raw'
+               AND records.property_key IS NULL
+               AND records.property_name = domains.property_name
+               AND COALESCE(records.property_unit_clean, '') = domains.unit_value
+              WHERE records.property_value_num IS NOT NULL
+            )
+            SELECT
+              option_key,
+              CASE
+                WHEN value < domain_min THEN 0
+                WHEN value > domain_max THEN bin_count + 1
+                WHEN domain_min = domain_max THEN 1
+                ELSE LEAST(
+                  bin_count,
+                  FLOOR(((value - domain_min) / (domain_max - domain_min)) * bin_count)::integer + 1
+                )
+              END AS bucket,
+              COUNT(*) AS count
+            FROM measurements
+            GROUP BY option_key, bucket
+            ORDER BY option_key, bucket
+            """
+        ).format(domain_rows=domain_rows, relation=relation),
+        params,
+    ).fetchall()
+    for row in bucket_rows:
+        option_key = row["option_key"]
+        histogram = histograms.get(option_key)
+        if histogram is None:
+            continue
+        bucket = int(row["bucket"])
+        count = int(row["count"] or 0)
+        if bucket == 0:
+            histogram["underflow_count"] = count
+        elif bucket == histogram["bin_count"] + 1:
+            histogram["overflow_count"] = count
+        elif 1 <= bucket <= histogram["bin_count"]:
+            histogram["counts"][bucket - 1] = count
+        histogram["total_count"] += count
+    return histograms
+
+
+def _property_filter_histogram_cache_key(
+    catalog: PropertyFilterCatalog,
+    option_key: str,
+) -> PropertyFilterHistogramCacheKey:
+    return (
+        catalog.generation,
+        catalog.generated_at,
+        catalog.import_batch_id,
+        catalog.source_sha256,
+        option_key,
+    )
+
+
+def resolve_property_filter_histogram(
+    connection: Any,
+    catalog: PropertyFilterCatalog | None,
+    option: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Resolve one legacy histogram per catalog revision and backend process.
+
+    Production intentionally runs one Uvicorn worker. A shared Future coalesces
+    concurrent first views without mutating the schema-v1 snapshot that older
+    rolling-release instances still need to validate. New imports embed every
+    histogram and bypass this compatibility cache.
+    """
+
+    embedded = option.get("histogram")
+    if embedded is not None:
+        return embedded, "snapshot"
+
+    option_key = str(option.get("option_key") or "")
+    if not option_key:
+        raise RuntimeError("Selected property has no option key")
+    if catalog is None:
+        histogram = aggregate_property_filter_histograms(connection, [option]).get(
+            option_key
+        )
+        if histogram is None:
+            raise RuntimeError("Selected property has no numeric histogram data")
+        return histogram, "computed"
+    cache_key = _property_filter_histogram_cache_key(catalog, option_key)
+    owner = False
+    with _property_filter_histogram_cache_lock:
+        cached = _property_filter_histogram_cache.get(cache_key)
+        if cached is not None:
+            _property_filter_histogram_cache.move_to_end(cache_key)
+            return cached, "cache-hit"
+        pending = _property_filter_histogram_in_flight.get(cache_key)
+        if pending is None:
+            pending = Future()
+            _property_filter_histogram_in_flight[cache_key] = pending
+            owner = True
+
+    if not owner:
+        return pending.result(), "shared"
+
+    try:
+        histogram = aggregate_property_filter_histograms(connection, [option]).get(
+            option_key
+        )
+        if histogram is None:
+            raise RuntimeError("Selected property has no numeric histogram data")
+    except BaseException as exc:
+        with _property_filter_histogram_cache_lock:
+            _property_filter_histogram_in_flight.pop(cache_key, None)
+        pending.set_exception(exc)
+        raise
+
+    with _property_filter_histogram_cache_lock:
+        _property_filter_histogram_cache[cache_key] = histogram
+        _property_filter_histogram_cache.move_to_end(cache_key)
+        while (
+            len(_property_filter_histogram_cache)
+            > PROPERTY_FILTER_HISTOGRAM_CACHE_MAX_ENTRIES
+        ):
+            _property_filter_histogram_cache.popitem(last=False)
+        _property_filter_histogram_in_flight.pop(cache_key, None)
+    pending.set_result(histogram)
+    return histogram, "computed"
+
+
+def reset_property_filter_histogram_cache_for_tests() -> None:
+    with _property_filter_histogram_cache_lock:
+        _property_filter_histogram_cache.clear()
+        _property_filter_histogram_in_flight.clear()
 
 
 def aggregate_property_filter_catalog(
@@ -121,11 +383,20 @@ def aggregate_property_filter_catalog(
             """
         ).format(relation=relation)
     ).fetchall()
+    options = [dict(row) for row in rows]
+    histograms = aggregate_property_filter_histograms(
+        connection,
+        options,
+        schema=schema,
+        table=table,
+    )
+    for option in options:
+        option["histogram"] = histograms.get(option["option_key"])
     return (
         int(summary["total_records"] or 0),
         int(summary["mapped_records"] or 0),
         int(summary["raw_records"] or 0),
-        [dict(row) for row in rows],
+        options,
     )
 
 

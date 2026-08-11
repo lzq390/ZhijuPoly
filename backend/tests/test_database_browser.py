@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Event, Lock
 
 from fastapi.testclient import TestClient
 
 from app.postgres_database import postgres_connection
+from app.services import property_filter_catalog as property_filter_catalog_service
 from app.services.analytics_snapshot_store import save_analytics_snapshot
 from app.services.postgres_database_browser import get_database_analytics_postgres, get_property_filter_options_postgres
 from app.services.property_filter_catalog import (
+    PropertyFilterCatalog,
     load_property_filter_catalog,
     rebuild_property_filter_catalog,
+    reset_property_filter_histogram_cache_for_tests,
+    resolve_property_filter_histogram,
 )
 
 
@@ -236,6 +242,15 @@ def test_property_filter_options_include_standardized_and_raw_properties(test_ap
     raw_option = next(item for item in options if item["filter_type"] == "raw" and item["property_name"] == "Cv")
     assert tg_option["canonical_unit"] == "C"
     assert tg_option["rows"] == 2
+    tg_histogram = tg_option["histogram"]
+    assert tg_histogram["domain_kind"] == "full_range"
+    assert tg_histogram["domain_min"] == 123.4
+    assert tg_histogram["domain_max"] == 320.0
+    assert tg_histogram["bin_count"] == 18
+    assert sum(tg_histogram["counts"]) == 2
+    assert tg_histogram["underflow_count"] == 0
+    assert tg_histogram["overflow_count"] == 0
+    assert tg_histogram["total_count"] == 2
     assert raw_option["property_unit_clean"] == "cal/(g*C)"
     assert raw_option["rows"] == 2
     assert response.headers["cache-control"] == "private, max-age=0, must-revalidate"
@@ -248,6 +263,214 @@ def test_property_filter_options_include_standardized_and_raw_properties(test_ap
     )
     assert conditional.status_code == 304
     assert conditional.content == b""
+
+
+def test_property_filter_histogram_reads_real_bins_and_supports_etag(test_app) -> None:
+    client = TestClient(test_app)
+    options_response = client.get("/api/v1/database-browser/property-filter/options")
+    tg_option = next(
+        item
+        for item in options_response.json()["options"]
+        if item["filter_type"] == "standardized" and item["property_key"] == "tg"
+    )
+
+    response = client.get(
+        "/api/v1/database-browser/property-filter/histogram",
+        params={"option_key": tg_option["option_key"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["option_key"] == tg_option["option_key"]
+    assert payload["histogram"] == tg_option["histogram"]
+    assert response.headers["cache-control"] == "private, max-age=0, must-revalidate"
+    assert response.headers["etag"].startswith('W/"pf-histogram-v1-')
+    assert "histogram;dur=" in response.headers["server-timing"]
+
+    conditional = client.get(
+        "/api/v1/database-browser/property-filter/histogram",
+        params={"option_key": tg_option["option_key"]},
+        headers={"If-None-Match": response.headers["etag"]},
+    )
+    assert conditional.status_code == 304
+    assert conditional.content == b""
+
+
+def test_property_filter_histogram_computes_bins_for_legacy_snapshot_once(
+    test_app,
+    monkeypatch,
+) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        connection.execute(
+            """
+            UPDATE governance.property_filter_options_snapshots
+            SET options = (
+              SELECT jsonb_agg(option - 'histogram')
+              FROM jsonb_array_elements(options) option
+            )
+            WHERE snapshot_key = 'current'
+            """
+        )
+        catalog = load_property_filter_catalog(connection)
+
+    assert catalog is not None
+    tg_option = next(option for option in catalog.options if option["property_key"] == "tg")
+    assert "histogram" not in tg_option
+    reset_property_filter_histogram_cache_for_tests()
+    original_aggregate = property_filter_catalog_service.aggregate_property_filter_histograms
+    aggregate_calls = 0
+
+    def counted_aggregate(*args, **kwargs):
+        nonlocal aggregate_calls
+        aggregate_calls += 1
+        return original_aggregate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        property_filter_catalog_service,
+        "aggregate_property_filter_histograms",
+        counted_aggregate,
+    )
+
+    client = TestClient(test_app)
+    response = client.get(
+        "/api/v1/database-browser/property-filter/histogram",
+        params={"option_key": tg_option["option_key"]},
+    )
+    repeated = client.get(
+        "/api/v1/database-browser/property-filter/histogram",
+        params={"option_key": tg_option["option_key"]},
+    )
+
+    assert response.status_code == 200
+    histogram = response.json()["histogram"]
+    assert histogram["domain_kind"] == "full_range"
+    assert histogram["total_count"] == 2
+    assert sum(histogram["counts"]) == 2
+    assert repeated.status_code == 200
+    assert repeated.json()["histogram"] == histogram
+    assert aggregate_calls == 1
+
+
+def test_property_filter_histogram_coalesces_concurrent_legacy_requests(
+    monkeypatch,
+) -> None:
+    reset_property_filter_histogram_cache_for_tests()
+    option = {
+        "filter_type": "standardized",
+        "option_key": "std:tg:C",
+        "property_key": "tg",
+        "canonical_unit": "C",
+    }
+    catalog = PropertyFilterCatalog(
+        schema_version=1,
+        generation=17,
+        import_batch_id=9,
+        source_sha256="a" * 64,
+        generated_at=datetime.now(timezone.utc),
+        total_records=45_160,
+        mapped_records=45_160,
+        raw_records=0,
+        options=[option],
+    )
+    expected = {
+        "domain_min": -179.15,
+        "domain_max": 488.15,
+        "domain_kind": "p5_p95",
+        "bin_count": 18,
+        "counts": [1] * 18,
+        "underflow_count": 2,
+        "overflow_count": 3,
+        "total_count": 23,
+    }
+    aggregate_started = Event()
+    allow_aggregate_to_finish = Event()
+    call_lock = Lock()
+    aggregate_calls = 0
+
+    def blocked_aggregate(_connection, options):
+        nonlocal aggregate_calls
+        with call_lock:
+            aggregate_calls += 1
+        assert options == [option]
+        aggregate_started.set()
+        assert allow_aggregate_to_finish.wait(timeout=5)
+        return {option["option_key"]: expected}
+
+    monkeypatch.setattr(
+        property_filter_catalog_service,
+        "aggregate_property_filter_histograms",
+        blocked_aggregate,
+    )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [
+            executor.submit(resolve_property_filter_histogram, object(), catalog, option)
+            for _ in range(8)
+        ]
+        assert aggregate_started.wait(timeout=5)
+        allow_aggregate_to_finish.set()
+        resolved = [future.result(timeout=5) for future in futures]
+
+    assert aggregate_calls == 1
+    assert all(histogram == expected for histogram, _mode in resolved)
+    assert [mode for _histogram, mode in resolved].count("computed") == 1
+    assert set(mode for _histogram, mode in resolved) <= {
+        "computed",
+        "shared",
+        "cache-hit",
+    }
+
+
+def test_property_filter_histogram_rejects_unknown_option(test_app) -> None:
+    response = TestClient(test_app).get(
+        "/api/v1/database-browser/property-filter/histogram",
+        params={"option_key": "missing:property"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_property_filter_histogram_uses_robust_domain_for_large_groups(test_app) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        connection.execute(
+            """
+            INSERT INTO core.polymer_property_filter_records (
+              filter_record_id, source_file, source_row_number,
+              property_name, property_value, property_value_num,
+              property_unit_raw, property_unit_clean, property_key,
+              property_label, canonical_value, canonical_unit
+            )
+            SELECT
+              1000 + value,
+              'histogram-fixture.csv',
+              value,
+              'Tg',
+              value::text,
+              value::double precision,
+              'C',
+              'C',
+              'tg',
+              'Glass transition temperature',
+              value::double precision,
+              'C'
+            FROM generate_series(1, 40) value
+            """
+        )
+        rebuild_property_filter_catalog(connection)
+
+    response = TestClient(test_app).get("/api/v1/database-browser/property-filter/options")
+    tg_option = next(
+        item
+        for item in response.json()["options"]
+        if item["filter_type"] == "standardized" and item["property_key"] == "tg"
+    )
+    histogram = tg_option["histogram"]
+
+    assert histogram["domain_kind"] == "p5_p95"
+    assert histogram["bin_count"] == 18
+    assert histogram["underflow_count"] > 0
+    assert histogram["overflow_count"] > 0
+    assert sum(histogram["counts"]) + histogram["underflow_count"] + histogram["overflow_count"] == 42
 
 
 def test_property_filter_options_fall_back_when_snapshot_is_missing(test_app) -> None:

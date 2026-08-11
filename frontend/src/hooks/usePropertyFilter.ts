@@ -117,10 +117,18 @@ function initialDraft(optionKey = ""): PropertyFilterDraft {
   return { id: 1, optionKey, minValue: "", maxValue: "", error: null };
 }
 
+function optionsCatalogRevision(cache: { etag: string | null; cachedAt: number } | null) {
+  if (!cache) return "loading";
+  return cache.etag ?? `live:${cache.cachedAt}`;
+}
+
 export function usePropertyFilter() {
   const initialOptionsCache = useMemo(() => readPropertyFilterOptionsCache(), []);
   const [optionsData, setOptionsData] = useState<PropertyFilterOptionsResponse | null>(
     initialOptionsCache?.data ?? null
+  );
+  const [optionsRevision, setOptionsRevision] = useState(
+    optionsCatalogRevision(initialOptionsCache)
   );
   const [optionsPending, setOptionsPending] = useState(!initialOptionsCache);
   const [optionsRefreshing, setOptionsRefreshing] = useState(false);
@@ -146,8 +154,12 @@ export function usePropertyFilter() {
   useEffect(() => {
     let subscribed = true;
     const cached = readPropertyFilterOptionsCache();
-    const applyOptions = (response: PropertyFilterOptionsResponse) => {
+    const applyOptions = (
+      response: PropertyFilterOptionsResponse,
+      cache: { etag: string | null; cachedAt: number }
+    ) => {
       setOptionsData(response);
+      setOptionsRevision(optionsCatalogRevision(cache));
       const defaultKey = preferredDefaultOption(response.options)?.option_key ?? "";
       const validKeys = new Set(response.options.map((option) => option.option_key));
       setDrafts((current) =>
@@ -158,7 +170,7 @@ export function usePropertyFilter() {
         )
       );
     };
-    if (cached) applyOptions(cached.data);
+    if (cached) applyOptions(cached.data, cached);
     const shouldRefresh = optionsRetryKey > 0 || !cached || !isPropertyFilterOptionsCacheFresh(cached);
     if (!shouldRefresh) {
       setOptionsPending(false);
@@ -178,7 +190,7 @@ export function usePropertyFilter() {
     refreshPropertyFilterOptions()
       .then((cache) => {
         if (!subscribed) return;
-        applyOptions(cache.data);
+        applyOptions(cache.data, cache);
       })
       .catch((error: unknown) => {
         if (!subscribed) return;
@@ -447,6 +459,7 @@ export function usePropertyFilter() {
 
   return {
     optionsData,
+    optionsRevision,
     options,
     optionsByKey,
     standardizedOptions,

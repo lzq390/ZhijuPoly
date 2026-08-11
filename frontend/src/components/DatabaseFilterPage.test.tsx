@@ -4,19 +4,23 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  PropertyFilterOption,
   PropertyFilterOptionsResponse,
   PropertyFilterSearchResponse
 } from "../types";
+import { resetPropertyFilterHistogramResourceForTests } from "../services/propertyFilterHistogramResource";
 import { resetPropertyFilterOptionsResourceForTests } from "../services/propertyFilterOptionsResource";
 import { DatabaseFilterPage } from "./DatabaseFilterPage";
 
 const apiMocks = vi.hoisted(() => ({
   fetchOptions: vi.fn(),
+  fetchHistogram: vi.fn(),
   search: vi.fn()
 }));
 
 vi.mock("../services/api", () => ({
   API_BASE_URL: "/api/v1",
+  fetchPropertyFilterHistogram: apiMocks.fetchHistogram,
   fetchPropertyFilterOptions: apiMocks.fetchOptions,
   searchPropertyFilterRecords: apiMocks.search
 }));
@@ -167,12 +171,50 @@ const successResponse: PropertyFilterSearchResponse = {
   ]
 };
 
+function histogramResponse(option: PropertyFilterOption) {
+  const total = option.rows;
+  const underflow = Math.floor(total * 0.05);
+  const overflow = Math.floor(total * 0.05);
+  const central = total - underflow - overflow;
+  const weights = [1, 2, 4, 6, 4, 1];
+  const weightedUnit = Math.floor(central / weights.reduce((sum, value) => sum + value, 0));
+  const counts = weights.map((weight) => weight * weightedUnit);
+  counts[counts.length - 1] += central - counts.reduce((sum, value) => sum + value, 0);
+  return {
+    status: "success" as const,
+    data: {
+      query_time_ms: 4.2,
+      option_key: option.option_key,
+      data_source: "postgres",
+      source_status: "ready",
+      source_message: null,
+      histogram: {
+        domain_min: option.p5_value ?? option.min_value ?? 0,
+        domain_max: option.p95_value ?? option.max_value ?? 0,
+        domain_kind: "p5_p95" as const,
+        bin_count: counts.length,
+        counts,
+        underflow_count: underflow,
+        overflow_count: overflow,
+        total_count: total
+      }
+    },
+    etag: `W/"histogram-${option.option_key}"`
+  };
+}
+
 beforeEach(() => {
+  resetPropertyFilterHistogramResourceForTests();
   resetPropertyFilterOptionsResourceForTests();
   apiMocks.fetchOptions.mockReset().mockResolvedValue({
     status: "success",
     data: optionsResponse,
     etag: 'W/"pf-options-v1-test"'
+  });
+  apiMocks.fetchHistogram.mockReset().mockImplementation((optionKey: string) => {
+    const option = optionsResponse.options.find((candidate) => candidate.option_key === optionKey);
+    if (!option) throw new Error(`unknown histogram option ${optionKey}`);
+    return Promise.resolve(histogramResponse(option));
   });
   apiMocks.search.mockReset().mockResolvedValue(successResponse);
 });
@@ -195,13 +237,16 @@ describe("DatabaseFilterPage", () => {
       </StrictMode>
     );
     await screen.findByRole("button", { name: /玻璃化转变温度/ });
+    await screen.findByRole("img", { name: /全库测量记录真实直方图/ });
     expect(apiMocks.fetchOptions).toHaveBeenCalledOnce();
+    expect(apiMocks.fetchHistogram).toHaveBeenCalledOnce();
 
     firstRender.unmount();
     render(<DatabaseFilterPage />);
     expect(screen.getByRole("button", { name: /玻璃化转变温度/ })).not.toBeNull();
     expect(screen.queryByText("正在读取属性目录")).toBeNull();
     expect(apiMocks.fetchOptions).toHaveBeenCalledOnce();
+    expect(apiMocks.fetchHistogram).toHaveBeenCalledOnce();
   });
 
   it("目录缓存过期后先渲染表单，并在后台刷新失败时保留可用数据", async () => {
@@ -244,18 +289,23 @@ describe("DatabaseFilterPage", () => {
     ).toHaveProperty("disabled", false);
   });
 
-  it("优先选择 Tg，显示真实五数分位，并按 standardized/raw 搜索分组", async () => {
+  it("优先选择 Tg，显示真实直方图，并按 standardized/raw 搜索分组", async () => {
     await renderLoadedPage();
 
     expect(screen.getByText("615,159")).not.toBeNull();
-    expect(screen.getByText("45,160 条 · °C")).not.toBeNull();
-    expect(screen.getByRole("img", { name: /45,160 条记录，32,010 个 SMILES/ })).not.toBeNull();
-    expect(document.querySelector(".dbf-quantile-rail")).not.toBeNull();
-    expect(document.querySelector(".dbf-quantile-bars")).toBeNull();
-    const quantileLabels = document.querySelectorAll(".dbf-quantile-labels span");
-    expect(quantileLabels[0]?.textContent).toContain("-179.15");
-    expect(quantileLabels[1]?.textContent).toContain("140");
-    expect(quantileLabels[2]?.textContent).toContain("488.15");
+    expect(await screen.findByRole("img", { name: /全库测量记录真实直方图，45,160 条记录/ })).not.toBeNull();
+    const bars = document.querySelectorAll<HTMLElement>(".dbf-histogram-bars > i");
+    expect(bars).toHaveLength(6);
+    expect(Number.parseFloat(bars[0]?.style.height ?? "0")).toBeLessThan(
+      Number.parseFloat(bars[3]?.style.height ?? "0")
+    );
+    expect(document.querySelector(".dbf-histogram-median")).not.toBeNull();
+    expect(document.querySelector(".dbf-quantile-rail")).toBeNull();
+    const histogramLabels = document.querySelectorAll(".dbf-histogram-labels span");
+    expect(histogramLabels[0]?.textContent).toContain("-179.15");
+    expect(histogramLabels[1]?.textContent).toContain("140");
+    expect(histogramLabels[2]?.textContent).toContain("488.15");
+    expect(apiMocks.fetchHistogram).toHaveBeenCalledOnce();
     expect((screen.getByLabelText("属性 1 最小值") as HTMLInputElement).value).toBe("");
     expect(screen.queryByRole("heading", { name: "筛选结果" })).toBeNull();
 

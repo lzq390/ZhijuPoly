@@ -411,7 +411,7 @@
 }
 
 .database-filter-page .dbf-condition-property,
-.database-filter-page .dbf-condition-quantile,
+.database-filter-page .dbf-condition-distribution,
 .database-filter-page .dbf-property-picker-root {
   min-width: 0;
 }
@@ -635,7 +635,7 @@
   font-size: 11px;
 }
 
-.database-filter-page .dbf-quantile {
+.database-filter-page .dbf-histogram {
   display: grid;
   height: 64px;
   min-width: 0;
@@ -646,7 +646,7 @@
   color: #64748b;
 }
 
-.database-filter-page .dbf-quantile-head {
+.database-filter-page .dbf-histogram-head {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -655,7 +655,7 @@
   line-height: 1;
 }
 
-.database-filter-page .dbf-quantile-head strong {
+.database-filter-page .dbf-histogram-head strong {
   flex: none;
   color: #174d7d;
   font-size: 11px;
@@ -663,7 +663,7 @@
   white-space: nowrap;
 }
 
-.database-filter-page .dbf-quantile-head span {
+.database-filter-page .dbf-histogram-head span {
   overflow: hidden;
   color: #8296ad;
   font-size: 9.5px;
@@ -672,87 +672,77 @@
   white-space: nowrap;
 }
 
-.database-filter-page .dbf-quantile-rail {
+.database-filter-page .dbf-histogram-head button {
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 4px;
+  color: #2563eb;
+  font-size: 9px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+}
+
+.database-filter-page .dbf-histogram-plot {
   position: relative;
   min-height: 0;
+  border-bottom: 1px solid rgba(96, 165, 250, 0.28);
 }
 
-.database-filter-page .dbf-quantile-whisker,
-.database-filter-page .dbf-quantile-middle,
-.database-filter-page .dbf-quantile-marker {
+.database-filter-page .dbf-histogram-bars {
   position: absolute;
+  inset: 1px 1px 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.database-filter-page .dbf-histogram-bars > i {
   display: block;
+  min-width: 2px;
+  min-height: 1px;
+  flex: 1;
+  border: 1px solid rgba(59, 130, 246, 0.16);
+  border-bottom: 0;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(180deg, #67a9ff 0%, #8bc7ff 56%, #c7e4ff 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36), 0 0 5px rgba(37, 99, 235, 0.08);
 }
 
-.database-filter-page .dbf-quantile-whisker {
-  top: 50%;
-  right: 1px;
-  left: 1px;
-  height: 2px;
-  border-radius: 999px;
-  background: #bfdbfe;
-  transform: translateY(-50%);
+.database-filter-page .dbf-histogram-bars > i.is-empty {
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
-.database-filter-page .dbf-quantile-whisker::before,
-.database-filter-page .dbf-quantile-whisker::after {
+.database-filter-page .dbf-histogram-median {
   position: absolute;
-  top: 50%;
+  top: -1px;
+  bottom: -2px;
+  left: var(--dbf-median-position);
   width: 2px;
-  height: 10px;
   border-radius: 999px;
-  background: #93c5fd;
-  content: "";
-  transform: translateY(-50%);
-}
-
-.database-filter-page .dbf-quantile-whisker::before { left: 0; }
-.database-filter-page .dbf-quantile-whisker::after { right: 0; }
-
-.database-filter-page .dbf-quantile-middle {
-  top: 50%;
-  left: var(--dbf-p5-position);
-  width: var(--dbf-middle-width);
-  height: 9px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #93c5fd, #60a5fa 52%, #67e8f9);
-  box-shadow: 0 2px 7px rgba(59, 130, 246, 0.18);
-  transform: translateY(-50%);
-}
-
-.database-filter-page .dbf-quantile-marker {
-  top: 50%;
-  width: 2px;
-  height: 14px;
-  border-radius: 999px;
-  background: #2563eb;
-  transform: translate(-50%, -50%);
-}
-
-.database-filter-page .dbf-quantile-marker.is-p5 { left: var(--dbf-p5-position); }
-.database-filter-page .dbf-quantile-marker.is-p50 {
-  left: var(--dbf-p50-position);
-  width: 3px;
-  height: 18px;
   background: #1d4ed8;
-  box-shadow: 0 0 7px rgba(37, 99, 235, 0.24);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.72), 0 0 6px rgba(29, 78, 216, 0.42);
+  transform: translateX(-50%);
 }
-.database-filter-page .dbf-quantile-marker.is-p95 { left: var(--dbf-p95-position); }
 
-.database-filter-page .dbf-quantile.is-raw .dbf-quantile-whisker { background: #a5f3fc; }
-.database-filter-page .dbf-quantile.is-raw .dbf-quantile-whisker::before,
-.database-filter-page .dbf-quantile.is-raw .dbf-quantile-whisker::after { background: #67e8f9; }
-.database-filter-page .dbf-quantile.is-raw .dbf-quantile-middle {
-  background: linear-gradient(90deg, #67e8f9, #22d3ee 52%, #5eead4);
-  box-shadow: 0 2px 7px rgba(6, 182, 212, 0.17);
+.database-filter-page .dbf-histogram.is-raw .dbf-histogram-plot {
+  border-bottom-color: rgba(34, 211, 238, 0.32);
 }
-.database-filter-page .dbf-quantile.is-raw .dbf-quantile-marker { background: #0891b2; }
-.database-filter-page .dbf-quantile.is-raw .dbf-quantile-marker.is-p50 {
+.database-filter-page .dbf-histogram.is-raw .dbf-histogram-bars > i {
+  border-color: rgba(6, 182, 212, 0.17);
+  background: linear-gradient(180deg, #22c5df 0%, #67d9ea 56%, #c7f2f7 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), 0 0 5px rgba(6, 182, 212, 0.08);
+}
+.database-filter-page .dbf-histogram.is-raw .dbf-histogram-median {
   background: #0e7490;
-  box-shadow: 0 0 7px rgba(6, 182, 212, 0.24);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.72), 0 0 6px rgba(6, 182, 212, 0.4);
 }
 
-.database-filter-page .dbf-quantile-labels {
+.database-filter-page .dbf-histogram-labels {
   display: grid;
   min-width: 0;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -766,17 +756,38 @@
   white-space: nowrap;
 }
 
-.database-filter-page .dbf-quantile-labels span {
+.database-filter-page .dbf-histogram-labels span {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.database-filter-page .dbf-quantile-labels span:nth-child(2) { text-align: center; }
-.database-filter-page .dbf-quantile-labels span:last-child { text-align: right; }
-.database-filter-page .dbf-quantile-labels b { color: #174d7d; font-weight: 760; }
+.database-filter-page .dbf-histogram-labels span:nth-child(2) { text-align: center; }
+.database-filter-page .dbf-histogram-labels span:last-child { text-align: right; }
+.database-filter-page .dbf-histogram-labels b { color: #174d7d; font-weight: 760; }
 
-.database-filter-page .dbf-quantile--empty p,
-.database-filter-page .dbf-quantile-placeholder {
+.database-filter-page .dbf-histogram-skeleton {
+  display: flex;
+  min-height: 0;
+  align-items: flex-end;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.database-filter-page .dbf-histogram-skeleton i {
+  height: 58%;
+  min-width: 2px;
+  flex: 1;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(90deg, #dbeafe 25%, #eff6ff 50%, #dbeafe 75%);
+  background-size: 200% 100%;
+  animation: dbf-shimmer 1.2s linear infinite;
+}
+
+.database-filter-page .dbf-histogram-skeleton i:nth-child(3n) { height: 78%; }
+.database-filter-page .dbf-histogram-skeleton i:nth-child(4n) { height: 42%; }
+
+.database-filter-page .dbf-histogram--empty p,
+.database-filter-page .dbf-histogram-placeholder {
   margin: 4px 0 0;
   color: #8a9db2;
   font-size: 11px;
@@ -1633,7 +1644,7 @@
   }
 
   .database-filter-page .dbf-condition-property { grid-column: 1; }
-  .database-filter-page .dbf-condition-quantile { grid-column: 2; padding-right: 4px; }
+  .database-filter-page .dbf-condition-distribution { grid-column: 2; padding-right: 4px; }
   .database-filter-page .dbf-bound-field { grid-row: 2; }
   .database-filter-page .dbf-bound-field:nth-of-type(1) { grid-column: 1; }
   .database-filter-page .dbf-bound-field:nth-of-type(2) { grid-column: 2; }
@@ -1708,7 +1719,7 @@
   }
 
   .database-filter-page .dbf-condition-property,
-  .database-filter-page .dbf-condition-quantile,
+  .database-filter-page .dbf-condition-distribution,
   .database-filter-page .dbf-bound-field:nth-of-type(1),
   .database-filter-page .dbf-bound-field:nth-of-type(2) {
     grid-column: 1 / 3;
@@ -1726,7 +1737,7 @@
     margin: 0;
   }
 
-  .database-filter-page .dbf-condition-quantile { min-height: 58px; padding: 4px 3px 0; }
+  .database-filter-page .dbf-condition-distribution { min-height: 58px; padding: 4px 3px 0; }
   .database-filter-page .dbf-query-zone { grid-template-columns: 1fr; }
   .database-filter-page .dbf-query-input,
   .database-filter-page .dbf-page-size,

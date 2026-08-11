@@ -1157,6 +1157,11 @@ def test_property_filter_import_replaces_only_filter_table(tmp_path: Path, postg
     assert catalog.mapped_records == 1
     assert catalog.raw_records == 1
     assert len(catalog.options) == 2
+    assert all(option["histogram"] is not None for option in catalog.options)
+    assert all(
+        option["histogram"]["total_count"] == option["rows"]
+        for option in catalog.options
+    )
 
 
 def test_property_filter_import_records_missing_source_without_truncating(tmp_path: Path, postgres_dsn: str) -> None:

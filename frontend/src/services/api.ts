@@ -62,6 +62,7 @@ import type {
   PolytaoStatusResponse,
   PredictRequest,
   PredictResponse,
+  PropertyFilterHistogramResponse,
   PropertyFilterOptionsResponse,
   PropertyFilterSearchRequest,
   PropertyFilterSearchResponse,
@@ -725,6 +726,35 @@ export async function fetchPropertyFilterOptions(options: {
   return {
     status: "success",
     data: (await response.json()) as PropertyFilterOptionsResponse,
+    etag
+  };
+}
+
+export type PropertyFilterHistogramFetchResult =
+  | { status: "success"; data: PropertyFilterHistogramResponse; etag: string | null }
+  | { status: "not-modified"; data: null; etag: string | null };
+
+export async function fetchPropertyFilterHistogram(
+  optionKey: string,
+  options: { etag?: string | null; signal?: AbortSignal } = {}
+): Promise<PropertyFilterHistogramFetchResult> {
+  const headers = new Headers();
+  if (options.etag) headers.set("If-None-Match", options.etag);
+  const searchParams = new URLSearchParams({ option_key: optionKey });
+  const response = await fetch(
+    `${API_BASE_URL}/database-browser/property-filter/histogram?${searchParams.toString()}`,
+    { cache: "no-cache", headers, signal: options.signal }
+  );
+  const etag = response.headers.get("ETag") ?? options.etag ?? null;
+  if (response.status === 304) {
+    return { status: "not-modified", data: null, etag };
+  }
+  if (!response.ok) {
+    throw new ApiRequestError(response.status, await errorMessageFromResponse(response));
+  }
+  return {
+    status: "success",
+    data: (await response.json()) as PropertyFilterHistogramResponse,
     etag
   };
 }

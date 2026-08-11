@@ -7,6 +7,7 @@ import {
   fetchDatabaseDatasetSummary,
   fetchDevGpuSessionStatus,
   fetchMonomerMdJobs,
+  fetchPropertyFilterHistogram,
   fetchPropertyFilterOptions,
   fetchPolytaoJob,
   fetchPolytaoStatus,
@@ -117,6 +118,47 @@ describe("property filter API", () => {
     });
     const requestInit = fetchMock.mock.calls[0][1] as RequestInit;
     expect(new Headers(requestInit.headers).get("If-None-Match")).toBe('W/"pf-options-v1-1"');
+  });
+
+  it("loads the selected property's real histogram with an encoded option key", async () => {
+    const payload = {
+      query_time_ms: 3,
+      option_key: "std:tg:C",
+      data_source: "postgres",
+      source_status: "ready",
+      source_message: null,
+      histogram: {
+        domain_min: -20,
+        domain_max: 300,
+        domain_kind: "p5_p95",
+        bin_count: 2,
+        counts: [4, 5],
+        underflow_count: 1,
+        overflow_count: 0,
+        total_count: 10
+      }
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ETag: 'W/"histogram-1"' }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const result = await fetchPropertyFilterHistogram("std:tg:C", {
+      etag: 'W/"histogram-0"',
+      signal: controller.signal
+    });
+
+    expect(result).toEqual({ status: "success", data: payload, etag: 'W/"histogram-1"' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/database-browser/property-filter/histogram?option_key=std%3Atg%3AC",
+      expect.objectContaining({ cache: "no-cache", signal: controller.signal })
+    );
+    const requestInit = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(new Headers(requestInit.headers).get("If-None-Match")).toBe('W/"histogram-0"');
   });
 
   it("posts the unchanged search contract and forwards AbortSignal", async () => {

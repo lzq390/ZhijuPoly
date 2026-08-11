@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from functools import lru_cache
+from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
 
@@ -24,6 +25,8 @@ from app.models import (
     ExperimentalPropertyRecord,
     FormulationBrowseResponse,
     FormulationRecord,
+    PropertyFilterHistogram,
+    PropertyFilterHistogramResponse,
     PropertyFilterOption,
     PropertyFilterOptionsResponse,
     PropertyFilterRecord,
@@ -42,6 +45,7 @@ from app.services.property_filter_catalog import (
     PropertyFilterCatalog,
     load_property_filter_catalog,
     property_filter_catalog_is_current,
+    resolve_property_filter_histogram,
 )
 from app.services.postgres_database_browser import (
     browse_dft_energy_steps_postgres,
@@ -175,6 +179,11 @@ def _property_filter_etag(catalog: PropertyFilterCatalog, source_status: str) ->
     sha_prefix = (catalog.source_sha256 or "none")[:12]
     normalized_status = "".join(character for character in source_status if character.isalnum() or character in "-_")
     return f'W/"pf-options-v1-{catalog.generation}-{sha_prefix}-{normalized_status or "unknown"}"'
+
+
+def _property_filter_histogram_etag(catalog: PropertyFilterCatalog, option_key: str) -> str:
+    option_digest = sha256(option_key.encode("utf-8")).hexdigest()[:12]
+    return f'W/"pf-histogram-v1-{catalog.generation}-{option_digest}"'
 
 
 def _etag_matches(value: str | None, etag: str) -> bool:
@@ -533,6 +542,26 @@ def _property_filter_record(row) -> PropertyFilterRecord:
     )
 
 
+def _property_filter_option(row) -> PropertyFilterOption:
+    return PropertyFilterOption(
+        filter_type=row["filter_type"],
+        option_key=row["option_key"],
+        label=row["label"],
+        property_key=row["property_key"],
+        property_name=row["property_name"],
+        property_unit_clean=row["property_unit_clean"],
+        canonical_unit=row["canonical_unit"],
+        rows=int(row["rows"]),
+        unique_smiles=int(row["unique_smiles"]),
+        min_value=row["min_value"],
+        p5_value=row["p5_value"],
+        median_value=row["median_value"],
+        p95_value=row["p95_value"],
+        max_value=row["max_value"],
+        histogram=row.get("histogram"),
+    )
+
+
 @router.get("/property-filter/options", response_model=PropertyFilterOptionsResponse)
 def get_property_filter_options(request: Request, response: Response):
     started_at = perf_counter()
@@ -544,6 +573,7 @@ def get_property_filter_options(request: Request, response: Response):
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
             if not postgres_table_exists(connection, "core", "polymer_property_filter_records"):
                 raise RuntimeError("core.polymer_property_filter_records is missing")
+            connection.execute("SET LOCAL statement_timeout = '15s'")
             catalog = _current_property_filter_catalog(connection)
             if catalog is None:
                 total_records, mapped_records, raw_records, rows = get_property_filter_options_postgres(connection)
@@ -562,6 +592,8 @@ def get_property_filter_options(request: Request, response: Response):
             source_status, source_message = _property_filter_source_status(connection, total_records)
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except QueryCanceled as exc:
+        raise HTTPException(status_code=504, detail="Property options query timed out") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -600,25 +632,91 @@ def get_property_filter_options(request: Request, response: Response):
         data_source="postgres",
         source_status=source_status,
         source_message=source_message,
-        options=[
-            PropertyFilterOption(
-                filter_type=row["filter_type"],
-                option_key=row["option_key"],
-                label=row["label"],
-                property_key=row["property_key"],
-                property_name=row["property_name"],
-                property_unit_clean=row["property_unit_clean"],
-                canonical_unit=row["canonical_unit"],
-                rows=int(row["rows"]),
-                unique_smiles=int(row["unique_smiles"]),
-                min_value=row["min_value"],
-                p5_value=row["p5_value"],
-                median_value=row["median_value"],
-                p95_value=row["p95_value"],
-                max_value=row["max_value"],
+        options=[_property_filter_option(row) for row in rows],
+    )
+
+
+@router.get("/property-filter/histogram", response_model=PropertyFilterHistogramResponse)
+def get_property_filter_histogram(
+    request: Request,
+    response: Response,
+    option_key: str = Query(min_length=1, max_length=400),
+):
+    started_at = perf_counter()
+    database_started_at = perf_counter()
+    settings = request.app.state.settings
+    _require_postgres_browser(request)
+    catalog: PropertyFilterCatalog | None = None
+
+    try:
+        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            if not postgres_table_exists(connection, "core", "polymer_property_filter_records"):
+                raise RuntimeError("core.polymer_property_filter_records is missing")
+            connection.execute("SET LOCAL statement_timeout = '15s'")
+            catalog = _current_property_filter_catalog(connection)
+            if catalog is None:
+                total_records, _, _, rows = get_property_filter_options_postgres(connection)
+                mode = "live-fallback"
+            else:
+                total_records = catalog.total_records
+                rows = catalog.options
+                mode = "snapshot"
+            option = next((row for row in rows if row.get("option_key") == option_key), None)
+            if option is None:
+                raise HTTPException(status_code=404, detail="Property-filter option was not found")
+            source_status, source_message = _property_filter_source_status(connection, total_records)
+            etag = _property_filter_histogram_etag(catalog, option_key) if catalog is not None else None
+            database_duration_ms = (perf_counter() - database_started_at) * 1000
+            headers = {
+                "Cache-Control": "private, max-age=0, must-revalidate" if etag is not None else "no-store",
+                "Server-Timing": f"histogram;dur={(perf_counter() - started_at) * 1000:.2f}, db;dur={database_duration_ms:.2f}",
+            }
+            if etag is not None:
+                headers["ETag"] = etag
+                if _etag_matches(request.headers.get("if-none-match"), etag):
+                    _log_property_filter_event(
+                        "property_filter_histogram",
+                        mode="304",
+                        revision=etag[:48],
+                        database_duration_ms=round(database_duration_ms, 3),
+                        total_duration_ms=round((perf_counter() - started_at) * 1000, 3),
+                        option_key=option_key[:120],
+                    )
+                    return Response(status_code=304, headers=headers)
+
+            histogram, histogram_mode = resolve_property_filter_histogram(
+                connection,
+                catalog,
+                option,
             )
-            for row in rows
-        ],
+            if histogram_mode != "snapshot":
+                mode = f"{mode}-{histogram_mode}"
+            database_duration_ms = (perf_counter() - database_started_at) * 1000
+    except PostgresUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except QueryCanceled as exc:
+        raise HTTPException(status_code=504, detail="Property histogram query timed out") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    duration_ms = (perf_counter() - started_at) * 1000
+    headers["Server-Timing"] = f"histogram;dur={duration_ms:.2f}, db;dur={database_duration_ms:.2f}"
+    response.headers.update(headers)
+    _log_property_filter_event(
+        "property_filter_histogram",
+        mode=mode,
+        revision=headers.get("ETag", "none")[:48],
+        database_duration_ms=round(database_duration_ms, 3),
+        total_duration_ms=round(duration_ms, 3),
+        option_key=option_key[:120],
+    )
+    return PropertyFilterHistogramResponse(
+        query_time_ms=duration_ms,
+        option_key=option_key,
+        data_source="postgres",
+        source_status=source_status,
+        source_message=source_message,
+        histogram=PropertyFilterHistogram.model_validate(histogram),
     )
 
 
