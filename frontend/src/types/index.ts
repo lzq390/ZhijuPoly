@@ -1378,6 +1378,17 @@ export type StructurePropertyBrowseResponse = {
 
 export type PropertyFilterType = "standardized" | "raw";
 
+export type PropertyFilterHistogram = {
+  domain_min: number;
+  domain_max: number;
+  domain_kind: "p5_p95" | "full_range";
+  bin_count: number;
+  counts: number[];
+  underflow_count: number;
+  overflow_count: number;
+  total_count: number;
+};
+
 export type PropertyFilterOption = {
   filter_type: PropertyFilterType;
   option_key: string;
@@ -1393,6 +1404,7 @@ export type PropertyFilterOption = {
   median_value: number | null;
   p95_value: number | null;
   max_value: number | null;
+  histogram?: PropertyFilterHistogram | null;
 };
 
 export type PropertyFilterOptionsResponse = {
@@ -1404,6 +1416,15 @@ export type PropertyFilterOptionsResponse = {
   source_status: string;
   source_message: string | null;
   options: PropertyFilterOption[];
+};
+
+export type PropertyFilterHistogramResponse = {
+  query_time_ms: number;
+  option_key: string;
+  data_source: string;
+  source_status: string;
+  source_message: string | null;
+  histogram: PropertyFilterHistogram;
 };
 
 export type PropertyFilterCondition = {

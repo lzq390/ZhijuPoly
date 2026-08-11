@@ -2,6 +2,7 @@ import {
   API_BASE_URL,
   fetchPropertyFilterOptions
 } from "./api";
+import { isPropertyFilterHistogram } from "./propertyFilterHistogramResource";
 import type { PropertyFilterOptionsResponse } from "../types";
 
 export const PROPERTY_FILTER_OPTIONS_CACHE_SCHEMA_VERSION = 1;
@@ -67,6 +68,9 @@ function isOptionsResponse(value: unknown): value is PropertyFilterOptionsRespon
         isNullableNumber(option.median_value) &&
         isNullableNumber(option.p95_value) &&
         isNullableNumber(option.max_value) &&
+        (option.histogram === undefined ||
+          option.histogram === null ||
+          isPropertyFilterHistogram(option.histogram)) &&
         (option.filter_type === "standardized"
           ? Boolean(option.property_key)
           : Boolean(option.property_name))

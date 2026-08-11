@@ -31,7 +31,14 @@ import {
   usePropertyFilter,
   type PropertyFilterDraft
 } from "../hooks/usePropertyFilter";
-import type { PropertyFilterOption } from "../types";
+import {
+  loadPropertyFilterHistogram,
+  readPropertyFilterHistogram
+} from "../services/propertyFilterHistogramResource";
+import type {
+  PropertyFilterHistogram as PropertyFilterHistogramData,
+  PropertyFilterOption
+} from "../types";
 import { DatabaseFilterResultsDrawer } from "./DatabaseFilterResultsDrawer";
 import "../styles/database-filter.css";
 
@@ -75,70 +82,172 @@ function PropertyTypeDot({ raw = false }: { raw?: boolean }) {
   return <i className={`dbf-property-dot${raw ? " is-raw" : ""}`} aria-hidden="true" />;
 }
 
-function quantilePosition(value: number, minimum: number, maximum: number) {
+function distributionPosition(value: number, minimum: number, maximum: number) {
   if (maximum === minimum) return 50;
   return Math.min(100, Math.max(0, ((value - minimum) / (maximum - minimum)) * 100));
 }
 
-const QuantileRail = memo(function QuantileRail({ option }: { option: PropertyFilterOption }) {
-  const { min_value: min, p5_value: p5, median_value: median, p95_value: p95, max_value: max } = option;
-  const unit = propertyFilterOptionUnit(option);
-  const validRange = min !== null && max !== null && Number.isFinite(min) && Number.isFinite(max);
+function histogramRangeLabel(
+  histogram: PropertyFilterHistogramData,
+  index: number,
+  unit: string
+) {
+  if (histogram.domain_min === histogram.domain_max) {
+    return `${formatValue(histogram.domain_min)}${unit ? ` ${unit}` : ""}`;
+  }
+  const width = (histogram.domain_max - histogram.domain_min) / histogram.bin_count;
+  const lower = histogram.domain_min + width * index;
+  const upper = index === histogram.bin_count - 1
+    ? histogram.domain_max
+    : histogram.domain_min + width * (index + 1);
+  return `${formatValue(lower)}–${formatValue(upper)}${unit ? ` ${unit}` : ""}`;
+}
 
-  if (!validRange) {
+const PropertyHistogram = memo(function PropertyHistogram({
+  option,
+  catalogRevision
+}: {
+  option: PropertyFilterOption;
+  catalogRevision: string;
+}) {
+  const unit = propertyFilterOptionUnit(option);
+  const embeddedHistogram = option.histogram ?? null;
+  const initialCache = embeddedHistogram
+    ? null
+    : readPropertyFilterHistogram(option.option_key, catalogRevision);
+  const [histogram, setHistogram] = useState<PropertyFilterHistogramData | null>(
+    embeddedHistogram ?? initialCache?.data.histogram ?? null
+  );
+  const [loading, setLoading] = useState(!histogram);
+  const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+
+  useEffect(() => {
+    if (embeddedHistogram) {
+      setHistogram(embeddedHistogram);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    let subscribed = true;
+    const cached = readPropertyFilterHistogram(option.option_key, catalogRevision);
+    if (cached && retryKey === 0) {
+      setHistogram(cached.data.histogram);
+      setLoading(false);
+      setError(null);
+      return () => {
+        subscribed = false;
+      };
+    }
+    setLoading(true);
+    setError(null);
+    loadPropertyFilterHistogram(option.option_key, catalogRevision, { force: retryKey > 0 })
+      .then((resource) => {
+        if (subscribed) setHistogram(resource.data.histogram);
+      })
+      .catch((requestError: unknown) => {
+        if (!subscribed) return;
+        setError(requestError instanceof Error ? requestError.message : "真实分布加载失败。");
+      })
+      .finally(() => {
+        if (subscribed) setLoading(false);
+      });
+    return () => {
+      subscribed = false;
+    };
+  }, [catalogRevision, embeddedHistogram, option.option_key, retryKey]);
+
+  if (loading && !histogram) {
     return (
-      <div className="dbf-quantile dbf-quantile--empty">
-        <div className="dbf-quantile-head">
-          <strong>分位分布</strong>
-          <span>{formatInteger(option.rows)} 条 · {unit || "无单位"}</span>
+      <div className="dbf-histogram is-loading" role="status" aria-label={`${option.label} 真实分布加载中`}>
+        <div className="dbf-histogram-head">
+          <strong>真实分布</strong>
+          <span>读取区间计数…</span>
         </div>
-        <p>当前属性暂无可用的数值分位统计。</p>
+        <div className="dbf-histogram-skeleton" aria-hidden="true">
+          {Array.from({ length: 18 }, (_, index) => <i key={index} />)}
+        </div>
       </div>
     );
   }
 
-  const p5Position = quantilePosition(p5 ?? min, min, max);
-  const medianPosition = quantilePosition(median ?? min, min, max);
-  const p95Position = quantilePosition(p95 ?? max, min, max);
-  const railStyle = {
-    "--dbf-p5-position": `${p5Position}%`,
-    "--dbf-p50-position": `${medianPosition}%`,
-    "--dbf-p95-position": `${p95Position}%`,
-    "--dbf-middle-width": `${Math.max(0, p95Position - p5Position)}%`
-  } as CSSProperties;
+  if (error && !histogram) {
+    return (
+      <div className="dbf-histogram dbf-histogram--empty" role="alert">
+        <div className="dbf-histogram-head">
+          <strong>真实分布</strong>
+          <button type="button" onClick={() => setRetryKey((current) => current + 1)}>重试</button>
+        </div>
+        <p title={error}>分布加载失败</p>
+      </div>
+    );
+  }
+
+  if (!histogram || histogram.counts.length === 0) {
+    return (
+      <div className="dbf-histogram dbf-histogram--empty">
+        <div className="dbf-histogram-head">
+          <strong>真实分布</strong>
+          <span>{formatInteger(option.rows)} 条 · {unit || "无单位"}</span>
+        </div>
+        <p>当前属性暂无可用的数值分布。</p>
+      </div>
+    );
+  }
+
+  const maximumCount = Math.max(1, ...histogram.counts);
+  const centralCount = histogram.counts.reduce((total, count) => total + count, 0);
+  const robustDomain = histogram.domain_kind === "p5_p95";
+  const domainStartLabel = robustDomain ? "P5" : "Min";
+  const domainEndLabel = robustDomain ? "P95" : "Max";
+  const medianPosition = option.median_value === null
+    ? null
+    : distributionPosition(option.median_value, histogram.domain_min, histogram.domain_max);
+  const medianStyle = medianPosition === null
+    ? undefined
+    : ({ "--dbf-median-position": `${medianPosition}%` } as CSSProperties);
   const accessibleSummary = [
-    `${option.label} 全库测量记录分位分布`,
-    `${formatInteger(option.rows)} 条记录`,
+    `${option.label} 全库测量记录真实直方图`,
+    `${formatInteger(histogram.total_count)} 条记录`,
+    `${domainStartLabel} 到 ${domainEndLabel} 主区间 ${formatInteger(centralCount)} 条`,
+    `左侧尾部 ${formatInteger(histogram.underflow_count)} 条`,
+    `右侧尾部 ${formatInteger(histogram.overflow_count)} 条`,
     `${formatInteger(option.unique_smiles)} 个 SMILES`,
-    `最小值 ${formatValue(min)}`,
-    `P5 ${formatValue(p5)}`,
-    `P50 ${formatValue(median)}`,
-    `P95 ${formatValue(p95)}`,
-    `最大值 ${formatValue(max)}`,
+    `${domainStartLabel} ${formatValue(histogram.domain_min)}`,
+    `P50 ${formatValue(option.median_value)}`,
+    `${domainEndLabel} ${formatValue(histogram.domain_max)}`,
     `单位 ${unit || "无单位"}`
   ].join("，");
 
   return (
     <div
-      className={`dbf-quantile${option.filter_type === "raw" ? " is-raw" : ""}`}
+      className={`dbf-histogram${option.filter_type === "raw" ? " is-raw" : ""}`}
       role="img"
       aria-label={accessibleSummary}
     >
-      <div className="dbf-quantile-head">
-        <strong>分位分布</strong>
-        <span>{formatInteger(option.rows)} 条 · {unit || "无单位"}</span>
+      <div className="dbf-histogram-head">
+        <strong>真实分布</strong>
+        <span title={`左右尾部另计 ${formatInteger(histogram.underflow_count + histogram.overflow_count)} 条`}>
+          {formatInteger(centralCount)} / {formatInteger(histogram.total_count)} 条 · {unit || "无单位"}
+        </span>
       </div>
-      <div className="dbf-quantile-rail" style={railStyle} aria-hidden="true">
-        <i className="dbf-quantile-whisker" />
-        <i className="dbf-quantile-middle" />
-        <i className="dbf-quantile-marker is-p5" />
-        <i className="dbf-quantile-marker is-p50" />
-        <i className="dbf-quantile-marker is-p95" />
+      <div className="dbf-histogram-plot" style={medianStyle} aria-hidden="true">
+        <div className="dbf-histogram-bars">
+          {histogram.counts.map((count, index) => (
+            <i
+              key={index}
+              className={count === 0 ? "is-empty" : undefined}
+              style={{ height: `${(count / maximumCount) * 100}%` }}
+              title={`${histogramRangeLabel(histogram, index, unit)}：${formatInteger(count)} 条`}
+            />
+          ))}
+        </div>
+        {medianPosition !== null ? <i className="dbf-histogram-median" /> : null}
       </div>
-      <div className="dbf-quantile-labels">
-        <span>P5 <b>{formatValue(p5)}</b></span>
-        <span>P50 <b>{formatValue(median)}</b></span>
-        <span>P95 <b>{formatValue(p95)}</b></span>
+      <div className="dbf-histogram-labels">
+        <span title={`${domainStartLabel} 以下 ${formatInteger(histogram.underflow_count)} 条`}>{domainStartLabel} <b>{formatValue(histogram.domain_min)}</b></span>
+        <span>P50 <b>{formatValue(option.median_value)}</b></span>
+        <span title={`${domainEndLabel} 以上 ${formatInteger(histogram.overflow_count)} 条`}>{domainEndLabel} <b>{formatValue(histogram.domain_max)}</b></span>
       </div>
     </div>
   );
@@ -270,6 +379,7 @@ const ConditionRow = memo(function ConditionRow({
   draft,
   index,
   option,
+  catalogRevision,
   canRemove,
   pickerOpen,
   pickerSearch,
@@ -284,6 +394,7 @@ const ConditionRow = memo(function ConditionRow({
   draft: PropertyFilterDraft;
   index: number;
   option: PropertyFilterOption | undefined;
+  catalogRevision: string;
   canRemove: boolean;
   pickerOpen: boolean;
   pickerSearch: string;
@@ -313,8 +424,16 @@ const ConditionRow = memo(function ConditionRow({
             onSelect={(optionKey) => onSelectProperty(draft.id, optionKey)}
           />
         </div>
-        <div className="dbf-condition-quantile">
-          {option ? <QuantileRail option={option} /> : <div className="dbf-quantile-placeholder">请选择属性以查看分位统计</div>}
+        <div className="dbf-condition-distribution">
+          {option ? (
+            <PropertyHistogram
+              key={`${catalogRevision}:${option.option_key}`}
+              option={option}
+              catalogRevision={catalogRevision}
+            />
+          ) : (
+            <div className="dbf-histogram-placeholder">请选择属性以查看真实分布</div>
+          )}
         </div>
         <label className="dbf-bound-field">
           <span>最小值 <small>可选</small></span>
@@ -510,7 +629,7 @@ export function DatabaseFilterPage() {
             {filter.optionsLoading ? (
               <div className="dbf-options-state" aria-live="polite">
                 <LoaderCircle className="dbf-spin" aria-hidden="true" />
-                <div><strong>正在读取属性目录</strong><span>加载真实属性范围与分位统计…</span></div>
+                <div><strong>正在读取属性目录</strong><span>加载真实属性范围与分布统计…</span></div>
               </div>
             ) : null}
 
@@ -562,6 +681,7 @@ export function DatabaseFilterPage() {
                           draft={draft}
                           index={index}
                           option={filter.optionsByKey.get(draft.optionKey)}
+                          catalogRevision={filter.optionsRevision}
                           canRemove={filter.drafts.length > 1}
                           pickerOpen={openPickerId === draft.id}
                           pickerSearch={openPickerId === draft.id ? pickerSearch : ""}
@@ -637,7 +757,7 @@ export function DatabaseFilterPage() {
 
             <div className="dbf-surface-note">
               <Info aria-hidden="true" />
-              <span>分位统计来自全库测量记录基线，并非筛选后结果分布；多条件结果优先按 canonical SMILES 聚合。</span>
+              <span>直方图来自全库测量记录真实计数；数据充足时展示 P5–P95 等宽区间及两侧尾部，小样本使用完整范围。</span>
             </div>
           </section>
         </div>

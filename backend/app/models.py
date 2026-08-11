@@ -357,6 +357,31 @@ class StructurePropertyBrowseResponse(BaseModel):
 PropertyFilterType = Literal["standardized", "raw"]
 
 
+class PropertyFilterHistogram(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    domain_min: float = Field(allow_inf_nan=False)
+    domain_max: float = Field(allow_inf_nan=False)
+    domain_kind: Literal["p5_p95", "full_range"]
+    bin_count: int = Field(ge=1, le=40)
+    counts: list[int] = Field(min_length=1, max_length=40)
+    underflow_count: int = Field(ge=0)
+    overflow_count: int = Field(ge=0)
+    total_count: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_histogram(self) -> "PropertyFilterHistogram":
+        if self.domain_min > self.domain_max:
+            raise ValueError("histogram domain_min must not exceed domain_max")
+        if len(self.counts) != self.bin_count:
+            raise ValueError("histogram counts length must equal bin_count")
+        if any(count < 0 for count in self.counts):
+            raise ValueError("histogram counts must be non-negative")
+        if sum(self.counts) + self.underflow_count + self.overflow_count != self.total_count:
+            raise ValueError("histogram counts must add up to total_count")
+        return self
+
+
 class PropertyFilterOption(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -374,6 +399,7 @@ class PropertyFilterOption(BaseModel):
     median_value: float | None = None
     p95_value: float | None = None
     max_value: float | None = None
+    histogram: PropertyFilterHistogram | None = None
 
 
 class PropertyFilterOptionsResponse(BaseModel):
@@ -387,6 +413,17 @@ class PropertyFilterOptionsResponse(BaseModel):
     source_status: str = "ready"
     source_message: str | None = None
     options: list[PropertyFilterOption] = Field(default_factory=list)
+
+
+class PropertyFilterHistogramResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query_time_ms: float = Field(ge=0.0)
+    option_key: str
+    data_source: str = "postgres"
+    source_status: str = "ready"
+    source_message: str | None = None
+    histogram: PropertyFilterHistogram
 
 
 class PropertyFilterCondition(BaseModel):
