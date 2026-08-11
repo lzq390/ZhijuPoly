@@ -46,12 +46,14 @@ from app.postgres_migrations import (
     migration_checksum,
 )
 from app.services.postgres_database_browser import get_database_analytics_postgres
+from app.services.property_filter_catalog import load_property_filter_catalog
 
 
 _CONTRACT_OPERATION_ID = "contract-0012-pg-guard"
 _CONTRACT_RELEASE_SHA = "a" * 40
 _DFT_MIGRATION_VERSION = "0013_monomer_dft_jobs"
 _MD_QUEUE_MIGRATION_VERSION = "0014_monomer_md_task_queue_cancel"
+_PROPERTY_FILTER_MIGRATION_VERSION = "0015_property_filter_performance"
 
 
 def _canonical_json(value: object) -> str:
@@ -176,7 +178,12 @@ def _prepare_polytao_contract_state(
             DELETE FROM governance.schema_migrations
             WHERE version = ANY(%s)
             """,
-            ([version, _DFT_MIGRATION_VERSION, _MD_QUEUE_MIGRATION_VERSION],),
+            ([
+                version,
+                _DFT_MIGRATION_VERSION,
+                _MD_QUEUE_MIGRATION_VERSION,
+                _PROPERTY_FILTER_MIGRATION_VERSION,
+            ],),
         )
         connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
         connection.execute(
@@ -230,7 +237,12 @@ def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
             DELETE FROM governance.schema_migrations
             WHERE version = ANY(%s)
             """,
-            ([version, _DFT_MIGRATION_VERSION, _MD_QUEUE_MIGRATION_VERSION],),
+            ([
+                version,
+                _DFT_MIGRATION_VERSION,
+                _MD_QUEUE_MIGRATION_VERSION,
+                _PROPERTY_FILTER_MIGRATION_VERSION,
+            ],),
         )
         connection.execute("DROP SCHEMA IF EXISTS monomer_dft CASCADE")
         connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")
@@ -289,7 +301,12 @@ def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
                 FROM governance.schema_migrations
                 WHERE version = ANY(%s)
                 """,
-                ([version, _DFT_MIGRATION_VERSION, _MD_QUEUE_MIGRATION_VERSION],),
+                ([
+                    version,
+                    _DFT_MIGRATION_VERSION,
+                    _MD_QUEUE_MIGRATION_VERSION,
+                    _PROPERTY_FILTER_MIGRATION_VERSION,
+                ],),
             ).fetchall()
         }
         schema = connection.execute(
@@ -314,9 +331,12 @@ def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
             _MD_QUEUE_MIGRATION_VERSION: migration_checksum(
                 MIGRATIONS_DIR / f"{_MD_QUEUE_MIGRATION_VERSION}.sql"
             ),
+            _PROPERTY_FILTER_MIGRATION_VERSION: migration_checksum(
+                MIGRATIONS_DIR / f"{_PROPERTY_FILTER_MIGRATION_VERSION}.sql"
+            ),
         }:
             raise AssertionError(
-                "test fixture did not restore exact 0012/0013/0014 migration records"
+                "test fixture did not restore exact 0012/0013/0014/0015 migration records"
             )
         if (
             schema is None
@@ -1095,6 +1115,9 @@ def test_static_rebuild_runtime_guard_rejects_mutable_table_drift(
 def test_property_filter_import_replaces_only_filter_table(tmp_path: Path, postgres_dsn: str) -> None:
     settings = _governance_settings(tmp_path, postgres_dsn)
 
+    with postgres_connection(postgres_dsn) as connection:
+        catalog_before = load_property_filter_catalog(connection)
+
     stats = import_all_to_postgres(
         settings,
         dsn=postgres_dsn,
@@ -1115,6 +1138,7 @@ def test_property_filter_import_replaces_only_filter_table(tmp_path: Path, postg
             """
         ).fetchall()
         core_property_count = connection.execute("SELECT COUNT(*) AS count FROM core.polymer_properties").fetchone()["count"]
+        catalog = load_property_filter_catalog(connection)
 
     assert core_property_count == 6
     assert len(property_filter_rows) == 2
@@ -1124,16 +1148,29 @@ def test_property_filter_import_replaces_only_filter_table(tmp_path: Path, postg
     assert property_filter_rows[1]["property_name"] == "Cv"
     assert property_filter_rows[1]["property_key"] is None
     assert property_filter_rows[1]["property_value_num"] == 0.28
+    assert catalog is not None
+    assert catalog_before is not None
+    assert catalog.generation == catalog_before.generation + 1
+    assert catalog.import_batch_id is not None
+    assert catalog.source_sha256 is not None
+    assert catalog.total_records == 2
+    assert catalog.mapped_records == 1
+    assert catalog.raw_records == 1
+    assert len(catalog.options) == 2
 
 
 def test_property_filter_import_records_missing_source_without_truncating(tmp_path: Path, postgres_dsn: str) -> None:
     settings = _governance_settings(tmp_path, postgres_dsn)
     settings.property_filter_csv_path = str(tmp_path / "missing_property_filter.csv")
 
+    with postgres_connection(postgres_dsn) as connection:
+        catalog_before = load_property_filter_catalog(connection)
+
     stats = import_all_to_postgres(
         settings,
         dsn=postgres_dsn,
         datasets={"property_filter"},
+        rebuild=True,
         apply_migrations=False,
     )
 
@@ -1159,12 +1196,69 @@ def test_property_filter_import_records_missing_source_without_truncating(tmp_pa
             """
         ).fetchone()
         existing_rows = connection.execute("SELECT COUNT(*) AS count FROM core.polymer_property_filter_records").fetchone()["count"]
+        catalog_after = load_property_filter_catalog(connection)
 
     assert batch["status"] == "missing"
     assert batch["row_count"] == 0
     assert "missing_property_filter.csv" in batch["error_message"]
     assert source["status"] == "missing"
     assert existing_rows == 6
+    assert catalog_after == catalog_before
+
+
+def test_property_filter_import_failure_rolls_back_live_rows_and_catalog(
+    tmp_path: Path,
+    postgres_dsn: str,
+) -> None:
+    settings = _governance_settings(tmp_path, postgres_dsn)
+    invalid_csv = tmp_path / "invalid_property_filter.csv"
+    invalid_csv.write_text("polymer_name,smiles\ninvalid,CCO\n", encoding="utf-8")
+    settings.property_filter_csv_path = str(invalid_csv)
+
+    with postgres_connection(postgres_dsn) as connection:
+        rows_before = connection.execute(
+            """
+            SELECT filter_record_id, polymer_name, smiles, property_name,
+                   canonical_value, property_value_num
+            FROM core.polymer_property_filter_records
+            ORDER BY filter_record_id
+            """
+        ).fetchall()
+        catalog_before = load_property_filter_catalog(connection)
+        batch_count_before = int(
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM governance.import_batches"
+            ).fetchone()["count"]
+        )
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        import_all_to_postgres(
+            settings,
+            dsn=postgres_dsn,
+            datasets={"property_filter"},
+            rebuild=True,
+            apply_migrations=False,
+        )
+
+    with postgres_connection(postgres_dsn) as connection:
+        rows_after = connection.execute(
+            """
+            SELECT filter_record_id, polymer_name, smiles, property_name,
+                   canonical_value, property_value_num
+            FROM core.polymer_property_filter_records
+            ORDER BY filter_record_id
+            """
+        ).fetchall()
+        catalog_after = load_property_filter_catalog(connection)
+        batch_count_after = int(
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM governance.import_batches"
+            ).fetchone()["count"]
+        )
+
+    assert rows_after == rows_before
+    assert catalog_after == catalog_before
+    assert batch_count_after == batch_count_before
 
 
 def test_retired_online_import_fails_closed_without_touching_runtime_rows(
@@ -1310,11 +1404,18 @@ def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
         _revert_md_queue_migration(connection)
         connection.execute("DROP SCHEMA monomer_dft CASCADE")
         connection.execute(
+            "DROP TABLE governance.property_filter_options_snapshots"
+        )
+        connection.execute(
             """
             DELETE FROM governance.schema_migrations
             WHERE version = ANY(%s)
             """,
-            ([_DFT_MIGRATION_VERSION, _MD_QUEUE_MIGRATION_VERSION],),
+            ([
+                _DFT_MIGRATION_VERSION,
+                _MD_QUEUE_MIGRATION_VERSION,
+                _PROPERTY_FILTER_MIGRATION_VERSION,
+            ],),
         )
 
     try:
@@ -1351,6 +1452,7 @@ def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
         assert final["migrations"]["missing"] == [
             _DFT_MIGRATION_VERSION,
             _MD_QUEUE_MIGRATION_VERSION,
+            _PROPERTY_FILTER_MIGRATION_VERSION,
         ]
         assert any(
             "checksum-exact 0013" in error for error in final["strict_errors"]
@@ -1382,7 +1484,11 @@ def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
                 DELETE FROM governance.schema_migrations
                 WHERE version = ANY(%s)
                 """,
-                ([_DFT_MIGRATION_VERSION, _MD_QUEUE_MIGRATION_VERSION],),
+                ([
+                    _DFT_MIGRATION_VERSION,
+                    _MD_QUEUE_MIGRATION_VERSION,
+                    _PROPERTY_FILTER_MIGRATION_VERSION,
+                ],),
             )
         apply_postgres_migrations(
             postgres_dsn,
@@ -1474,6 +1580,7 @@ def test_historical_expand_defers_0012_but_f_startup_rejects_that_state(
     version = "0012_drop_polytao_jobs"
     dft_version = _DFT_MIGRATION_VERSION
     queue_version = _MD_QUEUE_MIGRATION_VERSION
+    property_filter_version = _PROPERTY_FILTER_MIGRATION_VERSION
     monkeypatch.setattr(
         postgres_preflight,
         "_analytics_snapshot_report",
@@ -1516,6 +1623,7 @@ def test_historical_expand_defers_0012_but_f_startup_rejects_that_state(
                     version,
                     dft_version,
                     queue_version,
+                    property_filter_version,
                 ],),
         )
         connection.execute("DROP SCHEMA IF EXISTS generation CASCADE")

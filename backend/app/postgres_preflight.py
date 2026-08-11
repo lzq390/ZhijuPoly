@@ -53,7 +53,14 @@ MONOMER_DFT_POSTGRES_TABLES = [
     ("monomer_dft", "job_attempts"),
     ("monomer_dft", "artifacts"),
 ]
-POSTGRES_TABLES = [*POSTGRES_TABLES, *MONOMER_DFT_POSTGRES_TABLES]
+PROPERTY_FILTER_PERFORMANCE_POSTGRES_TABLES = [
+    ("governance", "property_filter_options_snapshots"),
+]
+POSTGRES_TABLES = [
+    *POSTGRES_TABLES,
+    *MONOMER_DFT_POSTGRES_TABLES,
+    *PROPERTY_FILTER_PERFORMANCE_POSTGRES_TABLES,
+]
 
 _MIGRATION_MANIFEST = (
     Path(__file__).resolve().parents[1] / "migrations" / "postgres" / "manifest.json"
@@ -91,7 +98,13 @@ KNOWN_CONTRACT_MIGRATIONS = tuple(
 )
 STRICT_RUNTIME_TABLES = tuple(POSTGRES_TABLES)
 STARTUP_RUNTIME_TABLES = tuple(
-    table for table in POSTGRES_TABLES if table not in MONOMER_DFT_POSTGRES_TABLES
+    table
+    for table in POSTGRES_TABLES
+    if table
+    not in {
+        *MONOMER_DFT_POSTGRES_TABLES,
+        *PROPERTY_FILTER_PERFORMANCE_POSTGRES_TABLES,
+    }
 )
 SCHEMA_TARGET_STARTUP = "startup-through-0012"
 SCHEMA_TARGET_FINAL = "final-0013"
@@ -464,6 +477,16 @@ def run_preflight(
                 f"{schema}.{table}": _postgres_count(connection, schema, table)
                 for schema, table in STARTUP_RUNTIME_TABLES
             }
+            table_counts.update(
+                {
+                    f"{schema}.{table}": _postgres_count(
+                        connection,
+                        schema,
+                        table,
+                    )
+                    for schema, table in PROPERTY_FILTER_PERFORMANCE_POSTGRES_TABLES
+                }
+            )
             if dft_schema.state is MonomerDftSchemaState.READY:
                 table_counts.update(
                     {
@@ -539,7 +562,7 @@ def main() -> None:
         default=SCHEMA_TARGET_FINAL,
         help=(
             "Validate startup compatibility through 0012 or strict readiness "
-            "through the current canonical manifest (currently 0014). The "
+            "through the current canonical manifest (currently 0015). The "
             "final-0013 choice is retained as a compatibility identifier."
         ),
     )

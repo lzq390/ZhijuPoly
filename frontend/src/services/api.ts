@@ -79,7 +79,7 @@ import type {
   StructurePropertyBrowseResponse
 } from "../types";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
 export class ApiRequestError extends Error {
   readonly status: number;
@@ -672,19 +672,19 @@ export function runMonomerPolymerization(
   return postJSON("/monomer-polymerization", payload);
 }
 
-export function fetchDftPcaSample(limit = 200): Promise<DftPcaSampleResponse> {
-  return getJSON(`/dft/pca-sample?limit=${limit}`);
+export function fetchDftPcaSample(limit = 200, signal?: AbortSignal): Promise<DftPcaSampleResponse> {
+  return getJSON(`/dft/pca-sample?limit=${limit}`, { signal });
 }
 
-export function fetchDftMolecule(molId: string): Promise<DftMoleculeDetail> {
-  return getJSON(`/dft/molecule/${encodeURIComponent(molId)}`);
+export function fetchDftMolecule(molId: string, signal?: AbortSignal): Promise<DftMoleculeDetail> {
+  return getJSON(`/dft/molecule/${encodeURIComponent(molId)}`, { signal });
 }
 
 export function browseStructurePropertyRecords(params: {
   q?: string;
   page?: number;
   page_size?: number;
-}): Promise<StructurePropertyBrowseResponse> {
+}, signal?: AbortSignal): Promise<StructurePropertyBrowseResponse> {
   const searchParams = new URLSearchParams();
   if (params.q) {
     searchParams.set("q", params.q);
@@ -697,17 +697,43 @@ export function browseStructurePropertyRecords(params: {
   }
 
   const suffix = searchParams.toString() ? `?${searchParams.toString()}` : "";
-  return getJSON(`/database-browser/structure-property${suffix}`);
+  return getJSON(`/database-browser/structure-property${suffix}`, { signal });
 }
 
-export function fetchPropertyFilterOptions(): Promise<PropertyFilterOptionsResponse> {
-  return getJSON("/database-browser/property-filter/options");
+export type PropertyFilterOptionsFetchResult =
+  | { status: "success"; data: PropertyFilterOptionsResponse; etag: string | null }
+  | { status: "not-modified"; data: null; etag: string | null };
+
+export async function fetchPropertyFilterOptions(options: {
+  etag?: string | null;
+  signal?: AbortSignal;
+} = {}): Promise<PropertyFilterOptionsFetchResult> {
+  const headers = new Headers();
+  if (options.etag) headers.set("If-None-Match", options.etag);
+  const response = await fetch(`${API_BASE_URL}/database-browser/property-filter/options`, {
+    cache: "no-cache",
+    headers,
+    signal: options.signal
+  });
+  const etag = response.headers.get("ETag") ?? options.etag ?? null;
+  if (response.status === 304) {
+    return { status: "not-modified", data: null, etag };
+  }
+  if (!response.ok) {
+    throw new ApiRequestError(response.status, await errorMessageFromResponse(response));
+  }
+  return {
+    status: "success",
+    data: (await response.json()) as PropertyFilterOptionsResponse,
+    etag
+  };
 }
 
 export function searchPropertyFilterRecords(
-  payload: PropertyFilterSearchRequest
+  payload: PropertyFilterSearchRequest,
+  signal?: AbortSignal
 ): Promise<PropertyFilterSearchResponse> {
-  return postJSON("/database-browser/property-filter/search", payload);
+  return postJSON("/database-browser/property-filter/search", payload, signal);
 }
 
 function buildQueryString(params: { q?: string; mol_id?: string; page?: number; page_size?: number }): string {
@@ -731,8 +757,8 @@ export function browseDftMolecules(params: {
   q?: string;
   page?: number;
   page_size?: number;
-}): Promise<DftMoleculeBrowseResponse> {
-  return getJSON(`/database-browser/dft/molecules${buildQueryString(params)}`);
+}, signal?: AbortSignal): Promise<DftMoleculeBrowseResponse> {
+  return getJSON(`/database-browser/dft/molecules${buildQueryString(params)}`, { signal });
 }
 
 export function browseDftEnergySteps(params: {
@@ -740,40 +766,40 @@ export function browseDftEnergySteps(params: {
   mol_id?: string;
   page?: number;
   page_size?: number;
-}): Promise<DftEnergyStepBrowseResponse> {
-  return getJSON(`/database-browser/dft/steps${buildQueryString(params)}`);
+}, signal?: AbortSignal): Promise<DftEnergyStepBrowseResponse> {
+  return getJSON(`/database-browser/dft/steps${buildQueryString(params)}`, { signal });
 }
 
-export function fetchDatabaseDatasetSummary(): Promise<DatasetSummaryResponse> {
-  return getJSON("/database-browser/datasets/summary");
+export function fetchDatabaseDatasetSummary(signal?: AbortSignal): Promise<DatasetSummaryResponse> {
+  return getJSON("/database-browser/datasets/summary", { signal });
 }
 
-export function fetchDatabaseAnalytics(options?: { refresh?: boolean }): Promise<DatabaseAnalyticsResponse> {
-  return getJSON(`/database-browser/datasets/analytics${options?.refresh ? "?refresh=true" : ""}`);
+export function fetchDatabaseAnalytics(options?: { refresh?: boolean; signal?: AbortSignal }): Promise<DatabaseAnalyticsResponse> {
+  return getJSON(`/database-browser/datasets/analytics${options?.refresh ? "?refresh=true" : ""}`, { signal: options?.signal });
 }
 
 export function browseFormulationRecords(params: {
   q?: string;
   page?: number;
   page_size?: number;
-}): Promise<FormulationBrowseResponse> {
-  return getJSON(`/database-browser/formulation${buildQueryString(params)}`);
+}, signal?: AbortSignal): Promise<FormulationBrowseResponse> {
+  return getJSON(`/database-browser/formulation${buildQueryString(params)}`, { signal });
 }
 
 export function browseExperimentalProcessRecords(params: {
   q?: string;
   page?: number;
   page_size?: number;
-}): Promise<ExperimentalProcessBrowseResponse> {
-  return getJSON(`/database-browser/experimental-process${buildQueryString(params)}`);
+}, signal?: AbortSignal): Promise<ExperimentalProcessBrowseResponse> {
+  return getJSON(`/database-browser/experimental-process${buildQueryString(params)}`, { signal });
 }
 
 export function browseExperimentalPropertyRecords(params: {
   q?: string;
   page?: number;
   page_size?: number;
-}): Promise<ExperimentalPropertyBrowseResponse> {
-  return getJSON(`/database-browser/experimental-property${buildQueryString(params)}`);
+}, signal?: AbortSignal): Promise<ExperimentalPropertyBrowseResponse> {
+  return getJSON(`/database-browser/experimental-property${buildQueryString(params)}`, { signal });
 }
 
 export function fetchLabDataTestProjects(): Promise<LabDataTestProject[]> {

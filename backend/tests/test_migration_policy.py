@@ -121,6 +121,7 @@ def test_repository_migration_manifest_classifies_every_sql_file() -> None:
     assert kinds["0012_drop_polytao_jobs"] == "contract"
     assert kinds["0013_monomer_dft_jobs"] == "expand"
     assert kinds["0014_monomer_md_task_queue_cancel"] == "expand"
+    assert kinds["0015_property_filter_performance"] == "expand"
     assert set(kinds) == {path.stem for path in MIGRATIONS_DIR.glob("*.sql")}
     assert {entry.manifest_schema_version for entry in entries} == {2}
     assert {entry.epoch for entry in entries} == {1, 2}
@@ -145,6 +146,14 @@ def test_repository_migration_manifest_classifies_every_sql_file() -> None:
     assert md_queue.epoch == 2
     assert md_queue.checksum == (
         "7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6"
+    )
+    property_filter = next(
+        entry for entry in entries
+        if entry.version == "0015_property_filter_performance"
+    )
+    assert property_filter.epoch == 2
+    assert property_filter.checksum == (
+        "e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732"
     )
 
 
@@ -462,7 +471,7 @@ def test_unknown_ledger_version_is_rejected_before_any_migration_sql(
     assert not any(body in query for body in migration_bodies for query in connection.queries)
 
 
-def test_bridge_b_accepts_only_complete_checksum_exact_0013_0014_prefixes(
+def test_bridge_b_accepts_only_complete_checksum_exact_registered_prefixes(
     monkeypatch,
 ) -> None:
     entries = validate_migration_manifest_entries(MIGRATIONS_DIR)
@@ -539,7 +548,7 @@ def test_bridge_b_accepts_only_complete_checksum_exact_0013_0014_prefixes(
             **fully_applied,
             FORWARD_COMPATIBLE_MIGRATIONS[-1]["version"]: "f" * 64,
         },
-        {**fully_applied, "0015_future": "e" * 64},
+        {**fully_applied, "0016_future": "e" * 64},
     ):
         assert compatible_forward_versions(changed, canonical) == set()
         with pytest.raises(RuntimeError, match="absent from the canonical manifest"):

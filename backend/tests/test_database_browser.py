@@ -6,6 +6,11 @@ from fastapi.testclient import TestClient
 
 from app.postgres_database import postgres_connection
 from app.services.analytics_snapshot_store import save_analytics_snapshot
+from app.services.postgres_database_browser import get_property_filter_options_postgres
+from app.services.property_filter_catalog import (
+    load_property_filter_catalog,
+    rebuild_property_filter_catalog,
+)
 
 
 def test_experimental_process_browser_returns_empty_when_postgres_table_empty(test_app) -> None:
@@ -119,11 +124,135 @@ def test_property_filter_options_include_standardized_and_raw_properties(test_ap
     assert tg_option["rows"] == 2
     assert raw_option["property_unit_clean"] == "cal/(g*C)"
     assert raw_option["rows"] == 2
+    assert response.headers["cache-control"] == "private, max-age=0, must-revalidate"
+    assert response.headers["etag"].startswith('W/"pf-options-v1-')
+    assert "catalog;dur=" in response.headers["server-timing"]
+
+    conditional = client.get(
+        "/api/v1/database-browser/property-filter/options",
+        headers={"If-None-Match": response.headers["etag"]},
+    )
+    assert conditional.status_code == 304
+    assert conditional.content == b""
+
+
+def test_property_filter_options_fall_back_when_snapshot_is_missing(test_app) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        connection.execute(
+            "DELETE FROM governance.property_filter_options_snapshots WHERE snapshot_key = 'current'"
+        )
+
+    response = TestClient(test_app).get("/api/v1/database-browser/property-filter/options")
+
+    assert response.status_code == 200
+    assert response.json()["total_records"] == 6
+    assert response.headers["cache-control"] == "no-store"
+    assert "etag" not in response.headers
+
+
+def test_property_filter_options_fall_back_when_snapshot_payload_is_invalid(test_app) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        connection.execute(
+            """
+            UPDATE governance.property_filter_options_snapshots
+            SET options = '[{}]'::jsonb
+            WHERE snapshot_key = 'current'
+            """
+        )
+
+    response = TestClient(test_app).get("/api/v1/database-browser/property-filter/options")
+
+    assert response.status_code == 200
+    assert response.json()["total_records"] == 6
+    assert len(response.json()["options"]) == 3
+    assert response.headers["cache-control"] == "no-store"
+    assert "etag" not in response.headers
+
+
+def test_property_filter_options_fall_back_when_newer_import_has_no_snapshot(test_app) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        connection.execute(
+            """
+            INSERT INTO governance.import_batches (
+              dataset_key, source_file_id, finished_at, status, row_count
+            )
+            SELECT 'property_filter', source_file_id, now(), 'completed', 6
+            FROM governance.source_files
+            WHERE logical_name = 'property_filter_csv'
+            """
+        )
+
+    response = TestClient(test_app).get(
+        "/api/v1/database-browser/property-filter/options"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total_records"] == 6
+    assert response.headers["cache-control"] == "no-store"
+    assert "etag" not in response.headers
+
+
+def test_property_filter_snapshot_matches_live_aggregation_field_for_field(test_app) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        catalog = load_property_filter_catalog(connection)
+        live_total, live_mapped, live_raw, live_options = (
+            get_property_filter_options_postgres(connection)
+        )
+
+    assert catalog is not None
+    assert (
+        catalog.total_records,
+        catalog.mapped_records,
+        catalog.raw_records,
+        catalog.options,
+    ) == (live_total, live_mapped, live_raw, live_options)
+
+
+def test_property_filter_statistics_group_by_canonical_smiles_first(test_app) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        connection.execute(
+            """
+            INSERT INTO core.polymer_property_filter_records (
+              filter_record_id, source_file, source_row_number, polymer_name,
+              smiles, canonical_smiles, rdkit_parse_ok, property_category,
+              property_name, property_value, property_value_num,
+              property_unit_raw, property_unit_clean, property_key,
+              property_label, canonical_value, canonical_unit,
+              unit_conversion_status, value_origin, reliable_score
+            ) VALUES
+              (101, 'canonical-stats.csv', 1, 'canonical polymer',
+               'raw-form-one', 'canonical-shared', false, 'Thermal',
+               'Tg', '150', 150, 'C', 'C', 'tg',
+               'Glass transition temperature', 150, 'C',
+               'already_standard', 'observed', 0.99),
+              (102, 'canonical-stats.csv', 2, 'canonical polymer',
+               'raw-form-two', 'canonical-shared', false, 'Thermal',
+               'Tg', '151', 151, 'C', 'C', 'tg',
+               'Glass transition temperature', 151, 'C',
+               'already_standard', 'observed', 0.98)
+            """
+        )
+        rebuild_property_filter_catalog(connection)
+
+    client = TestClient(test_app)
+    options_response = client.get("/api/v1/database-browser/property-filter/options")
+    analytics_response = client.get("/api/v1/database-browser/datasets/analytics?refresh=true")
+
+    assert options_response.status_code == 200
+    tg_option = next(
+        option
+        for option in options_response.json()["options"]
+        if option["filter_type"] == "standardized" and option["property_key"] == "tg"
+    )
+    assert tg_option["unique_smiles"] == 3
+    assert analytics_response.status_code == 200
+    assert analytics_response.json()["datasets"]["propertyFilter"]["uniqueSmiles"] == 3
 
 
 def test_property_filter_options_report_empty_table_as_not_ready(test_app) -> None:
     with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
         connection.execute("TRUNCATE core.polymer_property_filter_records")
+        rebuild_property_filter_catalog(connection)
     client = TestClient(test_app)
 
     response = client.get("/api/v1/database-browser/property-filter/options")
@@ -163,6 +292,8 @@ def test_property_filter_search_filters_standardized_property_range(test_app) ->
     assert payload["results"][0]["smiles"] == "CCO"
     assert payload["results"][0]["records"][0]["property_key"] == "tg"
     assert payload["results"][0]["records"][0]["canonical_value"] == 123.4
+    assert response.headers["cache-control"] == "no-store"
+    assert "search;dur=" in response.headers["server-timing"]
 
 
 def test_property_filter_search_ands_multiple_conditions_by_smiles(test_app) -> None:
@@ -197,6 +328,123 @@ def test_property_filter_search_ands_multiple_conditions_by_smiles(test_app) -> 
     assert payload["results"][0]["smiles"] == "CCO"
     assert payload["results"][0]["matched_filters"] == 2
     assert {record["property_key"] for record in payload["results"][0]["records"]} == {"tg", "bandgap"}
+
+
+def test_property_filter_search_preserves_counts_on_out_of_range_page(test_app) -> None:
+    response = TestClient(test_app).post(
+        "/api/v1/database-browser/property-filter/search",
+        json={
+            "filters": [
+                {
+                    "filter_type": "standardized",
+                    "property_key": "tg",
+                    "canonical_unit": "C",
+                    "min_value": 100,
+                    "max_value": 200,
+                }
+            ],
+            "page": 999,
+            "page_size": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_records"] == 6
+    assert payload["matched_records"] == 1
+    assert payload["results"] == []
+
+
+def test_property_filter_keyword_remains_scoped_to_each_and_branch(test_app) -> None:
+    response = TestClient(test_app).post(
+        "/api/v1/database-browser/property-filter/search",
+        json={
+            "filters": [
+                {
+                    "filter_type": "standardized",
+                    "property_key": "tg",
+                    "canonical_unit": "C",
+                    "min_value": 100,
+                    "max_value": 200,
+                },
+                {
+                    "filter_type": "standardized",
+                    "property_key": "bandgap",
+                    "canonical_unit": "eV",
+                    "max_value": 4,
+                },
+            ],
+            "q": "polymer_a",
+            "page": 1,
+            "page_size": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["matched_records"] == 1
+    assert payload["results"][0]["polymer_name"] == "polymer_a"
+
+
+def test_property_filter_search_groups_by_canonical_smiles_before_raw_smiles(test_app) -> None:
+    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+        connection.execute(
+            """
+            INSERT INTO core.polymer_property_filter_records (
+              filter_record_id, source_file, source_row_number, polymer_name,
+              smiles, canonical_smiles, rdkit_parse_ok, property_category,
+              property_name, property_value, property_value_num,
+              property_unit_raw, property_unit_clean, property_key,
+              property_label, canonical_value, canonical_unit,
+              unit_conversion_status, value_origin, reliable_score
+            ) VALUES
+              (101, 'canonical-regression.csv', 1, 'canonical polymer',
+               'raw-tg-form', 'canonical-shared', false, 'Thermal',
+               'Tg', '150', 150, 'C', 'C', 'tg',
+               'Glass transition temperature', 150, 'C',
+               'already_standard', 'observed', 0.99),
+              (102, 'canonical-regression.csv', 2, 'canonical polymer',
+               'raw-bandgap-form', 'canonical-shared', false, 'Electronic',
+               'Bandgap', '2.5', 2.5, 'eV', 'eV', 'bandgap',
+               'Bandgap', 2.5, 'eV',
+               'already_standard', 'observed', 0.98)
+            """
+        )
+
+    client = TestClient(test_app)
+    response = client.post(
+        "/api/v1/database-browser/property-filter/search",
+        json={
+            "filters": [
+                {
+                    "filter_type": "standardized",
+                    "property_key": "tg",
+                    "canonical_unit": "C",
+                    "min_value": 149,
+                    "max_value": 151,
+                },
+                {
+                    "filter_type": "standardized",
+                    "property_key": "bandgap",
+                    "canonical_unit": "eV",
+                    "min_value": 2.4,
+                    "max_value": 2.6,
+                },
+            ],
+            "page": 1,
+            "page_size": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["matched_records"] == 1
+    assert payload["results"][0]["canonical_smiles"] == "canonical-shared"
+    assert payload["results"][0]["matched_filters"] == 2
+    assert {record["smiles"] for record in payload["results"][0]["records"]} == {
+        "raw-tg-form",
+        "raw-bandgap-form",
+    }
 
 
 def test_property_filter_search_supports_raw_property_range(test_app) -> None:

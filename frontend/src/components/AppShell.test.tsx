@@ -173,6 +173,24 @@ function getProjectButton(directory: string): HTMLButtonElement {
 }
 
 describe("AppShell 侧边栏", () => {
+  it("数据库筛选使用无内边距的满高工作台容器", () => {
+    const view = renderShell("databaseFilter");
+    const main = view.container.querySelector("main");
+
+    expect(main?.classList.contains("overflow-hidden")).toBe(true);
+    expect(main?.classList.contains("p-0")).toBe(true);
+    expect(main?.classList.contains("overflow-y-auto")).toBe(false);
+  });
+
+  it("数据库分析使用无内边距的满高工作台容器", () => {
+    const view = renderShell("database");
+    const main = view.container.querySelector("main");
+
+    expect(main?.classList.contains("overflow-hidden")).toBe(true);
+    expect(main?.classList.contains("p-0")).toBe(true);
+    expect(main?.classList.contains("overflow-y-auto")).toBe(false);
+  });
+
   it("只保留顶部品牌入口，不再渲染重复的智聚万物按钮", () => {
     renderShell();
 

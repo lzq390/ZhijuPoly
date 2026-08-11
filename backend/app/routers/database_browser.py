@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 from time import perf_counter
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from psycopg.errors import QueryCanceled
 
 from app.config import PROJECT_ROOT
 from app.models import (
@@ -35,6 +38,11 @@ from app.models import (
 )
 from app.postgres_database import PostgresUnavailableError
 from app.services.analytics_snapshot_store import load_analytics_snapshot
+from app.services.property_filter_catalog import (
+    PropertyFilterCatalog,
+    load_property_filter_catalog,
+    property_filter_catalog_is_current,
+)
 from app.services.postgres_database_browser import (
     browse_dft_energy_steps_postgres,
     browse_dft_molecules_postgres,
@@ -57,6 +65,8 @@ from app.services.structure_2d import generate_2d_svg
 
 
 router = APIRouter(prefix="/api/v1/database-browser", tags=["database-browser"])
+logger = logging.getLogger("uvicorn.error")
+logger.setLevel(logging.INFO)
 
 DATASET_TITLES = {
     "process": "Experimental Process Data",
@@ -69,9 +79,28 @@ DATASET_TITLES = {
 POSTGRES_ONLY_DETAIL = "Postgres runtime is required; set STRUCTURED_DATA_BACKEND=postgres."
 
 
+def _log_property_filter_event(
+    event: str,
+    *,
+    level: int = logging.INFO,
+    **fields: object,
+) -> None:
+    logger.log(
+        level,
+        "%s",
+        json.dumps(
+            {"event": event, **fields},
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+
+
 def _require_postgres_browser(request: Request) -> None:
     if request.app.state.settings.structured_data_backend != "postgres":
         raise HTTPException(status_code=503, detail=POSTGRES_ONLY_DETAIL)
+
 
 def _latest_import(connection, dataset_key: str) -> tuple[str | None, str | None]:
     if not postgres_table_exists(connection, "governance", "import_batches"):
@@ -129,6 +158,30 @@ def _property_filter_source_status(connection, total_records: int) -> tuple[str,
     return source_status, source_message
 
 
+def _current_property_filter_catalog(connection) -> PropertyFilterCatalog | None:
+    if not postgres_table_exists(connection, "governance", "property_filter_options_snapshots"):
+        return None
+    try:
+        catalog = load_property_filter_catalog(connection)
+        if catalog is not None and property_filter_catalog_is_current(connection, catalog):
+            return catalog
+    except RuntimeError:
+        logger.exception("property-filter catalog validation failed; using live fallback")
+    return None
+
+
+def _property_filter_etag(catalog: PropertyFilterCatalog, source_status: str) -> str:
+    sha_prefix = (catalog.source_sha256 or "none")[:12]
+    normalized_status = "".join(character for character in source_status if character.isalnum() or character in "-_")
+    return f'W/"pf-options-v1-{catalog.generation}-{sha_prefix}-{normalized_status or "unknown"}"'
+
+
+def _etag_matches(value: str | None, etag: str) -> bool:
+    if value is None:
+        return False
+    return value.strip() == "*" or etag in {candidate.strip() for candidate in value.split(",")}
+
+
 def _postgres_dataset_summaries(connection) -> list[DatasetSummaryItem]:
     items: list[DatasetSummaryItem] = []
     process_status, process_message = source_file_status(connection, "experimental_process_csv")
@@ -142,7 +195,12 @@ def _postgres_dataset_summaries(connection) -> list[DatasetSummaryItem]:
     structure_total = int(connection.execute("SELECT COUNT(*) AS count FROM core.polymer_properties").fetchone()["count"])
     property_filter_total = 0
     if postgres_table_exists(connection, "core", "polymer_property_filter_records"):
-        property_filter_total = int(connection.execute("SELECT COUNT(*) AS count FROM core.polymer_property_filter_records").fetchone()["count"])
+        property_filter_catalog = _current_property_filter_catalog(connection)
+        property_filter_total = (
+            property_filter_catalog.total_records
+            if property_filter_catalog is not None
+            else int(connection.execute("SELECT COUNT(*) AS count FROM core.polymer_property_filter_records").fetchone()["count"])
+        )
         property_filter_status, property_filter_message = _property_filter_source_status(connection, property_filter_total)
     else:
         property_filter_status = "missing"
@@ -449,8 +507,9 @@ def _property_filter_record(row) -> PropertyFilterRecord:
 
 
 @router.get("/property-filter/options", response_model=PropertyFilterOptionsResponse)
-def get_property_filter_options(request: Request) -> PropertyFilterOptionsResponse:
+def get_property_filter_options(request: Request, response: Response):
     started_at = perf_counter()
+    database_started_at = perf_counter()
     settings = request.app.state.settings
     _require_postgres_browser(request)
 
@@ -458,15 +517,56 @@ def get_property_filter_options(request: Request) -> PropertyFilterOptionsRespon
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
             if not postgres_table_exists(connection, "core", "polymer_property_filter_records"):
                 raise RuntimeError("core.polymer_property_filter_records is missing")
-            total_records, mapped_records, raw_records, rows = get_property_filter_options_postgres(connection)
+            catalog = _current_property_filter_catalog(connection)
+            if catalog is None:
+                total_records, mapped_records, raw_records, rows = get_property_filter_options_postgres(connection)
+                mode = "live-fallback"
+                _log_property_filter_event(
+                    "property_filter_options_fallback",
+                    level=logging.WARNING,
+                    mode=mode,
+                )
+            else:
+                total_records = catalog.total_records
+                mapped_records = catalog.mapped_records
+                raw_records = catalog.raw_records
+                rows = catalog.options
+                mode = "snapshot"
             source_status, source_message = _property_filter_source_status(connection, total_records)
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    database_duration_ms = (perf_counter() - database_started_at) * 1000
+    duration_ms = (perf_counter() - started_at) * 1000
+    headers = {
+        "Cache-Control": "private, max-age=0, must-revalidate" if catalog is not None else "no-store",
+        "Server-Timing": f"catalog;dur={duration_ms:.2f}, db;dur={database_duration_ms:.2f}",
+    }
+    if catalog is not None:
+        etag = _property_filter_etag(catalog, source_status)
+        headers["ETag"] = etag
+        if _etag_matches(request.headers.get("if-none-match"), etag):
+            _log_property_filter_event(
+                "property_filter_options",
+                mode="304",
+                revision=etag[:48],
+                database_duration_ms=round(database_duration_ms, 3),
+                total_duration_ms=round(duration_ms, 3),
+            )
+            return Response(status_code=304, headers=headers)
+    response.headers.update(headers)
+    _log_property_filter_event(
+        "property_filter_options",
+        mode=mode,
+        revision=headers.get("ETag", "none")[:48],
+        database_duration_ms=round(database_duration_ms, 3),
+        total_duration_ms=round(duration_ms, 3),
+        option_count=len(rows),
+    )
     return PropertyFilterOptionsResponse(
-        query_time_ms=(perf_counter() - started_at) * 1000,
+        query_time_ms=duration_ms,
         total_records=total_records,
         mapped_records=mapped_records,
         raw_records=raw_records,
@@ -496,8 +596,13 @@ def get_property_filter_options(request: Request) -> PropertyFilterOptionsRespon
 
 
 @router.post("/property-filter/search", response_model=PropertyFilterSearchResponse)
-def search_property_filter(request_body: PropertyFilterSearchRequest, request: Request) -> PropertyFilterSearchResponse:
+def search_property_filter(
+    request_body: PropertyFilterSearchRequest,
+    request: Request,
+    response: Response,
+) -> PropertyFilterSearchResponse:
     started_at = perf_counter()
+    database_started_at = perf_counter()
     query = request_body.q.strip()
     settings = request.app.state.settings
     _require_postgres_browser(request)
@@ -506,6 +611,7 @@ def search_property_filter(request_body: PropertyFilterSearchRequest, request: R
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
             if not postgres_table_exists(connection, "core", "polymer_property_filter_records"):
                 raise RuntimeError("core.polymer_property_filter_records is missing")
+            connection.execute("SET LOCAL statement_timeout = '20s'")
             total_records, matched_records, rows = search_property_filter_records_postgres(
                 connection,
                 conditions=request_body.filters,
@@ -516,9 +622,12 @@ def search_property_filter(request_body: PropertyFilterSearchRequest, request: R
             source_status, source_message = _property_filter_source_status(connection, total_records)
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except QueryCanceled as exc:
+        raise HTTPException(status_code=504, detail="Property filter query timed out") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    database_duration_ms = (perf_counter() - database_started_at) * 1000
     grouped: dict[str, list[PropertyFilterRecord]] = {}
     group_meta: dict[str, dict[str, str | None]] = {}
     for row in rows:
@@ -544,11 +653,28 @@ def search_property_filter(request_body: PropertyFilterSearchRequest, request: R
         for group_key, records in grouped.items()
     ]
 
+    duration_ms = (perf_counter() - started_at) * 1000
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Server-Timing"] = (
+        f"search;dur={duration_ms:.2f}, db;dur={database_duration_ms:.2f}"
+    )
+    _log_property_filter_event(
+        "property_filter_search",
+        filter_count=len(request_body.filters),
+        page=request_body.page,
+        page_size=request_body.page_size,
+        query_present=bool(query),
+        matched_groups=matched_records,
+        returned_groups=len(results),
+        measurement_rows=len(rows),
+        database_duration_ms=round(database_duration_ms, 3),
+        total_duration_ms=round(duration_ms, 3),
+    )
     return PropertyFilterSearchResponse(
         query=query,
         page=request_body.page,
         page_size=request_body.page_size,
-        query_time_ms=(perf_counter() - started_at) * 1000,
+        query_time_ms=duration_ms,
         total_records=total_records,
         matched_records=matched_records,
         data_source="postgres",

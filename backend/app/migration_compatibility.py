@@ -1,8 +1,8 @@
 """The exact forward ledger states intentionally readable by bridge B.
 
 This is not a generic "ignore unknown migrations" escape hatch.  B accepts
-only F's checksum-exact 0013 prefix or 0013/0014 pair, and only after every B
-migration through the checksum-exact 0012 contract is present.
+only F's checksum-exact registered prefixes after every B migration through
+the checksum-exact 0012 contract is present.
 """
 
 from __future__ import annotations
@@ -24,6 +24,12 @@ FORWARD_COMPATIBLE_MIGRATIONS = (
             "7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6"
         ),
     },
+    {
+        "version": "0015_property_filter_performance",
+        "checksum": (
+            "e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732"
+        ),
+    },
 )
 
 
@@ -38,10 +44,12 @@ def compatible_forward_versions(
         for record in FORWARD_COMPATIBLE_MIGRATIONS
     }
     extra = set(applied).difference(canonical_checksums)
-    valid_extra = extra in (
-        {FORWARD_COMPATIBLE_MIGRATIONS[0]["version"]},
-        set(registered),
-    )
+    ordered_versions = tuple(record["version"] for record in FORWARD_COMPATIBLE_MIGRATIONS)
+    valid_prefixes = {
+        frozenset(ordered_versions[:index])
+        for index in range(1, len(ordered_versions) + 1)
+    }
+    valid_extra = frozenset(extra) in valid_prefixes
     if (
         not valid_extra
         or any(applied.get(version) != registered[version] for version in extra)

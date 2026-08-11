@@ -5,6 +5,7 @@ import {
   BarChart3,
   BookOpen,
   Database,
+  Filter,
   FlaskConical,
   Grid2X2,
   Microscope,
@@ -19,6 +20,7 @@ import {
 import { AgentWorkspaceHomePage, agentWorkspaceUrl } from "./components/AgentWorkspaceHomePage";
 import { ConditionalGenerationPage } from "./components/ConditionalGenerationPage";
 import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
+import { DatabaseFilterPage } from "./components/DatabaseFilterPage";
 import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
 import { ExperimentWorkflowDemoPage } from "./components/ExperimentWorkflowDemoPage";
 import { HighThroughputWorkflowDemoPage } from "./components/HighThroughputWorkflowDemoPage";
@@ -63,6 +65,7 @@ type ActiveModule =
   | "conditionalGeneration"
   | "polytaoGeneration"
   | "databaseQuery"
+  | "databaseFilter"
   | "database"
   | "knowledge"
   | "labData"
@@ -79,12 +82,13 @@ type KnowledgeNavigationInput = string | KnowledgeNavigationRequest;
 type AgentWorkspaceView = "general" | "projects" | "project";
 const POLYTAO_ROUTE = "/polytao-generation";
 const LEGACY_POLYTAO_ROUTE = "/conditional-generation/polytao";
+const DATABASE_FILTER_ROUTE = "/database-filter";
+const LEGACY_DATABASE_FILTER_ROUTE = "/database/property-filter";
 
 const datasetPathByKey: Record<DatasetKey, string> = {
   process: "/database/process",
   property: "/database/property",
   structureEffect: "/database/structure-effect",
-  propertyFilter: "/database/property-filter",
   dft: "/database/dft",
   formulation: "/database/formulation"
 };
@@ -139,6 +143,10 @@ function routeFromPath(pathname: string): AppRoute {
 
   if (path === "/database-query") {
     return { module: "databaseQuery", datasetKey: null };
+  }
+
+  if (path === DATABASE_FILTER_ROUTE || path === LEGACY_DATABASE_FILTER_ROUTE) {
+    return { module: "databaseFilter", datasetKey: null };
   }
 
   if (path === "/knowledge") {
@@ -214,6 +222,10 @@ function pathFromRoute(route: AppRoute) {
     return "/database-query";
   }
 
+  if (route.module === "databaseFilter") {
+    return DATABASE_FILTER_ROUTE;
+  }
+
   if (route.module === "knowledge") {
     return "/knowledge";
   }
@@ -245,6 +257,8 @@ function getInitialRoute() {
   const route = routeFromPath(window.location.pathname);
   if (normalizePath(window.location.pathname) === LEGACY_POLYTAO_ROUTE) {
     window.history.replaceState(route, "", POLYTAO_ROUTE);
+  } else if (normalizePath(window.location.pathname) === LEGACY_DATABASE_FILTER_ROUTE) {
+    window.history.replaceState(route, "", DATABASE_FILTER_ROUTE);
   }
   return route;
 }
@@ -439,6 +453,8 @@ export default function App() {
       const route = routeFromPath(window.location.pathname);
       if (normalizePath(window.location.pathname) === LEGACY_POLYTAO_ROUTE) {
         window.history.replaceState(route, "", POLYTAO_ROUTE);
+      } else if (normalizePath(window.location.pathname) === LEGACY_DATABASE_FILTER_ROUTE) {
+        window.history.replaceState(route, "", DATABASE_FILTER_ROUTE);
       }
       if (route.module === "knowledge") {
         setKnowledgeInitialQuery(new URLSearchParams(window.location.search).get("q") ?? "");
@@ -511,6 +527,10 @@ export default function App() {
     navigate({ module: "databaseQuery", datasetKey: null });
   }
 
+  function openDatabaseFilter() {
+    navigate({ module: "databaseFilter", datasetKey: null });
+  }
+
   function openDatabase() {
     navigate({ module: "database", datasetKey: null });
   }
@@ -560,6 +580,9 @@ export default function App() {
         break;
       case "databaseQuery":
         openDatabaseQuery();
+        break;
+      case "databaseFilter":
+        openDatabaseFilter();
         break;
       case "database":
         openDatabase();
@@ -713,6 +736,15 @@ export default function App() {
           onClick: openDatabaseQuery
         },
         {
+          id: "databaseFilter",
+          label: "数据库筛选",
+          description: "按多个性质阈值组合筛选聚合物记录。",
+          route: DATABASE_FILTER_ROUTE,
+          icon: <Filter className="h-4 w-4" />,
+          isActive: activeModule === "databaseFilter",
+          onClick: openDatabaseFilter
+        },
+        {
           id: "database",
           label: "数据库分析",
           description: "浏览过程、性能、DFT 与结构数据集。",
@@ -804,6 +836,8 @@ export default function App() {
   const isFullBleedModule =
     activeModule === "explorer" ||
     activeModule === "databaseQuery" ||
+    activeModule === "databaseFilter" ||
+    activeModule === "database" ||
     activeModule === "structureWorkbench" ||
     activeModule === "monomerPolymerization" ||
     activeModule === "polytaoGeneration" ||
@@ -874,6 +908,8 @@ export default function App() {
           onBackHome={() => navigate({ module: "home", datasetKey: null })}
         />
       ) : null}
+
+      {activeModule === "databaseFilter" ? <DatabaseFilterPage /> : null}
 
       {shouldKeepStructureWorkbenchMounted ? (
         <div

@@ -19,6 +19,10 @@ from app.import_csv import canonicalize_smiles, normalize_property_unit, parse_f
 from app.model_asset_manifest import iter_model_asset_specs
 from app.postgres_database import postgres_connection
 from app.postgres_migrations import apply_postgres_migrations
+from app.services.property_filter_catalog import (
+    aggregate_property_filter_catalog,
+    save_property_filter_catalog,
+)
 
 
 @dataclass(slots=True)
@@ -547,7 +551,42 @@ def import_core_from_csv(connection: Any, csv_path: Path, batch_size: int) -> Da
     )
 
 
-def import_property_filter_from_csv(connection: Any, csv_path: Path, batch_size: int) -> DatasetImportStats:
+PROPERTY_FILTER_IMPORT_COLUMNS = (
+    "filter_record_id",
+    "source_file",
+    "source_row_number",
+    "polymer_name",
+    "smiles",
+    "canonical_smiles",
+    "rdkit_parse_ok",
+    "property_category",
+    "property_name",
+    "property_value",
+    "property_value_num",
+    "property_unit",
+    "property_unit_raw",
+    "property_unit_clean",
+    "property_key",
+    "property_label",
+    "canonical_value",
+    "canonical_unit",
+    "unit_conversion_status",
+    "value_origin",
+    "label_source",
+    "reliable_score",
+    "soft_quality_flags",
+    "duplicate_flag",
+)
+
+
+def import_property_filter_from_csv(
+    connection: Any,
+    csv_path: Path,
+    batch_size: int,
+    *,
+    import_batch_id: int | None = None,
+    source_sha256: str | None = None,
+) -> DatasetImportStats:
     required_columns = {
         "polymer_name",
         "smiles",
@@ -611,62 +650,65 @@ def import_property_filter_from_csv(connection: Any, csv_path: Path, batch_size:
                     clean_text(row, "duplicate_flag"),
                 )
 
-    connection.execute("TRUNCATE core.polymer_property_filter_records")
-    row_count = _execute_many(
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    stage_table = "property_filter_import_stage"
+    connection.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(stage_table)))
+    connection.execute(
+        sql.SQL(
+            "CREATE TEMP TABLE {} (LIKE core.polymer_property_filter_records INCLUDING DEFAULTS) ON COMMIT DROP"
+        ).format(sql.Identifier(stage_table))
+    )
+    column_sql = sql.SQL(", ").join(sql.Identifier(column) for column in PROPERTY_FILTER_IMPORT_COLUMNS)
+    copy_sql = sql.SQL("COPY {} ({}) FROM STDIN").format(sql.Identifier(stage_table), column_sql)
+    row_count = 0
+    with connection.cursor() as cursor:
+        with cursor.copy(copy_sql) as copy:
+            for row in iter_rows():
+                copy.write_row(row)
+                row_count += 1
+
+    connection.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(stage_table)))
+    connection.execute("SET LOCAL work_mem = '128MB'")
+    total_records, mapped_count, raw_count, options = aggregate_property_filter_catalog(
         connection,
-        """
-        INSERT INTO core.polymer_property_filter_records (
-          filter_record_id, source_file, source_row_number, polymer_name, smiles,
-          canonical_smiles, rdkit_parse_ok, property_category, property_name,
-          property_value, property_value_num, property_unit, property_unit_raw,
-          property_unit_clean, property_key, property_label, canonical_value,
-          canonical_unit, unit_conversion_status, value_origin, label_source,
-          reliable_score, soft_quality_flags, duplicate_flag
-        ) VALUES (
-          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        schema=None,
+        table=stage_table,
+    )
+    if total_records != row_count:
+        raise RuntimeError(
+            f"property-filter staging count mismatch: copied {row_count}, catalog counted {total_records}"
         )
-        ON CONFLICT (filter_record_id) DO UPDATE SET
-          source_file = excluded.source_file,
-          source_row_number = excluded.source_row_number,
-          polymer_name = excluded.polymer_name,
-          smiles = excluded.smiles,
-          canonical_smiles = excluded.canonical_smiles,
-          rdkit_parse_ok = excluded.rdkit_parse_ok,
-          property_category = excluded.property_category,
-          property_name = excluded.property_name,
-          property_value = excluded.property_value,
-          property_value_num = excluded.property_value_num,
-          property_unit = excluded.property_unit,
-          property_unit_raw = excluded.property_unit_raw,
-          property_unit_clean = excluded.property_unit_clean,
-          property_key = excluded.property_key,
-          property_label = excluded.property_label,
-          canonical_value = excluded.canonical_value,
-          canonical_unit = excluded.canonical_unit,
-          unit_conversion_status = excluded.unit_conversion_status,
-          value_origin = excluded.value_origin,
-          label_source = excluded.label_source,
-          reliable_score = excluded.reliable_score,
-          soft_quality_flags = excluded.soft_quality_flags,
-          duplicate_flag = excluded.duplicate_flag
-        """,
-        iter_rows(),
-        batch_size,
-    )
-    mapped_count = int(
-        connection.execute(
+
+    connection.execute("TRUNCATE core.polymer_property_filter_records")
+    insert_cursor = connection.execute(
+        sql.SQL(
             """
-            SELECT COUNT(*) AS count
-            FROM core.polymer_property_filter_records
-            WHERE property_key IS NOT NULL
+            INSERT INTO core.polymer_property_filter_records ({columns})
+            SELECT {columns}
+            FROM {stage}
+            ORDER BY filter_record_id
             """
-        ).fetchone()["count"]
+        ).format(columns=column_sql, stage=sql.Identifier(stage_table))
     )
+    if insert_cursor.rowcount != row_count:
+        raise RuntimeError(
+            f"property-filter live swap mismatch: expected {row_count}, inserted {insert_cursor.rowcount}"
+        )
+    save_property_filter_catalog(
+        connection,
+        total_records=total_records,
+        mapped_records=mapped_count,
+        raw_records=raw_count,
+        options=options,
+        import_batch_id=import_batch_id,
+        source_sha256=source_sha256,
+    )
+    connection.execute("ANALYZE core.polymer_property_filter_records")
     return DatasetImportStats(
         dataset_key="property_filter",
         row_count=row_count,
-        details={"mapped_records": mapped_count, "raw_records": row_count - mapped_count},
+        details={"mapped_records": mapped_count, "raw_records": raw_count},
     )
 
 
@@ -1038,6 +1080,51 @@ def import_lab_from_legacy_schema(connection: Any) -> DatasetImportStats:
     )
 
 
+def _import_property_filter_dataset(
+    settings: Settings,
+    *,
+    target_dsn: str,
+    batch_size: int,
+) -> DatasetImportStats:
+    with postgres_connection(target_dsn) as connection:
+        with connection.transaction():
+            source_ids = upsert_source_registry(connection, settings, target_dsn)
+            source_file_id = source_ids["property_filter_csv"]
+            batch_id = _start_batch(connection, "property_filter", source_file_id)
+            if not settings.property_filter_csv_file.exists():
+                error = f"source CSV is missing: {settings.property_filter_csv_file}"
+                _finish_batch(connection, batch_id, 0, "missing", error)
+                return DatasetImportStats(
+                    dataset_key="property_filter",
+                    row_count=0,
+                    details={"missing_source": 1},
+                )
+
+            source_row = connection.execute(
+                """
+                SELECT sha256
+                FROM governance.source_files
+                WHERE source_file_id = %s
+                """,
+                (source_file_id,),
+            ).fetchone()
+            dataset_stats = import_property_filter_from_csv(
+                connection,
+                settings.property_filter_csv_file,
+                batch_size,
+                import_batch_id=batch_id,
+                source_sha256=source_row["sha256"] if source_row is not None else None,
+            )
+            _finish_batch(
+                connection,
+                batch_id,
+                dataset_stats.row_count,
+                "completed" if dataset_stats.row_count else "empty",
+                None if dataset_stats.row_count else "property filter import produced zero records",
+            )
+            return dataset_stats
+
+
 def import_all_to_postgres(
     settings: Settings,
     *,
@@ -1068,6 +1155,8 @@ def import_all_to_postgres(
         # implicitly run baseline provisioning or destructive contract changes.
         apply_postgres_migrations(target_dsn, allowed_kinds={"expand"})
 
+    property_filter_requested = "property_filter" in requested
+    transaction_requested = requested - {"property_filter"}
     stats = PostgresImportStats()
     source_ids: dict[str, int] = {}
 
@@ -1077,80 +1166,69 @@ def import_all_to_postgres(
             source_ids = upsert_source_registry(connection, settings, target_dsn)
         return source_ids
 
-    with postgres_connection(target_dsn) as connection:
-        with connection.transaction():
-            if rebuild:
-                truncate_static_import_tables(connection, requested)
-            if requested & {
-                "sources",
-                "batch_backfill",
-                "core",
-                "knowledge",
-                "pi",
-                "dft",
-                "experimental",
-                "property_filter",
-            }:
-                ensure_source_ids(connection)
-            if "sources" in requested:
-                stats.datasets.append(DatasetImportStats(dataset_key="governance.source_files", row_count=len(source_ids)))
-            if "assets" in requested:
-                stats.datasets.append(import_model_registry(connection, settings))
-            if "core" in requested:
-                if not settings.csv_source_file.exists():
-                    raise FileNotFoundError(settings.csv_source_file)
-                batch_id = _start_batch(connection, "core", ensure_source_ids(connection)["core_property_csv"])
-                dataset_stats = import_core_from_csv(connection, settings.csv_source_file, batch_size)
-                _finish_batch(connection, batch_id, dataset_stats.row_count)
-                stats.datasets.append(dataset_stats)
-            if "property_filter" in requested:
-                batch_id = _start_batch(connection, "property_filter", ensure_source_ids(connection)["property_filter_csv"])
-                if not settings.property_filter_csv_file.exists():
-                    error = f"source CSV is missing: {settings.property_filter_csv_file}"
-                    _finish_batch(connection, batch_id, 0, "missing", error)
-                    dataset_stats = DatasetImportStats(
-                        dataset_key="property_filter",
-                        row_count=0,
-                        details={"missing_source": 1},
-                    )
-                else:
-                    dataset_stats = import_property_filter_from_csv(connection, settings.property_filter_csv_file, batch_size)
-                    _finish_batch(
-                        connection,
-                        batch_id,
-                        dataset_stats.row_count,
-                        "completed" if dataset_stats.row_count else "empty",
-                        None if dataset_stats.row_count else "property filter import produced zero records",
-                    )
-                stats.datasets.append(dataset_stats)
-            if "knowledge" in requested:
-                batch_id = _start_batch(connection, "knowledge", ensure_source_ids(connection)["main_sqlite"])
-                dataset_stats = import_knowledge_from_sqlite(connection, settings.legacy_main_sqlite_source_file, batch_size)
-                _finish_batch(connection, batch_id, dataset_stats.row_count)
-                stats.datasets.append(dataset_stats)
-            if "pi" in requested:
-                batch_id = _start_batch(connection, "pi", ensure_source_ids(connection)["pi_sqlite"])
-                dataset_stats = import_pi_from_sqlite(connection, settings.legacy_pi_sqlite_source_file, batch_size)
-                _finish_batch(connection, batch_id, dataset_stats.row_count)
-                stats.datasets.append(dataset_stats)
-            if "dft" in requested:
-                batch_id = _start_batch(connection, "dft", ensure_source_ids(connection)["dft_sqlite"])
-                dataset_stats = import_dft_from_sqlite(connection, settings.legacy_dft_sqlite_source_file, batch_size)
-                _finish_batch(connection, batch_id, dataset_stats.row_count)
-                stats.datasets.append(dataset_stats)
-            if "experimental" in requested:
-                batch_id = _start_batch(connection, "experimental_process", ensure_source_ids(connection)["experimental_process_csv"])
-                dataset_stats = import_experimental_process_from_csv(connection, settings.experimental_process_csv_file, batch_size)
-                _finish_batch(connection, batch_id, dataset_stats.row_count, "completed" if dataset_stats.row_count else "missing")
-                stats.datasets.append(dataset_stats)
+    if transaction_requested:
+        with postgres_connection(target_dsn) as connection:
+            with connection.transaction():
+                if rebuild:
+                    truncate_static_import_tables(connection, transaction_requested)
+                if transaction_requested & {
+                    "sources",
+                    "batch_backfill",
+                    "core",
+                    "knowledge",
+                    "pi",
+                    "dft",
+                    "experimental",
+                }:
+                    ensure_source_ids(connection)
+                if "sources" in transaction_requested:
+                    stats.datasets.append(DatasetImportStats(dataset_key="governance.source_files", row_count=len(source_ids)))
+                if "assets" in transaction_requested:
+                    stats.datasets.append(import_model_registry(connection, settings))
+                if "core" in transaction_requested:
+                    if not settings.csv_source_file.exists():
+                        raise FileNotFoundError(settings.csv_source_file)
+                    batch_id = _start_batch(connection, "core", ensure_source_ids(connection)["core_property_csv"])
+                    dataset_stats = import_core_from_csv(connection, settings.csv_source_file, batch_size)
+                    _finish_batch(connection, batch_id, dataset_stats.row_count)
+                    stats.datasets.append(dataset_stats)
+                if "knowledge" in transaction_requested:
+                    batch_id = _start_batch(connection, "knowledge", ensure_source_ids(connection)["main_sqlite"])
+                    dataset_stats = import_knowledge_from_sqlite(connection, settings.legacy_main_sqlite_source_file, batch_size)
+                    _finish_batch(connection, batch_id, dataset_stats.row_count)
+                    stats.datasets.append(dataset_stats)
+                if "pi" in transaction_requested:
+                    batch_id = _start_batch(connection, "pi", ensure_source_ids(connection)["pi_sqlite"])
+                    dataset_stats = import_pi_from_sqlite(connection, settings.legacy_pi_sqlite_source_file, batch_size)
+                    _finish_batch(connection, batch_id, dataset_stats.row_count)
+                    stats.datasets.append(dataset_stats)
+                if "dft" in transaction_requested:
+                    batch_id = _start_batch(connection, "dft", ensure_source_ids(connection)["dft_sqlite"])
+                    dataset_stats = import_dft_from_sqlite(connection, settings.legacy_dft_sqlite_source_file, batch_size)
+                    _finish_batch(connection, batch_id, dataset_stats.row_count)
+                    stats.datasets.append(dataset_stats)
+                if "experimental" in transaction_requested:
+                    batch_id = _start_batch(connection, "experimental_process", ensure_source_ids(connection)["experimental_process_csv"])
+                    dataset_stats = import_experimental_process_from_csv(connection, settings.experimental_process_csv_file, batch_size)
+                    _finish_batch(connection, batch_id, dataset_stats.row_count, "completed" if dataset_stats.row_count else "missing")
+                    stats.datasets.append(dataset_stats)
 
-                batch_id = _start_batch(connection, "experimental_property", ensure_source_ids(connection)["experimental_property_csv"])
-                dataset_stats = import_experimental_property_from_csv(connection, settings.experimental_property_csv_file, batch_size)
-                _finish_batch(connection, batch_id, dataset_stats.row_count, "completed" if dataset_stats.row_count else "missing")
-                stats.datasets.append(dataset_stats)
-            if "batch_backfill" in requested:
-                updated_count = backfill_import_batch_sources(connection, ensure_source_ids(connection))
-                stats.datasets.append(DatasetImportStats(dataset_key="governance.import_batches", row_count=updated_count))
+                    batch_id = _start_batch(connection, "experimental_property", ensure_source_ids(connection)["experimental_property_csv"])
+                    dataset_stats = import_experimental_property_from_csv(connection, settings.experimental_property_csv_file, batch_size)
+                    _finish_batch(connection, batch_id, dataset_stats.row_count, "completed" if dataset_stats.row_count else "missing")
+                    stats.datasets.append(dataset_stats)
+                if "batch_backfill" in transaction_requested:
+                    updated_count = backfill_import_batch_sources(connection, ensure_source_ids(connection))
+                    stats.datasets.append(DatasetImportStats(dataset_key="governance.import_batches", row_count=updated_count))
+
+    if property_filter_requested:
+        stats.datasets.append(
+            _import_property_filter_dataset(
+                settings,
+                target_dsn=target_dsn,
+                batch_size=batch_size,
+            )
+        )
 
     if refresh_analytics_snapshot:
         write_database_analytics_snapshot(target_dsn)
