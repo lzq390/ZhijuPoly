@@ -524,8 +524,11 @@ export async function deleteMonomerMdJob(
   }
 }
 
-export function searchKnowledge(payload: KnowledgeSearchRequest): Promise<KnowledgeSearchResponse> {
-  return postJSON("/knowledge/search", payload);
+export function searchKnowledge(
+  payload: KnowledgeSearchRequest,
+  signal?: AbortSignal
+): Promise<KnowledgeSearchResponse> {
+  return postJSON("/knowledge/search", payload, signal);
 }
 
 export function searchOnlineKnowledge(

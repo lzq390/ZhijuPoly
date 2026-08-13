@@ -838,6 +838,7 @@ export default function App() {
     activeModule === "databaseQuery" ||
     activeModule === "databaseFilter" ||
     activeModule === "database" ||
+    activeModule === "knowledge" ||
     activeModule === "structureWorkbench" ||
     activeModule === "monomerPolymerization" ||
     activeModule === "polytaoGeneration" ||

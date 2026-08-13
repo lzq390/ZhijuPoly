@@ -191,6 +191,15 @@ describe("AppShell 侧边栏", () => {
     expect(main?.classList.contains("overflow-y-auto")).toBe(false);
   });
 
+  it("知识检索使用无内边距的满高工作台容器", () => {
+    const view = renderShell("knowledge");
+    const main = view.container.querySelector("main");
+
+    expect(main?.classList.contains("overflow-hidden")).toBe(true);
+    expect(main?.classList.contains("p-0")).toBe(true);
+    expect(main?.classList.contains("overflow-y-auto")).toBe(false);
+  });
+
   it("只保留顶部品牌入口，不再渲染重复的智聚万物按钮", () => {
     renderShell();
 

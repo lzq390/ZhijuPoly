@@ -1,111 +1,321 @@
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   BarChart3,
+  BookMarked,
+  Check,
   Clock3,
   Download,
-  Eraser,
-  Expand,
   FileClock,
   FlaskConical,
   Globe2,
+  History,
   KeyRound,
-  Loader2,
-  RefreshCcw,
+  LoaderCircle,
+  RefreshCw,
   Search,
-  Trash2,
-  X
+  SearchX,
+  Trash2
 } from "lucide-react";
-import { useOnlineKnowledgeSearch } from "../../hooks/useOnlineKnowledgeSearch";
-import { exportOnlineKnowledgeCsv, fetchOnlineKnowledgeDefaultConfig } from "../../services/api";
+import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   ONLINE_KNOWLEDGE_DEFAULT_BASE_URL,
   ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS,
   ONLINE_KNOWLEDGE_DEFAULT_MODEL
 } from "../../constants/onlineKnowledgeDefaults";
+import { useOnlineKnowledgeSearch } from "../../hooks/useOnlineKnowledgeSearch";
+import { exportOnlineKnowledgeCsv, fetchOnlineKnowledgeDefaultConfig } from "../../services/api";
 import type {
   OnlineKnowledgeCountItem,
+  OnlineKnowledgeHistoryItem,
   OnlineKnowledgeMode,
   OnlineKnowledgePropertyPoint,
+  OnlineKnowledgeSearchRequest,
   OnlineKnowledgeSearchResponse,
   OnlineKnowledgeSynthesis
 } from "../../types";
-import { cn } from "../../lib/utils";
-import { Alert } from "../ui/alert";
-import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
-import { Input } from "../ui/input";
-import { Select } from "../ui/select";
-
-type DetailState = {
-  label: string;
-  value: string;
-} | null;
+import { KnowledgeDetailDrawer, type KnowledgeDrawerTab } from "../knowledge-search/KnowledgeDetailDrawer";
 
 type OnlineKnowledgeSearchPanelProps = {
   initialMaterial?: string;
+  modeNavigation: ReactNode;
 };
 
-export function OnlineKnowledgeSearchPanel({ initialMaterial = "" }: OnlineKnowledgeSearchPanelProps) {
+type DrawerView = "detail" | "history";
+
+const JOB_STAGES = ["searching", "deduplicating", "enriching", "fallback", "extracting", "finalizing", "completed"];
+
+function optional(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value);
+}
+
+function isDesktopViewport() {
+  return typeof window === "undefined" || typeof window.matchMedia !== "function"
+    ? true
+    : !window.matchMedia("(max-width: 899px)").matches;
+}
+
+function DetailGrid({ fields }: { fields: Array<{ label: string; value: string | number | null | undefined }> }) {
+  return (
+    <dl className="ks-detail-grid">
+      {fields.map((field) => (
+        <div key={field.label}><dt>{field.label}</dt><dd>{optional(field.value)}</dd></div>
+      ))}
+    </dl>
+  );
+}
+
+function provenanceNotice(message: string) {
+  return (
+    <div className="ks-drawer-callout is-warning">
+      <AlertTriangle aria-hidden="true" />
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function buildPropertyTabs(item: OnlineKnowledgePropertyPoint, data: OnlineKnowledgeSearchResponse): KnowledgeDrawerTab[] {
+  return [
+    {
+      id: "overview",
+      label: "结果概览",
+      content: (
+        <div className="ks-drawer-stack">
+          <section className="ks-drawer-section">
+            <p className="ks-drawer-title-main">{item.property_name} · {item.property_value}</p>
+            <p className="ks-drawer-title-secondary">{item.polymer_name}</p>
+            <div className="ks-chip-row"><span className="ks-relation-chip">{item.relationship}</span><span className="ks-chip">{item.polymer_type}</span></div>
+          </section>
+          <section className="ks-drawer-section">
+            <h3><BookMarked aria-hidden="true" />抽取字段</h3>
+            <DetailGrid fields={[
+              { label: "聚合物类型", value: item.polymer_type },
+              { label: "聚合物名称", value: item.polymer_name },
+              { label: "性质名称", value: item.property_name },
+              { label: "性质值", value: item.property_value },
+              { label: "关系类型", value: item.relationship }
+            ]} />
+          </section>
+        </div>
+      )
+    },
+    {
+      id: "fields",
+      label: "条件与字段",
+      content: (
+        <div className="ks-drawer-stack">
+          <section className="ks-drawer-section">
+            <h3><FlaskConical aria-hidden="true" />条件信息</h3>
+            <DetailGrid fields={[
+              { label: "条件名称", value: item.condition_name },
+              { label: "条件值", value: item.condition_value },
+              { label: "性质名称", value: item.property_name },
+              { label: "性质值", value: item.property_value }
+            ]} />
+          </section>
+          <section className="ks-drawer-section">{provenanceNotice("在线结果为模型从可用摘要中抽取的结构化关系，应结合具体论文原文核验。")}</section>
+        </div>
+      )
+    },
+    {
+      id: "source",
+      label: "论文溯源",
+      content: (
+        <div className="ks-drawer-stack">
+          <section className="ks-drawer-section"><h3><BookMarked aria-hidden="true" />论文题名</h3><p className="ks-drawer-title-main">{optional(item.paper_title)}</p></section>
+          <section className="ks-drawer-section"><DetailGrid fields={[
+            { label: "检索材料", value: data.material },
+            { label: "抽取模式", value: "property" },
+            { label: "论文来源", value: "聚合来源去重结果" },
+            { label: "DOI / URL", value: "当前接口未返回" }
+          ]} /></section>
+          <section className="ks-drawer-section">{provenanceNotice("当前返回类型包含论文题名，但不包含 DOI、作者和原文 URL；页面明确保留这一溯源边界。")}</section>
+        </div>
+      )
+    }
+  ];
+}
+
+function buildSynthesisTabs(item: OnlineKnowledgeSynthesis, data: OnlineKnowledgeSearchResponse): KnowledgeDrawerTab[] {
+  return [
+    {
+      id: "overview",
+      label: "结果概览",
+      content: (
+        <div className="ks-drawer-stack">
+          <section className="ks-drawer-section">
+            <p className="ks-drawer-title-main">{item.method || "未命名合成方法"}</p>
+            <p className="ks-drawer-title-secondary">{item.product_name} {item.product_abbreviation ? `· ${item.product_abbreviation}` : ""}</p>
+            <div className="ks-chip-row"><span className="ks-chip is-match">{item.reaction_type}</span></div>
+          </section>
+          <section className="ks-drawer-section">
+            <h3><FlaskConical aria-hidden="true" />合成字段</h3>
+            <DetailGrid fields={[
+              { label: "产物", value: item.product_name },
+              { label: "反应类型", value: item.reaction_type },
+              { label: "反应物", value: item.reactants },
+              { label: "催化剂", value: item.catalyst },
+              { label: "性质", value: item.properties }
+            ]} />
+          </section>
+        </div>
+      )
+    },
+    {
+      id: "reaction",
+      label: "条件与字段",
+      content: <section className="ks-drawer-section"><h3><FlaskConical aria-hidden="true" />反应条件</h3><DetailGrid fields={[
+        { label: "温度", value: item.temperature },
+        { label: "时间", value: item.time },
+        { label: "溶剂", value: item.solvent },
+        { label: "气氛", value: item.atmosphere },
+        { label: "压力", value: item.pressure },
+        { label: "引发剂", value: item.initiator }
+      ]} /></section>
+    },
+    {
+      id: "source",
+      label: "论文溯源",
+      content: <div className="ks-drawer-stack"><section className="ks-drawer-section">{provenanceNotice("当前 OnlineKnowledgeSynthesis 接口类型不包含论文题名、DOI 或 URL；页面不会虚构论文溯源信息。")}</section><section className="ks-drawer-section"><DetailGrid fields={[
+        { label: "检索材料", value: data.material },
+        { label: "抽取模式", value: "synthesis" },
+        { label: "检索论文", value: `${data.totalPapers} 篇` },
+        { label: "具体论文定位", value: "当前接口未返回" }
+      ]} /></section></div>
+    }
+  ];
+}
+
+function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+  return (
+    <div className="ks-metric">
+      <span>{icon}{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function DistributionPanel({ title, items }: { title: string; items: OnlineKnowledgeCountItem[] }) {
+  const visible = items.slice(0, 5);
+  const maxCount = Math.max(1, ...visible.map((item) => item.count));
+  return (
+    <section className="ks-distribution">
+      <header><strong>{title}</strong><span>百分比基于该字段的非空记录</span></header>
+      {visible.length ? (
+        <div className="ks-bar-list">
+          {visible.map((item) => (
+            <div className="ks-bar-row" key={item.label}>
+              <span title={item.label}>{item.label}</span>
+              <i><b style={{ width: `${Math.max(5, (item.count / maxCount) * 100)}%` }} /></i>
+              <strong>{item.count}</strong>
+            </div>
+          ))}
+        </div>
+      ) : <p className="ks-distribution-empty">暂无可统计字段。</p>}
+    </section>
+  );
+}
+
+function OnlineProgress({ state }: { state: ReturnType<typeof useOnlineKnowledgeSearch> }) {
+  const job = state.job;
+  const progress = job && job.total_papers > 0
+    ? Math.min(100, Math.round((job.processed_papers / job.total_papers) * 100))
+    : 0;
+  const stage = job?.progress_stage || state.jobStatus || "pending";
+  const currentStageIndex = Math.max(0, JOB_STAGES.indexOf(stage));
+
+  return (
+    <div className="ks-progress-card" role="status">
+      <div className="ks-progress-head">
+        <div><strong>{job?.progress_message || "正在创建在线检索任务"}</strong><span>任务运行期间可切换到其他知识模式。</span></div>
+        <b>{progress}%</b>
+      </div>
+      <div className="ks-progress-track"><span style={{ width: `${progress}%` }} /></div>
+      <div className="ks-progress-stages">
+        {["searching", "deduplicating", "extracting", "finalizing"].map((item) => {
+          const itemIndex = JOB_STAGES.indexOf(item);
+          return <span className={itemIndex < currentStageIndex ? "is-done" : item === stage ? "is-active" : ""} key={item}><i />{item}</span>;
+        })}
+      </div>
+      <div className="ks-meta-row">
+        <span>处理论文：{job?.processed_papers ?? 0} / {job?.total_papers || job?.max_papers || "—"}</span>
+        <span>任务阶段：{stage}</span>
+        <span>进入抽取阶段后，论文总数可能按有效摘要重新定基</span>
+      </div>
+    </div>
+  );
+}
+
+export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigation }: OnlineKnowledgeSearchPanelProps) {
+  const searchState = useOnlineKnowledgeSearch();
   const [material, setMaterial] = useState(initialMaterial.trim());
+  const [mode, setMode] = useState<OnlineKnowledgeMode>("property");
+  const [maxPapers, setMaxPapers] = useState(ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS);
   const [baseUrl, setBaseUrl] = useState(ONLINE_KNOWLEDGE_DEFAULT_BASE_URL);
   const [model, setModel] = useState(ONLINE_KNOWLEDGE_DEFAULT_MODEL);
   const [hasServerApiKey, setHasServerApiKey] = useState(false);
-  const [mode, setMode] = useState<OnlineKnowledgeMode>("synthesis");
-  const [maxPapers, setMaxPapers] = useState(ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS);
-  const [detail, setDetail] = useState<DetailState>(null);
-  const [csvError, setCsvError] = useState<string | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
-  const [isLoadingConfig, setIsLoadingConfig] = useState(true);
-  const searchState = useOnlineKnowledgeSearch();
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [historyActionError, setHistoryActionError] = useState<string | null>(null);
+  const [lastPayload, setLastPayload] = useState<OnlineKnowledgeSearchRequest | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [drawerView, setDrawerView] = useState<DrawerView>("detail");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerWidth, setDrawerWidth] = useState(380);
+  const [confirmClearHistory, setConfirmClearHistory] = useState(false);
+  const previousDataRef = useRef<OnlineKnowledgeSearchResponse | null>(null);
+
+  const hasModelAccess = hasServerApiKey && Boolean(baseUrl.trim()) && Boolean(model.trim());
+  const canSearch = Boolean(material.trim()) && hasModelAccess && maxPapers >= 1 && maxPapers <= 2000 && !searchState.isLoading;
+  const data = searchState.data;
+  const resultCount = data ? (data.mode === "property" ? data.propertyPoints.length : data.syntheses.length) : 0;
+  const selectedProperty = data?.mode === "property" && selectedIndex !== null ? data.propertyPoints[selectedIndex] : null;
+  const selectedSynthesis = data?.mode === "synthesis" && selectedIndex !== null ? data.syntheses[selectedIndex] : null;
 
   useEffect(() => {
-    const nextMaterial = initialMaterial.trim();
-    if (nextMaterial) {
-      setMaterial(nextMaterial);
-    }
+    const value = initialMaterial.trim();
+    if (value) setMaterial(value);
   }, [initialMaterial]);
 
   useEffect(() => {
+    void loadDefaultConfig();
     void searchState.loadHistory();
-  }, [searchState.loadHistory]);
-
-  useEffect(() => {
-    void handleLoadDefaultConfig();
+    // First mount is the lazy-entry point for online configuration and shared history.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const hasModelAccess =
-    hasServerApiKey &&
-    baseUrl.trim().length > 0 &&
-    model.trim().length > 0;
-  const canSearch =
-    material.trim().length > 0 &&
-    hasModelAccess &&
-    maxPapers >= 1 &&
-    maxPapers <= 2000 &&
-    !searchState.isLoading;
-
-  const activeData = searchState.data;
-  const activeJob = searchState.job;
-  const progressPercent =
-    activeJob && activeJob.total_papers > 0
-      ? Math.min(100, Math.round((activeJob.processed_papers / activeJob.total_papers) * 100))
-      : null;
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!canSearch) {
+  useEffect(() => {
+    if (!data || data === previousDataRef.current) return;
+    previousDataRef.current = data;
+    const count = data.mode === "property" ? data.propertyPoints.length : data.syntheses.length;
+    if (!count) {
+      setSelectedIndex(null);
+      setDrawerOpen(false);
       return;
     }
+    setSelectedIndex(0);
+    setDrawerView("detail");
+    if (isDesktopViewport()) setDrawerOpen(true);
+  }, [data]);
 
-    await submitSearch(material.trim(), mode, maxPapers);
+  async function loadDefaultConfig() {
+    setConfigError(null);
+    try {
+      const config = await fetchOnlineKnowledgeDefaultConfig();
+      setBaseUrl(config.base_url);
+      setModel(config.model);
+      setHasServerApiKey(config.has_server_api_key);
+      if (!config.has_server_api_key) {
+        setConfigError("服务端模型 API Key 尚未配置，在线检索暂不可运行。");
+      }
+    } catch (error) {
+      setHasServerApiKey(false);
+      setConfigError(error instanceof Error ? error.message : "无法读取在线检索配置");
+    }
   }
 
-  async function submitSearch(nextMaterial: string, nextMode: OnlineKnowledgeMode, nextMaxPapers: number) {
-    if (!nextMaterial || !hasModelAccess || searchState.isLoading) {
-      return;
-    }
-
-    const payload = {
+  function buildPayload(nextMaterial: string, nextMode: OnlineKnowledgeMode, nextMaxPapers: number): OnlineKnowledgeSearchRequest {
+    return {
       material: nextMaterial,
       api_key: null,
       base_url: baseUrl.trim(),
@@ -115,40 +325,30 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "" }: OnlineKnowl
       extraction_delay_seconds: 0.5,
       use_server_default: true
     };
+  }
 
+  async function submitPayload(payload: OnlineKnowledgeSearchRequest) {
+    if (!hasModelAccess || searchState.isLoading) return;
+    setLastPayload(payload);
+    setSelectedIndex(null);
+    setDrawerOpen(false);
+    setCsvError(null);
     await searchState.submit(payload);
   }
 
-  async function handleLoadDefaultConfig() {
-    setConfigError(null);
-    setIsLoadingConfig(true);
-    try {
-      const config = await fetchOnlineKnowledgeDefaultConfig();
-      setBaseUrl(config.base_url);
-      setModel(config.model);
-      setMaxPapers(config.max_papers);
-      setHasServerApiKey(config.has_server_api_key);
-      if (!config.has_server_api_key) {
-        setConfigError("Server default API key is not configured. Update backend .env before searching.");
-      }
-    } catch (error) {
-      setHasServerApiKey(false);
-      setConfigError(error instanceof Error ? error.message : "Failed to load API config");
-    } finally {
-      setIsLoadingConfig(false);
-    }
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canSearch) return;
+    await submitPayload(buildPayload(material.trim(), mode, maxPapers));
   }
 
   async function handleExportCsv() {
-    if (!activeData || activeData.dataframe.length === 0) {
-      return;
-    }
-
+    if (!data?.dataframe.length) return;
     setCsvError(null);
     try {
       const response = await exportOnlineKnowledgeCsv(
-        activeData.dataframe,
-        `${activeData.material.replace(/\s+/g, "_")}_${activeData.mode}_results.csv`
+        data.dataframe,
+        `${data.material.replace(/\s+/g, "_")}_${data.mode}_results.csv`
       );
       const blob = new Blob([response.csv_content], { type: "text/csv;charset=utf-8" });
       const url = URL.createObjectURL(blob);
@@ -156,513 +356,191 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "" }: OnlineKnowl
       link.href = url;
       link.download = response.filename;
       link.click();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (error) {
-      setCsvError(error instanceof Error ? error.message : "CSV export failed");
+      setCsvError(error instanceof Error ? error.message : "CSV 导出失败");
     }
   }
 
+  function restoreHistory(item: OnlineKnowledgeHistoryItem) {
+    setMaterial(item.material);
+    setMode(item.mode);
+    setMaxPapers(item.max_papers || ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS);
+    searchState.restoreFromHistory(item);
+    setDrawerView("detail");
+  }
+
+  async function replayHistory(item: OnlineKnowledgeHistoryItem) {
+    setMaterial(item.material);
+    setMode(item.mode);
+    setMaxPapers(item.max_papers || ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS);
+    setDrawerOpen(false);
+    await submitPayload(buildPayload(item.material, item.mode, item.max_papers || ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS));
+  }
+
+  async function deleteHistory(historyId: number) {
+    setHistoryActionError(null);
+    try {
+      await searchState.deleteHistoryItem(historyId);
+    } catch (error) {
+      setHistoryActionError(error instanceof Error ? error.message : "删除历史失败");
+    }
+  }
+
+  async function clearHistory() {
+    setHistoryActionError(null);
+    try {
+      await searchState.clearHistory();
+      setConfirmClearHistory(false);
+    } catch (error) {
+      setHistoryActionError(error instanceof Error ? error.message : "清空历史失败");
+    }
+  }
+
+  const detailTabs = useMemo(() => {
+    if (!data) return [];
+    if (selectedProperty) return buildPropertyTabs(selectedProperty, data);
+    if (selectedSynthesis) return buildSynthesisTabs(selectedSynthesis, data);
+    return [];
+  }, [data, selectedProperty, selectedSynthesis]);
+
+  const drawerTitle = drawerView === "history"
+    ? "在线检索历史"
+    : selectedProperty
+      ? "性质关系详情"
+      : selectedSynthesis ? "合成记录详情" : "在线结果详情";
+  const drawerSubtitle = drawerView === "history"
+    ? `${searchState.history.length} 条已完成记录 · 当前服务实例共享`
+    : data
+      ? `${data.material} · 在线文献`
+      : "选择结果后查看";
+
   return (
-    <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <div className="space-y-4">
-        <form onSubmit={handleSubmit} autoComplete="off" className="rounded-[32px] border border-white/70 bg-white/75 p-4 shadow-soft md:p-5">
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_180px]">
-            <Field label="Material">
-              <Input
-                value={material}
-                onChange={(event) => setMaterial(event.target.value)}
-                placeholder="polyimide, PLA, PET..."
-                aria-label="Material"
-              />
-            </Field>
-            <Field label="Search Mode">
-              <Select value={mode} onChange={(event) => setMode(event.target.value as OnlineKnowledgeMode)}>
-                <option value="synthesis">Synthesis</option>
-                <option value="property">Property</option>
-              </Select>
-            </Field>
+    <div className={`ks-panel-layout${drawerOpen ? " is-drawer-open" : ""}`} style={{ "--ks-drawer-width": `${drawerWidth}px` } as CSSProperties}>
+      <div className="ks-panel-scroll">
+        <div className="ks-workbench-column">
+          <div className="ks-module-toolbar">
+            <span className="ks-toolbar-status"><i />准备就绪</span>
           </div>
 
-          <div className="mt-3 grid gap-3 lg:grid-cols-[160px_140px]">
-            <Field label="Max Papers">
-              <Input
-                type="number"
-                min={1}
-                max={2000}
-                value={maxPapers}
-                onChange={(event) => setMaxPapers(Number(event.target.value))}
-                aria-label="Max papers"
-              />
-            </Field>
-            <div className="flex items-end">
-              <Button type="submit" disabled={!canSearch} className="w-full">
-                {searchState.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
-                Search
-              </Button>
+          <section className="ks-surface ks-search-surface">
+            <header className="ks-surface-header">
+              <div className="ks-surface-heading">
+                <span className="ks-surface-mark"><Globe2 aria-hidden="true" /></span>
+                <div className="ks-surface-copy"><h2>在线文献检索</h2><p>聚合论文摘要并抽取结构化合成或性质关系</p></div>
+              </div>
+              {modeNavigation}
+            </header>
+
+            <div className="ks-form-zone">
+              <form className="ks-search-form ks-online-form" onSubmit={handleSubmit}>
+                <label className="ks-field"><span>材料名称 <small>Material</small></span><span className="ks-input-with-icon"><Search aria-hidden="true" /><input value={material} onChange={(event) => setMaterial(event.target.value)} placeholder="例如 PLA、polyimide" aria-label="在线检索材料名称" autoComplete="off" /></span></label>
+                <label className="ks-field"><span>抽取模式</span><select value={mode} onChange={(event) => setMode(event.target.value as OnlineKnowledgeMode)} aria-label="在线检索抽取模式"><option value="property">性质–条件关系</option><option value="synthesis">合成方法</option></select></label>
+                <label className="ks-field"><span>论文上限</span><input type="number" min={1} max={2000} value={maxPapers} onChange={(event) => setMaxPapers(Number(event.target.value))} aria-label="在线检索论文上限" /></label>
+                <button className="ks-button is-primary" type="submit" disabled={!canSearch}>{searchState.isLoading ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <Search aria-hidden="true" />}开始检索</button>
+              </form>
+
+              <div className="ks-meta-row">
+                <span className={hasModelAccess ? "is-ready" : "is-warning"}><KeyRound aria-hidden="true" />{hasModelAccess ? "服务端模型配置可用" : "服务端模型配置不可用"}</span>
+                <span><Globe2 aria-hidden="true" />Semantic Scholar / PubMed / OpenAlex / arXiv / Crossref</span>
+                <span>异步任务 · 仅成功任务写入共享历史</span>
+              </div>
+              {configError ? <div className="ks-inline-alert is-error" role="alert"><AlertTriangle aria-hidden="true" /><span>{configError}</span><button type="button" onClick={() => void loadDefaultConfig()}>重新检查</button></div> : null}
             </div>
-          </div>
+          </section>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <Badge className="bg-teal-50 text-teal-800">
-              <KeyRound className="mr-1.5 h-3.5 w-3.5" />
-              {isLoadingConfig ? "Loading server default config" : hasServerApiKey ? "Using server default model config" : "Server default API key is not configured"}
-            </Badge>
-            <Badge className="bg-white text-slate-700">
-              <Globe2 className="mr-1.5 h-3.5 w-3.5" />
-              Crossref, Semantic Scholar, OpenAlex, PubMed, arXiv
-            </Badge>
-          </div>
-        </form>
+          <section className="ks-surface ks-results-surface" aria-busy={searchState.isLoading}>
+            <header className="ks-results-header">
+              <div className="ks-results-summary"><h2>{data?.mode === "synthesis" ? "在线合成记录" : "在线性质关系"}</h2><p>{searchState.isLoading ? "异步任务运行中，切换知识模式后状态仍会保留" : data ? `${data.totalPapers} 篇处理论文 · ${resultCount} 条展示记录` : "外部文献聚合与模型结构化抽取"}</p></div>
+              <div className="ks-results-actions">
+                <button className="ks-button" type="button" onClick={() => { setDrawerView("history"); setDrawerOpen(true); }}><History aria-hidden="true" />检索历史 <b>{searchState.history.length}</b></button>
+                <button className="ks-button" type="button" disabled={!data?.dataframe.length} onClick={() => void handleExportCsv()}><Download aria-hidden="true" />导出 CSV</button>
+              </div>
+            </header>
 
-        {searchState.error ? <Alert variant="destructive">{searchState.error}</Alert> : null}
-        {csvError ? <Alert variant="destructive">{csvError}</Alert> : null}
-        {configError ? <Alert variant="destructive">{configError}</Alert> : null}
-
-        {searchState.isLoading ? (
-          <div className="flex min-h-[280px] flex-col items-center justify-center rounded-[32px] border border-white/70 bg-white/75 p-5 text-center shadow-soft">
-            <Loader2 className="h-8 w-8 animate-spin text-teal-700" />
-            <div className="mt-4 font-heading text-xl font-semibold tracking-tight text-slate-950">Retrieving literature</div>
-            <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
-              {activeJob?.progress_message || `Current status: ${searchState.jobStatus ?? "pending"}.`}
-            </p>
-            <div className="mt-4 flex flex-wrap justify-center gap-2">
-              <Badge className="bg-white text-slate-700">Stage: {formatJobStage(activeJob?.progress_stage, searchState.jobStatus)}</Badge>
-              {activeJob ? (
-                <Badge className="bg-white text-slate-700">
-                  Papers: {activeJob.processed_papers}/{activeJob.total_papers || activeJob.max_papers}
-                </Badge>
+            <div className="ks-results-body">
+              {searchState.isLoading ? <OnlineProgress state={searchState} /> : null}
+              {!searchState.isLoading && searchState.error ? (
+                <div className="ks-state is-error" role="alert"><span><AlertTriangle aria-hidden="true" /></span><h3>在线检索任务失败</h3><p>{searchState.error}</p>{lastPayload ? <button className="ks-button" type="button" onClick={() => void submitPayload(lastPayload)}><RefreshCw aria-hidden="true" />重试本次任务</button> : null}</div>
+              ) : null}
+              {!searchState.isLoading && !searchState.error && !data ? (
+                <div className="ks-state"><span><Globe2 aria-hidden="true" /></span><h3>输入材料名称开始在线检索</h3><p>任务会聚合可用摘要，再按当前模式抽取结构化记录。</p></div>
+              ) : null}
+              {!searchState.isLoading && data && resultCount === 0 ? (
+                <div className="ks-state"><span><SearchX aria-hidden="true" /></span><h3>没有提取到结构化记录</h3><p>已处理论文，但可用摘要中没有形成满足当前模式的数据点。</p></div>
+              ) : null}
+              {!searchState.isLoading && data && resultCount > 0 ? (
+                <div className="ks-online-results">
+                  {data.exampleUsed ? <div className="ks-inline-alert is-warning" role="status"><AlertTriangle aria-hidden="true" /><span>在线来源没有可用摘要，本次结果使用了服务端内置示例，不能视为真实文献检索结论。</span></div> : null}
+                  {csvError ? <div className="ks-inline-alert is-error" role="alert"><AlertTriangle aria-hidden="true" /><span>{csvError}</span><button type="button" onClick={() => void handleExportCsv()}>重试导出</button></div> : null}
+                  <div className="ks-metric-strip">
+                    <Metric icon={<Globe2 aria-hidden="true" />} label="处理论文" value={`${data.totalPapers} 篇`} />
+                    <Metric icon={<FlaskConical aria-hidden="true" />} label={data.mode === "property" ? "性质关系" : "合成反应"} value={`${resultCount} 条`} />
+                    <Metric icon={<Clock3 aria-hidden="true" />} label="查询耗时" value={`${(data.query_time_ms / 1000).toFixed(1)} s`} />
+                    <Metric icon={<FileClock aria-hidden="true" />} label="论文上限" value={`${data.max_papers} 篇`} />
+                  </div>
+                  <div className="ks-distribution-grid">
+                    {data.mode === "property" ? <><DistributionPanel title="条件分布" items={data.conditionDistribution} /><DistributionPanel title="关系类型" items={data.relationshipDistribution} /></> : <><DistributionPanel title="反应类型" items={data.reactionTypeTable} /><DistributionPanel title="催化剂" items={data.catalystTable} /></>}
+                  </div>
+                  {data.conditionSummary.length ? <div className="ks-summary-row"><BarChart3 aria-hidden="true" /><strong>条件摘要</strong>{data.conditionSummary.slice(0, 8).map((item) => <span className="ks-chip" key={item}>{item}</span>)}</div> : null}
+                  <div className="ks-result-list">
+                    {data.mode === "property" ? data.propertyPoints.map((item, index) => (
+                      <button className={`ks-result-card${selectedIndex === index ? " is-selected" : ""}`} type="button" aria-pressed={selectedIndex === index} key={`${item.polymer_name}-${item.property_name}-${index}`} onClick={() => { setSelectedIndex(index); setDrawerView("detail"); setDrawerOpen(true); }}>
+                        <span className="ks-card-topline"><span className="ks-card-heading"><strong>{item.property_name} · {item.property_value}</strong><small>{item.polymer_name} · {item.polymer_type}</small></span><span className="ks-card-status-group">{selectedIndex === index ? <span className="ks-selected-indicator"><Check aria-hidden="true" />已选中</span> : null}<span className="ks-relation-chip">{item.relationship}</span></span></span>
+                        <span className="ks-card-snippet"><b>条件：</b>{item.condition_name} = {item.condition_value}</span>
+                        {item.paper_title ? <span className="ks-chip-row"><span className="ks-chip"><BookMarked aria-hidden="true" />{item.paper_title}</span></span> : null}
+                      </button>
+                    )) : data.syntheses.map((item, index) => (
+                      <button className={`ks-result-card${selectedIndex === index ? " is-selected" : ""}`} type="button" aria-pressed={selectedIndex === index} key={`${item.product_name}-${index}`} onClick={() => { setSelectedIndex(index); setDrawerView("detail"); setDrawerOpen(true); }}>
+                        <span className="ks-card-topline"><span className="ks-card-heading"><strong>{item.method || "未命名合成方法"}</strong><small>{item.product_name} · {item.product_abbreviation}</small></span><span className="ks-card-status-group">{selectedIndex === index ? <span className="ks-selected-indicator"><Check aria-hidden="true" />已选中</span> : null}<span className="ks-chip is-match">{item.reaction_type}</span></span></span>
+                        <span className="ks-card-snippet"><b>Reactants：</b>{optional(item.reactants)} · <b>Catalyst：</b>{optional(item.catalyst)}</span>
+                        <span className="ks-chip-row"><span className="ks-chip is-warning"><AlertTriangle aria-hidden="true" />接口未返回论文题名</span></span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ) : null}
             </div>
-            {progressPercent !== null ? (
-              <div className="mt-4 w-full max-w-xl">
-                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                  <div className="h-full rounded-full bg-teal-600 transition-all" style={{ width: `${progressPercent}%` }} />
-                </div>
-                <div className="mt-2 text-xs font-medium text-slate-500">{progressPercent}%</div>
-              </div>
-            ) : null}
-          </div>
-        ) : activeData ? (
-          <OnlineResults data={activeData} onOpenDetail={(label, value) => setDetail({ label, value })} onExportCsv={handleExportCsv} />
-        ) : (
-          <div className="flex min-h-[280px] items-center justify-center rounded-[32px] border border-white/70 bg-white/75 p-5 text-center text-sm text-mutedForeground shadow-soft">
-            Enter a material and temporary model access to retrieve online polymer knowledge.
-          </div>
-        )}
-      </div>
-
-      <aside className="space-y-4">
-        <HistoryPanel
-          state={searchState}
-          onRestore={(item) => {
-            setMaterial(item.material);
-            setMode(item.mode);
-            setMaxPapers(item.max_papers || 100);
-            searchState.restoreFromHistory(item);
-          }}
-          onReplay={(item) => {
-            setMaterial(item.material);
-            setMode(item.mode);
-            setMaxPapers(item.max_papers || 100);
-            void submitSearch(item.material, item.mode, item.max_papers || 100);
-          }}
-          canReplay={hasModelAccess && !searchState.isLoading}
-        />
-      </aside>
-
-      <DetailDialog detail={detail} onClose={() => setDetail(null)} />
-    </section>
-  );
-}
-
-function OnlineResults({
-  data,
-  onOpenDetail,
-  onExportCsv
-}: {
-  data: OnlineKnowledgeSearchResponse;
-  onOpenDetail: (label: string, value: string) => void;
-  onExportCsv: () => void;
-}) {
-  const isPropertyMode = data.mode === "property";
-  const resultCount = isPropertyMode ? data.propertyPoints.length : data.syntheses.length;
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-[32px] border border-white/70 bg-white/75 p-4 shadow-soft md:p-5">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-teal-700">Search Result</div>
-            <h2 className="font-heading mt-1 text-2xl font-semibold tracking-tight text-slate-950">{data.material}</h2>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {data.exampleUsed ? <Badge className="bg-amber-50 text-amber-800">Example data used</Badge> : null}
-            <Button type="button" variant="outline" onClick={onExportCsv} disabled={data.dataframe.length === 0}>
-              <Download className="mr-2 h-4 w-4" />
-              CSV
-            </Button>
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Metric icon={<Globe2 className="h-4 w-4" />} label="Papers" value={String(data.totalPapers)} />
-          <Metric icon={<FlaskConical className="h-4 w-4" />} label={isPropertyMode ? "Data Points" : "Reactions"} value={String(resultCount)} />
-          <Metric icon={<Clock3 className="h-4 w-4" />} label="Search Time" value={`${(data.query_time_ms / 1000).toFixed(1)} s`} />
-          <Metric icon={<FileClock className="h-4 w-4" />} label="Limit" value={String(data.max_papers)} />
+          </section>
         </div>
       </div>
 
-      {isPropertyMode ? (
-        <div className="grid gap-4 xl:grid-cols-2">
-          <DistributionPanel title="Property Names" items={data.propertyNameDistribution} />
-          <DistributionPanel title="Conditions" items={data.conditionDistribution} />
-          <DistributionPanel title="Polymer Types" items={data.polymerTypeDistribution} />
-          <DistributionPanel title="Relationships" items={data.relationshipDistribution} />
-        </div>
-      ) : (
-        <div className="grid gap-4 xl:grid-cols-2">
-          <DistributionPanel title="Temperature Distribution" items={data.temperatureDistribution} />
-          <DistributionPanel title="Solvent Distribution" items={data.solventDistribution} />
-          <DistributionPanel title="Reaction Types" items={data.reactionTypeTable} />
-          <DistributionPanel title="Catalysts" items={data.catalystTable} />
-          <DistributionPanel title="Temperature Expressions" items={data.tempLabels} />
-        </div>
-      )}
-
-      <div className="rounded-[32px] border border-white/70 bg-white/75 p-4 shadow-soft md:p-5">
-        <div className="flex items-center gap-2">
-          <BarChart3 className="h-4 w-4 text-teal-700" />
-          <h3 className="font-heading text-lg font-semibold tracking-tight text-slate-950">Condition Summary</h3>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {data.conditionSummary.map((item) => (
-            <Badge key={item} className="bg-white text-slate-700">
-              {item}
-            </Badge>
-          ))}
-        </div>
-      </div>
-
-      <div className="space-y-3">
-        {isPropertyMode ? (
-          data.propertyPoints.length > 0 ? (
-            data.propertyPoints.map((item, index) => (
-              <PropertyPointCard key={`${item.polymer_name}-${item.property_name}-${index}`} index={index + 1} item={item} onOpenDetail={onOpenDetail} />
-            ))
-          ) : (
-            <EmptyResult>No property-condition relationships were extracted from the available abstracts.</EmptyResult>
-          )
-        ) : data.syntheses.length > 0 ? (
-          data.syntheses.map((item, index) => (
-            <SynthesisCard key={`${item.product_name}-${index}`} index={index + 1} item={item} onOpenDetail={onOpenDetail} />
-          ))
-        ) : (
-          <div className="flex min-h-[180px] items-center justify-center rounded-[32px] border border-white/70 bg-white/75 p-5 text-center text-sm text-mutedForeground shadow-soft">
-            No synthesis reactions were extracted from the available abstracts.
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function HistoryPanel({
-  state,
-  onRestore,
-  onReplay,
-  canReplay
-}: {
-  state: ReturnType<typeof useOnlineKnowledgeSearch>;
-  onRestore: (item: ReturnType<typeof useOnlineKnowledgeSearch>["history"][number]) => void;
-  onReplay: (item: ReturnType<typeof useOnlineKnowledgeSearch>["history"][number]) => void;
-  canReplay: boolean;
-}) {
-  return (
-    <div className="rounded-[32px] border border-white/70 bg-white/75 p-4 shadow-soft">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-teal-700">Search History</div>
-          <div className="font-heading mt-1 text-lg font-semibold tracking-tight text-slate-950">{state.history.length} records</div>
-        </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => void state.loadHistory()}
-            className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-white hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Refresh history"
-            title="Refresh history"
-          >
-            <RefreshCcw className={cn("h-4 w-4", state.isHistoryLoading && "animate-spin")} />
-          </button>
-          <button
-            type="button"
-            onClick={() => void state.clearHistory()}
-            disabled={state.history.length === 0}
-            className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-white hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
-            aria-label="Clear history"
-            title="Clear history"
-          >
-            <Eraser className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-
-      {state.historyError ? <Alert variant="destructive" className="mt-3">{state.historyError}</Alert> : null}
-
-      <div className="mt-4 space-y-2">
-        {state.history.length > 0 ? (
-          state.history.map((item) => (
-            <div key={item.history_id} className="rounded-2xl border border-slate-200/80 bg-white/75 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <button type="button" onClick={() => onRestore(item)} className="min-w-0 text-left">
-                  <div className="truncate text-sm font-semibold text-slate-950">{item.material}</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {item.timestamp} · {item.reactions_extracted} records
-                  </div>
-                </button>
-                <div className="flex shrink-0 gap-1">
-                  <button
-                    type="button"
-                    onClick={() => onReplay(item)}
-                    disabled={!canReplay}
-                    className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
-                    aria-label="Run this search again"
-                    title="Run again"
-                  >
-                    <Search className="h-4 w-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void state.deleteHistoryItem(item.history_id)}
-                    className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    aria-label="Delete history item"
-                    title="Delete"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))
-        ) : (
-          <div className="flex min-h-[160px] items-center justify-center text-center text-sm text-mutedForeground">
-            Completed online searches will appear here.
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SynthesisCard({
-  index,
-  item,
-  onOpenDetail
-}: {
-  index: number;
-  item: OnlineKnowledgeSynthesis;
-  onOpenDetail: (label: string, value: string) => void;
-}) {
-  return (
-    <article className="rounded-[28px] border border-white/70 bg-white/85 p-4 shadow-sm md:p-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <Badge className="bg-teal-50 text-teal-800">#{index}</Badge>
-          <h3 className="font-heading mt-3 text-xl font-semibold tracking-tight text-slate-950">{item.method}</h3>
-          <p className="mt-1 text-sm text-slate-600">{item.product_name}</p>
-        </div>
-        <Badge className="bg-white text-slate-700">{item.reaction_type}</Badge>
-      </div>
-
-      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-        <CompactField label="Reactants" value={item.reactants} onOpenDetail={onOpenDetail} />
-        <CompactField label="Properties" value={item.properties} onOpenDetail={onOpenDetail} />
-        <CompactField label="Temperature" value={item.temperature} onOpenDetail={onOpenDetail} />
-        <CompactField label="Catalyst" value={item.catalyst} onOpenDetail={onOpenDetail} />
-        <CompactField label="Solvent" value={item.solvent} onOpenDetail={onOpenDetail} />
-        <CompactField label="Time" value={item.time} onOpenDetail={onOpenDetail} />
-        <CompactField label="Atmosphere" value={item.atmosphere} onOpenDetail={onOpenDetail} />
-        <CompactField label="Pressure" value={item.pressure} onOpenDetail={onOpenDetail} />
-        <CompactField label="Initiator" value={item.initiator} onOpenDetail={onOpenDetail} />
-      </div>
-    </article>
-  );
-}
-
-function PropertyPointCard({
-  index,
-  item,
-  onOpenDetail
-}: {
-  index: number;
-  item: OnlineKnowledgePropertyPoint;
-  onOpenDetail: (label: string, value: string) => void;
-}) {
-  return (
-    <article className="rounded-[28px] border border-white/70 bg-white/85 p-4 shadow-sm md:p-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <Badge className="bg-teal-50 text-teal-800">#{index}</Badge>
-          <h3 className="font-heading mt-3 text-xl font-semibold tracking-tight text-slate-950">{item.property_name}</h3>
-          <p className="mt-1 text-sm text-slate-600">{item.polymer_name}</p>
-        </div>
-        <Badge className="bg-white text-slate-700">{item.relationship}</Badge>
-      </div>
-
-      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-        <CompactField label="Property Value" value={item.property_value} onOpenDetail={onOpenDetail} />
-        <CompactField label="Condition" value={item.condition_name} onOpenDetail={onOpenDetail} />
-        <CompactField label="Condition Value" value={item.condition_value} onOpenDetail={onOpenDetail} />
-        <CompactField label="Polymer Type" value={item.polymer_type} onOpenDetail={onOpenDetail} />
-        <CompactField label="Paper" value={item.paper_title} onOpenDetail={onOpenDetail} />
-      </div>
-    </article>
-  );
-}
-
-function CompactField({
-  label,
-  value,
-  onOpenDetail
-}: {
-  label: string;
-  value: string;
-  onOpenDetail: (label: string, value: string) => void;
-}) {
-  return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-center gap-2 rounded-2xl border border-slate-200/80 bg-white/70 px-3 py-2">
-      <div className="min-w-0">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
-        <div className="mt-1 truncate text-sm font-medium text-slate-900">{value}</div>
-      </div>
-      <button
-        type="button"
-        onClick={() => onOpenDetail(label, value)}
-        className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label={`View full ${label}`}
-        title="View full content"
+      <KnowledgeDetailDrawer
+        id="online-knowledge-detail"
+        open={drawerOpen && (drawerView === "history" || detailTabs.length > 0)}
+        width={drawerWidth}
+        contentKey={drawerView === "history" ? "online-history" : `online-detail-${data?.mode}-${selectedIndex}`}
+        title={drawerTitle}
+        subtitle={drawerSubtitle}
+        icon={drawerView === "history" ? <History aria-hidden="true" /> : <Globe2 aria-hidden="true" />}
+        tabs={drawerView === "detail" ? detailTabs : undefined}
+        footer={drawerView === "detail" && data ? <><span>处理论文 {data.totalPapers} 篇</span><span>{data.exampleUsed ? "示例回退" : "在线抽取"}</span></> : undefined}
+        reopenLabel={drawerView === "history" ? "查看检索历史" : "查看记录详情"}
+        verticalReopen={drawerView === "detail"}
+        showReopen={drawerView === "history" || detailTabs.length > 0}
+        onWidthChange={setDrawerWidth}
+        onClose={() => setDrawerOpen(false)}
+        onOpen={() => setDrawerOpen(true)}
       >
-        <Expand className="h-4 w-4" />
-      </button>
-    </div>
-  );
-}
-
-function EmptyResult({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex min-h-[180px] items-center justify-center rounded-[32px] border border-white/70 bg-white/75 p-5 text-center text-sm text-mutedForeground shadow-soft">
-      {children}
-    </div>
-  );
-}
-
-function DistributionPanel({ title, items }: { title: string; items: OnlineKnowledgeCountItem[] }) {
-  const maxCount = useMemo(() => Math.max(1, ...items.map((item) => item.count)), [items]);
-
-  return (
-    <div className="rounded-[28px] border border-white/70 bg-white/75 p-4 shadow-sm">
-      <h3 className="font-heading text-lg font-semibold tracking-tight text-slate-950">{title}</h3>
-      <div className="mt-4 space-y-3">
-        {items.length > 0 ? (
-          items.map((item) => (
-            <div key={item.label}>
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="truncate font-medium text-slate-700">{item.label}</span>
-                <span className="shrink-0 text-slate-500">
-                  {item.count} · {item.percentage}%
-                </span>
-              </div>
-              <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100">
-                <div className="h-full rounded-full bg-teal-600" style={{ width: `${Math.max(6, (item.count / maxCount) * 100)}%` }} />
-              </div>
+        {drawerView === "history" ? (
+          <div className="ks-drawer-stack">
+            <div className="ks-drawer-callout"><History aria-hidden="true" /><span>这里展示当前数据库服务实例最近 100 条已完成记录，不是按用户隔离的个人历史。</span></div>
+            <div className="ks-history-toolbar">
+              <button className="ks-button" type="button" onClick={() => void searchState.loadHistory()} disabled={searchState.isHistoryLoading}><RefreshCw className={searchState.isHistoryLoading ? "is-spinning" : ""} aria-hidden="true" />刷新</button>
+              {!confirmClearHistory ? <button className="ks-button is-danger" type="button" disabled={!searchState.history.length} onClick={() => setConfirmClearHistory(true)}><Trash2 aria-hidden="true" />清空全部</button> : <div className="ks-confirm-row"><span>确认清空服务实例全部历史？</span><button type="button" onClick={() => void clearHistory()}>确认</button><button type="button" onClick={() => setConfirmClearHistory(false)}>取消</button></div>}
             </div>
-          ))
-        ) : (
-          <div className="flex min-h-[120px] items-center justify-center text-center text-sm text-mutedForeground">No data available.</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-slate-200/80 bg-white/75 p-4">
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-        <span className="text-teal-700">{icon}</span>
-        {label}
-      </div>
-      <div className="font-heading mt-2 text-2xl font-semibold tracking-tight text-slate-950">{value}</div>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function formatJobStage(stage: string | undefined, status: string | null) {
-  const normalized = stage || status || "pending";
-  return normalized.replace(/_/g, " ");
-}
-
-function DetailDialog({ detail, onClose }: { detail: DetailState; onClose: () => void }) {
-  useEffect(() => {
-    if (!detail) {
-      return;
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [detail, onClose]);
-
-  if (!detail) {
-    return null;
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="online-knowledge-detail-title"
-      onClick={onClose}
-    >
-      <div
-        className="max-h-[78vh] w-full max-w-3xl overflow-hidden rounded-[24px] border border-white/80 bg-white shadow-[0_30px_90px_rgba(8,17,31,0.28)]"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
-          <div className="min-w-0">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-teal-700">{detail.label}</div>
-            <h2 id="online-knowledge-detail-title" className="font-heading mt-1 text-xl font-semibold tracking-tight text-slate-950">
-              Full Content
-            </h2>
+            {searchState.historyError || historyActionError ? <div className="ks-inline-alert is-error" role="alert"><AlertTriangle aria-hidden="true" /><span>{historyActionError || searchState.historyError}</span></div> : null}
+            <div className="ks-history-list">
+              {searchState.history.length ? searchState.history.map((item) => (
+                <article className="ks-history-item" key={item.history_id}>
+                  <div><strong>{item.material} · {item.mode === "property" ? "性质" : "合成"}</strong><span>{item.timestamp} · {item.papers_found} 篇 · {item.reactions_extracted} 条展示记录</span></div>
+                  <div><button type="button" onClick={() => restoreHistory(item)}>恢复</button><button type="button" disabled={!hasModelAccess || searchState.isLoading} onClick={() => void replayHistory(item)}>重新检索</button><button className="is-danger" type="button" onClick={() => void deleteHistory(item.history_id)} aria-label={`删除 ${item.material} 历史`}><Trash2 aria-hidden="true" /></button></div>
+                </article>
+              )) : <div className="ks-state is-compact"><span><FileClock aria-hidden="true" /></span><h3>暂无已完成历史</h3><p>成功完成的在线任务会显示在这里。</p></div>}
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="max-h-[60vh] overflow-auto px-5 py-5">
-          <p className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-800">{detail.value}</p>
-        </div>
-      </div>
+        ) : null}
+      </KnowledgeDetailDrawer>
     </div>
   );
 }

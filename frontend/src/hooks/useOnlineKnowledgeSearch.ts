@@ -190,16 +190,34 @@ export function useOnlineKnowledgeSearch() {
   }
 
   async function deleteHistoryItem(historyId: number) {
-    await deleteOnlineKnowledgeHistory(historyId);
-    setState((current) => ({
-      ...current,
-      history: current.history.filter((item) => item.history_id !== historyId)
-    }));
+    setState((current) => ({ ...current, historyError: null }));
+    try {
+      await deleteOnlineKnowledgeHistory(historyId);
+      setState((current) => ({
+        ...current,
+        history: current.history.filter((item) => item.history_id !== historyId)
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        historyError: error instanceof Error ? error.message : "Failed to delete history"
+      }));
+      throw error;
+    }
   }
 
   async function clearHistory() {
-    await clearOnlineKnowledgeHistory();
-    setState((current) => ({ ...current, history: [] }));
+    setState((current) => ({ ...current, historyError: null }));
+    try {
+      await clearOnlineKnowledgeHistory();
+      setState((current) => ({ ...current, history: [] }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        historyError: error instanceof Error ? error.message : "Failed to clear history"
+      }));
+      throw error;
+    }
   }
 
   return {
