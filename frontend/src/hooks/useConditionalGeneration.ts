@@ -32,6 +32,7 @@ const DEFAULT_REQUEST: ConditionalGenerationTgRequest = {
 
 export function useConditionalGeneration() {
   const [request, setRequest] = useState<ConditionalGenerationTgRequest>(DEFAULT_REQUEST);
+  const [submittedRequest, setSubmittedRequest] = useState<ConditionalGenerationTgRequest | null>(null);
   const [state, setState] = useState<ConditionalGenerationState>({
     isLoading: false,
     error: null,
@@ -82,6 +83,24 @@ export function useConditionalGeneration() {
 
   async function submit(nextRequest?: ConditionalGenerationTgRequest) {
     const activeRequest = nextRequest ?? request;
+    const normalizedSmiles = activeRequest.smiles.trim();
+    if (!normalizedSmiles) {
+      setState((current) => ({
+        ...current,
+        isLoading: false,
+        error: "请先在画布中绘制或输入聚合物结构。",
+        data: null,
+        job: null
+      }));
+      return;
+    }
+
+    const requestForGeneration: ConditionalGenerationTgRequest = {
+      ...activeRequest,
+      smiles: normalizedSmiles
+    };
+    setRequest(requestForGeneration);
+    setSubmittedRequest(requestForGeneration);
     pollAbortRef.current?.abort();
     const token = pollTokenRef.current + 1;
     pollTokenRef.current = token;
@@ -95,7 +114,7 @@ export function useConditionalGeneration() {
     });
 
     try {
-      const createdJob = await createConditionalGenerationTgJob(activeRequest, controller.signal);
+      const createdJob = await createConditionalGenerationTgJob(requestForGeneration, controller.signal);
       if (pollTokenRef.current !== token || controller.signal.aborted) {
         return;
       }
@@ -104,7 +123,7 @@ export function useConditionalGeneration() {
         job: {
           job_id: createdJob.job_id,
           status: createdJob.status,
-          delta_tg: activeRequest.delta_tg,
+          delta_tg: requestForGeneration.delta_tg,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           started_at: null,
@@ -134,10 +153,25 @@ export function useConditionalGeneration() {
     }
   }
 
+  function reset() {
+    pollTokenRef.current += 1;
+    pollAbortRef.current?.abort();
+    pollAbortRef.current = null;
+    setSubmittedRequest(null);
+    setState({
+      isLoading: false,
+      error: null,
+      data: null,
+      job: null
+    });
+  }
+
   return {
     request,
     setRequest,
+    submittedRequest,
     ...state,
-    submit
+    submit,
+    reset
   };
 }

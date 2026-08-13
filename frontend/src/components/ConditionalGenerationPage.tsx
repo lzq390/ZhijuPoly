@@ -1,406 +1,847 @@
-import { ArrowLeft, Atom, LoaderCircle, Microscope, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
-import { StructurePreview3D } from "./StructurePreview3D";
-import { StructureSvg } from "./StructureSvg";
-import { CurrentStructurePanel, MissingStructurePanel } from "./StructureWorkbenchPage";
-import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
-import { Input } from "./ui/input";
-import { useState } from "react";
+import {
+  ArrowUp,
+  Atom,
+  Box,
+  Check,
+  ChevronDown,
+  Copy,
+  Eraser,
+  ImagePlus,
+  LoaderCircle,
+  Plus,
+  RefreshCcw,
+  Search,
+  SlidersHorizontal,
+  Sparkles,
+  X
+} from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent
+} from "react";
 import { useConditionalGeneration } from "../hooks/useConditionalGeneration";
 import { useConditionalGenerationStatus } from "../hooks/useConditionalGenerationStatus";
+import { useTgStructureCanvas, wildcardCount } from "../hooks/useTgStructureCanvas";
 import type {
-  ConditionalGenerationCandidate,
   ConditionalGenerationTgRequest,
   StructureWorkspaceContext
 } from "../types";
+import { ConditionalGenerationResults } from "./ConditionalGenerationResults";
+import { StructurePreview3D } from "./StructurePreview3D";
+import "../styles/polymer-desktop.css";
+import "../styles/reverse-design.css";
 
 type ConditionalGenerationPageProps = {
   structure: StructureWorkspaceContext;
-  onEditStructure: () => void;
-  onBackHome: () => void;
 };
 
-function parseNumber(value: string, fallback: number) {
-  const parsed = Number(value);
-  return Number.isNaN(parsed) ? fallback : parsed;
+type OpenPanel = "parameters" | "assistant" | null;
+
+const DRAWER_MIN_WIDTH = 320;
+const DRAWER_MAX_WIDTH = 560;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
-function formatOptionalNumber(value: number | null | undefined, digits = 2) {
-  return value == null ? "Pending" : value.toFixed(digits);
+function validateRequest(request: ConditionalGenerationTgRequest) {
+  if (!Number.isFinite(request.delta_tg)) {
+    return "相对 Tg 变化必须为有效数值。";
+  }
+  if (
+    !Number.isInteger(request.candidate_count) ||
+    request.candidate_count < 1 ||
+    request.candidate_count > 50
+  ) {
+    return "候选数量必须为 1–50 的整数。";
+  }
+  if (
+    !Number.isInteger(request.top_k) ||
+    request.top_k < 1 ||
+    request.top_k > 20
+  ) {
+    return "Top-K 必须为 1–20 的整数。";
+  }
+  if (
+    !Number.isFinite(request.temperature) ||
+    request.temperature < 0.1 ||
+    request.temperature > 2
+  ) {
+    return "Temperature 必须在 0.1–2.0 之间。";
+  }
+  return null;
 }
 
-function CandidateCard({ candidate }: { candidate: ConditionalGenerationCandidate }) {
+function requestsDiffer(
+  draft: ConditionalGenerationTgRequest,
+  submitted: ConditionalGenerationTgRequest | null
+) {
+  if (!submitted) {
+    return false;
+  }
   return (
-    <Card className="self-start overflow-hidden rounded-[24px] border-white/70 bg-white/90">
-      <div className="border-b border-white/80 bg-white p-3">
-        <div className="mb-2 flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.18em] text-mutedForeground">
-          <span className="inline-flex items-center gap-2">
-            <Atom className="h-3.5 w-3.5 text-teal-600" />
-            Generated
-          </span>
-          <Badge className="bg-teal-50 text-teal-800">Rank {candidate.rank}</Badge>
-        </div>
-        {candidate.structure_svg ? (
-          <StructureSvg
-            svg={candidate.structure_svg}
-            alt={`Generated structure rank ${candidate.rank}`}
-            imageClassName="max-h-[170px]"
-          />
-        ) : (
-          <div className="flex min-h-[150px] items-center justify-center rounded-[14px] bg-slate-50 px-3 text-center font-mono-ui text-xs leading-5 text-mutedForeground">
-            {candidate.generated_smiles}
-          </div>
-        )}
-      </div>
-      <CardContent className="space-y-3 pt-4">
-        <div className="font-mono-ui break-all rounded-[16px] border border-white/80 bg-white/75 px-3 py-2 text-xs leading-5 text-slate-800">
-          {candidate.generated_smiles}
-        </div>
-        <div className="grid gap-2 text-xs">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-mutedForeground">Predicted Tg</span>
-            <span className="text-right font-semibold text-slate-800">
-              {formatOptionalNumber(candidate.predicted_tg)} {candidate.tg_unit}
-            </span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-mutedForeground">Similarity</span>
-            <span className="text-right font-semibold text-slate-800">
-              {formatOptionalNumber(candidate.similarity_score, 3)}
-            </span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-mutedForeground">SA Score</span>
-            <span className="text-right font-semibold text-slate-800">{formatOptionalNumber(candidate.sa_score)}</span>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+    draft.delta_tg !== submitted.delta_tg ||
+    draft.candidate_count !== submitted.candidate_count ||
+    draft.top_k !== submitted.top_k ||
+    draft.temperature !== submitted.temperature
   );
 }
 
-export function ConditionalGenerationPage({ structure, onEditStructure, onBackHome }: ConditionalGenerationPageProps) {
-  const smiles = structure.smiles;
+function useMobileDrawer() {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") {
+      return;
+    }
+    const query = window.matchMedia("(max-width: 899px)");
+    const update = () => setIsMobile(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return isMobile;
+}
+
+export function ConditionalGenerationPage({ structure }: ConditionalGenerationPageProps) {
   const generation = useConditionalGeneration();
+  const {
+    serviceStatus,
+    serviceStatusError,
+    isStatusLoading,
+    refreshStatus
+  } = useConditionalGenerationStatus();
+  const [openPanel, setOpenPanel] = useState<OpenPanel>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [hasRun, setHasRun] = useState(false);
+  const [drawerWidth, setDrawerWidth] = useState(380);
   const [structureError, setStructureError] = useState<string | null>(null);
-  const { serviceStatus, serviceStatusError, isStatusLoading, refreshStatus } = useConditionalGenerationStatus();
+  const [assistantInput, setAssistantInput] = useState("");
+  const [assistantNotice, setAssistantNotice] = useState<string | null>(null);
+  const parameterPanelRef = useRef<HTMLElement | null>(null);
+  const assistantPanelRef = useRef<HTMLElement | null>(null);
+  const parameterButtonRef = useRef<HTMLButtonElement | null>(null);
+  const assistantButtonRef = useRef<HTMLButtonElement | null>(null);
+  const drawerRef = useRef<HTMLElement | null>(null);
+  const drawerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const drawerReopenButtonRef = useRef<HTMLButtonElement | null>(null);
+  const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const isMobileDrawer = useMobileDrawer();
+
+  const handleStructureChanged = useCallback(() => {
+    generation.reset();
+    setHasRun(false);
+    setIsDrawerOpen(false);
+    setStructureError(null);
+  }, [generation]);
+
+  const canvas = useTgStructureCanvas({
+    structure,
+    onStructureChanged: handleStructureChanged
+  });
+
+  const validationMessage = validateRequest(generation.request);
+  const parametersDirty = requestsDiffer(
+    generation.request,
+    generation.submittedRequest
+  );
+  const operationBusy = canvas.isBusy || generation.isLoading;
+  const resultCount = generation.data?.returned_count ?? generation.job?.accepted_count ?? 0;
+  const resultStatus = generation.isLoading
+    ? generation.job?.status === "pending"
+      ? "任务排队中"
+      : "候选生成中"
+    : generation.error
+      ? "生成需要检查"
+      : generation.data
+        ? `${resultCount} 个候选`
+        : "尚未生成";
+  const serviceReady = serviceStatus?.available === true;
 
   function updateRequest(partial: Partial<ConditionalGenerationTgRequest>) {
+    setStructureError(null);
     generation.setRequest({
       ...generation.request,
       ...partial
     });
   }
 
-  const canSubmit =
-    !generation.isLoading &&
-    smiles.trim().length > 0 &&
-    Number.isFinite(generation.request.delta_tg) &&
-    generation.request.candidate_count >= 1 &&
-    generation.request.candidate_count <= 50 &&
-    generation.request.top_k >= 1 &&
-    generation.request.top_k <= 20 &&
-    generation.request.temperature >= 0.1 &&
-    generation.request.temperature <= 2.0 &&
-    serviceStatus?.available === true;
-
-  async function handleSubmit() {
-    setStructureError(null);
-    if (serviceStatus && !serviceStatus.available) {
-      setStructureError(serviceStatus.message);
-      return;
-    }
-    const currentSmiles = (await structure.getCurrentSmiles()).trim();
-    if (!currentSmiles) {
-      setStructureError("请先在结构工作台绘制或输入种子结构。");
-      return;
-    }
-    generation.setRequest({ ...generation.request, smiles: currentSmiles });
-    await generation.submit({
-      ...generation.request,
-      smiles: currentSmiles
-    });
+  function restorePanelFocus(panel: Exclude<OpenPanel, null>) {
+    const target =
+      panel === "parameters" ? parameterButtonRef.current : assistantButtonRef.current;
+    window.requestAnimationFrame(() => target?.focus());
   }
 
+  function closePanel(restoreFocus = true) {
+    if (openPanel && restoreFocus) {
+      restorePanelFocus(openPanel);
+    }
+    setOpenPanel(null);
+  }
+
+  function togglePanel(panel: Exclude<OpenPanel, null>) {
+    setOpenPanel((current) => (current === panel ? null : panel));
+  }
+
+  function openDrawer() {
+    setOpenPanel(null);
+    setIsDrawerOpen(true);
+  }
+
+  function closeDrawer(restoreFocus = true) {
+    setIsDrawerOpen(false);
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => drawerReopenButtonRef.current?.focus());
+    }
+  }
+
+  useEffect(() => {
+    if (!openPanel) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      const panel =
+        openPanel === "parameters" ? parameterPanelRef.current : assistantPanelRef.current;
+      const trigger =
+        openPanel === "parameters" ? parameterButtonRef.current : assistantButtonRef.current;
+      if (!panel?.contains(target) && !trigger?.contains(target)) {
+        closePanel(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closePanel(true);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [openPanel]);
+
+  useEffect(() => {
+    if (!isDrawerOpen) {
+      return;
+    }
+
+    if (isMobileDrawer) {
+      window.requestAnimationFrame(() => drawerCloseButtonRef.current?.focus());
+    }
+
+    function handleDrawerKeyDown(event: KeyboardEvent) {
+      if (openPanel) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeDrawer(true);
+        return;
+      }
+      if (event.key !== "Tab" || !isMobileDrawer || !drawerRef.current) {
+        return;
+      }
+      const focusable = Array.from(
+        drawerRef.current.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter((element) => element.getClientRects().length > 0);
+      if (focusable.length === 0) {
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleDrawerKeyDown);
+    return () => document.removeEventListener("keydown", handleDrawerKeyDown);
+  }, [isDrawerOpen, isMobileDrawer, openPanel]);
+
+  useEffect(() => {
+    function handlePointerMove(event: PointerEvent) {
+      const resizeState = resizeStateRef.current;
+      if (!resizeState) {
+        return;
+      }
+      const nextWidth = resizeState.startWidth + resizeState.startX - event.clientX;
+      setDrawerWidth(clamp(nextWidth, DRAWER_MIN_WIDTH, DRAWER_MAX_WIDTH));
+    }
+
+    function stopResize() {
+      resizeStateRef.current = null;
+      document.body.classList.remove("tg-is-resizing");
+    }
+
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", stopResize);
+    document.addEventListener("pointercancel", stopResize);
+    return () => {
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", stopResize);
+      document.removeEventListener("pointercancel", stopResize);
+      document.body.classList.remove("tg-is-resizing");
+    };
+  }, []);
+
+  function startDrawerResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (isMobileDrawer) {
+      return;
+    }
+    event.preventDefault();
+    resizeStateRef.current = {
+      startX: event.clientX,
+      startWidth: drawerWidth
+    };
+    document.body.classList.add("tg-is-resizing");
+  }
+
+  async function handleGenerate() {
+    setStructureError(null);
+    if (validationMessage || operationBusy || !serviceReady) {
+      return;
+    }
+
+    const smiles = await canvas.resolveSmilesForSearch();
+    if (!smiles) {
+      setStructureError("请先在结构画布中绘制或输入种子结构。");
+      setOpenPanel("parameters");
+      return;
+    }
+    if (wildcardCount(smiles) < 2) {
+      setStructureError("种子聚合物必须包含至少两个 * 连接点。");
+      setOpenPanel("parameters");
+      return;
+    }
+
+    const request: ConditionalGenerationTgRequest = {
+      ...generation.request,
+      smiles
+    };
+    setHasRun(true);
+    openDrawer();
+    void generation.submit(request);
+  }
+
+  function handleAssistantSend() {
+    if (!assistantInput.trim()) {
+      return;
+    }
+    setAssistantNotice("AI 对话接口尚未接入，本次内容未发送。");
+  }
+
+  function parameterStatusText() {
+    if (structureError) {
+      return structureError;
+    }
+    if (validationMessage) {
+      return validationMessage;
+    }
+    if (isStatusLoading) {
+      return "正在检查条件生成服务…";
+    }
+    if (serviceStatusError) {
+      return `服务检查失败：${serviceStatusError}`;
+    }
+    if (serviceStatus && !serviceStatus.available) {
+      return serviceStatus.enabled
+        ? "生成模型文件不完整，请检查部署配置。"
+        : "条件生成服务当前未启用。";
+    }
+    if (parametersDirty) {
+      return "参数已修改，需要重新生成。";
+    }
+    return "参数已就绪 · ΔTg 是相对种子结构的变化条件。";
+  }
+
+  const parameterHasError = Boolean(
+    structureError || validationMessage || serviceStatusError || (serviceStatus && !serviceStatus.available)
+  );
+  const rootStyle = {
+    "--tg-drawer-width": `${drawerWidth}px`
+  } as CSSProperties;
+
   return (
-    <div className="space-y-6">
-      <nav className="flex flex-col gap-3 rounded-[26px] border border-white/70 bg-white/80 px-4 py-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between md:px-5">
-        <div className="flex items-center gap-3">
-          <Button type="button" variant="outline" onClick={onBackHome}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Home
-          </Button>
-          <div>
-            <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-teal-700/70">Current Module</div>
-            <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-              Conditional Polymer Generation
-            </div>
-          </div>
-        </div>
-        <Badge className="bg-teal-50 text-teal-800">Generation</Badge>
-      </nav>
+    <div
+      className={`polymer-desktop-page polymer-desktop-page--embedded tg-reverse-page cg-generation-page${isDrawerOpen ? " has-open-drawer" : ""}`}
+      style={rootStyle}
+    >
+      <h1 className="tg-page-title">条件聚合物生成</h1>
 
-      <section className="hero-glow mesh-surface relative overflow-hidden rounded-[36px] border border-white/70 px-6 py-6 md:px-8 md:py-8">
-        <div className="animate-fade-up">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="rounded-full border border-white/80 bg-white/80 px-4 py-2 text-sm font-semibold tracking-[0.16em] text-slate-950 shadow-sm">
-              NEXPOLY
-            </div>
-            <Badge>Conditional Tg Generation</Badge>
-          </div>
-          <div className="mt-6 max-w-4xl">
-            <h1 className="font-heading text-[2.35rem] font-semibold tracking-[-0.03em] text-slate-950 md:text-[3.7rem] md:leading-[0.95]">
-              Conditional Polymer Generation
-            </h1>
-            <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600 md:text-lg">
-              Generate polymer candidates from a seed structure and a Tg shift.
-            </p>
-          </div>
-
-          <div className="mt-8 grid gap-3 md:grid-cols-3">
-            <div className="flex min-h-[150px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
-              <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
-                <Sparkles className="h-4 w-4 text-teal-600" />
-                ΔTg Input
-              </div>
-              <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                {generation.request.delta_tg.toFixed(1)} °C
-              </div>
-            </div>
-            <div className="flex min-h-[150px] flex-col justify-center rounded-[26px] border border-white/80 bg-white/80 p-5 text-center shadow-sm backdrop-blur">
-              <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-mutedForeground">
-                <Atom className="h-4 w-4 text-sky-600" />
-                Structure Input
-              </div>
-              <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight text-slate-950">
-                {smiles.trim().length > 0 ? "Ready" : "Waiting"}
-              </div>
-            </div>
-            <div className="flex min-h-[150px] flex-col justify-center rounded-[26px] border border-white/80 bg-slate-950 p-5 text-center text-slate-50 shadow-[0_22px_50px_rgba(8,17,31,0.2)]">
-              <div className="flex items-center justify-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">
-                <Sparkles className="h-4 w-4 text-teal-300" />
-                Results
-              </div>
-              <div className="font-heading mt-3 text-[1.45rem] font-semibold tracking-tight">
-                {generation.data?.returned_count ?? generation.job?.accepted_count ?? 0}
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="grid items-stretch gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(380px,0.82fr)]">
-        <div className="grid min-w-0 gap-6">
-          <CurrentStructurePanel structure={structure} onEditStructure={onEditStructure} />
-          {smiles.trim() ? (
-            <StructurePreview3D
-              smiles={smiles}
-              className="xl:flex xl:flex-1 xl:flex-col"
-              contentClassName="xl:flex xl:flex-1 xl:flex-col"
-              previewClassName="h-[320px] xl:h-auto xl:min-h-[360px] xl:flex-1"
+      <div className="tg-workbench-shell">
+        <div className="tg-workbench-column">
+          <header className="polymer-module-header tg-toolbar-row">
+            <input
+              ref={canvas.fileInputRef}
+              className="tg-visually-hidden"
+              type="file"
+              accept="image/*"
+              aria-label="导入结构图片"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (file) {
+                  void canvas.importImageFile(file);
+                }
+              }}
             />
-          ) : (
-            <MissingStructurePanel
-              title="请先设置生成种子结构"
-              description="条件聚合物生成会使用结构工作台中的共享 SMILES。先绘制、导入或输入结构后，再回到这里设置 Tg 变化。"
-              onEditStructure={onEditStructure}
-            />
-          )}
-        </div>
+            <div className="header-actions tg-toolbar" aria-label="条件生成结构工具栏">
+              <button
+                type="button"
+                className="btn btn--outline btn--sm tg-tool-button"
+                id="btn-import-img"
+                onClick={() => canvas.fileInputRef.current?.click()}
+                disabled={operationBusy}
+              >
+                {canvas.isImportingImage ? <LoaderCircle className="animate-spin" /> : <ImagePlus />}
+                导入图片
+              </button>
+              <button
+                type="button"
+                className="btn btn--outline btn--sm tg-tool-button"
+                id="btn-clear-canvas"
+                onClick={() => void canvas.clearCanvas()}
+                disabled={operationBusy || !canvas.isEditorReady}
+              >
+                {canvas.isClearing ? <LoaderCircle className="animate-spin" /> : <Eraser />}
+                清空画布
+              </button>
+              <button
+                type="button"
+                className="btn btn--outline btn--sm tg-tool-button"
+                id="btn-sync-canvas"
+                onClick={() => void canvas.syncSmilesFromCanvas()}
+                disabled={operationBusy || !canvas.isEditorReady}
+              >
+                {canvas.isSyncing ? <LoaderCircle className="animate-spin" /> : <RefreshCcw />}
+                生成SMILES
+              </button>
+              <button
+                type="button"
+                className={`btn btn--outline btn--sm tg-tool-button${canvas.isFlipped ? " active" : ""}`}
+                id="btn-toggle-3d"
+                onClick={() => void canvas.toggle3D()}
+                disabled={operationBusy || !canvas.isEditorReady}
+              >
+                {canvas.isFlipping ? <LoaderCircle className="animate-spin" /> : <Box />}
+                {canvas.isFlipped ? "2D画布" : "3D构象"}
+              </button>
+              <span className="tg-toolbar-separator" aria-hidden="true" />
+              <button
+                ref={parameterButtonRef}
+                type="button"
+                className={`btn btn--outline btn--sm tg-icon-tool${openPanel === "parameters" ? " is-active" : ""}`}
+                aria-label="生成参数"
+                title="生成参数"
+                aria-expanded={openPanel === "parameters"}
+                aria-controls="cg-parameter-panel"
+                onClick={() => togglePanel("parameters")}
+              >
+                <SlidersHorizontal />
+              </button>
+              <button
+                ref={assistantButtonRef}
+                type="button"
+                className={`btn btn--outline btn--sm tg-icon-tool${openPanel === "assistant" ? " is-active" : ""}`}
+                aria-label="AI 助手"
+                title="AI 助手"
+                aria-expanded={openPanel === "assistant"}
+                aria-controls="cg-assistant-panel"
+                onClick={() => togglePanel("assistant")}
+              >
+                <Sparkles />
+              </button>
+            </div>
 
-        <div className="flex min-w-0 flex-col gap-6">
-          <Card className="overflow-hidden rounded-[30px] border-white/70">
-            <CardHeader className="gap-3 border-b border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(244,248,249,0.86)_100%)]">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-teal-700/80">
-                    Generation
-                  </div>
-                  <CardTitle className="mt-2 text-[1.35rem] tracking-tight">Generation Settings</CardTitle>
-                  <CardDescription>Set the Tg change and sampling controls.</CardDescription>
-                </div>
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_12px_30px_rgba(8,17,31,0.18)]">
-                  <Microscope className="h-4 w-4" />
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4 pt-5">
-              <div className="space-y-3">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="space-y-1.5">
-                    <span className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.08em] text-mutedForeground">
-                      ΔTg (°C)
-                    </span>
-                    <Input
+            <section
+              ref={parameterPanelRef}
+              id="cg-parameter-panel"
+              className={`tg-parameter-panel cg-parameter-panel${openPanel === "parameters" ? " is-open" : ""}`}
+              role="dialog"
+              aria-modal="false"
+              aria-labelledby="cg-parameter-title"
+              aria-hidden={openPanel !== "parameters"}
+              inert={openPanel !== "parameters"}
+            >
+              <header>
+                <h2 id="cg-parameter-title">条件生成参数</h2>
+                <button type="button" aria-label="收起生成参数" onClick={() => closePanel()}>
+                  <X />
+                </button>
+              </header>
+              <div className="tg-parameter-fields">
+                <label>
+                  <span>相对 Tg 变化</span>
+                  <span className="tg-input-shell">
+                    <input
                       type="number"
-                      value={generation.request.delta_tg}
-                      onChange={(event) =>
-                        updateRequest({ delta_tg: parseNumber(event.target.value, generation.request.delta_tg) })
-                      }
-                    />
-                  </label>
-                  <label className="space-y-1.5">
-                    <span className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.08em] text-mutedForeground">
-                      Candidate Count
-                    </span>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={50}
-                      step={1}
-                      value={generation.request.candidate_count}
+                      step="0.1"
+                      value={Number.isNaN(generation.request.delta_tg) ? "" : generation.request.delta_tg}
                       onChange={(event) =>
                         updateRequest({
-                          candidate_count: parseNumber(event.target.value, generation.request.candidate_count)
+                          delta_tg: event.currentTarget.value === "" ? Number.NaN : Number(event.currentTarget.value)
                         })
                       }
                     />
-                  </label>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="space-y-1.5">
-                    <span className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.08em] text-mutedForeground">
-                      Temperature
-                    </span>
-                    <Input
+                    <small>°C</small>
+                  </span>
+                </label>
+                <label>
+                  <span>候选数量</span>
+                  <span className="tg-input-shell">
+                    <input
                       type="number"
-                      min={0.1}
-                      max={2}
-                      step={0.05}
-                      value={generation.request.temperature}
+                      min="1"
+                      max="50"
+                      step="1"
+                      value={Number.isNaN(generation.request.candidate_count) ? "" : generation.request.candidate_count}
                       onChange={(event) =>
-                        updateRequest({ temperature: parseNumber(event.target.value, generation.request.temperature) })
+                        updateRequest({
+                          candidate_count: event.currentTarget.value === "" ? Number.NaN : Number(event.currentTarget.value)
+                        })
                       }
                     />
-                  </label>
-                  <label className="space-y-1.5">
-                    <span className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.08em] text-mutedForeground">
-                      Top-K Sampling
-                    </span>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={20}
-                      step={1}
-                      value={generation.request.top_k}
-                      onChange={(event) => updateRequest({ top_k: parseNumber(event.target.value, generation.request.top_k) })}
-                    />
-                  </label>
-                </div>
-              </div>
+                    <small>个</small>
+                  </span>
+                </label>
 
-              {serviceStatus && !serviceStatus.available ? (
-                <div className="flex flex-wrap items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
-                  <TriangleAlert className="mt-0.5 h-4 w-4 flex-none" />
-                  <div className="min-w-0 flex-1">
-                    <div className="font-semibold">{serviceStatus.message}</div>
-                    {serviceStatus.missing_artifacts.length ? (
-                      <div className="mt-1 break-all font-mono-ui text-xs">
-                        Missing: {serviceStatus.missing_artifacts.join(", ")}
-                      </div>
-                    ) : null}
+                <div className="cg-advanced-parameters">
+                  <button
+                    type="button"
+                    className="cg-advanced-toggle"
+                    aria-expanded={advancedOpen}
+                    aria-controls="cg-advanced-fields"
+                    onClick={() => setAdvancedOpen((current) => !current)}
+                  >
+                    <span>高级采样</span>
+                    <ChevronDown aria-hidden="true" />
+                  </button>
+                  <div id="cg-advanced-fields" className="cg-advanced-fields" hidden={!advancedOpen}>
+                    <label>
+                      <span>Top-K</span>
+                      <span className="tg-input-shell">
+                        <input
+                          type="number"
+                          min="1"
+                          max="20"
+                          step="1"
+                          value={Number.isNaN(generation.request.top_k) ? "" : generation.request.top_k}
+                          onChange={(event) =>
+                            updateRequest({
+                              top_k: event.currentTarget.value === "" ? Number.NaN : Number(event.currentTarget.value)
+                            })
+                          }
+                        />
+                      </span>
+                    </label>
+                    <label>
+                      <span>Temperature</span>
+                      <span className="tg-input-shell">
+                        <input
+                          type="number"
+                          min="0.1"
+                          max="2"
+                          step="0.05"
+                          value={Number.isNaN(generation.request.temperature) ? "" : generation.request.temperature}
+                          onChange={(event) =>
+                            updateRequest({
+                              temperature: event.currentTarget.value === "" ? Number.NaN : Number(event.currentTarget.value)
+                            })
+                          }
+                        />
+                      </span>
+                    </label>
                   </div>
-                  <Button type="button" variant="outline" className="h-9 px-3 text-xs" onClick={() => void refreshStatus()} disabled={isStatusLoading}>
-                    <RefreshCw className={`mr-2 h-3.5 w-3.5 ${isStatusLoading ? "animate-spin" : ""}`} />
-                    Recheck
-                  </Button>
                 </div>
-              ) : null}
-              {serviceStatusError ? (
-                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
-                  <TriangleAlert className="mt-0.5 h-4 w-4 flex-none" />
-                  <span className="min-w-0 flex-1">{serviceStatusError}</span>
-                  <Button type="button" variant="outline" className="h-9 px-3 text-xs" onClick={() => void refreshStatus()} disabled={isStatusLoading}>
-                    <RefreshCw className={`mr-2 h-3.5 w-3.5 ${isStatusLoading ? "animate-spin" : ""}`} />
-                    Retry
-                  </Button>
-                </div>
-              ) : null}
-
-              <div className="flex flex-col gap-3 border-t border-slate-200/70 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-sm leading-6 text-mutedForeground">
-                  {generation.job
-                    ? `${generation.job.status} | attempts ${generation.job.attempts} | accepted ${generation.job.accepted_count}`
-                    : isStatusLoading
-                      ? "Checking generation service availability..."
-                      : canSubmit
-                        ? "Structure and ΔTg settings are ready."
-                        : serviceStatus && !serviceStatus.available
-                          ? "Generation model artifacts are not available."
-                          : "Enter a seed structure and valid ΔTg settings."}
-                </div>
-                <Button type="button" className="min-h-[44px] min-w-[190px]" onClick={handleSubmit} disabled={!canSubmit}>
-                  {generation.isLoading ? (
-                    <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Sparkles className="mr-2 h-4 w-4" />
-                  )}
-                  {generation.isLoading ? "Generating..." : "Run Generation"}
-                </Button>
               </div>
-              {structureError ? (
-                <div className="rounded-2xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700">
-                  {structureError}
-                </div>
+              <div
+                className={`tg-parameter-validation${parameterHasError ? " is-error" : ""}`}
+                role="status"
+                aria-live="polite"
+              >
+                {parameterStatusText()}
+              </div>
+              {serviceStatusError || (serviceStatus && !serviceStatus.available) ? (
+                <button
+                  type="button"
+                  className="cg-status-retry"
+                  onClick={() => void refreshStatus()}
+                  disabled={isStatusLoading}
+                >
+                  <RefreshCcw className={isStatusLoading ? "animate-spin" : ""} />
+                  重新检查服务
+                </button>
               ) : null}
-            </CardContent>
-          </Card>
-        </div>
-      </section>
+              <button
+                type="button"
+                className="tg-search-button"
+                onClick={() => void handleGenerate()}
+                disabled={Boolean(validationMessage) || operationBusy || !serviceReady}
+              >
+                {generation.isLoading ? <LoaderCircle className="animate-spin" /> : <Search />}
+                {generation.isLoading ? "生成中" : "运行生成"}
+              </button>
+            </section>
 
-      <section className="overflow-hidden rounded-[32px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(243,248,250,0.92)_100%)] shadow-soft">
-        <div className="border-b border-slate-200/80 px-6 py-5 md:px-8">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <div className="text-xs font-medium uppercase tracking-[0.18em] text-teal-700/70">Results</div>
-              <h2 className="font-heading mt-2 text-[1.8rem] font-semibold tracking-tight text-slate-950">
-                Generated Candidates
-              </h2>
-              <p className="mt-1 text-sm leading-6 text-mutedForeground">
-                Generated structures are ranked by similarity, SA score, and deterministic tie-breakers.
-              </p>
+            <section
+              ref={assistantPanelRef}
+              id="cg-assistant-panel"
+              className={`tg-assistant-panel${openPanel === "assistant" ? " is-open" : ""}`}
+              role="dialog"
+              aria-modal="false"
+              aria-labelledby="cg-assistant-title"
+              aria-hidden={openPanel !== "assistant"}
+              inert={openPanel !== "assistant"}
+            >
+              <header className="tg-assistant-header">
+                <div>
+                  <span className="tg-assistant-mark"><Sparkles /></span>
+                  <span>
+                    <h2 id="cg-assistant-title">条件生成 AI 助手</h2>
+                    <small>当前科研上下文已连接</small>
+                  </span>
+                </div>
+                <span className="tg-assistant-header-actions">
+                  <button
+                    type="button"
+                    aria-label="新建对话"
+                    title="新建对话"
+                    onClick={() => {
+                      setAssistantInput("");
+                      setAssistantNotice(null);
+                    }}
+                  >
+                    <Plus />
+                  </button>
+                  <button type="button" aria-label="收起 AI 助手" onClick={() => closePanel()}>
+                    <X />
+                  </button>
+                </span>
+              </header>
+
+              <div className="tg-assistant-body">
+                <div className="tg-assistant-context" aria-label="当前 AI 上下文">
+                  <span className={structure.smiles.trim() ? "is-ready" : ""}>
+                    <i />
+                    {structure.smiles.trim() ? "共享结构已同步" : "暂无共享结构"}
+                  </span>
+                  <span>{`ΔTg ${Number.isFinite(generation.request.delta_tg) ? generation.request.delta_tg : "—"} °C`}</span>
+                  <span>{resultStatus}</span>
+                </div>
+
+                <div className="tg-assistant-welcome">
+                  <span className="tg-assistant-orb"><Sparkles /></span>
+                  <h3><em>你好，</em><br />今天想一起研究什么？</h3>
+                  <p>我会结合当前种子结构、相对 Tg 条件和候选结构辅助分析。</p>
+                  <div className="tg-assistant-suggestions">
+                    {[
+                      "解释当前种子结构的生成空间",
+                      "建议更合适的采样参数",
+                      "比较候选结构的关键差异"
+                    ].map((suggestion) => (
+                      <button
+                        key={suggestion}
+                        type="button"
+                        onClick={() => {
+                          setAssistantInput(suggestion);
+                          setAssistantNotice(null);
+                        }}
+                      >
+                        <Sparkles />
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <footer className="tg-assistant-composer">
+                <div className="tg-assistant-input-shell">
+                  <textarea
+                    rows={2}
+                    value={assistantInput}
+                    onChange={(event) => {
+                      setAssistantInput(event.currentTarget.value);
+                      setAssistantNotice(null);
+                    }}
+                    placeholder="向 AI 助手提问，或描述新的结构约束…"
+                    aria-label="发送给 AI 助手的消息"
+                  />
+                  <div>
+                    <span><Plus /> 科研助手</span>
+                    <button
+                      type="button"
+                      aria-label="发送消息"
+                      onClick={handleAssistantSend}
+                      disabled={!assistantInput.trim()}
+                    >
+                      <ArrowUp />
+                    </button>
+                  </div>
+                </div>
+                <small role="status">
+                  {assistantNotice || "界面设计预留 · 当前不会向 AI 模型发送数据"}
+                </small>
+              </footer>
+            </section>
+          </header>
+
+          <section className="tg-structure-surface" aria-label="种子结构画布">
+            <div className={`tg-structure-flip${canvas.isFlipped ? " is-flipped" : ""}`}>
+              <div className="tg-structure-face tg-structure-face-front">
+                <iframe
+                  ref={structure.iframeRef}
+                  title="条件聚合物生成结构编辑器"
+                  src="/ketcher/index.html"
+                  onLoad={canvas.handleEditorLoad}
+                />
+              </div>
+              <div
+                className="tg-structure-face tg-structure-face-back"
+                aria-hidden={!canvas.isFlipped}
+              >
+                <StructurePreview3D
+                  smiles={structure.smiles}
+                  variant="bare"
+                  visualStyle="polished-atoms"
+                  className="h-full"
+                  previewClassName="h-full min-h-0"
+                />
+              </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge className="bg-slate-100 text-slate-700">{generation.data?.returned_count ?? 0} candidates</Badge>
-              <Badge className="bg-slate-100 text-slate-700">
-                {generation.data ? `${generation.data.query_time_ms.toFixed(1)} ms` : "Idle"}
-              </Badge>
+          </section>
+
+          <section className="tg-smiles-capsule" aria-labelledby="cg-smiles-label">
+            <label id="cg-smiles-label">SMILES</label>
+            <textarea
+              rows={2}
+              readOnly
+              value={structure.smiles}
+              placeholder="在上方 Ketcher 画布绘制种子结构后，点击“生成SMILES”。"
+              aria-label="当前共享 SMILES，只读"
+            />
+            <button
+              type="button"
+              onClick={() => void canvas.copySmiles()}
+              disabled={!structure.smiles.trim()}
+              aria-label="复制共享 SMILES"
+              title="复制共享 SMILES"
+            >
+              {canvas.copyState === "copied" ? <Check /> : <Copy />}
+            </button>
+            <p role="status" aria-live="polite">
+              {canvas.feedback || "聚合物连接点保持为 *；仅 3D 空间预览时封氢。"}
+            </p>
+          </section>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        className={`cg-drawer-backdrop${isDrawerOpen ? " is-open" : ""}`}
+        aria-label="关闭候选结果"
+        tabIndex={isDrawerOpen && isMobileDrawer ? 0 : -1}
+        onClick={() => closeDrawer(true)}
+      />
+
+      <aside
+        ref={drawerRef}
+        className={`tg-results-drawer cg-results-drawer${isDrawerOpen ? " is-open" : ""}`}
+        role="dialog"
+        aria-modal={isMobileDrawer}
+        aria-hidden={!isDrawerOpen}
+        inert={!isDrawerOpen}
+        aria-labelledby="cg-results-title"
+      >
+        <div
+          className="tg-drawer-resizer"
+          role="separator"
+          tabIndex={isDrawerOpen && !isMobileDrawer ? 0 : -1}
+          aria-label="调整候选结果抽屉宽度"
+          aria-orientation="vertical"
+          aria-valuemin={DRAWER_MIN_WIDTH}
+          aria-valuemax={DRAWER_MAX_WIDTH}
+          aria-valuenow={Math.round(drawerWidth)}
+          onPointerDown={startDrawerResize}
+          onKeyDown={(event) => {
+            const amount = event.shiftKey ? 40 : 16;
+            if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+              event.preventDefault();
+              setDrawerWidth((current) =>
+                clamp(
+                  current + (event.key === "ArrowLeft" ? amount : -amount),
+                  DRAWER_MIN_WIDTH,
+                  DRAWER_MAX_WIDTH
+                )
+              );
+            } else if (event.key === "Home") {
+              event.preventDefault();
+              setDrawerWidth(DRAWER_MIN_WIDTH);
+            } else if (event.key === "End") {
+              event.preventDefault();
+              setDrawerWidth(DRAWER_MAX_WIDTH);
+            }
+          }}
+        />
+        <header className="tg-results-header">
+          <div>
+            <span><Atom /></span>
+            <div>
+              <h2 id="cg-results-title">条件生成候选</h2>
+              <p>{resultStatus}</p>
             </div>
           </div>
+          <button
+            ref={drawerCloseButtonRef}
+            type="button"
+            aria-label="关闭候选结果"
+            onClick={() => closeDrawer(true)}
+          >
+            <X />
+          </button>
+        </header>
+        <div className="tg-results-body">
+          <ConditionalGenerationResults
+            data={generation.data}
+            error={generation.error}
+            isLoading={generation.isLoading}
+            job={generation.job}
+          />
         </div>
-        <div className="px-4 py-5 md:px-5">
-          {generation.error ? (
-            <div className="rounded-[24px] border border-red-200 bg-red-50 px-5 py-4 text-sm font-medium text-red-700">
-              {generation.error}
-            </div>
-          ) : null}
-          {generation.isLoading ? (
-            <div className="flex min-h-[240px] items-center justify-center rounded-[24px] border border-dashed border-white bg-white/70 text-sm font-semibold text-mutedForeground">
-              <LoaderCircle className="mr-2 h-5 w-5 animate-spin text-teal-700" />
-              Generating candidates
-            </div>
-          ) : null}
-          {!generation.isLoading && !generation.data && !generation.error ? (
-            <div className="flex min-h-[240px] flex-col items-center justify-center rounded-[24px] border border-dashed border-white bg-white/70 px-6 py-12 text-center">
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white bg-white/85 text-slate-600 shadow-sm">
-                <Sparkles className="h-5 w-5" />
-              </div>
-              <div className="mt-5 text-lg font-semibold text-slate-900">Generation Ready</div>
-              <div className="mt-2 max-w-xl text-sm leading-6 text-mutedForeground">
-                Results appear here after a generation job completes.
-              </div>
-            </div>
-          ) : null}
-          {!generation.isLoading && generation.data ? (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {generation.data.results.map((candidate) => (
-                <CandidateCard key={`${candidate.rank}-${candidate.generated_smiles}`} candidate={candidate} />
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </section>
+      </aside>
+
+      {hasRun && !isDrawerOpen ? (
+        <button
+          ref={drawerReopenButtonRef}
+          type="button"
+          className="btn-expand-analysis tg-drawer-reopen"
+          onClick={openDrawer}
+          aria-label="展开条件生成候选"
+          title="展开条件生成候选"
+        >
+          <Search width={14} height={14} />
+        </button>
+      ) : null}
     </div>
   );
 }

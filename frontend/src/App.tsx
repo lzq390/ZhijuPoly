@@ -843,19 +843,21 @@ export default function App() {
     activeModule === "monomerPolymerization" ||
     activeModule === "polytaoGeneration" ||
     activeModule === "reverseDesign" ||
+    activeModule === "conditionalGeneration" ||
     activeModule === "experimentWorkflowDemo" ||
     activeModule === "highThroughputWorkflowDemo" ||
     activeModule === "mdSimulationDemo" ||
     activeModule === "monomerMdSimulation" ||
     activeModule === "monomerDft";
-  const isReverseDesignKetcherOwner =
+  const isTgKetcherOwner =
     activeModule === "reverseDesign" ||
+    activeModule === "conditionalGeneration" ||
     (activeModule === "knowledge" && preserveReverseDesignForKnowledge);
   const shouldKeepStructureWorkbenchMounted =
     hasMountedStructureWorkbench &&
     activeModule !== "explorer" &&
     activeModule !== "databaseQuery" &&
-    !isReverseDesignKetcherOwner;
+    !isTgKetcherOwner;
 
   return (
     <AppShell
@@ -977,11 +979,7 @@ export default function App() {
       ) : null}
 
       {activeModule === "conditionalGeneration" ? (
-        <ConditionalGenerationPage
-          structure={structureWorkspace}
-          onEditStructure={openStructureWorkbench}
-          onBackHome={() => navigate({ module: "home", datasetKey: null })}
-        />
+        <ConditionalGenerationPage structure={structureWorkspace} />
       ) : null}
 
       {activeModule === "polytaoGeneration" ? (
