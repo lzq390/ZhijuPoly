@@ -157,6 +157,7 @@ describe("KnowledgeSearch", () => {
     );
     expect(screen.getByRole("dialog", { name: "知识记录详情" })).not.toBeNull();
     expect(screen.getByText("A complete polyimide abstract for traceability.")).not.toBeNull();
+    expect(screen.getByText("已选中")).not.toBeNull();
 
     fireEvent.click(screen.getByRole("tab", { name: "原文与溯源" }));
     expect(screen.getByText("polymer_knowledge.jsonl")).not.toBeNull();
@@ -166,7 +167,9 @@ describe("KnowledgeSearch", () => {
     expect(resizer.getAttribute("aria-valuenow")).toBe("390");
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "知识记录详情" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "查看记录详情" }));
+    const reopenButton = screen.getByRole("button", { name: "查看记录详情" });
+    expect(reopenButton.classList.contains("is-vertical")).toBe(true);
+    fireEvent.click(reopenButton);
     expect(screen.getByRole("dialog", { name: "知识记录详情" })).not.toBeNull();
 
     fireEvent.change(screen.getByRole("combobox", { name: "本地知识库每页数量" }), { target: { value: "50" } });
@@ -188,6 +191,10 @@ describe("KnowledgeSearch", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: /在线文献/ }));
     await waitFor(() => expect(apiMocks.fetchConfig).toHaveBeenCalledOnce());
+    const onlinePanel = document.getElementById("knowledge-panel-online");
+    expect(onlinePanel).not.toBeNull();
+    expect(within(onlinePanel!).getByText("准备就绪")).not.toBeNull();
+    expect(within(onlinePanel!).queryByText("结构化抽取说明")).toBeNull();
     const input = screen.getByRole("textbox", { name: "在线检索材料名称" });
     fireEvent.change(input, { target: { value: "PLA" } });
 
@@ -211,13 +218,21 @@ describe("KnowledgeSearch", () => {
 
     expect(screen.getAllByText("tensile strength · 62 MPa").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("8 篇")).not.toBeNull();
+    expect(screen.getByText("已选中")).not.toBeNull();
     expect(screen.queryByText(/Reliability|可靠度|78/)).toBeNull();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("button", { name: "查看记录详情" }).classList.contains("is-vertical")).toBe(true);
   });
 
   it("PDF 只校验文件并在 950ms 后展示六篇固定结果", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const view = render(<KnowledgeSearch onBackHome={vi.fn()} />);
     fireEvent.click(screen.getByRole("tab", { name: /PDF 相似度/ }));
+    const pdfPanel = document.getElementById("knowledge-panel-pdf");
+    expect(pdfPanel).not.toBeNull();
+    expect(within(pdfPanel!).getByText("准备就绪")).not.toBeNull();
+    expect(pdfPanel!.querySelector(".ks-module-toolbar .ks-toolbar-note")).toBeNull();
     expect(screen.getByText(/不读取、不上传 PDF 内容/)).not.toBeNull();
 
     const input = view.container.querySelector<HTMLInputElement>('input[type="file"]');

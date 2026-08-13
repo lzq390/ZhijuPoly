@@ -27,6 +27,7 @@ type KnowledgeDetailDrawerProps = {
   children?: ReactNode;
   footer?: ReactNode;
   reopenLabel?: string;
+  verticalReopen?: boolean;
   showReopen?: boolean;
   onWidthChange: (width: number) => void;
   onClose: () => void;
@@ -72,6 +73,7 @@ export function KnowledgeDetailDrawer({
   children,
   footer,
   reopenLabel = "重新打开详情",
+  verticalReopen = false,
   showReopen = true,
   onWidthChange,
   onClose,
@@ -209,7 +211,7 @@ export function KnowledgeDetailDrawer({
 
       {everOpened && !open && showReopen ? (
         <button
-          className="ks-drawer-reopen"
+          className={`ks-drawer-reopen${verticalReopen ? " is-vertical" : ""}`}
           type="button"
           onClick={onOpen}
           aria-expanded="false"

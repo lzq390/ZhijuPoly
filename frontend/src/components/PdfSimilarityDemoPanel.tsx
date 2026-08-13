@@ -309,8 +309,7 @@ export function PdfSimilarityDemoPanel({ modeNavigation }: PdfSimilarityDemoPane
       <div className="ks-panel-scroll">
         <div className="ks-workbench-column">
           <div className="ks-module-toolbar">
-            <span className="ks-toolbar-status is-demo"><i />静态演示 · 不读取文件</span>
-            <span className="ks-toolbar-note"><FileText aria-hidden="true" />六篇固定本地样例</span>
+            <span className="ks-toolbar-status"><i />准备就绪</span>
           </div>
 
           <section className="ks-surface ks-search-surface">

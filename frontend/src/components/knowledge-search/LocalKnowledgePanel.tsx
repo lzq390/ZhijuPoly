@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  Check,
   Copy,
   Database,
   FileText,
@@ -263,7 +264,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
       <div className="ks-panel-scroll">
         <div className="ks-workbench-column">
           <div className="ks-module-toolbar">
-            <span className="ks-toolbar-status"><i />知识库就绪 · PostgreSQL</span>
+            <span className="ks-toolbar-status"><i />准备就绪</span>
           </div>
 
           <section className="ks-surface ks-search-surface">
@@ -385,7 +386,10 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
                               <strong><HighlightedText text={record.title_zh || record.title_en || `知识记录 #${record.knowledge_id}`} terms={highlightTerms} /></strong>
                               {record.title_zh && record.title_en ? <small><HighlightedText text={record.title_en} terms={highlightTerms} /></small> : null}
                             </span>
-                            <span className="ks-record-id">#{record.knowledge_id}</span>
+                            <span className="ks-card-status-group">
+                              {selected ? <span className="ks-selected-indicator"><Check aria-hidden="true" />已选中</span> : null}
+                              <span className="ks-record-id">#{record.knowledge_id}</span>
+                            </span>
                           </span>
                           <span className="ks-card-snippet"><HighlightedText text={record.abstract_snippet} terms={highlightTerms} /></span>
                           <span className="ks-chip-row">
@@ -434,6 +438,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
           <><span><Clock3 aria-hidden="true" />记录 {selectedRecord.knowledge_id} · 可追溯字段完整</span><button className="ks-button" type="button" onClick={() => void navigator.clipboard?.writeText(`${selectedRecord.source_file}:${selectedRecord.source_row_number}`)}><Copy aria-hidden="true" />复制定位</button></>
         ) : undefined}
         reopenLabel="查看记录详情"
+        verticalReopen
         showReopen={Boolean(selectedRecord)}
         onWidthChange={setDrawerWidth}
         onClose={() => setDrawerOpen(false)}

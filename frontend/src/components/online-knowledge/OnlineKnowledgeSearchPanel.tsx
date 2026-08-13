@@ -2,7 +2,7 @@ import {
   AlertTriangle,
   BarChart3,
   BookMarked,
-  CircleHelp,
+  Check,
   Clock3,
   Download,
   FileClock,
@@ -254,7 +254,6 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
   const [baseUrl, setBaseUrl] = useState(ONLINE_KNOWLEDGE_DEFAULT_BASE_URL);
   const [model, setModel] = useState(ONLINE_KNOWLEDGE_DEFAULT_MODEL);
   const [hasServerApiKey, setHasServerApiKey] = useState(false);
-  const [isLoadingConfig, setIsLoadingConfig] = useState(true);
   const [configError, setConfigError] = useState<string | null>(null);
   const [csvError, setCsvError] = useState<string | null>(null);
   const [historyActionError, setHistoryActionError] = useState<string | null>(null);
@@ -300,7 +299,6 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
   }, [data]);
 
   async function loadDefaultConfig() {
-    setIsLoadingConfig(true);
     setConfigError(null);
     try {
       const config = await fetchOnlineKnowledgeDefaultConfig();
@@ -313,8 +311,6 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
     } catch (error) {
       setHasServerApiKey(false);
       setConfigError(error instanceof Error ? error.message : "无法读取在线检索配置");
-    } finally {
-      setIsLoadingConfig(false);
     }
   }
 
@@ -424,8 +420,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
       <div className="ks-panel-scroll">
         <div className="ks-workbench-column">
           <div className="ks-module-toolbar">
-            <span className={`ks-toolbar-status${hasModelAccess ? "" : " is-warning"}`}><i />{isLoadingConfig ? "正在检查在线服务" : hasModelAccess ? "在线服务就绪 · 异步任务" : "在线服务配置缺失"}</span>
-            <span className="ks-toolbar-note"><CircleHelp aria-hidden="true" />结构化抽取说明</span>
+            <span className="ks-toolbar-status"><i />准备就绪</span>
           </div>
 
           <section className="ks-surface ks-search-surface">
@@ -491,13 +486,13 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
                   <div className="ks-result-list">
                     {data.mode === "property" ? data.propertyPoints.map((item, index) => (
                       <button className={`ks-result-card${selectedIndex === index ? " is-selected" : ""}`} type="button" aria-pressed={selectedIndex === index} key={`${item.polymer_name}-${item.property_name}-${index}`} onClick={() => { setSelectedIndex(index); setDrawerView("detail"); setDrawerOpen(true); }}>
-                        <span className="ks-card-topline"><span className="ks-card-heading"><strong>{item.property_name} · {item.property_value}</strong><small>{item.polymer_name} · {item.polymer_type}</small></span><span className="ks-relation-chip">{item.relationship}</span></span>
+                        <span className="ks-card-topline"><span className="ks-card-heading"><strong>{item.property_name} · {item.property_value}</strong><small>{item.polymer_name} · {item.polymer_type}</small></span><span className="ks-card-status-group">{selectedIndex === index ? <span className="ks-selected-indicator"><Check aria-hidden="true" />已选中</span> : null}<span className="ks-relation-chip">{item.relationship}</span></span></span>
                         <span className="ks-card-snippet"><b>条件：</b>{item.condition_name} = {item.condition_value}</span>
                         {item.paper_title ? <span className="ks-chip-row"><span className="ks-chip"><BookMarked aria-hidden="true" />{item.paper_title}</span></span> : null}
                       </button>
                     )) : data.syntheses.map((item, index) => (
                       <button className={`ks-result-card${selectedIndex === index ? " is-selected" : ""}`} type="button" aria-pressed={selectedIndex === index} key={`${item.product_name}-${index}`} onClick={() => { setSelectedIndex(index); setDrawerView("detail"); setDrawerOpen(true); }}>
-                        <span className="ks-card-topline"><span className="ks-card-heading"><strong>{item.method || "未命名合成方法"}</strong><small>{item.product_name} · {item.product_abbreviation}</small></span><span className="ks-chip is-match">{item.reaction_type}</span></span>
+                        <span className="ks-card-topline"><span className="ks-card-heading"><strong>{item.method || "未命名合成方法"}</strong><small>{item.product_name} · {item.product_abbreviation}</small></span><span className="ks-card-status-group">{selectedIndex === index ? <span className="ks-selected-indicator"><Check aria-hidden="true" />已选中</span> : null}<span className="ks-chip is-match">{item.reaction_type}</span></span></span>
                         <span className="ks-card-snippet"><b>Reactants：</b>{optional(item.reactants)} · <b>Catalyst：</b>{optional(item.catalyst)}</span>
                         <span className="ks-chip-row"><span className="ks-chip is-warning"><AlertTriangle aria-hidden="true" />接口未返回论文题名</span></span>
                       </button>
@@ -520,7 +515,8 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
         icon={drawerView === "history" ? <History aria-hidden="true" /> : <Globe2 aria-hidden="true" />}
         tabs={drawerView === "detail" ? detailTabs : undefined}
         footer={drawerView === "detail" && data ? <><span>处理论文 {data.totalPapers} 篇</span><span>{data.exampleUsed ? "示例回退" : "在线抽取"}</span></> : undefined}
-        reopenLabel={drawerView === "history" ? "查看检索历史" : "查看在线详情"}
+        reopenLabel={drawerView === "history" ? "查看检索历史" : "查看记录详情"}
+        verticalReopen={drawerView === "detail"}
         showReopen={drawerView === "history" || detailTabs.length > 0}
         onWidthChange={setDrawerWidth}
         onClose={() => setDrawerOpen(false)}
