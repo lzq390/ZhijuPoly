@@ -197,7 +197,7 @@ describe("PolytaoGenerationPage snapshot implementation", () => {
     for (const group of GROUPS) {
       const groupRegion = within(region).getByRole("region", { name: group.name });
       expect(within(groupRegion).getByRole("heading", { name: group.name })).toBeTruthy();
-      expect(within(groupRegion).getByText(`0 / ${group.count} 已填写`)).toBeTruthy();
+      expect(within(groupRegion).getByText(`0 / ${group.count} 已填写`).classList.contains("is-incomplete")).toBe(true);
     }
     expect(screen.queryByText("Prompt Preview")).toBeNull();
     expect(screen.queryByRole("button", { name: "刷新状态" })).toBeNull();
@@ -214,7 +214,11 @@ describe("PolytaoGenerationPage snapshot implementation", () => {
     expect(within(region).getByLabelText("分子量 MolWt")).toHaveProperty("value", "264");
     for (const group of GROUPS) {
       const groupRegion = within(region).getByRole("region", { name: group.name });
-      expect(within(groupRegion).getByText(`${group.count} / ${group.count} 已填写`)).toBeTruthy();
+      expect(
+        within(groupRegion)
+          .getByText(`${group.count} / ${group.count} 已填写`)
+          .classList.contains("is-complete")
+      ).toBe(true);
     }
 
     fireEvent.click(screen.getByRole("button", { name: "清空" }));

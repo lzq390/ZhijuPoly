@@ -801,6 +801,7 @@ function DescriptorGroupEditor({
     (count, item) => count + (Number.isFinite(descriptors[item.name]) ? 1 : 0),
     0
   );
+  const groupComplete = filled === group.items.length;
 
   return (
     <section className="polytao-descriptor-group" aria-labelledby={`polytao-descriptor-group-${groupIndex}`}>
@@ -809,7 +810,9 @@ function DescriptorGroupEditor({
         <div className="polytao-descriptor-group-title">
           <h4 id={`polytao-descriptor-group-${groupIndex}`}>{group.title}</h4>
           <p>{group.description}</p>
-          <span className="polytao-group-progress">{filled} / {group.items.length} 已填写</span>
+          <span className={`polytao-group-progress ${groupComplete ? "is-complete" : "is-incomplete"}`}>
+            {filled} / {group.items.length} 已填写
+          </span>
         </div>
       </div>
       <div className="polytao-descriptor-fields">
