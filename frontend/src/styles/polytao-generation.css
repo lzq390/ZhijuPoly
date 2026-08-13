@@ -1,0 +1,2043 @@
+.polytao-page {
+  --polytao-bg-app: #edf3f9;
+  --polytao-bg-soft: #f8fafc;
+  --polytao-primary: #4d95ff;
+  --polytao-primary-strong: #2563eb;
+  --polytao-cyan: #0891b2;
+  --polytao-success: #10b981;
+  --polytao-success-soft: #ecfdf5;
+  --polytao-warning-soft: #fffbeb;
+  --polytao-danger: #ef4444;
+  --polytao-danger-soft: #fef2f2;
+  --polytao-ink: #0f172a;
+  --polytao-border: rgba(15, 23, 42, 0.09);
+  --polytao-border-strong: rgba(100, 116, 139, 0.24);
+  --polytao-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03);
+  --polytao-shadow-md: 0 9px 32px rgba(15, 23, 42, 0.055);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 24px 24px 92px;
+  color: var(--polytao-ink);
+  background-color: var(--polytao-bg-app);
+  background-image:
+    radial-gradient(circle at 72% 6%, rgba(34, 211, 238, 0.11), transparent 27%),
+    radial-gradient(circle at 18% 42%, rgba(77, 149, 255, 0.07), transparent 25%),
+    linear-gradient(rgba(77, 149, 255, 0.042) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(77, 149, 255, 0.042) 1px, transparent 1px);
+  background-repeat: no-repeat, no-repeat, repeat, repeat;
+  background-size: auto, auto, 32px 32px, 32px 32px;
+  font-size: 14px;
+  line-height: 1.5;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+  transition: padding-right 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.polytao-page *,
+.polytao-page *::before,
+.polytao-page *::after {
+  box-sizing: border-box;
+}
+
+.polytao-page button,
+.polytao-page input {
+  font-family: inherit;
+}
+
+.polytao-page button:focus-visible,
+.polytao-page input:focus-visible,
+.polytao-page [tabindex]:focus-visible {
+  outline: 2px solid rgba(77, 149, 255, 0.72);
+  outline-offset: 2px;
+}
+
+.polytao-page svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  stroke-width: 1.8;
+}
+
+.polytao-spinner {
+  animation: polytao-spin 900ms linear infinite;
+}
+
+@keyframes polytao-spin {
+  to { transform: rotate(360deg); }
+}
+
+.polytao-page-heading {
+  position: absolute;
+  z-index: 25;
+  top: 26px;
+  right: 24px;
+  left: 20px;
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  transition: right 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.polytao-page-heading-left {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.polytao-page-heading h1 {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 18px;
+  font-weight: 770;
+  line-height: 30px;
+  letter-spacing: -0.02em;
+}
+
+.polytao-model-label {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--polytao-border);
+  border-radius: 7px;
+  color: #64748b;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: var(--polytao-shadow-sm);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.polytao-model-label svg {
+  width: 13px;
+  height: 13px;
+  color: #3691d8;
+}
+
+.polytao-module-toolbar {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.polytao-status-chip {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid var(--polytao-border);
+  border-radius: 999px;
+  color: #4f647c;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--polytao-shadow-sm);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.polytao-status-chip i {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--polytao-success);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
+}
+
+.polytao-status-chip.is-running {
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.polytao-status-chip.is-running i {
+  background: var(--polytao-primary);
+  box-shadow: 0 0 0 3px rgba(77, 149, 255, 0.14);
+}
+
+.polytao-status-chip.is-warning {
+  color: #93600b;
+  border-color: #fde68a;
+  background: #fffdf3;
+}
+
+.polytao-status-chip.is-warning i {
+  background: #e2a31b;
+  box-shadow: 0 0 0 3px rgba(226, 163, 27, 0.12);
+}
+
+.polytao-status-chip.is-error {
+  color: #b91c1c;
+  border-color: #fecaca;
+  background: var(--polytao-danger-soft);
+}
+
+.polytao-status-chip.is-error i {
+  background: var(--polytao-danger);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
+}
+
+.polytao-quiet-button,
+.polytao-secondary-button,
+.polytao-icon-button,
+.polytao-small-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--polytao-border-strong);
+  border-radius: 7px;
+  color: #55677d;
+  background: #fff;
+  box-shadow: var(--polytao-shadow-sm);
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.polytao-quiet-button,
+.polytao-secondary-button {
+  min-height: 34px;
+  padding: 6px 11px;
+  font-size: 12px;
+}
+
+.polytao-small-button {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+
+.polytao-icon-button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
+.polytao-quiet-button:hover,
+.polytao-secondary-button:hover,
+.polytao-icon-button:hover,
+.polytao-small-button:hover {
+  color: var(--polytao-ink);
+  border-color: #93c5fd;
+  background: #f8fbff;
+}
+
+.polytao-secondary-button:hover,
+.polytao-small-button:hover {
+  transform: translateY(-1px);
+}
+
+.polytao-page button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none !important;
+}
+
+.polytao-workbench-shell {
+  width: min(100%, 1040px);
+  min-width: 0;
+  margin: 58px auto 0;
+}
+
+.polytao-generation-surface {
+  position: relative;
+  overflow: visible;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18px 55px rgba(15, 35, 65, 0.08), 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+}
+
+.polytao-generation-surface::before {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 3px;
+  border-radius: 16px 16px 0 0;
+  background: linear-gradient(90deg, #3b82f6 0%, #22d3ee 52%, #818cf8 100%);
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.22);
+  content: "";
+}
+
+.polytao-surface-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 16px 16px 0 0;
+  background:
+    radial-gradient(circle at 88% 0, rgba(34, 211, 238, 0.08), transparent 35%),
+    linear-gradient(180deg, rgba(248, 251, 255, 0.96), rgba(255, 255, 255, 0.96));
+}
+
+.polytao-surface-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+}
+
+.polytao-surface-mark,
+.polytao-drawer-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  place-items: center;
+  border: 1px solid rgba(96, 165, 250, 0.26);
+  border-radius: 10px;
+  color: #2563eb;
+  background: linear-gradient(145deg, #f3f8ff, #e4f4ff 62%, #edfdfd);
+  box-shadow: 0 7px 18px rgba(37, 99, 235, 0.1), 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+}
+
+.polytao-surface-mark svg,
+.polytao-drawer-mark svg {
+  width: 20px;
+  height: 20px;
+}
+
+.polytao-surface-copy {
+  min-width: 0;
+}
+
+.polytao-surface-copy h2 {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 20px;
+  font-weight: 760;
+  letter-spacing: -0.01em;
+}
+
+.polytao-surface-copy p {
+  margin: 2px 0 0;
+  color: #71839a;
+  font-size: 13px;
+}
+
+.polytao-surface-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.polytao-source-chip {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid #bae6fd;
+  border-radius: 999px;
+  color: #087a91;
+  background: #f0fdff;
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.polytao-source-chip svg {
+  width: 12px;
+  height: 12px;
+}
+
+.polytao-source-chip.is-manual {
+  color: #8a5a0a;
+  border-color: #fde68a;
+  background: var(--polytao-warning-soft);
+}
+
+.polytao-source-chip.is-empty {
+  color: #64748b;
+  border-color: var(--polytao-border);
+  background: var(--polytao-bg-soft);
+}
+
+.polytao-parameter-anchor {
+  position: relative;
+}
+
+.polytao-parameter-trigger {
+  min-height: 32px;
+  padding-right: 7px;
+  color: #30455d;
+}
+
+.polytao-parameter-trigger[aria-expanded="true"] {
+  color: #1d4ed8;
+  border-color: #93c5fd;
+  background: #eff6ff;
+  box-shadow: 0 0 0 3px rgba(77, 149, 255, 0.09);
+}
+
+.polytao-parameter-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 9px);
+  right: 0;
+  visibility: hidden;
+  width: min(410px, calc(100vw - 32px));
+  overflow: hidden;
+  border: 1px solid var(--polytao-border-strong);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 22px 60px rgba(15, 23, 42, 0.17);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-7px) scale(0.985);
+  transform-origin: top right;
+  transition: opacity 160ms ease, transform 160ms ease, visibility 160ms;
+}
+
+.polytao-parameter-panel.is-open {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+.polytao-parameter-panel-head {
+  display: flex;
+  min-height: 50px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--polytao-border);
+  background: #fbfdff;
+}
+
+.polytao-parameter-panel-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.polytao-parameter-panel-title .polytao-section-number {
+  width: 24px;
+  height: 24px;
+}
+
+.polytao-parameter-panel-title h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 760;
+}
+
+.polytao-parameter-panel-title p {
+  margin: 1px 0 0;
+  color: #8a99ab;
+  font-size: 11px;
+}
+
+.polytao-sampling-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 13px 14px 5px;
+}
+
+.polytao-sampling-field:last-child {
+  grid-column: 1 / -1;
+}
+
+.polytao-sampling-field {
+  min-width: 0;
+}
+
+.polytao-sampling-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+
+.polytao-sampling-label > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  color: #55677d;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polytao-range-hint {
+  flex: none;
+  color: #9aa8b9;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.polytao-generation-action-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 14px 14px;
+  padding-top: 11px;
+  border-top: 1px solid var(--polytao-border);
+}
+
+.polytao-run-readiness {
+  min-width: 0;
+  color: #728399;
+  font-size: 11px;
+}
+
+.polytao-run-readiness strong {
+  display: block;
+  color: #37485d;
+  font-size: 12px;
+}
+
+.polytao-run-readiness span {
+  display: block;
+}
+
+.polytao-primary-button {
+  display: inline-flex;
+  min-width: 156px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  border: 1px solid #3b82f6;
+  border-radius: 8px;
+  color: #fff;
+  background: linear-gradient(180deg, #5a9dff, #3b82f6);
+  box-shadow: 0 7px 16px rgba(37, 99, 235, 0.2);
+  font-size: 13px;
+  font-weight: 760;
+  cursor: pointer;
+  transition: filter 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+
+.polytao-primary-button:hover {
+  filter: saturate(1.08);
+  transform: translateY(-1px);
+  box-shadow: 0 9px 20px rgba(37, 99, 235, 0.24);
+}
+
+.polytao-condition-section {
+  padding: 16px;
+}
+
+.polytao-condition-section + .polytao-condition-section {
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.polytao-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.polytao-section-title {
+  display: flex;
+  min-width: 0;
+  gap: 9px;
+}
+
+.polytao-section-number {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  border: 1px solid #bfdbfe;
+  border-radius: 7px;
+  color: var(--polytao-primary-strong);
+  background: #eff6ff;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.polytao-section-title h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 760;
+}
+
+.polytao-section-title p {
+  margin: 2px 0 0;
+  color: #8291a5;
+  font-size: 12px;
+}
+
+.polytao-structure-view-toggle[aria-pressed="true"] {
+  color: #2563eb;
+  border-color: #93c5fd;
+  background: #eff6ff;
+  box-shadow: 0 5px 14px rgba(37, 99, 235, 0.1);
+}
+
+.polytao-structure-source {
+  display: grid;
+  grid-template-columns: minmax(330px, 1.04fr) minmax(270px, 0.96fr);
+  align-items: stretch;
+  gap: 14px;
+}
+
+.polytao-structure-flip {
+  position: relative;
+  min-height: 250px;
+  perspective: 1200px;
+}
+
+.polytao-structure-flip-inner {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transition: transform 600ms cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform;
+}
+
+.polytao-structure-flip.is-flipped .polytao-structure-flip-inner {
+  transform: rotateY(180deg);
+}
+
+.polytao-structure-face {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.polytao-structure-face-front {
+  transform: rotateY(0deg);
+}
+
+.polytao-structure-face-back {
+  border: 1px solid #20364d;
+  background: #07111f;
+  transform: rotateY(180deg);
+}
+
+.polytao-structure-face-label {
+  position: absolute;
+  z-index: 5;
+  top: 8px;
+  left: 8px;
+  display: inline-flex;
+  min-height: 21px;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 6px;
+  color: #6d8096;
+  background: rgba(255, 255, 255, 0.88);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 750;
+  backdrop-filter: blur(6px);
+}
+
+.polytao-structure-face-back .polytao-structure-face-label {
+  color: #c6d5e7;
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(15, 31, 49, 0.7);
+}
+
+.polytao-structure-canvas {
+  position: relative;
+  display: grid;
+  min-height: 250px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--polytao-border);
+  border-radius: 10px;
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    #fbfdff;
+  background-size: 20px 20px;
+}
+
+.polytao-structure-canvas::after {
+  position: absolute;
+  right: 8px;
+  bottom: 7px;
+  padding: 2px 6px;
+  border: 1px solid var(--polytao-border);
+  border-radius: 5px;
+  color: #8091a7;
+  background: rgba(255, 255, 255, 0.88);
+  content: "共享结构";
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.03em;
+}
+
+.polytao-reference-svg {
+  display: flex;
+  width: 96%;
+  height: 216px;
+  align-items: center;
+  justify-content: center;
+}
+
+.polytao-reference-svg-image {
+  width: 100% !important;
+  max-height: 216px !important;
+  object-fit: contain;
+}
+
+.polytao-reference-placeholder {
+  display: flex;
+  max-width: 82%;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  color: #7f91a5;
+  text-align: center;
+  font-size: 12px;
+}
+
+.polytao-reference-placeholder svg {
+  width: 23px;
+  height: 23px;
+  color: #5b9eea;
+}
+
+.polytao-structure-3d-canvas {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(30, 64, 98, 0.8), transparent 50%),
+    linear-gradient(145deg, #0a1728, #030812);
+}
+
+.polytao-structure-3d-canvas::before {
+  position: absolute;
+  right: -18%;
+  bottom: -50%;
+  left: -18%;
+  height: 78%;
+  border: 1px solid rgba(94, 168, 255, 0.14);
+  border-radius: 50%;
+  background:
+    linear-gradient(rgba(74, 133, 191, 0.11) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(74, 133, 191, 0.11) 1px, transparent 1px);
+  background-size: 22px 22px;
+  content: "";
+  transform: perspective(240px) rotateX(62deg);
+}
+
+.polytao-reference-3d {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+}
+
+.polytao-reference-3d-preview {
+  min-height: 0 !important;
+  height: 100% !important;
+  background: transparent !important;
+}
+
+.polytao-structure-3d-hint {
+  position: absolute;
+  z-index: 4;
+  right: 8px;
+  bottom: 7px;
+  color: #8298b2;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  pointer-events: none;
+}
+
+.polytao-source-detail {
+  display: flex;
+  min-width: 0;
+  min-height: 250px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.polytao-smiles-disclosure {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--polytao-border);
+  border-radius: 9px;
+  background: var(--polytao-bg-soft);
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.polytao-smiles-disclosure:hover,
+.polytao-smiles-disclosure.is-open {
+  border-color: rgba(96, 165, 250, 0.34);
+  background: #fbfdff;
+}
+
+.polytao-smiles-disclosure.is-open {
+  box-shadow: 0 0 0 3px rgba(77, 149, 255, 0.055);
+}
+
+.polytao-smiles-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px 8px 11px;
+  border: 0;
+  border-radius: 8px;
+  color: #60748b;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.polytao-smiles-toggle:hover {
+  color: #30455d;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.polytao-smiles-toggle:disabled {
+  background: transparent;
+}
+
+.polytao-smiles-toggle-action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: #71839a;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.polytao-smiles-toggle-action svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 180ms ease;
+}
+
+.polytao-smiles-toggle[aria-expanded="true"] .polytao-smiles-toggle-action svg {
+  transform: rotate(180deg);
+}
+
+.polytao-smiles-content {
+  position: relative;
+  padding: 2px 40px 10px 11px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.polytao-field-eyebrow {
+  display: block;
+  color: #8191a5;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.polytao-smiles-value {
+  display: block;
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+  color: #203047;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.65;
+}
+
+.polytao-copy-inline {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  color: #71839a;
+  background: transparent;
+  cursor: pointer;
+}
+
+.polytao-copy-inline:hover {
+  color: var(--polytao-primary-strong);
+  background: #fff;
+}
+
+.polytao-copy-inline svg {
+  width: 14px;
+  height: 14px;
+}
+
+.polytao-semantic-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid #bae6fd;
+  border-radius: 9px;
+  color: #36556c;
+  background: #f0fbff;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.polytao-semantic-note svg {
+  width: 15px;
+  height: 15px;
+  margin-top: 1px;
+  color: var(--polytao-cyan);
+}
+
+.polytao-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: auto;
+}
+
+.polytao-inline-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 9px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #b91c1c;
+  background: var(--polytao-danger-soft);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.polytao-inline-error svg {
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+}
+
+.polytao-descriptor-tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.polytao-completion-chip {
+  display: inline-flex;
+  min-height: 29px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid #a7f3d0;
+  border-radius: 999px;
+  color: #047857;
+  background: var(--polytao-success-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.polytao-completion-chip svg {
+  width: 12px;
+  height: 12px;
+}
+
+.polytao-completion-chip.is-incomplete {
+  color: #9a6107;
+  border-color: #fde68a;
+  background: var(--polytao-warning-soft);
+}
+
+.polytao-descriptor-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.polytao-descriptor-group {
+  display: grid;
+  grid-template-columns: 142px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 11px;
+  background: linear-gradient(90deg, rgba(241, 247, 255, 0.92) 0, rgba(248, 251, 255, 0.96) 142px, #fff 142px);
+  box-shadow: 0 5px 18px rgba(15, 35, 65, 0.025), 0 1px 0 rgba(255, 255, 255, 0.95) inset;
+}
+
+.polytao-descriptor-group-head {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 3px 0 0 2px;
+}
+
+.polytao-descriptor-group-index {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid #bfdbfe;
+  border-radius: 7px;
+  color: #2563eb;
+  background: #eff6ff;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.polytao-descriptor-group:nth-child(2) .polytao-descriptor-group-index {
+  color: #087a91;
+  border-color: #a5f3fc;
+  background: #ecfeff;
+}
+
+.polytao-descriptor-group:nth-child(3) .polytao-descriptor-group-index {
+  color: #5b4acb;
+  border-color: #ddd6fe;
+  background: #f5f3ff;
+}
+
+.polytao-descriptor-group-title {
+  min-width: 0;
+}
+
+.polytao-descriptor-group h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.polytao-descriptor-group-title p {
+  margin: 2px 0 0;
+  color: #91a0b2;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.polytao-group-progress {
+  display: inline-block;
+  margin-top: 7px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 740;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.polytao-group-progress.is-complete {
+  color: #047857;
+  background: rgba(236, 253, 245, 0.96);
+}
+
+.polytao-group-progress.is-incomplete {
+  color: #c24141;
+  background: rgba(254, 242, 242, 0.96);
+}
+
+.polytao-descriptor-fields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.polytao-descriptor-field {
+  display: block;
+  min-width: 0;
+}
+
+.polytao-descriptor-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: #3f5268;
+  font-size: 11px;
+  font-weight: 730;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polytao-descriptor-key {
+  display: block;
+  min-height: 14px;
+  margin-top: 1px;
+  overflow: hidden;
+  color: #98a7b8;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polytao-number-input {
+  width: 100%;
+  height: 35px;
+  margin-top: 3px;
+  padding: 6px 8px;
+  border: 1px solid var(--polytao-border-strong);
+  border-radius: 7px;
+  color: #1e293b;
+  background: #fff;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.polytao-number-input:hover {
+  border-color: #94a3b8;
+}
+
+.polytao-number-input:focus {
+  border-color: var(--polytao-primary);
+  box-shadow: 0 0 0 3px rgba(77, 149, 255, 0.1);
+  outline: 0;
+}
+
+.polytao-number-input.is-invalid {
+  border-color: #fca5a5;
+  background: #fffafa;
+}
+
+.polytao-drawer-backdrop {
+  position: fixed;
+  z-index: 55;
+  inset: 0;
+  border: 0;
+  background: rgba(15, 23, 42, 0.3);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+
+.polytao-detail-drawer {
+  position: fixed;
+  z-index: 60;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  width: var(--polytao-drawer-width);
+  min-width: 0;
+  flex-direction: column;
+  border-left: 1px solid rgba(100, 135, 170, 0.24);
+  background:
+    radial-gradient(circle at 88% 4%, rgba(34, 211, 238, 0.08), transparent 25%),
+    linear-gradient(180deg, #f8fbfe, #fafcff 58%, #f5f8fc);
+  box-shadow: -18px 0 48px rgba(65, 92, 120, 0.13);
+  opacity: 0;
+  transform: translateX(102%);
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1), opacity 160ms ease;
+}
+
+.polytao-detail-drawer.is-open {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.polytao-drawer-resizer {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  left: -7px;
+  width: 14px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.polytao-drawer-resizer::after {
+  position: absolute;
+  top: 50%;
+  left: 6px;
+  width: 2px;
+  height: 54px;
+  border-radius: 999px;
+  background: #cbd5e1;
+  content: "";
+  transform: translateY(-50%);
+  transition: background 150ms ease, height 150ms ease;
+}
+
+.polytao-drawer-resizer:hover::after,
+.polytao-drawer-resizer:focus::after,
+.polytao-drawer-resizer.is-dragging::after {
+  height: 76px;
+  background: var(--polytao-primary);
+}
+
+.polytao-drawer-header {
+  display: flex;
+  min-height: 82px;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 13px 12px 15px;
+  border-bottom: 1px solid rgba(96, 165, 250, 0.17);
+  color: #27445f;
+  background:
+    radial-gradient(circle at 78% -35%, rgba(34, 211, 238, 0.15), transparent 50%),
+    linear-gradient(135deg, #f3f8ff 0%, #edf7fd 58%, #eefcfd 125%);
+  box-shadow: 0 8px 24px rgba(66, 96, 125, 0.08);
+}
+
+.polytao-drawer-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+}
+
+.polytao-drawer-mark {
+  width: 42px;
+  height: 42px;
+  border-color: rgba(125, 211, 252, 0.2);
+  border-radius: 11px;
+  color: #2875c7;
+  background: linear-gradient(145deg, rgba(219, 234, 254, 0.96), rgba(207, 250, 254, 0.72));
+}
+
+.polytao-drawer-copy {
+  min-width: 0;
+}
+
+.polytao-drawer-eyebrow {
+  display: block;
+  margin-bottom: 1px;
+  color: #1594af;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 740;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.polytao-drawer-copy h2 {
+  margin: 0;
+  overflow: hidden;
+  color: #213a53;
+  font-family: var(--font-heading);
+  font-size: 17px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polytao-drawer-copy p {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: #7890a6;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polytao-drawer-header .polytao-icon-button {
+  width: 38px;
+  height: 38px;
+  border-color: rgba(96, 165, 250, 0.2);
+  color: #607d98;
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+}
+
+.polytao-drawer-header .polytao-icon-button:hover {
+  color: #2563eb;
+  border-color: rgba(96, 165, 250, 0.38);
+  background: #f8fbff;
+}
+
+.polytao-drawer-header .polytao-icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.polytao-drawer-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.polytao-drawer-results-list {
+  display: grid;
+  gap: 12px;
+}
+
+.polytao-drawer-result-card {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(132, 157, 184, 0.24);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 10px 30px rgba(15, 35, 65, 0.065), 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.polytao-drawer-result-card:hover {
+  border-color: rgba(77, 149, 255, 0.38);
+  box-shadow: 0 14px 36px rgba(15, 55, 95, 0.1), 0 0 0 1px rgba(77, 149, 255, 0.06) inset;
+  transform: translateY(-1px);
+}
+
+.polytao-drawer-result-card::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #3b82f6, #22d3ee 58%, transparent 94%);
+  content: "";
+}
+
+.polytao-drawer-result-head {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 13px 9px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  background: linear-gradient(180deg, rgba(245, 249, 255, 0.92), rgba(255, 255, 255, 0.74));
+}
+
+.polytao-candidate-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.polytao-candidate-number {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  border-radius: 9px;
+  color: #2563eb;
+  background: linear-gradient(145deg, #eff6ff, #e6f5ff);
+  box-shadow: 0 5px 12px rgba(37, 99, 235, 0.08);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.polytao-candidate-identity strong {
+  display: block;
+  color: #26394f;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.polytao-candidate-identity small {
+  display: block;
+  margin-top: 1px;
+  color: #8ca0b5;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.07em;
+}
+
+.polytao-score-meter {
+  display: grid;
+  min-width: 72px;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid rgba(16, 185, 129, 0.22);
+  border-radius: 9px;
+  background: linear-gradient(145deg, rgba(236, 253, 245, 0.96), rgba(240, 253, 250, 0.8));
+}
+
+.polytao-score-meter span {
+  color: #47816c;
+  font-size: 8px;
+  font-weight: 740;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.polytao-score-meter strong {
+  color: #047857;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.polytao-candidate-visual {
+  position: relative;
+  display: grid;
+  height: 180px;
+  margin: 10px 12px 0;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.17);
+  border-radius: 11px;
+  background:
+    linear-gradient(rgba(77, 149, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(77, 149, 255, 0.035) 1px, transparent 1px),
+    radial-gradient(circle at 50% 42%, rgba(34, 211, 238, 0.06), transparent 55%),
+    #f9fcff;
+  background-size: 20px 20px, 20px 20px, auto, auto;
+}
+
+.polytao-candidate-visual::after {
+  position: absolute;
+  z-index: 2;
+  right: 7%;
+  left: 7%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.5), transparent);
+  box-shadow: 0 0 9px rgba(34, 211, 238, 0.18);
+  content: "";
+  opacity: 0.5;
+  animation: polytao-result-scan 5.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes polytao-result-scan {
+  0%, 18% { top: 16%; opacity: 0; }
+  32% { opacity: 0.5; }
+  68% { opacity: 0.35; }
+  82%, 100% { top: 84%; opacity: 0; }
+}
+
+.polytao-candidate-svg {
+  display: flex;
+  width: 100%;
+  height: 168px;
+  align-items: center;
+  justify-content: center;
+  transform: scale(0.98);
+}
+
+.polytao-candidate-svg-image {
+  width: 100% !important;
+  max-height: 168px !important;
+  object-fit: contain;
+}
+
+.polytao-candidate-fallback {
+  max-width: 86%;
+  color: #60748b;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.polytao-drawer-result-smiles {
+  position: relative;
+  min-height: 0;
+  margin: 11px 13px 14px;
+}
+
+.polytao-result-smiles-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  color: #71879d;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.polytao-result-smiles-toggle:hover {
+  color: #2563eb;
+  border-bottom-color: rgba(96, 165, 250, 0.35);
+}
+
+.polytao-result-smiles-toggle > span:first-child {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.1em;
+}
+
+.polytao-result-smiles-toggle > span:last-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 680;
+}
+
+.polytao-result-smiles-toggle svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 180ms ease;
+}
+
+.polytao-result-smiles-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.polytao-result-smiles-content {
+  position: relative;
+  min-height: 40px;
+  padding-right: 34px;
+}
+
+.polytao-drawer-result-smiles code {
+  display: block;
+  padding: 7px 2px 0;
+  color: #304258;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 590;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.polytao-result-copy-button {
+  position: absolute;
+  top: 3px;
+  right: 0;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #607891;
+  background: transparent;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.polytao-result-copy-button:hover {
+  color: #2563eb;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.polytao-result-copy-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.polytao-drawer-empty-shell {
+  padding-top: 26px;
+}
+
+.polytao-state-panel {
+  display: flex;
+  min-height: 330px;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  border: 1px dashed #bfccda;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.82);
+  text-align: center;
+}
+
+.polytao-state-content {
+  width: min(100%, 460px);
+}
+
+.polytao-state-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 10px;
+  place-items: center;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  color: var(--polytao-primary-strong);
+  background: #eff6ff;
+}
+
+.polytao-state-icon.is-danger {
+  color: #b91c1c;
+  border-color: #fecaca;
+  background: var(--polytao-danger-soft);
+}
+
+.polytao-state-icon.is-warning {
+  color: #a16207;
+  border-color: #fde68a;
+  background: var(--polytao-warning-soft);
+}
+
+.polytao-state-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.polytao-state-panel h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 760;
+}
+
+.polytao-state-panel p {
+  margin: 5px auto 0;
+  color: #75869b;
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.polytao-state-panel .polytao-secondary-button {
+  margin-top: 14px;
+}
+
+.polytao-progress-card {
+  width: min(100%, 520px);
+  margin: 0 auto;
+  padding: 15px;
+  border: 1px solid var(--polytao-border);
+  border-radius: 11px;
+  background: #fff;
+  text-align: left;
+}
+
+.polytao-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.polytao-progress-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--polytao-primary-strong);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.polytao-progress-percent {
+  color: #41536a;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.polytao-progress-track {
+  height: 7px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8eef5;
+}
+
+.polytao-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--polytao-primary), #22d3ee);
+  transition: width 500ms ease;
+}
+
+.polytao-progress-message {
+  margin-top: 9px;
+  color: #65778e;
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.polytao-drawer-footer {
+  display: flex;
+  min-height: 48px;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  color: #7c8ca0;
+  background: rgba(255, 255, 255, 0.9);
+  font-size: 9px;
+}
+
+.polytao-drawer-reopen {
+  position: fixed;
+  z-index: 52;
+  top: 50%;
+  right: 12px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  border-radius: 12px;
+  color: #2875c7;
+  background: linear-gradient(145deg, #f8fbff, #e5f5ff);
+  box-shadow: 0 10px 25px rgba(51, 91, 128, 0.14), 0 0 18px rgba(34, 211, 238, 0.07);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) translateX(100%);
+  transition: opacity 150ms ease, transform 180ms ease;
+  cursor: pointer;
+}
+
+.polytao-drawer-reopen.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(-50%) translateX(0);
+}
+
+.polytao-drawer-reopen:hover {
+  color: #1d4ed8;
+  border-color: rgba(96, 165, 250, 0.48);
+}
+
+.polytao-drawer-reopen svg {
+  width: 18px;
+  height: 18px;
+}
+
+.polytao-toast {
+  position: fixed;
+  z-index: 90;
+  bottom: 18px;
+  left: 50%;
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 13px;
+  border: 1px solid #a7f3d0;
+  border-radius: 9px;
+  color: #2f5f50;
+  background: #f0fdf8;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.15);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -10px);
+  transition: opacity 160ms ease, transform 160ms ease;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.polytao-toast.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.polytao-toast svg {
+  color: var(--polytao-success);
+}
+
+@media (min-width: 1280px) {
+  .polytao-page.is-drawer-open {
+    padding-right: calc(var(--polytao-drawer-width) + 24px);
+  }
+
+  .polytao-page.is-drawer-open .polytao-page-heading {
+    right: calc(var(--polytao-drawer-width) + 24px);
+  }
+}
+
+@media (max-width: 1120px) {
+  .polytao-structure-source {
+    grid-template-columns: minmax(300px, 1fr) minmax(270px, 1fr);
+  }
+
+  .polytao-descriptor-group {
+    grid-template-columns: 132px minmax(0, 1fr);
+    background: linear-gradient(90deg, #f7faff 0, #fbfdff 132px, #fff 132px);
+  }
+
+  .polytao-descriptor-fields {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 899px) {
+  .polytao-page {
+    padding: 18px 14px 88px;
+  }
+
+  .polytao-detail-drawer {
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: calc(100% - 16px);
+    max-width: 560px;
+    border: 1px solid var(--polytao-border);
+    border-radius: 12px;
+    overflow: hidden;
+    transform: translateY(12px) scale(0.98);
+  }
+
+  .polytao-detail-drawer.is-open {
+    transform: none;
+  }
+
+  .polytao-drawer-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .polytao-drawer-resizer {
+    display: none;
+  }
+
+  .polytao-drawer-reopen {
+    top: auto;
+    right: 12px;
+    bottom: 12px;
+    transform: translateY(12px) scale(0.96);
+  }
+
+  .polytao-drawer-reopen.is-visible {
+    transform: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .polytao-page-heading {
+    position: relative;
+    top: auto;
+    right: auto;
+    left: auto;
+    min-height: 38px;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .polytao-page-heading h1 {
+    font-size: 21px;
+  }
+
+  .polytao-model-label {
+    max-width: 190px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .polytao-module-toolbar {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  .polytao-workbench-shell {
+    margin-top: 0;
+  }
+
+  .polytao-surface-header {
+    align-items: flex-start;
+  }
+
+  .polytao-surface-actions {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
+  .polytao-structure-source {
+    grid-template-columns: 1fr;
+  }
+
+  .polytao-structure-flip,
+  .polytao-structure-canvas {
+    min-height: 250px;
+  }
+
+  .polytao-source-detail {
+    min-height: 0;
+  }
+
+  .polytao-descriptor-group {
+    grid-template-columns: 1fr;
+    gap: 9px;
+    background: #fbfdff;
+  }
+
+  .polytao-descriptor-group-head {
+    grid-template-columns: 24px minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .polytao-descriptor-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .polytao-page {
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .polytao-module-toolbar .polytao-status-chip {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .polytao-generation-surface {
+    border-radius: 12px;
+  }
+
+  .polytao-surface-header,
+  .polytao-condition-section {
+    padding: 12px;
+  }
+
+  .polytao-surface-header {
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .polytao-surface-mark {
+    width: 36px;
+    height: 36px;
+  }
+
+  .polytao-surface-copy h2 {
+    font-size: 18px;
+  }
+
+  .polytao-surface-copy p {
+    max-width: 250px;
+    font-size: 11px;
+  }
+
+  .polytao-surface-actions {
+    width: 100%;
+    align-items: center;
+    flex-direction: row;
+    justify-content: space-between;
+    padding-left: 44px;
+  }
+
+  .polytao-source-chip {
+    width: fit-content;
+    max-width: 210px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .polytao-parameter-panel {
+    position: fixed;
+    top: 70px;
+    right: 10px;
+    left: 10px;
+    width: auto;
+    max-height: calc(100vh - 90px);
+    overflow-y: auto;
+    transform-origin: top center;
+  }
+
+  .polytao-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .polytao-descriptor-tools {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .polytao-descriptor-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .polytao-generation-action-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .polytao-primary-button {
+    width: 100%;
+  }
+
+  .polytao-drawer-header {
+    min-height: 60px;
+  }
+
+  .polytao-candidate-visual {
+    height: 170px;
+    margin-right: 9px;
+    margin-left: 9px;
+  }
+
+  .polytao-candidate-svg {
+    height: 158px;
+    transform: none;
+  }
+
+  .polytao-candidate-svg-image {
+    max-height: 158px !important;
+  }
+
+  .polytao-drawer-footer > span {
+    max-width: 155px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .polytao-page *,
+  .polytao-page *::before,
+  .polytao-page *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

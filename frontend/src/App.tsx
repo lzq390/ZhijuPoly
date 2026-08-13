@@ -710,7 +710,7 @@ export default function App() {
         },
         {
           id: "polytaoGeneration",
-          label: "PolyTAO 生成",
+          label: "聚合物生成",
           description: "按 15 个 RDKit 描述符调用 PolyTAO 生成候选重复单元。",
           route: POLYTAO_ROUTE,
           icon: <Sparkles className="h-4 w-4" />,
@@ -843,19 +843,21 @@ export default function App() {
     activeModule === "monomerPolymerization" ||
     activeModule === "polytaoGeneration" ||
     activeModule === "reverseDesign" ||
+    activeModule === "conditionalGeneration" ||
     activeModule === "experimentWorkflowDemo" ||
     activeModule === "highThroughputWorkflowDemo" ||
     activeModule === "mdSimulationDemo" ||
     activeModule === "monomerMdSimulation" ||
     activeModule === "monomerDft";
-  const isReverseDesignKetcherOwner =
+  const isTgKetcherOwner =
     activeModule === "reverseDesign" ||
+    activeModule === "conditionalGeneration" ||
     (activeModule === "knowledge" && preserveReverseDesignForKnowledge);
   const shouldKeepStructureWorkbenchMounted =
     hasMountedStructureWorkbench &&
     activeModule !== "explorer" &&
     activeModule !== "databaseQuery" &&
-    !isReverseDesignKetcherOwner;
+    !isTgKetcherOwner;
 
   return (
     <AppShell
@@ -977,11 +979,7 @@ export default function App() {
       ) : null}
 
       {activeModule === "conditionalGeneration" ? (
-        <ConditionalGenerationPage
-          structure={structureWorkspace}
-          onEditStructure={openStructureWorkbench}
-          onBackHome={() => navigate({ module: "home", datasetKey: null })}
-        />
+        <ConditionalGenerationPage structure={structureWorkspace} />
       ) : null}
 
       {activeModule === "polytaoGeneration" ? (

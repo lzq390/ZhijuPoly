@@ -54,6 +54,7 @@ type StructurePreview3DProps = {
   viewerClassName?: string;
   visualStyle?: "standard" | "polished-atoms";
   variant?: "card" | "bare";
+  backgroundColor?: string;
 };
 
 export function StructurePreview3D({
@@ -63,7 +64,8 @@ export function StructurePreview3D({
   previewClassName,
   viewerClassName,
   visualStyle = "standard",
-  variant = "card"
+  variant = "card",
+  backgroundColor = "#ffffff"
 }: StructurePreview3DProps) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,7 +106,7 @@ export function StructurePreview3D({
 
         viewerRef.current.innerHTML = "";
         const viewer = window.$3Dmol.createViewer(viewerRef.current, {
-          backgroundColor: "#ffffff"
+          backgroundColor
         });
         viewer.addModel(payload.molblock, "mol");
         if (visualStyle === "polished-atoms") {
@@ -147,7 +149,7 @@ export function StructurePreview3D({
     return () => {
       cancelled = true;
     };
-  }, [smiles, visualStyle]);
+  }, [backgroundColor, smiles, visualStyle]);
 
   const previewFrame = (
     <div

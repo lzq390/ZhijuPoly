@@ -142,8 +142,8 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
   },
   {
     id: "polytaoGeneration",
-    name: "PolyTAO 生成",
-    shortName: "PolyTAO",
+    name: "聚合物生成",
+    shortName: "聚合物生成",
     icon: Sparkles,
     relationship: "optional",
     isBuiltIn: false

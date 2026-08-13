@@ -11,6 +11,7 @@ import {
   fetchPropertyFilterOptions,
   fetchPolytaoJob,
   fetchPolytaoStatus,
+  fetchStructure2D,
   recoverDevGpuSession,
   searchPropertyFilterRecords
 } from "./api";
@@ -271,6 +272,33 @@ describe("fetchPolytaoStatus", () => {
     await expect(fetchPolytaoStatus()).rejects.toThrow("timed out after 10 seconds");
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 10_000);
+  });
+});
+
+describe("fetchStructure2D", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("posts the shared SMILES and forwards AbortSignal", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ structure_svg: "<svg />" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(fetchStructure2D("*CC*", controller.signal)).resolves.toEqual({
+      structure_svg: "<svg />"
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/structure/2d",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ smiles: "*CC*" }),
+        signal: controller.signal
+      })
+    );
   });
 });
 

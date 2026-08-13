@@ -1,23 +1,35 @@
 import {
-  ArrowLeft,
   Atom,
-  CheckCircle2,
+  Box,
+  Check,
+  ChevronDown,
   CircleAlert,
   Copy,
+  Edit3,
+  Filter,
+  Info,
+  Link2,
   LoaderCircle,
+  PanelRightOpen,
   Play,
   RefreshCw,
   RotateCcw,
+  SlidersHorizontal,
   Sparkles,
-  Wand2
+  Trash2,
+  Wand2,
+  X
 } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
-import { StructurePreview3D } from "./StructurePreview3D";
-import { StructureSvg } from "./StructureSvg";
-import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { Select } from "./ui/select";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject
+} from "react";
 import {
   DEFAULT_POLYTAO_DESCRIPTORS,
   EMPTY_POLYTAO_DESCRIPTORS,
@@ -26,19 +38,21 @@ import {
   type PolytaoRuntimeDisplayState,
   usePolytaoGeneration
 } from "../hooks/usePolytaoGeneration";
-import { cn } from "../lib/utils";
-import { calculatePolytaoDescriptors } from "../services/api";
-import type {
-  PolytaoCandidate,
-  PolytaoDescriptorMap,
-  PolytaoDescriptorName,
-  PolytaoGenerationRequest,
-  PolytaoGenerationResponse,
-  PolytaoJobStatusResponse,
-  PolytaoStatusResponse,
-  StructureWorkspaceContext
+import { calculatePolytaoDescriptors, fetchStructure2D } from "../services/api";
+import {
+  POLYTAO_DESCRIPTOR_NAMES,
+  type PolytaoCandidate,
+  type PolytaoDescriptorMap,
+  type PolytaoDescriptorName,
+  type PolytaoGenerationRequest,
+  type PolytaoGenerationResponse,
+  type PolytaoJobStatusResponse,
+  type PolytaoStatusResponse,
+  type StructureWorkspaceContext
 } from "../types";
-import { POLYTAO_DESCRIPTOR_NAMES } from "../types";
+import { StructurePreview3D } from "./StructurePreview3D";
+import { StructureSvg } from "./StructureSvg";
+import "../styles/polytao-generation.css";
 
 type PolytaoGenerationPageProps = {
   structure: StructureWorkspaceContext;
@@ -46,86 +60,316 @@ type PolytaoGenerationPageProps = {
   onBackHome: () => void;
 };
 
+type DescriptorSource = "empty" | "structure" | "manual" | "sample";
+
+type DescriptorItem = {
+  name: PolytaoDescriptorName;
+  label: string;
+  step: number;
+};
+
 type DescriptorGroup = {
   title: string;
-  detail: string;
-  descriptors: [PolytaoDescriptorName, ...PolytaoDescriptorName[]];
-  accentClassName: string;
+  description: string;
+  items: DescriptorItem[];
 };
 
 const DESCRIPTOR_GROUPS: DescriptorGroup[] = [
   {
-    title: "Size / Composition",
-    detail: "Molecular size and atom composition.",
-    descriptors: ["MolWt", "HeavyAtomCount", "NumHeteroatoms"],
-    accentClassName: "border-sky-100 bg-sky-50/80 text-sky-700"
+    title: "规模与柔性",
+    description: "质量、原子组成与链段活动度",
+    items: [
+      { name: "MolWt", label: "分子量", step: 0.1 },
+      { name: "HeavyAtomCount", label: "重原子数", step: 1 },
+      { name: "NumHeteroatoms", label: "杂原子数", step: 1 },
+      { name: "NumRotatableBonds", label: "可旋转键数", step: 1 }
+    ]
   },
   {
-    title: "Donor / Acceptor",
-    detail: "Hydrogen-bond and hetero atom counts.",
-    descriptors: ["NHOHCount", "NOCount", "NumHAcceptors", "NumHDonors"],
-    accentClassName: "border-cyan-100 bg-cyan-50/80 text-cyan-700"
+    title: "氢键能力",
+    description: "氮氧组成及供体、受体数量",
+    items: [
+      { name: "NHOHCount", label: "N / O–H 数", step: 1 },
+      { name: "NOCount", label: "氮氧原子数", step: 1 },
+      { name: "NumHAcceptors", label: "氢键受体数", step: 1 },
+      { name: "NumHDonors", label: "氢键供体数", step: 1 }
+    ]
   },
   {
-    title: "Ring System",
-    detail: "Aliphatic, aromatic, and total ring counts.",
-    descriptors: [
-      "NumAliphaticCarbocycles",
-      "NumAliphaticHeterocycles",
-      "NumAliphaticRings",
-      "NumAromaticCarbocycles",
-      "NumAromaticHeterocycles",
-      "NumAromaticRings",
-      "RingCount"
-    ],
-    accentClassName: "border-indigo-100 bg-indigo-50/80 text-indigo-700"
-  },
-  {
-    title: "Flexibility",
-    detail: "Rotatable-bond count.",
-    descriptors: ["NumRotatableBonds"],
-    accentClassName: "border-emerald-100 bg-emerald-50/80 text-emerald-700"
+    title: "环结构组成",
+    description: "脂肪族与芳香环系统分布",
+    items: [
+      { name: "NumAliphaticCarbocycles", label: "脂肪族碳环数", step: 1 },
+      { name: "NumAliphaticHeterocycles", label: "脂肪族杂环数", step: 1 },
+      { name: "NumAliphaticRings", label: "脂肪族环总数", step: 1 },
+      { name: "NumAromaticCarbocycles", label: "芳香碳环数", step: 1 },
+      { name: "NumAromaticHeterocycles", label: "芳香杂环数", step: 1 },
+      { name: "NumAromaticRings", label: "芳香环总数", step: 1 },
+      { name: "RingCount", label: "环总数", step: 1 }
+    ]
   }
 ];
 
-function parseNumber(value: string, fallback: number) {
+const DRAWER_MIN_WIDTH = 320;
+const DRAWER_MAX_WIDTH = 560;
+const DRAWER_DEFAULT_WIDTH = 430;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function parseNumber(value: string) {
   if (!value.trim()) {
     return Number.NaN;
   }
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function formatOptionalNumber(value: number | null | undefined, digits = 2) {
-  return value == null ? "Pending" : value.toFixed(digits);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
 function formatDescriptorValue(value: number) {
   if (!Number.isFinite(value)) {
     return "";
   }
-  return Math.abs(value - Math.round(value)) < 1e-9 ? String(Math.round(value)) : value.toPrecision(6);
+  return Math.abs(value - Math.round(value)) < 1e-9
+    ? String(Math.round(value))
+    : String(Number(value.toPrecision(6)));
 }
 
-function descriptorPrompt(descriptors: PolytaoDescriptorMap) {
-  return POLYTAO_DESCRIPTOR_NAMES.map((name) => formatDescriptorValue(descriptors[name])).join(",");
+function filledDescriptorCount(descriptors: PolytaoDescriptorMap) {
+  return POLYTAO_DESCRIPTOR_NAMES.reduce(
+    (count, name) => count + (Number.isFinite(descriptors[name]) ? 1 : 0),
+    0
+  );
 }
 
-function copyText(value: string) {
-  void navigator.clipboard?.writeText(value);
+async function writeClipboardText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
 }
 
-export function PolytaoGenerationPage({ structure, onEditStructure, onBackHome }: PolytaoGenerationPageProps) {
+function runtimePresentation(
+  displayState: PolytaoRuntimeDisplayState,
+  isGenerating: boolean,
+  activeJobs: number | null | undefined
+) {
+  if (isGenerating) {
+    return {
+      className: "is-running",
+      label: `PolyTAO 正在生成${activeJobs != null ? ` · 活动作业 ${activeJobs}` : ""}`
+    };
+  }
+
+  switch (displayState) {
+    case "checking":
+      return { className: "is-running", label: "正在检查 PolyTAO 模型" };
+    case "ready":
+      return { className: "", label: "PolyTAO 模型就绪" };
+    case "cold":
+      return { className: "is-warning", label: "PolyTAO 模型待加载" };
+    case "loading":
+      return { className: "is-running", label: "PolyTAO 模型加载中" };
+    case "disabled":
+      return { className: "is-error", label: "PolyTAO 模型未启用" };
+    case "db_unavailable":
+      return { className: "is-error", label: "PolyTAO 依赖不可用" };
+    default:
+      return { className: "is-error", label: "PolyTAO 运行时异常" };
+  }
+}
+
+function sourcePresentation(source: DescriptorSource, filled: number) {
+  if (source === "structure") {
+    return { icon: <Link2 />, label: "目标特征源自参考结构", className: "" };
+  }
+  if (source === "sample") {
+    return { icon: <Wand2 />, label: "示例向量 · 无骨架关联", className: "is-manual" };
+  }
+  if (source === "manual" && filled > 0) {
+    return { icon: <Edit3 />, label: "目标特征已人工调整", className: "is-manual" };
+  }
+  return { icon: <CircleAlert />, label: "描述符待填写", className: "is-empty" };
+}
+
+export function PolytaoGenerationPage({
+  structure,
+  onEditStructure
+}: PolytaoGenerationPageProps) {
   const polytao = usePolytaoGeneration();
   const [descriptorError, setDescriptorError] = useState<string | null>(null);
   const [isDescriptorLoading, setIsDescriptorLoading] = useState(false);
-  const currentPrompt = useMemo(() => descriptorPrompt(polytao.request.descriptors), [polytao.request.descriptors]);
+  const [descriptorSource, setDescriptorSource] = useState<DescriptorSource>("empty");
+  const [parameterOpen, setParameterOpen] = useState(false);
+  const [structureFlipped, setStructureFlipped] = useState(false);
+  const [referenceSmilesExpanded, setReferenceSmilesExpanded] = useState(false);
+  const [referenceSvg, setReferenceSvg] = useState<string | null>(null);
+  const [referenceSvgError, setReferenceSvgError] = useState<string | null>(null);
+  const [isReferenceSvgLoading, setIsReferenceSvgLoading] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(true);
+  const [drawerWidth, setDrawerWidth] = useState(DRAWER_DEFAULT_WIDTH);
+  const [isDrawerResizing, setIsDrawerResizing] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const parameterAnchorRef = useRef<HTMLDivElement | null>(null);
+  const parameterButtonRef = useRef<HTMLButtonElement | null>(null);
+  const drawerCloseRef = useRef<HTMLButtonElement | null>(null);
+  const drawerReopenRef = useRef<HTMLButtonElement | null>(null);
+  const drawerResizeCleanupRef = useRef<(() => void) | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
   const hasStructure = structure.smiles.trim().length > 0;
+  const filledCount = useMemo(
+    () => filledDescriptorCount(polytao.request.descriptors),
+    [polytao.request.descriptors]
+  );
   const runtimeDisplayState = getPolytaoRuntimeDisplayState(
     polytao.serviceStatus,
     polytao.statusError,
     polytao.isStatusLoading
   );
+  const runtime = runtimePresentation(
+    runtimeDisplayState,
+    polytao.isLoading,
+    polytao.serviceStatus?.active_jobs
+  );
+  const source = sourcePresentation(descriptorSource, filledCount);
+
+  const samplingValid =
+    polytao.request.candidate_count >= 1 &&
+    polytao.request.candidate_count <= 50 &&
+    polytao.request.temperature >= 0.1 &&
+    polytao.request.temperature <= 2 &&
+    polytao.request.top_k >= 1 &&
+    polytao.request.top_k <= 500 &&
+    polytao.request.top_p > 0 &&
+    polytao.request.top_p <= 1 &&
+    polytao.request.max_length >= 16 &&
+    polytao.request.max_length <= 512;
+  const descriptorReady = filledCount === POLYTAO_DESCRIPTOR_NAMES.length;
+  const canSubmit =
+    !polytao.isLoading &&
+    polytao.serviceStatus?.available === true &&
+    descriptorReady &&
+    samplingValid;
+
+  const showToast = useCallback((message: string) => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    setToastMessage(message);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+      toastTimerRef.current = null;
+    }, 1800);
+  }, []);
+
+  const copyText = useCallback(async (value: string, successMessage: string) => {
+    try {
+      await writeClipboardText(value);
+      showToast(successMessage);
+    } catch {
+      showToast("复制失败，请手动复制");
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+      drawerResizeCleanupRef.current?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const smiles = structure.smiles.trim();
+    setStructureFlipped(false);
+    setReferenceSmilesExpanded(false);
+    setReferenceSvg(null);
+    setReferenceSvgError(null);
+    if (!smiles) {
+      setIsReferenceSvgLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsReferenceSvgLoading(true);
+    void fetchStructure2D(smiles, controller.signal)
+      .then((response) => {
+        if (!controller.signal.aborted) {
+          setReferenceSvg(response.structure_svg);
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setReferenceSvgError(error instanceof Error ? error.message : "二维结构渲染失败");
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsReferenceSvgLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [structure.smiles]);
+
+  const closeParameterPanel = useCallback((restoreFocus = false) => {
+    setParameterOpen(false);
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => parameterButtonRef.current?.focus());
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!parameterOpen) {
+      return;
+    }
+
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!parameterAnchorRef.current?.contains(event.target as Node)) {
+        closeParameterPanel(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [closeParameterPanel, parameterOpen]);
+
+  const closeDrawer = useCallback(() => {
+    setDrawerOpen(false);
+    window.requestAnimationFrame(() => drawerReopenRef.current?.focus());
+  }, []);
+
+  const openDrawer = useCallback(() => {
+    setDrawerOpen(true);
+    window.requestAnimationFrame(() => drawerCloseRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      if (parameterOpen) {
+        closeParameterPanel(true);
+        return;
+      }
+      if (drawerOpen) {
+        closeDrawer();
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [closeDrawer, closeParameterPanel, drawerOpen, parameterOpen]);
 
   function updateRequest(partial: Partial<PolytaoGenerationRequest>) {
     polytao.setRequest({
@@ -136,13 +380,13 @@ export function PolytaoGenerationPage({ structure, onEditStructure, onBackHome }
   }
 
   function updateDescriptor(name: PolytaoDescriptorName, value: number) {
-    updateRequest({
-      descriptors: {
-        ...polytao.request.descriptors,
-        [name]: value
-      },
-      input_smiles: null
-    });
+    const descriptors = {
+      ...polytao.request.descriptors,
+      [name]: value
+    };
+    updateRequest({ descriptors, input_smiles: null });
+    setDescriptorSource(filledDescriptorCount(descriptors) > 0 ? "manual" : "empty");
+    setDescriptorError(null);
   }
 
   async function handleDescriptorPrefill() {
@@ -151,21 +395,34 @@ export function PolytaoGenerationPage({ structure, onEditStructure, onBackHome }
     try {
       const currentSmiles = (await structure.getCurrentSmiles()).trim();
       if (!currentSmiles) {
-        setDescriptorError("Set a structure before descriptor prefill.");
+        setDescriptorError("请先在结构工作台设置参考结构。");
         return;
       }
       const response = await calculatePolytaoDescriptors({ smiles: currentSmiles });
-      const descriptors = polytaoDescriptorMapFromEntries(response.descriptors);
       polytao.setRequest({
         ...polytao.request,
-        descriptors,
+        descriptors: polytaoDescriptorMapFromEntries(response.descriptors),
         input_smiles: response.canonical_smiles
       });
+      setDescriptorSource("structure");
+      showToast("已从参考结构提取 15 项描述符");
     } catch (error) {
-      setDescriptorError(error instanceof Error ? error.message : "Failed to calculate PolyTAO descriptors.");
+      setDescriptorError(error instanceof Error ? error.message : "PolyTAO 描述符计算失败。");
     } finally {
       setIsDescriptorLoading(false);
     }
+  }
+
+  function handleLoadSample() {
+    updateRequest({ descriptors: { ...DEFAULT_POLYTAO_DESCRIPTORS }, input_smiles: null });
+    setDescriptorSource("sample");
+    setDescriptorError(null);
+  }
+
+  function handleClearDescriptors() {
+    updateRequest({ descriptors: { ...EMPTY_POLYTAO_DESCRIPTORS }, input_smiles: null });
+    setDescriptorSource("empty");
+    setDescriptorError(null);
   }
 
   async function handleSubmit() {
@@ -175,689 +432,533 @@ export function PolytaoGenerationPage({ structure, onEditStructure, onBackHome }
       return;
     }
 
-    const currentSmiles = polytao.request.input_smiles?.trim() || "";
-
+    setParameterOpen(false);
+    setDrawerOpen(true);
     await polytao.submit({
       ...polytao.request,
-      input_smiles: currentSmiles || null
+      input_smiles: polytao.request.input_smiles?.trim() || null
     });
   }
 
-  const descriptorReady = POLYTAO_DESCRIPTOR_NAMES.every((name) => Number.isFinite(polytao.request.descriptors[name]));
-  const canSubmit =
-    !polytao.isLoading &&
-    polytao.serviceStatus?.available === true &&
-    descriptorReady &&
-    polytao.request.candidate_count >= 1 &&
-    polytao.request.candidate_count <= 50 &&
-    polytao.request.top_k >= 1 &&
-    polytao.request.top_k <= 500 &&
-    polytao.request.top_p > 0 &&
-    polytao.request.top_p <= 1 &&
-    polytao.request.temperature >= 0.1 &&
-    polytao.request.temperature <= 2.0 &&
-    polytao.request.max_length >= 16 &&
-    polytao.request.max_length <= 512;
+  function beginDrawerResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    drawerResizeCleanupRef.current?.();
+    const startX = event.clientX;
+    const startWidth = drawerWidth;
+    const previousUserSelect = document.body.style.userSelect;
+    setIsDrawerResizing(true);
+    document.body.style.userSelect = "none";
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      setDrawerWidth(clamp(startWidth + startX - moveEvent.clientX, DRAWER_MIN_WIDTH, DRAWER_MAX_WIDTH));
+    };
+    const cleanupResize = () => {
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleEnd);
+      window.removeEventListener("pointercancel", handleEnd);
+      drawerResizeCleanupRef.current = null;
+    };
+    const handleEnd = () => {
+      cleanupResize();
+      setIsDrawerResizing(false);
+    };
+
+    drawerResizeCleanupRef.current = cleanupResize;
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleEnd);
+    window.addEventListener("pointercancel", handleEnd);
+  }
+
+  function handleDrawerResizeKey(event: React.KeyboardEvent<HTMLDivElement>) {
+    let nextWidth = drawerWidth;
+    if (event.key === "ArrowLeft") {
+      nextWidth += 16;
+    } else if (event.key === "ArrowRight") {
+      nextWidth -= 16;
+    } else if (event.key === "Home") {
+      nextWidth = DRAWER_MIN_WIDTH;
+    } else if (event.key === "End") {
+      nextWidth = DRAWER_MAX_WIDTH;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    setDrawerWidth(clamp(nextWidth, DRAWER_MIN_WIDTH, DRAWER_MAX_WIDTH));
+  }
+
+  const pageStyle = {
+    "--polytao-drawer-width": `${drawerWidth}px`
+  } as CSSProperties;
 
   return (
-    <div className="relative -mx-4 -my-5 min-h-[calc(100vh-2.5rem)] bg-[#f6f8fb] text-slate-900 md:-mx-8 md:-my-8">
-      <header className="border-b border-slate-200 bg-white px-4 py-3 shadow-[0_10px_30px_rgba(15,23,42,0.04)] md:px-6">
-        <div className="mx-auto flex max-w-[1480px] flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onBackHome}
-              className="h-9 rounded-[8px] border-slate-200 bg-white px-3 shadow-none"
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Home
-            </Button>
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Current Module</div>
-              <h1 className="truncate font-heading text-[18px] font-semibold text-slate-950">PolyTAO Generation</h1>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <ServicePill
-              status={polytao.serviceStatus}
-              statusError={polytao.statusError}
-              isLoading={polytao.isStatusLoading}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void polytao.refreshStatus()}
-              disabled={polytao.isStatusLoading}
-              className="h-9 rounded-[8px] border-slate-200 bg-white px-3 shadow-none"
-            >
-              {polytao.isStatusLoading ? (
-                <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              Refresh
-            </Button>
-          </div>
+    <div
+      className={`polytao-page${drawerOpen ? " is-drawer-open" : ""}`}
+      style={pageStyle}
+    >
+      <div className="polytao-page-heading">
+        <div className="polytao-page-heading-left">
+          <h1>聚合物生成</h1>
+          <span className="polytao-model-label">
+            <Sparkles />
+            PolyTAO · 15 项 RDKit 描述符
+          </span>
         </div>
-      </header>
+        <div className="polytao-module-toolbar">
+          <span className={`polytao-status-chip ${runtime.className}`}>
+            <i />
+            <span>{runtime.label}</span>
+          </span>
+        </div>
+      </div>
 
-      <main className="mx-auto max-w-[1480px] px-4 py-4 md:px-6 md:py-5">
-        <section className="grid min-w-0 gap-4 xl:grid-cols-[minmax(270px,0.72fr)_minmax(520px,1fr)_minmax(310px,0.72fr)]">
-          <StructureSourcePanel
-            structure={structure}
-            hasStructure={hasStructure}
-            onEditStructure={onEditStructure}
-            onPrefill={() => void handleDescriptorPrefill()}
-            isPrefilling={isDescriptorLoading}
-            descriptorError={descriptorError}
-          />
+      <main className="polytao-workbench-shell">
+        <section className="polytao-generation-surface" aria-labelledby="polytao-generation-title">
+          <header className="polytao-surface-header">
+            <div className="polytao-surface-heading">
+              <span className="polytao-surface-mark"><Sparkles /></span>
+              <div className="polytao-surface-copy">
+                <h2 id="polytao-generation-title">目标生成设置</h2>
+                <p>PolyTAO 模型 · 根据 15 项目标分子特征生成聚合物重复单元</p>
+              </div>
+            </div>
 
-          <DescriptorEditorPanel
-            descriptors={polytao.request.descriptors}
-            prompt={currentPrompt}
-            onDescriptorChange={updateDescriptor}
-            onLoadSample={() => {
-              updateRequest({ descriptors: { ...DEFAULT_POLYTAO_DESCRIPTORS }, input_smiles: null });
-              setDescriptorError(null);
-            }}
-            onClear={() => {
-              updateRequest({ descriptors: { ...EMPTY_POLYTAO_DESCRIPTORS }, input_smiles: null });
-              setDescriptorError(null);
-            }}
-          />
+            <div className="polytao-surface-actions">
+              <span className={`polytao-source-chip ${source.className}`}>
+                {source.icon}
+                <span>{source.label}</span>
+              </span>
+              <div className="polytao-parameter-anchor" ref={parameterAnchorRef}>
+                <button
+                  ref={parameterButtonRef}
+                  className="polytao-secondary-button polytao-parameter-trigger"
+                  type="button"
+                  aria-expanded={parameterOpen}
+                  aria-controls="polytao-parameter-panel"
+                  onClick={() => setParameterOpen((open) => !open)}
+                >
+                  <SlidersHorizontal />
+                  参数配置
+                </button>
+                <ParameterPanel
+                  open={parameterOpen}
+                  request={polytao.request}
+                  canSubmit={canSubmit}
+                  descriptorReady={descriptorReady}
+                  samplingValid={samplingValid}
+                  runtimeAvailable={polytao.serviceStatus?.available === true}
+                  isLoading={polytao.isLoading}
+                  onClose={() => closeParameterPanel(true)}
+                  onRequestChange={updateRequest}
+                  onSubmit={() => void handleSubmit()}
+                />
+              </div>
+            </div>
+          </header>
 
-          <RunControlPanel
-            request={polytao.request}
-            status={polytao.serviceStatus}
-            statusError={polytao.statusError}
-            runtimeDisplayState={runtimeDisplayState}
-            job={polytao.job}
-            canSubmit={canSubmit}
-            descriptorReady={descriptorReady}
-            isLoading={polytao.isLoading}
-            prompt={currentPrompt}
-            onRequestChange={updateRequest}
-            onSubmit={() => void handleSubmit()}
-          />
+          <section className="polytao-condition-section" aria-labelledby="polytao-source-title">
+            <div className="polytao-section-heading">
+              <div className="polytao-section-title">
+                <span className="polytao-section-number">01</span>
+                <div>
+                  <h3 id="polytao-source-title">参考结构（可选）</h3>
+                  <p>从共享结构一键计算目标分子特征，也可以跳过并直接设定目标</p>
+                </div>
+              </div>
+              <button
+                className="polytao-small-button polytao-structure-view-toggle"
+                type="button"
+                aria-pressed={structureFlipped}
+                aria-controls="polytao-structure-flip"
+                disabled={!hasStructure}
+                onClick={() => setStructureFlipped((flipped) => !flipped)}
+              >
+                {structureFlipped ? <RotateCcw /> : <Box />}
+                {structureFlipped ? "返回 2D" : "查看 3D"}
+              </button>
+            </div>
+
+            <div className="polytao-structure-source">
+              <div
+                id="polytao-structure-flip"
+                className={`polytao-structure-flip${structureFlipped ? " is-flipped" : ""}`}
+              >
+                <div className="polytao-structure-flip-inner">
+                  <div className="polytao-structure-face polytao-structure-face-front">
+                    <span className="polytao-structure-face-label">2D 结构</span>
+                    <div className="polytao-structure-canvas" aria-label="共享聚合物重复单元二维结构">
+                      <ReferenceStructure2D
+                        hasStructure={hasStructure}
+                        svg={referenceSvg}
+                        isLoading={isReferenceSvgLoading}
+                        error={referenceSvgError}
+                      />
+                    </div>
+                  </div>
+                  <div className="polytao-structure-face polytao-structure-face-back">
+                    <span className="polytao-structure-face-label">3D 构象</span>
+                    <div className="polytao-structure-3d-canvas" aria-label="共享结构三维构象">
+                      {structureFlipped && hasStructure ? (
+                        <StructurePreview3D
+                          smiles={structure.smiles}
+                          variant="bare"
+                          visualStyle="polished-atoms"
+                          backgroundColor="#07111f"
+                          className="polytao-reference-3d"
+                          previewClassName="polytao-reference-3d-preview"
+                        />
+                      ) : null}
+                      <span className="polytao-structure-3d-hint">拖动旋转 · 滚轮缩放</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="polytao-source-detail">
+                <div className={`polytao-smiles-disclosure${referenceSmilesExpanded ? " is-open" : ""}`}>
+                  <button
+                    className="polytao-smiles-toggle"
+                    type="button"
+                    aria-expanded={referenceSmilesExpanded}
+                    aria-controls="polytao-reference-smiles-content"
+                    disabled={!hasStructure}
+                    onClick={() => setReferenceSmilesExpanded((expanded) => !expanded)}
+                  >
+                    <span className="polytao-field-eyebrow">共享结构 SMILES</span>
+                    <span className="polytao-smiles-toggle-action">
+                      {hasStructure ? (referenceSmilesExpanded ? "收起" : "展开") : "未设置"}
+                      <ChevronDown />
+                    </span>
+                  </button>
+                  {referenceSmilesExpanded && hasStructure ? (
+                    <div className="polytao-smiles-content" id="polytao-reference-smiles-content">
+                      <span className="polytao-smiles-value">{structure.smiles}</span>
+                      <button
+                        className="polytao-copy-inline"
+                        type="button"
+                        aria-label="复制共享结构 SMILES"
+                        onClick={() => {
+                          void copyText(structure.smiles, "共享结构 SMILES 已复制");
+                        }}
+                      >
+                        <Copy />
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="polytao-semantic-note">
+                  <Info />
+                  <span>
+                    <strong>参考结构不是生成骨架。</strong> PolyTAO 只读取由它计算出的分子特征，生成结果不会复刻或保留该结构。
+                  </span>
+                </div>
+                <div className="polytao-source-actions">
+                  <button className="polytao-secondary-button" type="button" onClick={onEditStructure}>
+                    <Edit3 />
+                    编辑结构
+                  </button>
+                  <button
+                    className="polytao-secondary-button"
+                    type="button"
+                    onClick={() => void handleDescriptorPrefill()}
+                    disabled={isDescriptorLoading || !hasStructure}
+                  >
+                    {isDescriptorLoading ? <LoaderCircle className="polytao-spinner" /> : <Wand2 />}
+                    提取描述符
+                  </button>
+                </div>
+                {descriptorError ? (
+                  <div className="polytao-inline-error" role="alert">
+                    <CircleAlert />
+                    <span>{descriptorError}</span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </section>
+
+          <section className="polytao-condition-section" aria-labelledby="polytao-descriptor-title">
+            <div className="polytao-section-heading">
+              <div className="polytao-section-title">
+                <span className="polytao-section-number">02</span>
+                <div>
+                  <h3 id="polytao-descriptor-title">目标分子特征</h3>
+                  <p>15 项 RDKit 描述符共同定义期望生成的聚合物特征</p>
+                </div>
+              </div>
+              <div className="polytao-descriptor-tools">
+                <span className={`polytao-completion-chip${descriptorReady ? "" : " is-incomplete"}`}>
+                  {descriptorReady ? <Check /> : <CircleAlert />}
+                  <span>{filledCount} / 15 {descriptorReady ? "完整" : "已填写"}</span>
+                </span>
+                <button className="polytao-small-button" type="button" onClick={handleLoadSample}>
+                  <Wand2 />
+                  载入示例
+                </button>
+                <button className="polytao-small-button" type="button" onClick={handleClearDescriptors}>
+                  <Trash2 />
+                  清空
+                </button>
+              </div>
+            </div>
+
+            <div className="polytao-descriptor-grid" aria-label="目标分子特征描述符编辑器">
+              {DESCRIPTOR_GROUPS.map((group, groupIndex) => (
+                <DescriptorGroupEditor
+                  key={group.title}
+                  group={group}
+                  groupIndex={groupIndex}
+                  descriptors={polytao.request.descriptors}
+                  onDescriptorChange={updateDescriptor}
+                />
+              ))}
+            </div>
+          </section>
         </section>
-
-        <ResultsPanel
-          data={polytao.data}
-          job={polytao.job}
-          error={polytao.error}
-          isLoading={polytao.isLoading}
-        />
       </main>
+
+      <ResultsDrawer
+        open={drawerOpen}
+        width={drawerWidth}
+        isResizing={isDrawerResizing}
+        data={polytao.data}
+        job={polytao.job}
+        error={polytao.error}
+        isLoading={polytao.isLoading}
+        runtimeDisplayState={runtimeDisplayState}
+        status={polytao.serviceStatus}
+        requestedCount={polytao.request.candidate_count}
+        closeButtonRef={drawerCloseRef}
+        reopenButtonRef={drawerReopenRef}
+        onClose={closeDrawer}
+        onOpen={openDrawer}
+        onRetry={() => void handleSubmit()}
+        onRefreshRuntime={() => void polytao.refreshStatus()}
+        onResizeStart={beginDrawerResize}
+        onResizeKeyDown={handleDrawerResizeKey}
+        onCopy={(value) => {
+          void copyText(value, "候选 SMILES 已复制");
+        }}
+      />
+
+      <div className={`polytao-toast${toastMessage ? " is-visible" : ""}`} role="status" aria-live="polite">
+        <Check />
+        <span>{toastMessage}</span>
+      </div>
     </div>
   );
 }
 
-function ServicePill({
-  status,
-  statusError,
-  isLoading
-}: {
-  status: PolytaoStatusResponse | null;
-  statusError: string | null;
-  isLoading: boolean;
-}) {
-  const displayState = getPolytaoRuntimeDisplayState(status, statusError, isLoading);
-  if (displayState === "checking") {
-    return (
-      <Badge className="border-slate-200 bg-slate-50 text-slate-700">
-        <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin" />
-        Checking runtime
-      </Badge>
-    );
-  }
-  if (displayState === "ready") {
-    return (
-      <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">
-        <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
-        Runtime ready
-      </Badge>
-    );
-  }
-  if (displayState === "cold") {
-    return (
-      <Badge className="border-amber-200 bg-amber-50 text-amber-700">
-        <CircleAlert className="mr-2 h-3.5 w-3.5" />
-        Runtime cold
-      </Badge>
-    );
-  }
-  if (displayState === "loading") {
-    return (
-      <Badge className="border-sky-200 bg-sky-50 text-sky-700">
-        <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin" />
-        Runtime loading
-      </Badge>
-    );
-  }
-  const label =
-    displayState === "disabled"
-      ? "Disabled"
-      : displayState === "db_unavailable"
-        ? "DB unavailable"
-        : "Runtime error";
-  return (
-    <Badge className="border-rose-200 bg-rose-50 text-rose-700">
-      <CircleAlert className="mr-2 h-3.5 w-3.5" />
-      {label}
-    </Badge>
-  );
-}
-
-function Panel({
-  title,
-  eyebrow,
-  icon,
-  children,
-  className,
-  actions
-}: {
-  title: string;
-  eyebrow: string;
-  icon: ReactNode;
-  children: ReactNode;
-  className?: string;
-  actions?: ReactNode;
-}) {
-  return (
-    <section
-      className={cn(
-        "min-w-0 overflow-hidden rounded-[14px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.045)]",
-        className
-      )}
-    >
-      <div className="flex min-h-[68px] items-center justify-between gap-4 border-b border-slate-100 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-10 w-10 flex-none items-center justify-center rounded-[10px] border border-slate-200 bg-slate-50 text-slate-700">
-            {icon}
-          </span>
-          <div className="min-w-0">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{eyebrow}</div>
-            <h2 className="truncate font-heading text-[16px] font-semibold text-slate-950">{title}</h2>
-          </div>
-        </div>
-        {actions}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function StructureSourcePanel({
-  structure,
+function ReferenceStructure2D({
   hasStructure,
-  onEditStructure,
-  onPrefill,
-  isPrefilling,
-  descriptorError
+  svg,
+  isLoading,
+  error
 }: {
-  structure: StructureWorkspaceContext;
   hasStructure: boolean;
-  onEditStructure: () => void;
-  onPrefill: () => void;
-  isPrefilling: boolean;
-  descriptorError: string | null;
+  svg: string | null;
+  isLoading: boolean;
+  error: string | null;
 }) {
-  return (
-    <Panel title="Structure Source" eyebrow="Input" icon={<Atom className="h-4 w-4" />}>
-      <div className="space-y-4 p-4">
-        <div className="rounded-[10px] border border-slate-200 bg-slate-50 px-3 py-3">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Current SMILES</div>
-          <div className="mt-2 min-h-[48px] break-all font-mono-ui text-sm leading-6 text-slate-900">
-            {hasStructure ? structure.smiles : "No shared structure. Manual descriptor generation is still available."}
-          </div>
-        </div>
-
-        {hasStructure ? (
-          <div className="overflow-hidden rounded-[10px] border border-slate-200 bg-white">
-            <StructurePreview3D
-              smiles={structure.smiles}
-              variant="bare"
-              previewClassName="min-h-[220px]"
-              visualStyle="polished-atoms"
-            />
-          </div>
-        ) : (
-          <div className="flex min-h-[220px] items-center justify-center rounded-[10px] border border-dashed border-slate-200 bg-slate-50 px-4 text-center text-sm leading-6 text-slate-500">
-            Open the shared structure workbench to draw or import a repeat unit.
-          </div>
-        )}
-
-        <div className="grid gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onEditStructure}
-            className="h-10 rounded-[8px] border-slate-200 bg-white shadow-none"
-          >
-            <Atom className="mr-2 h-4 w-4" />
-            Edit Structure
-          </Button>
-          <Button
-            type="button"
-            onClick={onPrefill}
-            disabled={isPrefilling}
-            className="h-10 rounded-[8px] shadow-none"
-          >
-            {isPrefilling ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />}
-            Prefill Descriptors
-          </Button>
-        </div>
-
-        {descriptorError ? <AlertBox tone="danger" title={descriptorError} /> : null}
+  if (svg) {
+    return (
+      <StructureSvg
+        svg={svg}
+        alt="共享聚合物重复单元二维结构"
+        className="polytao-reference-svg"
+        imageClassName="polytao-reference-svg-image"
+      />
+    );
+  }
+  if (isLoading) {
+    return (
+      <div className="polytao-reference-placeholder">
+        <LoaderCircle className="polytao-spinner" />
+        <span>正在渲染 2D 结构</span>
       </div>
-    </Panel>
-  );
-}
-
-function DescriptorEditorPanel({
-  descriptors,
-  prompt,
-  onDescriptorChange,
-  onLoadSample,
-  onClear
-}: {
-  descriptors: PolytaoDescriptorMap;
-  prompt: string;
-  onDescriptorChange: (name: PolytaoDescriptorName, value: number) => void;
-  onLoadSample: () => void;
-  onClear: () => void;
-}) {
+    );
+  }
   return (
-    <Panel
-      title="Descriptor Editor"
-      eyebrow="15 RDKit fields"
-      icon={<Sparkles className="h-4 w-4" />}
-      actions={
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onLoadSample}
-            className="h-8 rounded-[8px] border-slate-200 bg-white px-3 text-xs shadow-none"
-          >
-            <Wand2 className="mr-2 h-3.5 w-3.5" />
-            Load Sample
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onClear}
-            className="h-8 rounded-[8px] border-slate-200 bg-white px-3 text-xs shadow-none"
-          >
-            <RotateCcw className="mr-2 h-3.5 w-3.5" />
-            Clear
-          </Button>
-        </div>
-      }
-    >
-      <div className="space-y-4 p-4">
-        <div className="flex items-start justify-between gap-3 rounded-[10px] border border-slate-200 bg-slate-50 px-3 py-2">
-          <div className="min-w-0">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Prompt Preview</div>
-            <div className="mt-1 break-all font-mono-ui text-xs leading-5 text-slate-800">{prompt}</div>
-          </div>
-          <button
-            type="button"
-            onClick={() => copyText(prompt)}
-            className="flex h-8 w-8 flex-none items-center justify-center rounded-[8px] text-slate-500 transition hover:bg-white hover:text-slate-950"
-            aria-label="Copy PolyTAO descriptor prompt"
-          >
-            <Copy className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="grid gap-x-5 gap-y-6 lg:grid-cols-2">
-          {DESCRIPTOR_GROUPS.map((group) => (
-            <DescriptorGroupEditor
-              key={group.title}
-              group={group}
-              descriptors={descriptors}
-              onDescriptorChange={onDescriptorChange}
-            />
-          ))}
-        </div>
-      </div>
-    </Panel>
+    <div className="polytao-reference-placeholder">
+      {error ? <CircleAlert /> : <Atom />}
+      <span>{error ?? (hasStructure ? "暂无可用的 2D 结构" : "请先在结构工作台设置参考结构")}</span>
+    </div>
   );
 }
 
 function DescriptorGroupEditor({
   group,
+  groupIndex,
   descriptors,
   onDescriptorChange
 }: {
   group: DescriptorGroup;
+  groupIndex: number;
   descriptors: PolytaoDescriptorMap;
   onDescriptorChange: (name: PolytaoDescriptorName, value: number) => void;
 }) {
-  const [selectedDescriptor, setSelectedDescriptor] = useState<PolytaoDescriptorName>(group.descriptors[0]);
-  const filledCount = group.descriptors.reduce(
-    (count, name) => count + (Number.isFinite(descriptors[name]) ? 1 : 0),
+  const filled = group.items.reduce(
+    (count, item) => count + (Number.isFinite(descriptors[item.name]) ? 1 : 0),
     0
   );
+  const groupComplete = filled === group.items.length;
 
   return (
-    <div className="min-w-0 border-l-2 border-slate-200 pl-3">
-      <div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge
-            className={cn(
-              "rounded-[8px] px-2 py-1 text-[10px] tracking-[0.08em] shadow-none",
-              group.accentClassName
-            )}
-          >
-            {group.title}
-          </Badge>
-          <span className="rounded-[8px] border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold tracking-[0.08em] text-slate-600">
-            Filled {filledCount}/{group.descriptors.length}
+    <section className="polytao-descriptor-group" aria-labelledby={`polytao-descriptor-group-${groupIndex}`}>
+      <div className="polytao-descriptor-group-head">
+        <span className="polytao-descriptor-group-index">0{groupIndex + 1}</span>
+        <div className="polytao-descriptor-group-title">
+          <h4 id={`polytao-descriptor-group-${groupIndex}`}>{group.title}</h4>
+          <p>{group.description}</p>
+          <span className={`polytao-group-progress ${groupComplete ? "is-complete" : "is-incomplete"}`}>
+            {filled} / {group.items.length} 已填写
           </span>
         </div>
-        <div className="mt-2 text-xs leading-5 text-slate-500">{group.detail}</div>
       </div>
-      <div className="mt-3 grid gap-2">
-        <label className="grid gap-1.5">
-          <span className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-            Descriptor
-          </span>
-          <Select
-            aria-label={`${group.title} descriptor`}
-            value={selectedDescriptor}
-            onChange={(event) => setSelectedDescriptor(event.target.value as PolytaoDescriptorName)}
-            className="h-9 rounded-[8px] border-slate-200 bg-white px-3 shadow-none"
-          >
-            {group.descriptors.map((name) => (
-              <option key={name} value={name}>
-                {name} — {Number.isFinite(descriptors[name]) ? "Filled" : "Empty"}
-              </option>
-            ))}
-          </Select>
-        </label>
-        <NumberField
-          label={selectedDescriptor}
-          value={descriptors[selectedDescriptor]}
-          step={selectedDescriptor === "MolWt" ? 0.1 : 1}
-          onChange={(value) => onDescriptorChange(selectedDescriptor, value)}
-        />
-      </div>
-    </div>
-  );
-}
-
-function RunControlPanel({
-  request,
-  status,
-  statusError,
-  runtimeDisplayState,
-  job,
-  canSubmit,
-  descriptorReady,
-  isLoading,
-  prompt,
-  onRequestChange,
-  onSubmit
-}: {
-  request: PolytaoGenerationRequest;
-  status: PolytaoStatusResponse | null;
-  statusError: string | null;
-  runtimeDisplayState: PolytaoRuntimeDisplayState;
-  job: PolytaoJobStatusResponse | null;
-  canSubmit: boolean;
-  descriptorReady: boolean;
-  isLoading: boolean;
-  prompt: string;
-  onRequestChange: (partial: Partial<PolytaoGenerationRequest>) => void;
-  onSubmit: () => void;
-}) {
-  let runtimeMessage: string | null = null;
-  if (runtimeDisplayState === "cold") {
-    runtimeMessage = "The PolyTAO runtime is cold. Your first job will load the model before generation starts.";
-  } else if (runtimeDisplayState === "loading") {
-    runtimeMessage = "The PolyTAO model is loading. Accepted jobs will run when the runtime is ready.";
-  } else if (runtimeDisplayState === "runtime_error") {
-    runtimeMessage = statusError ?? status?.runtime_error ?? status?.message ?? "PolyTAO runtime status is unavailable.";
-    if (status?.available) {
-      runtimeMessage = `${runtimeMessage} Submitting another job will retry model loading.`;
-    }
-  } else if (runtimeDisplayState === "disabled" || runtimeDisplayState === "db_unavailable") {
-    runtimeMessage = statusError ?? status?.message ?? "PolyTAO is unavailable.";
-  }
-
-  return (
-    <Panel title="Run Controls" eyebrow="Sampling" icon={<Play className="h-4 w-4" />}>
-      <div className="space-y-4 p-4">
-        <div className="grid gap-2">
-          <NumberField
-            label="Candidate Count"
-            min={1}
-            max={50}
-            step={1}
-            value={request.candidate_count}
-            onChange={(value) => onRequestChange({ candidate_count: value })}
-          />
-          <NumberField
-            label="Temperature"
-            min={0.1}
-            max={2}
-            step={0.05}
-            value={request.temperature}
-            onChange={(value) => onRequestChange({ temperature: value })}
-          />
-          <NumberField
-            label="Top-K"
-            min={1}
-            max={500}
-            step={1}
-            value={request.top_k}
-            onChange={(value) => onRequestChange({ top_k: value })}
-          />
-          <NumberField
-            label="Top-P"
-            min={0.001}
-            max={1}
-            step={0.001}
-            value={request.top_p}
-            onChange={(value) => onRequestChange({ top_p: value })}
-          />
-          <NumberField
-            label="Max Length"
-            min={16}
-            max={512}
-            step={1}
-            value={request.max_length}
-            onChange={(value) => onRequestChange({ max_length: value })}
-          />
-        </div>
-
-        <div className="rounded-[10px] border border-slate-200 bg-slate-50 px-3 py-3">
-          <MetricRow label="Prompt fields" value={String(prompt.split(",").length)} />
-          <MetricRow label="Runtime version" value={status?.worker_version ?? "Backend"} />
-          <MetricRow label="Active jobs" value={String(status?.active_jobs ?? 0)} />
-        </div>
-
-        {job ? <JobProgress job={job} /> : null}
-        {runtimeMessage ? <AlertBox tone="warning" title={runtimeMessage} /> : null}
-        {!descriptorReady ? <AlertBox tone="warning" title="Fill all 15 descriptors, prefill from a structure, or load the sample vector." /> : null}
-
-        <Button
-          type="button"
-          onClick={onSubmit}
-          disabled={!canSubmit}
-          className="h-11 w-full rounded-[8px] shadow-none"
-        >
-          {isLoading ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-          {isLoading ? "Generating" : "Submit PolyTAO Job"}
-        </Button>
-      </div>
-    </Panel>
-  );
-}
-
-function JobProgress({ job }: { job: PolytaoJobStatusResponse }) {
-  const progress = Math.max(0, Math.min(100, job.progress_percent ?? 0));
-  return (
-    <div className="rounded-[10px] border border-slate-200 bg-white px-3 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{job.status}</div>
-        <div className="text-xs font-semibold text-slate-700">{progress}%</div>
-      </div>
-      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
-        <div className="h-full rounded-full bg-sky-500 transition-all" style={{ width: `${progress}%` }} />
-      </div>
-      <div className="mt-2 min-w-0 break-words text-xs leading-5 text-slate-500 [overflow-wrap:anywhere]">
-        {job.progress_message}
-      </div>
-      <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-        <MetricRow label="Returned" value={String(job.returned_count)} />
-        <MetricRow label="Attempts" value={String(job.attempts)} />
-      </div>
-    </div>
-  );
-}
-
-function ResultsPanel({
-  data,
-  job,
-  error,
-  isLoading
-}: {
-  data: PolytaoGenerationResponse | null;
-  job: PolytaoJobStatusResponse | null;
-  error: string | null;
-  isLoading: boolean;
-}) {
-  return (
-    <section className="mt-4 overflow-hidden rounded-[14px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.045)]">
-      <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Results</div>
-          <h2 className="font-heading text-[16px] font-semibold text-slate-950">Candidate Structures</h2>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Badge className="border-slate-200 bg-slate-50 text-slate-700">{data?.returned_count ?? job?.returned_count ?? 0} returned</Badge>
-          <Badge className="border-slate-200 bg-slate-50 text-slate-700">{data?.query_time_ms ? `${data.query_time_ms.toFixed(1)} ms` : "Idle"}</Badge>
-          {data?.attempts != null ? (
-            <Badge className="border-slate-200 bg-slate-50 text-slate-700">{data.attempts} attempts</Badge>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="p-4">
-        {error ? <AlertBox tone="danger" title={error} /> : null}
-        {isLoading ? (
-          <div className="flex min-h-[240px] items-center justify-center rounded-[12px] border border-dashed border-slate-200 bg-slate-50 text-sm font-semibold text-slate-600">
-            <LoaderCircle className="mr-2 h-5 w-5 animate-spin text-sky-600" />
-            Waiting for PolyTAO backend runtime
-          </div>
-        ) : null}
-        {!isLoading && !data && !error ? (
-          <div className="flex min-h-[240px] flex-col items-center justify-center rounded-[12px] border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
-            <Sparkles className="h-6 w-6 text-slate-400" />
-            <div className="mt-3 font-heading text-base font-semibold text-slate-900">No job result yet</div>
-            <div className="mt-1 text-sm leading-6 text-slate-500">Submit a descriptor prompt to populate this table.</div>
-          </div>
-        ) : null}
-        {!isLoading && data ? (
-          <div className="space-y-4">
-            <FilterCounter counter={data.filter_counter} />
-            {data.results.length ? (
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                {data.results.map((candidate) => (
-                  <CandidateCard key={`${candidate.rank}-${candidate.generated_smiles}`} candidate={candidate} />
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-[12px] border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
-                Backend runtime completed but no candidate passed filtering.
-              </div>
-            )}
-          </div>
-        ) : null}
+      <div className="polytao-descriptor-fields">
+        {group.items.map((item) => (
+          <label className="polytao-descriptor-field" key={item.name}>
+            <span className="polytao-descriptor-label">{item.label}</span>
+            <span className="polytao-descriptor-key" title={item.name}>{item.name}</span>
+            <input
+              className="polytao-number-input"
+              type="number"
+              step={item.step}
+              value={formatDescriptorValue(descriptors[item.name])}
+              aria-label={`${item.label} ${item.name}`}
+              onChange={(event) => onDescriptorChange(item.name, parseNumber(event.currentTarget.value))}
+            />
+          </label>
+        ))}
       </div>
     </section>
   );
 }
 
-function FilterCounter({ counter }: { counter: Record<string, number> }) {
-  const entries = Object.entries(counter);
-  if (!entries.length) {
-    return null;
+function ParameterPanel({
+  open,
+  request,
+  canSubmit,
+  descriptorReady,
+  samplingValid,
+  runtimeAvailable,
+  isLoading,
+  onClose,
+  onRequestChange,
+  onSubmit
+}: {
+  open: boolean;
+  request: PolytaoGenerationRequest;
+  canSubmit: boolean;
+  descriptorReady: boolean;
+  samplingValid: boolean;
+  runtimeAvailable: boolean;
+  isLoading: boolean;
+  onClose: () => void;
+  onRequestChange: (partial: Partial<PolytaoGenerationRequest>) => void;
+  onSubmit: () => void;
+}) {
+  let readinessTitle = "生成目标已就绪";
+  let readinessDetail = "15 项目标特征完整 · PolyTAO 可用";
+  if (isLoading) {
+    readinessTitle = "生成任务执行中";
+    readinessDetail = "参数已锁定 · 正在轮询作业状态";
+  } else if (!runtimeAvailable) {
+    readinessTitle = "模型运行时不可用";
+    readinessDetail = "当前输入已保留，恢复后可直接重试";
+  } else if (!descriptorReady) {
+    readinessTitle = "目标分子特征尚未完整";
+    readinessDetail = "PolyTAO 需要完整的 15 维描述符向量";
+  } else if (!samplingValid) {
+    readinessTitle = "采样参数超出范围";
+    readinessDetail = "请修正参数后再提交";
   }
+
   return (
-    <div className="flex flex-wrap gap-2">
-      {entries.map(([key, value]) => (
-        <Badge key={key} className="border-slate-200 bg-slate-50 text-slate-700">
-          {key}: {value}
-        </Badge>
-      ))}
-    </div>
+    <section
+      id="polytao-parameter-panel"
+      className={`polytao-parameter-panel${open ? " is-open" : ""}`}
+      role="dialog"
+      aria-modal="false"
+      aria-hidden={!open}
+      aria-labelledby="polytao-parameter-title"
+    >
+      <header className="polytao-parameter-panel-head">
+        <div className="polytao-parameter-panel-title">
+          <span className="polytao-section-number">03</span>
+          <div>
+            <h3 id="polytao-parameter-title">参数配置</h3>
+            <p>设置 PolyTAO 候选采样范围</p>
+          </div>
+        </div>
+        <button className="polytao-icon-button" type="button" aria-label="关闭参数配置" onClick={onClose}>
+          <X />
+        </button>
+      </header>
+      <div className="polytao-sampling-grid">
+        <SamplingField
+          label="候选数量"
+          range="1–50"
+          min={1}
+          max={50}
+          step={1}
+          value={request.candidate_count}
+          onChange={(candidate_count) => onRequestChange({ candidate_count })}
+        />
+        <SamplingField
+          label="Temperature"
+          range="0.1–2.0"
+          min={0.1}
+          max={2}
+          step={0.05}
+          value={request.temperature}
+          onChange={(temperature) => onRequestChange({ temperature })}
+        />
+        <SamplingField
+          label="Top-K"
+          range="1–500"
+          min={1}
+          max={500}
+          step={1}
+          value={request.top_k}
+          onChange={(top_k) => onRequestChange({ top_k })}
+        />
+        <SamplingField
+          label="Top-P"
+          range="(0, 1]"
+          min={0.001}
+          max={1}
+          step={0.001}
+          value={request.top_p}
+          onChange={(top_p) => onRequestChange({ top_p })}
+        />
+        <SamplingField
+          label="最大长度"
+          range="16–512"
+          min={16}
+          max={512}
+          step={1}
+          value={request.max_length}
+          onChange={(max_length) => onRequestChange({ max_length })}
+        />
+      </div>
+      <div className="polytao-generation-action-row">
+        <div className="polytao-run-readiness">
+          <strong>{readinessTitle}</strong>
+          <span>{readinessDetail}</span>
+        </div>
+        <button className="polytao-primary-button" type="button" disabled={!canSubmit} onClick={onSubmit}>
+          {isLoading ? <LoaderCircle className="polytao-spinner" /> : <Play />}
+          {isLoading ? "正在生成" : "开始生成"}
+        </button>
+      </div>
+    </section>
   );
 }
 
-function CandidateCard({ candidate }: { candidate: PolytaoCandidate }) {
-  return (
-    <article className="min-w-0 overflow-hidden rounded-[12px] border border-slate-200 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
-      <div className="border-b border-slate-100 bg-slate-50 px-3 py-3">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <Badge className="rounded-[8px] border-sky-100 bg-sky-50 px-2 py-1 text-[10px] text-sky-700 shadow-none">
-            Rank {candidate.rank}
-          </Badge>
-          <Badge
-            className={cn(
-              "rounded-[8px] px-2 py-1 text-[10px] shadow-none",
-              candidate.valid_smiles
-                ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-                : "border-rose-100 bg-rose-50 text-rose-700"
-            )}
-          >
-            {candidate.valid_smiles ? "Valid" : "Invalid"}
-          </Badge>
-        </div>
-        {candidate.structure_svg ? (
-          <StructureSvg
-            svg={candidate.structure_svg}
-            alt={`PolyTAO structure rank ${candidate.rank}`}
-            imageClassName="max-h-[168px]"
-          />
-        ) : (
-          <div className="flex min-h-[150px] items-center justify-center rounded-[10px] bg-white px-3 text-center font-mono-ui text-xs leading-5 text-slate-500">
-            {candidate.generated_smiles}
-          </div>
-        )}
-      </div>
-      <div className="space-y-3 p-3">
-        <div className="group flex items-start gap-2 rounded-[10px] border border-slate-200 bg-slate-50 px-3 py-2">
-          <div className="min-w-0 flex-1 break-all font-mono-ui text-xs leading-5 text-slate-900">{candidate.generated_smiles}</div>
-          <button
-            type="button"
-            onClick={() => copyText(candidate.generated_smiles)}
-            className="flex h-7 w-7 flex-none items-center justify-center rounded-[8px] text-slate-500 transition hover:bg-white hover:text-slate-950"
-            aria-label="Copy generated SMILES"
-          >
-            <Copy className="h-3.5 w-3.5" />
-          </button>
-        </div>
-        <div className="grid gap-2 text-xs">
-          <MetricRow label="SA score" value={formatOptionalNumber(candidate.sa_score)} />
-          <MetricRow label="Raw output" value={candidate.raw_smiles} mono />
-        </div>
-        {candidate.warnings.length ? (
-          <div className="min-w-0 break-words rounded-[10px] border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 [overflow-wrap:anywhere]">
-            {candidate.warnings.join(", ")}
-          </div>
-        ) : null}
-      </div>
-    </article>
-  );
-}
-
-function NumberField({
+function SamplingField({
   label,
+  range,
   value,
   min,
   max,
@@ -865,59 +966,363 @@ function NumberField({
   onChange
 }: {
   label: string;
+  range: string;
   value: number;
-  min?: number;
-  max?: number;
-  step?: number;
+  min: number;
+  max: number;
+  step: number;
   onChange: (value: number) => void;
 }) {
+  const valid = Number.isFinite(value) && value >= min && value <= max && (label !== "Top-P" || value > 0);
   return (
-    <label className="grid gap-1.5">
-      <span className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{label}</span>
-      <Input
+    <label className="polytao-sampling-field">
+      <span className="polytao-sampling-label">
+        <span>{label}</span>
+        <span className="polytao-range-hint">{range}</span>
+      </span>
+      <input
+        className={`polytao-number-input${valid ? "" : " is-invalid"}`}
         type="number"
         min={min}
         max={max}
         step={step}
         value={Number.isFinite(value) ? value : ""}
-        onChange={(event) => onChange(parseNumber(event.target.value, value))}
-        className="h-9 rounded-[8px] border-slate-200 bg-white px-3 shadow-none"
+        aria-label={label}
+        onChange={(event) => onChange(parseNumber(event.currentTarget.value))}
       />
     </label>
   );
 }
 
-function MetricRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+type ResultsDrawerProps = {
+  open: boolean;
+  width: number;
+  isResizing: boolean;
+  data: PolytaoGenerationResponse | null;
+  job: PolytaoJobStatusResponse | null;
+  error: string | null;
+  isLoading: boolean;
+  runtimeDisplayState: PolytaoRuntimeDisplayState;
+  status: PolytaoStatusResponse | null;
+  requestedCount: number;
+  closeButtonRef: RefObject<HTMLButtonElement | null>;
+  reopenButtonRef: RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+  onOpen: () => void;
+  onRetry: () => void;
+  onRefreshRuntime: () => void;
+  onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onResizeKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void;
+  onCopy: (value: string) => void;
+};
+
+function ResultsDrawer({
+  open,
+  width,
+  isResizing,
+  data,
+  job,
+  error,
+  isLoading,
+  runtimeDisplayState,
+  status,
+  requestedCount,
+  closeButtonRef,
+  reopenButtonRef,
+  onClose,
+  onOpen,
+  onRetry,
+  onRefreshRuntime,
+  onResizeStart,
+  onResizeKeyDown,
+  onCopy
+}: ResultsDrawerProps) {
+  const completedWithoutData = job?.status === "completed" && !data;
+  const runtimeUnavailable =
+    runtimeDisplayState === "disabled" ||
+    runtimeDisplayState === "db_unavailable" ||
+    runtimeDisplayState === "runtime_error";
+  let subtitle = "等待提交 · PolyTAO";
+  if (isLoading) {
+    subtitle = `${jobStatusLabel(job?.status)} · ${Math.round(job?.progress_percent ?? 0)}%`;
+  } else if (error) {
+    subtitle = "生成失败 · 输入已保留";
+  } else if (data) {
+    subtitle = `${data.returned_count} 个候选 · 仅显示结构、SMILES 与 SA Score`;
+  } else if (completedWithoutData) {
+    subtitle = "0 个候选 · 生成完成";
+  } else if (runtimeUnavailable) {
+    subtitle = "PolyTAO 运行时不可用";
+  }
+
   return (
-    <div className="flex items-start justify-between gap-3">
-      <span className="text-slate-500">{label}</span>
-      <span className={cn("min-w-0 text-right font-semibold text-slate-800 [overflow-wrap:anywhere]", mono ? "break-all font-mono-ui" : "break-words")}>
-        {value}
-      </span>
+    <>
+      <button
+        className={`polytao-drawer-backdrop${open ? " is-open" : ""}`}
+        type="button"
+        aria-label="关闭聚合物生成结果"
+        aria-hidden={!open}
+        tabIndex={open ? 0 : -1}
+        onClick={onClose}
+      />
+      <button
+        ref={reopenButtonRef}
+        className={`polytao-drawer-reopen${open ? "" : " is-visible"}`}
+        type="button"
+        aria-label="打开聚合物生成结果"
+        title="打开聚合物生成结果"
+        aria-hidden={open}
+        tabIndex={open ? -1 : 0}
+        onClick={onOpen}
+      >
+        <PanelRightOpen />
+      </button>
+      <aside
+        className={`polytao-detail-drawer${open ? " is-open" : ""}`}
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="polytao-drawer-title"
+        aria-hidden={!open}
+        inert={!open}
+      >
+        <div
+          className={`polytao-drawer-resizer${isResizing ? " is-dragging" : ""}`}
+          role="separator"
+          tabIndex={open ? 0 : -1}
+          aria-label="调整聚合物生成结果侧栏宽度"
+          aria-orientation="vertical"
+          aria-valuemin={DRAWER_MIN_WIDTH}
+          aria-valuemax={DRAWER_MAX_WIDTH}
+          aria-valuenow={Math.round(width)}
+          onPointerDown={onResizeStart}
+          onKeyDown={onResizeKeyDown}
+        />
+        <header className="polytao-drawer-header">
+          <div className="polytao-drawer-heading">
+            <span className="polytao-drawer-mark"><Sparkles /></span>
+            <div className="polytao-drawer-copy">
+              <span className="polytao-drawer-eyebrow">PolyTAO Output</span>
+              <h2 id="polytao-drawer-title">聚合物生成结果</h2>
+              <p>{subtitle}</p>
+            </div>
+          </div>
+          <button
+            ref={closeButtonRef}
+            className="polytao-icon-button"
+            type="button"
+            aria-label="关闭聚合物生成结果"
+            onClick={onClose}
+          >
+            <X />
+          </button>
+        </header>
+
+        <div className="polytao-drawer-body" aria-live="polite">
+          {isLoading ? <DrawerProgress job={job} /> : null}
+          {!isLoading && error ? (
+            <DrawerState
+              icon={<CircleAlert />}
+              tone="danger"
+              title="生成任务执行失败"
+              message={error}
+              actionLabel="重新提交"
+              onAction={onRetry}
+            />
+          ) : null}
+          {!isLoading && !error && data?.results.length ? (
+            <div className="polytao-drawer-results-list">
+              {data.results.map((candidate) => (
+                <CandidateCard
+                  key={`${candidate.rank}-${candidate.generated_smiles}`}
+                  candidate={candidate}
+                  onCopy={onCopy}
+                />
+              ))}
+            </div>
+          ) : null}
+          {!isLoading && !error && data && data.results.length === 0 ? (
+            <DrawerState
+              icon={<Filter />}
+              tone="warning"
+              title="没有可用候选"
+              message="本次生成未返回通过结构校验的聚合物，目标特征与参数已保留。"
+              actionLabel="重新生成"
+              onAction={onRetry}
+            />
+          ) : null}
+          {!isLoading && !error && !data && completedWithoutData ? (
+            <DrawerState
+              icon={<Filter />}
+              tone="warning"
+              title="没有可用候选"
+              message="生成任务已完成，但没有候选结构通过校验。"
+              actionLabel="重新生成"
+              onAction={onRetry}
+            />
+          ) : null}
+          {!isLoading && !error && !data && !completedWithoutData && runtimeUnavailable ? (
+            <DrawerState
+              icon={<CircleAlert />}
+              tone="danger"
+              title="模型运行时不可用"
+              message={status?.message ?? "当前输入不会丢失，恢复运行时后可直接重试。"}
+              actionLabel="重新检查"
+              onAction={onRefreshRuntime}
+            />
+          ) : null}
+          {!isLoading && !error && !data && !completedWithoutData && !runtimeUnavailable ? (
+            <DrawerState
+              icon={<Sparkles />}
+              title="等待生成聚合物"
+              message="打开右上角参数配置，确认 15 项目标特征后开始生成。"
+            />
+          ) : null}
+        </div>
+
+        <footer className="polytao-drawer-footer">
+          <span>候选 {data?.returned_count ?? job?.returned_count ?? 0} / {requestedCount}</span>
+          <span>{status?.model_id ?? "PolyTAO"}</span>
+        </footer>
+      </aside>
+    </>
+  );
+}
+
+function jobStatusLabel(status: PolytaoJobStatusResponse["status"] | undefined) {
+  switch (status) {
+    case "pending":
+      return "等待中";
+    case "submitted":
+      return "已提交";
+    case "running":
+      return "正在生成";
+    case "completed":
+      return "生成完成";
+    case "failed":
+      return "作业失败";
+    case "cancelled":
+      return "已取消";
+    default:
+      return "正在提交";
+  }
+}
+
+function DrawerProgress({ job }: { job: PolytaoJobStatusResponse | null }) {
+  const progress = clamp(job?.progress_percent ?? 0, 0, 100);
+  return (
+    <div className="polytao-drawer-empty-shell">
+      <div className="polytao-progress-card">
+        <div className="polytao-progress-head">
+          <span className="polytao-progress-stage">
+            <LoaderCircle className="polytao-spinner" />
+            {jobStatusLabel(job?.status)}
+          </span>
+          <span className="polytao-progress-percent">{Math.round(progress)}%</span>
+        </div>
+        <div className="polytao-progress-track">
+          <div className="polytao-progress-fill" style={{ width: `${progress}%` }} />
+        </div>
+        <div className="polytao-progress-message">
+          {job?.progress_message ?? "正在创建 PolyTAO 生成任务。"}
+        </div>
+      </div>
     </div>
   );
 }
 
-function AlertBox({
+function DrawerState({
+  icon,
+  tone,
   title,
-  children,
-  tone
+  message,
+  actionLabel,
+  onAction
 }: {
+  icon: React.ReactNode;
+  tone?: "danger" | "warning";
   title: string;
-  children?: ReactNode;
-  tone: "warning" | "danger";
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
 }) {
-  const className =
-    tone === "danger"
-      ? "border-rose-100 bg-rose-50 text-rose-700"
-      : "border-amber-100 bg-amber-50 text-amber-800";
   return (
-    <div className={cn("flex gap-2 rounded-[10px] border px-3 py-2 text-xs leading-5", className)}>
-      <CircleAlert className="mt-0.5 h-4 w-4 flex-none" />
-      <div className="min-w-0">
-        <div className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">{title}</div>
-        {children}
+    <div className="polytao-drawer-empty-shell">
+      <div className="polytao-state-panel">
+        <div className="polytao-state-content">
+          <span className={`polytao-state-icon${tone ? ` is-${tone}` : ""}`}>{icon}</span>
+          <h3>{title}</h3>
+          <p>{message}</p>
+          {actionLabel && onAction ? (
+            <button className="polytao-secondary-button" type="button" onClick={onAction}>
+              <RefreshCw />
+              {actionLabel}
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
+  );
+}
+
+function CandidateCard({ candidate, onCopy }: { candidate: PolytaoCandidate; onCopy: (value: string) => void }) {
+  const [smilesExpanded, setSmilesExpanded] = useState(false);
+
+  return (
+    <article className="polytao-drawer-result-card" aria-labelledby={`polytao-candidate-${candidate.rank}`}>
+      <div className="polytao-drawer-result-head">
+        <div className="polytao-candidate-identity">
+          <span className="polytao-candidate-number">{String(candidate.rank).padStart(2, "0")}</span>
+          <div>
+            <strong id={`polytao-candidate-${candidate.rank}`}>候选结构</strong>
+            <small>CANDIDATE {String(candidate.rank).padStart(2, "0")}</small>
+          </div>
+        </div>
+        <div className="polytao-score-meter">
+          <span>SA</span>
+          <strong>{candidate.sa_score == null ? "—" : candidate.sa_score.toFixed(2)}</strong>
+        </div>
+      </div>
+      <div className="polytao-candidate-visual">
+        {candidate.structure_svg ? (
+          <StructureSvg
+            svg={candidate.structure_svg}
+            alt={`PolyTAO 候选结构 ${candidate.rank}`}
+            className="polytao-candidate-svg"
+            imageClassName="polytao-candidate-svg-image"
+          />
+        ) : (
+          <div className="polytao-candidate-fallback">{candidate.generated_smiles}</div>
+        )}
+      </div>
+      <div className="polytao-drawer-result-smiles">
+        <button
+          className="polytao-result-smiles-toggle"
+          type="button"
+          aria-expanded={smilesExpanded}
+          aria-controls={`polytao-candidate-${candidate.rank}-smiles`}
+          aria-label={`${smilesExpanded ? "收起" : "展开"}候选 ${candidate.rank} SMILES`}
+          onClick={() => setSmilesExpanded((expanded) => !expanded)}
+        >
+          <span>SMILES</span>
+          <span>
+            {smilesExpanded ? "收起" : "展开"}
+            <ChevronDown />
+          </span>
+        </button>
+        {smilesExpanded ? (
+          <div className="polytao-result-smiles-content" id={`polytao-candidate-${candidate.rank}-smiles`}>
+            <code>{candidate.generated_smiles}</code>
+            <button
+              className="polytao-result-copy-button"
+              type="button"
+              aria-label={`复制候选 ${candidate.rank} SMILES`}
+              onClick={() => onCopy(candidate.generated_smiles)}
+            >
+              <Copy />
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </article>
   );
 }

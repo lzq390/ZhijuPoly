@@ -74,6 +74,7 @@ import type {
   SmilesLookupResponse,
   SmilesStandardizeRequest,
   SmilesStandardizeResponse,
+  Structure2DResponse,
   StructureImageRecognitionResponse,
   SmilesQueryRequest,
   SmilesQueryResponse,
@@ -648,6 +649,10 @@ export function fetchStructure3D(
   smiles: string
 ): Promise<{ molblock: string; capped_smiles: string; format: "mol" }> {
   return postJSON("/structure/3d", { smiles });
+}
+
+export function fetchStructure2D(smiles: string, signal?: AbortSignal): Promise<Structure2DResponse> {
+  return postJSON("/structure/2d", { smiles }, signal);
 }
 
 export function standardizeSmiles(payload: SmilesStandardizeRequest): Promise<SmilesStandardizeResponse> {

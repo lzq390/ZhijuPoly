@@ -173,6 +173,26 @@ function getProjectButton(directory: string): HTMLButtonElement {
 }
 
 describe("AppShell 侧边栏", () => {
+  it("聚合物生成使用无内边距的满高工作台容器", () => {
+    const view = renderShell("polytaoGeneration");
+    const main = view.container.querySelector("main");
+
+    expect(main?.classList.contains("overflow-hidden")).toBe(true);
+    expect(main?.classList.contains("p-0")).toBe(true);
+    expect(main?.classList.contains("px-4")).toBe(false);
+    expect(main?.firstElementChild?.classList.contains("h-full")).toBe(true);
+  });
+
+  it("条件生成使用与 Tg 逆向设计一致的无内边距满高工作台容器", () => {
+    const view = renderShell("conditionalGeneration");
+    const main = view.container.querySelector("main");
+
+    expect(main?.classList.contains("overflow-hidden")).toBe(true);
+    expect(main?.classList.contains("p-0")).toBe(true);
+    expect(main?.classList.contains("px-4")).toBe(false);
+    expect(main?.firstElementChild?.classList.contains("h-full")).toBe(true);
+  });
+
   it("数据库筛选使用无内边距的满高工作台容器", () => {
     const view = renderShell("databaseFilter");
     const main = view.container.querySelector("main");
