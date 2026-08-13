@@ -124,6 +124,18 @@ class PredictResponse(BaseModel):
     query_time_ms: float = Field(ge=0.0)
 
 
+class Structure2DRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    smiles: str = Field(min_length=1)
+
+
+class Structure2DResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    structure_svg: str
+
+
 class Structure3DRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

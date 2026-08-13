@@ -710,7 +710,7 @@ export default function App() {
         },
         {
           id: "polytaoGeneration",
-          label: "PolyTAO 生成",
+          label: "聚合物生成",
           description: "按 15 个 RDKit 描述符调用 PolyTAO 生成候选重复单元。",
           route: POLYTAO_ROUTE,
           icon: <Sparkles className="h-4 w-4" />,

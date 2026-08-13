@@ -100,12 +100,14 @@ export function AppShell({
   const isDatabaseFilterWorkbench = activeModule === "databaseFilter";
   const isDatabaseAnalysisWorkbench = activeModule === "database";
   const isKnowledgeWorkbench = activeModule === "knowledge";
+  const isPolytaoWorkbench = activeModule === "polytaoGeneration";
   const isResearchWorkbench =
     activeModule === "explorer" ||
     activeModule === "databaseQuery" ||
     isDatabaseFilterWorkbench ||
     isDatabaseAnalysisWorkbench ||
     isKnowledgeWorkbench ||
+    isPolytaoWorkbench ||
     isStructureWorkbench ||
     activeModule === "reverseDesign";
   const activeGroupTitle =
@@ -246,7 +248,7 @@ export function AppShell({
           <div className="h-10 w-10" />
         </header>
 
-        <main className={isHome ? "min-h-0 flex-1 overflow-hidden" : isResearchWorkbench ? `min-h-0 flex-1 overflow-hidden ${isReverseDesignWorkbench || isStructureWorkbench || isDatabaseFilterWorkbench || isDatabaseAnalysisWorkbench || isKnowledgeWorkbench ? "p-0" : "py-5 md:py-8"}` : "flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-8"}>
+        <main className={isHome ? "min-h-0 flex-1 overflow-hidden" : isResearchWorkbench ? `min-h-0 flex-1 overflow-hidden ${isReverseDesignWorkbench || isStructureWorkbench || isDatabaseFilterWorkbench || isDatabaseAnalysisWorkbench || isKnowledgeWorkbench || isPolytaoWorkbench ? "p-0" : "py-5 md:py-8"}` : "flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-8"}>
           <div className={isHome ? "h-full" : ["relative mx-auto flex flex-col", isResearchWorkbench ? "h-full gap-0" : "gap-8", fullBleed ? "max-w-none" : "max-w-[1480px]"].join(" ")}>
             {children}
           </div>

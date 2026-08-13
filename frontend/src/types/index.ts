@@ -866,6 +866,10 @@ export type SmilesStandardizeRequest = {
   smiles: string;
 };
 
+export type Structure2DResponse = {
+  structure_svg: string;
+};
+
 export type SmilesStandardizeResponse = {
   input_smiles: string;
   standardized_smiles: string;

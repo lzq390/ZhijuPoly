@@ -11,6 +11,8 @@ from app.models import (
     SmilesQueryResponse,
     SmilesStandardizeRequest,
     SmilesStandardizeResponse,
+    Structure2DRequest,
+    Structure2DResponse,
     Structure3DRequest,
     Structure3DResponse,
     StructureImageRecognitionResponse,
@@ -29,6 +31,7 @@ from app.services.smiles_utils import standardize_smiles
 from app.services.structure_similarity_index import (
     StructureSimilarityIndexUnavailableError,
 )
+from app.services.structure_2d import generate_2d_svg
 from app.services.structure_3d import generate_3d_molblock
 from app.utils.exceptions import (
     InvalidImageError,
@@ -193,6 +196,14 @@ async def generate_structure_3d(request_body: Structure3DRequest, request: Reque
         capped_smiles=capped_smiles,
         format="mol",
     )
+
+
+@router.post("/structure/2d", response_model=Structure2DResponse)
+async def generate_structure_2d(request_body: Structure2DRequest) -> Structure2DResponse:
+    structure_svg = await run_in_threadpool(generate_2d_svg, request_body.smiles)
+    if structure_svg is None:
+        raise HTTPException(status_code=422, detail=f"invalid smiles: {request_body.smiles}")
+    return Structure2DResponse(structure_svg=structure_svg)
 
 
 @router.post("/structure/standardize-smiles", response_model=SmilesStandardizeResponse)

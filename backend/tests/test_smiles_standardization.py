@@ -34,3 +34,23 @@ def test_standardize_smiles_rejects_invalid_smiles(test_app) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"] == "invalid smiles: not-a-smiles"
+
+
+def test_render_structure_2d_returns_rdkit_svg(test_app) -> None:
+    client = TestClient(test_app)
+
+    response = client.post("/api/v1/structure/2d", json={"smiles": "*CC*"})
+
+    assert response.status_code == 200
+    structure_svg = response.json()["structure_svg"]
+    assert structure_svg.startswith("<?xml")
+    assert "<svg" in structure_svg
+
+
+def test_render_structure_2d_rejects_invalid_smiles(test_app) -> None:
+    client = TestClient(test_app)
+
+    response = client.post("/api/v1/structure/2d", json={"smiles": "not-a-smiles"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "invalid smiles: not-a-smiles"
