@@ -26,6 +26,21 @@ MONOMER_DFT_CATALOG_FINGERPRINT_SHA256 = (
     "6dc2e6ca7e1bb052836afec2bbdd46c6aa0928e97efdbbc6669b9b220f9bf6f8"
 )
 
+_INVALID_CATALOG_ACL_PROJECTION = "<invalid-catalog-acl-projection>"
+_SCHEMA_OWNER_PRIVILEGES = frozenset({"CREATE", "USAGE"})
+_TABLE_OWNER_PRIVILEGES = frozenset(
+    {
+        "DELETE",
+        "INSERT",
+        "REFERENCES",
+        "SELECT",
+        "TRIGGER",
+        "TRUNCATE",
+        "UPDATE",
+    }
+)
+_SEQUENCE_OWNER_PRIVILEGES = frozenset({"SELECT", "UPDATE", "USAGE"})
+
 
 class MonomerDftSchemaState(str, Enum):
     ABSENT = "absent"
@@ -49,6 +64,89 @@ def _canonical_rows(
     fields: tuple[str, ...],
 ) -> list[dict[str, object]]:
     return [{field: row[field] for field in fields} for row in rows]
+
+
+def _normalize_catalog_access_control(
+    raw_access_control: object,
+    entries: object,
+    *,
+    owner_oid: object,
+    mutable_audit_role_oid: object,
+    owner_matches_contract: object,
+    owner_privileges: frozenset[str],
+    mutable_audit_privilege: str,
+) -> str:
+    """Remove only the exact managed mutable-audit read-only ACL.
+
+    PostgreSQL materializes an object's otherwise implicit owner ACL when the
+    first explicit grant is added.  Therefore the approved representation is
+    the complete default owner ACL plus one non-grantable privilege granted by
+    that same owner to the exact mutable-audit role.  Returning the raw ACL for
+    every other non-empty projection keeps unknown grantees, grantors, grant
+    options, or privileges inside the immutable catalog fingerprint.
+    """
+
+    if not isinstance(raw_access_control, str):
+        return _INVALID_CATALOG_ACL_PROJECTION
+    if raw_access_control == "":
+        return "" if entries == [] else _INVALID_CATALOG_ACL_PROJECTION
+
+    if (
+        owner_matches_contract is not True
+        or not isinstance(owner_oid, str)
+        or not owner_oid.isdigit()
+        or int(owner_oid) <= 0
+        or not isinstance(mutable_audit_role_oid, str)
+        or not mutable_audit_role_oid.isdigit()
+        or int(mutable_audit_role_oid) <= 0
+        or mutable_audit_role_oid == owner_oid
+        or not isinstance(entries, list)
+    ):
+        return raw_access_control
+
+    normalized_entries: list[tuple[str, str, str, bool]] = []
+    expected_fields = {"grantee", "grantor", "privilege", "grantable"}
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != expected_fields:
+            return raw_access_control
+        grantee = entry.get("grantee")
+        grantor = entry.get("grantor")
+        privilege = entry.get("privilege")
+        grantable = entry.get("grantable")
+        if (
+            not isinstance(grantee, str)
+            or not grantee.isdigit()
+            or int(grantee) <= 0
+            or not isinstance(grantor, str)
+            or not grantor.isdigit()
+            or int(grantor) <= 0
+            or not isinstance(privilege, str)
+            or not privilege
+            or not isinstance(grantable, bool)
+        ):
+            return raw_access_control
+        normalized_entries.append(
+            (grantee, grantor, privilege, grantable)
+        )
+
+    expected_entries = {
+        (owner_oid, owner_oid, privilege, False)
+        for privilege in owner_privileges
+    }
+    expected_entries.add(
+        (
+            mutable_audit_role_oid,
+            owner_oid,
+            mutable_audit_privilege,
+            False,
+        )
+    )
+    if (
+        len(normalized_entries) == len(expected_entries)
+        and set(normalized_entries) == expected_entries
+    ):
+        return ""
+    return raw_access_control
 
 
 @contextmanager
@@ -90,59 +188,128 @@ def monomer_dft_catalog_document(connection: Any) -> dict[str, object]:
     """
 
     with _catalog_search_path(connection):
+        namespace_rows = connection.execute(
+            """
+            SELECT
+              n.nspname AS schema_name,
+              n.nspowner = (
+                SELECT r.oid
+                FROM pg_catalog.pg_roles AS r
+                WHERE r.rolname = current_user
+              ) AS owner_is_current_role,
+              COALESCE(pg_catalog.array_to_string(n.nspacl, ','), '')
+                AS access_control,
+              n.nspowner::text AS acl_owner_oid,
+              (
+                SELECT r.oid::text
+                FROM pg_catalog.pg_roles AS r
+                WHERE r.rolname = 'nexpoly_mutable_audit'
+              ) AS mutable_audit_role_oid,
+              COALESCE(
+                (
+                  SELECT pg_catalog.jsonb_agg(
+                    pg_catalog.jsonb_build_object(
+                      'grantee', acl.grantee::text,
+                      'grantor', acl.grantor::text,
+                      'privilege', acl.privilege_type,
+                      'grantable', acl.is_grantable
+                    )
+                    ORDER BY
+                      acl.grantee,
+                      acl.grantor,
+                      acl.privilege_type,
+                      acl.is_grantable
+                  )
+                  FROM pg_catalog.aclexplode(n.nspacl) AS acl
+                ),
+                '[]'::pg_catalog.jsonb
+              ) AS access_control_entries
+            FROM pg_catalog.pg_namespace AS n
+            WHERE n.nspname = 'monomer_dft'
+            """
+        ).fetchall()
         namespace = _canonical_rows(
-            connection.execute(
-                """
-                SELECT
-                  n.nspname AS schema_name,
-                  n.nspowner = (
-                    SELECT r.oid
-                    FROM pg_catalog.pg_roles AS r
-                    WHERE r.rolname = current_user
-                  ) AS owner_is_current_role,
-                  COALESCE(pg_catalog.array_to_string(n.nspacl, ','), '')
-                    AS access_control
-                FROM pg_catalog.pg_namespace AS n
-                WHERE n.nspname = 'monomer_dft'
-                """
-            ).fetchall(),
+            namespace_rows,
             (
                 "schema_name",
                 "owner_is_current_role",
                 "access_control",
             ),
         )
+        for canonical, row in zip(namespace, namespace_rows, strict=True):
+            canonical["access_control"] = _normalize_catalog_access_control(
+                row["access_control"],
+                row["access_control_entries"],
+                owner_oid=row["acl_owner_oid"],
+                mutable_audit_role_oid=row["mutable_audit_role_oid"],
+                owner_matches_contract=row["owner_is_current_role"],
+                owner_privileges=_SCHEMA_OWNER_PRIVILEGES,
+                mutable_audit_privilege="USAGE",
+            )
+
+        relation_rows = connection.execute(
+            """
+            SELECT
+              c.relname AS relation_name,
+              c.relkind::text AS relation_kind,
+              c.relpersistence::text AS persistence,
+              c.relreplident::text AS replica_identity,
+              c.relrowsecurity AS row_security,
+              c.relforcerowsecurity AS force_row_security,
+              c.relispartition AS is_partition,
+              COALESCE(am.amname, '') AS access_method,
+              c.relowner = n.nspowner AS owner_matches_schema,
+              COALESCE(pg_catalog.array_to_string(c.relacl, ','), '')
+                AS access_control,
+              c.relowner::text AS acl_owner_oid,
+              (
+                SELECT r.oid::text
+                FROM pg_catalog.pg_roles AS r
+                WHERE r.rolname = 'nexpoly_mutable_audit'
+              ) AS mutable_audit_role_oid,
+              c.relowner = n.nspowner
+                AND n.nspowner = (
+                  SELECT r.oid
+                  FROM pg_catalog.pg_roles AS r
+                  WHERE r.rolname = current_user
+                ) AS acl_owner_matches_contract,
+              COALESCE(
+                (
+                  SELECT pg_catalog.jsonb_agg(
+                    pg_catalog.jsonb_build_object(
+                      'grantee', acl.grantee::text,
+                      'grantor', acl.grantor::text,
+                      'privilege', acl.privilege_type,
+                      'grantable', acl.is_grantable
+                    )
+                    ORDER BY
+                      acl.grantee,
+                      acl.grantor,
+                      acl.privilege_type,
+                      acl.is_grantable
+                  )
+                  FROM pg_catalog.aclexplode(c.relacl) AS acl
+                ),
+                '[]'::pg_catalog.jsonb
+              ) AS access_control_entries,
+              COALESCE(
+                (
+                  SELECT pg_catalog.string_agg(option_value, ',' ORDER BY option_value)
+                  FROM pg_catalog.unnest(c.reloptions) AS option_value
+                ),
+                ''
+              ) AS relation_options,
+              COALESCE(ts.spcname, '') AS tablespace
+            FROM pg_catalog.pg_class AS c
+            JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+            LEFT JOIN pg_catalog.pg_am AS am ON am.oid = c.relam
+            LEFT JOIN pg_catalog.pg_tablespace AS ts ON ts.oid = c.reltablespace
+            WHERE n.nspname = 'monomer_dft'
+            ORDER BY c.relkind, c.relname
+            """
+        ).fetchall()
         relations = _canonical_rows(
-            connection.execute(
-                """
-                SELECT
-                  c.relname AS relation_name,
-                  c.relkind::text AS relation_kind,
-                  c.relpersistence::text AS persistence,
-                  c.relreplident::text AS replica_identity,
-                  c.relrowsecurity AS row_security,
-                  c.relforcerowsecurity AS force_row_security,
-                  c.relispartition AS is_partition,
-                  COALESCE(am.amname, '') AS access_method,
-                  c.relowner = n.nspowner AS owner_matches_schema,
-                  COALESCE(pg_catalog.array_to_string(c.relacl, ','), '')
-                    AS access_control,
-                  COALESCE(
-                    (
-                      SELECT pg_catalog.string_agg(option_value, ',' ORDER BY option_value)
-                      FROM pg_catalog.unnest(c.reloptions) AS option_value
-                    ),
-                    ''
-                  ) AS relation_options,
-                  COALESCE(ts.spcname, '') AS tablespace
-                FROM pg_catalog.pg_class AS c
-                JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
-                LEFT JOIN pg_catalog.pg_am AS am ON am.oid = c.relam
-                LEFT JOIN pg_catalog.pg_tablespace AS ts ON ts.oid = c.reltablespace
-                WHERE n.nspname = 'monomer_dft'
-                ORDER BY c.relkind, c.relname
-                """
-            ).fetchall(),
+            relation_rows,
             (
                 "relation_name",
                 "relation_kind",
@@ -158,6 +325,24 @@ def monomer_dft_catalog_document(connection: Any) -> dict[str, object]:
                 "tablespace",
             ),
         )
+        relation_acl_contracts = {
+            "r": (_TABLE_OWNER_PRIVILEGES, "SELECT"),
+            "S": (_SEQUENCE_OWNER_PRIVILEGES, "SELECT"),
+        }
+        for canonical, row in zip(relations, relation_rows, strict=True):
+            contract = relation_acl_contracts.get(str(row["relation_kind"]))
+            if contract is None:
+                continue
+            owner_privileges, mutable_audit_privilege = contract
+            canonical["access_control"] = _normalize_catalog_access_control(
+                row["access_control"],
+                row["access_control_entries"],
+                owner_oid=row["acl_owner_oid"],
+                mutable_audit_role_oid=row["mutable_audit_role_oid"],
+                owner_matches_contract=row["acl_owner_matches_contract"],
+                owner_privileges=owner_privileges,
+                mutable_audit_privilege=mutable_audit_privilege,
+            )
         columns = _canonical_rows(
             connection.execute(
                 """

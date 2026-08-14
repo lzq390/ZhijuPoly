@@ -20,6 +20,7 @@ from app.services.monomer_dft_schema import (
     MONOMER_DFT_CATALOG_FINGERPRINT_SHA256,
     MONOMER_DFT_MIGRATION_VERSION,
     MonomerDftSchemaState,
+    _normalize_catalog_access_control,
     monomer_dft_catalog_document,
     monomer_dft_catalog_sha256,
     probe_monomer_dft_schema,
@@ -27,6 +28,53 @@ from app.services.monomer_dft_schema import (
 
 
 REQUEST_ADAPTER = TypeAdapter(MonomerDftRunRequest)
+ACL_TEST_OWNER_OID = "16384"
+ACL_TEST_AUDIT_ROLE_OID = "16385"
+ACL_TEST_RAW = "owner=UC/owner,nexpoly_mutable_audit=U/owner"
+
+
+def _acl_test_entries(
+    owner_privileges: frozenset[str],
+    audit_privilege: str,
+) -> list[dict[str, object]]:
+    return [
+        *[
+            {
+                "grantee": ACL_TEST_OWNER_OID,
+                "grantor": ACL_TEST_OWNER_OID,
+                "privilege": privilege,
+                "grantable": False,
+            }
+            for privilege in sorted(owner_privileges, reverse=True)
+        ],
+        {
+            "grantee": ACL_TEST_AUDIT_ROLE_OID,
+            "grantor": ACL_TEST_OWNER_OID,
+            "privilege": audit_privilege,
+            "grantable": False,
+        },
+    ]
+
+
+def _normalize_acl_for_test(
+    entries: object,
+    *,
+    owner_privileges: frozenset[str] = frozenset({"CREATE", "USAGE"}),
+    audit_privilege: str = "USAGE",
+    owner_oid: object = ACL_TEST_OWNER_OID,
+    audit_role_oid: object = ACL_TEST_AUDIT_ROLE_OID,
+    owner_matches_contract: object = True,
+    raw_access_control: object = ACL_TEST_RAW,
+) -> str:
+    return _normalize_catalog_access_control(
+        raw_access_control,
+        entries,
+        owner_oid=owner_oid,
+        mutable_audit_role_oid=audit_role_oid,
+        owner_matches_contract=owner_matches_contract,
+        owner_privileges=owner_privileges,
+        mutable_audit_privilege=audit_privilege,
+    )
 
 
 def _prepared(smiles: str = "CCO"):
@@ -421,6 +469,123 @@ def test_postgres_cancel_is_local_only_before_durable_dispatch_claim(postgres_ds
         )
 
 
+def test_catalog_acl_normalization_preserves_pristine_acl() -> None:
+    assert _normalize_acl_for_test([], raw_access_control="") == ""
+
+
+@pytest.mark.parametrize(
+    ("owner_privileges", "audit_privilege"),
+    [
+        (frozenset({"CREATE", "USAGE"}), "USAGE"),
+        (
+            frozenset(
+                {
+                    "DELETE",
+                    "INSERT",
+                    "REFERENCES",
+                    "SELECT",
+                    "TRIGGER",
+                    "TRUNCATE",
+                    "UPDATE",
+                }
+            ),
+            "SELECT",
+        ),
+        (frozenset({"SELECT", "UPDATE", "USAGE"}), "SELECT"),
+    ],
+    ids=("schema-usage", "table-select", "sequence-select"),
+)
+def test_catalog_acl_normalization_accepts_exact_audit_read_grant(
+    owner_privileges: frozenset[str],
+    audit_privilege: str,
+) -> None:
+    assert (
+        _normalize_acl_for_test(
+            _acl_test_entries(owner_privileges, audit_privilege),
+            owner_privileges=owner_privileges,
+            audit_privilege=audit_privilege,
+        )
+        == ""
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(
+            lambda entries: entries
+            + [
+                {
+                    "grantee": "16386",
+                    "grantor": ACL_TEST_OWNER_OID,
+                    "privilege": "USAGE",
+                    "grantable": False,
+                }
+            ],
+            id="unknown-grantee",
+        ),
+        pytest.param(
+            lambda entries: entries
+            + [
+                {
+                    "grantee": ACL_TEST_AUDIT_ROLE_OID,
+                    "grantor": ACL_TEST_OWNER_OID,
+                    "privilege": "CREATE",
+                    "grantable": False,
+                }
+            ],
+            id="extra-privilege",
+        ),
+        pytest.param(
+            lambda entries: [
+                {**entry, "grantable": True}
+                if entry["grantee"] == ACL_TEST_AUDIT_ROLE_OID
+                else entry
+                for entry in entries
+            ],
+            id="grant-option",
+        ),
+        pytest.param(
+            lambda entries: [
+                {**entry, "grantor": "16386"}
+                if entry["grantee"] == ACL_TEST_AUDIT_ROLE_OID
+                else entry
+                for entry in entries
+            ],
+            id="wrong-grantor",
+        ),
+        pytest.param(lambda entries: entries[:-1], id="missing-audit-grant"),
+        pytest.param(lambda entries: entries + [entries[-1]], id="duplicate"),
+        pytest.param(
+            lambda entries: [{**entries[0], "unknown": True}] + entries[1:],
+            id="unknown-entry-field",
+        ),
+    ],
+)
+def test_catalog_acl_normalization_keeps_unsafe_acl_in_fingerprint(
+    mutation,
+) -> None:
+    entries = _acl_test_entries(frozenset({"CREATE", "USAGE"}), "USAGE")
+    assert _normalize_acl_for_test(mutation(entries)) == ACL_TEST_RAW
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"owner_matches_contract": False},
+        {"owner_oid": "16386"},
+        {"audit_role_oid": None},
+        {"audit_role_oid": ACL_TEST_OWNER_OID},
+    ],
+    ids=("wrong-owner", "wrong-owner-oid", "missing-role", "role-is-owner"),
+)
+def test_catalog_acl_normalization_requires_exact_owner_and_role(
+    overrides: dict[str, object],
+) -> None:
+    entries = _acl_test_entries(frozenset({"CREATE", "USAGE"}), "USAGE")
+    assert _normalize_acl_for_test(entries, **overrides) == ACL_TEST_RAW
+
+
 def test_postgres_exact_0013_catalog_fingerprint_is_ready(
     postgres_dsn: str,
 ) -> None:
@@ -448,6 +613,124 @@ def test_postgres_exact_0013_catalog_fingerprint_is_ready(
         for relation in document["relations"]
     )
     assert all(column["access_control"] == "" for column in document["columns"])
+
+
+def test_postgres_exact_mutable_audit_acl_normalizes_to_pristine_fingerprint(
+    postgres_dsn: str,
+) -> None:
+    class RollbackAuditAcl(Exception):
+        pass
+
+    class RollbackUnsafeAcl(Exception):
+        pass
+
+    unsafe_grants = (
+        "GRANT CREATE ON SCHEMA monomer_dft TO nexpoly_mutable_audit",
+        "GRANT INSERT ON monomer_dft.jobs TO nexpoly_mutable_audit",
+        "GRANT USAGE ON SEQUENCE "
+        "monomer_dft.jobs_enqueue_sequence_seq TO nexpoly_mutable_audit",
+        "GRANT SELECT ON monomer_dft.jobs "
+        "TO nexpoly_mutable_audit WITH GRANT OPTION",
+    )
+
+    with postgres_connection(postgres_dsn) as connection:
+        try:
+            with connection.transaction():
+                role_exists = connection.execute(
+                    """
+                    SELECT EXISTS (
+                      SELECT 1
+                      FROM pg_catalog.pg_roles
+                      WHERE rolname = 'nexpoly_mutable_audit'
+                    ) AS role_exists
+                    """
+                ).fetchone()["role_exists"]
+                if not role_exists:
+                    connection.execute(
+                        "CREATE ROLE nexpoly_mutable_audit NOLOGIN"
+                    )
+
+                connection.execute(
+                    "GRANT USAGE ON SCHEMA monomer_dft "
+                    "TO nexpoly_mutable_audit"
+                )
+                connection.execute(
+                    "GRANT SELECT ON ALL TABLES IN SCHEMA monomer_dft "
+                    "TO nexpoly_mutable_audit"
+                )
+                connection.execute(
+                    "GRANT SELECT ON ALL SEQUENCES IN SCHEMA monomer_dft "
+                    "TO nexpoly_mutable_audit"
+                )
+
+                raw_acl = connection.execute(
+                    """
+                    SELECT
+                      n.nspacl::text AS namespace_acl,
+                      (
+                        SELECT c.relacl::text
+                        FROM pg_catalog.pg_class AS c
+                        WHERE c.relnamespace = n.oid
+                          AND c.relname = 'jobs'
+                      ) AS table_acl,
+                      (
+                        SELECT c.relacl::text
+                        FROM pg_catalog.pg_class AS c
+                        WHERE c.relnamespace = n.oid
+                          AND c.relname = 'jobs_enqueue_sequence_seq'
+                      ) AS sequence_acl
+                    FROM pg_catalog.pg_namespace AS n
+                    WHERE n.nspname = 'monomer_dft'
+                    """
+                ).fetchone()
+                assert "nexpoly_mutable_audit=U/" in raw_acl["namespace_acl"]
+                assert "nexpoly_mutable_audit=r/" in raw_acl["table_acl"]
+                assert "nexpoly_mutable_audit=r/" in raw_acl["sequence_acl"]
+
+                document = monomer_dft_catalog_document(connection)
+                digest = monomer_dft_catalog_sha256(connection)
+                probe = probe_monomer_dft_schema(connection)
+                assert digest == MONOMER_DFT_CATALOG_FINGERPRINT_SHA256
+                assert probe.state is MonomerDftSchemaState.READY
+                assert document["namespace"][0]["access_control"] == ""
+                assert all(
+                    relation["access_control"] == ""
+                    for relation in document["relations"]
+                )
+
+                for unsafe_grant in unsafe_grants:
+                    try:
+                        with connection.transaction():
+                            connection.execute(unsafe_grant)
+                            unsafe_probe = probe_monomer_dft_schema(connection)
+                            assert (
+                                unsafe_probe.state
+                                is MonomerDftSchemaState.INVALID
+                            )
+                            assert (
+                                unsafe_probe.reason
+                                == "catalog_fingerprint_mismatch"
+                            )
+                            assert (
+                                unsafe_probe.catalog_sha256
+                                != MONOMER_DFT_CATALOG_FINGERPRINT_SHA256
+                            )
+                            raise RollbackUnsafeAcl
+                    except RollbackUnsafeAcl:
+                        pass
+
+                assert (
+                    probe_monomer_dft_schema(connection).state
+                    is MonomerDftSchemaState.READY
+                )
+                raise RollbackAuditAcl
+        except RollbackAuditAcl:
+            pass
+
+        assert (
+            probe_monomer_dft_schema(connection).state
+            is MonomerDftSchemaState.READY
+        )
 
 
 def test_catalog_probe_failure_restores_search_path_and_preserves_error(

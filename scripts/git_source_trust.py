@@ -15,12 +15,12 @@ installed in both bootstrap recovery tools and content-addressed controls.
 from __future__ import annotations
 
 import configparser
+import ctypes
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import secrets
 import stat
 import struct
 import subprocess
@@ -36,28 +36,36 @@ PERMISSION_MARKER_RELATIVE_PATH = Path(
     "state/legacy-git-permission-takeover.json"
 )
 PERMISSION_MARKER_MAX_BYTES = 128 * 1024 * 1024
-PERMISSION_PHASES = frozenset(
-    {
-        "captured",
-        "root-intent",
-        "root-hardened",
-        "metadata-directories-intent",
-        "metadata-directories-hardened",
-        "metadata-files-intent",
-        "metadata-files-hardened",
-        "hardened",
-        "restore-files-intent",
-        "restore-files-restored",
-        "restore-directories-intent",
-        "restore-directories-restored",
-        "restore-root-intent",
-        "restored",
-    }
+PERMISSION_HISTORY_MAX_BYTES = 512 * 1024 * 1024
+PERMISSION_HISTORY_FREE_MARGIN_BYTES = 64 * 1024 * 1024
+PERMISSION_TAKEOVER_PHASE_SEQUENCE = (
+    "captured",
+    "root-intent",
+    "root-hardened",
+    "metadata-directories-intent",
+    "metadata-directories-hardened",
+    "metadata-files-intent",
+    "metadata-files-hardened",
+    "hardened",
 )
+PERMISSION_RESTORE_PHASE_SEQUENCE = (
+    "restore-files-intent",
+    "restore-files-restored",
+    "restore-directories-intent",
+    "restore-directories-restored",
+    "restore-root-intent",
+    "restored",
+)
+PERMISSION_LIFECYCLE_PHASE_SEQUENCE = (
+    *PERMISSION_TAKEOVER_PHASE_SEQUENCE,
+    *PERMISSION_RESTORE_PHASE_SEQUENCE,
+)
+PERMISSION_PHASES = frozenset(PERMISSION_LIFECYCLE_PHASE_SEQUENCE)
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_CONTROL_FILE_BYTES = 64 * 1024 * 1024
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+RENAME_NOREPLACE = 1
 
 # These values can redirect repository discovery, object reads, config,
 # identity, hooks/helpers, or the binary implementation before our command
@@ -383,44 +391,1440 @@ def _permission_json_no_duplicates(
     return value
 
 
-def _atomic_permission_marker(
-    marker_path: Path,
-    document: dict[str, Any],
-) -> None:
-    marker_path = _private_permission_marker_parent(marker_path)
-    payload = canonical_json_bytes(document) + b"\n"
-    temporary = marker_path.parent / (
-        f".{marker_path.name}.tmp-{secrets.token_hex(16)}"
+def _permission_entry_exists_at(directory_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _permission_staging_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_nlink,
     )
+
+
+def _permission_staging_version(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _permission_staging_content_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+
+
+def _permission_renameat2(
+    directory_fd: int,
+    source_name: str,
+    target_name: str,
+    flags: int,
+) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise GitPermissionTakeoverError(
+            "renameat2 no-replace permission quarantine is unavailable"
+        )
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    if (
+        renameat2(
+            directory_fd,
+            os.fsencode(source_name),
+            directory_fd,
+            os.fsencode(target_name),
+            flags,
+        )
+        != 0
+    ):
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), source_name)
+
+
+def _permission_rename_noreplace(
+    directory_fd: int,
+    source_name: str,
+    target_name: str,
+) -> None:
+    _permission_renameat2(
+        directory_fd,
+        source_name,
+        target_name,
+        RENAME_NOREPLACE,
+    )
+
+
+def _open_permission_staging_at(
+    directory_fd: int,
+    name: str,
+) -> tuple[int, os.stat_result]:
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            "permission takeover marker staging is unsafe"
+        ) from exc
+    try:
+        metadata = os.fstat(descriptor)
+        observed = os.stat(
+            name,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+            or not 0 <= metadata.st_size <= PERMISSION_MARKER_MAX_BYTES
+            or _permission_staging_identity(observed)
+            != _permission_staging_identity(metadata)
+        ):
+            raise GitPermissionTakeoverError(
+                "permission takeover marker staging is unsafe"
+            )
+        return descriptor, metadata
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _permission_staging_bytes_at(
+    directory_fd: int,
+    name: str,
+) -> tuple[bytes, tuple[int, int, int, int, int]]:
+    descriptor, before = _open_permission_staging_at(directory_fd, name)
+    try:
+        payload, after = _permission_staging_bytes_from_descriptor(
+            descriptor, before
+        )
+        return bytes(payload), _permission_staging_identity(after)
+    finally:
+        os.close(descriptor)
+
+
+def _permission_staging_bytes_from_descriptor(
+    descriptor: int,
+    before: os.stat_result,
+) -> tuple[bytes, os.stat_result]:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    payload = bytearray()
+    remaining = before.st_size
+    while remaining:
+        chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+        if not chunk:
+            raise GitPermissionTakeoverError(
+                "permission takeover marker staging was truncated"
+            )
+        payload.extend(chunk)
+        remaining -= len(chunk)
+    after = os.fstat(descriptor)
+    if _permission_staging_version(after) != _permission_staging_version(
+        before
+    ):
+        raise GitPermissionTakeoverError(
+            "permission takeover marker staging changed while read"
+        )
+    return bytes(payload), after
+
+
+def _assert_permission_held_path_at(
+    directory_fd: int,
+    name: str,
+    descriptor: int,
+    expected_payload: bytes,
+    *,
+    message: str,
+) -> os.stat_result:
+    held_payload, held = _permission_staging_bytes_from_descriptor(
+        descriptor, os.fstat(descriptor)
+    )
+    try:
+        observed = os.stat(
+            name,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise GitPermissionTakeoverError(message) from exc
+    if (
+        held_payload != expected_payload
+        or _permission_staging_version(observed)
+        != _permission_staging_version(held)
+    ):
+        raise GitPermissionTakeoverError(message)
+    return held
+
+
+def _rename_permission_held_noreplace_at(
+    directory_fd: int,
+    source_name: str,
+    target_name: str,
+    descriptor: int,
+    expected_payload: bytes,
+    *,
+    message: str,
+) -> os.stat_result:
+    _assert_permission_held_path_at(
+        directory_fd,
+        source_name,
+        descriptor,
+        expected_payload,
+        message=message,
+    )
+    _permission_rename_noreplace(
+        directory_fd, source_name, target_name
+    )
+    try:
+        held = _assert_permission_held_path_at(
+            directory_fd,
+            target_name,
+            descriptor,
+            expected_payload,
+            message=message,
+        )
+    except BaseException:
+        os.fsync(directory_fd)
+        raise
+    os.fsync(directory_fd)
+    return held
+
+
+def _remove_permission_staging_at(
+    directory_fd: int,
+    staging_name: str,
+    quarantine_name: str,
+    *,
+    expected_identity: tuple[int, int, int, int, int] | None = None,
+) -> None:
+    staging_exists = _permission_entry_exists_at(directory_fd, staging_name)
+    quarantine_exists = _permission_entry_exists_at(
+        directory_fd, quarantine_name
+    )
+    if staging_exists and quarantine_exists:
+        raise GitPermissionTakeoverError(
+            "permission marker staging and quarantine both exist"
+        )
+    if not staging_exists and not quarantine_exists:
+        return
+    current_name = quarantine_name if quarantine_exists else staging_name
+    descriptor, metadata = _open_permission_staging_at(
+        directory_fd, current_name
+    )
+    try:
+        identity = _permission_staging_identity(metadata)
+        if expected_identity is not None and identity != expected_identity:
+            raise GitPermissionTakeoverError(
+                "permission marker staging identity changed before quarantine"
+            )
+        if staging_exists:
+            _permission_rename_noreplace(
+                directory_fd, staging_name, quarantine_name
+            )
+            observed = os.stat(
+                quarantine_name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            if _permission_staging_identity(observed) != identity:
+                os.fsync(directory_fd)
+                raise GitPermissionTakeoverError(
+                    "permission marker staging raced during quarantine"
+                )
+            os.fsync(directory_fd)
+        observed = os.stat(
+            quarantine_name,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        if _permission_staging_identity(observed) != identity:
+            raise GitPermissionTakeoverError(
+                "permission marker quarantine identity changed"
+            )
+        os.unlink(quarantine_name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+    finally:
+        os.close(descriptor)
+
+
+def _prepare_permission_staging_at(
+    directory_fd: int,
+    staging_name: str,
+    quarantine_name: str,
+    payload: bytes,
+) -> None:
+    staging_exists = _permission_entry_exists_at(directory_fd, staging_name)
+    quarantine_exists = _permission_entry_exists_at(
+        directory_fd, quarantine_name
+    )
+    if staging_exists and quarantine_exists:
+        raise GitPermissionTakeoverError(
+            "permission marker staging and quarantine both exist"
+        )
+    if quarantine_exists:
+        _remove_permission_staging_at(
+            directory_fd, staging_name, quarantine_name
+        )
+        staging_exists = False
+    if staging_exists:
+        staged, identity = _permission_staging_bytes_at(
+            directory_fd, staging_name
+        )
+        if staged != payload:
+            _remove_permission_staging_at(
+                directory_fd,
+                staging_name,
+                quarantine_name,
+                expected_identity=identity,
+            )
+            staging_exists = False
+    if staging_exists:
+        return
     descriptor: int | None = None
     try:
         descriptor = os.open(
-            temporary,
+            staging_name,
             os.O_WRONLY
             | os.O_CREAT
             | os.O_EXCL
             | getattr(os, "O_CLOEXEC", 0)
             | getattr(os, "O_NOFOLLOW", 0),
             0o600,
+            dir_fd=directory_fd,
         )
-        with os.fdopen(descriptor, "wb", closefd=True) as stream:
-            descriptor = None
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, marker_path)
-        _fsync_permission_directory(marker_path.parent)
+        written = 0
+        while written < len(payload):
+            written += os.write(descriptor, payload[written:])
+        os.fsync(descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    os.fsync(directory_fd)
+
+
+def _permission_marker_expectation(
+    marker_path: Path,
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
+    expected_payload = canonical_json_bytes(document) + b"\n"
+    directory_fd = os.open(
+        marker_path.parent,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        descriptor, before = _open_permission_staging_at(
+            directory_fd, marker_path.name
+        )
+        try:
+            payload, after = _permission_staging_bytes_from_descriptor(
+                descriptor, before
+            )
+        finally:
+            os.close(descriptor)
+        if payload != expected_payload:
+            raise GitPermissionTakeoverError(
+                "permission marker raw generation changed before save"
+            )
+        return {
+            "identity": _permission_staging_identity(after),
+            "version": _permission_staging_version(after),
+            "raw_sha256": sha256_bytes(payload),
+        }
+    finally:
+        os.close(directory_fd)
+
+
+def _assert_permission_marker_expectation(
+    descriptor: int,
+    before: os.stat_result,
+    expectation: Mapping[str, Any],
+) -> tuple[bytes, os.stat_result]:
+    payload, after = _permission_staging_bytes_from_descriptor(
+        descriptor, before
+    )
+    if (
+        expectation.get("identity")
+        != _permission_staging_identity(after)
+        or expectation.get("version")
+        != _permission_staging_version(after)
+        or expectation.get("raw_sha256") != sha256_bytes(payload)
+    ):
+        raise GitPermissionTakeoverError(
+            "permission marker target changed before generation save"
+        )
+    return payload, after
+
+
+def _permission_predecessor_document(
+    current: Mapping[str, Any],
+) -> dict[str, Any]:
+    phase = current.get("phase")
+    if phase not in PERMISSION_LIFECYCLE_PHASE_SEQUENCE:
+        raise GitPermissionTakeoverError(
+            "permission marker current phase is invalid"
+        )
+    phase_index = PERMISSION_LIFECYCLE_PHASE_SEQUENCE.index(str(phase))
+    if phase_index == 0:
+        raise GitPermissionTakeoverError(
+            "permission marker first phase has no predecessor"
+        )
+    generation = current.get("generation")
+    if (
+        isinstance(generation, bool)
+        or not isinstance(generation, int)
+        or generation <= 1
+    ):
+        raise GitPermissionTakeoverError(
+            "permission marker current generation has no predecessor"
+        )
+    predecessor = dict(current)
+    predecessor["phase"] = PERMISSION_LIFECYCLE_PHASE_SEQUENCE[
+        phase_index - 1
+    ]
+    predecessor["generation"] = generation - 1
+    predecessor["evidence_sha256"] = _permission_document_digest(
+        predecessor
+    )
+    return predecessor
+
+
+def _permission_retired_prefix(marker_path: Path) -> str:
+    return f".{marker_path.name}.retired-g"
+
+
+def _permission_retired_name(
+    marker_path: Path,
+    document: Mapping[str, Any],
+    payload: bytes,
+) -> str:
+    generation = document.get("generation")
+    if (
+        isinstance(generation, bool)
+        or not isinstance(generation, int)
+        or generation <= 0
+    ):
+        raise GitPermissionTakeoverError(
+            "permission marker retired generation is invalid"
+        )
+    digest = sha256_bytes(payload).removeprefix("sha256:")
+    return (
+        f"{_permission_retired_prefix(marker_path)}"
+        f"{generation:020d}-{digest}"
+    )
+
+
+def _permission_rebuild_name(
+    marker_path: Path,
+    document: Mapping[str, Any],
+    payload: bytes,
+) -> str:
+    generation = document.get("generation")
+    if isinstance(generation, bool) or not isinstance(generation, int):
+        raise GitPermissionTakeoverError(
+            "permission marker rebuild generation is invalid"
+        )
+    digest = sha256_bytes(payload).removeprefix("sha256:")
+    return (
+        f".{marker_path.name}.rebuild-g{generation:020d}-{digest}"
+    )
+
+
+def _rebuild_permission_generation_at(
+    directory_fd: int,
+    marker_path: Path,
+    destination_name: str,
+    document: Mapping[str, Any],
+) -> None:
+    payload = canonical_json_bytes(document) + b"\n"
+    if len(payload) > PERMISSION_MARKER_MAX_BYTES:
+        raise GitPermissionTakeoverError(
+            "permission marker rebuild generation is oversized"
+        )
+    rebuild_name = _permission_rebuild_name(
+        marker_path, document, payload
+    )
+    quarantine_name = f"{rebuild_name}.quarantine"
+    if _permission_entry_exists_at(directory_fd, quarantine_name):
+        raise GitPermissionTakeoverError(
+            "permission marker rebuild quarantine is occupied"
+        )
+    if _permission_entry_exists_at(directory_fd, rebuild_name):
+        existing, _identity = _permission_staging_bytes_at(
+            directory_fd, rebuild_name
+        )
+        if existing != payload:
+            raise GitPermissionTakeoverError(
+                "permission marker rebuild staging is occupied"
+            )
+    else:
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                rebuild_name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=directory_fd,
+            )
+            written = 0
+            while written < len(payload):
+                written += os.write(descriptor, payload[written:])
+            os.fsync(descriptor)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        os.fsync(directory_fd)
+    descriptor, before = _open_permission_staging_at(
+        directory_fd, rebuild_name
+    )
+    try:
+        observed, _after = _permission_staging_bytes_from_descriptor(
+            descriptor, before
+        )
+        if observed != payload:
+            raise GitPermissionTakeoverError(
+                "permission marker rebuild staging differs"
+            )
+        _rename_permission_held_noreplace_at(
+            directory_fd,
+            rebuild_name,
+            destination_name,
+            descriptor,
+            payload,
+            message="permission marker rebuild publication raced",
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_permission_marker(
+    marker_path: Path,
+    document: dict[str, Any],
+    *,
+    expected_previous: Mapping[str, Any] | None,
+) -> None:
+    marker_path = _private_permission_marker_parent(marker_path)
+    payload = canonical_json_bytes(document) + b"\n"
+    if len(payload) > PERMISSION_MARKER_MAX_BYTES:
+        raise GitPermissionTakeoverError(
+            "permission takeover marker is oversized"
+        )
+    staging_name = f".{marker_path.name}.staging"
+    quarantine_name = f"{staging_name}.quarantine"
+    previous_name = f".{marker_path.name}.previous"
+    directory_fd: int | None = None
+    try:
+        directory_fd = os.open(
+            marker_path.parent,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        _prepare_permission_staging_at(
+            directory_fd, staging_name, quarantine_name, payload
+        )
+        previous_exists = _permission_entry_exists_at(
+            directory_fd, previous_name
+        )
+        retired_entries = _permission_retired_entries_at(
+            directory_fd,
+            root=Path(document["repository"]),
+            marker_path=marker_path,
+        )
+        staging_fd, staging_before = _open_permission_staging_at(
+            directory_fd, staging_name
+        )
+        try:
+            staged, _staging_validated = (
+                _permission_staging_bytes_from_descriptor(
+                    staging_fd, staging_before
+                )
+            )
+            if staged != payload:
+                raise GitPermissionTakeoverError(
+                    "permission takeover marker staging payload differs"
+                )
+            if expected_previous is None:
+                if previous_exists or retired_entries:
+                    raise GitPermissionTakeoverError(
+                        "first permission marker publication has a predecessor"
+                    )
+                _rename_permission_held_noreplace_at(
+                    directory_fd,
+                    staging_name,
+                    marker_path.name,
+                    staging_fd,
+                    payload,
+                    message=(
+                        "permission marker first publication identity raced"
+                    ),
+                )
+                return
+            marker_fd, marker_before = _open_permission_staging_at(
+                directory_fd, marker_path.name
+            )
+            try:
+                current_payload, _current_validated = (
+                    _assert_permission_marker_expectation(
+                        marker_fd, marker_before, expected_previous
+                    )
+                )
+                current_document = _permission_predecessor_document(
+                    document
+                )
+                if (
+                    current_payload
+                    != canonical_json_bytes(current_document) + b"\n"
+                ):
+                    raise GitPermissionTakeoverError(
+                        "permission marker current generation differs"
+                    )
+                if previous_exists:
+                    retired_document, retired_payload, prior_identity = (
+                        _permission_transaction_document_at(
+                            directory_fd,
+                            previous_name,
+                            root=Path(document["repository"]),
+                            marker_path=marker_path,
+                        )
+                    )
+                    _validate_permission_generation_pair(
+                        retired_document, current_document
+                    )
+                    _validate_permission_retired_history(
+                        retired_entries, tail=retired_document
+                    )
+                    retired_name = _permission_retired_name(
+                        marker_path, retired_document, retired_payload
+                    )
+                    if _permission_entry_exists_at(
+                        directory_fd, retired_name
+                    ):
+                        raise GitPermissionTakeoverError(
+                            "permission marker retired generation already exists"
+                        )
+                    retired_fd, retired_before = (
+                        _open_permission_staging_at(
+                            directory_fd, previous_name
+                        )
+                    )
+                    try:
+                        observed_retired, observed_retired_after = (
+                            _permission_staging_bytes_from_descriptor(
+                                retired_fd, retired_before
+                            )
+                        )
+                        if (
+                            observed_retired != retired_payload
+                            or _permission_staging_identity(
+                                observed_retired_after
+                            )
+                            != prior_identity
+                        ):
+                            raise GitPermissionTakeoverError(
+                                "permission marker predecessor changed before rotation"
+                            )
+                        moved_retired = (
+                            _rename_permission_held_noreplace_at(
+                                directory_fd,
+                                previous_name,
+                                retired_name,
+                                retired_fd,
+                                retired_payload,
+                                message=(
+                                    "permission marker predecessor raced during rotation"
+                                ),
+                            )
+                        )
+                        if (
+                            _permission_staging_identity(moved_retired)
+                            != prior_identity
+                        ):
+                            raise GitPermissionTakeoverError(
+                                "permission marker retired identity changed"
+                            )
+                    finally:
+                        os.close(retired_fd)
+                else:
+                    if retired_entries:
+                        raise GitPermissionTakeoverError(
+                            "permission marker predecessor history has a gap"
+                        )
+                    _validate_permission_retired_history(
+                        (), tail=current_document
+                    )
+                _assert_permission_marker_expectation(
+                    marker_fd, os.fstat(marker_fd), expected_previous
+                )
+                _rename_permission_held_noreplace_at(
+                    directory_fd,
+                    marker_path.name,
+                    previous_name,
+                    marker_fd,
+                    current_payload,
+                    message=(
+                        "permission marker target raced during predecessor save"
+                    ),
+                )
+                _rename_permission_held_noreplace_at(
+                    directory_fd,
+                    staging_name,
+                    marker_path.name,
+                    staging_fd,
+                    payload,
+                    message=(
+                        "permission marker generation publication identity raced"
+                    ),
+                )
+            finally:
+                os.close(marker_fd)
+        finally:
+            os.close(staging_fd)
     except OSError as exc:
         raise GitPermissionTakeoverError(
             "cannot persist permission takeover marker"
         ) from exc
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def _permission_transaction_document_at(
+    directory_fd: int,
+    name: str,
+    *,
+    root: Path,
+    marker_path: Path,
+) -> tuple[
+    dict[str, Any],
+    bytes,
+    tuple[int, int, int, int, int],
+]:
+    payload, identity = _permission_staging_bytes_at(directory_fd, name)
+    try:
+        raw = json.loads(
+            payload,
+            object_pairs_hook=_permission_json_no_duplicates,
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise GitPermissionTakeoverError(
+            "permission marker transaction document is malformed"
+        ) from exc
+    document = validate_permission_takeover_evidence(
+        raw,
+        repository=root,
+        marker_path=marker_path,
+    )
+    if payload != canonical_json_bytes(document) + b"\n":
+        raise GitPermissionTakeoverError(
+            "permission marker transaction bytes are not canonical"
+        )
+    return document, payload, identity
+
+
+def _permission_retired_entries_at(
+    directory_fd: int,
+    *,
+    root: Path,
+    marker_path: Path,
+) -> tuple[
+    tuple[
+        str,
+        dict[str, Any],
+        bytes,
+        tuple[int, int, int, int, int],
+    ],
+    ...,
+]:
+    prefix = _permission_retired_prefix(marker_path)
+    pattern = re.compile(
+        rf"^{re.escape(prefix)}([0-9]{{20}})-([0-9a-f]{{64}})$"
+    )
+    names = sorted(
+        name
+        for name in os.listdir(directory_fd)
+        if name.startswith(prefix)
+    )
+    maximum = max(0, len(PERMISSION_LIFECYCLE_PHASE_SEQUENCE) - 2)
+    if len(names) > maximum:
+        raise GitPermissionTakeoverError(
+            "permission marker retired history is oversized"
+        )
+    entries: list[
+        tuple[
+            str,
+            dict[str, Any],
+            bytes,
+            tuple[int, int, int, int, int],
+        ]
+    ] = []
+    generations: set[int] = set()
+    for name in names:
+        match = pattern.fullmatch(name)
+        if match is None:
+            raise GitPermissionTakeoverError(
+                "permission marker retired name is invalid"
+            )
+        document, payload, identity = _permission_transaction_document_at(
+            directory_fd,
+            name,
+            root=root,
+            marker_path=marker_path,
+        )
+        generation = document["generation"]
+        if (
+            int(match.group(1)) != generation
+            or name
+            != _permission_retired_name(
+                marker_path, document, payload
+            )
+            or generation in generations
+        ):
+            raise GitPermissionTakeoverError(
+                "permission marker retired identity is invalid"
+            )
+        generations.add(generation)
+        entries.append((name, document, payload, identity))
+    entries.sort(key=lambda entry: int(entry[1]["generation"]))
+    return tuple(entries)
+
+
+def _permission_document_is_history_anchor(
+    document: Mapping[str, Any],
+) -> bool:
+    return (
+        document.get("phase") == "captured"
+        and document.get("generation") == 1
+    ) or (
+        document.get("phase") == "hardened"
+        and document.get("generation")
+        == PERMISSION_LIFECYCLE_PHASE_SEQUENCE.index("hardened") + 1
+    )
+
+
+def _validate_permission_retired_history(
+    entries: tuple[
+        tuple[
+            str,
+            dict[str, Any],
+            bytes,
+            tuple[int, int, int, int, int],
+        ],
+        ...,
+    ],
+    *,
+    tail: Mapping[str, Any] | None = None,
+) -> None:
+    documents = [entry[1] for entry in entries]
+    if documents:
+        if not _permission_document_is_history_anchor(documents[0]):
+            raise GitPermissionTakeoverError(
+                "permission marker retired history has no valid anchor"
+            )
+        for previous, current in zip(documents, documents[1:]):
+            _validate_permission_generation_pair(previous, current)
+        if tail is not None:
+            _validate_permission_generation_pair(documents[-1], tail)
+    elif tail is not None and not _permission_document_is_history_anchor(
+        tail
+    ):
+        raise GitPermissionTakeoverError(
+            "permission marker predecessor history has no valid anchor"
+        )
+
+
+def _permission_successor_document(
+    previous: Mapping[str, Any],
+) -> dict[str, Any]:
+    phase = previous.get("phase")
+    if phase not in PERMISSION_LIFECYCLE_PHASE_SEQUENCE:
+        raise GitPermissionTakeoverError(
+            "permission marker previous phase is invalid"
+        )
+    phase_index = PERMISSION_LIFECYCLE_PHASE_SEQUENCE.index(str(phase))
+    if phase_index + 1 >= len(PERMISSION_LIFECYCLE_PHASE_SEQUENCE):
+        raise GitPermissionTakeoverError(
+            "permission marker terminal phase has no successor"
+        )
+    generation = previous.get("generation")
+    if isinstance(generation, bool) or not isinstance(generation, int):
+        raise GitPermissionTakeoverError(
+            "permission marker previous generation is invalid"
+        )
+    successor = dict(previous)
+    successor["phase"] = PERMISSION_LIFECYCLE_PHASE_SEQUENCE[
+        phase_index + 1
+    ]
+    successor["generation"] = generation + 1
+    successor["evidence_sha256"] = _permission_document_digest(successor)
+    return successor
+
+
+def _validate_permission_generation_pair(
+    previous: Mapping[str, Any],
+    current: Mapping[str, Any],
+) -> None:
+    if dict(current) != _permission_successor_document(previous):
+        raise GitPermissionTakeoverError(
+            "permission marker generations are not exact successors"
+        )
+
+
+def _permission_marker_transaction_names(
+    marker_path: Path,
+) -> tuple[str, str, str, str]:
+    staging_name = f".{marker_path.name}.staging"
+    return (
+        staging_name,
+        f"{staging_name}.quarantine",
+        f".{marker_path.name}.previous",
+        _permission_retired_prefix(marker_path),
+    )
+
+
+def _permission_reconcile_marker_transaction(
+    root: Path,
+    marker_path: Path,
+) -> None:
+    (
+        staging_name,
+        _staging_quarantine_name,
+        previous_name,
+        _retired_prefix,
+    ) = _permission_marker_transaction_names(marker_path)
+    directory_fd = os.open(
+        marker_path.parent,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    def open_expected(
+        name: str,
+        expected_raw: bytes,
+        expected_identity: tuple[int, int, int, int, int],
+    ) -> int:
+        descriptor, before = _open_permission_staging_at(
+            directory_fd, name
+        )
         try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+            raw, after = _permission_staging_bytes_from_descriptor(
+                descriptor, before
+            )
+            if (
+                raw != expected_raw
+                or _permission_staging_identity(after)
+                != expected_identity
+            ):
+                raise GitPermissionTakeoverError(
+                    "permission marker replay entry changed"
+                )
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def move_expected(
+        source_name: str,
+        target_name: str,
+        expected_raw: bytes,
+        expected_identity: tuple[int, int, int, int, int],
+        *,
+        message: str,
+    ) -> tuple[int, int, int, int, int]:
+        descriptor = open_expected(
+            source_name, expected_raw, expected_identity
+        )
+        try:
+            moved = _rename_permission_held_noreplace_at(
+                directory_fd,
+                source_name,
+                target_name,
+                descriptor,
+                expected_raw,
+                message=message,
+            )
+            return _permission_staging_identity(moved)
+        finally:
+            os.close(descriptor)
+
+    try:
+        marker_exists = _permission_entry_exists_at(
+            directory_fd, marker_path.name
+        )
+        staging_exists = _permission_entry_exists_at(
+            directory_fd, staging_name
+        )
+        staging_quarantine_exists = _permission_entry_exists_at(
+            directory_fd, _staging_quarantine_name
+        )
+        previous_exists = _permission_entry_exists_at(
+            directory_fd, previous_name
+        )
+        retired_entries = _permission_retired_entries_at(
+            directory_fd,
+            root=root,
+            marker_path=marker_path,
+        )
+        if not previous_exists and not retired_entries:
+            if staging_quarantine_exists:
+                _remove_permission_staging_at(
+                    directory_fd,
+                    staging_name,
+                    _staging_quarantine_name,
+                )
+                staging_exists = _permission_entry_exists_at(
+                    directory_fd, staging_name
+                )
+            if staging_exists:
+                staging_is_valid = False
+                recovery_anchor: dict[str, Any] | None = None
+                try:
+                    staged = _permission_transaction_document_at(
+                        directory_fd,
+                        staging_name,
+                        root=root,
+                        marker_path=marker_path,
+                    )
+                    if marker_exists:
+                        current = _permission_transaction_document_at(
+                            directory_fd,
+                            marker_path.name,
+                            root=root,
+                            marker_path=marker_path,
+                        )
+                        _validate_permission_generation_pair(
+                            current[0], staged[0]
+                        )
+                        staging_is_valid = True
+                    else:
+                        staging_is_valid = (
+                            staged[0].get("phase") == "captured"
+                            and staged[0].get("generation") == 1
+                        )
+                        if not staging_is_valid:
+                            candidate_anchor = (
+                                _permission_predecessor_document(
+                                    staged[0]
+                                )
+                            )
+                            if _permission_document_is_history_anchor(
+                                candidate_anchor
+                            ):
+                                recovery_anchor = candidate_anchor
+                except GitPermissionTakeoverError:
+                    if marker_exists:
+                        # A malformed live marker owns the failure.  Its
+                        # adjacent staging must remain untouched for audit.
+                        _permission_transaction_document_at(
+                            directory_fd,
+                            marker_path.name,
+                            root=root,
+                            marker_path=marker_path,
+                        )
+                if recovery_anchor is not None:
+                    _rebuild_permission_generation_at(
+                        directory_fd,
+                        marker_path,
+                        previous_name,
+                        recovery_anchor,
+                    )
+                    staging_fd = open_expected(
+                        staging_name, staged[1], staged[2]
+                    )
+                    try:
+                        _rename_permission_held_noreplace_at(
+                            directory_fd,
+                            staging_name,
+                            marker_path.name,
+                            staging_fd,
+                            staged[1],
+                            message=(
+                                "permission marker anchor replay publication raced"
+                            ),
+                        )
+                    finally:
+                        os.close(staging_fd)
+                    return
+                if not staging_is_valid:
+                    _staged_raw, staged_identity = (
+                        _permission_staging_bytes_at(
+                            directory_fd, staging_name
+                        )
+                    )
+                    _remove_permission_staging_at(
+                        directory_fd,
+                        staging_name,
+                        _staging_quarantine_name,
+                        expected_identity=staged_identity,
+                    )
+                    staging_exists = False
+            if marker_exists:
+                current_entry = _permission_transaction_document_at(
+                    directory_fd,
+                    marker_path.name,
+                    root=root,
+                    marker_path=marker_path,
+                )
+                current_document = current_entry[0]
+                terminal_restored = (
+                    current_document.get("phase") == "restored"
+                    and current_document.get("generation")
+                    == len(PERMISSION_LIFECYCLE_PHASE_SEQUENCE)
+                )
+                if (
+                    _permission_document_is_history_anchor(
+                        current_document
+                    )
+                    or terminal_restored
+                ):
+                    return
+                missing_previous = _permission_predecessor_document(
+                    current_document
+                )
+                if not _permission_document_is_history_anchor(
+                    missing_previous
+                ):
+                    raise GitPermissionTakeoverError(
+                        "permission marker predecessor history has no valid anchor"
+                    )
+                if staging_exists:
+                    staged_entry = _permission_transaction_document_at(
+                        directory_fd,
+                        staging_name,
+                        root=root,
+                        marker_path=marker_path,
+                    )
+                    _validate_permission_generation_pair(
+                        current_document, staged_entry[0]
+                    )
+                _rebuild_permission_generation_at(
+                    directory_fd,
+                    marker_path,
+                    previous_name,
+                    missing_previous,
+                )
+            return
+
+        marker_entry = (
+            _permission_transaction_document_at(
+                directory_fd,
+                marker_path.name,
+                root=root,
+                marker_path=marker_path,
+            )
+            if marker_exists
+            else None
+        )
+        staging_entry = (
+            _permission_transaction_document_at(
+                directory_fd,
+                staging_name,
+                root=root,
+                marker_path=marker_path,
+            )
+            if staging_exists
+            else None
+        )
+        previous_entry = (
+            _permission_transaction_document_at(
+                directory_fd,
+                previous_name,
+                root=root,
+                marker_path=marker_path,
+            )
+            if previous_exists
+            else None
+        )
+        if marker_entry is not None and previous_entry is not None:
+            _validate_permission_retired_history(
+                retired_entries, tail=previous_entry[0]
+            )
+            _validate_permission_generation_pair(
+                previous_entry[0], marker_entry[0]
+            )
+            if staging_entry is not None:
+                _validate_permission_generation_pair(
+                    marker_entry[0], staging_entry[0]
+                )
+            return
+
+        if marker_entry is not None and previous_entry is None:
+            if not retired_entries:
+                _validate_permission_retired_history(
+                    (), tail=marker_entry[0]
+                )
+                if staging_entry is not None:
+                    _validate_permission_generation_pair(
+                        marker_entry[0], staging_entry[0]
+                    )
+                return
+            latest = retired_entries[-1]
+            _validate_permission_retired_history(retired_entries)
+            latest_successor = _permission_successor_document(latest[1])
+            if marker_entry[0] != latest_successor:
+                missing_previous = _permission_predecessor_document(
+                    marker_entry[0]
+                )
+                _validate_permission_retired_history(
+                    retired_entries, tail=missing_previous
+                )
+                _validate_permission_generation_pair(
+                    missing_previous, marker_entry[0]
+                )
+                if staging_entry is not None:
+                    _validate_permission_generation_pair(
+                        marker_entry[0], staging_entry[0]
+                    )
+                _rebuild_permission_generation_at(
+                    directory_fd,
+                    marker_path,
+                    previous_name,
+                    missing_previous,
+                )
+                return
+            if staging_entry is None:
+                move_expected(
+                    latest[0],
+                    previous_name,
+                    latest[2],
+                    latest[3],
+                    message="permission marker predecessor restore raced",
+                )
+                return
+            _validate_permission_generation_pair(
+                marker_entry[0], staging_entry[0]
+            )
+            move_expected(
+                marker_path.name,
+                previous_name,
+                marker_entry[1],
+                marker_entry[2],
+                message="permission marker replay predecessor save raced",
+            )
+            staging_fd = open_expected(
+                staging_name, staging_entry[1], staging_entry[2]
+            )
+            try:
+                _rename_permission_held_noreplace_at(
+                    directory_fd,
+                    staging_name,
+                    marker_path.name,
+                    staging_fd,
+                    staging_entry[1],
+                    message="permission marker replay publication raced",
+                )
+            finally:
+                os.close(staging_fd)
+            return
+
+        if marker_entry is None and previous_entry is not None:
+            _validate_permission_retired_history(
+                retired_entries, tail=previous_entry[0]
+            )
+            if staging_entry is not None:
+                _validate_permission_generation_pair(
+                    previous_entry[0], staging_entry[0]
+                )
+                staging_fd = open_expected(
+                    staging_name, staging_entry[1], staging_entry[2]
+                )
+                try:
+                    _rename_permission_held_noreplace_at(
+                        directory_fd,
+                        staging_name,
+                        marker_path.name,
+                        staging_fd,
+                        staging_entry[1],
+                        message="permission marker replay publication raced",
+                    )
+                finally:
+                    os.close(staging_fd)
+                return
+            move_expected(
+                previous_name,
+                marker_path.name,
+                previous_entry[1],
+                previous_entry[2],
+                message="permission marker previous restore raced",
+            )
+            if retired_entries:
+                latest = retired_entries[-1]
+                move_expected(
+                    latest[0],
+                    previous_name,
+                    latest[2],
+                    latest[3],
+                    message="permission marker retired restore raced",
+                )
+            return
+
+        if marker_entry is None and previous_entry is None:
+            if not retired_entries:
+                return
+            _validate_permission_retired_history(retired_entries)
+            latest = retired_entries[-1]
+            reconstructed = _permission_successor_document(latest[1])
+            if staging_entry is not None:
+                missing_previous = _permission_predecessor_document(
+                    staging_entry[0]
+                )
+                if reconstructed != missing_previous:
+                    raise GitPermissionTakeoverError(
+                        "permission marker missing generation is ambiguous"
+                    )
+                _rebuild_permission_generation_at(
+                    directory_fd,
+                    marker_path,
+                    previous_name,
+                    reconstructed,
+                )
+                staging_fd = open_expected(
+                    staging_name, staging_entry[1], staging_entry[2]
+                )
+                try:
+                    _rename_permission_held_noreplace_at(
+                        directory_fd,
+                        staging_name,
+                        marker_path.name,
+                        staging_fd,
+                        staging_entry[1],
+                        message="permission marker replay publication raced",
+                    )
+                finally:
+                    os.close(staging_fd)
+                return
+            _rebuild_permission_generation_at(
+                directory_fd,
+                marker_path,
+                marker_path.name,
+                reconstructed,
+            )
+            move_expected(
+                latest[0],
+                previous_name,
+                latest[2],
+                latest[3],
+                message="permission marker retired restore raced",
+            )
+            return
+
+        raise GitPermissionTakeoverError(
+            "permission marker generation replay is incomplete"
+        )
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            "cannot reconcile permission marker generation"
+        ) from exc
+    finally:
+        os.close(directory_fd)
+
+
+def _permission_pending_captured_projection(
+    root: Path,
+    marker_path: Path,
+) -> dict[str, Any] | None:
+    (
+        staging_name,
+        _staging_quarantine_name,
+        previous_name,
+        _retired_prefix,
+    ) = _permission_marker_transaction_names(marker_path)
+    directory_fd = os.open(
+        marker_path.parent,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        retired_entries = _permission_retired_entries_at(
+            directory_fd,
+            root=root,
+            marker_path=marker_path,
+        )
+        if (
+            not _permission_entry_exists_at(directory_fd, previous_name)
+            or not _permission_entry_exists_at(directory_fd, staging_name)
+            or retired_entries
+        ):
+            return None
+        previous, _raw, _identity = _permission_transaction_document_at(
+            directory_fd,
+            previous_name,
+            root=root,
+            marker_path=marker_path,
+        )
+        current, _current_raw, _current_identity = (
+            _permission_transaction_document_at(
+                directory_fd,
+                staging_name,
+                root=root,
+                marker_path=marker_path,
+            )
+        )
+        _validate_permission_retired_history((), tail=previous)
+        _validate_permission_generation_pair(previous, current)
+        captured = dict(previous)
+        captured["phase"] = "captured"
+        captured["generation"] = 1
+        captured["evidence_sha256"] = _permission_document_digest(captured)
+        return validate_permission_takeover_evidence(
+            captured,
+            repository=root,
+            marker_path=marker_path,
+            allowed_phases={"captured"},
+        )
+    finally:
+        os.close(directory_fd)
 
 
 def _read_permission_marker(marker_path: Path) -> dict[str, Any]:
@@ -848,6 +2252,263 @@ def _permission_document_digest(document: Mapping[str, Any]) -> str:
     )
 
 
+def _require_permission_marker_size_envelope(
+    document: Mapping[str, Any],
+    phases: tuple[str, ...],
+) -> None:
+    """Prove every remaining journal generation fits before any mutation."""
+
+    generation = document.get("generation")
+    if (
+        isinstance(generation, bool)
+        or not isinstance(generation, int)
+        or generation < 0
+    ):
+        raise GitPermissionTakeoverError(
+            "permission takeover generation is invalid"
+        )
+    candidate = dict(document)
+    future_sizes: list[int] = []
+    first_future_payload: bytes | None = None
+    future_bytes = 0
+    for phase in phases:
+        generation += 1
+        candidate["phase"] = phase
+        candidate["generation"] = generation
+        candidate["evidence_sha256"] = _permission_document_digest(
+            candidate
+        )
+        candidate_payload = canonical_json_bytes(candidate) + b"\n"
+        payload_bytes = len(candidate_payload)
+        if payload_bytes > PERMISSION_MARKER_MAX_BYTES:
+            raise GitPermissionTakeoverError(
+                "permission takeover marker lifecycle is oversized"
+            )
+        future_bytes += payload_bytes
+        if future_bytes > PERMISSION_HISTORY_MAX_BYTES:
+            raise GitPermissionTakeoverError(
+                "permission takeover marker history is oversized"
+            )
+        future_sizes.append(payload_bytes)
+        if first_future_payload is None:
+            first_future_payload = candidate_payload
+        candidate_payload = b""
+    marker_value = document.get("marker_path")
+    if not isinstance(marker_value, str) or not Path(marker_value).is_absolute():
+        raise GitPermissionTakeoverError(
+            "permission takeover marker path is invalid"
+        )
+    marker_path = Path(marker_value)
+    directory_fd = os.open(
+        marker_path.parent,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        prefix = _permission_retired_prefix(marker_path)
+        staging_name = f".{marker_path.name}.staging"
+        staging_quarantine_name = f"{staging_name}.quarantine"
+        staging_exists = _permission_entry_exists_at(
+            directory_fd, staging_name
+        )
+        staging_quarantine_exists = _permission_entry_exists_at(
+            directory_fd, staging_quarantine_name
+        )
+        if staging_exists and staging_quarantine_exists:
+            raise GitPermissionTakeoverError(
+                "permission marker staging and quarantine both exist"
+            )
+        if staging_quarantine_exists:
+            raise GitPermissionTakeoverError(
+                "permission marker staging quarantine requires replay"
+            )
+        staged_allocated_bytes = 0
+        if staging_exists:
+            if first_future_payload is None:
+                raise GitPermissionTakeoverError(
+                    "permission marker staging has no future generation"
+                )
+            staging_fd, staging_before = _open_permission_staging_at(
+                directory_fd, staging_name
+            )
+            try:
+                staged_payload, staging_after = (
+                    _permission_staging_bytes_from_descriptor(
+                        staging_fd, staging_before
+                    )
+                )
+            finally:
+                os.close(staging_fd)
+            if staged_payload != first_future_payload:
+                raise GitPermissionTakeoverError(
+                    "permission marker staging differs from future generation"
+                )
+            staged_allocated_bytes = staging_after.st_blocks * 512
+        retained_names = [
+            name
+            for name in os.listdir(directory_fd)
+            if name in {
+                marker_path.name,
+                f".{marker_path.name}.previous",
+            }
+            or name.startswith(prefix)
+        ]
+        retained_bytes = 0
+        for name in retained_names:
+            metadata = os.stat(
+                name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_nlink != 1
+                or not 0 <= metadata.st_size <= PERMISSION_MARKER_MAX_BYTES
+            ):
+                raise GitPermissionTakeoverError(
+                    "permission marker retained history is unsafe"
+                )
+            retained_bytes += metadata.st_size
+        if retained_bytes + future_bytes > PERMISSION_HISTORY_MAX_BYTES:
+            raise GitPermissionTakeoverError(
+                "permission takeover marker history is oversized"
+            )
+        if future_bytes:
+            filesystem = os.fstatvfs(directory_fd)
+            fragment_size = filesystem.f_frsize or filesystem.f_bsize
+            available = filesystem.f_bavail * fragment_size
+            future_allocated_bytes = sum(
+                ((payload_size + fragment_size - 1) // fragment_size)
+                * fragment_size
+                for payload_size in future_sizes
+            )
+            required = (
+                future_allocated_bytes
+                - min(
+                    staged_allocated_bytes,
+                    (
+                        (future_sizes[0] + fragment_size - 1)
+                        // fragment_size
+                    )
+                    * fragment_size,
+                )
+                + PERMISSION_HISTORY_FREE_MARGIN_BYTES
+            )
+            if available < required:
+                raise GitPermissionTakeoverError(
+                    "permission takeover marker history lacks free space"
+                )
+    except OSError as exc:
+        raise GitPermissionTakeoverError(
+            "cannot prove permission marker history capacity"
+        ) from exc
+    finally:
+        os.close(directory_fd)
+
+
+def _new_permission_takeover_document(
+    root: Path,
+    marker_path: Path,
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the immutable captured inventory before any marker write."""
+
+    return {
+        "schema_version": PERMISSION_SCHEMA_VERSION,
+        "policy": PERMISSION_POLICY_NAME,
+        "repository": str(root),
+        "marker_path": str(marker_path),
+        "phase": "captured",
+        "generation": 0,
+        "records": records,
+        "inventory_sha256": sha256_bytes(canonical_json_bytes(records)),
+        "original_permissions_sha256": sha256_bytes(
+            canonical_json_bytes(
+                _permission_identity(records, hardened=False)
+            )
+        ),
+        "hardened_permissions_sha256": sha256_bytes(
+            canonical_json_bytes(
+                _permission_identity(records, hardened=True)
+            )
+        ),
+    }
+
+
+def _validate_permission_takeover_expectations(
+    document: Mapping[str, Any],
+    *,
+    expected_inventory_sha256: str | None,
+    expected_original_permissions_sha256: str | None,
+    expected_hardened_permissions_sha256: str | None,
+) -> None:
+    expected = {
+        "inventory_sha256": expected_inventory_sha256,
+        "original_permissions_sha256": expected_original_permissions_sha256,
+        "hardened_permissions_sha256": expected_hardened_permissions_sha256,
+    }
+    for field, digest in expected.items():
+        if digest is None:
+            continue
+        if (
+            not isinstance(digest, str)
+            or DIGEST_RE.fullmatch(digest) is None
+        ):
+            raise GitPermissionTakeoverError(
+                "permission takeover expected digest is malformed"
+            )
+        if document.get(field) != digest:
+            raise GitPermissionTakeoverError(
+                f"permission takeover {field} changed before mutation"
+            )
+
+
+def plan_repository_permission_takeover(
+    root: Path,
+    marker_path: Path,
+) -> dict[str, Any]:
+    """Return the exact captured marker projection without writing anything."""
+
+    root = _permission_root(root)
+    marker_path = _private_permission_marker_parent(marker_path)
+    if marker_path.exists() or marker_path.is_symlink():
+        raise GitPermissionTakeoverError(
+            "permission takeover marker already exists"
+        )
+    pending = _permission_pending_captured_projection(root, marker_path)
+    if pending is not None:
+        return pending
+    records = _inventory_permission_records(root)
+    _validate_permission_stage(
+        root,
+        records,
+        root_state="original",
+        directory_state="original",
+        file_state="original",
+        exact_paths=True,
+        allow_mutable_changes=False,
+        verify_content=True,
+    )
+    _validate_permission_takeover_config(root, records)
+    document = _new_permission_takeover_document(root, marker_path, records)
+    _require_permission_marker_size_envelope(
+        document, PERMISSION_LIFECYCLE_PHASE_SEQUENCE
+    )
+    document["generation"] = 1
+    document["evidence_sha256"] = _permission_document_digest(document)
+    validated = validate_permission_takeover_evidence(
+        document,
+        repository=root,
+        marker_path=marker_path,
+        allowed_phases={"captured"},
+    )
+    return validated
+
+
 def validate_permission_takeover_evidence(
     value: object,
     *,
@@ -1028,11 +2689,21 @@ def validate_permission_takeover_evidence(
 def _save_permission_document(
     marker_path: Path,
     document: dict[str, Any],
+    *,
+    expected_previous: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     generation = document.get("generation", 0)
     if isinstance(generation, bool) or not isinstance(generation, int):
         raise GitPermissionTakeoverError(
             "permission takeover generation is invalid"
+        )
+    if generation == 0 and expected_previous is not None:
+        raise GitPermissionTakeoverError(
+            "first permission marker generation cannot have a predecessor"
+        )
+    if generation != 0 and expected_previous is None:
+        raise GitPermissionTakeoverError(
+            "permission marker predecessor expectation is required"
         )
     document["generation"] = generation + 1
     document["evidence_sha256"] = _permission_document_digest(document)
@@ -1041,7 +2712,11 @@ def _save_permission_document(
         repository=Path(document["repository"]),
         marker_path=marker_path,
     )
-    _atomic_permission_marker(marker_path, validated)
+    _atomic_permission_marker(
+        marker_path,
+        validated,
+        expected_previous=expected_previous,
+    )
     return validated
 
 
@@ -1053,6 +2728,25 @@ def _load_permission_document(
         _read_permission_marker(marker_path),
         repository=root,
         marker_path=marker_path,
+    )
+
+
+def read_repository_permission_takeover(
+    root: Path,
+    marker_path: Path,
+    *,
+    allowed_phases: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    """Read and strictly validate one durable permission marker."""
+
+    root = _permission_root(root)
+    marker_path = _private_permission_marker_parent(marker_path)
+    document = _load_permission_document(root, marker_path)
+    return validate_permission_takeover_evidence(
+        document,
+        repository=root,
+        marker_path=marker_path,
+        allowed_phases=allowed_phases,
     )
 
 
@@ -1286,8 +2980,15 @@ def _permission_transition(
     phase: str,
     checkpoint: Callable[[str], None],
 ) -> dict[str, Any]:
+    expected_previous = _permission_marker_expectation(
+        marker_path, document
+    )
     document["phase"] = phase
-    document = _save_permission_document(marker_path, document)
+    document = _save_permission_document(
+        marker_path,
+        document,
+        expected_previous=expected_previous,
+    )
     checkpoint(f"permission:{phase}")
     return document
 
@@ -1297,14 +2998,28 @@ def takeover_repository_permissions(
     marker_path: Path,
     *,
     checkpoint: Callable[[str], None] | None = None,
+    expected_inventory_sha256: str | None = None,
+    expected_original_permissions_sha256: str | None = None,
+    expected_hardened_permissions_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Crash-safely harden the checkout before the first production Git call."""
 
     root = _permission_root(root)
     marker_path = _private_permission_marker_parent(marker_path)
     emit = checkpoint or (lambda _label: None)
+    _permission_reconcile_marker_transaction(root, marker_path)
     if marker_path.exists() or marker_path.is_symlink():
         document = _load_permission_document(root, marker_path)
+        _validate_permission_takeover_expectations(
+            document,
+            expected_inventory_sha256=expected_inventory_sha256,
+            expected_original_permissions_sha256=(
+                expected_original_permissions_sha256
+            ),
+            expected_hardened_permissions_sha256=(
+                expected_hardened_permissions_sha256
+            ),
+        )
         if document["phase"] not in {
             "restore-files-intent",
             "restore-files-restored",
@@ -1318,6 +3033,19 @@ def takeover_repository_permissions(
             # check is read-only and still leaves the explicit restore path
             # available for a previously hardened checkout.
             _validate_permission_takeover_config(root, document["records"])
+        if document["phase"] in PERMISSION_TAKEOVER_PHASE_SEQUENCE:
+            phase_index = PERMISSION_TAKEOVER_PHASE_SEQUENCE.index(
+                document["phase"]
+            )
+            _require_permission_marker_size_envelope(
+                document,
+                (
+                    *PERMISSION_TAKEOVER_PHASE_SEQUENCE[
+                        phase_index + 1 :
+                    ],
+                    *PERMISSION_RESTORE_PHASE_SEQUENCE,
+                ),
+            )
     else:
         records = _inventory_permission_records(root)
         _validate_permission_stage(
@@ -1331,28 +3059,25 @@ def takeover_repository_permissions(
             verify_content=True,
         )
         _validate_permission_takeover_config(root, records)
-        document = {
-            "schema_version": PERMISSION_SCHEMA_VERSION,
-            "policy": PERMISSION_POLICY_NAME,
-            "repository": str(root),
-            "marker_path": str(marker_path),
-            "phase": "captured",
-            "generation": 0,
-            "records": records,
-            "inventory_sha256": sha256_bytes(
-                canonical_json_bytes(records)
+        document = _new_permission_takeover_document(
+            root, marker_path, records
+        )
+        _require_permission_marker_size_envelope(
+            document, PERMISSION_LIFECYCLE_PHASE_SEQUENCE
+        )
+        # This compare-and-swap happens before the first durable marker and
+        # before the first chmod.  A reviewed read-only plan can therefore
+        # never authorize a newly observed Git inventory.
+        _validate_permission_takeover_expectations(
+            document,
+            expected_inventory_sha256=expected_inventory_sha256,
+            expected_original_permissions_sha256=(
+                expected_original_permissions_sha256
             ),
-            "original_permissions_sha256": sha256_bytes(
-                canonical_json_bytes(
-                    _permission_identity(records, hardened=False)
-                )
+            expected_hardened_permissions_sha256=(
+                expected_hardened_permissions_sha256
             ),
-            "hardened_permissions_sha256": sha256_bytes(
-                canonical_json_bytes(
-                    _permission_identity(records, hardened=True)
-                )
-            ),
-        }
+        )
         document = _save_permission_document(marker_path, document)
         emit("permission:captured")
     records = document["records"]
@@ -1523,6 +3248,7 @@ def restore_repository_permissions(
     root = _permission_root(root)
     marker_path = _private_permission_marker_parent(marker_path)
     emit = checkpoint or (lambda _label: None)
+    _permission_reconcile_marker_transaction(root, marker_path)
     document = _load_permission_document(root, marker_path)
     if document["phase"] not in {
         "hardened",
@@ -1536,6 +3262,20 @@ def restore_repository_permissions(
         raise GitPermissionTakeoverError(
             "permission hardening must finish before it can be restored"
         )
+    if document["phase"] == "hardened":
+        remaining_restore_phases = PERMISSION_RESTORE_PHASE_SEQUENCE
+    elif document["phase"] in PERMISSION_RESTORE_PHASE_SEQUENCE:
+        restore_index = PERMISSION_RESTORE_PHASE_SEQUENCE.index(
+            document["phase"]
+        )
+        remaining_restore_phases = PERMISSION_RESTORE_PHASE_SEQUENCE[
+            restore_index + 1 :
+        ]
+    else:  # pragma: no cover - phase validation above owns this branch
+        remaining_restore_phases = ()
+    _require_permission_marker_size_envelope(
+        document, remaining_restore_phases
+    )
     records = document["records"]
     root_record = records[0]
     directory_records = sorted(

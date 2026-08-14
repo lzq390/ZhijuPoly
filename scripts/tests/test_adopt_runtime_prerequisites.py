@@ -195,6 +195,146 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             source_readiness_probe=source_readiness_probe,
         )
 
+    def permission_installer(
+        self,
+        checkpoint=None,
+    ):  # type: ignore[no-untyped-def]
+        if not hasattr(self, "production"):
+            self.production = Path(self.temporary.name) / "production"
+            self.production.mkdir(mode=0o755)
+            (self.production / "tracked.txt").write_text("adopted production\n")
+            _run(
+                self.production,
+                "/usr/bin/git",
+                "init",
+                "--initial-branch=main",
+            )
+            _run(
+                self.production,
+                "/usr/bin/git",
+                "config",
+                "user.name",
+                "Permission Test",
+            )
+            _run(
+                self.production,
+                "/usr/bin/git",
+                "config",
+                "user.email",
+                "permission@example.invalid",
+            )
+            _run(self.production, "/usr/bin/git", "add", ".")
+            _run(
+                self.production,
+                "/usr/bin/git",
+                "commit",
+                "-m",
+                "adopted production",
+            )
+            self.production_sha = _run(
+                self.production,
+                "/usr/bin/git",
+                "rev-parse",
+                "HEAD",
+            )
+            self.production_tree = _run(
+                self.production,
+                "/usr/bin/git",
+                "rev-parse",
+                "HEAD^{tree}",
+            )
+            for path in sorted(
+                (self.production / ".git").rglob("*"),
+                reverse=True,
+            ):
+                if path.is_dir():
+                    path.chmod(0o755)
+                elif path.is_file():
+                    path.chmod(0o644)
+            (self.production / ".git").chmod(0o755)
+            (self.production / "tracked.txt").chmod(0o644)
+            self.production.chmod(0o755)
+
+            trust_source = SOURCE_ROOT / "scripts/git_source_trust.py"
+            trust_target = self.source / "scripts/git_source_trust.py"
+            shutil.copyfile(trust_source, trust_target)
+            trust_target.chmod(0o700)
+            _run(
+                self.source,
+                "/usr/bin/git",
+                "add",
+                "scripts/git_source_trust.py",
+            )
+            _run(
+                self.source,
+                "/usr/bin/git",
+                "commit",
+                "-m",
+                "add permission trust policy",
+            )
+            self.sha = _run(
+                self.source, "/usr/bin/git", "rev-parse", "HEAD"
+            )
+            _run(
+                self.source,
+                "/usr/bin/git",
+                "update-ref",
+                "refs/remotes/origin/main",
+                self.sha,
+            )
+            _make_tree_private(self.source)
+            self.delivery_gate["remote_main"] = self.sha
+            self.delivery_gate["ci"]["head_sha"] = self.sha
+
+            adopted = {
+                "schema_version": 1,
+                "status": "adopted",
+                "authority_kind": ADOPTER.ADOPTION_AUTHORITY_KIND,
+                "source_sha": self.production_sha,
+                "source_tree": self.production_tree,
+            }
+            _write_private(
+                self.runtime / "state/adopted-deployment.json",
+                json.dumps(adopted, sort_keys=True).encode() + b"\n",
+                0o600,
+            )
+            _write_private(
+                self.runtime / "state/bootstrap-control.json",
+                json.dumps(
+                    {
+                        "schema_version": 3,
+                        "status": "completed",
+                        "authority_kind": ADOPTER.ADOPTION_AUTHORITY_KIND,
+                        "adopted_deployment": adopted,
+                        "adopted_deployment_sha256": (
+                            ADOPTER._canonical_digest(adopted)
+                        ),
+                    },
+                    sort_keys=True,
+                ).encode()
+                + b"\n",
+                0o600,
+            )
+            base_plan = self.installer().plan(
+                source_sha=self.sha,
+                operation_id=self.operation_id,
+            )
+            self.installer().apply(
+                source_sha=self.sha,
+                operation_id=self.operation_id,
+                confirm_plan_sha256=base_plan["plan_sha256"],
+            )
+            self.permission_operation_id = (
+                "adopt-git-permission-test-0001"
+            )
+        return ADOPTER.PermissionHardeningInstaller(
+            self.source,
+            self.runtime,
+            production_root=self.production,
+            checkpoint=checkpoint,
+            delivery_gate_probe=self.installer().delivery_gate_probe,
+        )
+
     def advance_remote_tracking_ref(self) -> str:
         environment = {
             **os.environ,
@@ -401,6 +541,457 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             ),
             planned,
         )
+
+    def test_permission_plan_is_zero_write_and_apply_binds_marker(self) -> None:
+        installer = self.permission_installer()
+        production_before = _inventory(self.production)
+        runtime_before = _inventory(self.runtime)
+        planned = installer.plan(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+        )
+
+        self.assertEqual(_inventory(self.production), production_before)
+        self.assertEqual(_inventory(self.runtime), runtime_before)
+        self.assertTrue(planned["logical_zero_write"])
+        self.assertEqual(
+            planned["permission_impact_sha256"],
+            planned["plan"]["permission_impact_sha256"],
+        )
+        self.assertEqual(
+            planned["plan"]["production_source"],
+            {
+                "source_sha": self.production_sha,
+                "source_tree": self.production_tree,
+            },
+        )
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "impact confirmation differs",
+        ):
+            installer.apply(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_permission_impact_sha256="sha256:" + "0" * 64,
+            )
+        self.assertFalse(installer.permission_marker_path.exists())
+
+        authority = installer.apply(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+            confirm_plan_sha256=planned["plan_sha256"],
+            confirm_permission_impact_sha256=planned[
+                "permission_impact_sha256"
+            ],
+        )
+        marker = ADOPTER.GIT_SOURCE_TRUST.verify_repository_permission_takeover(
+            self.production,
+            installer.permission_marker_path,
+        )
+        self.assertEqual(authority["status"], "completed")
+        self.assertEqual(
+            authority["authority_kind"],
+            ADOPTER.PERMISSION_AUTHORITY_KIND,
+        )
+        self.assertEqual(
+            authority["permission_marker_sha256"],
+            ADOPTER._file_digest(installer.permission_marker_path, mode=0o600),
+        )
+        self.assertEqual(
+            authority["permission_evidence_sha256"],
+            marker["evidence_sha256"],
+        )
+        self.assertEqual(
+            authority["permission_inventory_sha256"],
+            marker["inventory_sha256"],
+        )
+        self.assertEqual(stat.S_IMODE(self.production.stat().st_mode), 0o700)
+        self.assertEqual(
+            stat.S_IMODE(
+                (self.production / "tracked.txt").stat().st_mode
+            ),
+            0o644,
+        )
+        self.assertEqual(
+            installer.apply(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_permission_impact_sha256=planned[
+                    "permission_impact_sha256"
+                ],
+            ),
+            authority,
+        )
+
+    def test_permission_change_intent_without_marker_replays_forward(self) -> None:
+        planned = self.permission_installer().plan(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+        )
+
+        def crash(phase: str) -> None:
+            if phase == "permission-change-intent":
+                raise RuntimeError("crash before first marker")
+
+        with self.assertRaisesRegex(RuntimeError, "before first marker"):
+            self.permission_installer(crash).apply(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_permission_impact_sha256=planned[
+                    "permission_impact_sha256"
+                ],
+            )
+        self.assertFalse(
+            self.permission_installer().permission_marker_path.exists()
+        )
+        self.assertEqual(
+            self.permission_installer().plan(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+            ),
+            planned,
+        )
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "forward-only",
+        ):
+            self.permission_installer().abort(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_permission_impact_sha256=planned[
+                    "permission_impact_sha256"
+                ],
+            )
+        completed = self.permission_installer().apply(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+            confirm_plan_sha256=planned["plan_sha256"],
+            confirm_permission_impact_sha256=planned[
+                "permission_impact_sha256"
+            ],
+        )
+        self.assertEqual(completed["status"], "completed")
+
+    def test_permission_abort_is_allowed_only_before_change_intent(self) -> None:
+        planned = self.permission_installer().plan(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+        )
+
+        def crash(phase: str) -> None:
+            if phase == "permission-intent":
+                raise RuntimeError("crash at abortable intent")
+
+        with self.assertRaisesRegex(RuntimeError, "abortable intent"):
+            self.permission_installer(crash).apply(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_permission_impact_sha256=planned[
+                    "permission_impact_sha256"
+                ],
+            )
+        aborted = self.permission_installer().abort(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+            confirm_plan_sha256=planned["plan_sha256"],
+            confirm_permission_impact_sha256=planned[
+                "permission_impact_sha256"
+            ],
+        )
+        self.assertEqual(aborted["status"], "aborted")
+        self.assertFalse(
+            self.permission_installer().permission_marker_path.exists()
+        )
+        self.assertEqual(stat.S_IMODE(self.production.stat().st_mode), 0o755)
+
+    def test_permission_authority_link_crash_replays_create_only(self) -> None:
+        planned = self.permission_installer().plan(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+        )
+        crashed = False
+
+        def crash(phase: str) -> None:
+            nonlocal crashed
+            if phase == "authority-linked" and not crashed:
+                crashed = True
+                raise RuntimeError("crash after permission authority link")
+
+        with self.assertRaisesRegex(RuntimeError, "after permission authority"):
+            self.permission_installer(crash).apply(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_permission_impact_sha256=planned[
+                    "permission_impact_sha256"
+                ],
+            )
+        authority_path = (
+            self.runtime / ADOPTER.PERMISSION_AUTHORITY_PATH
+        )
+        self.assertTrue(authority_path.exists())
+        self.assertEqual(authority_path.stat().st_nlink, 2)
+
+        completed = self.permission_installer().apply(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+            confirm_plan_sha256=planned["plan_sha256"],
+            confirm_permission_impact_sha256=planned[
+                "permission_impact_sha256"
+            ],
+        )
+        self.assertTrue(crashed)
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(authority_path.stat().st_nlink, 1)
+
+    def test_create_owned_json_once_honors_large_explicit_limit(self) -> None:
+        directory = self.runtime / "state"
+        directory_fd = ADOPTER._open_private_directory(directory)
+        try:
+            ADOPTER._create_owned_json_once_at(
+                directory_fd,
+                "large-authority.json",
+                {"payload": "x" * (9 * 1024 * 1024)},
+                operation_id=self.operation_id,
+                checkpoint=lambda _phase: None,
+                maximum_bytes=10 * 1024 * 1024,
+            )
+        finally:
+            os.close(directory_fd)
+        authority = directory / "large-authority.json"
+        self.assertGreater(authority.stat().st_size, 8 * 1024 * 1024)
+        self.assertEqual(authority.stat().st_nlink, 1)
+
+    def test_create_owned_json_once_rejects_oversize_before_staging(self) -> None:
+        directory = self.runtime / "state"
+        directory_fd = ADOPTER._open_private_directory(directory)
+        try:
+            with self.assertRaisesRegex(
+                ADOPTER.PrerequisiteError,
+                "authority is oversized",
+            ):
+                ADOPTER._create_owned_json_once_at(
+                    directory_fd,
+                    "oversized-authority.json",
+                    {"payload": "x" * 2048},
+                    operation_id=self.operation_id,
+                    checkpoint=lambda _phase: None,
+                    maximum_bytes=1024,
+                )
+        finally:
+            os.close(directory_fd)
+        target = directory / "oversized-authority.json"
+        staging = directory / (
+            f".{target.name}.create-{self.operation_id}"
+        )
+        quarantine = staging.with_name(staging.name + ".quarantine")
+        self.assertFalse(target.exists())
+        self.assertFalse(staging.exists())
+        self.assertFalse(quarantine.exists())
+
+    def test_permission_state_path_swap_fails_closed_and_same_op_recovers(
+        self,
+    ) -> None:
+        installer = self.permission_installer()
+        planned = installer.plan(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+        )
+        state = self.runtime / "state"
+        displaced = self.runtime / "state-permission-displaced"
+        replacement = self.runtime / "state-permission-replacement"
+        replacement.mkdir(mode=0o700)
+        swapped = False
+
+        def swap(phase: str) -> None:
+            nonlocal swapped
+            if phase == "permission:captured" and not swapped:
+                swapped = True
+                os.rename(state, displaced)
+                os.rename(replacement, state)
+
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "hardening did not complete|pinned prerequisite state",
+        ):
+            self.permission_installer(swap).apply(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_permission_impact_sha256=planned[
+                    "permission_impact_sha256"
+                ],
+            )
+        self.assertTrue(swapped)
+        self.assertFalse(
+            (self.runtime / ADOPTER.PERMISSION_AUTHORITY_PATH).exists()
+        )
+
+        os.rename(state, replacement)
+        os.rename(displaced, state)
+        completed = self.permission_installer().apply(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+            confirm_plan_sha256=planned["plan_sha256"],
+            confirm_permission_impact_sha256=planned[
+                "permission_impact_sha256"
+            ],
+        )
+        self.assertEqual(completed["status"], "completed")
+
+    def test_permission_production_root_swap_before_publish_recovers(
+        self,
+    ) -> None:
+        installer = self.permission_installer()
+        planned = installer.plan(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+        )
+        displaced = self.production.parent / "production-permission-displaced"
+        replacement = self.production.parent / "production-permission-replacement"
+        shutil.copytree(self.production, replacement, copy_function=shutil.copy2)
+        swapped = False
+
+        def swap(phase: str) -> None:
+            nonlocal swapped
+            if phase == "permission-authority-commit-intent" and not swapped:
+                swapped = True
+                os.rename(self.production, displaced)
+                os.rename(replacement, self.production)
+
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "pinned production permission authority changed",
+        ):
+            self.permission_installer(swap).apply(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_permission_impact_sha256=planned[
+                    "permission_impact_sha256"
+                ],
+            )
+        self.assertTrue(swapped)
+        self.assertFalse(
+            (self.runtime / ADOPTER.PERMISSION_AUTHORITY_PATH).exists()
+        )
+
+        os.rename(self.production, replacement)
+        os.rename(displaced, self.production)
+        completed = self.permission_installer().apply(
+            source_sha=self.sha,
+            operation_id=self.permission_operation_id,
+            confirm_plan_sha256=planned["plan_sha256"],
+            confirm_permission_impact_sha256=planned[
+                "permission_impact_sha256"
+            ],
+        )
+        self.assertEqual(completed["status"], "completed")
+
+    def test_permission_base_authority_atomic_swap_is_rejected(self) -> None:
+        installer = self.permission_installer()
+        base_path = self.runtime / ADOPTER.AUTHORITY_PATH
+        original_reader = installer._read_adoption_permission_authorities
+        original_inode = base_path.stat().st_ino
+        replaced = False
+
+        def read_then_replace():  # type: ignore[no-untyped-def]
+            nonlocal replaced
+            observed = original_reader()
+            if not replaced:
+                replacement = json.loads(base_path.read_text(encoding="utf-8"))
+                replacement["completed_at"] = "2099-01-01T00:00:00Z"
+                staging = base_path.parent / ".base-authority-replacement"
+                _write_private(
+                    staging,
+                    json.dumps(replacement, sort_keys=True).encode() + b"\n",
+                    0o600,
+                )
+                os.replace(staging, base_path)
+                replaced = True
+            return observed
+
+        with mock.patch.object(
+            installer,
+            "_read_adoption_permission_authorities",
+            side_effect=read_then_replace,
+        ), self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "authorities changed while validating",
+        ):
+            installer.plan(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+            )
+        self.assertTrue(replaced)
+        self.assertNotEqual(base_path.stat().st_ino, original_inode)
+
+    def test_permission_base_authority_in_place_write_is_rejected(self) -> None:
+        installer = self.permission_installer()
+        base_path = self.runtime / ADOPTER.AUTHORITY_PATH
+        original_inode = base_path.stat().st_ino
+        original_reader = ADOPTER._descriptor_bytes
+        rewritten = False
+
+        def rewrite_open_inode(
+            descriptor: int,
+            *,
+            maximum_bytes: int,
+        ) -> bytes:
+            nonlocal rewritten
+            payload = original_reader(
+                descriptor,
+                maximum_bytes=maximum_bytes,
+            )
+            try:
+                opened_path = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+            except OSError:
+                opened_path = Path("")
+            if opened_path == base_path and not rewritten:
+                with base_path.open("r+b", buffering=0) as stream:
+                    stream.seek(0)
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                rewritten = True
+            return payload
+
+        with mock.patch.object(
+            ADOPTER,
+            "_descriptor_bytes",
+            side_effect=rewrite_open_inode,
+        ), self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "changed while reading",
+        ):
+            installer.plan(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+            )
+        self.assertTrue(rewritten)
+        self.assertEqual(base_path.stat().st_ino, original_inode)
+
+    def test_permission_plan_is_restricted_to_raw_manual_adoption(self) -> None:
+        installer = self.permission_installer()
+        _write_private(
+            self.runtime / "state/current-deployment.json",
+            b"{}\n",
+            0o600,
+        )
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "restricted to raw manual adoption",
+        ):
+            installer.plan(
+                source_sha=self.sha,
+                operation_id=self.permission_operation_id,
+            )
+        self.assertFalse(installer.permission_marker_path.exists())
 
     def test_locked_apply_recomputes_plan_after_target_race(self) -> None:
         planned = self.installer().plan(

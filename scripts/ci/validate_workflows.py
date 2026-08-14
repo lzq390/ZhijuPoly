@@ -15,6 +15,9 @@ WORKFLOW_ROOT = REPOSITORY_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOW_ROOT / "ci.yml"
 RELEASE_INPUT_PATH = REPOSITORY_ROOT / "release-input.json"
 DEPLOYMENT_DOC_PATH = REPOSITORY_ROOT / "docs" / "deployment.md"
+RELEASE_CONTROLLER_DOC_PATH = (
+    REPOSITORY_ROOT / "docs" / "release-controller.md"
+)
 LEGACY_REMOTE_RELEASE_PATH = REPOSITORY_ROOT / "scripts" / "ci" / "remote_release.sh"
 EXACT_B_BRIDGE_PATH = REPOSITORY_ROOT / "scripts" / "ci" / "test_exact_b_bridge.sh"
 BACKEND_DOCKERFILE_PATH = REPOSITORY_ROOT / "Dockerfile"
@@ -1109,6 +1112,138 @@ def validate_deployment_asset_pin(failures: list[str]) -> None:
         )
 
 
+def validate_adopted_permission_documentation_text(
+    deployment_text: str,
+    controller_text: str,
+    failures: list[str],
+) -> None:
+    deployment_start = deployment_text.find(
+        "### One-time adopted Git permission hardening"
+    )
+    deployment_end = deployment_text.find(
+        "Next provision the dedicated mutable-data audit login.",
+        deployment_start,
+    )
+    if deployment_start < 0 or deployment_end < 0:
+        failures.append(
+            "docs/deployment.md must isolate the current adopted Git "
+            "permission workflow before role provisioning"
+        )
+        return
+    deployment_section = deployment_text[deployment_start:deployment_end]
+    controller_start = controller_text.find(
+        "## Current production authority and prerequisites"
+    )
+    controller_end = controller_text.find("## Commands", controller_start)
+    if controller_start < 0 or controller_end < 0:
+        failures.append(
+            "docs/release-controller.md must isolate current production "
+            "permission authority before controller commands"
+        )
+        return
+    controller_section = controller_text[controller_start:controller_end]
+
+    exact_commands = (
+        "./scripts/adopt_runtime_prerequisites.py permission-plan \\\n"
+        "  --sha <full-main-sha> \\\n"
+        "  --operation-id \"$permission_operation_id\"",
+        "./scripts/adopt_runtime_prerequisites.py permission-apply \\\n"
+        "  --sha <full-main-sha> \\\n"
+        "  --operation-id \"$permission_operation_id\" \\\n"
+        "  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \\\n"
+        "  --confirm-permission-impact-sha256 "
+        "sha256:<reviewed-impact-digest>",
+        "./scripts/adopt_runtime_prerequisites.py permission-abort \\\n"
+        "  --sha <full-main-sha> \\\n"
+        "  --operation-id \"$permission_operation_id\" \\\n"
+        "  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \\\n"
+        "  --confirm-permission-impact-sha256 "
+        "sha256:<reviewed-impact-digest>",
+    )
+    for label, section in (
+        ("docs/deployment.md", deployment_section),
+        ("docs/release-controller.md", controller_section),
+    ):
+        normalized_section = " ".join(section.split())
+        if (
+            section.count(
+                "permission_operation_id="
+                "adopt-git-permission-<utc-timestamp>"
+            )
+            != 1
+            or any(section.count(command) != 1 for command in exact_commands)
+        ):
+            failures.append(
+                f"{label} must contain one exact permission-plan/apply/abort "
+                "command sequence"
+            )
+        if (
+            section.count("--confirm-plan-sha256") != 2
+            or section.count("--confirm-permission-impact-sha256") != 2
+        ):
+            failures.append(
+                f"{label} permission apply and abort must both require the "
+                "plan and impact confirmations"
+            )
+        required = (
+            "state/adopted-git-permissions.json",
+            "manual-runtime-adoption-permission-hardening",
+            "state/adopted-git-permission-transactions/<operation-id>.json",
+            "state/deploy.lock",
+            "`intent`",
+            "permission-change-intent",
+            "permission-ready",
+            "source-verified",
+            "authority-commit-intent",
+            "`completed`",
+            "aborted",
+            "forward-only",
+            "167",
+            "not a policy constant",
+            "checkout root and `.git/**`",
+            "ordinary working-tree files",
+            "lowercase, colon-free",
+            "does not invoke",
+            "compact permission",
+            "state/legacy-git-permission-takeover.json",
+            "git_source_trust.takeover_repository_permissions",
+            "install_legacy_takeover_prerequisites.py",
+        )
+        missing = [
+            marker for marker in required if marker not in normalized_section
+        ]
+        if missing:
+            failures.append(
+                f"{label} adopted Git permission policy is incomplete: "
+                + ", ".join(missing)
+            )
+        if "./scripts/install_legacy_takeover_prerequisites.py \\" in section:
+            failures.append(
+                f"{label} current adopted workflow must not execute the "
+                "legacy permission installer"
+            )
+
+
+def validate_adopted_permission_documentation(
+    failures: list[str],
+) -> None:
+    try:
+        deployment_text = DEPLOYMENT_DOC_PATH.read_text(encoding="utf-8")
+        controller_text = RELEASE_CONTROLLER_DOC_PATH.read_text(
+            encoding="utf-8"
+        )
+    except (OSError, UnicodeError) as exc:
+        failures.append(
+            f"adopted Git permission documentation is unavailable: {exc}"
+        )
+        return
+    validate_adopted_permission_documentation_text(
+        deployment_text,
+        controller_text,
+        failures,
+    )
+
+
 def validate_exact_b_bridge(failures: list[str]) -> None:
     try:
         text = EXACT_B_BRIDGE_PATH.read_text(encoding="utf-8")
@@ -1429,6 +1564,7 @@ def main() -> int:
         failures.append("ci.yml must not build or test the removed standalone PolyTAO Worker")
     validate_release_input(failures)
     validate_deployment_asset_pin(failures)
+    validate_adopted_permission_documentation(failures)
     validate_exact_b_bridge(failures)
 
     if failures:

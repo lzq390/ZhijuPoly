@@ -54,10 +54,93 @@ PostgreSQL, containers, services, or credentials. Its `abort` subcommand can
 remove only operation-owned files before the authority commit. See
 [deployment.md](deployment.md) for the parser-exact commands.
 
+That prerequisite authority is followed by the dedicated adopted-checkout
+permission transaction from the same exact private source. It is deliberately
+not the historical installer or a raw permission primitive:
+
+```bash
+permission_operation_id=adopt-git-permission-<utc-timestamp>
+
+./scripts/adopt_runtime_prerequisites.py permission-plan \
+  --sha <full-main-sha> \
+  --operation-id "$permission_operation_id"
+
+./scripts/adopt_runtime_prerequisites.py permission-apply \
+  --sha <full-main-sha> \
+  --operation-id "$permission_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-permission-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+`<utc-timestamp>` is a lowercase, colon-free slug such as
+`20260814t140705z`, matching the operation-ID grammar. Exact `HEAD`, moving
+`origin/main`, and protected-main CI are checked for the initial plan and first
+durable `intent`. Once intent exists, same-operation replay/abort uses the
+sealed source plus the two confirmed digests and does not re-query moving main
+or CI authority, so recovery remains possible after a later main advance.
+
+`permission-plan` is logically zero-write and binds the complete permission
+inventory. `plan_sha256` confirms the full source/authority/permission plan;
+`permission_impact_sha256` independently confirms the exact inode mode
+transitions. The current production observation reports 167 transitions, but
+that number is not a policy constant: only the records, count, and digest in
+the fresh reviewed plan are authoritative.
+
+The apply uses the shared `state/deploy.lock` and publishes
+`state/adopted-git-permissions.json` only after its source and raw adoption,
+bootstrap, prerequisite, and permission evidence still compare exactly. Its
+only non-authority mutation is the exact planned checkout root and `.git/**`
+metadata mode set; ordinary working-tree files, source content/refs,
+PostgreSQL, containers, credentials, and services remain unchanged. Its
+authority kind is
+`manual-runtime-adoption-permission-hardening`. The private journal at
+`state/adopted-git-permission-transactions/<operation-id>.json` advances
+`intent` → `permission-change-intent` → `permission-ready` →
+`source-verified` → `authority-commit-intent` → `completed`. Before the
+durable permission-change intent, the same operation may be aborted with both
+confirmations:
+
+```bash
+./scripts/adopt_runtime_prerequisites.py permission-abort \
+  --sha <full-main-sha> \
+  --operation-id "$permission_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-permission-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+Marker generations are durable authority. The current marker retains its
+immediate predecessor and every older lifecycle generation under a
+generation-and-digest-addressed `.retired-g*` name; the transaction never
+unlinks those records. Every replay validates a bounded, contiguous chain.
+Before any marker write or permission change, cumulative history is limited to
+512 MiB and the filesystem must also retain a 64 MiB free-space margin. These
+predecessor and retired files must not be cleaned up operationally.
+
+At or after `permission-change-intent`, partial mode changes are an unknown
+commit and abort is forbidden. Recovery is forward-only: only the same
+`permission-apply`, operation ID, SHA, and two digests may converge. The
+completed authority seals both source identities, the raw
+adoption/bootstrap/prerequisite digests, both confirmation digests, the full
+plan, and the raw marker/evidence/inventory/original/hardened permission
+digests. It is immutable.
+
+The permission helper does not invoke the old installed controller as a probe.
+Instead it deliberately produces the unchanged schema-v1 hardened marker at
+`state/legacy-git-permission-takeover.json`, which is compatible with that
+controller's generic verifier. The new target controller independently
+requires that marker and the adopted wrapper authority to bind each other and
+seals the compact permission authority in the schema-v2 prerequisite target
+binding. It repeats the full check during formal plan, prepare/resume, and apply
+pre-switch. Do not invoke
+`git_source_trust.takeover_repository_permissions` directly, run
+`install_legacy_takeover_prerequisites.py`, synthesize the marker, or use
+manual `chmod`; none of those paths creates this authority.
+
 The same exact source then runs
 `provision_mutable_data_audit_role.py --plan/--apply`. Formal Pull `plan` and
-`prepare` are forbidden until that transaction completes. The resulting
-mutable-data audit helper report is schema-v7 and proves an explicit
+`prepare` are forbidden until the prerequisite, permission, and role
+transactions all complete. The resulting mutable-data audit helper report is
+schema-v7 and proves an explicit
 least-privilege projection: no elevated role attributes, memberships,
 ownership, cluster-wide predefined read role, write authority, or authority
 outside the governed schemas. The only normalized direct grants are
@@ -87,8 +170,8 @@ from raw manual adoption. With no current-state record, the immutable selector
 has no prepared target control release to select, while the installed
 `cff408…` planner rejects the adopted MD slot as ungoverned. From the exact
 private, standalone, clean, complete-history, source-pinned target clone used
-for the one-time prerequisite and role transactions, run only the read-only
-plan directly:
+for the one-time prerequisite, permission, and role transactions, run only the
+read-only plan directly:
 
 ```bash
 /usr/bin/python3 -I -B ./scripts/pull_deploy_controller.py plan \
@@ -97,11 +180,11 @@ plan directly:
 ```
 
 The target planner accepts raw adoption only when the active MD slot, active
-control, adoption provenance, and completed prerequisite authority are exact,
-and it performs no logical writes. The prerequisite authority remains an
-immutable record of the reviewed SHA/tree, readiness evidence, and delivery
-gate at which it was created; it is never rewritten to impersonate a newer
-target.
+control, adoption provenance, completed prerequisite authority, adopted Git
+permission wrapper, and its hardened marker are exact, and it performs no
+logical writes. The prerequisite and permission authorities remain immutable
+records of the reviewed source and evidence at which they were created; they
+are never rewritten to impersonate a newer target.
 
 That authority may bind either to the exact same target source or to a strict
 successor under the `ancestor-byte-identical` compatibility mode. The latter is
@@ -111,9 +194,12 @@ byte-identical, and equal to its sealed authority digest. The direct plan proves
 this from the exact private target clone and emits a deterministic
 `adopted_prerequisite_target_binding` containing the mode, authority and target
 SHA/tree, blob-inventory digest, sealed authority readiness digest, and target
-source-trust/readiness projection digest. A descriptor-v4 record that contains
-`adopted_deployment` must contain this binding; a descriptor without adopted
-deployment must not contain it.
+source-trust/readiness projection digest. For raw adoption this becomes a
+schema-v2 binding containing the immutable permission-wrapper digest and the
+exact raw hardened marker/evidence/inventory/original/hardened digests. A
+descriptor-v4 record
+that contains `adopted_deployment` must contain this binding; a descriptor
+without adopted deployment must not contain it.
 
 This conditional descriptor-v4 tightening is valid only for the first raw
 adoption when no current-state record, deployment marker, or pre-existing
@@ -125,9 +211,11 @@ not infer, retrofit, or silently omit the binding.
 Continue with the installed `nexpoly-pull-deploy prepare`; never run a mutating
 or recovery verb from the checkout. `prepare` independently reproves the
 ancestry and every old/target blob from the strictly trusted production
-repository after fetching the target. Resume, already-ready replay, and
-`apply` pre-switch validation repeat the proof and exact binding comparison, so
-authority, ancestry, or blob drift fails before source switching. The old
+repository after fetching the target. It also reads both the adopted permission
+wrapper and schema-compatible marker from production and recomputes their raw
+and projected digests. Resume, already-ready replay, and `apply` pre-switch
+validation repeat the proof and exact binding comparison, so authority,
+permission, ancestry, or blob drift fails before source switching. The old
 delivery gate remains exact for the authority SHA, while the target's current
 remote-main and CI evidence remain exact for the target SHA. Once current-state
 v3 exists and target controls are active, subsequent releases use the installed
@@ -328,6 +416,9 @@ state/deploy-in-progress.json
 state/current-deployment.json
 state/adopted-deployment.json
 state/adopted-prerequisites.json
+state/adopted-git-permissions.json
+state/legacy-git-permission-takeover.json
+state/adopted-git-permission-transactions/<operation-id>.json
 state/prepared/<operation-id>/descriptor.json
 state/prepared/<operation-id>/ready.json
 state/prepared/<operation-id>/acceptance-authority.json
@@ -346,7 +437,8 @@ drain-final database backup. MD slot records bind the final venv path, base
 Python identity, complete distribution inventory and source SHA. Descriptor v4
 additionally binds the DFT venv/runtime manifest, six model digests, env, unit,
 and GPU identity. Current-state v3 permanently retains the manual-adoption
-provenance.
+provenance; its immutable descriptor retains the adopted Git permission
+binding.
 
 Files are written through a private temporary file, `fsync`, atomic rename and
 parent-directory `fsync`. Symlinks, unexpected ownership, loose permissions,

@@ -219,6 +219,121 @@ or pgpass drift remains fail-closed. The prerequisite plan's
 `adopted_deployment_sha256` binds the raw bytes of the pre-existing adoption
 file; its canonical JSON digest remains a separate bootstrap binding.
 
+### One-time adopted Git permission hardening
+
+The manually adopted checkout did not pass through the historical takeover, so
+its production Git modes must be brought under the current controller before
+the first formal Pull plan. This is a separate, one-time transaction after
+`adopted-prerequisites.json` is complete. It publishes
+`state/adopted-git-permissions.json` with
+`authority_kind=manual-runtime-adoption-permission-hardening`; it does not
+rewrite the original adoption, prerequisite, or bootstrap authority.
+
+Run all three verbs from the same private, standalone, clean, complete-history,
+source-pinned target clone used for the prerequisite transaction. On the
+initial plan and the first apply that writes durable `intent`, `HEAD` and
+`origin/main` must both be the full reviewed SHA and protected-main CI must
+still be successful. After durable intent exists, same-operation replay or
+abort uses the sealed source and confirmed digests; it deliberately does not
+re-query a moving `origin/main` or CI result, so a later main advance cannot
+block the only safe recovery path:
+
+```bash
+permission_operation_id=adopt-git-permission-<utc-timestamp>
+
+./scripts/adopt_runtime_prerequisites.py permission-plan \
+  --sha <full-main-sha> \
+  --operation-id "$permission_operation_id"
+
+./scripts/adopt_runtime_prerequisites.py permission-apply \
+  --sha <full-main-sha> \
+  --operation-id "$permission_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-permission-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+`<utc-timestamp>` is a lowercase, colon-free slug such as
+`20260814t140705z`, matching the operation-ID grammar.
+
+`permission-plan` is logically zero-write. Review its complete Git permission
+inventory, each current and target mode, production source identity, target
+source SHA/tree, and raw adoption/bootstrap/prerequisite bindings. The target
+policy makes the checkout root and all Git metadata directories mode `0700`;
+Git metadata files retain only their existing owner permission bits. In other
+words, the complete mutation scope is the checkout root and `.git/**`; ordinary
+working-tree files are excluded. The `plan_sha256`
+binds that complete plan; the separately confirmed
+`permission_impact_sha256` binds the exact inode mode transitions. The current
+production observation contains 167 such transitions, but 167 is not a policy
+constant or an operator input. The count and records in the fresh reviewed plan
+are authoritative. Any different count, path, mode, inode identity, or either
+changed digest requires a new review and must stop apply.
+
+`permission-apply` acquires the shared `state/deploy.lock`, repeats the source
+and authority checks, and compares the reviewed plan and impact under the lock
+before the first mode change. It changes only the planned checkout-root/Git
+metadata modes and its private marker/journal/authority; it does not change Git
+content or refs, PostgreSQL, containers, credentials, or service state. Its
+private journal at
+`state/adopted-git-permission-transactions/<operation-id>.json` advances
+monotonically: `intent` → `permission-change-intent` → `permission-ready`
+→ `source-verified` → `authority-commit-intent` → `completed`. Every
+checkpoint and directory update is durably synced. The journal and the
+primitive permission marker both compare the planned device/inode/type/mode
+and content evidence, so an unplanned path, replacement, source drift, raw
+authority drift, or concurrent deployment fails closed instead of widening the
+reviewed mutation.
+
+The primitive marker keeps its immediate predecessor plus content-addressed
+retired generations for the complete finite lifecycle. Those files are
+authority, not temporary cleanup: never delete or rename
+`.legacy-git-permission-takeover.json.previous` or any matching
+`.legacy-git-permission-takeover.json.retired-g*` entry. Rotation uses
+no-replace renames and validates the contiguous generation chain on every
+replay. Before the first marker write or `chmod`, the helper proves that the
+complete retained history is at most 512 MiB and that the state filesystem has
+room for every remaining generation plus a 64 MiB safety margin.
+
+Abort is available only while the transaction is still before the durably
+written `permission-change-intent`, using the same operation and both reviewed
+digests:
+
+```bash
+./scripts/adopt_runtime_prerequisites.py permission-abort \
+  --sha <full-main-sha> \
+  --operation-id "$permission_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-permission-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+Before that boundary, abort records only that exact transaction as aborted.
+At or after `permission-change-intent`, a crash may have committed any prefix
+of the planned `chmod` operations, so abort and permission restoration are
+forbidden. Recovery is forward-only: rerun `permission-apply` with the same
+operation ID, SHA, and two confirmations until `completed`. A new operation,
+an inferred rollback, or hand-edited journal/authority is not recovery.
+`authority-commit-intent` is likewise an unknown wrapper-publication boundary
+and converges only through the same apply.
+
+The completed wrapper seals both target and production source identities; the
+raw `adopted-deployment.json`, `bootstrap-control.json`, and
+`adopted-prerequisites.json` digests; both confirmation digests; the full plan;
+and the raw permission marker, evidence, inventory, original-permission, and
+hardened-permission digests. It is immutable. The schema-v1 hardened marker at
+`state/legacy-git-permission-takeover.json` is retained only as a format-
+compatible handoff that the already installed controller can verify. The
+permission transaction does not invoke that old controller as a probe. The new
+target controller independently requires the wrapper and marker to bind each
+other, seals their compact permission-authority digest projection in its
+schema-v2 adopted-prerequisite target binding, and separately revalidates the
+raw marker at plan, prepare, resume, and apply pre-switch validation.
+
+Do not call `git_source_trust.takeover_repository_permissions` directly, run
+`install_legacy_takeover_prerequisites.py`, start the historical takeover, use
+manual `chmod`, or synthesize the legacy marker. Those raw paths do not publish
+the adopted permission authority or its double-confirmed CAS and cannot
+authorize the current production checkout.
+
 Next provision the dedicated mutable-data audit login. This step is mandatory
 before formal Pull `plan` or `prepare`. The source-pinned provisioner reads the
 one exact private pgpass entry, derives a SCRAM verifier locally, and never
@@ -727,10 +842,11 @@ generations can never be retired or rearmed.
 ## Current ordinary deployments
 
 The manually adopted production runtime uses descriptor v4 and current-state
-v3 for ordinary deployments. The prerequisite authority and the exact
-least-privilege mutable-data audit role described above must both be complete
-before this sequence starts. Every attempt uses one unique lowercase operation
-ID and the full 40-character SHA currently at `origin/main`:
+v3 for ordinary deployments. The prerequisite authority, adopted Git
+permission-hardening authority, and exact least-privilege mutable-data audit
+role described above must all be complete before this sequence starts. Every
+attempt uses one unique lowercase operation ID and the full 40-character SHA
+currently at `origin/main`:
 
 ```bash
 deploy_operation_id=deploy-<utc-timestamp>
@@ -747,21 +863,26 @@ nexpoly-pull-deploy prepare \
 The direct controller invocation is a one-time exception for the first
 ordinary deployment while `current-deployment.json` is absent. Run it only
 from the same private, standalone, clean, source-pinned target clone used for
-the prerequisite and role transactions. The installed selector cannot route a
-pre-prepare `plan` to a target control release that does not exist yet, and its
-adopted `cff408…` controller intentionally rejects an active MD slot without a
-current-state record. The target controller instead validates that slot,
-source, active control, prerequisite source/CI, and adoption provenance
-directly against the raw manual-adoption authority, without writing files or
-changing services. Review `authority_kind=manual-runtime-adoption`, the
-adopted-deployment digest, and the prerequisite plan digest in its output.
+the prerequisite, permission, and role transactions. The installed selector
+cannot route a pre-prepare `plan` to a target control release that does not
+exist yet, and its adopted `cff408…` controller intentionally rejects an active
+MD slot without a current-state record. The target controller instead validates
+that slot, source, active control, prerequisite source/CI, adoption provenance,
+the immutable adopted permission wrapper, and its schema-compatible hardened
+marker without writing files or changing services. Review
+`authority_kind=manual-runtime-adoption`, the adopted-deployment and
+permission-authority raw digests, the permission marker/evidence/inventory
+digests, and the prerequisite target-binding digest in its output.
 
 Do not invoke checkout code directly for `prepare`, `apply`, `accept`,
 `rollback`, or recovery. The installed launcher owns those mutations; its
 `prepare` command creates the candidate control release and performs the
-sealed target handoff. After the first deployment writes current-state v3 and
-activates the target controls, all later releases return to the normal
-installed command:
+sealed target handoff. Its target controller independently revalidates the
+permission wrapper and raw marker; compatibility with the old installed
+controller's marker parser alone is not sufficient. Resume and apply
+pre-switch repeat the same exact binding. After the first deployment writes
+current-state v3 and activates the target controls, all later releases return
+to the normal installed command:
 
 ```bash
 nexpoly-pull-deploy plan \
