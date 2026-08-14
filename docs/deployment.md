@@ -845,6 +845,16 @@ structure queries; knowledge; and the main frontend routes. Only after every
 probe passes does the controller durably start the 900-second maintenance
 observation:
 
+Before the first probe command, the controller proves ingress isolation and
+persists an `acceptance_probe_intent` containing the candidate-bound full
+mutable-data digest. Failed or crashed probes may retain partial MD/DFT history,
+so retries reuse that intent instead of incorrectly requiring the original
+live row digest. A passing report is accepted only when a fresh post-probe
+snapshot proves that PostgreSQL/system/role/ledger identity, schemas, static
+and analytics data, migration exceptions, sequence structure and all
+non-probe business data stayed unchanged. The new post-probe digest then
+becomes the exact database baseline for the observation window.
+
 ```bash
 nexpoly-pull-deploy accept \
   --sha <full-main-sha> \
@@ -854,10 +864,16 @@ nexpoly-pull-deploy accept \
 The first `accept` returns `status=maintenance-observation`, keeps public
 admission closed, and reports `acceptance_not_before`. Do not substitute the
 earlier staging timestamp for this post-probe deadline. After that time, invoke
-the exact same command a second time. The controller revalidates the sealed
-probe report plus source, current-state, PostgreSQL, runtime, Worker fence, and
-image identities. It opens public ingress and submissions only if those
-identities are unchanged:
+the exact same command a second time. This final invocation uses a read-only
+runtime verifier and does not submit another MD/GPU canary. It revalidates the
+sealed probe report plus source, current-state, PostgreSQL, runtime, Worker
+fence, image and post-probe mutable-data identities. Only the current
+operation's drain reason/timestamps/content digest are normalised; business
+rows and sequences remain exact. In DFT `observe` mode, a fresh valid guard may
+move between `ready` and `quarantined` without becoming runtime drift, while
+the guard schema/GPU UUID/timestamp freshness, runtime readiness and process
+identity are still independently required. It opens public ingress and
+submissions only if those identities are unchanged:
 
 ```bash
 nexpoly-pull-deploy accept \
@@ -865,10 +881,27 @@ nexpoly-pull-deploy accept \
   --operation-id "$deploy_operation_id"
 ```
 
-Any failed acceptance probe, changed identity, missing/stale authority, or
-maintenance-observation anomaly is a stop condition. Admission remains closed;
-use the exact operation's explicit rollback instead of opening services by
-hand.
+Before `acceptance_resume_intent` is persisted, any failed acceptance probe,
+changed identity, missing/stale authority, or maintenance-observation anomaly
+is a stop condition. Admission remains closed; use the exact operation's
+explicit rollback instead of opening services by hand. A stopped runtime may
+be restarted only while still at the initial `awaiting-acceptance` boundary.
+Once post-probe observation has started it is rejected without restarting or
+reusing probes. After the sticky resume intent, rollback is forbidden and only
+forward recovery is permitted. Recovery first read-only verifies the exact
+candidate state/source, sealed probe authority and non-mutable database
+provenance. A fully open exact public runtime is terminalized in place without
+isolating ingress or reading mutable rows. A partial persistent resume is
+isolated and exactly re-drained, then the candidate, runtime, non-mutable
+database and Worker-fence identities are compared before the same runtime is
+resumed. Writes accepted after an unknown resume commit are therefore
+preserved. A stopped or drifted runtime keeps the sticky resume phase and
+requires a forward fix; it is never restarted, reprobed or made rollbackable.
+For both full-open and partial recovery, the top-level full runtime-verification
+and Worker-fence digests must bind the sealed acceptance evidence. The freshly
+read complete repository identity, including Git trust and permission-takeover
+evidence, must exactly match the repository identity sealed in that runtime
+verification. Re-drain recovery evidence cannot replace this full authority.
 
 ## Historical migrations and first takeover
 
@@ -910,7 +943,8 @@ the standalone static importer excludes every business-mutable table.
 
 ## Rollback and interrupted attempts
 
-Rollback is explicit:
+Rollback is explicit while the descriptor-v4 candidate is still staged with
+public ingress and submissions closed:
 
 ```bash
 nexpoly-pull-deploy rollback \
@@ -927,6 +961,35 @@ can start or accept writes. Before that phase, rollback may restore the sealed
 source, images, assets, and Worker identities without replacing PostgreSQL.
 Ingress and submissions remain closed until the old source, database, MD/DFT
 runtime, and service identities all pass their recovery checks.
+
+Once acceptance has completed and public admission has reopened, an ordinary
+descriptor-v4 deployment is terminal and the same `rollback` command is
+fail-closed before it writes a marker, takes a backup, drains, or stops any
+service. Operators must forward-fix. The controller must never run the old
+`fc05` source against the post-0015 ledger, and restoring the drain-final
+post-0013 dump after reopening traffic would discard all intervening writes.
+That data-loss operation requires a separately reviewed and authorized
+maintenance entrypoint; ordinary `rollback` intentionally exposes no bypass or
+confirmation flag.
+
+Immediately before final admission resume, the marker seals a sticky
+`acceptance_resume_intent` for the exact operation and candidate state. A lost
+resume response may mean public writes were already accepted, so
+`acceptance-resume-started` can only recover forward. New retries retain that
+phase when the runtime is stopped or its identity drifts. A pre-existing
+`acceptance-rejected` marker that already contains the sticky intent remains
+loadable but requires a separately reviewed forward fix; neither automatic
+convergence nor explicit rollback may restore its database.
+
+The inverse transition is fenced as well. When a pre-intent staged rollback
+has restored the old database, effects, and current-state authority, the
+controller persists `rollback_admission_resume_intent` before reopening the
+old runtime, then records `rollback-admission-resumed` only after resume
+returns. That intent binds the failed candidate, previous deployment/adoption,
+backup and restore evidence, and exact runtime fence. A crash in this window
+can only verify an already-open old runtime or re-drain and resume that same
+runtime forward; it must never repeat the database restore, so writes accepted
+after an unknown resume commit are preserved.
 
 The deployment marker and journal are stored below
 `nexpoly-runtime/state`. An interrupted or ambiguous operation fails closed;
