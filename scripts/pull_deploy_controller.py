@@ -24240,6 +24240,12 @@ class PullDeployController:
             controls=descriptor["monomer_dft"]["guard"],
             status="stopped",
         )
+        # Every stop probe publishes fresh evidence (including its recorded
+        # time).  A source-switch fence binds the exact prior evidence digest,
+        # so it is invalid after any retry even when this remains the same
+        # logical stop cycle.  The source-switch path recreates the fence only
+        # after its adjacent full checkout-reader scan.
+        marker.pop("dft_guard_source_switch_fence", None)
         marker["dft_guard_stop_evidence"] = evidence
         marker["dft_guard_scheduling_stopped"] = True
         marker["updated_at"] = utc_now()

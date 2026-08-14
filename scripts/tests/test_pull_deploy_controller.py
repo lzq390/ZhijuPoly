@@ -11245,6 +11245,49 @@ class DftGuardTransactionTests(PullDeployTestCase):
         )
         self.assertIsNot(first_evidence, marker["dft_guard_stop_evidence"])
 
+    def test_guard_stop_retry_invalidates_stale_source_switch_fence(
+        self,
+    ) -> None:
+        lifecycle = self.RecordingLifecycle()
+        controller, descriptor = self._prepared(lifecycle)
+        marker: dict[str, object] = {"dft_guard_scheduling_stopped": False}
+        tick = 0
+
+        def advancing_utc() -> str:
+            nonlocal tick
+            tick += 1
+            minute, second = divmod(tick, 60)
+            return f"2026-07-16T00:{minute:02d}:{second:02d}Z"
+
+        with (
+            mock.patch.object(CONTROLLER, "utc_now", side_effect=advancing_utc),
+            mock.patch.object(
+                CONTROLLER.SystemLifecycle,
+                "_assert_no_checkout_readers",
+            ),
+        ):
+            controller._refresh_dft_guard_source_switch_fence(
+                marker,
+                descriptor,
+            )
+            first_digest = CONTROLLER.canonical_json_digest(
+                marker["dft_guard_stop_evidence"]
+            )
+            self.assertIn("dft_guard_source_switch_fence", marker)
+
+            # Recovery later stops the guard again before reconstructing the
+            # previous runtime.  Its fresh evidence must invalidate the old
+            # source-adjacent fence even within the same logical stop cycle.
+            controller._stop_dft_guard_scheduling(marker, descriptor)
+
+        self.assertNotEqual(
+            CONTROLLER.canonical_json_digest(
+                marker["dft_guard_stop_evidence"]
+            ),
+            first_digest,
+        )
+        self.assertNotIn("dft_guard_source_switch_fence", marker)
+
     def test_lost_guard_restore_response_is_externally_restopped_before_source_switch(
         self,
     ) -> None:
