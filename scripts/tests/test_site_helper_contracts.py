@@ -1315,9 +1315,14 @@ class SiteHelperContractTests(unittest.TestCase):
             "'outside_governed_privileges', outside_governed_privileges.value",
             "'security_definer_execute', security_definer_execute.value",
             "'large_object_mutators', large_object_mutators.value",
+            "'oid', mutator.oid::oid::text",
             "'pg_database_owner', mutator.oid, 'EXECUTE'",
         ):
             self.assertIn(required, helper)
+        self.assertEqual(
+            helper.count("CASE WHEN sequence.relkind = 'S' THEN"),
+            4,
+        )
 
     def test_mutable_helper_generates_single_line_psql_copy_commands(self) -> None:
         helper_path = (

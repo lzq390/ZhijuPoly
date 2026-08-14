@@ -57,6 +57,13 @@ def _inventory(root: Path) -> list[tuple[str, int, str]]:
     return result
 
 
+def _make_tree_private(root: Path) -> None:
+    for path in root.rglob("*"):
+        if not path.is_symlink():
+            path.chmod(stat.S_IMODE(path.stat().st_mode) & ~0o077)
+    root.chmod(0o700)
+
+
 class AdoptRuntimePrerequisiteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -65,8 +72,18 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
         self.runtime = root / "runtime"
         self.source.mkdir(mode=0o700)
         self.runtime.mkdir(mode=0o700)
-        for relative in ("config", "state", "audit/adoption"):
-            (self.runtime / relative).mkdir(mode=0o700, parents=True)
+        runtime_directories = (
+            self.runtime,
+            self.runtime / "config",
+            self.runtime / "state",
+            self.runtime / "audit",
+            self.runtime / "audit/adoption",
+        )
+        for directory in runtime_directories[1:]:
+            directory.mkdir(mode=0o700)
+        for directory in runtime_directories:
+            directory.chmod(0o700)
+            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
         _write_private(self.runtime / "state/deploy.lock", b"", 0o600)
         adopted = {"schema_version": 1, "status": "adopted"}
         _write_private(
@@ -133,10 +150,7 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             "refs/remotes/origin/main",
             "HEAD",
         )
-        for path in self.source.rglob("*"):
-            if not path.is_symlink():
-                path.chmod(stat.S_IMODE(path.stat().st_mode) & ~0o077)
-        self.source.chmod(0o700)
+        _make_tree_private(self.source)
         self.sha = _run(self.source, "/usr/bin/git", "rev-parse", "HEAD")
         self.operation_id = "adopt-prereq-test-0001"
         self.delivery_gate = {
@@ -213,6 +227,7 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             "refs/remotes/origin/main",
             advanced,
         )
+        _make_tree_private(self.source)
         return advanced
 
     def test_plan_is_zero_write_and_deterministic(self) -> None:

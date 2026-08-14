@@ -340,15 +340,24 @@ sequence_privileges AS (
                 'sequence', namespace.nspname || '.' || sequence.relname,
                 'oid', sequence.oid::text,
                 'owner', pg_catalog.pg_get_userbyid(sequence.relowner),
-                'select', pg_catalog.has_sequence_privilege(
-                    target.oid, sequence.oid, 'SELECT'
-                ),
-                'usage', pg_catalog.has_sequence_privilege(
-                    target.oid, sequence.oid, 'USAGE'
-                ),
-                'update', pg_catalog.has_sequence_privilege(
-                    target.oid, sequence.oid, 'UPDATE'
-                )
+                'select', CASE WHEN sequence.relkind = 'S' THEN
+                    pg_catalog.has_sequence_privilege(
+                        target.oid, sequence.oid, 'SELECT'
+                    )
+                    ELSE false
+                END,
+                'usage', CASE WHEN sequence.relkind = 'S' THEN
+                    pg_catalog.has_sequence_privilege(
+                        target.oid, sequence.oid, 'USAGE'
+                    )
+                    ELSE false
+                END,
+                'update', CASE WHEN sequence.relkind = 'S' THEN
+                    pg_catalog.has_sequence_privilege(
+                        target.oid, sequence.oid, 'UPDATE'
+                    )
+                    ELSE false
+                END
             )
             ORDER BY namespace.nspname, sequence.relname
         ),
@@ -426,10 +435,12 @@ outside_governed_privileges AS (
               FROM governed_schema_names AS governed
               WHERE governed.schema_name = namespace.nspname
           )
-          AND sequence.relkind = 'S'
-          AND pg_catalog.has_sequence_privilege(
-              target.oid, sequence.oid, 'SELECT,USAGE,UPDATE'
-          )
+          AND CASE WHEN sequence.relkind = 'S' THEN
+              pg_catalog.has_sequence_privilege(
+                  target.oid, sequence.oid, 'SELECT,USAGE,UPDATE'
+              )
+              ELSE false
+          END
         UNION ALL
         SELECT 'column:' || namespace.nspname || '.' || relation.relname
                || '.' || attribute.attname
@@ -574,7 +585,7 @@ large_object_mutators AS (
     SELECT jsonb_agg(
         jsonb_build_object(
             'routine', mutator.name,
-            'oid', mutator.oid::text,
+            'oid', mutator.oid::oid::text,
             'owner', pg_catalog.pg_get_userbyid(routine.proowner),
             'public_execute', pg_catalog.has_function_privilege(
                 'public', mutator.oid, 'EXECUTE'
