@@ -17,13 +17,24 @@ PRODUCTION_REPO_ROOT = Path("/data/lzq/gith/nexpoly")
 PRODUCTION_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
 RUNTIME_ENV_RELATIVE = Path("config/monomer-dft-runtime.env")
 GPU_UUID = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+UV_SHA256 = (
+    "sha256:f985abdfdbef9a69f47f5a88f800eae0488bdcb0d7868f5cc1e0aa3e11a8f47e"
+)
+BASE_PYTHON_SHA256 = (
+    "sha256:1643dacd9feaedc58f3cc581e4d22577dfe25c09b10282936186ccf0f2e61118"
+)
+PIP_INVENTORY_SHA256 = (
+    "sha256:645e76321f3088ac750fb5d96eda0f21cca88d21311916874c4c8d73e2146b7b"
+)
 RUNTIME_ENV_KEYS = frozenset(
     {
         "MONOMER_DFT_RELEASE_SHA",
         "MONOMER_DFT_RUNTIME_CONTRACT_SHA256",
+        "MONOMER_DFT_RUNTIME_INVENTORY_SHA256",
         "MONOMER_DFT_PYTHON",
         "AIMNET_CACHE_DIR",
         "WARP_CACHE_PATH",
+        "NEXPOLY_DFT_GPU_GUARD_MODE",
     }
 )
 
@@ -124,7 +135,7 @@ def validate(
     private_file(runtime_manifest)
     try:
         runtime_payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         raise PreflightError("DFT runtime manifest is invalid") from exc
     if (
         runtime_payload.get("schema_version") != 1
@@ -135,22 +146,55 @@ def validate(
     if (
         runtime_payload.get("python") != "3.12"
         or runtime_payload.get("uv") != "0.11.21"
+        or runtime_payload.get("uv_sha256") != UV_SHA256
+        or runtime_payload.get("base_python_sha256") != BASE_PYTHON_SHA256
+        or runtime_payload.get("pip_inventory_sha256")
+        != PIP_INVENTORY_SHA256
+        or not isinstance(
+            runtime_payload.get("wheelhouse_inventory_sha256"), str
+        )
     ):
         raise PreflightError("DFT runtime toolchain differs from the locked release")
+    wheelhouse_digest = runtime_payload["wheelhouse_inventory_sha256"]
+    try:
+        int(wheelhouse_digest.removeprefix("sha256:"), 16)
+    except ValueError as exc:
+        raise PreflightError("DFT wheelhouse inventory identity is invalid") from exc
+    if not wheelhouse_digest.startswith("sha256:") or len(wheelhouse_digest) != 71:
+        raise PreflightError("DFT wheelhouse inventory identity is invalid")
     runtime_contract_sha256 = "sha256:" + sha256_file(runtime_manifest)
     runtime_environment = load_runtime_environment(
         runtime_root / RUNTIME_ENV_RELATIVE
     )
+    process_environment = environment if environment is not None else os.environ
+    guard_mode = runtime_environment.get("NEXPOLY_DFT_GPU_GUARD_MODE")
+    inventory_digest = runtime_environment.get(
+        "MONOMER_DFT_RUNTIME_INVENTORY_SHA256", ""
+    )
+    try:
+        int(inventory_digest.removeprefix("sha256:"), 16)
+    except ValueError as exc:
+        raise PreflightError("DFT runtime inventory identity is invalid") from exc
+    if (
+        guard_mode not in {"enforce", "observe"}
+        or not inventory_digest.startswith("sha256:")
+        or len(inventory_digest) != 71
+    ):
+        raise PreflightError("DFT runtime guard or inventory identity is invalid")
     expected_environment = {
         "MONOMER_DFT_RELEASE_SHA": head,
         "MONOMER_DFT_RUNTIME_CONTRACT_SHA256": runtime_contract_sha256,
+        "MONOMER_DFT_RUNTIME_INVENTORY_SHA256": inventory_digest,
         "MONOMER_DFT_PYTHON": os.fspath(release_runtime / "venv/bin/python"),
         "AIMNET_CACHE_DIR": os.fspath(release_runtime / "aimnet-cache"),
-        "WARP_CACHE_PATH": os.fspath(release_runtime / "warp-cache"),
+        "WARP_CACHE_PATH": os.fspath(
+            runtime_root / "state/monomer-dft-warp-cache" / head
+        ),
+        "NEXPOLY_DFT_GPU_GUARD_MODE": guard_mode,
     }
     if runtime_environment != expected_environment:
         raise PreflightError("DFT runtime environment differs from the active release")
-    process_environment = environment if environment is not None else os.environ
+    private_directory(Path(expected_environment["WARP_CACHE_PATH"]))
     if any(
         process_environment.get(key) != value
         for key, value in expected_environment.items()
@@ -184,7 +228,7 @@ def validate(
         raise PreflightError("DFT runtime locks differ from the production release")
     try:
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError) as exc:
         raise PreflightError("AIMNet source lock is invalid") from exc
     models = lock.get("models")
     if not isinstance(models, list) or len(models) != 6:

@@ -32,6 +32,7 @@ CONTROL_LAYOUT_RELATIVE_PATHS = (
     "state/monomer-md-worker-socket",
     "state/monomer-md-worker-runs",
     "state/gpu-resource",
+    "state/adoption-transactions",
     "state/active-control.json",
     "state/bootstrap-control.json",
     "audit",

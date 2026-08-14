@@ -164,9 +164,11 @@ DFT_RUNTIME_ENV_KEYS = frozenset(
     {
         "MONOMER_DFT_RELEASE_SHA",
         "MONOMER_DFT_RUNTIME_CONTRACT_SHA256",
+        "MONOMER_DFT_RUNTIME_INVENTORY_SHA256",
         "MONOMER_DFT_PYTHON",
         "AIMNET_CACHE_DIR",
         "WARP_CACHE_PATH",
+        "NEXPOLY_DFT_GPU_GUARD_MODE",
     }
 )
 
@@ -1500,7 +1502,8 @@ def _read_json_file(
             path,
             os.O_RDONLY
             | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
         )
         before = os.fstat(descriptor)
         chunks: list[bytes] = []
@@ -1524,9 +1527,12 @@ def _read_json_file(
     if (
         not stat.S_ISREG(before.st_mode)
         or before.st_size > maximum_bytes
+        or private
+        and before.st_nlink != 1
         or (
             before.st_dev,
             before.st_ino,
+            before.st_nlink,
             before.st_size,
             before.st_mtime_ns,
             before.st_ctime_ns,
@@ -1534,6 +1540,7 @@ def _read_json_file(
         != (
             after.st_dev,
             after.st_ino,
+            after.st_nlink,
             after.st_size,
             after.st_mtime_ns,
             after.st_ctime_ns,
@@ -1542,6 +1549,7 @@ def _read_json_file(
             current.st_dev,
             current.st_ino,
             current.st_mode,
+            current.st_nlink,
             current.st_size,
             current.st_mtime_ns,
             current.st_ctime_ns,
@@ -1550,6 +1558,7 @@ def _read_json_file(
             after.st_dev,
             after.st_ino,
             after.st_mode,
+            after.st_nlink,
             after.st_size,
             after.st_mtime_ns,
             after.st_ctime_ns,
@@ -1565,7 +1574,7 @@ def _read_json_file(
         _fail("required evidence file is unsafe")
     try:
         document = json.loads(payload.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ProductionReadinessError("required evidence is invalid JSON") from exc
     if not isinstance(document, dict):
         _fail("required evidence is not a JSON object")
@@ -2442,6 +2451,72 @@ def _dft_runtime_environment(path: Path) -> dict[str, str]:
     return values
 
 
+def _dft_runtime_inventory(root: Path) -> str:
+    """Recompute the controller-built immutable DFT release inventory."""
+
+    records: list[dict[str, object]] = []
+    allowed_links = {
+        "venv/bin/python": "/usr/bin/python3.12",
+        "venv/bin/python3": "python",
+        "venv/bin/python3.12": "python",
+        "venv/lib64": "lib",
+    }
+    try:
+        paths = sorted(root.rglob("*"), key=lambda value: value.as_posix())
+        for path in paths:
+            relative = path.relative_to(root).as_posix()
+            if relative in {"READY.json", ".preparing.json"}:
+                continue
+            metadata = path.lstat()
+            mode = stat.S_IMODE(metadata.st_mode)
+            if metadata.st_uid != os.geteuid():
+                _fail("production DFT runtime ownership is unsafe")
+            if stat.S_ISLNK(metadata.st_mode):
+                target = os.readlink(path)
+                if allowed_links.get(relative) != target:
+                    _fail("production DFT runtime contains an unknown symlink")
+                records.append(
+                    {
+                        "path": relative,
+                        "kind": "symlink",
+                        "uid": metadata.st_uid,
+                        "mode": mode,
+                        "target": target,
+                    }
+                )
+            elif stat.S_ISDIR(metadata.st_mode):
+                if mode & 0o022:
+                    _fail("production DFT runtime directory mode is unsafe")
+                records.append(
+                    {
+                        "path": relative,
+                        "kind": "directory",
+                        "uid": metadata.st_uid,
+                        "mode": mode,
+                    }
+                )
+            elif stat.S_ISREG(metadata.st_mode):
+                if mode & 0o022 or metadata.st_nlink != 1:
+                    _fail("production DFT runtime file identity is unsafe")
+                records.append(
+                    {
+                        "path": relative,
+                        "kind": "file",
+                        "uid": metadata.st_uid,
+                        "mode": mode,
+                        "size": metadata.st_size,
+                        "sha256": sha256_file(path),
+                    }
+                )
+            else:
+                _fail("production DFT runtime contains a special file")
+    except OSError as exc:
+        raise ProductionReadinessError(
+            "production DFT runtime inventory is unavailable"
+        ) from exc
+    return canonical_json_digest(records)
+
+
 def dft_live_readiness(
     authority: str,
     *,
@@ -2475,15 +2550,22 @@ def dft_live_readiness(
     runtime_manifest = release_runtime / "runtime.json"
     _private_regular_file(runtime_manifest, mode=0o600)
     runtime_contract_sha256 = sha256_file(runtime_manifest)
+    runtime_inventory_sha256 = _dft_runtime_inventory(release_runtime)
+    warp_cache_parent = runtime_root / "state/monomer-dft-warp-cache"
+    warp_cache = warp_cache_parent / authority
+    _require_private_directory(warp_cache_parent)
+    _require_private_directory(warp_cache)
     runtime_environment = _dft_runtime_environment(
         runtime_root / "config/monomer-dft-runtime.env"
     )
     expected_environment = {
         "MONOMER_DFT_RELEASE_SHA": authority,
         "MONOMER_DFT_RUNTIME_CONTRACT_SHA256": runtime_contract_sha256,
+        "MONOMER_DFT_RUNTIME_INVENTORY_SHA256": runtime_inventory_sha256,
         "MONOMER_DFT_PYTHON": os.fspath(release_runtime / "venv/bin/python"),
         "AIMNET_CACHE_DIR": os.fspath(release_runtime / "aimnet-cache"),
-        "WARP_CACHE_PATH": os.fspath(release_runtime / "warp-cache"),
+        "WARP_CACHE_PATH": os.fspath(warp_cache),
+        "NEXPOLY_DFT_GPU_GUARD_MODE": "observe",
     }
     if runtime_environment != expected_environment:
         _fail("production DFT runtime is not bound to the release")
@@ -2499,16 +2581,28 @@ def dft_live_readiness(
             _fail(f"{unit} is not enabled")
 
     guard_path = runtime_root / "state/gpu2-guard.json"
-    guard = json.loads(guard_path.read_text(encoding="utf-8"))
+    guard, _guard_file_sha256 = _read_json_file(
+        guard_path,
+        private=True,
+        maximum_bytes=1024 * 1024,
+    )
+    guard_status = guard.get("status")
+    unknown_processes = guard.get("unknown_processes")
     if (
-        guard.get("status") != "ready"
+        guard.get("schema_version") != 1
         or guard.get("gpu_index") != "2"
         or guard.get("gpu_uuid") != GPU2_UUID
-        or guard.get("unknown_processes") != []
+        or guard_status not in {"ready", "quarantined"}
+        or not isinstance(unknown_processes, list)
+        or (guard_status == "ready") != (not unknown_processes)
     ):
-        _fail("GPU2 guard is not ready")
+        _fail("GPU2 guard observation is invalid")
     observed = _utc_timestamp(guard.get("observed_at"), "GPU2 guard observed_at")
-    if dt.datetime.now(dt.timezone.utc) - observed > dt.timedelta(minutes=2):
+    guard_age = dt.datetime.now(dt.timezone.utc) - observed
+    if (
+        guard_age < -dt.timedelta(seconds=30)
+        or guard_age > dt.timedelta(minutes=2)
+    ):
         _fail("GPU2 guard evidence is stale")
 
     worker = _unix_json(
@@ -2528,7 +2622,13 @@ def dft_live_readiness(
         or runtime.get("deployment") != "prod"
         or runtime.get("physical_gpu") != "2"
         or runtime.get("gpu_uuid") != GPU2_UUID
-        or runtime.get("guard_status") != "ready"
+        or worker.get("gpu_guard_mode") != "observe"
+        or worker.get("gpu_guard_status") != guard_status
+        or worker.get("gpu_contention_observed") is not bool(unknown_processes)
+        or runtime.get("guard_status") != guard_status
+        or runtime.get("gpu_guard_mode") != "observe"
+        or runtime.get("gpu_guard_status") != guard_status
+        or runtime.get("gpu_contention_observed") is not bool(unknown_processes)
         or not isinstance(models, dict)
         or set(models) != DFT_MODEL_ALIASES
         or any(
@@ -2547,6 +2647,9 @@ def dft_live_readiness(
         or backend.get("available") is not True
         or backend.get("schema_ready") is not True
         or backend.get("runtime_ready") is not True
+        or backend.get("gpu_guard_mode") != "observe"
+        or backend.get("gpu_guard_status") != guard_status
+        or backend.get("gpu_contention_observed") is not bool(unknown_processes)
     ):
         _fail("production Backend has not enabled ready DFT submission")
 
@@ -2596,8 +2699,12 @@ def dft_live_readiness(
         "deployment": "prod",
         "gpu_index": "2",
         "gpu_uuid": GPU2_UUID,
+        "gpu_guard_mode": "observe",
+        "gpu_guard_status": guard_status,
+        "gpu_contention_observed": bool(unknown_processes),
         "models": sorted(DFT_MODEL_ALIASES),
         "runtime_contract_sha256": runtime_contract_sha256,
+        "runtime_inventory_sha256": runtime_inventory_sha256,
         "worker_unit_sha256": sha256_file(installed_unit),
         "compose_files": compose_files,
         "guard_sha256": sha256_file(guard_path),

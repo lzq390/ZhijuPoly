@@ -14,6 +14,7 @@ Environment="MONOMER_DFT_WORKER_UDS=/data/lzq/gith/nexpoly-runtime/state/monomer
 Environment="MONOMER_DFT_JOB_ROOT=/data/lzq/gith/nexpoly-runtime/state/monomer-dft-worker-runs"
 Environment="MONOMER_DFT_DOWNLOAD_SPOOL_ROOT=/data/lzq/gith/nexpoly-runtime/state/monomer-dft-download-spool"
 Environment="MONOMER_DFT_GPU_GUARD_STATE=/data/lzq/gith/nexpoly-runtime/state/gpu2-guard.json"
+Environment="NEXPOLY_DFT_GPU_GUARD_MODE=enforce"
 Environment="NEXPOLY_DFT_GPU_DEVICE=2"
 Environment="NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="
 Environment="NEXPOLY_DEV_GPU1_ONLY_SESSION=0"
@@ -28,7 +29,7 @@ ExecStartPre=/usr/bin/git -C /data/lzq/gith/nexpoly diff --quiet --ignore-submod
 ExecStartPre=/usr/bin/git -C /data/lzq/gith/nexpoly diff --cached --quiet --ignore-submodules --
 ExecStartPre=/usr/bin/python3 -I -B /data/lzq/gith/nexpoly/scripts/preflight_monomer_dft_prod.py
 ExecStartPre=/usr/bin/python3 -I -B /data/lzq/gith/nexpoly/scripts/gpu2_guard.py --require-ready
-ExecStart=/data/lzq/gith/nexpoly/workers/monomer_dft_worker/run_host_worker.sh
+ExecStart=/usr/bin/python3 -I -B /data/lzq/gith/nexpoly-runtime/bin/control_runtime_selector.py run monomer-dft
 Restart=always
 RestartSec=5
 TimeoutStartSec=180

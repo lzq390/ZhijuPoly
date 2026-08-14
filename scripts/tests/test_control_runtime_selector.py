@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib.util
 import fcntl
 import os
@@ -102,8 +103,8 @@ class SelectorTests(unittest.TestCase):
             "source_tree": source_tree,
             "compatibility": {
                 "handoff_protocol_versions": [1],
-                "descriptor_schema_versions": [2],
-                "current_state_schema_versions": [2],
+                "descriptor_schema_versions": [2, 4],
+                "current_state_schema_versions": [2, 3],
                 "marker_schema_versions": [2, 3],
                 "worker_slot_schema_versions": [2],
                 "prepare_abort_abi_versions": [1],
@@ -246,6 +247,153 @@ class SelectorTests(unittest.TestCase):
         if not alias_marker.exists():
             self._complete_alias_gate(manifest)
         return active
+
+    @staticmethod
+    def _dft_environment_payload(values: dict[str, str]) -> bytes:
+        return "".join(
+            f"{name}={value}\n" for name, value in values.items()
+        ).encode("utf-8")
+
+    def _rewrite_dft_environment(self, projection: dict[str, object]) -> None:
+        transition = projection["runtime_env"]
+        self.assertIsInstance(transition, dict)
+        target = transition.get("target", transition)
+        self.assertIsInstance(target, dict)
+        values = target["values"]
+        self.assertIsInstance(values, dict)
+        payload = self._dft_environment_payload(values)
+        path = Path(str(target["path"]))
+        self._write(path, payload, 0o600)
+        target["sha256"] = SELECTOR.sha256_bytes(payload)
+
+    def dft_projection(
+        self,
+        manifest: dict[str, object],
+        *,
+        guard_mode: str = "observe",
+    ) -> tuple[dict[str, object], Path]:
+        source_sha = str(manifest["source_sha"])
+        source_tree = str(manifest["source_tree"])
+        release_root = self.runtime / "worker-venvs/dft" / source_sha
+        python_path = release_root / "venv/bin/python"
+        aimnet_cache = release_root / "aimnet-cache"
+        python_path.parent.mkdir(parents=True, mode=0o700)
+        aimnet_cache.mkdir(parents=True, mode=0o700)
+        for path in (release_root, release_root / "venv", python_path.parent, aimnet_cache):
+            os.chmod(path, 0o700)
+        self._write(python_path, b"fixture governed python\n", 0o700)
+        models: dict[str, str] = {}
+        for name in sorted(SELECTOR.MONOMER_DFT_MODEL_FILES):
+            payload = f"fixture model {name}\n".encode("ascii")
+            self._write(aimnet_cache / name, payload, 0o600)
+            models[name] = SELECTOR.sha256_bytes(payload)
+        runtime_manifest = release_root / "runtime.json"
+        self._write(
+            runtime_manifest,
+            SELECTOR.canonical_json_bytes(
+                {
+                    "schema_version": 1,
+                    "release": source_sha,
+                    "source_tree": source_tree,
+                }
+            )
+            + b"\n",
+            0o600,
+        )
+        runtime = {
+            "root": str(release_root),
+            "runtime_manifest_path": str(runtime_manifest),
+            "runtime_manifest_sha256": SELECTOR.sha256_file(runtime_manifest),
+            "runtime_inventory_sha256": SELECTOR.governed_dft_runtime_inventory(
+                release_root
+            ),
+            "release_sha": source_sha,
+            "source_tree": source_tree,
+            "python": str(python_path),
+            "requirements_lock_sha256": "sha256:" + "6" * 64,
+            "aimnet_source_lock_sha256": "sha256:" + "7" * 64,
+            "models": models,
+        }
+        ready = {
+            "schema_version": 1,
+            "status": "ready",
+            "release_sha": source_sha,
+            "source_tree": source_tree,
+            "requirements_lock_sha256": runtime[
+                "requirements_lock_sha256"
+            ],
+            "aimnet_source_lock_sha256": runtime[
+                "aimnet_source_lock_sha256"
+            ],
+            "runtime": runtime,
+            "ready_at": "2026-08-14T00:00:00+00:00",
+        }
+        self._write(
+            release_root / "READY.json",
+            SELECTOR.canonical_json_bytes(ready) + b"\n",
+            0o600,
+        )
+        warp_cache = (
+            self.runtime / "state/monomer-dft-warp-cache" / source_sha
+        )
+        warp_cache.mkdir(parents=True, mode=0o700)
+        os.chmod(warp_cache.parent, 0o700)
+        os.chmod(warp_cache, 0o700)
+        env_path = self.runtime / "config/monomer-dft-runtime.env"
+        env_path.parent.mkdir(mode=0o700)
+        values = {
+            "MONOMER_DFT_RELEASE_SHA": source_sha,
+            "MONOMER_DFT_RUNTIME_CONTRACT_SHA256": runtime[
+                "runtime_manifest_sha256"
+            ],
+            "MONOMER_DFT_RUNTIME_INVENTORY_SHA256": runtime[
+                "runtime_inventory_sha256"
+            ],
+            "MONOMER_DFT_PYTHON": str(python_path),
+            "AIMNET_CACHE_DIR": str(aimnet_cache),
+            "WARP_CACHE_PATH": str(warp_cache),
+            "NEXPOLY_DFT_GPU_GUARD_MODE": guard_mode,
+        }
+        env_payload = self._dft_environment_payload(values)
+        self._write(env_path, env_payload, 0o600)
+        unit_target = (
+            self.runtime
+            / "systemd-user/nexpoly-monomer-dft-worker.service"
+        )
+        unit_target.parent.mkdir(mode=0o700)
+        unit_payload = b"[Service]\nExecStart=fixture-dft\n"
+        self._write(unit_target, unit_payload, 0o600)
+        role = manifest["entrypoints"]["monomer-dft"]
+        launcher_name = role["launcher"]
+        launcher_path = (
+            self.runtime
+            / "control-releases"
+            / str(manifest["release_id"])
+            / launcher_name
+        )
+        projection = {
+            "runtime": runtime,
+            "runtime_env": {
+                "path": str(env_path),
+                "sha256": SELECTOR.sha256_bytes(env_payload),
+                "values": values,
+            },
+            "systemd_unit": {
+                "target_path": str(unit_target),
+                "sha256": SELECTOR.sha256_bytes(unit_payload),
+                "control_release_id": manifest["release_id"],
+                "launcher_path": str(launcher_path),
+                "launcher_sha256": manifest["files"][launcher_name]["sha256"],
+            },
+            "gpu": {
+                "index": "2",
+                "uuid": SELECTOR.ADOPTED_DFT_GPU_UUID,
+                "guard_mode": guard_mode,
+                "guard_state_path": str(SELECTOR.MONOMER_DFT_GUARD_STATE),
+                "guard_schema_version": 1,
+            },
+        }
+        return projection, unit_target
 
     def _complete_alias_gate(self, manifest: dict[str, object]) -> None:
         operation_id = "alias-0005-fixture"
@@ -655,7 +803,12 @@ class SelectorTests(unittest.TestCase):
             captured.update(path=path, argv=argv, environment=environment)
             raise RuntimeError("captured")
 
-        with mock.patch.object(SELECTOR.os, "execve", fake_exec):
+        with (
+            mock.patch.object(
+                SELECTOR, "_validate_worker_route_authority"
+            ),
+            mock.patch.object(SELECTOR.os, "execve", fake_exec),
+        ):
             with self.assertRaisesRegex(RuntimeError, "captured"):
                 SELECTOR._exec_role(
                     "monomer-dft",
@@ -1014,6 +1167,446 @@ class SelectorTests(unittest.TestCase):
             )
             self.assertEqual(loaded, manifest)
             self.assertEqual(loaded_root, root)
+
+    def test_dft_steady_route_rejects_self_consistent_env_contract_drift(
+        self,
+    ) -> None:
+        manifest, root = self.release(
+            source_sha="5" * 40,
+            source_tree="6" * 40,
+            variant="dft-steady",
+            dft=True,
+        )
+        operation = "deploy-20260814-dft-steady"
+        active = self.activate(manifest, operation_id=operation)
+        projection, unit_target = self.dft_projection(manifest)
+        asset = self.runtime / "dft-steady-asset"
+        asset.mkdir(mode=0o700)
+        (self.runtime / "state/current-assets").symlink_to(asset)
+        current = {
+            "schema_version": 3,
+            "operation_id": operation,
+            "source_sha": manifest["source_sha"],
+            "source_tree": manifest["source_tree"],
+            "active_control": active,
+            "monomer_dft": projection,
+            "asset_identity": {"root": str(asset)},
+        }
+        current_path = self.runtime / "state/current-deployment.json"
+        self._write(
+            current_path,
+            SELECTOR.canonical_json_bytes(current) + b"\n",
+            0o600,
+        )
+        with mock.patch.object(
+            SELECTOR, "MONOMER_DFT_UNIT_TARGET", unit_target
+        ):
+            selected, selected_root = SELECTOR._selected_release(
+                self.runtime, "monomer-dft", []
+            )
+        self.assertEqual(selected, manifest)
+        self.assertEqual(selected_root, root)
+
+        tampered = copy.deepcopy(projection)
+        tampered["runtime_env"]["values"][
+            "MONOMER_DFT_RUNTIME_CONTRACT_SHA256"
+        ] = "sha256:" + "f" * 64
+        self._rewrite_dft_environment(tampered)
+        current["monomer_dft"] = tampered
+        self._write(
+            current_path,
+            SELECTOR.canonical_json_bytes(current) + b"\n",
+            0o600,
+        )
+        with (
+            mock.patch.object(
+                SELECTOR, "MONOMER_DFT_UNIT_TARGET", unit_target
+            ),
+            self.assertRaisesRegex(
+                SELECTOR.ControlRuntimeError,
+                "differ from governed deployment authority",
+            ),
+        ):
+            SELECTOR._selected_release(self.runtime, "monomer-dft", [])
+
+    def test_dft_route_requires_ready_and_rejects_preparing_owner(self) -> None:
+        manifest, root = self.release(
+            source_sha="d" * 40,
+            source_tree="e" * 40,
+            variant="dft-ready-contract",
+            dft=True,
+        )
+        operation = "deploy-20260814-dft-ready"
+        active = self.activate(manifest, operation_id=operation)
+        projection, unit_target = self.dft_projection(manifest)
+        asset = self.runtime / "dft-ready-asset"
+        asset.mkdir(mode=0o700)
+        (self.runtime / "state/current-assets").symlink_to(asset)
+        current = {
+            "schema_version": 3,
+            "operation_id": operation,
+            "source_sha": manifest["source_sha"],
+            "source_tree": manifest["source_tree"],
+            "active_control": active,
+            "monomer_dft": projection,
+            "asset_identity": {"root": str(asset)},
+        }
+        self._write(
+            self.runtime / "state/current-deployment.json",
+            SELECTOR.canonical_json_bytes(current) + b"\n",
+            0o600,
+        )
+        release_root = Path(str(projection["runtime"]["root"]))
+        ready_path = release_root / "READY.json"
+        preparing_path = release_root / ".preparing.json"
+        ready_payload = ready_path.read_bytes()
+        ready_document = SELECTOR._load_private_json(ready_path)
+
+        def route() -> tuple[dict[str, object], Path]:
+            with mock.patch.object(
+                SELECTOR, "MONOMER_DFT_UNIT_TARGET", unit_target
+            ):
+                return SELECTOR._selected_release(
+                    self.runtime, "monomer-dft", []
+                )
+
+        def assert_rejected() -> None:
+            with self.assertRaisesRegex(
+                SELECTOR.ControlRuntimeError,
+                "differ from governed deployment authority",
+            ):
+                route()
+
+        selected, selected_root = route()
+        self.assertEqual(selected, manifest)
+        self.assertEqual(selected_root, root)
+
+        self._write(
+            preparing_path,
+            SELECTOR.canonical_json_bytes({"operation_id": operation}) + b"\n",
+            0o600,
+        )
+        assert_rejected()
+        preparing_path.unlink()
+        preparing_path.symlink_to(ready_path)
+        assert_rejected()
+        preparing_path.unlink()
+
+        ready_path.unlink()
+        assert_rejected()
+        self._write(ready_path, ready_payload, 0o600)
+
+        self._write(ready_path, b"{not-json\n", 0o600)
+        assert_rejected()
+        self._write(ready_path, ready_payload, 0o600)
+
+        self._write(ready_path, ready_payload, 0o640)
+        assert_rejected()
+        self._write(ready_path, ready_payload, 0o600)
+
+        ready_target = self.runtime / "ready-symlink-target.json"
+        self._write(ready_target, ready_payload, 0o600)
+        ready_path.unlink()
+        ready_path.symlink_to(ready_target)
+        assert_rejected()
+        ready_path.unlink()
+        self._write(ready_path, ready_payload, 0o600)
+
+        for field in ("release_sha", "runtime_inventory_sha256"):
+            with self.subTest(field=field):
+                drifted = copy.deepcopy(ready_document)
+                if field == "release_sha":
+                    drifted[field] = "f" * 40
+                else:
+                    drifted["runtime"][field] = "sha256:" + "f" * 64
+                self._write(
+                    ready_path,
+                    SELECTOR.canonical_json_bytes(drifted) + b"\n",
+                    0o600,
+                )
+                assert_rejected()
+                self._write(ready_path, ready_payload, 0o600)
+
+        selected, selected_root = route()
+        self.assertEqual(selected, manifest)
+        self.assertEqual(selected_root, root)
+
+    def test_dft_candidate_route_rejects_guard_projection_drift(self) -> None:
+        manifest, root = self.release(
+            source_sha="7" * 40,
+            source_tree="8" * 40,
+            variant="dft-candidate",
+            dft=True,
+        )
+        operation = "deploy-20260814-dft-candidate"
+        active = self.activate(manifest, operation_id=operation)
+        projection, unit_target = self.dft_projection(manifest)
+        asset = self.runtime / "dft-candidate-asset"
+        asset.mkdir(mode=0o700)
+        (self.runtime / "state/current-assets").symlink_to(asset)
+        candidate = self.candidate(manifest, operation_id=operation)
+        descriptor_projection = copy.deepcopy(projection)
+        descriptor_projection["runtime_env"] = {
+            "target": descriptor_projection["runtime_env"],
+            "candidate_path": str(
+                self.runtime / "state/prepared" / operation / "dft.env"
+            ),
+        }
+        descriptor = {
+            "repository": {
+                "target_sha": manifest["source_sha"],
+                "target_tree": manifest["source_tree"],
+            },
+            "controller": {
+                "executor_control": candidate,
+                "executor_control_sha256": SELECTOR.canonical_json_digest(
+                    candidate
+                ),
+                "previous_active_control": None,
+            },
+            "monomer_dft": descriptor_projection,
+            "release_input": {"asset": {"root": str(asset)}},
+            "previous_deployment": None,
+        }
+        prepared = self.runtime / "state/prepared" / operation
+        prepared.mkdir(mode=0o700)
+        descriptor_path = prepared / "descriptor.json"
+        self._write(
+            descriptor_path,
+            SELECTOR.canonical_json_bytes(descriptor) + b"\n",
+            0o600,
+        )
+        marker = {
+            "schema_version": 3,
+            "action": "deploy",
+            "operation_id": operation,
+            "descriptor_sha256": SELECTOR.sha256_file(descriptor_path),
+            "executor_control": candidate,
+            "executor_control_sha256": SELECTOR.canonical_json_digest(candidate),
+            "runtime_stopped": True,
+            "source_switched": True,
+            "slot_switched": True,
+            "unit_switched": True,
+            "control_switched": True,
+            "asset_switched": True,
+            "worker_env_switched": True,
+            "dft_runtime_switched": True,
+            "dft_unit_switched": True,
+        }
+        marker_path = self.runtime / "state/deploy-in-progress.json"
+        self._write(
+            marker_path,
+            SELECTOR.canonical_json_bytes(marker) + b"\n",
+            0o600,
+        )
+        lock_path = self.runtime / "state/deploy.lock"
+        self._write(lock_path, b"", 0o600)
+        with lock_path.open("rb") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            with mock.patch.object(
+                SELECTOR, "MONOMER_DFT_UNIT_TARGET", unit_target
+            ):
+                selected, selected_root = SELECTOR._selected_release(
+                    self.runtime, "monomer-dft", []
+                )
+            self.assertEqual(selected, manifest)
+            self.assertEqual(selected_root, root)
+
+            preparing_path = (
+                Path(str(projection["runtime"]["root"]))
+                / ".preparing.json"
+            )
+            self._write(
+                preparing_path,
+                SELECTOR.canonical_json_bytes(
+                    {"operation_id": operation}
+                )
+                + b"\n",
+                0o600,
+            )
+            with (
+                mock.patch.object(
+                    SELECTOR, "MONOMER_DFT_UNIT_TARGET", unit_target
+                ),
+                self.assertRaisesRegex(
+                    SELECTOR.ControlRuntimeError,
+                    "candidate Worker transition identity differs",
+                ),
+            ):
+                SELECTOR._selected_release(self.runtime, "monomer-dft", [])
+            preparing_path.unlink()
+
+            target_env = descriptor_projection["runtime_env"]["target"]
+            target_env["values"]["NEXPOLY_DFT_GPU_GUARD_MODE"] = "enforce"
+            self._rewrite_dft_environment(descriptor_projection)
+            self._write(
+                descriptor_path,
+                SELECTOR.canonical_json_bytes(descriptor) + b"\n",
+                0o600,
+            )
+            marker["descriptor_sha256"] = SELECTOR.sha256_file(descriptor_path)
+            self._write(
+                marker_path,
+                SELECTOR.canonical_json_bytes(marker) + b"\n",
+                0o600,
+            )
+            with (
+                mock.patch.object(
+                    SELECTOR, "MONOMER_DFT_UNIT_TARGET", unit_target
+                ),
+                self.assertRaisesRegex(
+                    SELECTOR.ControlRuntimeError,
+                    "candidate Worker transition identity differs",
+                ),
+            ):
+                SELECTOR._selected_release(self.runtime, "monomer-dft", [])
+
+    def test_dft_restored_route_rejects_self_consistent_unit_target_drift(
+        self,
+    ) -> None:
+        previous_manifest, previous_root = self.release(
+            source_sha="9" * 40,
+            source_tree="a" * 40,
+            variant="dft-restored-previous",
+            dft=True,
+        )
+        candidate_manifest, _candidate_root = self.release(
+            source_sha="b" * 40,
+            source_tree="c" * 40,
+            variant="dft-restored-candidate",
+            dft=True,
+        )
+        previous_operation = "deploy-20260814-dft-previous"
+        operation = "deploy-20260814-dft-restored"
+        active = self.activate(
+            previous_manifest, operation_id=previous_operation
+        )
+        projection, unit_target = self.dft_projection(previous_manifest)
+        asset = self.runtime / "dft-restored-asset"
+        asset.mkdir(mode=0o700)
+        (self.runtime / "state/current-assets").symlink_to(asset)
+        previous = {
+            "schema_version": 3,
+            "operation_id": previous_operation,
+            "source_sha": previous_manifest["source_sha"],
+            "source_tree": previous_manifest["source_tree"],
+            "active_control": active,
+            "monomer_dft": projection,
+            "asset_identity": {"root": str(asset)},
+        }
+        candidate = self.candidate(
+            candidate_manifest, operation_id=operation
+        )
+        descriptor = {
+            "repository": {
+                "target_sha": candidate_manifest["source_sha"],
+                "target_tree": candidate_manifest["source_tree"],
+            },
+            "controller": {
+                "executor_control": candidate,
+                "executor_control_sha256": SELECTOR.canonical_json_digest(
+                    candidate
+                ),
+                "previous_active_control": active,
+            },
+            "monomer_dft": {},
+            "release_input": {},
+            "previous_deployment": previous,
+        }
+        prepared = self.runtime / "state/prepared" / operation
+        prepared.mkdir(mode=0o700)
+        descriptor_path = prepared / "descriptor.json"
+        self._write(
+            descriptor_path,
+            SELECTOR.canonical_json_bytes(descriptor) + b"\n",
+            0o600,
+        )
+        marker = {
+            "schema_version": 3,
+            "action": "deploy",
+            "operation_id": operation,
+            "descriptor_sha256": SELECTOR.sha256_file(descriptor_path),
+            "executor_control": candidate,
+            "executor_control_sha256": SELECTOR.canonical_json_digest(candidate),
+            "runtime_stopped": True,
+            "source_switched": False,
+            "slot_switched": False,
+            "unit_switched": False,
+            "control_switched": False,
+            "asset_switched": False,
+            "worker_env_switched": False,
+            "dft_runtime_switched": False,
+            "dft_unit_switched": False,
+        }
+        marker_path = self.runtime / "state/deploy-in-progress.json"
+        self._write(
+            marker_path,
+            SELECTOR.canonical_json_bytes(marker) + b"\n",
+            0o600,
+        )
+        lock_path = self.runtime / "state/deploy.lock"
+        self._write(lock_path, b"", 0o600)
+        with lock_path.open("rb") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            with mock.patch.object(
+                SELECTOR, "MONOMER_DFT_UNIT_TARGET", unit_target
+            ):
+                selected, selected_root = SELECTOR._selected_release(
+                    self.runtime, "monomer-dft", []
+                )
+            self.assertEqual(selected, previous_manifest)
+            self.assertEqual(selected_root, previous_root)
+
+            ready_path = (
+                Path(str(projection["runtime"]["root"])) / "READY.json"
+            )
+            ready_payload = ready_path.read_bytes()
+            ready_path.unlink()
+            with (
+                mock.patch.object(
+                    SELECTOR, "MONOMER_DFT_UNIT_TARGET", unit_target
+                ),
+                self.assertRaisesRegex(
+                    SELECTOR.ControlRuntimeError,
+                    "restored Worker transition identity differs",
+                ),
+            ):
+                SELECTOR._selected_release(self.runtime, "monomer-dft", [])
+            self._write(ready_path, ready_payload, 0o600)
+
+            tampered = copy.deepcopy(projection)
+            alternate_unit = unit_target.with_name("alternate-dft.service")
+            self._write(
+                alternate_unit,
+                unit_target.read_bytes(),
+                0o600,
+            )
+            tampered["systemd_unit"]["target_path"] = str(alternate_unit)
+            tampered["systemd_unit"]["sha256"] = SELECTOR.sha256_file(
+                alternate_unit
+            )
+            previous["monomer_dft"] = tampered
+            self._write(
+                descriptor_path,
+                SELECTOR.canonical_json_bytes(descriptor) + b"\n",
+                0o600,
+            )
+            marker["descriptor_sha256"] = SELECTOR.sha256_file(descriptor_path)
+            self._write(
+                marker_path,
+                SELECTOR.canonical_json_bytes(marker) + b"\n",
+                0o600,
+            )
+            with (
+                mock.patch.object(
+                    SELECTOR, "MONOMER_DFT_UNIT_TARGET", unit_target
+                ),
+                self.assertRaisesRegex(
+                    SELECTOR.ControlRuntimeError,
+                    "restored Worker transition identity differs",
+                ),
+            ):
+                SELECTOR._selected_release(self.runtime, "monomer-dft", [])
 
     def test_worker_role_binds_current_state_and_marker_owned_transition(self) -> None:
         manifest, root = self.release(

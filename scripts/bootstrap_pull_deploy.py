@@ -12,18 +12,22 @@ from __future__ import annotations
 import argparse
 import configparser
 import contextlib
+import ctypes
 import datetime as dt
+import errno
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import ssl
 import stat
 import subprocess
 import sys
 import types
+from typing import Iterable
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -35,10 +39,14 @@ RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
 WORKER_UNIT_PATH = Path(
     "/home/devuser/.config/systemd/user/nexpoly-monomer-md-worker.service"
 )
+DFT_WORKER_UNIT_PATH = Path(
+    "/home/devuser/.config/systemd/user/nexpoly-monomer-dft-worker.service"
+)
 SCRIPT_ROOT = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_ROOT.parent
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 TAKEOVER_OPERATION_RE = re.compile(r"takeover-[a-z0-9][a-z0-9-]{7,79}\Z")
+ADOPTION_OPERATION_RE = re.compile(r"adopt-[a-z0-9][a-z0-9._-]{7,119}\Z")
 REPOSITORY_SSH_URL = "git@github.com:lzq390/ZhijuPoly.git"
 REPOSITORY_API_ROOT = "https://api.github.com/repos/lzq390/ZhijuPoly"
 SYSTEM_CA_BUNDLE = Path("/etc/ssl/certs/ca-certificates.crt")
@@ -64,15 +72,19 @@ DIRECTORIES = {
     "state/monomer-md-worker-socket": 0o700,
     "state/monomer-md-worker-runs": 0o700,
     "state/gpu-resource": 0o700,
+    "state/adoption-transactions": 0o700,
     "audit": 0o700,
     "audit/production-readiness": 0o700,
     "audit/mutable-data": 0o700,
     "audit/bootstrap-worker-unit": 0o700,
+    "audit/contracts": 0o700,
     "audit/contracts/0012": 0o700,
     "audit/maintenance": 0o700,
     "audit/maintenance/0005-polytao-alias": 0o700,
+    "audit/adoption": 0o700,
     "backups": 0o700,
     "backups/bootstrap-worker-unit": 0o700,
+    "backups/contracts": 0o700,
     "backups/contracts/0012": 0o700,
     "backups/maintenance": 0o700,
     "backups/maintenance/0005-polytao-alias": 0o700,
@@ -120,6 +132,31 @@ BOOTSTRAP_PHASES = (
     "control-release-ready",
     "authority-commit-intent",
     "completed",
+)
+
+ADOPTION_TRANSACTION_SCHEMA_VERSION = 2
+ADOPTION_PHASES = (
+    "intent",
+    "layout-ready",
+    "controls-ready",
+    "baseline-ready",
+    "authority-commit-intent",
+    "completed",
+)
+ADOPTED_DEPLOYMENT_SCHEMA_VERSION = 1
+ADOPTION_AUTHORITY_KIND = "manual-runtime-adoption"
+ADOPTION_DEPLOY_LOCK_DISPOSITION = "permanent-control-layout"
+ADOPTED_DFT_GPU_UUID = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+ADOPTED_DFT_RUNTIME_SYMLINKS = {
+    "venv/bin/python": "/usr/bin/python3.12",
+    "venv/bin/python3": "python",
+    "venv/bin/python3.12": "python",
+    "venv/lib64": "lib",
+}
+ADOPTION_TRANSACTION_RELATIVE_DIRECTORY = Path("state/adoption-transactions")
+ADOPTED_DEPLOYMENT_RELATIVE_PATH = Path("state/adopted-deployment.json")
+ADOPTION_ALIAS_MARKER_RELATIVE_PATH = Path(
+    "state/maintenance/0005-polytao-alias/operation.json"
 )
 
 
@@ -546,6 +583,66 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _rename_noreplace(source: Path, destination: Path) -> None:
+    if source.parent != destination.parent:
+        raise BootstrapError("no-clobber publication must remain in one parent")
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise BootstrapError("renameat2 is required for no-clobber publication")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        -100,
+        os.fsencode(source),
+        -100,
+        os.fsencode(destination),
+        1,  # RENAME_NOREPLACE
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        if error == errno.EEXIST:
+            raise FileExistsError(error, os.strerror(error), str(destination))
+        raise BootstrapError(
+            f"no-clobber publication failed: {os.strerror(error)}"
+        )
+    _fsync_directory(destination.parent)
+
+
+def _rename_exchange(first: Path, second: Path) -> None:
+    if first.parent != second.parent:
+        raise BootstrapError("authority exchange must remain in one parent")
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise BootstrapError("renameat2 is required for authority exchange")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        -100,
+        os.fsencode(first),
+        -100,
+        os.fsencode(second),
+        2,  # RENAME_EXCHANGE
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise BootstrapError(f"authority exchange failed: {os.strerror(error)}")
+    _fsync_directory(first.parent)
+
+
 def _atomic_file(path: Path, payload: bytes, mode: int) -> None:
     temporary = path.parent / f".{path.name}.{os.urandom(12).hex()}.tmp"
     descriptor = os.open(
@@ -605,6 +702,2933 @@ def _canonical_json_digest(value: object) -> str:
             ensure_ascii=True,
         ).encode("utf-8")
     )
+
+
+def _adopted_dft_runtime_inventory(root: Path) -> str:
+    """Seal the exact legacy runtime while excluding mutable Warp payloads.
+
+    The manually-built fc05 uv environment contains cache-backed hard links
+    and one owner-contained 0666 lock file.  Those legacy identities are
+    recorded verbatim for later CAS instead of applying the stricter target
+    runtime policy (which requires single-link regular files).
+    """
+
+    try:
+        root_metadata = root.lstat()
+    except OSError as exc:
+        raise BootstrapError("adopted monomer DFT runtime is unavailable") from exc
+    if (
+        not stat.S_ISDIR(root_metadata.st_mode)
+        or root.is_symlink()
+        or root_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(root_metadata.st_mode) != 0o700
+    ):
+        raise BootstrapError("adopted monomer DFT runtime root is unsafe")
+
+    def immutable_paths(directory: Path) -> Iterable[Path]:
+        try:
+            with os.scandir(directory) as stream:
+                entries = sorted(stream, key=lambda entry: entry.name)
+        except OSError as exc:
+            raise BootstrapError(
+                "adopted monomer DFT runtime changed during inventory"
+            ) from exc
+        for entry in entries:
+            path = directory / entry.name
+            yield path
+            relative = path.relative_to(root).as_posix()
+            if relative == "warp-cache":
+                continue
+            try:
+                is_directory = entry.is_dir(follow_symlinks=False)
+            except OSError as exc:
+                raise BootstrapError(
+                    "adopted monomer DFT runtime changed during inventory"
+                ) from exc
+            if is_directory:
+                yield from immutable_paths(path)
+
+    records: list[dict[str, object]] = [
+        {
+            "path": ".",
+            "kind": "directory",
+            "uid": root_metadata.st_uid,
+            "mode": stat.S_IMODE(root_metadata.st_mode),
+            "nlink": root_metadata.st_nlink,
+        }
+    ]
+    observed_links: set[str] = set()
+    warp_root_seen = False
+    for path in immutable_paths(root):
+        relative = path.relative_to(root).as_posix()
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise BootstrapError(
+                "adopted monomer DFT runtime changed during inventory"
+            ) from exc
+        mode = stat.S_IMODE(metadata.st_mode)
+        if metadata.st_uid != os.geteuid() or metadata.st_nlink < 1:
+            raise BootstrapError("adopted monomer DFT runtime ownership is unsafe")
+        if relative == "warp-cache":
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or path.is_symlink()
+                or mode != 0o700
+            ):
+                raise BootstrapError(
+                    "adopted monomer DFT mutable Warp cache root is unsafe"
+                )
+            warp_root_seen = True
+            records.append(
+                {
+                    "path": relative,
+                    "kind": "mutable-directory",
+                    "uid": metadata.st_uid,
+                    "mode": mode,
+                }
+            )
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            try:
+                target = os.readlink(path)
+                after = path.lstat()
+            except OSError as exc:
+                raise BootstrapError(
+                    "adopted monomer DFT runtime symlink changed"
+                ) from exc
+            if (
+                ADOPTED_DFT_RUNTIME_SYMLINKS.get(relative) != target
+                or (
+                    metadata.st_dev,
+                    metadata.st_ino,
+                    metadata.st_mode,
+                    metadata.st_uid,
+                    metadata.st_nlink,
+                    metadata.st_mtime_ns,
+                    metadata.st_ctime_ns,
+                )
+                != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_mode,
+                    after.st_uid,
+                    after.st_nlink,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                )
+            ):
+                raise BootstrapError(
+                    "adopted monomer DFT runtime contains an unknown symlink"
+                )
+            observed_links.add(relative)
+            records.append(
+                {
+                    "path": relative,
+                    "kind": "symlink",
+                    "uid": metadata.st_uid,
+                    "mode": mode,
+                    "nlink": metadata.st_nlink,
+                    "target": target,
+                }
+            )
+            continue
+        if stat.S_ISDIR(metadata.st_mode):
+            if mode & 0o022:
+                raise BootstrapError("adopted monomer DFT runtime mode is unsafe")
+            records.append(
+                {
+                    "path": relative,
+                    "kind": "directory",
+                    "uid": metadata.st_uid,
+                    "mode": mode,
+                    "nlink": metadata.st_nlink,
+                }
+            )
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise BootstrapError("adopted monomer DFT runtime contains a special file")
+        if (relative != "venv/.lock" and mode & 0o022) or (
+            relative == "venv/.lock" and mode != 0o666
+        ):
+            raise BootstrapError("adopted monomer DFT runtime mode is unsafe")
+        try:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+        except OSError as exc:
+            raise BootstrapError(
+                "adopted monomer DFT runtime file is unavailable"
+            ) from exc
+        try:
+            before = os.fstat(descriptor)
+            file_digest = hashlib.sha256()
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                file_digest.update(chunk)
+            after = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+        identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_uid,
+            before.st_nlink,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or identity
+            != (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_mode,
+                metadata.st_uid,
+                metadata.st_nlink,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+            )
+            or identity
+            != (
+                after.st_dev,
+                after.st_ino,
+                after.st_mode,
+                after.st_uid,
+                after.st_nlink,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            )
+        ):
+            raise BootstrapError(
+                "adopted monomer DFT runtime file changed during inventory"
+            )
+        records.append(
+            {
+                "path": relative,
+                "kind": "file",
+                "uid": before.st_uid,
+                "mode": stat.S_IMODE(before.st_mode),
+                "nlink": before.st_nlink,
+                "size": before.st_size,
+                "sha256": "sha256:" + file_digest.hexdigest(),
+            }
+        )
+    if observed_links != set(ADOPTED_DFT_RUNTIME_SYMLINKS) or not warp_root_seen:
+        raise BootstrapError("adopted monomer DFT runtime layout is incomplete")
+    return _canonical_json_digest(records)
+
+
+def _dft_worker_unit_path(production_root: Path, *, allow_test: bool) -> Path:
+    if allow_test:
+        return (
+            production_root.parent
+            / "systemd/user/nexpoly-monomer-dft-worker.service"
+        )
+    return DFT_WORKER_UNIT_PATH
+
+
+def _require_adoption_operation_id(value: object) -> str:
+    if not isinstance(value, str) or ADOPTION_OPERATION_RE.fullmatch(value) is None:
+        raise BootstrapError("adoption operation ID is invalid")
+    return value
+
+
+def _adoption_transaction_path(
+    runtime_root: Path, *, operation_id: str
+) -> Path:
+    operation_id = _require_adoption_operation_id(operation_id)
+    return (
+        runtime_root
+        / ADOPTION_TRANSACTION_RELATIVE_DIRECTORY
+        / f"{operation_id}.json"
+    )
+
+
+def _adoption_transactions(
+    runtime_root: Path,
+) -> dict[str, dict[str, object]]:
+    """Load every durable adoption journal without creating the journal root."""
+
+    directory = runtime_root / ADOPTION_TRANSACTION_RELATIVE_DIRECTORY
+    if not (directory.exists() or directory.is_symlink()):
+        return {}
+    try:
+        metadata = directory.lstat()
+        entries = sorted(directory.iterdir(), key=lambda value: value.name)
+    except OSError as exc:
+        raise BootstrapError("adoption transaction inventory is unavailable") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or directory.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise BootstrapError("adoption transaction directory is unsafe")
+    transactions: dict[str, dict[str, object]] = {}
+    for path in entries:
+        if path.suffix != ".json":
+            raise BootstrapError("adoption transaction inventory contains an unknown entry")
+        operation_id = path.stem
+        _require_adoption_operation_id(operation_id)
+        transaction = _validate_adoption_transaction(
+            _load_private_json(path), path=path
+        )
+        if transaction["operation_id"] != operation_id:
+            raise BootstrapError("adoption transaction filename differs from its identity")
+        transactions[operation_id] = transaction
+    return transactions
+
+
+def _assert_exclusive_adoption_transaction(
+    runtime_root: Path, *, operation_id: str
+) -> dict[str, object] | None:
+    """Reject a second live adoption authority, even when its ID differs."""
+
+    transactions = _adoption_transactions(runtime_root)
+    foreign = [
+        value
+        for name, value in transactions.items()
+        if name != operation_id and value.get("status") != "aborted"
+    ]
+    if foreign:
+        raise BootstrapError("another manual runtime adoption transaction exists")
+    return transactions.get(operation_id)
+
+
+def _regular_file_record(
+    path: Path,
+    *,
+    label: str,
+    maximum: int = 16 * 1024 * 1024,
+    allowed_modes: set[int] | None = None,
+) -> tuple[dict[str, object], bytes]:
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as exc:
+        raise BootstrapError(f"{label} is unavailable") from exc
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or not 1 <= before.st_size <= maximum
+            or (
+                allowed_modes is not None
+                and stat.S_IMODE(before.st_mode) not in allowed_modes
+            )
+        ):
+            raise BootstrapError(f"{label} has an unsafe identity")
+        payload = bytearray()
+        while len(payload) < before.st_size:
+            chunk = os.read(descriptor, min(1024 * 1024, before.st_size - len(payload)))
+            if not chunk:
+                raise BootstrapError(f"{label} changed while being read")
+            payload.extend(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_mode,
+        before.st_uid,
+    )
+    if identity != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_mode,
+        after.st_uid,
+    ):
+        raise BootstrapError(f"{label} changed while being read")
+    content = bytes(payload)
+    return (
+        {
+            "path": str(path),
+            "sha256": digest(content),
+            "size": len(content),
+            "mode": format(stat.S_IMODE(before.st_mode), "04o"),
+        },
+        content,
+    )
+
+
+def _json_file_record(
+    path: Path,
+    *,
+    label: str,
+    maximum: int = 16 * 1024 * 1024,
+) -> tuple[dict[str, object], dict[str, object]]:
+    record, payload = _regular_file_record(
+        path,
+        label=label,
+        maximum=maximum,
+        allowed_modes={0o600},
+    )
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise BootstrapError(f"{label} is invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise BootstrapError(f"{label} is not a JSON object")
+    return record, value
+
+
+def _literal_environment_values(
+    path: Path, *, label: str, names: set[str]
+) -> tuple[dict[str, object], dict[str, str]]:
+    record, payload = _regular_file_record(
+        path,
+        label=label,
+        maximum=1024 * 1024,
+        allowed_modes={0o600},
+    )
+    values: dict[str, str] = {}
+    try:
+        lines = payload.decode("utf-8").splitlines()
+    except UnicodeError as exc:
+        raise BootstrapError(f"{label} is not UTF-8") from exc
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise BootstrapError(f"{label} contains a malformed assignment")
+        name, value = line.split("=", 1)
+        if name in values:
+            raise BootstrapError(f"{label} contains a duplicate assignment")
+        if name in names:
+            values[name] = value
+    if set(values) != names:
+        raise BootstrapError(f"{label} lacks required adoption values")
+    return record, values
+
+
+ADOPTED_DFT_PROCESS_ENVIRONMENT = {
+    "MONOMER_DFT_GPU_BROKER_ENABLED": "0",
+    "MONOMER_DFT_GPU_GUARD_STATE": str(RUNTIME_ROOT / "state/gpu2-guard.json"),
+    "MONOMER_DFT_MAX_CONCURRENT_JOBS": "1",
+    "MONOMER_DFT_MAX_QUEUED_JOBS": "8",
+    "NEXPOLY_DFT_GPU_DEVICE": "2",
+    "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES": "",
+}
+
+
+def _bounded_process_environment(pid: int) -> dict[str, str]:
+    path = Path(f"/proc/{pid}/environ")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+    except OSError as exc:
+        raise BootstrapError("monomer DFT process environment is unavailable") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid():
+            raise BootstrapError("monomer DFT process environment is unsafe")
+        payload = bytearray()
+        while True:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                break
+            payload.extend(chunk)
+            if len(payload) > 1024 * 1024:
+                raise BootstrapError("monomer DFT process environment is too large")
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_uid,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_uid,
+    ):
+        raise BootstrapError("monomer DFT process changed during environment read")
+    values: dict[str, str] = {}
+    try:
+        entries = bytes(payload).split(b"\0")
+        for raw in entries:
+            if not raw:
+                continue
+            name, separator, value = raw.partition(b"=")
+            if not separator:
+                raise BootstrapError("monomer DFT process environment is malformed")
+            decoded_name = name.decode("utf-8")
+            decoded_value = value.decode("utf-8")
+            if decoded_name in values:
+                raise BootstrapError(
+                    "monomer DFT process environment contains a duplicate"
+                )
+            values[decoded_name] = decoded_value
+    except UnicodeError as exc:
+        raise BootstrapError("monomer DFT process environment is not UTF-8") from exc
+    return values
+
+
+def _assert_adopted_dft_unit_semantics(
+    payload: bytes,
+    *,
+    main_pid: int,
+    allow_test: bool,
+) -> None:
+    try:
+        lines = [
+            raw.strip()
+            for raw in payload.decode("utf-8").splitlines()
+            if raw.strip() and not raw.lstrip().startswith(("#", ";"))
+        ]
+    except UnicodeError as exc:
+        raise BootstrapError("monomer DFT unit is not UTF-8") from exc
+    required_lines = {
+        f"EnvironmentFile={RUNTIME_ROOT}/config/monomer-dft-runtime.env",
+        'Environment="MONOMER_DFT_GPU_GUARD_STATE='
+        f'{RUNTIME_ROOT}/state/gpu2-guard.json"',
+        'Environment="NEXPOLY_DFT_GPU_DEVICE=2"',
+        'Environment="NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="',
+        'Environment="MONOMER_DFT_GPU_BROKER_ENABLED=0"',
+        'Environment="MONOMER_DFT_MAX_CONCURRENT_JOBS=1"',
+        'Environment="MONOMER_DFT_MAX_QUEUED_JOBS=8"',
+        f"ExecStartPre=/usr/bin/python3 -I -B {PRODUCTION_ROOT}/scripts/"
+        "gpu2_guard.py --require-ready",
+        f"ExecStart={PRODUCTION_ROOT}/workers/monomer_dft_worker/"
+        "run_host_worker.sh",
+    }
+    if any(lines.count(value) != 1 for value in required_lines):
+        raise BootstrapError("monomer DFT unit lacks the exact legacy GPU2 contract")
+    guard_assignments = [
+        value
+        for value in lines
+        if "NEXPOLY_DFT_GPU_GUARD_MODE=" in value
+    ]
+    if guard_assignments not in (
+        [],
+        ['Environment="NEXPOLY_DFT_GPU_GUARD_MODE=enforce"'],
+    ):
+        raise BootstrapError("monomer DFT unit is not fail-closed enforce mode")
+    if allow_test:
+        environment = dict(ADOPTED_DFT_PROCESS_ENVIRONMENT)
+    else:
+        environment = _bounded_process_environment(main_pid)
+    if any(
+        environment.get(name) != expected
+        for name, expected in ADOPTED_DFT_PROCESS_ENVIRONMENT.items()
+    ):
+        raise BootstrapError("monomer DFT process does not use the legacy GPU2 contract")
+    guard_mode = environment.get("NEXPOLY_DFT_GPU_GUARD_MODE")
+    if guard_mode not in {None, "enforce"}:
+        raise BootstrapError("monomer DFT process is not fail-closed enforce mode")
+    cuda_visible = environment.get("CUDA_VISIBLE_DEVICES")
+    if cuda_visible not in {None, "2"}:
+        raise BootstrapError("monomer DFT process CUDA visibility differs from GPU2")
+
+
+def _adoption_systemd_identity(
+    path: Path,
+    *,
+    unit_name: str,
+    expected_sha256: str | None,
+    allow_test: bool,
+    require_dft_semantics: bool = False,
+) -> dict[str, object]:
+    record, payload = _regular_file_record(
+        path,
+        label=f"{unit_name} unit",
+        maximum=1024 * 1024,
+        allowed_modes={0o600, 0o664},
+    )
+    if expected_sha256 is not None and (
+        not isinstance(expected_sha256, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256) is None
+        or record["sha256"] != expected_sha256
+    ):
+        raise BootstrapError(f"{unit_name} unit differs from explicit confirmation")
+    if allow_test:
+        fields = {
+            "LoadState": "loaded",
+            "FragmentPath": str(path),
+            "DropInPaths": "",
+            "NeedDaemonReload": "no",
+            "UnitFileState": "enabled",
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": "1001",
+            "InvocationID": "1" * 32,
+        }
+    else:
+        result = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                unit_name,
+                "--property=LoadState",
+                "--property=FragmentPath",
+                "--property=DropInPaths",
+                "--property=NeedDaemonReload",
+                "--property=UnitFileState",
+                "--property=ActiveState",
+                "--property=SubState",
+                "--property=MainPID",
+                "--property=InvocationID",
+            ],
+            env=_systemd_environment(allow_test=False),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        fields = dict(
+            line.split("=", 1)
+            for line in result.stdout.splitlines()
+            if "=" in line
+        )
+    required = {
+        "LoadState",
+        "FragmentPath",
+        "DropInPaths",
+        "NeedDaemonReload",
+        "UnitFileState",
+        "ActiveState",
+        "SubState",
+        "MainPID",
+        "InvocationID",
+    }
+    try:
+        main_pid = int(fields.get("MainPID", ""))
+    except ValueError as exc:
+        raise BootstrapError(f"{unit_name} process identity is malformed") from exc
+    invocation = fields.get("InvocationID")
+    if (
+        set(fields) != required
+        or fields["LoadState"] != "loaded"
+        or fields["FragmentPath"] != str(path)
+        or fields["DropInPaths"] != ""
+        or fields["NeedDaemonReload"] != "no"
+        or fields["UnitFileState"] not in {"enabled", "static"}
+        or fields["ActiveState"] != "active"
+        or fields["SubState"] != "running"
+        or main_pid <= 0
+        or not isinstance(invocation, str)
+        or re.fullmatch(r"[0-9a-f]{32}", invocation) is None
+    ):
+        raise BootstrapError(f"{unit_name} is not the active unchanged instance")
+    if require_dft_semantics:
+        _assert_adopted_dft_unit_semantics(
+            payload,
+            main_pid=main_pid,
+            allow_test=allow_test,
+        )
+    return {
+        **record,
+        "systemd_state": {
+            key: fields[key]
+            for key in (
+                "LoadState",
+                "FragmentPath",
+                "DropInPaths",
+                "NeedDaemonReload",
+                "UnitFileState",
+                "ActiveState",
+                "SubState",
+            )
+        },
+        "process_identity": {
+            "main_pid": main_pid,
+            "invocation_id": invocation,
+        },
+    }
+
+
+def _adoption_worker_health(
+    runtime_root: Path, *, worker: str, allow_test: bool, live_sha: str
+) -> dict[str, object]:
+    if allow_test:
+        return {
+            "status": "ok",
+            "runtime_ready": True,
+            "active_jobs": 0,
+            "queued_jobs": 0,
+            "worker_instance_id": f"test-{worker}",
+            "release_sha": live_sha,
+            "gpu_guard_status": "ready" if worker == "monomer-dft" else None,
+            "gpu_contention_observed": False,
+            "degradation_reason": None,
+        }
+    socket_path = (
+        runtime_root / f"state/{worker}-worker-socket/worker.sock"
+    )
+    try:
+        parent = socket_path.parent.lstat()
+        metadata = socket_path.lstat()
+    except OSError as exc:
+        raise BootstrapError(f"{worker} Worker socket is unavailable") from exc
+    if (
+        not stat.S_ISDIR(parent.st_mode)
+        or socket_path.parent.is_symlink()
+        or parent.st_uid != os.geteuid()
+        or parent.st_mode & 0o077
+        or not stat.S_ISSOCK(metadata.st_mode)
+        or socket_path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+    ):
+        raise BootstrapError(f"{worker} Worker socket is unsafe")
+    result = subprocess.run(
+        [
+            "/usr/bin/curl",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "10",
+            "--unix-socket",
+            str(socket_path),
+            "http://worker/health",
+        ],
+        env={"PATH": "/usr/bin:/bin", "HOME": "/home/devuser"},
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        document = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise BootstrapError(f"{worker} Worker health is invalid JSON") from exc
+    active = document.get("active_jobs") if isinstance(document, dict) else None
+    queued = (
+        document.get("queued_jobs", 0) if isinstance(document, dict) else None
+    )
+    instance = (
+        document.get("worker_instance_id") if isinstance(document, dict) else None
+    )
+    if (
+        not isinstance(document, dict)
+        or not isinstance(active, int)
+        or isinstance(active, bool)
+        or active != 0
+        or not isinstance(queued, int)
+        or isinstance(queued, bool)
+        or queued != 0
+        or not isinstance(instance, str)
+        or not instance
+    ):
+        raise BootstrapError(f"{worker} Worker is not an idle adoption baseline")
+    observed_release = document.get("release_sha", document.get("source_sha"))
+    if observed_release != live_sha:
+        raise BootstrapError(f"{worker} Worker source differs from live checkout")
+    runtime = document.get("runtime")
+    if worker == "monomer-md":
+        if document.get("status") != "ok" or document.get("runtime_ready") is not True:
+            raise BootstrapError("monomer-md Worker is not runtime ready")
+        degradation_reason = None
+        guard_status = None
+        contention_observed = False
+    else:
+        runtime_guard_status = (
+            runtime.get("guard_status") if isinstance(runtime, dict) else None
+        )
+        guard_status = document.get("gpu_guard_status", runtime_guard_status)
+        contention_observed = (
+            document.get("gpu_contention_observed") is True
+            or (
+                "gpu_contention_observed" not in document
+                and guard_status == "quarantined"
+            )
+        )
+        if document.get("status") == "ok":
+            if document.get("runtime_ready") is not True:
+                raise BootstrapError("monomer-dft Worker readiness is inconsistent")
+            degradation_reason = None
+        elif (
+            document.get("status") == "degraded"
+            and document.get("runtime_ready") is False
+            and document.get("accepting_jobs") is False
+            and document.get("gpu_guard_mode", "enforce") == "enforce"
+            and guard_status == "quarantined"
+            and contention_observed
+            and isinstance(runtime, dict)
+            and runtime.get("fatal") is False
+            and runtime.get("fatal_reason") is None
+            and runtime.get("guard_status") == "quarantined"
+        ):
+            degradation_reason = "gpu-guard-quarantined"
+        else:
+            raise BootstrapError(
+                "monomer-dft Worker degradation is not the admitted GPU guard quarantine"
+            )
+    return {
+        "status": document.get("status"),
+        "runtime_ready": document.get("runtime_ready") is True,
+        "active_jobs": active,
+        "queued_jobs": queued,
+        "worker_instance_id": instance,
+        "release_sha": observed_release,
+        "gpu_guard_status": guard_status,
+        "gpu_contention_observed": contention_observed,
+        "degradation_reason": degradation_reason,
+    }
+
+
+def _adoption_asset_identity(
+    runtime_root: Path, *, allow_test: bool
+) -> dict[str, object]:
+    pointer = runtime_root / "state/current-assets"
+    if allow_test and not (pointer.exists() or pointer.is_symlink()):
+        return {
+            "pointer": str(pointer),
+            "root": str(runtime_root.parent / ("a" * 64)),
+            "manifest_sha256": "sha256:" + "a" * 64,
+        }
+    try:
+        metadata = pointer.lstat()
+        raw_target = Path(os.readlink(pointer))
+    except OSError as exc:
+        raise BootstrapError("active asset pointer is unavailable") from exc
+    if (
+        not stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+    ):
+        raise BootstrapError("active asset pointer is unsafe")
+    target = raw_target if raw_target.is_absolute() else pointer.parent / raw_target
+    target = target.absolute()
+    try:
+        target_metadata = target.lstat()
+    except OSError as exc:
+        raise BootstrapError("active asset release is unavailable") from exc
+    if (
+        not stat.S_ISDIR(target_metadata.st_mode)
+        or target.is_symlink()
+        or target_metadata.st_uid != os.geteuid()
+        or target_metadata.st_mode & 0o022
+    ):
+        raise BootstrapError("active asset release is unsafe")
+    manifest_record, _payload = _regular_file_record(
+        target / "ASSET-MANIFEST.json",
+        label="active asset manifest",
+        maximum=16 * 1024 * 1024,
+        allowed_modes={0o600, 0o400, 0o644},
+    )
+    if not allow_test and target.name != str(manifest_record["sha256"]).removeprefix(
+        "sha256:"
+    ):
+        raise BootstrapError("active asset release differs from its manifest")
+    return {
+        "pointer": str(pointer),
+        "root": str(target),
+        "manifest_sha256": manifest_record["sha256"],
+    }
+
+
+def _adoption_dft_projection(
+    production_root: Path,
+    runtime_root: Path,
+    *,
+    live_sha: str,
+    live_tree: str,
+    unit: dict[str, object],
+    allow_test: bool,
+) -> dict[str, object]:
+    env_path = runtime_root / "config/monomer-dft-runtime.env"
+    names = {
+        "MONOMER_DFT_RELEASE_SHA",
+        "MONOMER_DFT_RUNTIME_CONTRACT_SHA256",
+        "MONOMER_DFT_PYTHON",
+        "AIMNET_CACHE_DIR",
+        "WARP_CACHE_PATH",
+    }
+    if allow_test and not env_path.exists():
+        release_root = runtime_root / "worker-venvs/dft" / live_sha
+        model_names = (
+            "aimnet2-pd_0.pt",
+            "aimnet2_2025_b973c_d3_0.pt",
+            "aimnet2_b973c_d3_0.pt",
+            "aimnet2_rxn_0.pt",
+            "aimnet2_wb97m_d3_0.pt",
+            "aimnet2nse_wb97m_0.pt",
+        )
+        return {
+            "runtime": {
+                "root": str(release_root),
+                "runtime_manifest_path": str(release_root / "runtime.json"),
+                "runtime_manifest_sha256": "sha256:" + "2" * 64,
+                "release_sha": live_sha,
+                "source_tree": live_tree,
+                "python": str(release_root / "venv/bin/python"),
+                "requirements_lock_sha256": "sha256:" + "3" * 64,
+                "aimnet_source_lock_sha256": "sha256:" + "4" * 64,
+                "runtime_inventory_sha256": "sha256:" + "1" * 64,
+                "models": {
+                    name: "sha256:" + format(index + 5, "x") * 64
+                    for index, name in enumerate(model_names)
+                },
+            },
+            "runtime_env": {
+                "path": str(env_path),
+                "sha256": "sha256:" + "b" * 64,
+                "values": {
+                    "MONOMER_DFT_RELEASE_SHA": live_sha,
+                    "MONOMER_DFT_RUNTIME_CONTRACT_SHA256": "sha256:" + "5" * 64,
+                    "MONOMER_DFT_PYTHON": str(release_root / "venv/bin/python"),
+                    "AIMNET_CACHE_DIR": str(release_root / "aimnet-cache"),
+                    "WARP_CACHE_PATH": str(release_root / "warp-cache"),
+                },
+            },
+            "systemd_unit": {
+                "target_path": unit["path"],
+                "sha256": unit["sha256"],
+                "systemd_state": unit["systemd_state"],
+                "process_identity": unit["process_identity"],
+                "control_release_id": None,
+                "launcher_path": str(
+                    production_root
+                    / "workers/monomer_dft_worker/run_host_worker.sh"
+                ),
+                "launcher_sha256": "sha256:" + "c" * 64,
+            },
+            "gpu": {
+                "index": "2",
+                "uuid": ADOPTED_DFT_GPU_UUID,
+                "guard_mode": "enforce",
+                "guard_state_path": str(runtime_root / "state/gpu2-guard.json"),
+                "guard_schema_version": 1,
+                "guard_status": "ready",
+                "contention_observed": False,
+            },
+        }
+    env_record, values = _literal_environment_values(
+        env_path,
+        label="monomer DFT runtime environment",
+        names=names,
+    )
+    if (
+        values["MONOMER_DFT_RELEASE_SHA"] != live_sha
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            values["MONOMER_DFT_RUNTIME_CONTRACT_SHA256"],
+        )
+        is None
+    ):
+        raise BootstrapError("monomer DFT runtime environment source differs")
+    python = Path(values["MONOMER_DFT_PYTHON"])
+    model_root = Path(values["AIMNET_CACHE_DIR"])
+    warp_root = Path(values["WARP_CACHE_PATH"])
+    if (
+        not python.is_absolute()
+        or not model_root.is_absolute()
+        or not warp_root.is_absolute()
+    ):
+        raise BootstrapError("monomer DFT runtime paths are not absolute")
+    release_root = model_root.parent
+    if (
+        release_root
+        != runtime_root / "worker-venvs/dft" / live_sha
+        or python != release_root / "venv/bin/python"
+        or warp_root != release_root / "warp-cache"
+    ):
+        raise BootstrapError("monomer DFT runtime paths leave the sealed release")
+    manifest_record, runtime_manifest = _json_file_record(
+        release_root / "runtime.json",
+        label="monomer DFT runtime manifest",
+    )
+    if (
+        runtime_manifest.get("schema_version") != 1
+        or runtime_manifest.get("release") != live_sha
+        or runtime_manifest.get("source_tree") != live_tree
+    ):
+        raise BootstrapError("monomer DFT runtime manifest source differs")
+    requirements = runtime_manifest.get("requirements_lock_sha256")
+    aimnet_source = runtime_manifest.get("aimnet_source_lock_sha256")
+    if (
+        not isinstance(requirements, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", requirements) is None
+        or not isinstance(aimnet_source, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", aimnet_source) is None
+    ):
+        raise BootstrapError("monomer DFT runtime lock identity is invalid")
+    checkpoint_names = (
+        "aimnet2-pd_0.pt",
+        "aimnet2_2025_b973c_d3_0.pt",
+        "aimnet2_b973c_d3_0.pt",
+        "aimnet2_rxn_0.pt",
+        "aimnet2_wb97m_d3_0.pt",
+        "aimnet2nse_wb97m_0.pt",
+    )
+    models: dict[str, str] = {}
+    for name in checkpoint_names:
+        record, _payload = _regular_file_record(
+            model_root / name,
+            label=f"monomer DFT checkpoint {name}",
+            maximum=2 * 1024 * 1024 * 1024,
+            allowed_modes={0o600, 0o400, 0o644},
+        )
+        models[name] = str(record["sha256"])
+    guard_path = runtime_root / "state/gpu2-guard.json"
+    if allow_test and not guard_path.exists():
+        guard = {
+            "schema_version": 1,
+            "gpu_index": "2",
+            "gpu_uuid": ADOPTED_DFT_GPU_UUID,
+            "status": "ready",
+        }
+    else:
+        _guard_record, guard = _json_file_record(
+            guard_path,
+            label="GPU2 guard observation",
+        )
+    gpu_uuid = guard.get("gpu_uuid")
+    guard_status = guard.get("status")
+    if (
+        guard.get("schema_version") != 1
+        or guard.get("gpu_index") != "2"
+        or gpu_uuid != ADOPTED_DFT_GPU_UUID
+        or guard_status not in {"ready", "quarantined"}
+    ):
+        raise BootstrapError("GPU2 guard identity is invalid")
+    if not allow_test:
+        observed_at = guard.get("observed_at")
+        try:
+            observed = dt.datetime.fromisoformat(
+                str(observed_at).replace("Z", "+00:00")
+            )
+            age = (dt.datetime.now(dt.timezone.utc) - observed).total_seconds()
+        except (TypeError, ValueError) as exc:
+            raise BootstrapError("GPU2 guard observation timestamp is invalid") from exc
+        unknown = guard.get("unknown_processes")
+        if (
+            observed.tzinfo is None
+            or not -5 <= age <= 150
+            or not isinstance(unknown, list)
+            or (guard_status == "ready") != (len(unknown) == 0)
+        ):
+            raise BootstrapError("GPU2 guard observation is stale or inconsistent")
+    launcher_record, _payload = _regular_file_record(
+        production_root / "workers/monomer_dft_worker/run_host_worker.sh",
+        label="monomer DFT live launcher",
+        maximum=1024 * 1024,
+        allowed_modes={0o700, 0o755},
+    )
+    runtime_inventory_sha256 = _adopted_dft_runtime_inventory(release_root)
+    return {
+        "runtime": {
+            "root": str(release_root),
+            "runtime_manifest_path": str(release_root / "runtime.json"),
+            "runtime_manifest_sha256": manifest_record["sha256"],
+            "release_sha": live_sha,
+            "source_tree": live_tree,
+            "python": str(python),
+            "requirements_lock_sha256": requirements,
+            "aimnet_source_lock_sha256": aimnet_source,
+            "runtime_inventory_sha256": runtime_inventory_sha256,
+            "models": models,
+        },
+        "runtime_env": {
+            "path": str(env_path),
+            "sha256": env_record["sha256"],
+            "values": values,
+        },
+        "systemd_unit": {
+            "target_path": unit["path"],
+            "sha256": unit["sha256"],
+            "systemd_state": unit["systemd_state"],
+            "process_identity": unit["process_identity"],
+            "control_release_id": None,
+            "launcher_path": str(
+                production_root
+                / "workers/monomer_dft_worker/run_host_worker.sh"
+            ),
+            "launcher_sha256": launcher_record["sha256"],
+        },
+        "gpu": {
+            "index": "2",
+            "uuid": gpu_uuid,
+            "guard_mode": "enforce",
+            "guard_state_path": str(guard_path),
+            "guard_schema_version": 1,
+            "guard_status": guard_status,
+            "contention_observed": guard_status == "quarantined",
+        },
+    }
+
+
+def _adoption_migration_records(
+    *, source_sha: str, allow_test: bool
+) -> list[dict[str, object]]:
+    payload = _read_reviewed_source(
+        "backend/migrations/postgres/manifest.json",
+        source_sha=source_sha,
+        allow_test=allow_test,
+    )
+    try:
+        document = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise BootstrapError("reviewed migration manifest is invalid") from exc
+    migrations = document.get("migrations") if isinstance(document, dict) else None
+    if not isinstance(migrations, list):
+        raise BootstrapError("reviewed migration manifest lacks migrations")
+    records: list[dict[str, object]] = []
+    for value in migrations:
+        if not isinstance(value, dict):
+            raise BootstrapError("reviewed migration record is invalid")
+        records.append(dict(value))
+        if value.get("version") == "0013_monomer_dft_jobs":
+            break
+    if (
+        len(records) != 13
+        or records[-1].get("version") != "0013_monomer_dft_jobs"
+        or any(
+            not isinstance(value.get("checksum"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", str(value["checksum"])) is None
+            for value in records
+        )
+    ):
+        raise BootstrapError("reviewed post-0013 migration authority is invalid")
+    return records
+
+
+def _adoption_container_and_database_evidence(
+    runtime_root: Path,
+    *,
+    source_sha: str,
+    source_tree: str,
+    migrations: list[dict[str, object]],
+    allow_test: bool,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    deploy_env = runtime_root / "config/deploy.env"
+    if allow_test:
+        env_record = _adoption_optional_test_file_record(
+            deploy_env,
+            label="production deploy environment",
+            allow_test=True,
+        )
+        images = {
+            "backend": {
+                "digest_ref": "example.invalid/backend@sha256:" + "1" * 64,
+                "container_id": "1" * 64,
+                "image_id": "sha256:" + "2" * 64,
+                "started_at": "2026-01-01T00:00:00Z",
+                "restart_count": 0,
+            },
+            "web": {
+                "digest_ref": "example.invalid/web@sha256:" + "3" * 64,
+                "container_id": "3" * 64,
+                "image_id": "sha256:" + "4" * 64,
+                "started_at": "2026-01-01T00:00:00Z",
+                "restart_count": 0,
+            },
+        }
+        postgres = {
+            "container_id": "5" * 64,
+            "image_id": "sha256:" + "6" * 64,
+            "configured_image": "postgres:16-alpine",
+            "system_identifier": "7659245354718314530",
+        }
+        database = {
+            "system_identifier": postgres["system_identifier"],
+            "ledger": [
+                {"version": value["version"], "checksum": value["checksum"]}
+                for value in migrations
+            ],
+            "postgres_major": 16,
+        }
+        return env_record, images, {"runtime": postgres, **database}
+    env_record, values = _literal_environment_values(
+        deploy_env,
+        label="production deploy environment",
+        names={
+            "NEXPOLY_BACKEND_IMAGE",
+            "NEXPOLY_WEB_IMAGE",
+            "NEXPOLY_POSTGRES_USER",
+            "NEXPOLY_POSTGRES_DB",
+        },
+    )
+    environment = {
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "HOME": "/home/devuser",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
+    containers: dict[str, dict[str, object]] = {}
+    raw_inspect: dict[str, dict[str, object]] = {}
+    for service, output_name in (
+        ("backend", "backend"),
+        ("nginx", "web"),
+        ("lab-postgres", "postgres"),
+    ):
+        listed = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "--no-trunc",
+                "--filter",
+                "label=com.docker.compose.project=nexpoly",
+                "--filter",
+                f"label=com.docker.compose.service={service}",
+                "--format",
+                "{{.ID}}",
+            ],
+            env=environment,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        ids = [value for value in listed.stdout.splitlines() if value]
+        if len(ids) != 1:
+            raise BootstrapError(f"production {service} container identity is ambiguous")
+        inspected = subprocess.run(
+            ["docker", "container", "inspect", ids[0]],
+            env=environment,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            container = json.loads(inspected.stdout)[0]
+            state = container["State"]
+            config = container["Config"]
+            labels = config["Labels"]
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise BootstrapError(f"production {service} container evidence is invalid") from exc
+        if (
+            container.get("Id") != ids[0]
+            or state.get("Running") is not True
+            or labels.get("com.docker.compose.project") != "nexpoly"
+            or labels.get("com.docker.compose.service") != service
+            or not isinstance(container.get("Image"), str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", container["Image"]) is None
+            or not isinstance(container.get("RestartCount"), int)
+            or isinstance(container.get("RestartCount"), bool)
+            or container["RestartCount"] < 0
+        ):
+            raise BootstrapError(f"production {service} container identity differs")
+        if output_name in {"backend", "web"} and (
+            labels.get("org.opencontainers.image.revision") != source_sha
+            or (
+                output_name == "backend"
+                and labels.get("com.nexpoly.source.tree") != source_tree
+            )
+        ):
+            raise BootstrapError(f"production {service} image source differs")
+        containers[output_name] = {
+            "container_id": container["Id"],
+            "image_id": container["Image"],
+            "started_at": state.get("StartedAt"),
+            "restart_count": container["RestartCount"],
+        }
+        raw_inspect[output_name] = container
+    image_evidence: dict[str, object] = {}
+    for output_name, variable in (
+        ("backend", "NEXPOLY_BACKEND_IMAGE"),
+        ("web", "NEXPOLY_WEB_IMAGE"),
+    ):
+        digest_ref = values[variable]
+        if re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", digest_ref) is None:
+            raise BootstrapError(f"production {output_name} image is not digest-pinned")
+        configured = raw_inspect[output_name].get("Config")
+        if not isinstance(configured, dict) or configured.get("Image") != digest_ref:
+            raise BootstrapError(f"production {output_name} configured image differs")
+        image_evidence[output_name] = {
+            "digest_ref": digest_ref,
+            **containers[output_name],
+        }
+    postgres_container = raw_inspect["postgres"]
+    postgres_config = postgres_container.get("Config")
+    configured_postgres = (
+        postgres_config.get("Image") if isinstance(postgres_config, dict) else None
+    )
+    query = (
+        "SELECT json_build_object("
+        "'system_identifier',(SELECT system_identifier::text FROM pg_control_system()),"
+        "'server_version_num',current_setting('server_version_num'),"
+        "'ledger',(SELECT COALESCE(json_agg(json_build_object('version',version,"
+        "'checksum',checksum) ORDER BY version),'[]'::json) FROM governance.schema_migrations)"
+        ")::text"
+    )
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            str(postgres_container["Id"]),
+            "psql",
+            "--no-psqlrc",
+            "--tuples-only",
+            "--no-align",
+            "--set",
+            "ON_ERROR_STOP=1",
+            "--username",
+            values["NEXPOLY_POSTGRES_USER"],
+            "--dbname",
+            values["NEXPOLY_POSTGRES_DB"],
+            "--command",
+            query,
+        ],
+        env=environment,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        database = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as exc:
+        raise BootstrapError("production database adoption evidence is invalid") from exc
+    expected_ledger = [
+        {"version": value["version"], "checksum": value["checksum"]}
+        for value in migrations
+    ]
+    if (
+        not isinstance(database, dict)
+        or not isinstance(database.get("system_identifier"), str)
+        or not database["system_identifier"].isdigit()
+        or not str(database.get("server_version_num", "")).startswith("16")
+        or database.get("ledger") != expected_ledger
+    ):
+        raise BootstrapError("production database is not the exact post-0013 baseline")
+    postgres_evidence = {
+        "runtime": {
+            **containers["postgres"],
+            "configured_image": configured_postgres,
+        },
+        "system_identifier": database["system_identifier"],
+        "postgres_major": 16,
+        "ledger": expected_ledger,
+    }
+    return env_record, image_evidence, postgres_evidence
+
+
+def _adoption_manual_evidence(
+    runtime_root: Path, *, allow_test: bool
+) -> dict[str, object]:
+    paths = {
+        "manual_deployment_report": runtime_root
+        / "manual-operations/manual-deploy-20260727t095913z/DEPLOYMENT-REPORT.md",
+        "post_0013_database": runtime_root
+        / "manual-operations/manual-deploy-20260727t095913z/evidence/database-post-0013.txt",
+        "isolated_restore": runtime_root
+        / "manual-operations/manual-deploy-20260727t095913z/evidence/isolated-restore.txt",
+        "formal_dft_release": runtime_root
+        / "manual-operations/formal-dft-20260729t012508z-8d6a580/release-completion-report.json",
+    }
+    if allow_test and not all(path.exists() for path in paths.values()):
+        return {
+            name: {
+                "path": str(path),
+                "sha256": "sha256:" + format(index + 1, "x") * 64,
+                "size": 1,
+                "mode": "0600",
+            }
+            for index, (name, path) in enumerate(paths.items())
+        }
+    records: dict[str, object] = {}
+    for name, path in paths.items():
+        record, _payload = _regular_file_record(
+            path,
+            label=name.replace("_", " "),
+            maximum=64 * 1024 * 1024,
+            allowed_modes={0o600},
+        )
+        records[name] = record
+    return records
+
+
+def _adoption_optional_test_file_record(
+    path: Path, *, label: str, allow_test: bool
+) -> dict[str, object]:
+    if allow_test and not path.exists():
+        return {
+            "path": str(path),
+            "sha256": "sha256:" + "e" * 64,
+            "size": 1,
+            "mode": "0600",
+        }
+    record, _payload = _regular_file_record(
+        path,
+        label=label,
+        maximum=16 * 1024 * 1024,
+        allowed_modes={0o600},
+    )
+    return record
+
+
+def _collect_adoption_evidence(
+    production_root: Path,
+    runtime_root: Path,
+    *,
+    operation_id: str,
+    bootstrap_source_sha: str,
+    bootstrap_source_tree: str,
+    live_sha: str,
+    expected_md_unit_sha256: str | None,
+    expected_dft_unit_sha256: str | None,
+    allow_test: bool,
+) -> dict[str, object]:
+    operation_id = _require_adoption_operation_id(operation_id)
+    if SHA_RE.fullmatch(live_sha) is None:
+        raise BootstrapError("adopted live SHA is invalid")
+    repository = _production_repository_identity(
+        production_root,
+        bootstrap_source_sha,
+        allow_test=allow_test,
+    )
+    live_tree = repository.get("tree")
+    if repository.get("head") != live_sha or not isinstance(live_tree, str):
+        raise BootstrapError("production checkout differs from the requested live SHA")
+    md_unit = _adoption_systemd_identity(
+        _worker_unit_path(production_root, allow_test=allow_test),
+        unit_name="nexpoly-monomer-md-worker.service",
+        expected_sha256=expected_md_unit_sha256,
+        allow_test=allow_test,
+    )
+    dft_unit = _adoption_systemd_identity(
+        _dft_worker_unit_path(production_root, allow_test=allow_test),
+        unit_name="nexpoly-monomer-dft-worker.service",
+        expected_sha256=expected_dft_unit_sha256,
+        allow_test=allow_test,
+        require_dft_semantics=True,
+    )
+    active_slot_path = runtime_root / "state/monomer-md-active-slot.json"
+    if allow_test and not active_slot_path.exists():
+        active_slot_record = {
+            "path": str(active_slot_path),
+            "sha256": "sha256:" + "6" * 64,
+            "size": 1,
+            "mode": "0600",
+        }
+        slot_record_path = runtime_root / "state/worker-slots/md-a.json"
+        slot_file_record = {
+            "path": str(slot_record_path),
+            "sha256": "sha256:" + "8" * 64,
+            "size": 1,
+            "mode": "0600",
+        }
+        slot_record = {
+            "schema_version": 2,
+            "status": "ready",
+            "component": "monomer-md",
+            "slot": "a",
+            "source_sha": live_sha,
+            "source_tree": live_tree,
+        }
+        slot_record_identity_sha256 = _canonical_json_digest(slot_record)
+        active_slot = {
+            "schema_version": 1,
+            "component": "monomer-md",
+            "slot": "a",
+            "source_sha": live_sha,
+            "source_tree": live_tree,
+            "worker_lock_sha256": "sha256:" + "7" * 64,
+            "slot_record_sha256": slot_record_identity_sha256,
+            "operation_id": "manual-md-test-adoption",
+            "activated_at": "2026-01-01T00:00:00Z",
+        }
+    else:
+        active_slot_record, active_slot = _json_file_record(
+            active_slot_path,
+            label="active monomer MD slot",
+        )
+        slot = active_slot.get("slot")
+        if (
+            active_slot.get("schema_version") != 1
+            or active_slot.get("component") != "monomer-md"
+            or slot not in {"a", "b"}
+            or active_slot.get("source_sha") != live_sha
+            or active_slot.get("source_tree") != live_tree
+        ):
+            raise BootstrapError("active monomer MD slot differs from live source")
+        slot_record_path = runtime_root / f"state/worker-slots/md-{slot}.json"
+        slot_file_record, slot_record = _json_file_record(
+            slot_record_path,
+            label="active monomer MD slot record",
+        )
+        # The active pointer binds the semantic worker-slot record, while the
+        # adoption evidence below independently seals its exact file bytes.
+        # ``_atomic_json`` appends a newline, so these digests intentionally
+        # differ for the production record.
+        slot_record_identity_sha256 = _canonical_json_digest(slot_record)
+        if (
+            slot_record.get("schema_version") != 2
+            or slot_record.get("status") != "ready"
+            or slot_record.get("component") != "monomer-md"
+            or slot_record.get("slot") != slot
+            or slot_record.get("source_sha") != live_sha
+            or slot_record.get("source_tree") != live_tree
+            or active_slot.get("slot_record_sha256")
+            != slot_record_identity_sha256
+        ):
+            raise BootstrapError("active monomer MD slot record differs")
+    worker_env = _adoption_optional_test_file_record(
+        runtime_root / "config/worker.env",
+        label="monomer MD Worker environment",
+        allow_test=allow_test,
+    )
+    md_launcher_path = production_root / "workers/monomer_md_worker/run_host_worker.sh"
+    if allow_test and not md_launcher_path.exists():
+        md_launcher_sha256 = "sha256:" + "9" * 64
+    else:
+        launcher_record, _payload = _regular_file_record(
+            md_launcher_path,
+            label="monomer MD live launcher",
+            maximum=1024 * 1024,
+            allowed_modes={0o700, 0o755},
+        )
+        md_launcher_sha256 = str(launcher_record["sha256"])
+    md_health = _adoption_worker_health(
+        runtime_root,
+        worker="monomer-md",
+        allow_test=allow_test,
+        live_sha=live_sha,
+    )
+    dft_health = _adoption_worker_health(
+        runtime_root,
+        worker="monomer-dft",
+        allow_test=allow_test,
+        live_sha=live_sha,
+    )
+    monomer_dft = _adoption_dft_projection(
+        production_root,
+        runtime_root,
+        live_sha=live_sha,
+        live_tree=live_tree,
+        unit=dft_unit,
+        allow_test=allow_test,
+    )
+    gpu = monomer_dft["gpu"]
+    if (
+        not isinstance(gpu, dict)
+        or dft_health.get("gpu_guard_status") != gpu.get("guard_status")
+        or dft_health.get("gpu_contention_observed")
+        != gpu.get("contention_observed")
+    ):
+        raise BootstrapError("monomer DFT health differs from fresh GPU guard evidence")
+    migrations = _adoption_migration_records(
+        source_sha=bootstrap_source_sha,
+        allow_test=allow_test,
+    )
+    deploy_env, images, database = _adoption_container_and_database_evidence(
+        runtime_root,
+        source_sha=live_sha,
+        source_tree=live_tree,
+        migrations=migrations,
+        allow_test=allow_test,
+    )
+    app_env = _adoption_optional_test_file_record(
+        runtime_root / "config/app.env",
+        label="production application environment",
+        allow_test=allow_test,
+    )
+    asset = _adoption_asset_identity(runtime_root, allow_test=allow_test)
+    manual = _adoption_manual_evidence(runtime_root, allow_test=allow_test)
+    ledger = database.get("ledger")
+    if not isinstance(ledger, list):
+        raise BootstrapError("adopted database ledger is invalid")
+    return {
+        "schema_version": 1,
+        "authority_kind": ADOPTION_AUTHORITY_KIND,
+        "operation_id": operation_id,
+        "bootstrap_source": {
+            "sha": bootstrap_source_sha,
+            "tree": bootstrap_source_tree,
+        },
+        "live_repository": repository,
+        "production_config": {
+            "deploy_env": deploy_env,
+            "app_env": app_env,
+        },
+        "images": images,
+        "database": database,
+        "asset_identity": asset,
+        "migrations": migrations,
+        "maintenance": {
+            "kind": "adopted-maintenance-provenance",
+            "alias_0005": "completed-without-formal-marker",
+            "contract_0012": "completed-without-formal-marker",
+            "ledger_endpoint": "post-0013",
+            "ledger_sha256": _canonical_json_digest(ledger),
+            "manual_evidence": manual,
+        },
+        "monomer_md": {
+            "active_slot_path": str(active_slot_path),
+            "active_slot_file_sha256": active_slot_record["sha256"],
+            "active_slot": active_slot,
+            "slot_record_path": str(slot_record_path),
+            "slot_record_file_sha256": slot_file_record["sha256"],
+            "slot_record": slot_record,
+            "worker_env": worker_env,
+            "systemd_unit": {
+                "target_path": md_unit["path"],
+                "sha256": md_unit["sha256"],
+                "systemd_state": md_unit["systemd_state"],
+                "process_identity": md_unit["process_identity"],
+                "control_release_id": None,
+                "launcher_path": str(md_launcher_path),
+                "launcher_sha256": md_launcher_sha256,
+            },
+            "health": md_health,
+        },
+        "monomer_dft": {**monomer_dft, "health": dft_health},
+    }
+
+
+def _adoption_tree_identity(path: Path) -> dict[str, object]:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise BootstrapError(f"adoption-owned tree is unavailable: {path}") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o077
+    ):
+        raise BootstrapError(f"adoption-owned tree is unsafe: {path}")
+    records: list[dict[str, object]] = []
+    for entry in sorted(path.rglob("*")):
+        relative = entry.relative_to(path).as_posix()
+        entry_metadata = entry.lstat()
+        if entry.is_symlink() or entry_metadata.st_uid != os.geteuid():
+            raise BootstrapError(f"adoption-owned tree contains an unsafe entry: {path}")
+        if stat.S_ISDIR(entry_metadata.st_mode):
+            kind = "directory"
+            sha256 = None
+        elif stat.S_ISREG(entry_metadata.st_mode):
+            kind = "file"
+            sha256 = digest(entry.read_bytes())
+        else:
+            raise BootstrapError(f"adoption-owned tree contains a special entry: {path}")
+        records.append(
+            {
+                "relative_path": relative,
+                "kind": kind,
+                "mode": format(stat.S_IMODE(entry_metadata.st_mode), "04o"),
+                "sha256": sha256,
+            }
+        )
+    return {
+        "path": str(path),
+        "kind": "tree",
+        "identity_sha256": _canonical_json_digest(records),
+    }
+
+
+def _adoption_file_ownership(path: Path) -> dict[str, object]:
+    record, _payload = _regular_file_record(
+        path,
+        label=f"adoption-owned file {path.name}",
+        maximum=64 * 1024 * 1024,
+        allowed_modes={0o600, 0o700},
+    )
+    return {
+        "path": str(path),
+        "kind": "file",
+        "sha256": record["sha256"],
+        "mode": record["mode"],
+    }
+
+
+def _adoption_file_plan(
+    path: Path, payload: bytes, mode: int
+) -> dict[str, object]:
+    if mode not in {0o600, 0o700}:
+        raise BootstrapError("adoption file plan mode is invalid")
+    return {
+        "path": str(path),
+        "kind": "file",
+        "sha256": digest(payload),
+        "mode": format(mode, "04o"),
+    }
+
+
+def _adoption_install_temporary_path(
+    path: Path, *, operation_id: str
+) -> Path:
+    operation_id = _require_adoption_operation_id(operation_id)
+    return path.parent / f".{path.name}.{operation_id}.tmp"
+
+
+def _validate_adoption_ownership(
+    value: object, *, label: str
+) -> dict[str, object]:
+    if (
+        not isinstance(value, dict)
+        or value.get("kind")
+        not in {"file", "tree", "directory", "staging-tree"}
+        or not isinstance(value.get("path"), str)
+        or not Path(value["path"]).is_absolute()
+    ):
+        raise BootstrapError(f"{label} ownership is invalid")
+    kind = value["kind"]
+    if kind == "file":
+        if (
+            set(value) != {"path", "kind", "sha256", "mode"}
+            or not isinstance(value.get("sha256"), str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", value["sha256"]) is None
+            or value.get("mode") not in {"0600", "0700"}
+        ):
+            raise BootstrapError(f"{label} file ownership is invalid")
+    elif kind == "tree":
+        if (
+            set(value) != {"path", "kind", "identity_sha256"}
+            or not isinstance(value.get("identity_sha256"), str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", value["identity_sha256"])
+            is None
+        ):
+            raise BootstrapError(f"{label} tree ownership is invalid")
+    elif kind == "directory":
+        if (
+            set(value) != {"path", "kind", "mode"}
+            or value.get("mode") != "0700"
+        ):
+            raise BootstrapError(f"{label} directory ownership is invalid")
+    else:
+        files = value.get("files")
+        if (
+            set(value)
+            != {"path", "kind", "owner_sha256", "owner", "files"}
+            or not isinstance(value.get("owner_sha256"), str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", value["owner_sha256"])
+            is None
+            or not isinstance(value.get("owner"), dict)
+            or _canonical_json_digest(value["owner"]) != value["owner_sha256"]
+            or not isinstance(files, dict)
+            or not files
+        ):
+            raise BootstrapError(f"{label} staging-tree ownership is invalid")
+        for name, record in files.items():
+            if (
+                not isinstance(name, str)
+                or re.fullmatch(r"[A-Za-z0-9._-]+", name) is None
+                or not isinstance(record, dict)
+                or set(record) != {"sha256", "mode"}
+                or not isinstance(record.get("sha256"), str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", record["sha256"])
+                is None
+                or record.get("mode") not in {"0600", "0700"}
+            ):
+                raise BootstrapError(
+                    f"{label} staging-tree file authority is invalid"
+                )
+    return dict(value)
+
+
+def _validate_adoption_staging_tree(
+    path: Path, ownership: dict[str, object]
+) -> dict[str, object]:
+    expected = _validate_adoption_ownership(
+        ownership, label="adoption staging-tree"
+    )
+    if expected["kind"] != "staging-tree" or str(path) != expected["path"]:
+        raise BootstrapError("adoption staging-tree authority differs")
+    metadata = path.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise BootstrapError("adoption staging-tree root changed before abort")
+    owner = expected["owner"]
+    files = expected["files"]
+    assert isinstance(owner, dict) and isinstance(files, dict)
+    owner_payload = json.dumps(
+        owner, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8") + b"\n"
+    entries = {entry.name: entry for entry in path.iterdir()}
+    owner_present = ".owner.json" in entries
+    owner_temps = {
+        name
+        for name in entries
+        if re.fullmatch(r"\.\.owner\.json\.[0-9a-f]+\.tmp", name)
+    }
+    if owner_present:
+        owner_record, observed_owner_payload = _regular_file_record(
+            path / ".owner.json",
+            label="adoption staging-tree owner",
+            maximum=1024 * 1024,
+            allowed_modes={0o600},
+        )
+        if (
+            owner_record["sha256"] != digest(owner_payload)
+            or observed_owner_payload != owner_payload
+            or _load_private_json(path / ".owner.json") != owner
+        ):
+            raise BootstrapError(
+                "adoption staging-tree owner changed before abort"
+            )
+    for name, entry in entries.items():
+        if name == ".owner.json":
+            continue
+        expected_record: object | None = files.get(name)
+        expected_payload: bytes | None = None
+        if name in owner_temps:
+            expected_record = {"sha256": digest(owner_payload), "mode": "0600"}
+            expected_payload = owner_payload
+        if expected_record is None:
+            for file_name, record in files.items():
+                if re.fullmatch(
+                    rf"\.{re.escape(str(file_name))}\.[0-9a-f]+\.tmp", name
+                ):
+                    expected_record = record
+                    break
+        if not isinstance(expected_record, dict):
+            raise BootstrapError(
+                "adoption staging-tree contains an unplanned entry"
+            )
+        record, payload = _regular_file_record(
+            entry,
+            label="adoption staging-tree file",
+            maximum=64 * 1024 * 1024,
+            allowed_modes={int(str(expected_record["mode"]), 8)},
+        )
+        if record["sha256"] != expected_record["sha256"] or (
+            expected_payload is not None and payload != expected_payload
+        ):
+            raise BootstrapError(
+                "adoption staging-tree file changed before abort"
+            )
+    final_names = set(files)
+    actual_final_names = set(entries) & final_names
+    if not owner_present and not owner_temps and entries:
+        if set(entries) != final_names or actual_final_names != final_names:
+            raise BootstrapError(
+                "ownerless adoption staging-tree is not complete"
+            )
+    return expected
+
+
+def _validate_adoption_transaction(
+    document: dict[str, object], *, path: Path
+) -> dict[str, object]:
+    required = {
+        "schema_version",
+        "status",
+        "phase",
+        "operation_id",
+        "identity",
+        "identity_sha256",
+        "created_at",
+        "updated_at",
+        "planned_paths",
+        "created_paths",
+        "step_plans",
+        "step_evidence",
+    }
+    optional = {"aborted_at"}
+    identity = document.get("identity")
+    planned = document.get("planned_paths")
+    created = document.get("created_paths")
+    step_plans = document.get("step_plans")
+    phase = document.get("phase")
+    status = document.get("status")
+    operation_id = document.get("operation_id")
+    if (
+        not isinstance(document, dict)
+        or not required.issubset(document)
+        or not set(document).issubset(required | optional)
+        or document.get("schema_version") != ADOPTION_TRANSACTION_SCHEMA_VERSION
+        or not isinstance(operation_id, str)
+        or _require_adoption_operation_id(operation_id) != operation_id
+        or path != _adoption_transaction_path(path.parents[2], operation_id=operation_id)
+        or not isinstance(identity, dict)
+        or _canonical_json_digest(identity) != document.get("identity_sha256")
+        or identity.get("deploy_lock_disposition")
+        != ADOPTION_DEPLOY_LOCK_DISPOSITION
+        or not isinstance(identity.get("deploy_lock_created"), bool)
+        or not isinstance(planned, list)
+        or not isinstance(created, list)
+        or not isinstance(step_plans, dict)
+        or not set(step_plans).issubset({"layout", "controls", "baseline"})
+        or not isinstance(document.get("step_evidence"), dict)
+        or not isinstance(document.get("created_at"), str)
+        or not isinstance(document.get("updated_at"), str)
+    ):
+        raise BootstrapError("adoption transaction has an invalid shape")
+    if status in {"in-progress", "completed"}:
+        if phase not in ADOPTION_PHASES or (status == "completed") != (
+            phase == "completed"
+        ):
+            raise BootstrapError("adoption transaction phase is invalid")
+        if "aborted_at" in document:
+            raise BootstrapError("active adoption transaction contains abort state")
+    elif status == "aborted":
+        if phase != "aborted" or not isinstance(document.get("aborted_at"), str):
+            raise BootstrapError("aborted adoption transaction is invalid")
+    else:
+        raise BootstrapError("adoption transaction status is invalid")
+    planned_by_path: dict[str, dict[str, object]] = {}
+    for raw in planned:
+        value = _validate_adoption_ownership(raw, label="planned adoption")
+        path_value = str(value["path"])
+        if path_value in planned_by_path:
+            raise BootstrapError("planned adoption ownership is duplicated")
+        planned_by_path[path_value] = value
+    created_by_path: dict[str, dict[str, object]] = {}
+    for raw in created:
+        value = _validate_adoption_ownership(raw, label="committed adoption")
+        path_value = str(value["path"])
+        if (
+            path_value in created_by_path
+            or planned_by_path.get(path_value) != value
+        ):
+            raise BootstrapError("committed adoption ownership was not planned")
+        created_by_path[path_value] = value
+    for name, raw_plan in step_plans.items():
+        if (
+            not isinstance(raw_plan, dict)
+            or set(raw_plan) != {"evidence", "paths"}
+            or not isinstance(raw_plan.get("paths"), list)
+        ):
+            raise BootstrapError(f"adoption {name} plan is invalid")
+        for raw in raw_plan["paths"]:
+            value = _validate_adoption_ownership(
+                raw, label=f"adoption {name} plan"
+            )
+            if planned_by_path.get(str(value["path"])) != value:
+                raise BootstrapError(f"adoption {name} plan is not durable")
+    return dict(document)
+
+
+def _write_adoption_transaction(
+    path: Path, transaction: dict[str, object]
+) -> dict[str, object]:
+    value = {
+        **transaction,
+        "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+    _atomic_json(path, value)
+    return _validate_adoption_transaction(_load_private_json(path), path=path)
+
+
+def _record_adoption_plan(
+    path: Path,
+    transaction: dict[str, object],
+    *,
+    name: str,
+    evidence: object,
+    planned_paths: list[dict[str, object]],
+) -> dict[str, object]:
+    if name not in {"layout", "controls", "baseline"}:
+        raise BootstrapError("adoption plan name is invalid")
+    normalized = [
+        _validate_adoption_ownership(value, label=f"adoption {name} plan")
+        for value in planned_paths
+    ]
+    plan = {"evidence": evidence, "paths": normalized}
+    step_plans = transaction.get("step_plans")
+    existing_paths = transaction.get("planned_paths")
+    if not isinstance(step_plans, dict) or not isinstance(existing_paths, list):
+        raise BootstrapError("adoption planned ownership journal is invalid")
+    if name in step_plans:
+        if step_plans[name] != plan:
+            raise BootstrapError(f"existing adoption {name} plan differs")
+        return transaction
+    by_path = {
+        str(value["path"]): value
+        for value in existing_paths
+        if isinstance(value, dict) and isinstance(value.get("path"), str)
+    }
+    for value in normalized:
+        path_value = str(value["path"])
+        if path_value in by_path and by_path[path_value] != value:
+            raise BootstrapError("adoption planned ownership conflicts")
+        by_path[path_value] = value
+    return _write_adoption_transaction(
+        path,
+        {
+            **transaction,
+            "planned_paths": list(by_path.values()),
+            "step_plans": {**step_plans, name: plan},
+        },
+    )
+
+
+def _advance_adoption_transaction(
+    path: Path,
+    transaction: dict[str, object],
+    *,
+    phase: str,
+    evidence_name: str,
+    evidence: object,
+    created_paths: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    current = str(transaction.get("phase"))
+    if phase not in ADOPTION_PHASES:
+        raise BootstrapError("requested adoption phase is invalid")
+    current_index = ADOPTION_PHASES.index(current)
+    target_index = ADOPTION_PHASES.index(phase)
+    stored = transaction["step_evidence"]
+    if not isinstance(stored, dict):
+        raise BootstrapError("adoption transaction evidence is invalid")
+    if current_index >= target_index:
+        if stored.get(evidence_name) != evidence:
+            raise BootstrapError("completed adoption step evidence differs")
+        return transaction
+    if target_index != current_index + 1:
+        raise BootstrapError("adoption phase transition is not sequential")
+    paths = list(transaction["created_paths"])
+    for value in created_paths or []:
+        if value not in paths:
+            paths.append(value)
+    return _write_adoption_transaction(
+        path,
+        {
+            **transaction,
+            "phase": phase,
+            "status": "completed" if phase == "completed" else "in-progress",
+            "created_paths": paths,
+            "step_evidence": {**stored, evidence_name: evidence},
+        },
+    )
+
+
+def _ensure_adoption_lock(runtime_root: Path) -> tuple[Path, bool]:
+    try:
+        root = runtime_root.lstat()
+        state = (runtime_root / "state").lstat()
+    except OSError as exc:
+        raise BootstrapError(
+            "manual adoption requires the existing private runtime/state layout"
+        ) from exc
+    if (
+        not stat.S_ISDIR(root.st_mode)
+        or runtime_root.is_symlink()
+        or root.st_uid != os.geteuid()
+        or stat.S_IMODE(root.st_mode) != 0o700
+        or not stat.S_ISDIR(state.st_mode)
+        or (runtime_root / "state").is_symlink()
+        or state.st_uid != os.geteuid()
+        or stat.S_IMODE(state.st_mode) != 0o700
+    ):
+        raise BootstrapError("manual adoption runtime/state layout is unsafe")
+    lock = runtime_root / "state/deploy.lock"
+    created = False
+    if not (lock.exists() or lock.is_symlink()):
+        descriptor = os.open(
+            lock,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        _fsync_directory(lock.parent)
+        created = True
+    return lock, created
+
+
+def _ensure_adoption_layout(
+    runtime_root: Path,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    created: list[dict[str, object]] = []
+    evidence: dict[str, object] = {}
+    for relative, requested_mode in DIRECTORIES.items():
+        path = runtime_root / relative
+        if not (path.exists() or path.is_symlink()):
+            path.mkdir(parents=False, mode=requested_mode)
+            _fsync_directory(path.parent)
+            created.append(
+                {
+                    "path": str(path),
+                    "kind": "directory",
+                    "mode": format(requested_mode, "04o"),
+                }
+            )
+        metadata = path.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o022
+        ):
+            raise BootstrapError(f"adoption runtime directory is unsafe: {path}")
+        evidence[relative] = {
+            "path": str(path),
+            "mode": format(stat.S_IMODE(metadata.st_mode), "04o"),
+        }
+    return evidence, created
+
+
+def _new_adoption_transaction(
+    runtime_root: Path,
+    *,
+    operation_id: str,
+    identity: dict[str, object],
+) -> tuple[Path, dict[str, object]]:
+    directory = runtime_root / ADOPTION_TRANSACTION_RELATIVE_DIRECTORY
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    metadata = directory.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or directory.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise BootstrapError("adoption transaction directory is unsafe")
+    path = _adoption_transaction_path(runtime_root, operation_id=operation_id)
+    if path.exists() or path.is_symlink():
+        transaction = _validate_adoption_transaction(
+            _load_private_json(path), path=path
+        )
+        if transaction["identity"] != identity:
+            raise BootstrapError("existing adoption transaction identity differs")
+        return path, transaction
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    transaction = {
+        "schema_version": ADOPTION_TRANSACTION_SCHEMA_VERSION,
+        "status": "in-progress",
+        "phase": "intent",
+        "operation_id": operation_id,
+        "identity": identity,
+        "identity_sha256": _canonical_json_digest(identity),
+        "created_at": now,
+        "updated_at": now,
+        "planned_paths": [],
+        "created_paths": [],
+        "step_plans": {},
+        "step_evidence": {"intent": identity},
+    }
+    _atomic_json(path, transaction)
+    return path, _validate_adoption_transaction(
+        _load_private_json(path), path=path
+    )
+
+
+def _adoption_initial_presence(runtime_root: Path) -> dict[str, object]:
+    releases = runtime_root / "control-releases"
+    release_names = (
+        sorted(entry.name for entry in releases.iterdir())
+        if releases.is_dir() and not releases.is_symlink()
+        else []
+    )
+    paths = {
+        str(runtime_root / relative): (
+            (runtime_root / relative).exists()
+            or (runtime_root / relative).is_symlink()
+        )
+        for relative in DIRECTORIES
+    }
+    for name in IMMUTABLE_FILES:
+        path = runtime_root / "bin" / name
+        paths[str(path)] = path.exists() or path.is_symlink()
+    for relative in (
+        ADOPTED_DEPLOYMENT_RELATIVE_PATH,
+        Path("state/bootstrap-control.json"),
+        Path("state/active-control.json"),
+    ):
+        path = runtime_root / relative
+        paths[str(path)] = path.exists() or path.is_symlink()
+    return {"paths": paths, "control_release_names": release_names}
+
+
+def _adoption_preflight(
+    runtime_root: Path,
+    *,
+    operation_id: str,
+    permit_transaction: bool,
+) -> None:
+    transaction = _assert_exclusive_adoption_transaction(
+        runtime_root, operation_id=operation_id
+    )
+    transaction_present = transaction is not None
+    if transaction_present and not permit_transaction:
+        raise BootstrapError("manual adoption operation already has a transaction")
+    if transaction_present:
+        assert transaction is not None
+        if transaction["status"] == "aborted":
+            raise BootstrapError("manual adoption operation was already aborted")
+    for path in (
+        runtime_root / "state/deploy-in-progress.json",
+        runtime_root / "state/contract-0012-in-progress.json",
+        runtime_root / ADOPTION_ALIAS_MARKER_RELATIVE_PATH,
+    ):
+        if path.exists() or path.is_symlink():
+            raise BootstrapError("manual adoption is blocked by governed operation state")
+    bootstrap_path = runtime_root / "state/bootstrap-control.json"
+    current_path = runtime_root / "state/current-deployment.json"
+    if current_path.exists() or current_path.is_symlink():
+        raise BootstrapError(
+            "manual adoption requires current deployment state to be absent"
+        )
+    if bootstrap_path.exists() or bootstrap_path.is_symlink():
+        record = _load_private_json(bootstrap_path)
+        if not (
+            permit_transaction
+            and record.get("schema_version") == 3
+            and record.get("authority_kind") == ADOPTION_AUTHORITY_KIND
+            and record.get("operation_id") == operation_id
+            ):
+            raise BootstrapError("production already has a bootstrap authority")
+    if not transaction_present:
+        for path in (
+            runtime_root / "state/active-control.json",
+            runtime_root / ADOPTED_DEPLOYMENT_RELATIVE_PATH,
+        ):
+            if path.exists() or path.is_symlink():
+                raise BootstrapError(
+                    "manual adoption found a pre-existing control destination"
+                )
+        bin_root = runtime_root / "bin"
+        if bin_root.is_dir() and not bin_root.is_symlink() and any(
+            bin_root.iterdir()
+        ):
+            raise BootstrapError("manual adoption found pre-existing runtime controls")
+        releases = runtime_root / "control-releases"
+        if releases.is_dir() and not releases.is_symlink() and any(
+            releases.iterdir()
+        ):
+            raise BootstrapError("manual adoption found pre-existing control releases")
+
+
+def _adopted_deployment_state(
+    *,
+    evidence: dict[str, object],
+    evidence_sha256: str,
+    active: dict[str, object],
+    adopted_at: str,
+) -> dict[str, object]:
+    repository = evidence["live_repository"]
+    bootstrap_source = evidence["bootstrap_source"]
+    if not isinstance(repository, dict) or not isinstance(bootstrap_source, dict):
+        raise BootstrapError("adoption evidence lacks repository authority")
+    return {
+        "schema_version": ADOPTED_DEPLOYMENT_SCHEMA_VERSION,
+        "status": "adopted",
+        "authority_kind": ADOPTION_AUTHORITY_KIND,
+        "operation_id": evidence["operation_id"],
+        "source_sha": repository["head"],
+        "source_tree": repository["tree"],
+        "bootstrap_source_sha": bootstrap_source["sha"],
+        "bootstrap_source_tree": bootstrap_source["tree"],
+        "active_control": active,
+        "adoption_evidence": evidence,
+        "adoption_evidence_sha256": evidence_sha256,
+        "images": evidence["images"],
+        "production_config": evidence["production_config"],
+        "asset_identity": evidence["asset_identity"],
+        "migrations": evidence["migrations"],
+        "database": evidence["database"],
+        "maintenance": evidence["maintenance"],
+        "monomer_md": evidence["monomer_md"],
+        "monomer_dft": evidence["monomer_dft"],
+        "adopted_at": adopted_at,
+    }
+
+
+def _assert_adoption_evidence_unchanged(
+    expected: dict[str, object],
+    production_root: Path,
+    runtime_root: Path,
+    *,
+    operation_id: str,
+    bootstrap_source_sha: str,
+    bootstrap_source_tree: str,
+    live_sha: str,
+    md_unit_sha256: str,
+    dft_unit_sha256: str,
+    allow_test: bool,
+) -> None:
+    observed = _collect_adoption_evidence(
+        production_root,
+        runtime_root,
+        operation_id=operation_id,
+        bootstrap_source_sha=bootstrap_source_sha,
+        bootstrap_source_tree=bootstrap_source_tree,
+        live_sha=live_sha,
+        expected_md_unit_sha256=md_unit_sha256,
+        expected_dft_unit_sha256=dft_unit_sha256,
+        allow_test=allow_test,
+    )
+    if observed != expected:
+        raise BootstrapError("manual runtime adoption evidence changed")
+
+
+def _apply_manual_runtime_adoption(
+    args: argparse.Namespace,
+    *,
+    production_root: Path,
+    runtime_root: Path,
+    source_sha: str,
+    source_tree: str,
+    source_readiness: dict[str, object],
+    delivery_gate: dict[str, object],
+    evidence: dict[str, object],
+    evidence_sha256: str,
+    immutable_payloads: dict[str, tuple[bytes, int]],
+    control: object,
+    allow_test: bool,
+) -> dict[str, object]:
+    if args.confirm_evidence_sha256 != evidence_sha256:
+        raise BootstrapError("adoption evidence differs from explicit confirmation")
+    repository = evidence.get("live_repository")
+    if (
+        not isinstance(repository, dict)
+        or args.confirm_source_tree != repository.get("tree")
+    ):
+        raise BootstrapError("adopted live tree differs from explicit confirmation")
+    operation_id = _require_adoption_operation_id(args.operation_id)
+    _adoption_preflight(
+        runtime_root,
+        operation_id=operation_id,
+        permit_transaction=True,
+    )
+    lock_path, lock_created = _ensure_adoption_lock(runtime_root)
+    with _open_deploy_lock(lock_path) as stream:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise BootstrapError("another deployment holds deploy.lock") from exc
+        # The first preflight happens before the lock path can be created and
+        # acquired.  Repeat it under the shared deployment lock so a governed
+        # operation that completed in that gap cannot be adopted as though the
+        # original no-authority baseline still existed.
+        _adoption_preflight(
+            runtime_root,
+            operation_id=operation_id,
+            permit_transaction=True,
+        )
+        transaction_path = _adoption_transaction_path(
+            runtime_root, operation_id=operation_id
+        )
+        if transaction_path.exists() or transaction_path.is_symlink():
+            transaction = _validate_adoption_transaction(
+                _load_private_json(transaction_path), path=transaction_path
+            )
+            stored_identity = transaction.get("identity")
+            if not isinstance(stored_identity, dict):
+                raise BootstrapError("adoption transaction identity is invalid")
+            initial_presence = stored_identity.get("initial_presence")
+            expected_fields = {
+                "authority_kind": ADOPTION_AUTHORITY_KIND,
+                "operation_id": operation_id,
+                "bootstrap_source_sha": source_sha,
+                "bootstrap_source_tree": source_tree,
+                "live_source_sha": args.live_sha,
+                "live_source_tree": repository["tree"],
+                "evidence_sha256": evidence_sha256,
+                "source_readiness_sha256": _canonical_json_digest(source_readiness),
+                "delivery_gate_sha256": _canonical_json_digest(delivery_gate),
+                "md_unit_sha256": args.confirm_md_unit_sha256,
+                "dft_unit_sha256": args.confirm_dft_unit_sha256,
+                "deploy_lock_disposition": ADOPTION_DEPLOY_LOCK_DISPOSITION,
+            }
+            if any(
+                stored_identity.get(name) != value
+                for name, value in expected_fields.items()
+            ):
+                raise BootstrapError("adoption transaction authority changed")
+        else:
+            initial_presence = _adoption_initial_presence(runtime_root)
+            identity = {
+                "authority_kind": ADOPTION_AUTHORITY_KIND,
+                "operation_id": operation_id,
+                "bootstrap_source_sha": source_sha,
+                "bootstrap_source_tree": source_tree,
+                "live_source_sha": args.live_sha,
+                "live_source_tree": repository["tree"],
+                "evidence_sha256": evidence_sha256,
+                "source_readiness_sha256": _canonical_json_digest(source_readiness),
+                "delivery_gate_sha256": _canonical_json_digest(delivery_gate),
+                "md_unit_sha256": args.confirm_md_unit_sha256,
+                "dft_unit_sha256": args.confirm_dft_unit_sha256,
+                "initial_presence": initial_presence,
+                "deploy_lock_created": lock_created,
+                "deploy_lock_disposition": ADOPTION_DEPLOY_LOCK_DISPOSITION,
+            }
+            transaction_path, transaction = _new_adoption_transaction(
+                runtime_root,
+                operation_id=operation_id,
+                identity=identity,
+            )
+        if not isinstance(initial_presence, dict):
+            raise BootstrapError("adoption initial path authority is invalid")
+        initial_paths = initial_presence.get("paths")
+        initial_releases = initial_presence.get("control_release_names")
+        if not isinstance(initial_paths, dict) or not isinstance(initial_releases, list):
+            raise BootstrapError("adoption initial path inventory is invalid")
+        _assert_adoption_evidence_unchanged(
+            evidence,
+            production_root,
+            runtime_root,
+            operation_id=operation_id,
+            bootstrap_source_sha=source_sha,
+            bootstrap_source_tree=source_tree,
+            live_sha=args.live_sha,
+            md_unit_sha256=args.confirm_md_unit_sha256,
+            dft_unit_sha256=args.confirm_dft_unit_sha256,
+            allow_test=allow_test,
+        )
+        layout_planned: list[dict[str, object]] = []
+        for relative, mode in DIRECTORIES.items():
+            path = runtime_root / relative
+            if (
+                Path(relative) != ADOPTION_TRANSACTION_RELATIVE_DIRECTORY
+                and initial_paths.get(str(path)) is False
+            ):
+                layout_planned.append(
+                    {
+                        "path": str(path),
+                        "kind": "directory",
+                        "mode": format(mode, "04o"),
+                    }
+                )
+        transaction = _record_adoption_plan(
+            transaction_path,
+            transaction,
+            name="layout",
+            evidence={"directories": layout_planned},
+            planned_paths=layout_planned,
+        )
+        layout_evidence, _layout_created_now = _ensure_adoption_layout(runtime_root)
+        transaction = _advance_adoption_transaction(
+            transaction_path,
+            transaction,
+            phase="layout-ready",
+            evidence_name="runtime_layout",
+            evidence=layout_evidence,
+            created_paths=layout_planned,
+        )
+        _assert_adoption_evidence_unchanged(
+            evidence,
+            production_root,
+            runtime_root,
+            operation_id=operation_id,
+            bootstrap_source_sha=source_sha,
+            bootstrap_source_tree=source_tree,
+            live_sha=args.live_sha,
+            md_unit_sha256=args.confirm_md_unit_sha256,
+            dft_unit_sha256=args.confirm_dft_unit_sha256,
+            allow_test=allow_test,
+        )
+        if any(str(value).startswith(".bootstrap-") for value in initial_releases):
+            raise BootstrapError("manual adoption found pre-existing control staging")
+        control_plan = _plan_control_release(
+            runtime_root,
+            control=control,
+            source_sha=source_sha,
+            source_tree=source_tree,
+            allow_test=allow_test,
+            prepared_at=str(transaction["created_at"]),
+        )
+        candidate = control_plan["candidate"]
+        active = control_plan["active"]
+        release_id = control_plan["release_id"]
+        if (
+            not isinstance(candidate, dict)
+            or not isinstance(active, dict)
+            or not isinstance(release_id, str)
+        ):
+            raise BootstrapError("planned adoption controls are invalid")
+        control_planned: list[dict[str, object]] = []
+        bin_temporary_paths: dict[str, Path] = {}
+        immutable_digests: dict[str, str] = {}
+        for name, (payload, mode) in immutable_payloads.items():
+            path = runtime_root / "bin" / name
+            immutable_digests[name] = digest(payload)
+            if initial_paths.get(str(path)) is False:
+                temporary = _adoption_install_temporary_path(
+                    path, operation_id=operation_id
+                )
+                bin_temporary_paths[name] = temporary
+                control_planned.extend(
+                    (
+                        _adoption_file_plan(path, payload, mode),
+                        _adoption_file_plan(temporary, payload, mode),
+                    )
+                )
+        if release_id not in initial_releases:
+            staging_ownership = control_plan.get("staging_tree_ownership")
+            release_ownership = control_plan.get("release_tree_ownership")
+            if not isinstance(staging_ownership, dict) or not isinstance(
+                release_ownership, dict
+            ):
+                raise BootstrapError("planned control-release ownership is invalid")
+            control_planned.extend((staging_ownership, release_ownership))
+        controls_plan_evidence = {
+            "immutable_files": immutable_digests,
+            "candidate_control": candidate,
+            "active_control": active,
+            "release_tree": control_plan["release_tree_ownership"],
+        }
+        transaction = _record_adoption_plan(
+            transaction_path,
+            transaction,
+            name="controls",
+            evidence=controls_plan_evidence,
+            planned_paths=control_planned,
+        )
+        installed: dict[str, str] = {}
+        control_created: list[dict[str, object]] = []
+        for name, (payload, mode) in immutable_payloads.items():
+            path = runtime_root / "bin" / name
+            installed[name] = _install_exact(
+                path,
+                payload,
+                mode,
+                temporary_path=bin_temporary_paths.get(name),
+                reject_unowned_staging=True,
+            )
+            if initial_paths.get(str(path)) is False:
+                control_created.append(_adoption_file_plan(path, payload, mode))
+        actual_bin = {entry.name for entry in (runtime_root / "bin").iterdir()}
+        if actual_bin != set(IMMUTABLE_FILES):
+            raise BootstrapError("runtime/bin contains non-adoption controls")
+        candidate, active = _build_control_release(
+            runtime_root,
+            control=control,
+            source_sha=source_sha,
+            source_tree=source_tree,
+            allow_test=allow_test,
+            prepared_at=str(transaction["created_at"]),
+            plan=control_plan,
+        )
+        release_path = runtime_root / "control-releases" / str(candidate["release_id"])
+        if str(candidate["release_id"]) not in initial_releases:
+            release_ownership = control_plan["release_tree_ownership"]
+            if _adoption_tree_identity(release_path) != release_ownership:
+                raise BootstrapError("installed control-release tree differs from plan")
+            control_created.append(release_ownership)
+        controls_evidence = {
+            "immutable_files": installed,
+            "candidate_control": candidate,
+            "active_control": active,
+        }
+        transaction = _advance_adoption_transaction(
+            transaction_path,
+            transaction,
+            phase="controls-ready",
+            evidence_name="controls",
+            evidence=controls_evidence,
+            created_paths=control_created,
+        )
+        _assert_adoption_evidence_unchanged(
+            evidence,
+            production_root,
+            runtime_root,
+            operation_id=operation_id,
+            bootstrap_source_sha=source_sha,
+            bootstrap_source_tree=source_tree,
+            live_sha=args.live_sha,
+            md_unit_sha256=args.confirm_md_unit_sha256,
+            dft_unit_sha256=args.confirm_dft_unit_sha256,
+            allow_test=allow_test,
+        )
+        adopted_state = _adopted_deployment_state(
+            evidence=evidence,
+            evidence_sha256=evidence_sha256,
+            active=active,
+            adopted_at=str(transaction["created_at"]),
+        )
+        adopted_path = runtime_root / ADOPTED_DEPLOYMENT_RELATIVE_PATH
+        adopted_payload = json.dumps(
+            adopted_state,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8") + b"\n"
+        baseline_planned: list[dict[str, object]] = []
+        adopted_temporary: Path | None = None
+        if initial_paths.get(str(adopted_path)) is False:
+            adopted_temporary = _adoption_install_temporary_path(
+                adopted_path, operation_id=operation_id
+            )
+            baseline_planned.extend(
+                (
+                    _adoption_file_plan(adopted_path, adopted_payload, 0o600),
+                    _adoption_file_plan(adopted_temporary, adopted_payload, 0o600),
+                )
+            )
+        baseline_evidence = {
+            "adopted_deployment_sha256": _canonical_json_digest(adopted_state),
+            "adopted_deployment": adopted_state,
+        }
+        transaction = _record_adoption_plan(
+            transaction_path,
+            transaction,
+            name="baseline",
+            evidence=baseline_evidence,
+            planned_paths=baseline_planned,
+        )
+        _install_exact(
+            adopted_path,
+            adopted_payload,
+            0o600,
+            temporary_path=adopted_temporary,
+            reject_unowned_staging=True,
+        )
+        if _load_private_json(adopted_path) != adopted_state:
+            raise BootstrapError("existing adopted deployment state differs")
+        baseline_created = [
+            _adoption_file_plan(adopted_path, adopted_payload, 0o600)
+        ] if initial_paths.get(str(adopted_path)) is False else []
+        transaction = _advance_adoption_transaction(
+            transaction_path,
+            transaction,
+            phase="baseline-ready",
+            evidence_name="baseline",
+            evidence=baseline_evidence,
+            created_paths=baseline_created,
+        )
+        _assert_adoption_evidence_unchanged(
+            evidence,
+            production_root,
+            runtime_root,
+            operation_id=operation_id,
+            bootstrap_source_sha=source_sha,
+            bootstrap_source_tree=source_tree,
+            live_sha=args.live_sha,
+            md_unit_sha256=args.confirm_md_unit_sha256,
+            dft_unit_sha256=args.confirm_dft_unit_sha256,
+            allow_test=allow_test,
+        )
+        bootstrap_path = runtime_root / "state/bootstrap-control.json"
+        active_path = runtime_root / "state/active-control.json"
+        bootstrap_base = {
+            "schema_version": 3,
+            "authority_kind": ADOPTION_AUTHORITY_KIND,
+            "operation_id": operation_id,
+            "source_sha": source_sha,
+            "source_tree": source_tree,
+            "source_readiness": source_readiness,
+            "source_readiness_sha256": _canonical_json_digest(source_readiness),
+            "delivery_gate": delivery_gate,
+            "production_repository": repository,
+            "adoption": evidence,
+            "adoption_evidence_sha256": evidence_sha256,
+            "adopted_deployment": adopted_state,
+            "adopted_deployment_sha256": _canonical_json_digest(adopted_state),
+            "immutable_files": installed,
+            "candidate_control": candidate,
+            "active_control": active,
+        }
+        prepared_bootstrap = {**bootstrap_base, "status": "prepared"}
+        completed_bootstrap = {**bootstrap_base, "status": "completed"}
+        authority_intent = {
+            "bootstrap_schema_version": 3,
+            "active_control": active,
+            "adopted_deployment_sha256": _canonical_json_digest(adopted_state),
+        }
+        if transaction["phase"] == "baseline-ready":
+            for path in (bootstrap_path, active_path):
+                temporary = _adoption_install_temporary_path(
+                    path, operation_id=operation_id
+                )
+                if (
+                    path.exists()
+                    or path.is_symlink()
+                    or temporary.exists()
+                    or temporary.is_symlink()
+                ):
+                    raise BootstrapError(
+                        "adoption authority destination appeared before commit intent"
+                    )
+        else:
+            if bootstrap_path.exists() or bootstrap_path.is_symlink():
+                current_bootstrap = _load_private_json(bootstrap_path)
+                if current_bootstrap not in (
+                    prepared_bootstrap,
+                    completed_bootstrap,
+                ):
+                    raise BootstrapError(
+                        "existing adoption bootstrap authority differs"
+                    )
+            if active_path.exists() or active_path.is_symlink():
+                if _load_private_json(active_path) != active:
+                    raise BootstrapError(
+                        "existing adoption active control differs"
+                    )
+        transaction = _advance_adoption_transaction(
+            transaction_path,
+            transaction,
+            phase="authority-commit-intent",
+            evidence_name="authority_intent",
+            evidence=authority_intent,
+        )
+        bootstrap_payload = json.dumps(
+            prepared_bootstrap,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8") + b"\n"
+        if bootstrap_path.exists() or bootstrap_path.is_symlink():
+            current_bootstrap = _load_private_json(bootstrap_path)
+            if current_bootstrap not in (prepared_bootstrap, completed_bootstrap):
+                raise BootstrapError("existing adoption bootstrap authority differs")
+            if current_bootstrap == prepared_bootstrap:
+                _install_exact(
+                    bootstrap_path,
+                    bootstrap_payload,
+                    0o600,
+                    temporary_path=_adoption_install_temporary_path(
+                        bootstrap_path, operation_id=operation_id
+                    ),
+                    reject_unowned_staging=True,
+                )
+        else:
+            _install_exact(
+                bootstrap_path,
+                bootstrap_payload,
+                0o600,
+                temporary_path=_adoption_install_temporary_path(
+                    bootstrap_path, operation_id=operation_id
+                ),
+                reject_unowned_staging=True,
+            )
+        active_payload = json.dumps(
+            active,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8") + b"\n"
+        _install_exact(
+            active_path,
+            active_payload,
+            0o600,
+            temporary_path=_adoption_install_temporary_path(
+                active_path, operation_id=operation_id
+            ),
+            reject_unowned_staging=True,
+        )
+        if _load_private_json(bootstrap_path) != completed_bootstrap:
+            completed_payload = json.dumps(
+                completed_bootstrap,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8") + b"\n"
+            _cas_replace_exact_file(
+                bootstrap_path,
+                expected_payload=bootstrap_payload,
+                replacement_payload=completed_payload,
+                mode=0o600,
+                temporary_path=bootstrap_path.parent
+                / f".{bootstrap_path.name}.{operation_id}.complete.tmp",
+            )
+        loaded_active, _manifest, _release = control.load_active_control(runtime_root)
+        if loaded_active != active:
+            raise BootstrapError("adoption active control did not commit")
+        transaction = _advance_adoption_transaction(
+            transaction_path,
+            transaction,
+            phase="completed",
+            evidence_name="authority",
+            evidence={
+                "bootstrap_control_sha256": digest(bootstrap_path.read_bytes()),
+                "active_control_sha256": digest(active_path.read_bytes()),
+                "adopted_deployment_sha256": digest(adopted_path.read_bytes()),
+            },
+        )
+    return {
+        "status": "adopted",
+        "operation_id": operation_id,
+        "evidence_sha256": evidence_sha256,
+        "adopted_deployment": adopted_state,
+        "active_control": active,
+        "adoption_transaction": transaction,
+    }
+
+
+def _abort_manual_runtime_adoption(
+    args: argparse.Namespace,
+    *,
+    runtime_root: Path,
+) -> dict[str, object]:
+    operation_id = _require_adoption_operation_id(args.operation_id)
+    transaction_path = _adoption_transaction_path(
+        runtime_root, operation_id=operation_id
+    )
+    transaction = _validate_adoption_transaction(
+        _load_private_json(transaction_path), path=transaction_path
+    )
+    if transaction["status"] == "aborted":
+        return {"status": "already-aborted", "operation_id": operation_id}
+    if transaction["phase"] in {"authority-commit-intent", "completed"}:
+        raise BootstrapError(
+            "adoption abort is forbidden after authority commit intent"
+        )
+    identity = transaction.get("identity")
+    if (
+        not isinstance(identity, dict)
+        or identity.get("operation_id") != operation_id
+        or identity.get("bootstrap_source_sha") != args.sha
+        or identity.get("live_source_sha") != args.live_sha
+        or identity.get("live_source_tree") != args.confirm_source_tree
+        or identity.get("evidence_sha256") != args.confirm_evidence_sha256
+        or identity.get("md_unit_sha256") != args.confirm_md_unit_sha256
+        or identity.get("dft_unit_sha256") != args.confirm_dft_unit_sha256
+    ):
+        raise BootstrapError("adoption abort confirmation differs from transaction")
+    lock_path, _created = _ensure_adoption_lock(runtime_root)
+    with _open_deploy_lock(lock_path) as stream:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise BootstrapError("another deployment holds deploy.lock") from exc
+        current_transaction = _assert_exclusive_adoption_transaction(
+            runtime_root, operation_id=operation_id
+        )
+        if current_transaction is None:
+            raise BootstrapError("adoption transaction disappeared before abort")
+        transaction = current_transaction
+        if transaction.get("identity") != identity:
+            raise BootstrapError("adoption transaction changed before abort")
+        if transaction["phase"] in {"authority-commit-intent", "completed"}:
+            raise BootstrapError(
+                "adoption abort is forbidden after authority commit intent"
+            )
+        for path in (
+            runtime_root / "state/bootstrap-control.json",
+            runtime_root / "state/active-control.json",
+            runtime_root / "state/current-deployment.json",
+        ):
+            if path.exists() or path.is_symlink():
+                raise BootstrapError(
+                    "adoption abort found committed or foreign deployment authority"
+                )
+        ownership_by_path: dict[str, dict[str, object]] = {}
+        for raw in [
+            *list(transaction["planned_paths"]),
+            *list(transaction["created_paths"]),
+        ]:
+            ownership = _validate_adoption_ownership(
+                raw, label="adoption abort"
+            )
+            path_value = str(ownership["path"])
+            if (
+                path_value in ownership_by_path
+                and ownership_by_path[path_value] != ownership
+            ):
+                raise BootstrapError("adoption abort ownership conflicts")
+            ownership_by_path[path_value] = ownership
+        ordered_ownership = reversed(list(ownership_by_path.values()))
+        owned_paths = {Path(value) for value in ownership_by_path}
+        # Validate the entire cleanup set before deleting its first byte.  This
+        # makes an existing drift a zero-delete failure rather than a partial
+        # teardown discovered halfway through the reverse traversal.
+        for ownership in list(ordered_ownership):
+            path = Path(str(ownership["path"]))
+            if not path.is_absolute() or not path.is_relative_to(runtime_root):
+                raise BootstrapError("adoption abort ownership leaves runtime root")
+            if ownership["kind"] == "file":
+                if not (path.exists() or path.is_symlink()):
+                    continue
+                current = _adoption_file_ownership(path)
+                if current != ownership:
+                    raise BootstrapError("adoption-owned file changed before abort")
+            elif ownership["kind"] == "tree":
+                if not (path.exists() or path.is_symlink()):
+                    continue
+                current = _adoption_tree_identity(path)
+                if current != ownership:
+                    raise BootstrapError("adoption-owned tree changed before abort")
+            elif ownership["kind"] == "staging-tree":
+                if not (path.exists() or path.is_symlink()):
+                    continue
+                _validate_adoption_staging_tree(path, ownership)
+            else:
+                if not (path.exists() or path.is_symlink()):
+                    continue
+                metadata = path.lstat()
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or path.is_symlink()
+                    or metadata.st_uid != os.geteuid()
+                    or format(stat.S_IMODE(metadata.st_mode), "04o")
+                    != ownership["mode"]
+                ):
+                    raise BootstrapError("adoption-owned directory changed before abort")
+                if any(entry not in owned_paths for entry in path.iterdir()):
+                    raise BootstrapError(
+                        f"adoption-owned directory is not empty during abort: {path}"
+                    )
+        for ownership in reversed(list(ownership_by_path.values())):
+            path = Path(str(ownership["path"]))
+            if not (path.exists() or path.is_symlink()):
+                continue
+            if ownership["kind"] == "file":
+                if _adoption_file_ownership(path) != ownership:
+                    raise BootstrapError("adoption-owned file changed during abort")
+                path.unlink()
+            elif ownership["kind"] == "tree":
+                if _adoption_tree_identity(path) != ownership:
+                    raise BootstrapError("adoption-owned tree changed during abort")
+                shutil.rmtree(path)
+            elif ownership["kind"] == "staging-tree":
+                _validate_adoption_staging_tree(path, ownership)
+                shutil.rmtree(path)
+            else:
+                metadata = path.lstat()
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or path.is_symlink()
+                    or metadata.st_uid != os.geteuid()
+                    or format(stat.S_IMODE(metadata.st_mode), "04o")
+                    != ownership["mode"]
+                ):
+                    raise BootstrapError(
+                        "adoption-owned directory changed during abort"
+                    )
+                try:
+                    path.rmdir()
+                except OSError as exc:
+                    raise BootstrapError(
+                        f"adoption-owned directory changed during abort: {path}"
+                    ) from exc
+            _fsync_directory(path.parent)
+        lock_metadata = lock_path.lstat()
+        if (
+            identity.get("deploy_lock_disposition")
+            != ADOPTION_DEPLOY_LOCK_DISPOSITION
+            or not stat.S_ISREG(lock_metadata.st_mode)
+            or lock_path.is_symlink()
+            or lock_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(lock_metadata.st_mode) != 0o600
+        ):
+            raise BootstrapError("permanent adoption deploy lock is unsafe")
+        terminal = _write_adoption_transaction(
+            transaction_path,
+            {
+                **transaction,
+                "status": "aborted",
+                "phase": "aborted",
+                "aborted_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            },
+        )
+    return {
+        "status": "aborted",
+        "operation_id": operation_id,
+        "adoption_transaction": terminal,
+    }
 
 
 def _bootstrap_transaction_path(
@@ -922,7 +3946,7 @@ def _sealed_bootstrap_delivery_gate(
     record = _load_private_json(path)
     gate = record.get("delivery_gate")
     if (
-        record.get("schema_version") != 2
+        record.get("schema_version") not in {2, 3}
         or record.get("status") not in {"prepared", "completed"}
         or record.get("source_sha") != source_sha
         or record.get("source_tree") != source_tree
@@ -932,20 +3956,45 @@ def _sealed_bootstrap_delivery_gate(
     return dict(gate)
 
 
-def _install_exact(path: Path, payload: bytes, mode: int) -> str:
+def _install_exact(
+    path: Path,
+    payload: bytes,
+    mode: int,
+    *,
+    temporary_path: Path | None = None,
+    reject_unowned_staging: bool = False,
+) -> str:
     # A prior crash can leave only a private staging name, or both a complete
     # hard-linked destination and its staging name.  It must never leave a
     # truncated final path.  The parent is deploy-user-owned mode 0700.
-    for temporary in path.parent.glob(f".{path.name}.*.tmp"):
-        metadata = temporary.lstat()
+    staging = list(path.parent.glob(f".{path.name}.*.tmp"))
+    if temporary_path is None:
+        if reject_unowned_staging and staging:
+            raise BootstrapError("immutable install has unowned staging files")
+        for temporary in staging:
+            metadata = temporary.lstat()
+            if (
+                temporary.is_symlink()
+                or not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+            ):
+                raise BootstrapError(
+                    f"immutable install staging file is unsafe: {temporary}"
+                )
+            temporary.unlink()
+        _fsync_directory(path.parent)
+    else:
         if (
-            temporary.is_symlink()
-            or not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
+            temporary_path.parent != path.parent
+            or not temporary_path.name.startswith(f".{path.name}.")
+            or not temporary_path.name.endswith(".tmp")
+            or any(value != temporary_path for value in staging)
         ):
-            raise BootstrapError(f"immutable install staging file is unsafe: {temporary}")
-        temporary.unlink()
-    _fsync_directory(path.parent)
+            raise BootstrapError("immutable install has foreign staging files")
+        if temporary_path.exists() or temporary_path.is_symlink():
+            staged = _adoption_file_ownership(temporary_path)
+            if staged != _adoption_file_plan(temporary_path, payload, mode):
+                raise BootstrapError("immutable install staging file differs")
     if path.exists() or path.is_symlink():
         try:
             metadata = path.lstat()
@@ -962,29 +4011,146 @@ def _install_exact(path: Path, payload: bytes, mode: int) -> str:
             raise BootstrapError(
                 f"refusing to overwrite a different immutable file: {path}"
             )
+        if temporary_path is not None and (
+            temporary_path.exists() or temporary_path.is_symlink()
+        ):
+            temporary_path.unlink()
+            _fsync_directory(path.parent)
         return digest(existing)
-    temporary = path.parent / f".{path.name}.{os.urandom(12).hex()}.tmp"
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-        mode,
+    temporary = temporary_path or (
+        path.parent / f".{path.name}.{os.urandom(12).hex()}.tmp"
     )
+    if not (temporary.exists() or temporary.is_symlink()):
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            mode,
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fchmod(stream.fileno(), mode)
+                os.fsync(stream.fileno())
+        except BaseException:
+            if temporary_path is None:
+                with contextlib.suppress(OSError):
+                    temporary.unlink()
+            raise
     try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fchmod(stream.fileno(), mode)
-            os.fsync(stream.fileno())
         # link(2) is an atomic no-replace publication.  A concurrent or stale
         # destination cannot be overwritten as os.replace() would do.
         os.link(temporary, path, follow_symlinks=False)
         temporary.unlink()
         _fsync_directory(path.parent)
     except BaseException:
-        with contextlib.suppress(OSError):
-            temporary.unlink()
+        if temporary_path is None:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
         raise
     return digest(payload)
+
+
+def _cas_replace_exact_file(
+    path: Path,
+    *,
+    expected_payload: bytes,
+    replacement_payload: bytes,
+    mode: int,
+    temporary_path: Path,
+) -> None:
+    """Exchange exact expected bytes without overwriting a raced destination."""
+
+    expected = _adoption_file_plan(path, expected_payload, mode)
+    replacement = _adoption_file_plan(path, replacement_payload, mode)
+    temporary_expected = _adoption_file_plan(
+        temporary_path, expected_payload, mode
+    )
+    temporary_replacement = _adoption_file_plan(
+        temporary_path, replacement_payload, mode
+    )
+    current = _adoption_file_ownership(path)
+    if current == replacement:
+        if temporary_path.exists() or temporary_path.is_symlink():
+            if _adoption_file_ownership(temporary_path) != temporary_expected:
+                raise BootstrapError("authority CAS residue differs")
+            temporary_path.unlink()
+            _fsync_directory(path.parent)
+        return
+    if current != expected:
+        raise BootstrapError("authority CAS precondition differs")
+    if temporary_path.exists() or temporary_path.is_symlink():
+        if _adoption_file_ownership(temporary_path) != temporary_replacement:
+            raise BootstrapError("authority CAS staging differs")
+    else:
+        descriptor = os.open(
+            temporary_path,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            mode,
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(replacement_payload)
+                stream.flush()
+                os.fchmod(stream.fileno(), mode)
+                os.fsync(stream.fileno())
+        except BaseException:
+            with contextlib.suppress(OSError):
+                temporary_path.unlink()
+            raise
+        _fsync_directory(path.parent)
+    pinned = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        pinned_metadata = os.fstat(pinned)
+        pinned_payload = bytearray()
+        while len(pinned_payload) < pinned_metadata.st_size:
+            chunk = os.read(
+                pinned,
+                min(1024 * 1024, pinned_metadata.st_size - len(pinned_payload)),
+            )
+            if not chunk:
+                raise BootstrapError("authority CAS precondition changed")
+            pinned_payload.extend(chunk)
+        if (
+            not stat.S_ISREG(pinned_metadata.st_mode)
+            or pinned_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(pinned_metadata.st_mode) != mode
+            or bytes(pinned_payload) != expected_payload
+        ):
+            raise BootstrapError("authority CAS precondition differs")
+        _rename_exchange(path, temporary_path)
+        swapped = temporary_path.lstat()
+        if (
+            swapped.st_dev,
+            swapped.st_ino,
+            swapped.st_mode,
+            swapped.st_uid,
+            swapped.st_size,
+        ) != (
+            pinned_metadata.st_dev,
+            pinned_metadata.st_ino,
+            pinned_metadata.st_mode,
+            pinned_metadata.st_uid,
+            pinned_metadata.st_size,
+        ):
+            _rename_exchange(path, temporary_path)
+            raise BootstrapError("authority CAS destination changed before exchange")
+    finally:
+        os.close(pinned)
+    if _adoption_file_ownership(temporary_path) != temporary_expected:
+        _rename_exchange(path, temporary_path)
+        raise BootstrapError("authority CAS exchanged unexpected bytes")
+    temporary_path.unlink()
+    _fsync_directory(path.parent)
 
 
 def _git_layout(root: Path) -> tuple[Path, Path]:
@@ -1525,15 +4691,17 @@ def _read_reviewed_source(relative: str, *, source_sha: str, allow_test: bool) -
     return payload
 
 
-def _build_control_release(
+def _plan_control_release(
     runtime_root: Path,
     *,
     control: object,
     source_sha: str,
     source_tree: str,
     allow_test: bool,
-    prepared_at: str | None = None,
-) -> tuple[dict[str, object], dict[str, object]]:
+    prepared_at: str,
+) -> dict[str, object]:
+    if not isinstance(prepared_at, str) or not prepared_at:
+        raise BootstrapError("bootstrap control prepared timestamp is invalid")
     source_payload = _read_reviewed_source(
         "scripts/control-release.json", source_sha=source_sha, allow_test=allow_test
     )
@@ -1578,56 +4746,141 @@ def _build_control_release(
         "release_id": release_id,
         "manifest_sha256": digest(manifest_payload),
     }
+    operation_id = "bootstrap-controls-" + source_sha[:16]
+    candidate = {
+        "schema_version": control.CONTROL_CANDIDATE_SCHEMA_VERSION,
+        "protocol_version": control.PROTOCOL_VERSION,
+        "component": "deployment-controls",
+        "release_id": release_id,
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "manifest_sha256": digest(manifest_payload),
+        "operation_id": operation_id,
+        "prepared_at": prepared_at,
+    }
+    control.validate_candidate_record(candidate)
+    active = {
+        "schema_version": control.ACTIVE_CONTROL_SCHEMA_VERSION,
+        "protocol_version": control.PROTOCOL_VERSION,
+        "component": "deployment-controls",
+        "generation": 1,
+        "release_id": release_id,
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "manifest_sha256": digest(manifest_payload),
+        "operation_id": operation_id,
+        "previous_release_id": None,
+        "activated_at": prepared_at,
+    }
+    control.validate_active_control_record(active)
+    expected_files = {
+        **{
+            name: {"sha256": digest(payload), "mode": "0700"}
+            for name, payload in payloads.items()
+        },
+        control.CONTROL_MANIFEST_NAME: {
+            "sha256": digest(manifest_payload),
+            "mode": "0600",
+        },
+    }
+    tree_records = [
+        {
+            "relative_path": name,
+            "kind": "file",
+            "mode": record["mode"],
+            "sha256": record["sha256"],
+        }
+        for name, record in sorted(expected_files.items())
+    ]
+    return {
+        "payloads": payloads,
+        "manifest": manifest,
+        "manifest_payload": manifest_payload,
+        "release_id": release_id,
+        "release_path": release,
+        "staging_path": staging,
+        "staging_owner": staging_owner,
+        "expected_files": expected_files,
+        "release_tree_ownership": {
+            "path": str(release),
+            "kind": "tree",
+            "identity_sha256": _canonical_json_digest(tree_records),
+        },
+        "staging_tree_ownership": {
+            "path": str(staging),
+            "kind": "staging-tree",
+            "owner_sha256": _canonical_json_digest(staging_owner),
+            "owner": staging_owner,
+            "files": expected_files,
+        },
+        "candidate": candidate,
+        "active": active,
+    }
+
+
+def _build_control_release(
+    runtime_root: Path,
+    *,
+    control: object,
+    source_sha: str,
+    source_tree: str,
+    allow_test: bool,
+    prepared_at: str | None = None,
+    plan: dict[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    if prepared_at is None:
+        prepared_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    if plan is None:
+        plan = _plan_control_release(
+            runtime_root,
+            control=control,
+            source_sha=source_sha,
+            source_tree=source_tree,
+            allow_test=allow_test,
+            prepared_at=prepared_at,
+        )
+    payloads = plan.get("payloads")
+    manifest = plan.get("manifest")
+    manifest_payload = plan.get("manifest_payload")
+    release_id = plan.get("release_id")
+    release = plan.get("release_path")
+    staging = plan.get("staging_path")
+    staging_owner = plan.get("staging_owner")
+    staging_ownership = plan.get("staging_tree_ownership")
+    candidate = plan.get("candidate")
+    active = plan.get("active")
+    if (
+        not isinstance(payloads, dict)
+        or any(
+            not isinstance(name, str) or not isinstance(payload, bytes)
+            for name, payload in payloads.items()
+        )
+        or not isinstance(manifest, dict)
+        or not isinstance(manifest_payload, bytes)
+        or not isinstance(release_id, str)
+        or not isinstance(release, Path)
+        or not isinstance(staging, Path)
+        or not isinstance(staging_owner, dict)
+        or not isinstance(staging_ownership, dict)
+        or not isinstance(candidate, dict)
+        or not isinstance(active, dict)
+        or candidate.get("prepared_at") != prepared_at
+    ):
+        raise BootstrapError("bootstrap control release plan is invalid")
+    release_parent = release.parent
 
     def inspect_staging() -> str:
-        metadata = staging.lstat()
-        if (
-            not stat.S_ISDIR(metadata.st_mode)
-            or staging.is_symlink()
-            or metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o700
-        ):
-            raise BootstrapError("bootstrap control-release staging is unsafe")
+        _validate_adoption_staging_tree(staging, staging_ownership)
         entries = {entry.name: entry for entry in staging.iterdir()}
-        owner_path = staging / ".owner.json"
         if ".owner.json" in entries:
-            if _load_private_json(owner_path) != staging_owner:
-                raise BootstrapError(
-                    "bootstrap control-release staging has foreign ownership"
-                )
+            return "owned"
+        if any(
+            re.fullmatch(r"\.\.owner\.json\.[0-9a-f]+\.tmp", name)
+            for name in entries
+        ):
             return "owned"
         if not entries:
             return "empty"
-        expected_names = set(payloads) | {control.CONTROL_MANIFEST_NAME}
-        if set(entries) != expected_names:
-            raise BootstrapError(
-                "ownerless bootstrap staging is neither empty nor complete"
-            )
-        for name, payload in payloads.items():
-            path = entries[name]
-            file_metadata = path.lstat()
-            if (
-                not stat.S_ISREG(file_metadata.st_mode)
-                or path.is_symlink()
-                or file_metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(file_metadata.st_mode) != 0o700
-                or path.read_bytes() != payload
-            ):
-                raise BootstrapError(
-                    "ownerless bootstrap staging payload differs"
-                )
-        manifest_path = entries[control.CONTROL_MANIFEST_NAME]
-        manifest_metadata = manifest_path.lstat()
-        if (
-            not stat.S_ISREG(manifest_metadata.st_mode)
-            or manifest_path.is_symlink()
-            or manifest_metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(manifest_metadata.st_mode) != 0o600
-            or manifest_path.read_bytes() != manifest_payload
-        ):
-            raise BootstrapError(
-                "ownerless bootstrap staging manifest differs"
-            )
         return "complete"
 
     foreign_staging = [
@@ -1656,19 +4909,14 @@ def _build_control_release(
                 raise BootstrapError(
                     "bootstrap control-release residue is invalid"
                 )
-            import shutil
-
             shutil.rmtree(staging)
             _fsync_directory(release_parent)
     else:
         if staging_state == "complete":
-            os.rename(staging, release)
-            _fsync_directory(release_parent)
+            _rename_noreplace(staging, release)
             control.load_control_release(runtime_root, release_id)
             staging_state = None
         elif staging_state is not None:
-            import shutil
-
             shutil.rmtree(staging)
             _fsync_directory(release_parent)
             staging_state = None
@@ -1685,46 +4933,13 @@ def _build_control_release(
                 )
                 (staging / ".owner.json").unlink()
                 _fsync_directory(staging)
-                os.rename(staging, release)
-                _fsync_directory(release_parent)
+                _rename_noreplace(staging, release)
             except BaseException:
                 if staging.exists() and not staging.is_symlink():
-                    import shutil
-
+                    inspect_staging()
                     shutil.rmtree(staging)
                 raise
         control.load_control_release(runtime_root, release_id)
-    operation_id = "bootstrap-controls-" + source_sha[:16]
-    if prepared_at is None:
-        prepared_at = dt.datetime.now(dt.timezone.utc).isoformat()
-    if not isinstance(prepared_at, str) or not prepared_at:
-        raise BootstrapError("bootstrap control prepared timestamp is invalid")
-    candidate = {
-        "schema_version": control.CONTROL_CANDIDATE_SCHEMA_VERSION,
-        "protocol_version": control.PROTOCOL_VERSION,
-        "component": "deployment-controls",
-        "release_id": release_id,
-        "source_sha": source_sha,
-        "source_tree": source_tree,
-        "manifest_sha256": digest(manifest_payload),
-        "operation_id": operation_id,
-        "prepared_at": prepared_at,
-    }
-    control.validate_candidate_record(candidate)
-    active = {
-        "schema_version": control.ACTIVE_CONTROL_SCHEMA_VERSION,
-        "protocol_version": control.PROTOCOL_VERSION,
-        "component": "deployment-controls",
-        "generation": 1,
-        "release_id": release_id,
-        "source_sha": source_sha,
-        "source_tree": source_tree,
-        "manifest_sha256": digest(manifest_payload),
-        "operation_id": operation_id,
-        "previous_release_id": None,
-        "activated_at": candidate["prepared_at"],
-    }
-    control.validate_active_control_record(active)
     return candidate, active
 
 
@@ -2619,6 +5834,237 @@ def _abort_bootstrap_transaction(
         }
 
 
+def _test_bootstrap_source_readiness(
+    source_sha: str, source_tree: str
+) -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "ready": True,
+        "source_root": str(REPOSITORY_ROOT),
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "branch": "main",
+        "origin": REPOSITORY_SSH_URL,
+        "remote_names": ["origin"],
+        "origin_fetch_urls": [REPOSITORY_SSH_URL],
+        "origin_push_urls": [REPOSITORY_SSH_URL],
+        "origin_main_sha": source_sha,
+        "standalone_object_database": True,
+        "shallow": False,
+        "dirty_entries": 0,
+        "ignored_entries": 0,
+        "unreachable_objects": 0,
+        "replace_refs": 0,
+        "special_index_entries": 0,
+        "sparse_index": False,
+        "owner_private": True,
+        "group_or_world_writable": False,
+    }
+
+
+def _require_mutating_adoption_roots(
+    args: argparse.Namespace,
+    *,
+    production_root: Path,
+    runtime_root: Path,
+    allow_test: bool,
+) -> None:
+    if allow_test:
+        return
+    if (
+        production_root != PRODUCTION_ROOT
+        or runtime_root != RUNTIME_ROOT
+        or production_root.resolve() != PRODUCTION_ROOT
+        or runtime_root.resolve() != RUNTIME_ROOT
+    ):
+        raise BootstrapError(
+            "mutating manual adoption requires exact production/runtime roots"
+        )
+    if (
+        args.confirm_production_root != str(PRODUCTION_ROOT)
+        or args.confirm_runtime_root != str(RUNTIME_ROOT)
+    ):
+        raise BootstrapError(
+            "mutating manual adoption requires exact confirmed roots"
+        )
+
+
+def _manual_adoption_main(
+    args: argparse.Namespace, *, allow_test: bool
+) -> int:
+    production_root = Path(args.production_root).absolute()
+    runtime_root = Path(args.runtime_root).absolute()
+    operation_id = _require_adoption_operation_id(args.operation_id)
+    if not isinstance(args.live_sha, str) or SHA_RE.fullmatch(args.live_sha) is None:
+        raise BootstrapError("--live-sha is required for manual adoption")
+    test_units = (
+        _worker_unit_path(production_root, allow_test=True),
+        _dft_worker_unit_path(production_root, allow_test=True),
+    )
+    if allow_test and (
+        any(
+            _paths_overlap(candidate, protected)
+            for candidate in (production_root, runtime_root)
+            for protected in (PRODUCTION_ROOT, RUNTIME_ROOT)
+        )
+        or any(_paths_overlap(unit, WORKER_UNIT_PATH) for unit in test_units)
+        or any(_paths_overlap(unit, DFT_WORKER_UNIT_PATH) for unit in test_units)
+    ):
+        raise BootstrapError("test mode is forbidden for production roots")
+    if args.adopt_abort:
+        _require_mutating_adoption_roots(
+            args,
+            production_root=production_root,
+            runtime_root=runtime_root,
+            allow_test=allow_test,
+        )
+        if (
+            not args.confirm_evidence_sha256
+            or not args.confirm_source_tree
+            or not args.confirm_md_unit_sha256
+            or not args.confirm_dft_unit_sha256
+        ):
+            raise BootstrapError("adoption abort requires exact confirmations")
+        result = _abort_manual_runtime_adoption(
+            args,
+            runtime_root=runtime_root,
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+    if allow_test:
+        source_sha, source_tree = _source_identity(allow_test=True)
+        source_readiness = _test_bootstrap_source_readiness(
+            source_sha, source_tree
+        )
+    else:
+        source_readiness = bootstrap_source_readiness(
+            REPOSITORY_ROOT,
+            expected_sha=args.sha,
+        )
+        source_sha = str(source_readiness["source_sha"])
+        source_tree = str(source_readiness["source_tree"])
+    if args.sha != source_sha:
+        raise BootstrapError(
+            "requested adoption SHA differs from the clean source checkout"
+        )
+    if args.adopt_apply:
+        _require_mutating_adoption_roots(
+            args,
+            production_root=production_root,
+            runtime_root=runtime_root,
+            allow_test=allow_test,
+        )
+        for name, value in (
+            ("evidence", args.confirm_evidence_sha256),
+            ("MD unit", args.confirm_md_unit_sha256),
+            ("DFT unit", args.confirm_dft_unit_sha256),
+        ):
+            if (
+                not isinstance(value, str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
+            ):
+                raise BootstrapError(f"confirmed adoption {name} digest is invalid")
+    _adoption_preflight(
+        runtime_root,
+        operation_id=operation_id,
+        permit_transaction=args.adopt_apply,
+    )
+    sealed_gate = _sealed_bootstrap_delivery_gate(
+        runtime_root,
+        source_sha=source_sha,
+        source_tree=source_tree,
+    )
+    delivery_gate = _delivery_gate(
+        production_root,
+        runtime_root,
+        source_sha,
+        allow_test=allow_test,
+        sealed=sealed_gate,
+    )
+    evidence = _collect_adoption_evidence(
+        production_root,
+        runtime_root,
+        operation_id=operation_id,
+        bootstrap_source_sha=source_sha,
+        bootstrap_source_tree=source_tree,
+        live_sha=args.live_sha,
+        expected_md_unit_sha256=(
+            args.confirm_md_unit_sha256 if args.adopt_apply else None
+        ),
+        expected_dft_unit_sha256=(
+            args.confirm_dft_unit_sha256 if args.adopt_apply else None
+        ),
+        allow_test=allow_test,
+    )
+    evidence_sha256 = _canonical_json_digest(evidence)
+    md_unit_sha256 = evidence["monomer_md"]["systemd_unit"]["sha256"]  # type: ignore[index]
+    dft_unit_sha256 = evidence["monomer_dft"]["systemd_unit"]["sha256"]  # type: ignore[index]
+    plan = {
+        "action": "manual-runtime-adoption",
+        "apply": args.adopt_apply,
+        "operation_id": operation_id,
+        "production_root": str(production_root),
+        "runtime_root": str(runtime_root),
+        "bootstrap_source_sha": source_sha,
+        "bootstrap_source_tree": source_tree,
+        "live_source_sha": args.live_sha,
+        "live_source_tree": evidence["live_repository"]["tree"],  # type: ignore[index]
+        "source_readiness": source_readiness,
+        "delivery_gate": delivery_gate,
+        "deploy_lock_disposition": ADOPTION_DEPLOY_LOCK_DISPOSITION,
+        "evidence": evidence,
+        "evidence_sha256": evidence_sha256,
+        "confirmations": {
+            "production_root": str(production_root),
+            "runtime_root": str(runtime_root),
+            "source_tree": evidence["live_repository"]["tree"],  # type: ignore[index]
+            "evidence_sha256": evidence_sha256,
+            "md_unit_sha256": md_unit_sha256,
+            "dft_unit_sha256": dft_unit_sha256,
+        },
+        "excluded_actions": [
+            "change Git HEAD or fetch",
+            "start, stop, reload, or restart services",
+            "change PostgreSQL or its migration ledger",
+            "change container or image state",
+            "change Worker units, environments, slots, or runtimes",
+            "change asset pointers",
+            "forge legacy takeover or maintenance markers",
+        ],
+    }
+    if args.adopt_plan:
+        print(json.dumps(plan, indent=2, sort_keys=True))
+        return 0
+    immutable_payloads = {
+        name: (
+            _read_reviewed_source(
+                source.relative_to(REPOSITORY_ROOT).as_posix(),
+                source_sha=source_sha,
+                allow_test=allow_test,
+            ),
+            mode,
+        )
+        for name, (source, mode) in IMMUTABLE_FILES.items()
+    }
+    control = _control_runtime(source_sha=source_sha, allow_test=allow_test)
+    result = _apply_manual_runtime_adoption(
+        args,
+        production_root=production_root,
+        runtime_root=runtime_root,
+        source_sha=source_sha,
+        source_tree=source_tree,
+        source_readiness=source_readiness,
+        delivery_gate=delivery_gate,
+        evidence=evidence,
+        evidence_sha256=evidence_sha256,
+        immutable_payloads=immutable_payloads,
+        control=control,
+        allow_test=allow_test,
+    )
+    print(json.dumps({**plan, **result}, indent=2, sort_keys=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
@@ -2640,10 +6086,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="restore the exact legacy state for an interrupted bootstrap",
     )
+    action.add_argument(
+        "--adopt-plan",
+        action="store_true",
+        help="read-only plan for one-time manual production adoption",
+    )
+    action.add_argument(
+        "--adopt-apply",
+        action="store_true",
+        help="install only control authority around an unchanged manual runtime",
+    )
+    action.add_argument(
+        "--adopt-abort",
+        action="store_true",
+        help="CAS-remove adoption-owned controls before authority commit",
+    )
     parser.add_argument("--confirm-production-root")
     parser.add_argument("--confirm-runtime-root")
     parser.add_argument("--confirm-source-tree")
     parser.add_argument("--confirm-worker-unit-sha256")
+    parser.add_argument("--operation-id")
+    parser.add_argument("--live-sha")
+    parser.add_argument("--confirm-evidence-sha256")
+    parser.add_argument("--confirm-md-unit-sha256")
+    parser.add_argument("--confirm-dft-unit-sha256")
     parser.add_argument(
         "--legacy-takeover-operation-id",
         help=(
@@ -2664,7 +6130,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     args = build_parser().parse_args(argv)
     if args.check_source_readiness:
-        if args.apply or args.abort:
+        if (
+            args.apply
+            or args.abort
+            or args.adopt_plan
+            or args.adopt_apply
+            or args.adopt_abort
+        ):
             print(
                 "bootstrap-pull-deploy: error: source readiness is read-only",
                 file=sys.stderr,
@@ -2688,6 +6160,17 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.adopt_plan or args.adopt_apply or args.adopt_abort:
+        try:
+            return _manual_adoption_main(args, allow_test=allow_test)
+        except (
+            BootstrapError,
+            OSError,
+            UnicodeError,
+            subprocess.SubprocessError,
+        ) as exc:
+            print(f"bootstrap-pull-deploy: error: {exc}", file=sys.stderr)
+            return 2
     if not args.legacy_takeover_operation_id:
         print(
             "bootstrap-pull-deploy: error: "

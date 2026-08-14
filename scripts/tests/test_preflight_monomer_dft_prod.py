@@ -34,6 +34,18 @@ class ProductionDftPreflightTests(unittest.TestCase):
         self.assertNotIn("runtime-launcher", unit)
         self.assertNotIn("worker-venvs/dft-a", unit)
         self.assertNotIn("NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY=0", unit)
+        self.assertIn("NEXPOLY_DFT_GPU_GUARD_MODE=enforce", unit)
+        self.assertIn("gpu2_guard.py --require-ready", unit)
+        self.assertIn(
+            "/data/lzq/gith/nexpoly-runtime/bin/"
+            "control_runtime_selector.py run monomer-dft",
+            unit,
+        )
+        self.assertNotIn(
+            "ExecStart=/data/lzq/gith/nexpoly/workers/"
+            "monomer_dft_worker/run_host_worker.sh",
+            unit,
+        )
 
     def test_runtime_builder_creates_a_release_directory_not_a_slot(self) -> None:
         setup = (
@@ -98,6 +110,10 @@ class ProductionDftPreflightTests(unittest.TestCase):
                     "source_tree": source_tree,
                     "python": "3.12",
                     "uv": "0.11.21",
+                    "uv_sha256": preflight.UV_SHA256,
+                    "base_python_sha256": preflight.BASE_PYTHON_SHA256,
+                    "pip_inventory_sha256": preflight.PIP_INVENTORY_SHA256,
+                    "wheelhouse_inventory_sha256": "sha256:" + "c" * 64,
                     "requirements_lock_sha256": (
                         "sha256:" + hashlib.sha256(b"locked\n").hexdigest()
                     ),
@@ -114,11 +130,19 @@ class ProductionDftPreflightTests(unittest.TestCase):
         environment = {
             "MONOMER_DFT_RELEASE_SHA": release,
             "MONOMER_DFT_RUNTIME_CONTRACT_SHA256": runtime_contract,
+            "MONOMER_DFT_RUNTIME_INVENTORY_SHA256": "sha256:" + "d" * 64,
             "MONOMER_DFT_PYTHON": str(python),
             "AIMNET_CACHE_DIR": str(model_root),
-            "WARP_CACHE_PATH": str(release_runtime / "warp-cache"),
+            "WARP_CACHE_PATH": str(
+                runtime / "state/monomer-dft-warp-cache" / release
+            ),
+            "NEXPOLY_DFT_GPU_GUARD_MODE": "observe",
         }
-        (release_runtime / "warp-cache").mkdir(mode=0o700)
+        Path(environment["WARP_CACHE_PATH"]).mkdir(
+            parents=True,
+            mode=0o700,
+        )
+        Path(environment["WARP_CACHE_PATH"]).chmod(0o700)
         config = runtime / "config"
         config.mkdir(mode=0o700)
         runtime_env = config / "monomer-dft-runtime.env"

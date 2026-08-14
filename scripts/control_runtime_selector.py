@@ -16,7 +16,7 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import sys
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 
 PROTOCOL_VERSION = 1
@@ -28,6 +28,8 @@ PRODUCTION_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
 SOURCE_MANIFEST_RELATIVE_PATH = "scripts/control-release.json"
 CONTROL_MANIFEST_NAME = "CONTROL-MANIFEST.json"
 BOOTSTRAP_AUTHORITY_NAME = "bootstrap-control.json"
+ADOPTED_DEPLOYMENT_NAME = "adopted-deployment.json"
+ADOPTION_AUTHORITY_KIND = "manual-runtime-adoption"
 BOOTSTRAP_IMMUTABLE_FILES = {
     "control_runtime_selector.py",
     "nexpoly-pull-deploy",
@@ -108,6 +110,66 @@ ALIAS_PRE_LEDGER = sorted(
     [*ALIAS_CANONICAL_LEDGER, (ALIAS_VERSION, ALIAS_CHECKSUM)]
 )
 ALIAS_POST_LEDGER = sorted(ALIAS_CANONICAL_LEDGER)
+ADOPTED_POST_0013_LEDGER = sorted(
+    [
+        *ALIAS_CANONICAL_LEDGER,
+        (
+            "0009_monomer_md_job_leases",
+            "ef1757a81976f351459e8257bd492aa6267cbf507c4ea85506fefa2d465d2db8",
+        ),
+        (
+            "0010_deployment_control",
+            "f7fad29bcf1da1c6903a688a7312a67216bc11002ac558209ff56e25f69cf7cd",
+        ),
+        (
+            "0011_monomer_md_demo_steps",
+            "9a03f38329199aa707818c2099b9811d46366bafe0ddaeb39ae53bc20d0a68ed",
+        ),
+        (
+            "0012_drop_polytao_jobs",
+            "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728",
+        ),
+        (
+            "0013_monomer_dft_jobs",
+            "ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc",
+        ),
+    ]
+)
+ADOPTED_DFT_GPU_UUID = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+MONOMER_DFT_GPU_INDEX = "2"
+MONOMER_DFT_GUARD_STATE = (
+    PRODUCTION_RUNTIME_ROOT / "state/gpu2-guard.json"
+)
+MONOMER_DFT_UNIT_TARGET = Path(
+    "/home/devuser/.config/systemd/user/nexpoly-monomer-dft-worker.service"
+)
+MONOMER_DFT_ENV_KEYS = frozenset(
+    {
+        "MONOMER_DFT_RELEASE_SHA",
+        "MONOMER_DFT_RUNTIME_CONTRACT_SHA256",
+        "MONOMER_DFT_RUNTIME_INVENTORY_SHA256",
+        "MONOMER_DFT_PYTHON",
+        "AIMNET_CACHE_DIR",
+        "WARP_CACHE_PATH",
+        "NEXPOLY_DFT_GPU_GUARD_MODE",
+    }
+)
+MONOMER_DFT_MODEL_FILES = frozenset(
+    {
+        "aimnet2-pd_0.pt",
+        "aimnet2_2025_b973c_d3_0.pt",
+        "aimnet2_b973c_d3_0.pt",
+        "aimnet2_rxn_0.pt",
+        "aimnet2_wb97m_d3_0.pt",
+        "aimnet2nse_wb97m_0.pt",
+    }
+)
+ADOPTED_DFT_RUNTIME_SYMLINKS = {
+    "venv/bin/python": "/usr/bin/python3.12",
+    "venv/bin/python3": "python",
+    "venv/bin/python3.12": "python",
+    "venv/lib64": "lib",
+}
 ALIAS_EXPECTED_SCHEMA_SHA256 = (
     "8594868c661024af0766627a2d48280fc6967b8efe445878fc2a252a4520000c"
 )
@@ -337,6 +399,285 @@ def canonical_json_bytes(value: object) -> bytes:
 
 def canonical_json_digest(value: object) -> str:
     return sha256_bytes(canonical_json_bytes(value))
+
+
+def adopted_dft_runtime_inventory(root: Path) -> str:
+    """Recompute the immutable portion of an adopted legacy DFT runtime."""
+
+    try:
+        root_metadata = root.lstat()
+    except OSError as exc:
+        raise ControlRuntimeError("adopted monomer DFT runtime is unavailable") from exc
+    if (
+        not stat.S_ISDIR(root_metadata.st_mode)
+        or root.is_symlink()
+        or root_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(root_metadata.st_mode) != 0o700
+    ):
+        raise ControlRuntimeError("adopted monomer DFT runtime root is unsafe")
+
+    def immutable_paths(directory: Path) -> Iterable[Path]:
+        try:
+            with os.scandir(directory) as stream:
+                entries = sorted(stream, key=lambda entry: entry.name)
+        except OSError as exc:
+            raise ControlRuntimeError(
+                "adopted monomer DFT runtime changed during inventory"
+            ) from exc
+        for entry in entries:
+            path = directory / entry.name
+            yield path
+            relative = path.relative_to(root).as_posix()
+            if relative == "warp-cache":
+                continue
+            try:
+                is_directory = entry.is_dir(follow_symlinks=False)
+            except OSError as exc:
+                raise ControlRuntimeError(
+                    "adopted monomer DFT runtime changed during inventory"
+                ) from exc
+            if is_directory:
+                yield from immutable_paths(path)
+
+    records: list[dict[str, object]] = [
+        {
+            "path": ".",
+            "kind": "directory",
+            "uid": root_metadata.st_uid,
+            "mode": stat.S_IMODE(root_metadata.st_mode),
+            "nlink": root_metadata.st_nlink,
+        }
+    ]
+    observed_links: set[str] = set()
+    warp_root_seen = False
+    for path in immutable_paths(root):
+        relative = path.relative_to(root).as_posix()
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise ControlRuntimeError(
+                "adopted monomer DFT runtime changed during inventory"
+            ) from exc
+        mode = stat.S_IMODE(metadata.st_mode)
+        if metadata.st_uid != os.geteuid() or metadata.st_nlink < 1:
+            raise ControlRuntimeError(
+                "adopted monomer DFT runtime ownership is unsafe"
+            )
+        if relative == "warp-cache":
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or path.is_symlink()
+                or mode != 0o700
+            ):
+                raise ControlRuntimeError(
+                    "adopted monomer DFT mutable Warp cache root is unsafe"
+                )
+            warp_root_seen = True
+            records.append(
+                {
+                    "path": relative,
+                    "kind": "mutable-directory",
+                    "uid": metadata.st_uid,
+                    "mode": mode,
+                }
+            )
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            try:
+                target = os.readlink(path)
+                after = path.lstat()
+            except OSError as exc:
+                raise ControlRuntimeError(
+                    "adopted monomer DFT runtime symlink changed"
+                ) from exc
+            if (
+                ADOPTED_DFT_RUNTIME_SYMLINKS.get(relative) != target
+                or (
+                    metadata.st_dev,
+                    metadata.st_ino,
+                    metadata.st_mode,
+                    metadata.st_uid,
+                    metadata.st_nlink,
+                    metadata.st_mtime_ns,
+                    metadata.st_ctime_ns,
+                )
+                != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_mode,
+                    after.st_uid,
+                    after.st_nlink,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                )
+            ):
+                raise ControlRuntimeError(
+                    "adopted monomer DFT runtime contains an unknown symlink"
+                )
+            observed_links.add(relative)
+            records.append(
+                {
+                    "path": relative,
+                    "kind": "symlink",
+                    "uid": metadata.st_uid,
+                    "mode": mode,
+                    "nlink": metadata.st_nlink,
+                    "target": target,
+                }
+            )
+            continue
+        if stat.S_ISDIR(metadata.st_mode):
+            if mode & 0o022:
+                raise ControlRuntimeError("adopted monomer DFT runtime mode is unsafe")
+            records.append(
+                {
+                    "path": relative,
+                    "kind": "directory",
+                    "uid": metadata.st_uid,
+                    "mode": mode,
+                    "nlink": metadata.st_nlink,
+                }
+            )
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ControlRuntimeError(
+                "adopted monomer DFT runtime contains a special file"
+            )
+        if (relative != "venv/.lock" and mode & 0o022) or (
+            relative == "venv/.lock" and mode != 0o666
+        ):
+            raise ControlRuntimeError("adopted monomer DFT runtime mode is unsafe")
+        try:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+        except OSError as exc:
+            raise ControlRuntimeError(
+                "adopted monomer DFT runtime file is unavailable"
+            ) from exc
+        try:
+            before = os.fstat(descriptor)
+            file_digest = hashlib.sha256()
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                file_digest.update(chunk)
+            after = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+        identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_uid,
+            before.st_nlink,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or identity
+            != (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_mode,
+                metadata.st_uid,
+                metadata.st_nlink,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+            )
+            or identity
+            != (
+                after.st_dev,
+                after.st_ino,
+                after.st_mode,
+                after.st_uid,
+                after.st_nlink,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            )
+        ):
+            raise ControlRuntimeError(
+                "adopted monomer DFT runtime file changed during inventory"
+            )
+        records.append(
+            {
+                "path": relative,
+                "kind": "file",
+                "uid": before.st_uid,
+                "mode": stat.S_IMODE(before.st_mode),
+                "nlink": before.st_nlink,
+                "size": before.st_size,
+                "sha256": "sha256:" + file_digest.hexdigest(),
+            }
+        )
+    if observed_links != set(ADOPTED_DFT_RUNTIME_SYMLINKS) or not warp_root_seen:
+        raise ControlRuntimeError("adopted monomer DFT runtime layout is incomplete")
+    return canonical_json_digest(records)
+
+
+def governed_dft_runtime_inventory(root: Path) -> str:
+    """Recompute a controller-built immutable DFT release inventory."""
+
+    allowed_links = ADOPTED_DFT_RUNTIME_SYMLINKS
+    records: list[dict[str, object]] = []
+    for path in sorted(root.rglob("*"), key=lambda value: value.as_posix()):
+        relative = path.relative_to(root).as_posix()
+        if relative in {"READY.json", ".preparing.json"}:
+            continue
+        metadata = path.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if metadata.st_uid != os.geteuid():
+            raise ControlRuntimeError("governed monomer DFT runtime owner differs")
+        if stat.S_ISLNK(metadata.st_mode):
+            target = os.readlink(path)
+            if allowed_links.get(relative) != target:
+                raise ControlRuntimeError("governed monomer DFT runtime link differs")
+            records.append(
+                {
+                    "path": relative,
+                    "kind": "symlink",
+                    "uid": metadata.st_uid,
+                    "mode": mode,
+                    "target": target,
+                }
+            )
+        elif stat.S_ISDIR(metadata.st_mode):
+            if mode & 0o022:
+                raise ControlRuntimeError("governed monomer DFT runtime mode differs")
+            records.append(
+                {
+                    "path": relative,
+                    "kind": "directory",
+                    "uid": metadata.st_uid,
+                    "mode": mode,
+                }
+            )
+        elif stat.S_ISREG(metadata.st_mode):
+            if mode & 0o022 or metadata.st_nlink != 1:
+                raise ControlRuntimeError("governed monomer DFT runtime file differs")
+            records.append(
+                {
+                    "path": relative,
+                    "kind": "file",
+                    "uid": metadata.st_uid,
+                    "mode": mode,
+                    "size": metadata.st_size,
+                    "sha256": sha256_file(path),
+                }
+            )
+        else:
+            raise ControlRuntimeError(
+                "governed monomer DFT runtime contains a special file"
+            )
+    return canonical_json_digest(records)
 
 
 def _open_verified_control_file(
@@ -988,6 +1329,26 @@ def load_production_0005_alias_gate(
 
     marker_path = runtime_root / ALIAS_MARKER_RELATIVE
     if not (marker_path.exists() or marker_path.is_symlink()):
+        bootstrap_path = runtime_root / "state" / BOOTSTRAP_AUTHORITY_NAME
+        if bootstrap_path.exists() or bootstrap_path.is_symlink():
+            bootstrap = _validate_bootstrap_authority(runtime_root)
+            if (
+                bootstrap.get("schema_version") == 3
+                and bootstrap.get("authority_kind") == ADOPTION_AUTHORITY_KIND
+            ):
+                adoption = bootstrap["adoption"]
+                maintenance = adoption["maintenance"]
+                return {
+                    "schema_version": 1,
+                    "action": "adopted-maintenance-provenance",
+                    "phase": "completed",
+                    "authority_kind": ADOPTION_AUTHORITY_KIND,
+                    "operation_id": adoption["operation_id"],
+                    "ledger_sha256": maintenance["ledger_sha256"],
+                    "adoption_evidence_sha256": bootstrap[
+                        "adoption_evidence_sha256"
+                    ],
+                }
         if require_completed:
             raise ControlRuntimeError(
                 "production 0005 ledger-alias reconciliation is required"
@@ -1511,10 +1872,460 @@ def active_control_record_path(runtime_root: Path) -> Path:
     return runtime_root / "state/active-control.json"
 
 
+def _adoption_file_record_is_valid(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and set(value) == {"path", "sha256", "size", "mode"}
+        and isinstance(value.get("path"), str)
+        and Path(value["path"]).is_absolute()
+        and isinstance(value.get("sha256"), str)
+        and DIGEST_RE.fullmatch(value["sha256"]) is not None
+        and isinstance(value.get("size"), int)
+        and not isinstance(value.get("size"), bool)
+        and value["size"] > 0
+        and isinstance(value.get("mode"), str)
+        and re.fullmatch(r"0[0-7]{3}", value["mode"]) is not None
+    )
+
+
+def _validate_adoption_evidence(
+    value: object,
+    *,
+    operation_id: str,
+    bootstrap_source_sha: str,
+    bootstrap_source_tree: str,
+) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "authority_kind",
+        "operation_id",
+        "bootstrap_source",
+        "live_repository",
+        "production_config",
+        "images",
+        "database",
+        "asset_identity",
+        "migrations",
+        "maintenance",
+        "monomer_md",
+        "monomer_dft",
+    }
+    if (
+        not isinstance(value, dict)
+        or set(value) != fields
+        or value.get("schema_version") != 1
+        or value.get("authority_kind") != ADOPTION_AUTHORITY_KIND
+        or value.get("operation_id") != operation_id
+        or value.get("bootstrap_source")
+        != {"sha": bootstrap_source_sha, "tree": bootstrap_source_tree}
+    ):
+        raise ControlRuntimeError("manual runtime adoption evidence is invalid")
+    repository = value.get("live_repository")
+    if (
+        not isinstance(repository, dict)
+        or set(repository)
+        != {
+            "branch",
+            "origin",
+            "head",
+            "tree",
+            "target",
+            "fast_forward",
+            "ignored_entries",
+        }
+        or repository.get("branch") != "main"
+        or repository.get("origin") != "git@github.com:lzq390/ZhijuPoly.git"
+        or SHA_RE.fullmatch(str(repository.get("head", ""))) is None
+        or SHA_RE.fullmatch(str(repository.get("tree", ""))) is None
+        or repository.get("target") != bootstrap_source_sha
+        or repository.get("fast_forward") is not True
+        or repository.get("ignored_entries") != 0
+    ):
+        raise ControlRuntimeError("adopted production repository evidence is invalid")
+    production_config = value.get("production_config")
+    if (
+        not isinstance(production_config, dict)
+        or set(production_config) != {"deploy_env", "app_env"}
+        or not all(
+            _adoption_file_record_is_valid(production_config.get(name))
+            for name in ("deploy_env", "app_env")
+        )
+    ):
+        raise ControlRuntimeError("adopted production configuration is invalid")
+    migrations = value.get("migrations")
+    if not isinstance(migrations, list) or len(migrations) != 13:
+        raise ControlRuntimeError("adopted migration evidence is invalid")
+    ledger: list[tuple[str, str]] = []
+    for record in migrations:
+        if (
+            not isinstance(record, dict)
+            or set(record)
+            != {"version", "kind", "epoch", "checksum", "requires_contracts"}
+            or not isinstance(record.get("version"), str)
+            or not isinstance(record.get("checksum"), str)
+            or HEX_DIGEST_RE.fullmatch(record["checksum"]) is None
+            or not isinstance(record.get("kind"), str)
+            or not isinstance(record.get("epoch"), int)
+            or isinstance(record.get("epoch"), bool)
+            or not isinstance(record.get("requires_contracts"), list)
+        ):
+            raise ControlRuntimeError("adopted migration record is invalid")
+        ledger.append((record["version"], record["checksum"]))
+    if ledger != ADOPTED_POST_0013_LEDGER:
+        raise ControlRuntimeError("adopted migration ledger is not exact post-0013")
+    database = value.get("database")
+    database_ledger = database.get("ledger") if isinstance(database, dict) else None
+    if (
+        not isinstance(database, dict)
+        or database.get("postgres_major") != 16
+        or not isinstance(database.get("system_identifier"), str)
+        or not database["system_identifier"].isdigit()
+        or not isinstance(database.get("runtime"), dict)
+        or database_ledger
+        != [
+            {"version": version, "checksum": checksum}
+            for version, checksum in ADOPTED_POST_0013_LEDGER
+        ]
+    ):
+        raise ControlRuntimeError("adopted PostgreSQL evidence is invalid")
+    maintenance = value.get("maintenance")
+    if (
+        not isinstance(maintenance, dict)
+        or set(maintenance)
+        != {
+            "kind",
+            "alias_0005",
+            "contract_0012",
+            "ledger_endpoint",
+            "ledger_sha256",
+            "manual_evidence",
+        }
+        or maintenance.get("kind") != "adopted-maintenance-provenance"
+        or maintenance.get("alias_0005") != "completed-without-formal-marker"
+        or maintenance.get("contract_0012") != "completed-without-formal-marker"
+        or maintenance.get("ledger_endpoint") != "post-0013"
+        or maintenance.get("ledger_sha256")
+        != canonical_json_digest(database_ledger)
+        or not isinstance(maintenance.get("manual_evidence"), dict)
+        or set(maintenance["manual_evidence"])
+        != {
+            "manual_deployment_report",
+            "post_0013_database",
+            "isolated_restore",
+            "formal_dft_release",
+        }
+        or not all(
+            _adoption_file_record_is_valid(record)
+            for record in maintenance["manual_evidence"].values()
+        )
+    ):
+        raise ControlRuntimeError("adopted maintenance provenance is invalid")
+    asset = value.get("asset_identity")
+    if (
+        not isinstance(asset, dict)
+        or set(asset) != {"pointer", "root", "manifest_sha256"}
+        or not isinstance(asset.get("pointer"), str)
+        or not Path(asset["pointer"]).is_absolute()
+        or not isinstance(asset.get("root"), str)
+        or not Path(asset["root"]).is_absolute()
+        or not isinstance(asset.get("manifest_sha256"), str)
+        or DIGEST_RE.fullmatch(asset["manifest_sha256"]) is None
+    ):
+        raise ControlRuntimeError("adopted asset identity is invalid")
+    monomer_md = value.get("monomer_md")
+    md_unit = monomer_md.get("systemd_unit") if isinstance(monomer_md, dict) else None
+    if (
+        not isinstance(monomer_md, dict)
+        or not isinstance(monomer_md.get("active_slot"), dict)
+        or monomer_md["active_slot"].get("source_sha") != repository["head"]
+        or monomer_md["active_slot"].get("source_tree") != repository["tree"]
+        or not isinstance(monomer_md.get("slot_record"), dict)
+        or monomer_md["slot_record"].get("source_sha") != repository["head"]
+        or monomer_md["slot_record"].get("source_tree") != repository["tree"]
+        or not isinstance(md_unit, dict)
+        or md_unit.get("control_release_id") is not None
+        or not isinstance(md_unit.get("target_path"), str)
+        or not Path(md_unit["target_path"]).is_absolute()
+        or not isinstance(md_unit.get("sha256"), str)
+        or DIGEST_RE.fullmatch(md_unit["sha256"]) is None
+        or not isinstance(md_unit.get("launcher_path"), str)
+        or not Path(md_unit["launcher_path"]).is_absolute()
+        or not isinstance(md_unit.get("launcher_sha256"), str)
+        or DIGEST_RE.fullmatch(md_unit["launcher_sha256"]) is None
+    ):
+        raise ControlRuntimeError("adopted monomer MD identity is invalid")
+    monomer_dft = value.get("monomer_dft")
+    runtime = monomer_dft.get("runtime") if isinstance(monomer_dft, dict) else None
+    runtime_env = (
+        monomer_dft.get("runtime_env") if isinstance(monomer_dft, dict) else None
+    )
+    dft_unit = (
+        monomer_dft.get("systemd_unit") if isinstance(monomer_dft, dict) else None
+    )
+    gpu = monomer_dft.get("gpu") if isinstance(monomer_dft, dict) else None
+    health = monomer_dft.get("health") if isinstance(monomer_dft, dict) else None
+    model_names = {
+        "aimnet2-pd_0.pt",
+        "aimnet2_2025_b973c_d3_0.pt",
+        "aimnet2_b973c_d3_0.pt",
+        "aimnet2_rxn_0.pt",
+        "aimnet2_wb97m_d3_0.pt",
+        "aimnet2nse_wb97m_0.pt",
+    }
+    if (
+        not isinstance(runtime, dict)
+        or runtime.get("release_sha") != repository["head"]
+        or runtime.get("source_tree") != repository["tree"]
+        or not isinstance(runtime.get("models"), dict)
+        or set(runtime["models"]) != model_names
+        or any(
+            not isinstance(checksum, str) or DIGEST_RE.fullmatch(checksum) is None
+            for checksum in runtime["models"].values()
+        )
+        or any(
+            not isinstance(runtime.get(name), str)
+            or DIGEST_RE.fullmatch(runtime[name]) is None
+            for name in (
+                "runtime_manifest_sha256",
+                "requirements_lock_sha256",
+                "aimnet_source_lock_sha256",
+                "runtime_inventory_sha256",
+            )
+        )
+        or not isinstance(runtime_env, dict)
+        or not isinstance(runtime_env.get("sha256"), str)
+        or DIGEST_RE.fullmatch(runtime_env["sha256"]) is None
+        or not isinstance(dft_unit, dict)
+        or dft_unit.get("control_release_id") is not None
+        or not isinstance(dft_unit.get("sha256"), str)
+        or DIGEST_RE.fullmatch(dft_unit["sha256"]) is None
+        or not isinstance(dft_unit.get("launcher_path"), str)
+        or not Path(dft_unit["launcher_path"]).is_absolute()
+        or not isinstance(dft_unit.get("launcher_sha256"), str)
+        or DIGEST_RE.fullmatch(dft_unit["launcher_sha256"]) is None
+        or not isinstance(gpu, dict)
+        or gpu.get("index") != "2"
+        or gpu.get("guard_mode") != "enforce"
+        or gpu.get("guard_status") not in {"ready", "quarantined"}
+        or gpu.get("contention_observed")
+        != (gpu.get("guard_status") == "quarantined")
+        or gpu.get("uuid") != ADOPTED_DFT_GPU_UUID
+        or not isinstance(health, dict)
+        or health.get("release_sha") != repository["head"]
+        or health.get("active_jobs") != 0
+        or health.get("queued_jobs") != 0
+        or health.get("gpu_guard_status") != gpu.get("guard_status")
+        or health.get("gpu_contention_observed")
+        != gpu.get("contention_observed")
+        or (
+            gpu.get("guard_status") == "ready"
+            and (
+                health.get("status") != "ok"
+                or health.get("runtime_ready") is not True
+                or health.get("degradation_reason") is not None
+            )
+        )
+        or (
+            gpu.get("guard_status") == "quarantined"
+            and (
+                health.get("status") != "degraded"
+                or health.get("runtime_ready") is not False
+                or health.get("degradation_reason") != "gpu-guard-quarantined"
+            )
+        )
+    ):
+        raise ControlRuntimeError("adopted monomer DFT identity is invalid")
+    return dict(value)
+
+
+def _validate_adopted_deployment(
+    value: object,
+    *,
+    adoption: Mapping[str, Any],
+    adoption_sha256: str,
+    active: Mapping[str, Any],
+) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "status",
+        "authority_kind",
+        "operation_id",
+        "source_sha",
+        "source_tree",
+        "bootstrap_source_sha",
+        "bootstrap_source_tree",
+        "active_control",
+        "adoption_evidence",
+        "adoption_evidence_sha256",
+        "images",
+        "production_config",
+        "asset_identity",
+        "migrations",
+        "database",
+        "maintenance",
+        "monomer_md",
+        "monomer_dft",
+        "adopted_at",
+    }
+    repository = adoption["live_repository"]
+    if (
+        not isinstance(value, dict)
+        or set(value) != fields
+        or value.get("schema_version") != 1
+        or value.get("status") != "adopted"
+        or value.get("authority_kind") != ADOPTION_AUTHORITY_KIND
+        or value.get("operation_id") != adoption["operation_id"]
+        or value.get("source_sha") != repository["head"]
+        or value.get("source_tree") != repository["tree"]
+        or value.get("bootstrap_source_sha") != active["source_sha"]
+        or value.get("bootstrap_source_tree") != active["source_tree"]
+        or value.get("active_control") != active
+        or value.get("adoption_evidence") != adoption
+        or value.get("adoption_evidence_sha256") != adoption_sha256
+        or any(
+            value.get(name) != adoption.get(name)
+            for name in (
+                "images",
+                "production_config",
+                "asset_identity",
+                "migrations",
+                "database",
+                "maintenance",
+                "monomer_md",
+                "monomer_dft",
+            )
+        )
+        or not isinstance(value.get("adopted_at"), str)
+        or not value["adopted_at"]
+    ):
+        raise ControlRuntimeError("adopted deployment authority is invalid")
+    return dict(value)
+
+
+def _validate_adoption_bootstrap_authority(
+    runtime_root: Path, record: dict[str, Any]
+) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "status",
+        "authority_kind",
+        "operation_id",
+        "source_sha",
+        "source_tree",
+        "source_readiness",
+        "source_readiness_sha256",
+        "delivery_gate",
+        "production_repository",
+        "adoption",
+        "adoption_evidence_sha256",
+        "adopted_deployment",
+        "adopted_deployment_sha256",
+        "immutable_files",
+        "candidate_control",
+        "active_control",
+    }
+    operation_id = record.get("operation_id")
+    if (
+        set(record) != fields
+        or record.get("schema_version") != 3
+        or record.get("status") != "completed"
+        or record.get("authority_kind") != ADOPTION_AUTHORITY_KIND
+        or not isinstance(operation_id, str)
+        or OPERATION_ID_RE.fullmatch(operation_id) is None
+        or SHA_RE.fullmatch(str(record.get("source_sha", ""))) is None
+        or SHA_RE.fullmatch(str(record.get("source_tree", ""))) is None
+    ):
+        raise ControlRuntimeError("completed adoption bootstrap authority is invalid")
+    readiness = record.get("source_readiness")
+    if (
+        not isinstance(readiness, dict)
+        or readiness.get("ready") is not True
+        or readiness.get("source_sha") != record["source_sha"]
+        or readiness.get("source_tree") != record["source_tree"]
+        or readiness.get("branch") != "main"
+        or readiness.get("origin") != "git@github.com:lzq390/ZhijuPoly.git"
+        or readiness.get("origin_main_sha") != record["source_sha"]
+        or readiness.get("dirty_entries") != 0
+        or readiness.get("ignored_entries") != 0
+        or record.get("source_readiness_sha256")
+        != canonical_json_digest(readiness)
+    ):
+        raise ControlRuntimeError("adoption bootstrap source readiness is invalid")
+    candidate = validate_candidate_record(record.get("candidate_control"))
+    active = validate_active_control_record(record.get("active_control"))
+    if (
+        any(
+            candidate.get(name) != active.get(name)
+            for name in (
+                "protocol_version",
+                "release_id",
+                "source_sha",
+                "source_tree",
+                "manifest_sha256",
+                "operation_id",
+            )
+        )
+        or active["source_sha"] != record["source_sha"]
+        or active["source_tree"] != record["source_tree"]
+    ):
+        raise ControlRuntimeError("adoption initial control authority is invalid")
+    adoption = _validate_adoption_evidence(
+        record.get("adoption"),
+        operation_id=operation_id,
+        bootstrap_source_sha=record["source_sha"],
+        bootstrap_source_tree=record["source_tree"],
+    )
+    adoption_sha256 = canonical_json_digest(adoption)
+    if (
+        record.get("adoption_evidence_sha256") != adoption_sha256
+        or record.get("production_repository") != adoption["live_repository"]
+    ):
+        raise ControlRuntimeError("adoption evidence binding differs")
+    adopted = _validate_adopted_deployment(
+        record.get("adopted_deployment"),
+        adoption=adoption,
+        adoption_sha256=adoption_sha256,
+        active=active,
+    )
+    if record.get("adopted_deployment_sha256") != canonical_json_digest(adopted):
+        raise ControlRuntimeError("adopted deployment digest differs")
+    adopted_path = runtime_root / "state" / ADOPTED_DEPLOYMENT_NAME
+    if _load_private_json(adopted_path) != adopted:
+        raise ControlRuntimeError("durable adopted deployment authority differs")
+    immutable = record.get("immutable_files")
+    if (
+        not isinstance(immutable, dict)
+        or set(immutable) != BOOTSTRAP_IMMUTABLE_FILES
+        or any(
+            not isinstance(value, str) or DIGEST_RE.fullmatch(value) is None
+            for value in immutable.values()
+        )
+    ):
+        raise ControlRuntimeError("adoption immutable controls are invalid")
+    bin_root = runtime_root / "bin"
+    _require_private_directory(bin_root)
+    if {entry.name for entry in bin_root.iterdir()} != BOOTSTRAP_IMMUTABLE_FILES:
+        raise ControlRuntimeError("immutable bootstrap router inventory differs")
+    for name, expected_digest in immutable.items():
+        path = bin_root / name
+        metadata = path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or sha256_file(path) != expected_digest
+        ):
+            raise ControlRuntimeError(f"immutable bootstrap router differs: {name}")
+    return record
+
+
 def _validate_bootstrap_authority(runtime_root: Path) -> dict[str, Any]:
     record = _load_private_json(
         runtime_root / "state" / BOOTSTRAP_AUTHORITY_NAME
     )
+    if record.get("schema_version") == 3:
+        return _validate_adoption_bootstrap_authority(runtime_root, record)
     expected_fields = {
         "schema_version",
         "status",
@@ -1863,21 +2674,394 @@ def _asset_pointer_matches(runtime_root: Path, asset: object) -> bool:
     )
 
 
+def _adopted_worker_route_matches(
+    runtime_root: Path,
+    active: Mapping[str, Any],
+) -> bool:
+    try:
+        bootstrap = _validate_bootstrap_authority(runtime_root)
+    except (ControlRuntimeError, OSError, ValueError):
+        return False
+    if bootstrap.get("schema_version") != 3:
+        return False
+    adopted = bootstrap.get("adopted_deployment")
+    if (
+        not isinstance(adopted, dict)
+        or adopted.get("schema_version") != 1
+        or adopted.get("active_control") != active
+    ):
+        return False
+    monomer = adopted.get("monomer_md")
+    if not isinstance(monomer, dict):
+        return False
+    unit = monomer.get("systemd_unit")
+    active_slot = monomer.get("active_slot")
+    slot_record = monomer.get("slot_record")
+    if (
+        not isinstance(unit, dict)
+        or not isinstance(active_slot, dict)
+        or not isinstance(slot_record, dict)
+        or active_slot.get("source_sha") != adopted.get("source_sha")
+        or active_slot.get("source_tree") != adopted.get("source_tree")
+        or slot_record.get("source_sha") != adopted.get("source_sha")
+        or slot_record.get("source_tree") != adopted.get("source_tree")
+    ):
+        return False
+    paths = (
+        (unit.get("target_path"), unit.get("sha256")),
+        (unit.get("launcher_path"), unit.get("launcher_sha256")),
+        (
+            monomer.get("worker_env", {}).get("path")
+            if isinstance(monomer.get("worker_env"), dict)
+            else None,
+            monomer.get("worker_env", {}).get("sha256")
+            if isinstance(monomer.get("worker_env"), dict)
+            else None,
+        ),
+        (
+            monomer.get("active_slot_path"),
+            monomer.get("active_slot_file_sha256"),
+        ),
+        (
+            monomer.get("slot_record_path"),
+            monomer.get("slot_record_file_sha256"),
+        ),
+    )
+    for raw_path, expected_digest in paths:
+        if (
+            not isinstance(raw_path, str)
+            or not Path(raw_path).is_absolute()
+            or not isinstance(expected_digest, str)
+            or DIGEST_RE.fullmatch(expected_digest) is None
+        ):
+            return False
+        path = Path(raw_path)
+        try:
+            metadata = path.lstat()
+        except OSError:
+            return False
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or sha256_file(path) != expected_digest
+        ):
+            return False
+    monomer_dft = adopted.get("monomer_dft")
+    if not isinstance(monomer_dft, dict):
+        return False
+    dft_unit = monomer_dft.get("systemd_unit")
+    dft_env = monomer_dft.get("runtime_env")
+    dft_runtime = monomer_dft.get("runtime")
+    dft_gpu = monomer_dft.get("gpu")
+    if (
+        not isinstance(dft_unit, dict)
+        or not isinstance(dft_env, dict)
+        or not isinstance(dft_runtime, dict)
+        or not isinstance(dft_gpu, dict)
+        or dft_runtime.get("release_sha") != adopted.get("source_sha")
+        or dft_runtime.get("source_tree") != adopted.get("source_tree")
+        or dft_gpu.get("index") != "2"
+        or dft_gpu.get("guard_mode") != "enforce"
+        or dft_gpu.get("uuid") != ADOPTED_DFT_GPU_UUID
+    ):
+        return False
+    dft_paths = (
+        (dft_unit.get("target_path"), dft_unit.get("sha256")),
+        (dft_unit.get("launcher_path"), dft_unit.get("launcher_sha256")),
+        (dft_env.get("path"), dft_env.get("sha256")),
+        (
+            dft_runtime.get("runtime_manifest_path"),
+            dft_runtime.get("runtime_manifest_sha256"),
+        ),
+    )
+    for raw_path, expected_digest in dft_paths:
+        if (
+            not isinstance(raw_path, str)
+            or not Path(raw_path).is_absolute()
+            or not isinstance(expected_digest, str)
+            or DIGEST_RE.fullmatch(expected_digest) is None
+        ):
+            return False
+        path = Path(raw_path)
+        try:
+            metadata = path.lstat()
+        except OSError:
+            return False
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or sha256_file(path) != expected_digest
+        ):
+            return False
+    release_root_raw = dft_runtime.get("root")
+    models = dft_runtime.get("models")
+    if (
+        not isinstance(release_root_raw, str)
+        or not Path(release_root_raw).is_absolute()
+        or not isinstance(models, dict)
+    ):
+        return False
+    release_root = Path(release_root_raw)
+    try:
+        if adopted_dft_runtime_inventory(release_root) != dft_runtime.get(
+            "runtime_inventory_sha256"
+        ):
+            return False
+    except (ControlRuntimeError, OSError, ValueError):
+        return False
+    for name, expected_digest in models.items():
+        if (
+            not isinstance(name, str)
+            or SAFE_NAME_RE.fullmatch(name) is None
+            or not isinstance(expected_digest, str)
+            or DIGEST_RE.fullmatch(expected_digest) is None
+        ):
+            return False
+        path = release_root / "aimnet-cache" / name
+        try:
+            metadata = path.lstat()
+        except OSError:
+            return False
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or sha256_file(path) != expected_digest
+        ):
+            return False
+    return _asset_pointer_matches(runtime_root, adopted.get("asset_identity"))
+
+
+def _dft_projection_matches(
+    runtime_root: Path,
+    active: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    *,
+    source_sha: object,
+    source_tree: object,
+    projection: object,
+) -> bool:
+    if (
+        not isinstance(source_sha, str)
+        or not isinstance(source_tree, str)
+        or not isinstance(projection, dict)
+        or active.get("source_sha") != source_sha
+        or active.get("source_tree") != source_tree
+        or manifest.get("source_sha") != source_sha
+        or manifest.get("source_tree") != source_tree
+    ):
+        return False
+    runtime = projection.get("runtime")
+    env_transition = projection.get("runtime_env")
+    unit = projection.get("systemd_unit")
+    gpu = projection.get("gpu")
+    if (
+        not isinstance(runtime, dict)
+        or not isinstance(env_transition, dict)
+        or not isinstance(unit, dict)
+        or not isinstance(gpu, dict)
+    ):
+        return False
+    runtime_env = env_transition.get("target", env_transition)
+    if (
+        not isinstance(runtime_env, dict)
+        or set(runtime_env) != {"path", "sha256", "values"}
+        or not isinstance(runtime_env.get("values"), dict)
+        or set(runtime_env["values"]) != MONOMER_DFT_ENV_KEYS
+        or any(
+            not isinstance(value, str) or not value
+            for value in runtime_env["values"].values()
+        )
+        or set(gpu)
+        != {
+            "index",
+            "uuid",
+            "guard_mode",
+            "guard_state_path",
+            "guard_schema_version",
+        }
+    ):
+        return False
+    values = runtime_env["values"]
+    release_root = runtime_root / "worker-venvs/dft" / source_sha
+    manifest_path = release_root / "runtime.json"
+    env_path = runtime_root / "config/monomer-dft-runtime.env"
+    aimnet_cache = release_root / "aimnet-cache"
+    python_path = release_root / "venv/bin/python"
+    warp_cache = runtime_root / "state/monomer-dft-warp-cache" / source_sha
+    role = manifest.get("entrypoints", {}).get("monomer-dft")
+    launcher_name = role.get("launcher") if isinstance(role, dict) else None
+    launcher = manifest.get("files", {}).get(launcher_name)
+    expected_launcher_path = (
+        runtime_root / "control-releases" / str(active.get("release_id")) / str(launcher_name)
+    )
+    models = runtime.get("models")
+    if (
+        runtime.get("release_sha") != source_sha
+        or runtime.get("source_tree") != source_tree
+        or runtime.get("root") != str(release_root)
+        or runtime.get("runtime_manifest_path") != str(manifest_path)
+        or runtime.get("python") != str(python_path)
+        or any(
+            not isinstance(runtime.get(name), str)
+            or DIGEST_RE.fullmatch(runtime[name]) is None
+            for name in (
+                "runtime_manifest_sha256",
+                "runtime_inventory_sha256",
+                "requirements_lock_sha256",
+                "aimnet_source_lock_sha256",
+            )
+        )
+        or not isinstance(models, dict)
+        or set(models) != MONOMER_DFT_MODEL_FILES
+        or any(
+            not isinstance(checksum, str)
+            or DIGEST_RE.fullmatch(checksum) is None
+            for checksum in models.values()
+        )
+        or values["MONOMER_DFT_RELEASE_SHA"] != source_sha
+        or values["MONOMER_DFT_RUNTIME_CONTRACT_SHA256"]
+        != runtime["runtime_manifest_sha256"]
+        or values["MONOMER_DFT_RUNTIME_INVENTORY_SHA256"]
+        != runtime["runtime_inventory_sha256"]
+        or values["MONOMER_DFT_PYTHON"] != str(python_path)
+        or values["AIMNET_CACHE_DIR"] != str(aimnet_cache)
+        or values["WARP_CACHE_PATH"] != str(warp_cache)
+        or values["NEXPOLY_DFT_GPU_GUARD_MODE"] != gpu.get("guard_mode")
+        or runtime_env.get("path") != str(env_path)
+        or gpu.get("index") != MONOMER_DFT_GPU_INDEX
+        or gpu.get("uuid") != ADOPTED_DFT_GPU_UUID
+        or gpu.get("guard_mode") not in {"enforce", "observe"}
+        or gpu.get("guard_state_path") != str(MONOMER_DFT_GUARD_STATE)
+        or gpu.get("guard_schema_version") != 1
+        or unit.get("target_path") != str(MONOMER_DFT_UNIT_TARGET)
+        or unit.get("control_release_id") != active.get("release_id")
+        or not isinstance(role, dict)
+        or role.get("kind") != "worker"
+        or not isinstance(launcher, dict)
+        or unit.get("launcher_path") != str(expected_launcher_path)
+        or unit.get("launcher_sha256") != launcher.get("sha256")
+    ):
+        return False
+    preparing_path = release_root / ".preparing.json"
+    ready_path = release_root / "READY.json"
+    if preparing_path.exists() or preparing_path.is_symlink():
+        return False
+    try:
+        ready_metadata = ready_path.lstat()
+        ready = _load_private_json(ready_path)
+    except (ControlRuntimeError, OSError, ValueError):
+        return False
+    if (
+        not stat.S_ISREG(ready_metadata.st_mode)
+        or ready_path.is_symlink()
+        or ready_metadata.st_uid != os.geteuid()
+        or ready_metadata.st_nlink != 1
+        or stat.S_IMODE(ready_metadata.st_mode) != 0o600
+        or set(ready)
+        != {
+            "schema_version",
+            "status",
+            "release_sha",
+            "source_tree",
+            "requirements_lock_sha256",
+            "aimnet_source_lock_sha256",
+            "runtime",
+            "ready_at",
+        }
+        or ready.get("schema_version") != 1
+        or ready.get("status") != "ready"
+        or ready.get("release_sha") != source_sha
+        or ready.get("source_tree") != source_tree
+        or ready.get("requirements_lock_sha256")
+        != runtime["requirements_lock_sha256"]
+        or ready.get("aimnet_source_lock_sha256")
+        != runtime["aimnet_source_lock_sha256"]
+        or ready.get("runtime") != runtime
+        or not isinstance(ready.get("ready_at"), str)
+        or not ready["ready_at"]
+    ):
+        return False
+    paths = (
+        (manifest_path, runtime["runtime_manifest_sha256"], 0o600),
+        (env_path, runtime_env.get("sha256"), 0o600),
+        (MONOMER_DFT_UNIT_TARGET, unit.get("sha256"), 0o600),
+        (expected_launcher_path, launcher.get("sha256"), 0o700),
+    )
+    for path, expected_digest, expected_mode in paths:
+        if (
+            not path.is_absolute()
+            or not isinstance(expected_digest, str)
+            or DIGEST_RE.fullmatch(expected_digest) is None
+        ):
+            return False
+        try:
+            metadata = path.lstat()
+        except OSError:
+            return False
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != expected_mode
+            or sha256_file(path) != expected_digest
+        ):
+            return False
+    for name, expected_digest in models.items():
+        path = aimnet_cache / name
+        try:
+            metadata = path.lstat()
+        except OSError:
+            return False
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or sha256_file(path) != expected_digest
+        ):
+            return False
+    try:
+        return (
+            governed_dft_runtime_inventory(release_root)
+            == runtime["runtime_inventory_sha256"]
+        )
+    except (ControlRuntimeError, OSError, ValueError):
+        return False
+
+
 def _validate_worker_route_authority(
     runtime_root: Path,
     active: Mapping[str, Any],
     manifest: Mapping[str, Any],
+    *,
+    role: str,
 ) -> None:
     current_path = runtime_root / "state/current-deployment.json"
     marker_path = runtime_root / "state/deploy-in-progress.json"
     marker_present = marker_path.exists() or marker_path.is_symlink()
+    if (
+        not marker_present
+        and not (current_path.exists() or current_path.is_symlink())
+        and _adopted_worker_route_matches(runtime_root, active)
+    ):
+        return
     if not marker_present and (current_path.exists() or current_path.is_symlink()):
         current = _load_private_json(current_path)
         compatibility = manifest["compatibility"]["current_state_schema_versions"]
-        if (
-            current.get("schema_version") in compatibility
-            and current.get("active_control") == active
-            and _worker_projection_matches(
+        projection_matches = (
+            _dft_projection_matches(
+                runtime_root,
+                active,
+                manifest,
+                source_sha=current.get("source_sha"),
+                source_tree=current.get("source_tree"),
+                projection=current.get("monomer_dft"),
+            )
+            if role == "monomer-dft"
+            else _worker_projection_matches(
                 active,
                 manifest,
                 source_sha=current.get("source_sha"),
@@ -1886,6 +3070,11 @@ def _validate_worker_route_authority(
                 slot=current.get("active_monomer_md_slot"),
                 operation_id=current.get("operation_id"),
             )
+        )
+        if (
+            current.get("schema_version") in compatibility
+            and current.get("active_control") == active
+            and projection_matches
             and _asset_pointer_matches(runtime_root, current.get("asset_identity"))
         ):
             return
@@ -1927,27 +3116,26 @@ def _validate_worker_route_authority(
         or marker.get("executor_control_sha256") != candidate_digest
     ):
         raise ControlRuntimeError("Worker transition control authority differs")
+    common_effects = [
+        "source_switched",
+        "slot_switched",
+        "unit_switched",
+        "control_switched",
+        "asset_switched",
+    ]
+    if role == "monomer-dft" and marker.get("schema_version") == 3:
+        common_effects.extend(
+            ("worker_env_switched", "dft_runtime_switched", "dft_unit_switched")
+        )
     switched = all(
         marker.get(field) is True
-        for field in (
-            "source_switched",
-            "slot_switched",
-            "unit_switched",
-            "control_switched",
-            "asset_switched",
-        )
+        for field in common_effects
     )
     restored = (
         marker.get("runtime_stopped") is True
         and all(
             marker.get(field) is False
-            for field in (
-                "source_switched",
-                "slot_switched",
-                "unit_switched",
-                "control_switched",
-                "asset_switched",
-            )
+            for field in common_effects
         )
     )
     pre_stop_previous = (
@@ -1961,25 +3149,32 @@ def _validate_worker_route_authority(
         )
         and all(
             marker.get(field) is False
-            for field in (
-                "source_switched",
-                "slot_switched",
-                "unit_switched",
-                "control_switched",
-                "asset_switched",
-            )
+            for field in common_effects
         )
     )
     if switched and _active_matches_candidate(active, candidate):
-        if not isinstance(monomer, dict) or not _worker_projection_matches(
-            active,
-            manifest,
-            source_sha=repository.get("target_sha"),
-            source_tree=repository.get("target_tree"),
-            unit=monomer.get("systemd_unit"),
-            slot=monomer.get("slot_record"),
-            operation_id=operation_id,
-        ):
+        candidate_projection_matches = (
+            _dft_projection_matches(
+                runtime_root,
+                active,
+                manifest,
+                source_sha=repository.get("target_sha"),
+                source_tree=repository.get("target_tree"),
+                projection=descriptor.get("monomer_dft"),
+            )
+            if role == "monomer-dft"
+            else isinstance(monomer, dict)
+            and _worker_projection_matches(
+                active,
+                manifest,
+                source_sha=repository.get("target_sha"),
+                source_tree=repository.get("target_tree"),
+                unit=monomer.get("systemd_unit"),
+                slot=monomer.get("slot_record"),
+                operation_id=operation_id,
+            )
+        )
+        if not candidate_projection_matches:
             raise ControlRuntimeError("candidate Worker transition identity differs")
         release_input = descriptor.get("release_input")
         if not isinstance(release_input, dict) or not _asset_pointer_matches(
@@ -1988,6 +3183,16 @@ def _validate_worker_route_authority(
             raise ControlRuntimeError("candidate Worker asset identity differs")
         return
     previous_control = controller.get("previous_active_control")
+    adopted = descriptor.get("adopted_deployment")
+    if (
+        (restored or pre_stop_previous)
+        and previous is None
+        and isinstance(adopted, dict)
+        and active == previous_control
+        and previous_control == adopted.get("active_control")
+        and _adopted_worker_route_matches(runtime_root, active)
+    ):
+        return
     if (
         (restored or pre_stop_previous)
         and isinstance(previous, dict)
@@ -2004,15 +3209,27 @@ def _validate_worker_route_authority(
                 raise ControlRuntimeError(
                     "unchanged pre-stop Worker state differs from previous deployment"
                 )
-        if not _worker_projection_matches(
-            active,
-            manifest,
-            source_sha=previous.get("source_sha"),
-            source_tree=previous.get("source_tree"),
-            unit=previous.get("monomer_md_systemd_unit"),
-            slot=previous.get("active_monomer_md_slot"),
-            operation_id=previous.get("operation_id"),
-        ):
+        previous_projection_matches = (
+            _dft_projection_matches(
+                runtime_root,
+                active,
+                manifest,
+                source_sha=previous.get("source_sha"),
+                source_tree=previous.get("source_tree"),
+                projection=previous.get("monomer_dft"),
+            )
+            if role == "monomer-dft"
+            else _worker_projection_matches(
+                active,
+                manifest,
+                source_sha=previous.get("source_sha"),
+                source_tree=previous.get("source_tree"),
+                unit=previous.get("monomer_md_systemd_unit"),
+                slot=previous.get("active_monomer_md_slot"),
+                operation_id=previous.get("operation_id"),
+            )
+        )
+        if not previous_projection_matches:
             raise ControlRuntimeError("restored Worker transition identity differs")
         if not _asset_pointer_matches(runtime_root, previous.get("asset_identity")):
             raise ControlRuntimeError("restored Worker asset identity differs")
@@ -2073,6 +3290,10 @@ def _selected_release(
         role == "reconcile-production-0005-alias"
         and alias_marker is not None
     ):
+        if alias_marker.get("authority_kind") == ADOPTION_AUTHORITY_KIND:
+            raise ControlRuntimeError(
+                "production 0005 maintenance is already sealed by manual adoption"
+            )
         _validate_bootstrap_authority(runtime_root)
         identity = alias_marker.get("identity")
         control = identity.get("control") if isinstance(identity, dict) else None
@@ -2106,8 +3327,10 @@ def _selected_release(
             )
         return recovery_manifest, recovery_root
     active, manifest, root = load_active_control(runtime_root)
-    if role == "monomer-md":
-        _validate_worker_route_authority(runtime_root, active, manifest)
+    if role in {"monomer-md", "monomer-dft"}:
+        _validate_worker_route_authority(
+            runtime_root, active, manifest, role=role
+        )
     if role != "deploy" or not arguments:
         return manifest, root
     command = arguments[0]

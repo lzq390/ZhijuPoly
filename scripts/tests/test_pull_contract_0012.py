@@ -1427,6 +1427,25 @@ class ContractRuntimeLifecycle(contract.pull.SystemLifecycle):
             return "stopped"
         return "partial"
 
+    def stop(self, controller, descriptor):  # type: ignore[no-untyped-def]
+        self.events.append("runtime:stop-and-prove")
+        self.nginx_running = False
+        self.backend_running = False
+        self.worker_running = False
+        return self.postgres_runtime_identity(controller, descriptor)
+
+    def _prove_runtime_stopped(  # type: ignore[no-untyped-def]
+        self, controller, descriptor, *, expected_postgres=None
+    ):
+        self.events.append("runtime:prove-stopped")
+        if self.backend_running or self.worker_running:
+            raise contract.pull.PullDeployError(
+                "contract fixture source reader remains active"
+            )
+        return expected_postgres or self.postgres_runtime_identity(
+            controller, descriptor
+        )
+
     def ensure_candidate_drained(self, controller, descriptor):  # type: ignore[no-untyped-def]
         self.events.append("runtime:redrain")
         backend = self._backend_process_identity(controller, descriptor)

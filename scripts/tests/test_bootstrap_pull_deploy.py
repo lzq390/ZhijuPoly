@@ -24,7 +24,11 @@ BOOTSTRAP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOOTSTRAP)
 SOURCE_SHA = "1" * 40
 SOURCE_TREE = "2" * 40
+LIVE_SHA = "0" * 40
+LIVE_TREE = "0" * 40
+DFT_GPU_UUID = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
 TAKEOVER_OPERATION_ID = "takeover-fixture-0001"
+ADOPTION_OPERATION_ID = "adopt-fixture-0001"
 
 
 def takeover_binding(
@@ -143,6 +147,256 @@ class BootstrapPullDeployTests(unittest.TestCase):
             SOURCE_TREE,
         ]
 
+    def prepare_adoption_fixture(self) -> tuple[str, str]:
+        state = self.runtime / "state"
+        config = self.runtime / "config"
+        state.mkdir(parents=True, mode=0o700)
+        config.mkdir(mode=0o700)
+        os.chmod(self.runtime, 0o700)
+        os.chmod(state, 0o700)
+        os.chmod(config, 0o700)
+        unit_root = self.root / "systemd/user"
+        unit_root.mkdir(parents=True, mode=0o700)
+        md = unit_root / "nexpoly-monomer-md-worker.service"
+        dft = unit_root / "nexpoly-monomer-dft-worker.service"
+        md.write_bytes(b"[Service]\nExecStart=/manual-md\n")
+        dft.write_text(
+            "\n".join(
+                (
+                    "[Service]",
+                    f"EnvironmentFile={BOOTSTRAP.RUNTIME_ROOT}/config/monomer-dft-runtime.env",
+                    'Environment="MONOMER_DFT_GPU_GUARD_STATE='
+                    f'{BOOTSTRAP.RUNTIME_ROOT}/state/gpu2-guard.json"',
+                    'Environment="NEXPOLY_DFT_GPU_DEVICE=2"',
+                    'Environment="NEXPOLY_DFT_OVERFLOW_GPU_DEVICES="',
+                    'Environment="MONOMER_DFT_GPU_BROKER_ENABLED=0"',
+                    'Environment="MONOMER_DFT_MAX_CONCURRENT_JOBS=1"',
+                    'Environment="MONOMER_DFT_MAX_QUEUED_JOBS=8"',
+                    f"ExecStartPre=/usr/bin/python3 -I -B {BOOTSTRAP.PRODUCTION_ROOT}/scripts/gpu2_guard.py --require-ready",
+                    f"ExecStart={BOOTSTRAP.PRODUCTION_ROOT}/workers/monomer_dft_worker/run_host_worker.sh",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(md, 0o600)
+        os.chmod(dft, 0o600)
+        md_launcher = (
+            self.production / "workers/monomer_md_worker/run_host_worker.sh"
+        )
+        dft_launcher = (
+            self.production / "workers/monomer_dft_worker/run_host_worker.sh"
+        )
+        md_launcher.parent.mkdir(parents=True)
+        dft_launcher.parent.mkdir(parents=True)
+        md_launcher.write_bytes(b"#!/bin/sh\nexit 0\n")
+        dft_launcher.write_bytes(b"#!/bin/sh\nexit 0\n")
+        os.chmod(md_launcher, 0o755)
+        os.chmod(dft_launcher, 0o755)
+        worker_env = config / "worker.env"
+        worker_env.write_bytes(b"NEXPOLY_GPU_DEVICE=2\n")
+        os.chmod(worker_env, 0o600)
+        deploy_env = config / "deploy.env"
+        deploy_env.write_bytes(b"sealed deploy configuration\n")
+        os.chmod(deploy_env, 0o600)
+        app_env = config / "app.env"
+        app_env.write_bytes(b"sealed application configuration\n")
+        os.chmod(app_env, 0o600)
+        slot_root = state / "worker-slots"
+        slot_root.mkdir(mode=0o700)
+        slot_path = slot_root / "md-a.json"
+        slot = {
+            "schema_version": 2,
+            "status": "ready",
+            "component": "monomer-md",
+            "slot": "a",
+            "source_sha": LIVE_SHA,
+            "source_tree": LIVE_TREE,
+        }
+        BOOTSTRAP._atomic_json(slot_path, slot)
+        active = {
+            "schema_version": 1,
+            "component": "monomer-md",
+            "slot": "a",
+            "source_sha": LIVE_SHA,
+            "source_tree": LIVE_TREE,
+            "worker_lock_sha256": "sha256:" + "7" * 64,
+            "slot_record_sha256": BOOTSTRAP._canonical_json_digest(slot),
+            "operation_id": "manual-md-test-adoption",
+            "activated_at": "2026-01-01T00:00:00Z",
+        }
+        BOOTSTRAP._atomic_json(state / "monomer-md-active-slot.json", active)
+        dft_root = self.runtime / "worker-venvs/dft" / LIVE_SHA
+        model_root = dft_root / "aimnet-cache"
+        model_root.mkdir(parents=True, mode=0o700)
+        os.chmod(dft_root, 0o700)
+        venv = dft_root / "venv"
+        venv_bin = venv / "bin"
+        venv_lib = venv / "lib/python3.12/site-packages"
+        venv_bin.mkdir(parents=True, mode=0o700)
+        venv_lib.mkdir(parents=True, mode=0o700)
+        (venv_bin / "python").symlink_to("/usr/bin/python3.12")
+        (venv_bin / "python3").symlink_to("python")
+        (venv_bin / "python3.12").symlink_to("python")
+        (venv / "lib64").symlink_to("lib")
+        uv_lock = venv / ".lock"
+        uv_lock.write_bytes(b"")
+        os.chmod(uv_lock, 0o666)
+        hardlink_source = venv_lib / "uv-cache-backed.py"
+        hardlink_source.write_bytes(b"legacy hardlink baseline\n")
+        os.chmod(hardlink_source, 0o600)
+        os.link(hardlink_source, venv_lib / "uv-cache-backed-copy.py")
+        warp_cache = dft_root / "warp-cache"
+        warp_cache.mkdir(mode=0o700)
+        mutable_warp_payload = warp_cache / "kernel.cache"
+        mutable_warp_payload.write_bytes(b"mutable and excluded\n")
+        os.chmod(mutable_warp_payload, 0o600)
+        for name in (
+            "aimnet2-pd_0.pt",
+            "aimnet2_2025_b973c_d3_0.pt",
+            "aimnet2_b973c_d3_0.pt",
+            "aimnet2_rxn_0.pt",
+            "aimnet2_wb97m_d3_0.pt",
+            "aimnet2nse_wb97m_0.pt",
+        ):
+            checkpoint = model_root / name
+            checkpoint.write_bytes((name + "\n").encode("ascii"))
+            os.chmod(checkpoint, 0o600)
+        BOOTSTRAP._atomic_json(
+            dft_root / "runtime.json",
+            {
+                "schema_version": 1,
+                "release": LIVE_SHA,
+                "source_tree": LIVE_TREE,
+                "requirements_lock_sha256": "sha256:" + "3" * 64,
+                "aimnet_source_lock_sha256": "sha256:" + "4" * 64,
+            },
+        )
+        dft_env = config / "monomer-dft-runtime.env"
+        dft_env.write_text(
+            "\n".join(
+                (
+                    f"MONOMER_DFT_RELEASE_SHA={LIVE_SHA}",
+                    f"MONOMER_DFT_RUNTIME_CONTRACT_SHA256=sha256:{'5' * 64}",
+                    f"MONOMER_DFT_PYTHON={dft_root / 'venv/bin/python'}",
+                    f"AIMNET_CACHE_DIR={model_root}",
+                    f"WARP_CACHE_PATH={dft_root / 'warp-cache'}",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(dft_env, 0o600)
+        BOOTSTRAP._atomic_json(
+            state / "gpu2-guard.json",
+            {
+                "schema_version": 1,
+                "gpu_index": "2",
+                "gpu_uuid": DFT_GPU_UUID,
+                "status": "ready",
+            },
+        )
+        asset_root = self.root / "asset-release"
+        asset_root.mkdir(mode=0o700)
+        asset_manifest = asset_root / "ASSET-MANIFEST.json"
+        asset_manifest.write_bytes(b"{}\n")
+        os.chmod(asset_manifest, 0o600)
+        (state / "current-assets").symlink_to(asset_root)
+        return BOOTSTRAP.digest(md.read_bytes()), BOOTSTRAP.digest(dft.read_bytes())
+
+    def adoption_base_arguments(self) -> list[str]:
+        return [
+            "--sha",
+            SOURCE_SHA,
+            "--live-sha",
+            LIVE_SHA,
+            "--operation-id",
+            ADOPTION_OPERATION_ID,
+            "--production-root",
+            str(self.production),
+            "--runtime-root",
+            str(self.runtime),
+        ]
+
+    def adoption_apply_arguments(
+        self,
+        plan: dict[str, object],
+        md_sha256: str,
+        dft_sha256: str,
+    ) -> list[str]:
+        return [
+            *self.adoption_base_arguments(),
+            "--adopt-apply",
+            "--confirm-production-root",
+            str(self.production.absolute()),
+            "--confirm-runtime-root",
+            str(self.runtime.absolute()),
+            "--confirm-source-tree",
+            LIVE_TREE,
+            "--confirm-evidence-sha256",
+            str(plan["evidence_sha256"]),
+            "--confirm-md-unit-sha256",
+            md_sha256,
+            "--confirm-dft-unit-sha256",
+            dft_sha256,
+        ]
+
+    @staticmethod
+    def adoption_abort_arguments(apply_arguments: list[str]) -> list[str]:
+        return [
+            value if value != "--adopt-apply" else "--adopt-abort"
+            for value in apply_arguments
+        ]
+
+    def crash_adoption_before_phase_journal(
+        self, phase: str
+    ) -> tuple[list[str], dict[str, object]]:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        arguments = self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        original_advance = BOOTSTRAP._advance_adoption_transaction
+        crashed = False
+
+        def crash(*values, **keywords):  # type: ignore[no-untyped-def]
+            nonlocal crashed
+            if not crashed and keywords.get("phase") == phase:
+                crashed = True
+                raise BOOTSTRAP.BootstrapError(
+                    f"injected pre-journal {phase} abort crash"
+                )
+            return original_advance(*values, **keywords)
+
+        with mock.patch.object(
+            BOOTSTRAP, "_advance_adoption_transaction", side_effect=crash
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn(f"pre-journal {phase} abort crash", error)
+        transaction = BOOTSTRAP._load_private_json(
+            BOOTSTRAP._adoption_transaction_path(
+                self.runtime, operation_id=ADOPTION_OPERATION_ID
+            )
+        )
+        return arguments, transaction
+
+    def assert_adoption_planned_paths_absent(
+        self, transaction: dict[str, object]
+    ) -> None:
+        planned = transaction["planned_paths"]
+        self.assertIsInstance(planned, list)
+        for ownership in planned:
+            self.assertIsInstance(ownership, dict)
+            path = Path(str(ownership["path"]))
+            self.assertFalse(
+                path.exists() or path.is_symlink(),
+                f"planned adoption residue remains: {path}",
+            )
+        self.assertTrue((self.runtime / "state/deploy.lock").is_file())
+
     def committed_private_repo(self, path: Path) -> Path:
         previous_umask = os.umask(0o077)
         try:
@@ -217,6 +471,1025 @@ class BootstrapPullDeployTests(unittest.TestCase):
         self.assertNotIn(str(self.runtime / "worker-venvs" / "md-a"), document["directories"])
         self.assertIn("change Git HEAD or fetch", document["excluded_actions"])
         self.assertEqual(document["delivery_gate"]["remote_main"], SOURCE_SHA)
+
+    def test_adoption_plan_is_strictly_read_only_and_seals_confirmations(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+
+        def snapshot() -> list[tuple[str, int, bytes]]:
+            result: list[tuple[str, int, bytes]] = []
+            for path in sorted(self.runtime.rglob("*")):
+                result.append(
+                    (
+                        path.relative_to(self.runtime).as_posix(),
+                        stat.S_IMODE(path.lstat().st_mode),
+                        path.read_bytes() if path.is_file() else b"",
+                    )
+                )
+            return result
+
+        before = snapshot()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        self.assertEqual(snapshot(), before)
+        self.assertEqual(plan["action"], "manual-runtime-adoption")
+        self.assertFalse(plan["apply"])
+        self.assertEqual(plan["live_source_sha"], LIVE_SHA)
+        self.assertEqual(plan["live_source_tree"], LIVE_TREE)
+        self.assertEqual(
+            plan["deploy_lock_disposition"], "permanent-control-layout"
+        )
+        self.assertEqual(
+            plan["evidence_sha256"],
+            BOOTSTRAP._canonical_json_digest(plan["evidence"]),
+        )
+        self.assertEqual(
+            plan["confirmations"]["md_unit_sha256"], md_sha256
+        )
+        self.assertEqual(
+            plan["confirmations"]["dft_unit_sha256"], dft_sha256
+        )
+        slot_path = self.runtime / "state/worker-slots/md-a.json"
+        self.assertTrue(slot_path.read_bytes().endswith(b"\n"))
+        slot_record = json.loads(slot_path.read_bytes())
+        slot_identity_sha256 = BOOTSTRAP._canonical_json_digest(slot_record)
+        slot_file_sha256 = BOOTSTRAP.digest(slot_path.read_bytes())
+        self.assertNotEqual(slot_identity_sha256, slot_file_sha256)
+        monomer_md = plan["evidence"]["monomer_md"]
+        self.assertEqual(
+            monomer_md["active_slot"]["slot_record_sha256"],
+            slot_identity_sha256,
+        )
+        self.assertEqual(
+            monomer_md["slot_record_file_sha256"],
+            slot_file_sha256,
+        )
+        self.assertFalse((self.runtime / "state/deploy.lock").exists())
+        self.assertFalse((self.runtime / "bin").exists())
+
+    def test_adoption_apply_writes_bootstrap_v3_and_adopted_v1_only(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        md_unit = self.root / "systemd/user/nexpoly-monomer-md-worker.service"
+        dft_unit = self.root / "systemd/user/nexpoly-monomer-dft-worker.service"
+        unit_before = (md_unit.read_bytes(), dft_unit.read_bytes())
+        result, output, error = self.run_main(
+            *self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        )
+        self.assertEqual(result, 0, error)
+        applied = json.loads(output)
+        self.assertEqual(applied["status"], "adopted")
+        bootstrap = BOOTSTRAP._load_private_json(
+            self.runtime / "state/bootstrap-control.json"
+        )
+        self.assertEqual(bootstrap["schema_version"], 3)
+        self.assertEqual(
+            bootstrap["authority_kind"], "manual-runtime-adoption"
+        )
+        self.assertNotIn("legacy_takeover", bootstrap)
+        adopted = BOOTSTRAP._load_private_json(
+            self.runtime / "state/adopted-deployment.json"
+        )
+        self.assertFalse(
+            (self.runtime / "state/current-deployment.json").exists()
+        )
+        self.assertEqual(adopted["schema_version"], 1)
+        self.assertEqual(adopted["status"], "adopted")
+        self.assertEqual(adopted["source_sha"], LIVE_SHA)
+        self.assertEqual(
+            adopted["monomer_dft"]["gpu"]["uuid"], DFT_GPU_UUID
+        )
+        self.assertEqual(
+            adopted["monomer_dft"]["runtime"]["runtime_inventory_sha256"],
+            BOOTSTRAP._adopted_dft_runtime_inventory(
+                self.runtime / "worker-venvs/dft" / LIVE_SHA
+            ),
+        )
+        production_config = adopted["production_config"]
+        self.assertEqual(set(production_config), {"deploy_env", "app_env"})
+        for name, path in (
+            ("deploy_env", self.runtime / "config/deploy.env"),
+            ("app_env", self.runtime / "config/app.env"),
+        ):
+            self.assertEqual(production_config[name]["path"], str(path))
+            self.assertEqual(
+                production_config[name]["sha256"],
+                BOOTSTRAP.digest(path.read_bytes()),
+            )
+            self.assertEqual(production_config[name]["mode"], "0600")
+        deploy_lock = self.runtime / "state/deploy.lock"
+        self.assertTrue(deploy_lock.is_file())
+        self.assertEqual(stat.S_IMODE(deploy_lock.stat().st_mode), 0o600)
+        self.assertEqual(unit_before, (md_unit.read_bytes(), dft_unit.read_bytes()))
+        second, _output, error = self.run_main(
+            *self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        )
+        self.assertEqual(second, 0, error)
+
+    def test_adoption_preflight_rejects_existing_current_state(self) -> None:
+        self.prepare_adoption_fixture()
+        current = self.runtime / "state/current-deployment.json"
+        BOOTSTRAP._atomic_json(current, {"schema_version": 3})
+        result, _output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 2)
+        self.assertIn("current deployment state to be absent", error)
+        self.assertFalse((self.runtime / "state/deploy.lock").exists())
+        self.assertFalse((self.runtime / "bin").exists())
+
+    def test_non_test_adoption_abort_rejects_custom_roots_without_writes(self) -> None:
+        self.prepare_adoption_fixture()
+
+        def snapshot() -> list[tuple[str, int, bytes]]:
+            return [
+                (
+                    path.relative_to(self.runtime).as_posix(),
+                    stat.S_IMODE(path.lstat().st_mode),
+                    path.read_bytes() if path.is_file() else b"",
+                )
+                for path in sorted(self.runtime.rglob("*"))
+            ]
+
+        before = snapshot()
+        args = BOOTSTRAP.build_parser().parse_args(
+            [
+                "--sha",
+                SOURCE_SHA,
+                "--live-sha",
+                LIVE_SHA,
+                "--operation-id",
+                ADOPTION_OPERATION_ID,
+                "--adopt-abort",
+                "--production-root",
+                str(self.production),
+                "--runtime-root",
+                str(self.runtime),
+                "--confirm-production-root",
+                str(self.production),
+                "--confirm-runtime-root",
+                str(self.runtime),
+                "--confirm-source-tree",
+                LIVE_TREE,
+                "--confirm-evidence-sha256",
+                "sha256:" + "1" * 64,
+                "--confirm-md-unit-sha256",
+                "sha256:" + "2" * 64,
+                "--confirm-dft-unit-sha256",
+                "sha256:" + "3" * 64,
+            ]
+        )
+        with self.assertRaisesRegex(
+            BOOTSTRAP.BootstrapError, "exact production/runtime roots"
+        ):
+            BOOTSTRAP._manual_adoption_main(args, allow_test=False)
+        self.assertEqual(snapshot(), before)
+        self.assertFalse((self.runtime / "state/deploy.lock").exists())
+
+    def test_adoption_plan_rejects_a_different_gpu2_uuid(self) -> None:
+        self.prepare_adoption_fixture()
+        BOOTSTRAP._atomic_json(
+            self.runtime / "state/gpu2-guard.json",
+            {
+                "schema_version": 1,
+                "gpu_index": "2",
+                "gpu_uuid": "GPU-" + "1" * 32,
+                "status": "ready",
+            },
+        )
+        result, _output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 2)
+        self.assertIn("GPU2 guard identity is invalid", error)
+
+    def test_adoption_plan_requires_exact_legacy_dft_unit_semantics(self) -> None:
+        self.prepare_adoption_fixture()
+        unit = self.root / "systemd/user/nexpoly-monomer-dft-worker.service"
+        unit.write_text(
+            unit.read_text(encoding="utf-8").replace(
+                "gpu2_guard.py --require-ready", "gpu2_guard.py"
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(unit, 0o600)
+        result, _output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 2)
+        self.assertIn("exact legacy GPU2 contract", error)
+
+    def test_adoption_rejects_non_enforce_dft_process_environment(self) -> None:
+        self.prepare_adoption_fixture()
+        unit = self.root / "systemd/user/nexpoly-monomer-dft-worker.service"
+        environment = dict(BOOTSTRAP.ADOPTED_DFT_PROCESS_ENVIRONMENT)
+        environment["NEXPOLY_DFT_GPU_GUARD_MODE"] = "observe"
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_bounded_process_environment",
+            return_value=environment,
+        ):
+            with self.assertRaisesRegex(
+                BOOTSTRAP.BootstrapError, "fail-closed enforce mode"
+            ):
+                BOOTSTRAP._assert_adopted_dft_unit_semantics(
+                    unit.read_bytes(), main_pid=1234, allow_test=False
+                )
+
+    def test_adoption_fresh_preflight_rejects_foreign_control_destinations(self) -> None:
+        self.prepare_adoption_fixture()
+        active = self.runtime / "state/active-control.json"
+        BOOTSTRAP._atomic_json(active, {"foreign": True})
+        before = active.read_bytes()
+        result, _output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 2)
+        self.assertIn("pre-existing control destination", error)
+        self.assertEqual(active.read_bytes(), before)
+        self.assertFalse((self.runtime / "state/deploy.lock").exists())
+
+    def test_adoption_fresh_preflight_preserves_foreign_staging(self) -> None:
+        self.prepare_adoption_fixture()
+        bin_root = self.runtime / "bin"
+        bin_root.mkdir(mode=0o700)
+        staging = bin_root / ".control_runtime_selector.py.foreign.tmp"
+        staging.write_bytes(b"foreign staging\n")
+        os.chmod(staging, 0o700)
+        before = staging.read_bytes()
+        result, _output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 2)
+        self.assertIn("pre-existing runtime controls", error)
+        self.assertEqual(staging.read_bytes(), before)
+        self.assertFalse((self.runtime / "state/deploy.lock").exists())
+
+    def test_selector_routes_adopted_md_and_dft_with_static_cas(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        result, _output, error = self.run_main(
+            *self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        )
+        self.assertEqual(result, 0, error)
+        selector = BOOTSTRAP._control_runtime(
+            source_sha=SOURCE_SHA,
+            allow_test=True,
+        )
+        for role in ("monomer-md", "monomer-dft"):
+            manifest, release_root = selector._selected_release(  # type: ignore[attr-defined]
+                self.runtime, role, []
+            )
+            self.assertEqual(manifest["source_sha"], SOURCE_SHA)
+            self.assertTrue(release_root.is_dir())
+
+        # The minute-by-minute guard observation is deliberately not a route
+        # CAS input; the sealed UUID/index/policy still is.
+        BOOTSTRAP._atomic_json(
+            self.runtime / "state/gpu2-guard.json",
+            {
+                "schema_version": 1,
+                "gpu_index": "2",
+                "gpu_uuid": DFT_GPU_UUID,
+                "status": "quarantined",
+                "unknown_processes": [{"redacted": True}],
+            },
+        )
+        selector._selected_release(self.runtime, "monomer-dft", [])  # type: ignore[attr-defined]
+
+        # Mutable Warp output is deliberately outside the immutable digest.
+        warp_payload = (
+            self.runtime
+            / "worker-venvs/dft"
+            / LIVE_SHA
+            / "warp-cache/kernel.cache"
+        )
+        warp_payload.write_bytes(b"new mutable cache content\n")
+        selector._selected_release(self.runtime, "monomer-dft", [])  # type: ignore[attr-defined]
+
+        # Legacy uv hard links are admitted, but their exact link count is CAS.
+        hardlink_copy = (
+            self.runtime
+            / "worker-venvs/dft"
+            / LIVE_SHA
+            / "venv/lib/python3.12/site-packages/uv-cache-backed-copy.py"
+        )
+        hardlink_source = hardlink_copy.with_name("uv-cache-backed.py")
+        hardlink_copy.unlink()
+        with self.assertRaisesRegex(
+            selector.ControlRuntimeError,  # type: ignore[attr-defined]
+            "governed deployment authority",
+        ):
+            selector._selected_release(  # type: ignore[attr-defined]
+                self.runtime, "monomer-dft", []
+            )
+        os.link(hardlink_source, hardlink_copy)
+        selector._selected_release(self.runtime, "monomer-dft", [])  # type: ignore[attr-defined]
+
+        checkpoint = (
+            self.runtime
+            / "worker-venvs/dft"
+            / LIVE_SHA
+            / "aimnet-cache/aimnet2-pd_0.pt"
+        )
+        checkpoint.write_bytes(b"tampered\n")
+        os.chmod(checkpoint, 0o600)
+        with self.assertRaisesRegex(
+            selector.ControlRuntimeError,  # type: ignore[attr-defined]
+            "governed deployment authority",
+        ):
+            selector._selected_release(  # type: ignore[attr-defined]
+                self.runtime, "monomer-dft", []
+            )
+
+    def test_adopted_dft_inventory_prunes_warp_cache_before_scandir(self) -> None:
+        previous_umask = os.umask(0o022)
+        try:
+            self.prepare_adoption_fixture()
+        finally:
+            os.umask(previous_umask)
+        runtime = self.runtime / "worker-venvs/dft" / LIVE_SHA
+        warp_cache = runtime / "warp-cache"
+        original_scandir = os.scandir
+
+        def reject_warp_traversal(path):  # type: ignore[no-untyped-def]
+            if Path(path) == warp_cache:
+                raise AssertionError("mutable warp-cache must not be traversed")
+            return original_scandir(path)
+
+        with mock.patch.object(
+            BOOTSTRAP.os, "scandir", side_effect=reject_warp_traversal
+        ):
+            bootstrap_before = BOOTSTRAP._adopted_dft_runtime_inventory(runtime)
+
+        selector = BOOTSTRAP._control_runtime(
+            source_sha=SOURCE_SHA,
+            allow_test=True,
+        )
+        with mock.patch.object(
+            selector.os, "scandir", side_effect=reject_warp_traversal
+        ):
+            selector_before = selector.adopted_dft_runtime_inventory(runtime)
+        self.assertEqual(selector_before, bootstrap_before)
+
+        (warp_cache / "kernel.cache").write_bytes(
+            b"a completely different mutable warp cache payload\n"
+        )
+        with mock.patch.object(
+            BOOTSTRAP.os, "scandir", side_effect=reject_warp_traversal
+        ):
+            bootstrap_after = BOOTSTRAP._adopted_dft_runtime_inventory(runtime)
+        with mock.patch.object(
+            selector.os, "scandir", side_effect=reject_warp_traversal
+        ):
+            selector_after = selector.adopted_dft_runtime_inventory(runtime)
+        self.assertEqual(bootstrap_after, bootstrap_before)
+        self.assertEqual(selector_after, selector_before)
+
+    def test_adoption_every_durable_phase_is_crash_resumable(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        arguments = self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        original_atomic = BOOTSTRAP._atomic_json
+        intent_crashed = False
+
+        def crash_intent(path: Path, document: dict[str, object]) -> None:
+            nonlocal intent_crashed
+            original_atomic(path, document)
+            if (
+                not intent_crashed
+                and path.parent.name == "adoption-transactions"
+                and document.get("phase") == "intent"
+            ):
+                intent_crashed = True
+                raise BOOTSTRAP.BootstrapError("injected adoption intent crash")
+
+        with mock.patch.object(
+            BOOTSTRAP, "_atomic_json", side_effect=crash_intent
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2)
+        self.assertIn("intent crash", error)
+        transaction_path = BOOTSTRAP._adoption_transaction_path(
+            self.runtime, operation_id=ADOPTION_OPERATION_ID
+        )
+        self.assertEqual(
+            BOOTSTRAP._load_private_json(transaction_path)["phase"], "intent"
+        )
+
+        original_advance = BOOTSTRAP._advance_adoption_transaction
+        for phase in (
+            "layout-ready",
+            "controls-ready",
+            "baseline-ready",
+            "authority-commit-intent",
+            "completed",
+        ):
+            crashed = False
+
+            def crash_phase(*values, **keywords):  # type: ignore[no-untyped-def]
+                nonlocal crashed
+                transaction = original_advance(*values, **keywords)
+                if not crashed and keywords.get("phase") == phase:
+                    crashed = True
+                    raise BOOTSTRAP.BootstrapError(
+                        f"injected adoption {phase} crash"
+                    )
+                return transaction
+
+            with mock.patch.object(
+                BOOTSTRAP,
+                "_advance_adoption_transaction",
+                side_effect=crash_phase,
+            ):
+                result, _output, error = self.run_main(*arguments)
+            self.assertEqual(result, 2, (phase, error))
+            self.assertIn(phase, error)
+            self.assertEqual(
+                BOOTSTRAP._load_private_json(transaction_path)["phase"], phase
+            )
+        result, output, error = self.run_main(*arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+
+    def test_foreign_adoption_operation_cannot_reuse_completed_controls(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        arguments = self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        original_advance = BOOTSTRAP._advance_adoption_transaction
+        crashed = False
+
+        def crash_after_controls(*values, **keywords):  # type: ignore[no-untyped-def]
+            nonlocal crashed
+            transaction = original_advance(*values, **keywords)
+            if not crashed and keywords.get("phase") == "controls-ready":
+                crashed = True
+                raise BOOTSTRAP.BootstrapError("injected controls-ready crash")
+            return transaction
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_advance_adoption_transaction",
+            side_effect=crash_after_controls,
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2)
+        self.assertIn("controls-ready crash", error)
+
+        def snapshot() -> list[tuple[str, int, bytes]]:
+            values: list[tuple[str, int, bytes]] = []
+            for path in sorted(self.runtime.rglob("*")):
+                values.append(
+                    (
+                        path.relative_to(self.runtime).as_posix(),
+                        stat.S_IMODE(path.lstat().st_mode),
+                        path.read_bytes() if path.is_file() else b"",
+                    )
+                )
+            return values
+
+        before = snapshot()
+        other_id = "adopt-fixture-0002"
+        other_base = [
+            other_id if value == ADOPTION_OPERATION_ID else value
+            for value in self.adoption_base_arguments()
+        ]
+        result, _output, error = self.run_main(*other_base, "--adopt-plan")
+        self.assertEqual(result, 2)
+        self.assertIn("another manual runtime adoption", error)
+        self.assertEqual(snapshot(), before)
+
+        other_apply = [
+            other_id if value == ADOPTION_OPERATION_ID else value
+            for value in arguments
+        ]
+        result, _output, error = self.run_main(*other_apply)
+        self.assertEqual(result, 2)
+        self.assertIn("another manual runtime adoption", error)
+        self.assertEqual(snapshot(), before)
+
+    def test_adoption_control_release_publish_never_clobbers_raced_destination(
+        self,
+    ) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        arguments = self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        original = BOOTSTRAP._rename_noreplace
+        raced: Path | None = None
+
+        def race(source: Path, destination: Path) -> None:
+            nonlocal raced
+            if raced is None:
+                destination.mkdir(mode=0o700)
+                raced = destination
+            original(source, destination)
+
+        with mock.patch.object(BOOTSTRAP, "_rename_noreplace", side_effect=race):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2)
+        self.assertIsNotNone(raced)
+        assert raced is not None
+        self.assertTrue(raced.is_dir())
+        self.assertEqual(list(raced.iterdir()), [])
+        raced.rmdir()
+
+        result, output, error = self.run_main(*arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+
+    def test_authority_completion_exchange_preserves_a_raced_destination(
+        self,
+    ) -> None:
+        state = self.runtime / "state"
+        state.mkdir(parents=True, mode=0o700)
+        os.chmod(self.runtime, 0o700)
+        path = state / "bootstrap-control.json"
+        temporary = state / ".bootstrap-control.complete.tmp"
+        expected = b'{"status":"prepared"}\n'
+        replacement = b'{"status":"completed"}\n'
+        foreign = b'{"status":"foreign"}\n'
+        path.write_bytes(expected)
+        os.chmod(path, 0o600)
+        original = BOOTSTRAP._rename_exchange
+        raced = False
+
+        def race(first: Path, second: Path) -> None:
+            nonlocal raced
+            if not raced:
+                raced = True
+                BOOTSTRAP._atomic_file(first, foreign, 0o600)
+            original(first, second)
+
+        with mock.patch.object(BOOTSTRAP, "_rename_exchange", side_effect=race):
+            with self.assertRaisesRegex(
+                BOOTSTRAP.BootstrapError,
+                "destination changed before exchange",
+            ):
+                BOOTSTRAP._cas_replace_exact_file(
+                    path,
+                    expected_payload=expected,
+                    replacement_payload=replacement,
+                    mode=0o600,
+                    temporary_path=temporary,
+                )
+        self.assertEqual(path.read_bytes(), foreign)
+        self.assertEqual(temporary.read_bytes(), replacement)
+
+        temporary.unlink()
+        BOOTSTRAP._atomic_file(path, expected, 0o600)
+        BOOTSTRAP._cas_replace_exact_file(
+            path,
+            expected_payload=expected,
+            replacement_payload=replacement,
+            mode=0o600,
+            temporary_path=temporary,
+        )
+        self.assertEqual(path.read_bytes(), replacement)
+        self.assertFalse(temporary.exists())
+
+    def test_adoption_abort_preserves_foreign_authority_and_owned_controls(self) -> None:
+        arguments, _transaction = self.crash_adoption_before_phase_journal(
+            "baseline-ready"
+        )
+        control_snapshot = {
+            path.relative_to(self.runtime).as_posix(): path.read_bytes()
+            for root in (self.runtime / "bin", self.runtime / "control-releases")
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+        bootstrap = self.runtime / "state/bootstrap-control.json"
+        active = self.runtime / "state/active-control.json"
+        BOOTSTRAP._atomic_json(bootstrap, {"operation_id": "adopt-fixture-0002"})
+        BOOTSTRAP._atomic_json(active, {"operation_id": "adopt-fixture-0002"})
+        result, _output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+        self.assertEqual(result, 2)
+        self.assertIn("foreign deployment authority", error)
+        self.assertEqual(
+            {
+                path.relative_to(self.runtime).as_posix(): path.read_bytes()
+                for root in (
+                    self.runtime / "bin",
+                    self.runtime / "control-releases",
+                )
+                for path in root.rglob("*")
+                if path.is_file()
+            },
+            control_snapshot,
+        )
+        self.assertTrue(bootstrap.is_file())
+        self.assertTrue(active.is_file())
+
+    def test_adoption_side_effect_before_each_journal_advance_is_resumable(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        arguments = self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        transaction_path = BOOTSTRAP._adoption_transaction_path(
+            self.runtime, operation_id=ADOPTION_OPERATION_ID
+        )
+        original_advance = BOOTSTRAP._advance_adoption_transaction
+        previous_phase = "intent"
+
+        # Every phase prepares its filesystem effects before advancing the
+        # journal. Inject the crash in that exact gap, then let the next run
+        # reconstruct ownership and resume idempotently from the prior phase.
+        for phase in (
+            "layout-ready",
+            "controls-ready",
+            "baseline-ready",
+            "authority-commit-intent",
+            "completed",
+        ):
+            crashed = False
+
+            def crash_before_advance(*values, **keywords):  # type: ignore[no-untyped-def]
+                nonlocal crashed
+                if not crashed and keywords.get("phase") == phase:
+                    crashed = True
+                    raise BOOTSTRAP.BootstrapError(
+                        f"injected pre-journal {phase} crash"
+                    )
+                return original_advance(*values, **keywords)
+
+            with mock.patch.object(
+                BOOTSTRAP,
+                "_advance_adoption_transaction",
+                side_effect=crash_before_advance,
+            ):
+                result, _output, error = self.run_main(*arguments)
+            self.assertEqual(result, 2, (phase, error))
+            self.assertIn(f"pre-journal {phase}", error)
+            self.assertEqual(
+                BOOTSTRAP._load_private_json(transaction_path)["phase"],
+                previous_phase,
+            )
+            previous_phase = phase
+
+        result, output, error = self.run_main(*arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+
+    def test_adoption_cas_drift_fails_before_authority(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        md_unit = self.root / "systemd/user/nexpoly-monomer-md-worker.service"
+        md_unit.write_bytes(b"[Service]\nExecStart=/drifted\n")
+        os.chmod(md_unit, 0o600)
+        result, _output, error = self.run_main(
+            *self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        )
+        self.assertEqual(result, 2)
+        self.assertIn("explicit confirmation", error)
+        self.assertFalse((self.runtime / "state/bootstrap-control.json").exists())
+        self.assertFalse((self.runtime / "state/active-control.json").exists())
+
+    def test_adoption_rechecks_absent_authority_after_deploy_lock(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        original_preflight = BOOTSTRAP._adoption_preflight
+        calls = 0
+
+        def race_preflight(*values, **keywords):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            # manual main and apply both check before the lock. Simulate a
+            # governed operation committing current state immediately after
+            # those checks but before adoption obtains the shared lock.
+            if calls == 3:
+                BOOTSTRAP._atomic_json(
+                    self.runtime / "state/current-deployment.json",
+                    {"schema_version": 3},
+                )
+            return original_preflight(*values, **keywords)
+
+        with mock.patch.object(
+            BOOTSTRAP, "_adoption_preflight", side_effect=race_preflight
+        ):
+            result, _output, error = self.run_main(
+                *self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+            )
+        self.assertEqual(result, 2)
+        self.assertIn("current deployment state to be absent", error)
+        self.assertFalse((self.runtime / "state/bootstrap-control.json").exists())
+        self.assertFalse((self.runtime / "state/active-control.json").exists())
+        self.assertFalse(
+            BOOTSTRAP._adoption_transaction_path(
+                self.runtime, operation_id=ADOPTION_OPERATION_ID
+            ).exists()
+        )
+        # deploy.lock is a permanent part of the adopted control layout even
+        # when the under-lock preflight refuses to begin a transaction.
+        self.assertTrue((self.runtime / "state/deploy.lock").is_file())
+        self.assertEqual(
+            stat.S_IMODE((self.runtime / "state/deploy.lock").stat().st_mode),
+            0o600,
+        )
+
+    def test_adoption_abort_cleans_precommit(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        apply_arguments = self.adoption_apply_arguments(
+            plan, md_sha256, dft_sha256
+        )
+        original_advance = BOOTSTRAP._advance_adoption_transaction
+        crashed = False
+
+        def crash_baseline(*values, **keywords):  # type: ignore[no-untyped-def]
+            nonlocal crashed
+            transaction = original_advance(*values, **keywords)
+            if not crashed and keywords.get("phase") == "baseline-ready":
+                crashed = True
+                raise BOOTSTRAP.BootstrapError("injected baseline crash")
+            return transaction
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_advance_adoption_transaction",
+            side_effect=crash_baseline,
+        ):
+            result, _output, error = self.run_main(*apply_arguments)
+        self.assertEqual(result, 2)
+        self.assertIn("baseline crash", error)
+        abort_arguments = [
+            value if value != "--adopt-apply" else "--adopt-abort"
+            for value in apply_arguments
+        ]
+        result, output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "aborted")
+        self.assertFalse((self.runtime / "state/current-deployment.json").exists())
+        self.assertFalse((self.runtime / "state/adopted-deployment.json").exists())
+        self.assertFalse((self.runtime / "state/bootstrap-control.json").exists())
+        self.assertFalse((self.runtime / "state/active-control.json").exists())
+        self.assertTrue((self.runtime / "state/deploy.lock").is_file())
+
+    def test_adoption_abort_removes_prejournal_layout_mutations(self) -> None:
+        arguments, transaction = self.crash_adoption_before_phase_journal(
+            "layout-ready"
+        )
+        result, output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "aborted")
+        self.assert_adoption_planned_paths_absent(transaction)
+
+    def test_adoption_abort_removes_prejournal_control_mutations(self) -> None:
+        arguments, transaction = self.crash_adoption_before_phase_journal(
+            "controls-ready"
+        )
+        result, output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "aborted")
+        self.assert_adoption_planned_paths_absent(transaction)
+
+    def test_adoption_abort_removes_prejournal_baseline_mutations(self) -> None:
+        arguments, transaction = self.crash_adoption_before_phase_journal(
+            "baseline-ready"
+        )
+        result, output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "aborted")
+        self.assert_adoption_planned_paths_absent(transaction)
+
+    def test_adoption_abort_refuses_tampered_prejournal_control(self) -> None:
+        arguments, transaction = self.crash_adoption_before_phase_journal(
+            "controls-ready"
+        )
+        planned = transaction["planned_paths"]
+        self.assertIsInstance(planned, list)
+        target = next(
+            Path(str(ownership["path"]))
+            for ownership in planned
+            if isinstance(ownership, dict)
+            and ownership.get("kind") == "file"
+            and Path(str(ownership.get("path"))).parent
+            == self.runtime / "bin"
+            and Path(str(ownership.get("path"))).name
+            in BOOTSTRAP.IMMUTABLE_FILES
+        )
+        target.write_bytes(b"tampered after the planned control write\n")
+        os.chmod(target, 0o700)
+
+        def snapshot() -> list[tuple[str, int, bytes]]:
+            return [
+                (
+                    path.relative_to(self.runtime).as_posix(),
+                    stat.S_IMODE(path.lstat().st_mode),
+                    path.read_bytes() if path.is_file() else b"",
+                )
+                for path in sorted(self.runtime.rglob("*"))
+            ]
+
+        before = snapshot()
+        result, _output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+        self.assertEqual(result, 2)
+        self.assertIn("changed before abort", error)
+        self.assertTrue(target.is_file())
+        self.assertEqual(snapshot(), before)
+
+    def test_adoption_abort_removes_complete_atomic_install_temporary(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        arguments = self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        original_install = BOOTSTRAP._install_exact
+        crashed = False
+
+        def crash_with_complete_temporary(
+            path: Path,
+            payload: bytes,
+            mode: int,
+            **keywords: object,
+        ) -> str:
+            nonlocal crashed
+            temporary = keywords.get("temporary_path")
+            if not crashed and isinstance(temporary, Path):
+                crashed = True
+                BOOTSTRAP._atomic_file(temporary, payload, mode)
+                raise BOOTSTRAP.BootstrapError(
+                    "injected complete atomic install temporary crash"
+                )
+            return original_install(path, payload, mode, **keywords)
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_install_exact",
+            side_effect=crash_with_complete_temporary,
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2)
+        self.assertIn("atomic install temporary crash", error)
+        transaction = BOOTSTRAP._load_private_json(
+            BOOTSTRAP._adoption_transaction_path(
+                self.runtime, operation_id=ADOPTION_OPERATION_ID
+            )
+        )
+        temporary_paths = [
+            Path(str(value["path"]))
+            for value in transaction["planned_paths"]
+            if isinstance(value, dict)
+            and value.get("kind") == "file"
+            and str(value.get("path", "")).endswith(
+                f".{ADOPTION_OPERATION_ID}.tmp"
+            )
+        ]
+        self.assertTrue(any(path.is_file() for path in temporary_paths))
+        result, output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "aborted")
+        self.assert_adoption_planned_paths_absent(transaction)
+
+    def test_adoption_abort_removes_owned_control_staging_tree(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        arguments = self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        crashed = False
+
+        def crash_with_owned_staging(*values, **keywords):  # type: ignore[no-untyped-def]
+            nonlocal crashed
+            control_plan = keywords.get("plan")
+            if crashed or not isinstance(control_plan, dict):
+                raise AssertionError("unexpected repeated control release build")
+            crashed = True
+            staging = control_plan["staging_path"]
+            owner = control_plan["staging_owner"]
+            payloads = control_plan["payloads"]
+            expected_files = control_plan["expected_files"]
+            self.assertIsInstance(staging, Path)
+            self.assertIsInstance(owner, dict)
+            self.assertIsInstance(payloads, dict)
+            self.assertIsInstance(expected_files, dict)
+            staging.mkdir(mode=0o700)
+            BOOTSTRAP._atomic_json(staging / ".owner.json", owner)
+            name, payload = next(iter(payloads.items()))
+            record = expected_files[name]
+            BOOTSTRAP._atomic_file(
+                staging / name,
+                payload,
+                int(str(record["mode"]), 8),
+            )
+            raise BOOTSTRAP.BootstrapError(
+                "injected owned control staging crash"
+            )
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_build_control_release",
+            side_effect=crash_with_owned_staging,
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2)
+        self.assertIn("owned control staging crash", error)
+        transaction = BOOTSTRAP._load_private_json(
+            BOOTSTRAP._adoption_transaction_path(
+                self.runtime, operation_id=ADOPTION_OPERATION_ID
+            )
+        )
+        staging_paths = [
+            Path(str(value["path"]))
+            for value in transaction["planned_paths"]
+            if isinstance(value, dict)
+            and value.get("kind") == "staging-tree"
+        ]
+        self.assertEqual(len(staging_paths), 1)
+        self.assertTrue(staging_paths[0].is_dir())
+        result, output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "aborted")
+        self.assert_adoption_planned_paths_absent(transaction)
+
+    def test_adoption_abort_rejects_post_authority_intent(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        apply_arguments = self.adoption_apply_arguments(
+            plan, md_sha256, dft_sha256
+        )
+        original_advance = BOOTSTRAP._advance_adoption_transaction
+        crashed = False
+
+        def crash_authority(*values, **keywords):  # type: ignore[no-untyped-def]
+            nonlocal crashed
+            transaction = original_advance(*values, **keywords)
+            if not crashed and keywords.get("phase") == "authority-commit-intent":
+                crashed = True
+                raise BOOTSTRAP.BootstrapError("injected authority intent crash")
+            return transaction
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_advance_adoption_transaction",
+            side_effect=crash_authority,
+        ):
+            result, _output, error = self.run_main(*apply_arguments)
+        self.assertEqual(result, 2)
+        abort_arguments = [
+            value if value != "--adopt-apply" else "--adopt-abort"
+            for value in apply_arguments
+        ]
+        result, _output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 2)
+        self.assertIn("forbidden after authority commit intent", error)
 
     def test_requested_sha_and_source_tree_confirmation_are_fail_closed(self) -> None:
         result, _output, error = self.run_main(
