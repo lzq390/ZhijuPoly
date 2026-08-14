@@ -24,11 +24,27 @@ ROLE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ROLE)
 
 
-def _write_private(path: Path, value: object | bytes) -> None:
+def _write_private(path: Path, value: object | bytes, mode: int = 0o600) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     payload = value if isinstance(value, bytes) else ROLE._canonical_bytes(value) + b"\n"
     path.write_bytes(payload)
-    path.chmod(0o600)
+    path.chmod(mode)
+
+
+def _delivery_gate(source_sha: str) -> dict[str, object]:
+    return {
+        "remote_main": source_sha,
+        "ci": {
+            "workflow_run_id": 1234,
+            "run_attempt": 1,
+            "head_sha": source_sha,
+            "head_branch": "main",
+            "event": "push",
+            "path": ".github/workflows/ci.yml",
+            "conclusion": "success",
+            "required_jobs": ["exact-B"],
+        },
+    }
 
 
 class MutableAuditRolePrimitiveTests(unittest.TestCase):
@@ -299,6 +315,59 @@ class MutableAuditRoleSourceTrustTests(unittest.TestCase):
         controlled_run.assert_not_called()
         self.assertFalse(marker.exists())
 
+    def test_assume_unchanged_and_skip_worktree_are_rejected(self) -> None:
+        original_run = ROLE._run
+
+        def controlled_run(command, **kwargs):  # type: ignore[no-untyped-def]
+            if "ls-remote" in command:
+                return mock.Mock(
+                    stdout=f"{self.sha}\trefs/heads/main\n".encode()
+                )
+            return original_run(command, **kwargs)
+
+        cases = (
+            ("--assume-unchanged", "--no-assume-unchanged"),
+            ("--skip-worktree", "--no-skip-worktree"),
+        )
+        for set_flag, clear_flag in cases:
+            with self.subTest(index_flag=set_flag):
+                subprocess.run(
+                    [
+                        "/usr/bin/git",
+                        "update-index",
+                        set_flag,
+                        ROLE.SCRIPT_PATH,
+                    ],
+                    cwd=self.source,
+                    check=True,
+                )
+                (self.source / ".git/index").chmod(0o600)
+                try:
+                    with mock.patch.object(
+                        ROLE,
+                        "_git_ssh_command",
+                        return_value="/usr/bin/ssh -F /dev/null",
+                    ), mock.patch.object(
+                        ROLE, "_run", side_effect=controlled_run
+                    ):
+                        with self.assertRaisesRegex(
+                            ROLE.RoleProvisionError,
+                            "assume-unchanged or skip-worktree",
+                        ):
+                            ROLE._source_authority(self.sha)
+                finally:
+                    subprocess.run(
+                        [
+                            "/usr/bin/git",
+                            "update-index",
+                            clear_flag,
+                            ROLE.SCRIPT_PATH,
+                        ],
+                        cwd=self.source,
+                        check=True,
+                    )
+                    (self.source / ".git/index").chmod(0o600)
+
     def test_clean_source_uses_only_pinned_git_commands(self) -> None:
         calls: list[tuple[list[str], dict[str, str]]] = []
 
@@ -313,13 +382,21 @@ class MutableAuditRoleSourceTrustTests(unittest.TestCase):
                     "rev-parse",
                     "ls-remote",
                     "status",
+                    "ls-files",
                     "remote",
                     "for-each-ref",
+                    "fsck",
                     "show",
                 }
             )
             arguments = command[subcommand_index:]
             if arguments == ["rev-parse", "--verify", "HEAD"]:
+                output = f"{self.sha}\n".encode()
+            elif arguments == [
+                "rev-parse",
+                "--verify",
+                "refs/heads/main",
+            ]:
                 output = f"{self.sha}\n".encode()
             elif arguments == [
                 "rev-parse",
@@ -335,8 +412,26 @@ class MutableAuditRoleSourceTrustTests(unittest.TestCase):
                 output = f"{self.sha}\n".encode()
             elif arguments[0] == "ls-remote":
                 output = f"{self.sha}\trefs/heads/main\n".encode()
-            elif arguments[0] in {"status", "for-each-ref"}:
+            elif arguments[0] in {"status", "for-each-ref", "fsck"}:
                 output = b""
+            elif arguments == [
+                "ls-files",
+                "-z",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+            ]:
+                output = b""
+            elif arguments == ["ls-files", "-z", "--stage"]:
+                output = (
+                    b"100644 " + b"1" * 40 + b" 0\t" + ROLE.SCRIPT_PATH.encode() + b"\0"
+                    b"100644 " + b"2" * 40 + b" 0\t" + ROLE.ROLE_SQL_PATH.encode() + b"\0"
+                )
+            elif arguments == ["ls-files", "-z", "-v", "--cached"]:
+                output = (
+                    b"H " + ROLE.SCRIPT_PATH.encode() + b"\0"
+                    b"H " + ROLE.ROLE_SQL_PATH.encode() + b"\0"
+                )
             elif arguments == ["remote"]:
                 output = b"origin\n"
             elif arguments[:3] == ["remote", "get-url", "--all"]:
@@ -372,6 +467,328 @@ class MutableAuditRoleSourceTrustTests(unittest.TestCase):
             self.assertEqual(
                 environment["GIT_SSH_COMMAND"], "/usr/bin/ssh -F /dev/null"
             )
+
+
+class MutableAuditRoleAdoptionAuthorityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.runtime = Path(self.temporary.name) / "runtime"
+        for relative in ("state", "config"):
+            (self.runtime / relative).mkdir(mode=0o700, parents=True)
+        self.old_runtime = ROLE.RUNTIME_ROOT
+        self.old_pgpass = ROLE.PGPASS_PATH
+        ROLE.RUNTIME_ROOT = self.runtime
+        ROLE.PGPASS_PATH = self.runtime / "config/mutable-data-audit.pgpass"
+
+        self.authority_sha = "a" * 40
+        self.authority_tree = "b" * 40
+        self.target_sha = "c" * 40
+        self.target_tree = "d" * 40
+        self.production_sha = "e" * 40
+        self.production_tree = "f" * 40
+        self.is_ancestor = True
+        self.observed_authority_tree = self.authority_tree
+        self.target_overrides: dict[str, bytes] = {}
+        self.authority_overrides: dict[str, bytes] = {}
+
+        self.active = {"schema_version": 1, "release_id": "adopted-control"}
+        evidence_names = (
+            "images",
+            "production_config",
+            "asset_identity",
+            "migrations",
+            "database",
+            "maintenance",
+            "monomer_md",
+            "monomer_dft",
+        )
+        evidence = {
+            "operation_id": "adopt-unit-test-0001",
+            "live_repository": {
+                "head": self.production_sha,
+                "tree": self.production_tree,
+            },
+            **{name: {"sealed": name} for name in evidence_names},
+        }
+        adopted = {
+            "schema_version": 1,
+            "status": "adopted",
+            "authority_kind": ROLE.ADOPTION_AUTHORITY_KIND,
+            "operation_id": evidence["operation_id"],
+            "source_sha": self.production_sha,
+            "source_tree": self.production_tree,
+            "adoption_evidence": evidence,
+            "adoption_evidence_sha256": ROLE._digest(evidence),
+            "active_control": self.active,
+            **{name: evidence[name] for name in evidence_names},
+        }
+        # Production adoption predates canonical write-once JSON.  The
+        # prerequisite transaction seals these exact pretty-printed bytes.
+        self.adopted_payload = (
+            json.dumps(adopted, indent=2, sort_keys=False).encode("utf-8") + b"\n"
+        )
+        _write_private(
+            self.runtime / "state/adopted-deployment.json", self.adopted_payload
+        )
+        _write_private(self.runtime / "state/active-control.json", self.active)
+        bootstrap_readiness = self._readiness(
+            self.authority_sha, self.authority_tree
+        )
+        bootstrap = {
+            "schema_version": 3,
+            "status": "completed",
+            "authority_kind": ROLE.ADOPTION_AUTHORITY_KIND,
+            "operation_id": evidence["operation_id"],
+            "source_sha": self.authority_sha,
+            "source_tree": self.authority_tree,
+            "adopted_deployment": adopted,
+            "adopted_deployment_sha256": ROLE._digest(adopted),
+            "adoption": evidence,
+            "adoption_evidence_sha256": ROLE._digest(evidence),
+            "active_control": self.active,
+            "source_readiness": bootstrap_readiness,
+            "source_readiness_sha256": ROLE._digest(bootstrap_readiness),
+            "delivery_gate": _delivery_gate(self.authority_sha),
+        }
+        _write_private(self.runtime / "state/bootstrap-control.json", bootstrap)
+
+        self.blobs = {
+            source_path: f"sealed prerequisite: {source_path}\n".encode()
+            for source_path, _name, _mode, _classification
+            in ROLE.PREREQUISITE_INSTALLS
+        }
+        files: list[dict[str, object]] = []
+        for source_path, name, mode, classification in ROLE.PREREQUISITE_INSTALLS:
+            payload = self.blobs[source_path]
+            _write_private(self.runtime / "config" / name, payload, mode)
+            files.append(
+                {
+                    "source_path": source_path,
+                    "destination": str(self.runtime / "config" / name),
+                    "name": name,
+                    "sha256": ROLE._digest_bytes(payload),
+                    "mode": f"{mode:04o}",
+                    "classification": classification,
+                    "disposition": "create",
+                }
+            )
+        self.pgpass_payload = (
+            b"127.0.0.1:55432:nexpoly:nexpoly_mutable_audit:unit-test-only\n"
+        )
+        _write_private(ROLE.PGPASS_PATH, self.pgpass_payload)
+        prereq_readiness = self._readiness(
+            self.authority_sha, self.authority_tree
+        )
+        prereq_delivery = _delivery_gate(self.authority_sha)
+        prereq_plan = {
+            "schema_version": 1,
+            "authority_kind": ROLE.PREREQUISITE_AUTHORITY_KIND,
+            "operation_id": "adopt-prereq-unit-test-0001",
+            "source_sha": self.authority_sha,
+            "source_tree": self.authority_tree,
+            "source_readiness": prereq_readiness,
+            "source_readiness_sha256": ROLE._digest(prereq_readiness),
+            "delivery_gate": prereq_delivery,
+            "delivery_gate_sha256": ROLE._digest(prereq_delivery),
+            "adopted_deployment_sha256": ROLE._digest_bytes(
+                self.adopted_payload
+            ),
+            "files": files,
+            "preserved_pgpass": {
+                "path": str(ROLE.PGPASS_PATH),
+                "sha256": ROLE._digest_bytes(self.pgpass_payload),
+                "mode": "0600",
+            },
+            "mutations": {
+                "services": False,
+                "source": False,
+                "database": False,
+                "credentials": False,
+            },
+        }
+        prerequisites = {
+            "schema_version": 1,
+            "status": "completed",
+            "authority_kind": ROLE.PREREQUISITE_AUTHORITY_KIND,
+            "operation_id": prereq_plan["operation_id"],
+            "source_sha": self.authority_sha,
+            "source_tree": self.authority_tree,
+            "adopted_deployment_sha256": ROLE._digest_bytes(
+                self.adopted_payload
+            ),
+            "plan_sha256": ROLE._digest(prereq_plan),
+            "plan": prereq_plan,
+            "completed_at": "2026-08-14T00:00:00Z",
+        }
+        self.prerequisites = prerequisites
+        _write_private(
+            self.runtime / "state/adopted-prerequisites.json", prerequisites
+        )
+
+    def tearDown(self) -> None:
+        ROLE.RUNTIME_ROOT = self.old_runtime
+        ROLE.PGPASS_PATH = self.old_pgpass
+        self.temporary.cleanup()
+
+    def _readiness(self, source_sha: str, source_tree: str) -> dict[str, object]:
+        return {
+            "schema_version": 2,
+            "ready": True,
+            "source_root": "/untrusted/old/source/path",
+            "source_sha": source_sha,
+            "source_tree": source_tree,
+            "branch": "main",
+            "origin": ROLE.SSH_ORIGIN,
+            "remote_names": ["origin"],
+            "origin_fetch_urls": [ROLE.SSH_ORIGIN],
+            "origin_push_urls": [ROLE.SSH_ORIGIN],
+            "origin_main_sha": source_sha,
+            "standalone_object_database": True,
+            "shallow": False,
+            "dirty_entries": 0,
+            "ignored_entries": 0,
+            "unreachable_objects": 0,
+            "replace_refs": 0,
+            "special_index_entries": 0,
+            "sparse_index": False,
+            "owner_private": True,
+            "group_or_world_writable": False,
+        }
+
+    def _git(self, *arguments: str, check: bool = True) -> bytes:
+        del check
+        if arguments == (
+            "rev-parse",
+            "--verify",
+            f"{self.authority_sha}^{{tree}}",
+        ):
+            return f"{self.observed_authority_tree}\n".encode()
+        if arguments == (
+            "rev-parse",
+            "--verify",
+            f"{self.target_sha}^{{tree}}",
+        ):
+            return f"{self.target_tree}\n".encode()
+        if arguments == (
+            "merge-base",
+            "--is-ancestor",
+            self.authority_sha,
+            self.target_sha,
+        ):
+            if not self.is_ancestor:
+                raise ROLE.RoleProvisionError("controlled command failed: git")
+            return b""
+        if len(arguments) == 2 and arguments[0] == "show":
+            revision, source_path = arguments[1].split(":", 1)
+            if revision == self.authority_sha:
+                return self.authority_overrides.get(
+                    source_path, self.blobs[source_path]
+                )
+            if revision == self.target_sha:
+                return self.target_overrides.get(source_path, self.blobs[source_path])
+        raise AssertionError(f"unexpected Git call: {arguments}")
+
+    def _current_gate(self, source_sha: str, *, sealed: object = None) -> dict[str, object]:
+        gate = _delivery_gate(source_sha)
+        if sealed is not None:
+            self.assertEqual(sealed, gate)
+        return gate
+
+    def _strict(self, *, sealed: object = None) -> dict[str, object]:
+        with mock.patch.object(ROLE, "_git", side_effect=self._git), mock.patch.object(
+            ROLE, "_current_delivery_gate", side_effect=self._current_gate
+        ):
+            return ROLE._strict_adopted_authority(
+                self.target_sha, sealed_delivery_gate=sealed
+            )
+
+    def test_pretty_adoption_uses_raw_digest_and_binds_ancestor_blobs(self) -> None:
+        result = self._strict(sealed=_delivery_gate(self.target_sha))
+        self.assertEqual(
+            result["adopted_file_sha256"],
+            ROLE._digest_bytes(self.adopted_payload),
+        )
+        self.assertNotEqual(
+            result["adopted_file_sha256"], result["adopted_sha256"]
+        )
+        binding = result["prerequisite_source_binding"]
+        self.assertEqual(binding["authority_sha"], self.authority_sha)
+        self.assertEqual(binding["authority_tree"], self.authority_tree)
+        self.assertEqual(binding["target_sha"], self.target_sha)
+        self.assertEqual(binding["target_tree"], self.target_tree)
+        self.assertEqual(binding["relation"], "ancestor-byte-identical")
+        self.assertRegex(binding["files_sha256"], ROLE.DIGEST_RE)
+        self.assertEqual(
+            result["current_delivery_gate"], _delivery_gate(self.target_sha)
+        )
+
+    def test_nonancestor_prerequisite_is_rejected(self) -> None:
+        self.is_ancestor = False
+        with self.assertRaisesRegex(ROLE.RoleProvisionError, "not an ancestor"):
+            self._strict()
+
+    def test_exact_prerequisite_source_remains_supported(self) -> None:
+        self.target_sha = self.authority_sha
+        self.target_tree = self.authority_tree
+        result = self._strict()
+        self.assertEqual(
+            result["prerequisite_source_binding"]["relation"], "exact"
+        )
+
+    def test_authority_or_target_blob_drift_is_rejected(self) -> None:
+        source_path = ROLE.PREREQUISITE_INSTALLS[0][0]
+        self.target_overrides[source_path] = b"changed target blob\n"
+        with self.assertRaisesRegex(ROLE.RoleProvisionError, "digest changed"):
+            self._strict()
+        self.target_overrides.clear()
+        self.authority_overrides[source_path] = b"changed authority blob\n"
+        with self.assertRaisesRegex(ROLE.RoleProvisionError, "digest changed"):
+            self._strict()
+
+    def test_installed_prerequisite_or_pgpass_drift_is_rejected(self) -> None:
+        _source_path, name, mode, _classification = ROLE.PREREQUISITE_INSTALLS[0]
+        _write_private(self.runtime / "config" / name, b"installed drift\n", mode)
+        with self.assertRaisesRegex(ROLE.RoleProvisionError, "digest changed"):
+            self._strict()
+        _write_private(
+            self.runtime / "config" / name,
+            self.blobs[ROLE.PREREQUISITE_INSTALLS[0][0]],
+            mode,
+        )
+        _write_private(ROLE.PGPASS_PATH, b"changed-test-pgpass\n")
+        with self.assertRaisesRegex(ROLE.RoleProvisionError, "pgpass changed"):
+            self._strict()
+
+    def test_recomputed_authority_tree_drift_is_rejected(self) -> None:
+        self.observed_authority_tree = "9" * 40
+        with self.assertRaisesRegex(ROLE.RoleProvisionError, "tree authority"):
+            self._strict()
+
+    def test_malformed_prerequisite_operation_or_timestamp_is_rejected(self) -> None:
+        self.prerequisites["completed_at"] = "2026-08-14T00:00:00+00:00"
+        _write_private(
+            self.runtime / "state/adopted-prerequisites.json",
+            self.prerequisites,
+        )
+        with self.assertRaisesRegex(
+            ROLE.RoleProvisionError, "prerequisite authority is invalid"
+        ):
+            self._strict()
+
+        self.prerequisites["completed_at"] = "2026-08-14T00:00:00Z"
+        self.prerequisites["operation_id"] = "invalid-operation"
+        self.prerequisites["plan"]["operation_id"] = "invalid-operation"
+        self.prerequisites["plan_sha256"] = ROLE._digest(
+            self.prerequisites["plan"]
+        )
+        _write_private(
+            self.runtime / "state/adopted-prerequisites.json",
+            self.prerequisites,
+        )
+        with self.assertRaisesRegex(
+            ROLE.RoleProvisionError, "prerequisite authority is invalid"
+        ):
+            self._strict()
 
 
 class MutableAuditRoleContractTests(unittest.TestCase):
@@ -795,7 +1212,10 @@ class MutableAuditRoleApplyTests(unittest.TestCase):
             b"__SCRAM_VERIFIER_LITERAL__;\n"
             b"__IN_TRANSACTION_DESIRED_ASSERT__\nCOMMIT;\n"
         )
-        self.adoption = {"adopted_sha256": "sha256:" + "3" * 64}
+        self.adoption = {
+            "adopted_sha256": "sha256:" + "3" * 64,
+            "current_delivery_gate": _delivery_gate(self.sha),
+        }
         self.postgres = {
             "container_id": "c" * 64,
             "image_id": "sha256:" + "4" * 64,
@@ -846,7 +1266,7 @@ class MutableAuditRoleApplyTests(unittest.TestCase):
 
     def test_apply_uses_one_transaction_and_writes_secret_free_report(self) -> None:
         patches = self._patches([self.before, self.desired, self.desired])
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], mock.patch.object(
+        with patches[0], patches[1], patches[2] as adopted_authority, patches[3], patches[4], patches[5], mock.patch.object(
             ROLE, "_apply_transaction"
         ) as apply_transaction:
             result = ROLE.apply_plan(
@@ -856,6 +1276,10 @@ class MutableAuditRoleApplyTests(unittest.TestCase):
                 self.plan["public_lo_acl_impact_sha256"],
             )
         apply_transaction.assert_called_once()
+        adopted_authority.assert_called_once_with(
+            self.sha,
+            sealed_delivery_gate=self.adoption["current_delivery_gate"],
+        )
         payload = apply_transaction.call_args.args[1]
         # The production implementation wipes after subprocess completion; the
         # mocked call sees the generated verifier but no plaintext password.
@@ -898,6 +1322,48 @@ class MutableAuditRoleApplyTests(unittest.TestCase):
             )
         apply_transaction.assert_not_called()
         self.assertTrue(result["report"]["commit_response_recovered"])
+
+    def test_intent_recovery_rejects_current_delivery_gate_drift_before_transaction(
+        self,
+    ) -> None:
+        operation_dir = self.runtime / "audit/mutable-data-role" / self.operation
+        operation_dir.mkdir(mode=0o700, parents=True)
+        journal = ROLE._journal_document(
+            operation_id=self.operation,
+            plan=self.plan,
+            phase="intent",
+            previous=None,
+        )
+        _write_private(operation_dir / "journal.json", journal)
+        patches = self._patches([self.before])
+
+        def drifted_authority(
+            source_sha: str, *, sealed_delivery_gate: object = None
+        ) -> dict[str, object]:
+            self.assertEqual(source_sha, self.sha)
+            self.assertEqual(
+                sealed_delivery_gate,
+                self.adoption["current_delivery_gate"],
+            )
+            raise ROLE.RoleProvisionError("sealed current delivery gate changed")
+
+        with patches[0], patches[1], mock.patch.object(
+            ROLE,
+            "_strict_adopted_authority",
+            side_effect=drifted_authority,
+        ), patches[3], patches[4], patches[5], mock.patch.object(
+            ROLE, "_apply_transaction"
+        ) as apply_transaction:
+            with self.assertRaisesRegex(
+                ROLE.RoleProvisionError, "sealed current delivery gate changed"
+            ):
+                ROLE.apply_plan(
+                    self.sha,
+                    self.operation,
+                    self.plan["plan_sha256"],
+                    self.plan["public_lo_acl_impact_sha256"],
+                )
+        apply_transaction.assert_not_called()
 
     def test_apply_rejects_third_state_and_wrong_lo_confirmation(self) -> None:
         drift = copy.deepcopy(self.before)

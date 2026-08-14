@@ -1143,6 +1143,140 @@ class ControllerSiblingValidationTests(unittest.TestCase):
                     self.validate(controller)
 
 
+class AdoptedPrerequisitePrivateSourceTests(unittest.TestCase):
+    def test_direct_plan_uses_private_complete_target_clone_for_relation(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="nexpoly-prerequisite-source-"
+        ) as temporary:
+            root = Path(temporary)
+            os.chmod(root, 0o700)
+            source = root / "source"
+            source.mkdir(mode=0o700)
+
+            def git(*arguments: str) -> str:
+                result = subprocess.run(
+                    ["/usr/bin/git", *arguments],
+                    cwd=source,
+                    env={
+                        "PATH": "/usr/bin:/bin",
+                        "HOME": str(root),
+                        "GIT_CONFIG_NOSYSTEM": "1",
+                        "GIT_CONFIG_GLOBAL": os.devnull,
+                    },
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                return result.stdout.strip()
+
+            git("init", "--initial-branch=main")
+            git("config", "user.name", "Prerequisite Test")
+            git("config", "user.email", "prerequisite@example.invalid")
+            git("remote", "add", "origin", CONTROLLER.REPOSITORY_SSH_URL)
+            controller_path = source / "scripts/pull_deploy_controller.py"
+            controller_path.parent.mkdir(parents=True, mode=0o700)
+            controller_path.write_text(
+                "# exact target controller fixture\n", encoding="utf-8"
+            )
+            os.chmod(controller_path, 0o700)
+            sealed: dict[str, str] = {}
+            for index, (
+                source_path,
+                _name,
+                _mode,
+                _classification,
+                _evidence_key,
+            ) in enumerate(CONTROLLER.ADOPTED_PREREQUISITE_FILES):
+                path = source / source_path
+                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                os.chmod(path.parent, 0o700)
+                payload = f"sealed prerequisite {index}\n".encode("utf-8")
+                path.write_bytes(payload)
+                os.chmod(path, 0o700)
+                sealed[source_path] = CONTROLLER.sha256_bytes(payload)
+            git("add", "--all")
+            git("commit", "-m", "authority")
+            authority_sha = git("rev-parse", "HEAD")
+            authority_tree = git("rev-parse", "HEAD^{tree}")
+            successor = source / "SUCCESSOR"
+            successor.write_text("verifier fix only\n", encoding="utf-8")
+            os.chmod(successor, 0o700)
+            git("add", "SUCCESSOR")
+            git("commit", "-m", "successor")
+            target_sha = git("rev-parse", "HEAD")
+            target_tree = git("rev-parse", "HEAD^{tree}")
+            git("update-ref", "refs/remotes/origin/main", target_sha)
+
+            for directory, _names, files in os.walk(source):
+                current = Path(directory)
+                os.chmod(current, 0o700)
+                for name in files:
+                    path = current / name
+                    os.chmod(
+                        path,
+                        0o700 if not path.is_relative_to(source / ".git") else 0o600,
+                    )
+            # Worktree modes are part of this repository's committed identity.
+            for path in source.rglob("*"):
+                if path.is_file() and not path.is_relative_to(source / ".git"):
+                    os.chmod(path, 0o700)
+
+            readiness = {
+                "source_sha": authority_sha,
+                "source_tree": authority_tree,
+            }
+            delivery = {
+                "remote_main": authority_sha,
+                "ci": {"head_sha": authority_sha, "conclusion": "success"},
+            }
+            plan = {
+                "source_readiness_sha256": CONTROLLER.canonical_json_digest(
+                    readiness
+                ),
+                "delivery_gate_sha256": CONTROLLER.canonical_json_digest(
+                    delivery
+                ),
+                "files": [
+                    {
+                        "source_path": source_path,
+                        "name": name,
+                        "sha256": sealed[source_path],
+                    }
+                    for source_path, name, _mode, _classification, _evidence_key in (
+                        CONTROLLER.ADOPTED_PREREQUISITE_FILES
+                    )
+                ],
+            }
+            authority = {
+                "source_sha": authority_sha,
+                "source_tree": authority_tree,
+                "plan_sha256": CONTROLLER.canonical_json_digest(plan),
+                "adopted_deployment_sha256": "sha256:" + "a" * 64,
+                "plan": plan,
+            }
+            controller = object.__new__(CONTROLLER.PullDeployController)
+            controller.runtime_root = root / "runtime"
+            with mock.patch.object(
+                CONTROLLER, "__file__", str(controller_path)
+            ):
+                binding = controller._plan_adopted_prerequisite_target_binding(
+                    authority,
+                    target_sha=target_sha,
+                )
+            self.assertEqual(binding["mode"], "ancestor-byte-identical")
+            self.assertEqual(
+                binding["target"],
+                {"source_sha": target_sha, "source_tree": target_tree},
+            )
+            self.assertEqual(
+                binding["target_source_trust_sha256"],
+                CONTROLLER.canonical_json_digest(
+                    binding["target_source_trust"]
+                ),
+            )
+
+
 class GitRunner:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
@@ -1686,6 +1820,7 @@ class FixtureController(CONTROLLER.PullDeployController):
         self.source_sha = PREVIOUS_SHA
         self.source_tree = PREVIOUS_TREE
         self.rollback_called = False
+        self.prerequisite_is_ancestor = True
         if self.active_control_path.exists():
             return
         with self.deployment_lock():
@@ -1902,6 +2037,64 @@ class FixtureController(CONTROLLER.PullDeployController):
         if target_sha != TARGET_SHA:
             raise AssertionError(target_sha)
         return TARGET_TREE
+
+    def _fixture_adopted_prerequisite_target_binding(
+        self,
+        authority: dict[str, object],
+        *,
+        target_sha: str,
+        target_tree: str,
+    ) -> dict[str, object]:
+        source_sha = str(authority["source_sha"])
+        authority_digests = {
+            source_path: CONTROLLER.sha256_bytes(
+                self._git_show(source_sha, source_path)
+            )
+            for source_path, _name, _mode, _classification, _evidence_key in (
+                CONTROLLER.ADOPTED_PREREQUISITE_FILES
+            )
+        }
+        target_digests = {
+            source_path: CONTROLLER.sha256_bytes(
+                self._git_show(target_sha, source_path)
+            )
+            for source_path, _name, _mode, _classification, _evidence_key in (
+                CONTROLLER.ADOPTED_PREREQUISITE_FILES
+            )
+        }
+        return self._build_adopted_prerequisite_target_binding(
+            authority,
+            target_sha=target_sha,
+            target_tree=target_tree,
+            is_ancestor=self.prerequisite_is_ancestor,
+            authority_file_digests=authority_digests,
+            target_file_digests=target_digests,
+        )
+
+    def _plan_adopted_prerequisite_target_binding(
+        self,
+        authority: dict[str, object],
+        *,
+        target_sha: str,
+    ) -> dict[str, object]:
+        return self._fixture_adopted_prerequisite_target_binding(
+            authority,
+            target_sha=target_sha,
+            target_tree=TARGET_TREE,
+        )
+
+    def _prepared_adopted_prerequisite_target_binding(
+        self,
+        authority: dict[str, object],
+        *,
+        target_sha: str,
+        target_tree: str,
+    ) -> dict[str, object]:
+        return self._fixture_adopted_prerequisite_target_binding(
+            authority,
+            target_sha=target_sha,
+            target_tree=target_tree,
+        )
 
     def ci_evidence(self, target_sha: str) -> dict[str, object]:
         return {
@@ -15410,7 +15603,58 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
         CONTROLLER.atomic_json(
             controller.state_dir / "bootstrap-control.json", bootstrap
         )
+        controller.active_control_evidence = (  # type: ignore[method-assign]
+            lambda: CONTROLLER._control_runtime.validate_active_control_record(
+                CONTROLLER.load_private_json(controller.active_control_path)
+            )
+        )
         return adopted
+
+    @staticmethod
+    def _rewrite_prerequisite_source(
+        controller: FixtureController,
+        *,
+        source_sha: str,
+        source_tree: str,
+    ) -> dict[str, object]:
+        authority_path = (
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        authority = CONTROLLER.load_private_json(authority_path)
+        plan = authority["plan"]
+        readiness = plan["source_readiness"]
+        readiness.update(
+            {
+                "source_sha": source_sha,
+                "source_tree": source_tree,
+                "origin_main_sha": source_sha,
+            }
+        )
+        delivery = plan["delivery_gate"]
+        delivery["remote_main"] = source_sha
+        delivery["ci"]["head_sha"] = source_sha
+        plan.update(
+            {
+                "source_sha": source_sha,
+                "source_tree": source_tree,
+                "source_readiness_sha256": (
+                    CONTROLLER.canonical_json_digest(readiness)
+                ),
+                "delivery_gate_sha256": CONTROLLER.canonical_json_digest(
+                    delivery
+                ),
+            }
+        )
+        authority.update(
+            {
+                "source_sha": source_sha,
+                "source_tree": source_tree,
+                "plan_sha256": CONTROLLER.canonical_json_digest(plan),
+            }
+        )
+        CONTROLLER.atomic_json(authority_path, authority)
+        return authority
 
     def test_adopted_legacy_image_values_are_exact_inert_and_stripped(self) -> None:
         controller = self.controller()
@@ -15617,9 +15861,13 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             controller,
             "_validate_adopted_prerequisite_provenance",
             return_value=mismatched_prerequisites,
+        ), mock.patch.object(
+            controller,
+            "prerequisite_is_ancestor",
+            False,
         ), self.assertRaisesRegex(
             CONTROLLER.PullDeployError,
-            "plan target differs from prerequisite source authority",
+            "not an ancestor of the final target",
         ):
             controller.plan(
                 target_sha=TARGET_SHA,
@@ -15883,6 +16131,533 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
         ):
             controller._validate_adopted_prerequisite_provenance(evidence)
 
+    def test_ancestor_prerequisites_bind_identically_in_plan_and_prepare(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        self._rewrite_prerequisite_source(
+            controller,
+            source_sha=PREVIOUS_SHA,
+            source_tree=PREVIOUS_TREE,
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+
+        plan = controller.plan(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        binding = plan["adopted_prerequisite_target_binding"]
+        self.assertEqual(binding["mode"], "ancestor-byte-identical")
+        self.assertEqual(binding["authority"]["source_sha"], PREVIOUS_SHA)
+        self.assertEqual(binding["target"]["source_sha"], TARGET_SHA)
+
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        self.assertEqual(
+            descriptor["adopted_prerequisite_target_binding"], binding
+        )
+        self.assertEqual(descriptor["ci"]["head_sha"], TARGET_SHA)
+        authority = CONTROLLER.load_private_json(
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        self.assertEqual(
+            authority["plan"]["delivery_gate"]["ci"]["head_sha"],
+            PREVIOUS_SHA,
+        )
+
+    def test_direct_plan_rejects_target_superseded_during_prerequisite_proof(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        remote_probes = 0
+
+        def moving_remote_main() -> str:
+            nonlocal remote_probes
+            remote_probes += 1
+            return TARGET_SHA if remote_probes == 1 else "5" * 40
+
+        controller.remote_main = moving_remote_main  # type: ignore[method-assign]
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "target changed during prerequisite compatibility proof",
+        ):
+            controller.plan(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+        self.assertEqual(remote_probes, 2)
+
+    def test_ancestor_prerequisite_rejects_nonancestor_and_blob_drift(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        self._rewrite_prerequisite_source(
+            controller,
+            source_sha=PREVIOUS_SHA,
+            source_tree=PREVIOUS_TREE,
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prerequisite_is_ancestor = False
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "not an ancestor of the final target",
+        ):
+            controller.plan(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "not an ancestor of the final target",
+        ):
+            controller.prepare(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+
+        controller.prerequisite_is_ancestor = True
+        original_git_show = controller._git_show
+        changed_path = CONTROLLER.ADOPTED_PREREQUISITE_FILES[0][0]
+
+        def changed_target_blob(source_sha: str, relative: str) -> bytes:
+            if source_sha == TARGET_SHA and relative == changed_path:
+                return b"changed target prerequisite\n"
+            return original_git_show(source_sha, relative)
+
+        controller._git_show = changed_target_blob  # type: ignore[method-assign]
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "final prerequisite Git blob differs",
+        ):
+            controller.plan(
+                target_sha=TARGET_SHA,
+                operation_id="deploy-20260716-target-blob-drift",
+            )
+
+    def test_prerequisite_binding_reproves_authority_blob(self) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        self._rewrite_prerequisite_source(
+            controller,
+            source_sha=PREVIOUS_SHA,
+            source_tree=PREVIOUS_TREE,
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        original_git_show = controller._git_show
+        changed_path = CONTROLLER.ADOPTED_PREREQUISITE_FILES[0][0]
+
+        def changed_authority_blob(source_sha: str, relative: str) -> bytes:
+            if source_sha == PREVIOUS_SHA and relative == changed_path:
+                return b"changed authority prerequisite\n"
+            return original_git_show(source_sha, relative)
+
+        controller._git_show = changed_authority_blob  # type: ignore[method-assign]
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "final prerequisite Git blob differs",
+        ):
+            controller.prepare(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+
+    def test_adopted_descriptor_requires_and_exclusively_owns_binding(self) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+
+        missing = json.loads(json.dumps(descriptor))
+        missing.pop("adopted_prerequisite_target_binding")
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lacks prerequisite target binding",
+        ):
+            CONTROLLER.validate_descriptor(missing)
+
+        unexpected = json.loads(json.dumps(descriptor))
+        unexpected["adopted_deployment"] = None
+        unexpected["adopted_deployment_sha256"] = None
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "without adoption has a prerequisite target binding|differs from repository",
+        ):
+            CONTROLLER.validate_descriptor(unexpected)
+
+    def test_already_ready_replay_rejects_prerequisite_blob_drift_without_mutation(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        self._rewrite_prerequisite_source(
+            controller,
+            source_sha=PREVIOUS_SHA,
+            source_tree=PREVIOUS_TREE,
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        operation, descriptor_path, ready_path = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor_payload = descriptor_path.read_bytes()
+        ready_payload = ready_path.read_bytes()
+        operation_tree_before = {
+            path.relative_to(operation).as_posix(): path.read_bytes()
+            for path in operation.rglob("*")
+            if path.is_file() and not path.is_symlink()
+        }
+        original_git_show = controller._git_show
+        changed_path = CONTROLLER.ADOPTED_PREREQUISITE_FILES[0][0]
+
+        def changed_target_blob(source_sha: str, relative: str) -> bytes:
+            if source_sha == TARGET_SHA and relative == changed_path:
+                return b"changed already-ready target prerequisite\n"
+            return original_git_show(source_sha, relative)
+
+        controller._git_show = changed_target_blob  # type: ignore[method-assign]
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "final prerequisite Git blob differs",
+        ):
+            controller.prepare(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+
+        self.assertEqual(descriptor_path.read_bytes(), descriptor_payload)
+        self.assertEqual(ready_path.read_bytes(), ready_payload)
+        self.assertEqual(
+            {
+                path.relative_to(operation).as_posix(): path.read_bytes()
+                for path in operation.rglob("*")
+                if path.is_file() and not path.is_symlink()
+            },
+            operation_tree_before,
+        )
+        self.assertEqual(controller.source_sha, PREVIOUS_SHA)
+
+    def test_descriptor_only_recovery_rejects_prerequisite_authority_drift_before_ready(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        self._rewrite_prerequisite_source(
+            controller,
+            source_sha=PREVIOUS_SHA,
+            source_tree=PREVIOUS_TREE,
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        operation, descriptor_path, ready_path = controller._operation_paths(
+            OPERATION_ID
+        )
+        ready_path.unlink()
+        CONTROLLER.fsync_directory(ready_path.parent)
+        descriptor_payload = descriptor_path.read_bytes()
+        operation_tree_before = {
+            path.relative_to(operation).as_posix(): path.read_bytes()
+            for path in operation.rglob("*")
+            if path.is_file() and not path.is_symlink()
+        }
+        authority_path = (
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        authority = CONTROLLER.load_private_json(authority_path)
+        delivery = authority["plan"]["delivery_gate"]
+        delivery["ci"]["required_jobs"] = ["drifted-old-authority-gate"]
+        authority["plan"]["delivery_gate_sha256"] = (
+            CONTROLLER.canonical_json_digest(delivery)
+        )
+        authority["plan_sha256"] = CONTROLLER.canonical_json_digest(
+            authority["plan"]
+        )
+        CONTROLLER.atomic_json(authority_path, authority)
+
+        with mock.patch.object(
+            CONTROLLER,
+            "atomic_json",
+            wraps=CONTROLLER.atomic_json,
+        ) as atomic_write, self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "binding changed after prepare",
+        ):
+            controller._resume_descriptor_without_ready(
+                descriptor_path=descriptor_path,
+                ready_path=ready_path,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+                bridge_relation=None,
+                authority_sha=None,
+                prefetch_operation_id=None,
+            )
+
+        atomic_write.assert_not_called()
+        self.assertFalse(ready_path.exists())
+        self.assertFalse(ready_path.is_symlink())
+        self.assertEqual(descriptor_path.read_bytes(), descriptor_payload)
+        self.assertEqual(
+            {
+                path.relative_to(operation).as_posix(): path.read_bytes()
+                for path in operation.rglob("*")
+                if path.is_file() and not path.is_symlink()
+            },
+            operation_tree_before,
+        )
+        self.assertEqual(controller.source_sha, PREVIOUS_SHA)
+
+    def test_pre_switch_reproves_prerequisite_authority_binding(self) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        self._rewrite_prerequisite_source(
+            controller,
+            source_sha=PREVIOUS_SHA,
+            source_tree=PREVIOUS_TREE,
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        authority_path = (
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        authority = CONTROLLER.load_private_json(authority_path)
+        delivery = authority["plan"]["delivery_gate"]
+        delivery["ci"]["required_jobs"] = ["different-successful-old-gate"]
+        authority["plan"]["delivery_gate_sha256"] = (
+            CONTROLLER.canonical_json_digest(delivery)
+        )
+        authority["plan_sha256"] = CONTROLLER.canonical_json_digest(
+            authority["plan"]
+        )
+        CONTROLLER.atomic_json(authority_path, authority)
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "binding changed after prepare",
+        ):
+            CONTROLLER.PullDeployController._revalidate_pre_switch(
+                controller, descriptor
+            )
+        self.assertEqual(controller.source_sha, PREVIOUS_SHA)
+
+    def test_pre_switch_rejects_prerequisite_ancestry_drift(self) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        self._rewrite_prerequisite_source(
+            controller,
+            source_sha=PREVIOUS_SHA,
+            source_tree=PREVIOUS_TREE,
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        controller.prerequisite_is_ancestor = False
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "not an ancestor of the final target",
+        ):
+            CONTROLLER.PullDeployController._revalidate_pre_switch(
+                controller, descriptor
+            )
+        self.assertEqual(controller.source_sha, PREVIOUS_SHA)
+
+    def test_pre_switch_rejects_prerequisite_blob_drift(self) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        self._rewrite_prerequisite_source(
+            controller,
+            source_sha=PREVIOUS_SHA,
+            source_tree=PREVIOUS_TREE,
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        original_git_show = controller._git_show
+        changed_path = CONTROLLER.ADOPTED_PREREQUISITE_FILES[-1][0]
+
+        def changed_target_blob(source_sha: str, relative: str) -> bytes:
+            if source_sha == TARGET_SHA and relative == changed_path:
+                return b"changed after prepare\n"
+            return original_git_show(source_sha, relative)
+
+        controller._git_show = changed_target_blob  # type: ignore[method-assign]
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "final prerequisite Git blob differs",
+        ):
+            CONTROLLER.PullDeployController._revalidate_pre_switch(
+                controller, descriptor
+            )
+        self.assertEqual(controller.source_sha, PREVIOUS_SHA)
+
+    def test_prepare_rejects_target_superseded_during_prerequisite_proof(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        self._rewrite_prerequisite_source(
+            controller,
+            source_sha=PREVIOUS_SHA,
+            source_tree=PREVIOUS_TREE,
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller._prepared_adopted_prerequisite_target_binding = (  # type: ignore[method-assign]
+            lambda authority, *, target_sha, target_tree: (
+                CONTROLLER.PullDeployController._prepared_adopted_prerequisite_target_binding(
+                    controller,
+                    authority,
+                    target_sha=target_sha,
+                    target_tree=target_tree,
+                )
+            )
+        )
+
+        original_git = controller._git
+
+        def compatibility_git(
+            *arguments: str, **kwargs: object
+        ) -> SimpleNamespace:
+            if arguments[:2] == ("cat-file", "-t"):
+                return SimpleNamespace(stdout="commit\n", returncode=0)
+            if arguments == ("rev-parse", f"{PREVIOUS_SHA}^{{tree}}"):
+                return SimpleNamespace(stdout=PREVIOUS_TREE + "\n", returncode=0)
+            if arguments == ("rev-parse", f"{TARGET_SHA}^{{tree}}"):
+                return SimpleNamespace(stdout=TARGET_TREE + "\n", returncode=0)
+            if arguments[:2] == ("merge-base", "--is-ancestor"):
+                return SimpleNamespace(stdout="", returncode=0)
+            return original_git(*arguments, **kwargs)
+
+        controller._git = compatibility_git  # type: ignore[method-assign]
+        remote_probes = 0
+
+        def moving_remote_main() -> str:
+            nonlocal remote_probes
+            remote_probes += 1
+            return TARGET_SHA if remote_probes < 3 else "5" * 40
+
+        controller.remote_main = moving_remote_main  # type: ignore[method-assign]
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "compatibility target changed during proof",
+        ):
+            controller.prepare(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+        self.assertGreaterEqual(remote_probes, 3)
+        self.assertEqual(controller.source_sha, PREVIOUS_SHA)
+
+    def test_pre_switch_rejects_target_superseded_during_prerequisite_proof(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        self._rewrite_prerequisite_source(
+            controller,
+            source_sha=PREVIOUS_SHA,
+            source_tree=PREVIOUS_TREE,
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller._prepared_adopted_prerequisite_target_binding = (  # type: ignore[method-assign]
+            lambda authority, *, target_sha, target_tree: (
+                CONTROLLER.PullDeployController._prepared_adopted_prerequisite_target_binding(
+                    controller,
+                    authority,
+                    target_sha=target_sha,
+                    target_tree=target_tree,
+                )
+            )
+        )
+
+        original_git = controller._git
+
+        def compatibility_git(
+            *arguments: str, **kwargs: object
+        ) -> SimpleNamespace:
+            if arguments[:2] == ("cat-file", "-t"):
+                return SimpleNamespace(stdout="commit\n", returncode=0)
+            if arguments == ("rev-parse", f"{PREVIOUS_SHA}^{{tree}}"):
+                return SimpleNamespace(stdout=PREVIOUS_TREE + "\n", returncode=0)
+            if arguments == ("rev-parse", f"{TARGET_SHA}^{{tree}}"):
+                return SimpleNamespace(stdout=TARGET_TREE + "\n", returncode=0)
+            if arguments[:2] == ("merge-base", "--is-ancestor"):
+                return SimpleNamespace(stdout="", returncode=0)
+            return original_git(*arguments, **kwargs)
+
+        controller._git = compatibility_git  # type: ignore[method-assign]
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        remote_probes = 0
+
+        def moving_remote_main() -> str:
+            nonlocal remote_probes
+            remote_probes += 1
+            return TARGET_SHA if remote_probes < 3 else "5" * 40
+
+        controller.remote_main = moving_remote_main  # type: ignore[method-assign]
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "compatibility target changed during proof",
+        ):
+            CONTROLLER.PullDeployController._revalidate_pre_switch(
+                controller, descriptor
+            )
+        self.assertGreaterEqual(remote_probes, 3)
+        self.assertEqual(controller.source_sha, PREVIOUS_SHA)
+
     def test_manual_bootstrap_missing_or_mismatched_adopted_state_fails_early(
         self,
     ) -> None:
@@ -15984,7 +16759,7 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
 
         with self.assertRaisesRegex(
             CONTROLLER.PullDeployError,
-            "target differs from final prerequisite source authority",
+            "different source tree",
         ):
             controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
 
