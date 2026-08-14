@@ -1849,6 +1849,8 @@ class FixtureController(CONTROLLER.PullDeployController):
     def asset_evidence(self, expected_digest: str) -> dict[str, object]:
         target = self.runtime_root / "fixture-assets" / expected_digest.split(":", 1)[1]
         target.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(target.parent, 0o700)
+        os.chmod(target, 0o700)
         return {
             "pointer_path": str(self.state_dir / "current-assets"),
             "root": str(target),
@@ -1938,6 +1940,8 @@ class FixtureController(CONTROLLER.PullDeployController):
         operation = self.prepared_root / operation_id
         release_root = self.venv_root / "dft" / target_sha
         release_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(release_root.parent, 0o700)
+        os.chmod(release_root, 0o700)
         runtime_manifest = release_root / "runtime.json"
         if not runtime_manifest.exists():
             write_private(runtime_manifest, '{"fixture":true}\n')
@@ -2208,6 +2212,8 @@ class FixtureController(CONTROLLER.PullDeployController):
         self._remove_owned_slot(slot, operation_id)
         venv = self.venv_root / f"md-{slot}" / "venv"
         (venv / "bin").mkdir(parents=True, mode=0o700)
+        for path in (venv.parent, venv, venv / "bin"):
+            os.chmod(path, 0o700)
         (venv / "bin/python").write_text("fixture\n", encoding="utf-8")
         record = {
             "schema_version": CONTROLLER.SLOT_RECORD_SCHEMA_VERSION,
@@ -2307,6 +2313,10 @@ class PullDeployTestCase(unittest.TestCase):
             path = self.runtime / relative
             path.mkdir(parents=True, exist_ok=True, mode=0o700)
             os.chmod(path, 0o700)
+        # The first nested mkdir creates the runtime root using the process
+        # umask.  Keep this fixture deterministic when a test is run alone
+        # under the CI default umask instead of relying on an earlier main().
+        os.chmod(self.runtime, 0o700)
         lock = self.runtime / "state/deploy.lock"
         lock.write_text("", encoding="utf-8")
         os.chmod(lock, 0o600)
