@@ -86,8 +86,9 @@ There is one compatibility exception before the first ordinary deployment
 from raw manual adoption. With no current-state record, the immutable selector
 has no prepared target control release to select, while the installed
 `cff408…` planner rejects the adopted MD slot as ungoverned. From the exact
-private, standalone, clean, source-pinned target clone used for the one-time
-prerequisite and role transactions, run only the read-only plan directly:
+private, standalone, clean, complete-history, source-pinned target clone used
+for the one-time prerequisite and role transactions, run only the read-only
+plan directly:
 
 ```bash
 /usr/bin/python3 -I -B ./scripts/pull_deploy_controller.py plan \
@@ -95,12 +96,42 @@ prerequisite and role transactions, run only the read-only plan directly:
   --operation-id <id>
 ```
 
-The target planner accepts raw adoption only when its source, active MD slot,
-active control, adoption provenance, and source/CI-matched prerequisite
-authority are exact, and it performs no logical writes. Continue with the
-installed `nexpoly-pull-deploy prepare`; never run a mutating or recovery verb
-from the checkout. Once current-state v3 exists and target controls are active,
-subsequent releases use the installed `nexpoly-pull-deploy plan` shown above.
+The target planner accepts raw adoption only when the active MD slot, active
+control, adoption provenance, and completed prerequisite authority are exact,
+and it performs no logical writes. The prerequisite authority remains an
+immutable record of the reviewed SHA/tree, readiness evidence, and delivery
+gate at which it was created; it is never rewritten to impersonate a newer
+target.
+
+That authority may bind either to the exact same target source or to a strict
+successor under the `ancestor-byte-identical` compatibility mode. The latter is
+accepted only when the authority SHA is an ancestor of the exact remote-main
+target, and every fixed prerequisite source blob is present at both commits,
+byte-identical, and equal to its sealed authority digest. The direct plan proves
+this from the exact private target clone and emits a deterministic
+`adopted_prerequisite_target_binding` containing the mode, authority and target
+SHA/tree, blob-inventory digest, sealed authority readiness digest, and target
+source-trust/readiness projection digest. A descriptor-v4 record that contains
+`adopted_deployment` must contain this binding; a descriptor without adopted
+deployment must not contain it.
+
+This conditional descriptor-v4 tightening is valid only for the first raw
+adoption when no current-state record, deployment marker, or pre-existing
+prepared descriptor exists. The current production installation has been
+proved read-only to satisfy those conditions. If any such state or an older
+adopted descriptor is present, stop for explicit compatibility handling; do
+not infer, retrofit, or silently omit the binding.
+
+Continue with the installed `nexpoly-pull-deploy prepare`; never run a mutating
+or recovery verb from the checkout. `prepare` independently reproves the
+ancestry and every old/target blob from the strictly trusted production
+repository after fetching the target. Resume, already-ready replay, and
+`apply` pre-switch validation repeat the proof and exact binding comparison, so
+authority, ancestry, or blob drift fails before source switching. The old
+delivery gate remains exact for the authority SHA, while the target's current
+remote-main and CI evidence remain exact for the target SHA. Once current-state
+v3 exists and target controls are active, subsequent releases use the installed
+`nexpoly-pull-deploy plan` shown above.
 
 An operation ID cannot be reused for a different SHA. Repeating a completed
 phase with the same identity is idempotent; an unknown previous result or an

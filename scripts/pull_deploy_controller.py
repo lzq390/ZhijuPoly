@@ -568,6 +568,12 @@ ADOPTED_PREREQUISITE_SOURCE_READINESS_FIELDS = {
     "owner_private",
     "group_or_world_writable",
 }
+ADOPTED_PREREQUISITE_TARGET_POLICY = (
+    "nexpoly-adopted-prerequisite-successor-v1"
+)
+ADOPTED_PREREQUISITE_TARGET_RELATIONS = frozenset(
+    {"exact-source", "ancestor-byte-identical"}
+)
 MUTABLE_DATA_SERVICE = "nexpoly-mutable-audit"
 MUTABLE_DATA_HOST = "127.0.0.1"
 MUTABLE_DATA_PORT = 55432
@@ -742,6 +748,7 @@ DESCRIPTOR_FIELDS = LEGACY_DESCRIPTOR_FIELDS | {
     "adopted_deployment",
     "adopted_deployment_sha256",
 }
+DESCRIPTOR_OPTIONAL_FIELDS = {"adopted_prerequisite_target_binding"}
 BRIDGE_DESCRIPTOR_FIELDS = LEGACY_DESCRIPTOR_FIELDS | {
     "bridge",
     "legacy_takeover",
@@ -7271,6 +7278,130 @@ def validate_adopted_deployment(document: object) -> dict[str, Any]:
     return dict(document)
 
 
+def validate_adopted_prerequisite_target_binding(
+    document: object,
+) -> dict[str, Any]:
+    """Validate one path-independent prerequisite successor projection."""
+
+    fields = {
+        "schema_version",
+        "policy",
+        "mode",
+        "authority",
+        "target",
+        "target_source_trust",
+        "target_source_trust_sha256",
+        "files",
+        "files_sha256",
+        "identity_sha256",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != 1
+        or document.get("policy") != ADOPTED_PREREQUISITE_TARGET_POLICY
+        or document.get("mode")
+        not in ADOPTED_PREREQUISITE_TARGET_RELATIONS
+    ):
+        raise PullDeployError(
+            "adopted prerequisite target binding has an invalid shape"
+        )
+    authority = document.get("authority")
+    if not isinstance(authority, dict) or set(authority) != {
+        "source_sha",
+        "source_tree",
+        "plan_sha256",
+        "source_readiness_sha256",
+        "delivery_gate_sha256",
+        "adopted_deployment_sha256",
+    }:
+        raise PullDeployError(
+            "adopted prerequisite target authority is invalid"
+        )
+    require_sha(authority.get("source_sha"), "prerequisite binding source SHA")
+    require_sha(authority.get("source_tree"), "prerequisite binding source tree")
+    for field in (
+        "plan_sha256",
+        "source_readiness_sha256",
+        "delivery_gate_sha256",
+        "adopted_deployment_sha256",
+    ):
+        require_digest(
+            authority.get(field),
+            f"prerequisite binding authority {field}",
+        )
+    target = document.get("target")
+    if not isinstance(target, dict) or set(target) != {
+        "source_sha",
+        "source_tree",
+    }:
+        raise PullDeployError("adopted prerequisite binding target is invalid")
+    require_sha(target.get("source_sha"), "prerequisite binding target SHA")
+    require_sha(target.get("source_tree"), "prerequisite binding target tree")
+    exact_identity = (
+        authority["source_sha"] == target["source_sha"]
+        and authority["source_tree"] == target["source_tree"]
+    )
+    if exact_identity != (document["mode"] == "exact-source") or (
+        document["mode"] == "ancestor-byte-identical"
+        and authority["source_sha"] == target["source_sha"]
+    ):
+        raise PullDeployError(
+            "adopted prerequisite target relation is inconsistent"
+        )
+    trust = document.get("target_source_trust")
+    if trust != {
+        "schema_version": 1,
+        "policy": "nexpoly-trusted-standalone-complete-target-v1",
+        "source_sha": target["source_sha"],
+        "source_tree": target["source_tree"],
+        "origin": REPOSITORY_SSH_URL,
+        "remote_main": target["source_sha"],
+        "standalone_object_database": True,
+        "complete_history": True,
+        "shallow": False,
+        "replace_refs": 0,
+    } or document.get("target_source_trust_sha256") != canonical_json_digest(
+        trust
+    ):
+        raise PullDeployError(
+            "adopted prerequisite target source trust differs"
+        )
+    files = document.get("files")
+    if not isinstance(files, list) or len(files) != len(
+        ADOPTED_PREREQUISITE_FILES
+    ):
+        raise PullDeployError(
+            "adopted prerequisite target file inventory is invalid"
+        )
+    for record, expected in zip(
+        files, ADOPTED_PREREQUISITE_FILES, strict=True
+    ):
+        source_path, name, _mode, _classification, _evidence_key = expected
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"source_path", "name", "sha256"}
+            or record.get("source_path") != source_path
+            or record.get("name") != name
+        ):
+            raise PullDeployError(
+                "adopted prerequisite target file inventory differs"
+            )
+        require_digest(record.get("sha256"), f"prerequisite target blob {name}")
+    if document.get("files_sha256") != canonical_json_digest(files):
+        raise PullDeployError(
+            "adopted prerequisite target file inventory digest differs"
+        )
+    identity = {
+        key: value for key, value in document.items() if key != "identity_sha256"
+    }
+    if document.get("identity_sha256") != canonical_json_digest(identity):
+        raise PullDeployError(
+            "adopted prerequisite target binding digest differs"
+        )
+    return dict(document)
+
+
 def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any]:
     """Validate the durable state that a new prepare seals by digest."""
 
@@ -7792,7 +7923,19 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             else None
         )
     )
-    if expected_fields is None or set(document) != expected_fields:
+    descriptor_fields = set(document) if isinstance(document, dict) else set()
+    valid_shape = (
+        expected_fields is not None
+        and (
+            descriptor_fields == expected_fields
+            if schema_version != DESCRIPTOR_SCHEMA_VERSION
+            else DESCRIPTOR_FIELDS.issubset(descriptor_fields)
+            and descriptor_fields.issubset(
+                DESCRIPTOR_FIELDS | DESCRIPTOR_OPTIONAL_FIELDS
+            )
+        )
+    )
+    if not valid_shape:
         raise PullDeployError("prepared deployment descriptor has an invalid shape")
     operation_id = require_operation_id(str(document.get("operation_id", "")))
     repository = document.get("repository")
@@ -8070,6 +8213,38 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
         if previous is not None and adopted is not None:
             raise PullDeployError(
                 "descriptor has two previous deployment authorities"
+            )
+        raw_prerequisite_binding = document.get(
+            "adopted_prerequisite_target_binding"
+        )
+        if raw_prerequisite_binding is not None:
+            prerequisite_binding = (
+                validate_adopted_prerequisite_target_binding(
+                    raw_prerequisite_binding
+                )
+            )
+            if (
+                adopted is None
+                or prerequisite_binding["target"]
+                != {
+                    "source_sha": repository["target_sha"],
+                    "source_tree": repository["target_tree"],
+                }
+            ):
+                raise PullDeployError(
+                    "descriptor prerequisite target binding differs from repository"
+                )
+        elif adopted is not None:
+            raise PullDeployError(
+                "descriptor adopted deployment lacks prerequisite target binding"
+            )
+        elif "adopted_prerequisite_target_binding" in document:
+            raise PullDeployError(
+                "descriptor prerequisite target binding is null"
+            )
+        if adopted is None and "adopted_prerequisite_target_binding" in document:
+            raise PullDeployError(
+                "descriptor without adoption has a prerequisite target binding"
             )
     if previous is None:
         if previous_digest is not None:
@@ -14737,6 +14912,402 @@ class PullDeployController:
             raise PullDeployError("adopted deployment authority is incomplete")
         return authority
 
+    @staticmethod
+    def _build_adopted_prerequisite_target_binding(
+        authority: Mapping[str, Any],
+        *,
+        target_sha: str,
+        target_tree: str,
+        is_ancestor: bool,
+        authority_file_digests: Mapping[str, str],
+        target_file_digests: Mapping[str, str],
+    ) -> dict[str, Any]:
+        """Project independently verified Git facts into stable audit evidence."""
+
+        target_sha = require_sha(target_sha, "prerequisite target SHA")
+        target_tree = require_sha(target_tree, "prerequisite target tree")
+        source_sha = require_sha(
+            authority.get("source_sha"), "prerequisite authority SHA"
+        )
+        source_tree = require_sha(
+            authority.get("source_tree"), "prerequisite authority tree"
+        )
+        exact = source_sha == target_sha and source_tree == target_tree
+        if source_sha == target_sha and not exact:
+            raise PullDeployError(
+                "prerequisite target commit has a different source tree"
+            )
+        if not exact and not is_ancestor:
+            raise PullDeployError(
+                "prerequisite source is not an ancestor of the final target"
+            )
+        plan = authority.get("plan")
+        if not isinstance(plan, dict) or not isinstance(plan.get("files"), list):
+            raise PullDeployError("prerequisite target plan is unavailable")
+        expected_paths = [record[0] for record in ADOPTED_PREREQUISITE_FILES]
+        if (
+            set(authority_file_digests) != set(expected_paths)
+            or set(target_file_digests) != set(expected_paths)
+        ):
+            raise PullDeployError(
+                "prerequisite target Git blob inventory differs"
+            )
+        files: list[dict[str, str]] = []
+        for record, expected in zip(
+            plan["files"], ADOPTED_PREREQUISITE_FILES, strict=True
+        ):
+            source_path, name, _mode, _classification, _evidence_key = expected
+            authority_observed = require_digest(
+                authority_file_digests.get(source_path),
+                f"authority prerequisite Git blob {name}",
+            )
+            target_observed = require_digest(
+                target_file_digests.get(source_path),
+                f"final prerequisite Git blob {name}",
+            )
+            if (
+                not isinstance(record, dict)
+                or record.get("source_path") != source_path
+                or record.get("name") != name
+                or record.get("sha256") != authority_observed
+                or authority_observed != target_observed
+            ):
+                raise PullDeployError(
+                    f"final prerequisite Git blob differs: {name}"
+                )
+            files.append(
+                {
+                    "source_path": source_path,
+                    "name": name,
+                    "sha256": target_observed,
+                }
+            )
+        trust = {
+            "schema_version": 1,
+            "policy": "nexpoly-trusted-standalone-complete-target-v1",
+            "source_sha": target_sha,
+            "source_tree": target_tree,
+            "origin": REPOSITORY_SSH_URL,
+            "remote_main": target_sha,
+            "standalone_object_database": True,
+            "complete_history": True,
+            "shallow": False,
+            "replace_refs": 0,
+        }
+        body: dict[str, Any] = {
+            "schema_version": 1,
+            "policy": ADOPTED_PREREQUISITE_TARGET_POLICY,
+            "mode": "exact-source" if exact else "ancestor-byte-identical",
+            "authority": {
+                "source_sha": source_sha,
+                "source_tree": source_tree,
+                "plan_sha256": require_digest(
+                    authority.get("plan_sha256"),
+                    "prerequisite target authority plan",
+                ),
+                "source_readiness_sha256": require_digest(
+                    plan.get("source_readiness_sha256"),
+                    "prerequisite authority source readiness",
+                ),
+                "delivery_gate_sha256": require_digest(
+                    plan.get("delivery_gate_sha256"),
+                    "prerequisite authority delivery gate",
+                ),
+                "adopted_deployment_sha256": require_digest(
+                    authority.get("adopted_deployment_sha256"),
+                    "prerequisite adopted deployment",
+                ),
+            },
+            "target": {"source_sha": target_sha, "source_tree": target_tree},
+            "target_source_trust": trust,
+            "target_source_trust_sha256": canonical_json_digest(trust),
+            "files": files,
+            "files_sha256": canonical_json_digest(files),
+        }
+        body["identity_sha256"] = canonical_json_digest(body)
+        return validate_adopted_prerequisite_target_binding(body)
+
+    @staticmethod
+    def _private_source_git(
+        source_root: Path,
+        *arguments: str,
+        check: bool = True,
+        text: bool = True,
+    ) -> subprocess.CompletedProcess[Any]:
+        bootstrap = _load_exact_sibling_module(
+            "nexpoly_pull_deploy_bootstrap_source",
+            "bootstrap_pull_deploy.py",
+        )
+        try:
+            return subprocess.run(
+                bootstrap._git_command(source_root, *arguments),
+                cwd=source_root,
+                env=bootstrap._git_environment(
+                    source_root, home=os.environ.get("HOME", "")
+                ),
+                check=check,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=text,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise PullDeployError(
+                "cannot verify the private target source repository"
+            ) from exc
+
+    def _plan_adopted_prerequisite_target_binding(
+        self,
+        authority: Mapping[str, Any],
+        *,
+        target_sha: str,
+    ) -> dict[str, Any]:
+        """Prove compatibility in the exact private target checkout."""
+
+        context, _release_id = _controller_execution_context(
+            Path(__file__), runtime_root=self.runtime_root
+        )
+        source_root = Path(__file__).resolve().parents[1]
+        if (
+            context != "source"
+            or source_root / "scripts" / _CONTROLLER_FILENAME
+            != Path(__file__).resolve()
+        ):
+            raise PullDeployError(
+                "first adopted successor plan must run from its private target clone"
+            )
+        bootstrap = _load_exact_sibling_module(
+            "nexpoly_pull_deploy_bootstrap_source",
+            "bootstrap_pull_deploy.py",
+        )
+        try:
+            before = bootstrap.bootstrap_source_readiness(
+                source_root, expected_sha=target_sha
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "private target source readiness is invalid"
+            ) from exc
+        target_tree = require_sha(
+            before.get("source_tree"), "private target source tree"
+        )
+        source_sha = require_sha(
+            authority.get("source_sha"), "prerequisite authority SHA"
+        )
+        source_tree = require_sha(
+            authority.get("source_tree"), "prerequisite authority tree"
+        )
+        try:
+            if (
+                str(
+                    self._private_source_git(
+                        source_root, "cat-file", "-t", source_sha
+                    ).stdout
+                ).strip()
+                != "commit"
+                or require_sha(
+                    str(
+                        self._private_source_git(
+                            source_root,
+                            "rev-parse",
+                            f"{source_sha}^{{tree}}",
+                        ).stdout
+                    ).strip(),
+                    "private prerequisite authority tree",
+                )
+                != source_tree
+            ):
+                raise PullDeployError(
+                    "private target clone lacks the prerequisite authority"
+                )
+            ancestor = self._private_source_git(
+                source_root,
+                "merge-base",
+                "--is-ancestor",
+                source_sha,
+                target_sha,
+                check=False,
+            )
+            authority_digests = {
+                source_path: sha256_bytes(
+                    bytes(
+                        self._private_source_git(
+                            source_root,
+                            "show",
+                            f"{source_sha}:{source_path}",
+                            text=False,
+                        ).stdout
+                    )
+                )
+                for source_path, _name, _mode, _classification, _evidence_key in (
+                    ADOPTED_PREREQUISITE_FILES
+                )
+            }
+            target_digests = {
+                source_path: sha256_bytes(
+                    bytes(
+                        self._private_source_git(
+                            source_root,
+                            "show",
+                            f"{target_sha}:{source_path}",
+                            text=False,
+                        ).stdout
+                    )
+                )
+                for source_path, _name, _mode, _classification, _evidence_key in (
+                    ADOPTED_PREREQUISITE_FILES
+                )
+            }
+        except PullDeployError:
+            raise
+        except Exception as exc:
+            raise PullDeployError(
+                "private target prerequisite relation is invalid"
+            ) from exc
+        try:
+            after = bootstrap.bootstrap_source_readiness(
+                source_root, expected_sha=target_sha
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "private target source changed during compatibility proof"
+            ) from exc
+        if before != after:
+            raise PullDeployError(
+                "private target source changed during compatibility proof"
+            )
+        return self._build_adopted_prerequisite_target_binding(
+            authority,
+            target_sha=target_sha,
+            target_tree=target_tree,
+            is_ancestor=ancestor.returncode == 0,
+            authority_file_digests=authority_digests,
+            target_file_digests=target_digests,
+        )
+
+    def _prepared_adopted_prerequisite_target_binding(
+        self,
+        authority: Mapping[str, Any],
+        *,
+        target_sha: str,
+        target_tree: str,
+    ) -> dict[str, Any]:
+        """Re-prove the same binding after fetch in the trusted live repo."""
+
+        before = self._git_trust_preflight()
+        if before is None and not self.test_root_mode:
+            raise PullDeployError(
+                "production target Git trust evidence is unavailable"
+            )
+        current = self.repository_identity(require_ssh_origin=True)
+        if current.get("origin") != REPOSITORY_SSH_URL:
+            raise PullDeployError("production target repository origin differs")
+        if self.remote_main() != target_sha:
+            raise PullDeployError(
+                "prerequisite compatibility target is no longer remote main"
+            )
+        source_sha = require_sha(
+            authority.get("source_sha"), "prerequisite authority SHA"
+        )
+        source_tree = require_sha(
+            authority.get("source_tree"), "prerequisite authority tree"
+        )
+        if (
+            str(self._git("cat-file", "-t", source_sha).stdout).strip()
+            != "commit"
+            or require_sha(
+                str(
+                    self._git("rev-parse", f"{source_sha}^{{tree}}").stdout
+                ).strip(),
+                "fetched prerequisite authority tree",
+            )
+            != source_tree
+            or require_sha(
+                str(
+                    self._git("rev-parse", f"{target_sha}^{{tree}}").stdout
+                ).strip(),
+                "fetched prerequisite target tree",
+            )
+            != target_tree
+        ):
+            raise PullDeployError(
+                "fetched target repository lacks exact prerequisite Git identities"
+            )
+        ancestor = self._git(
+            "merge-base",
+            "--is-ancestor",
+            source_sha,
+            target_sha,
+            check=False,
+        )
+        authority_digests = {
+            source_path: sha256_bytes(
+                self._git_show(source_sha, source_path)
+            )
+            for source_path, _name, _mode, _classification, _evidence_key in (
+                ADOPTED_PREREQUISITE_FILES
+            )
+        }
+        target_digests = {
+            source_path: sha256_bytes(
+                self._git_show(target_sha, source_path)
+            )
+            for source_path, _name, _mode, _classification, _evidence_key in (
+                ADOPTED_PREREQUISITE_FILES
+            )
+        }
+        after = self._git_trust_preflight()
+        if before != after:
+            raise PullDeployError(
+                "production target Git trust changed during compatibility proof"
+            )
+        if self.remote_main() != target_sha:
+            raise PullDeployError(
+                "prerequisite compatibility target changed during proof"
+            )
+        return self._build_adopted_prerequisite_target_binding(
+            authority,
+            target_sha=target_sha,
+            target_tree=target_tree,
+            is_ancestor=ancestor.returncode == 0,
+            authority_file_digests=authority_digests,
+            target_file_digests=target_digests,
+        )
+
+    def _revalidate_adopted_prerequisite_target_binding(
+        self,
+        descriptor: Mapping[str, Any],
+    ) -> None:
+        sealed = descriptor.get("adopted_prerequisite_target_binding")
+        if sealed is None:
+            if descriptor.get("adopted_deployment") is not None:
+                raise PullDeployError(
+                    "adopted descriptor lost its prerequisite target binding"
+                )
+            return
+        sealed = validate_adopted_prerequisite_target_binding(sealed)
+        production_config = validate_production_config_evidence(
+            descriptor.get("production_config")
+        )
+        authority = self._validate_adopted_prerequisite_provenance(
+            production_config
+        )
+        if authority is None:
+            raise PullDeployError(
+                "adopted prerequisite authority disappeared after prepare"
+            )
+        repository = descriptor.get("repository")
+        if not isinstance(repository, dict):  # pragma: no cover - descriptor owns
+            raise PullDeployError("descriptor repository authority is invalid")
+        observed = self._prepared_adopted_prerequisite_target_binding(
+            authority,
+            target_sha=repository["target_sha"],
+            target_tree=repository["target_tree"],
+        )
+        if observed != sealed:
+            raise PullDeployError(
+                "adopted prerequisite target binding changed after prepare"
+            )
+
     def production_config_evidence(self, *, check_free_space: bool) -> dict[str, str]:
         # This runs before credential/config hashing or any prepare-owned
         # artifact can be created.  A v3 manual-adoption bootstrap can never
@@ -20715,6 +21286,7 @@ class PullDeployController:
         adopted: dict[str, Any] | None = None
         adopted_digest: str | None = None
         adopted_prerequisites: dict[str, Any] | None = None
+        adopted_prerequisite_binding: dict[str, Any] | None = None
         if self.current_state_path.exists() or self.current_state_path.is_symlink():
             current_state = self._validate_steady_deployment_state(
                 load_private_json(self.current_state_path)
@@ -20729,13 +21301,9 @@ class PullDeployController:
                         production_config
                     )
                 )
-                if (
-                    adopted_prerequisites is None  # pragma: no cover - binding owns
-                    or adopted_prerequisites["source_sha"] != target_sha
-                ):
+                if adopted_prerequisites is None:  # pragma: no cover - binding owns
                     raise PullDeployError(
-                        "first adopted deployment plan target differs from "
-                        "prerequisite source authority"
+                        "adopted prerequisite authority is unavailable"
                     )
         active = self._active_slot()
         if (
@@ -20778,6 +21346,17 @@ class PullDeployController:
         remote = self.remote_main()
         if remote != target_sha:
             raise PullDeployError("requested target is not current remote main")
+        if adopted_prerequisites is not None:
+            adopted_prerequisite_binding = (
+                self._plan_adopted_prerequisite_target_binding(
+                    adopted_prerequisites,
+                    target_sha=target_sha,
+                )
+            )
+            if self.remote_main() != target_sha:
+                raise PullDeployError(
+                    "requested target changed during prerequisite compatibility proof"
+                )
         return {
             "action": "plan",
             "apply": False,
@@ -20805,6 +21384,9 @@ class PullDeployController:
                 adopted_prerequisites["plan_sha256"]
                 if adopted_prerequisites is not None
                 else None
+            ),
+            "adopted_prerequisite_target_binding": (
+                adopted_prerequisite_binding
             ),
             "service_mutation": False,
             "ignored_runtime_entries": self.ignored_runtime_entries(),
@@ -24761,6 +25343,10 @@ class PullDeployController:
                         descriptor,
                         descriptor_path,
                     )
+                else:
+                    self._revalidate_adopted_prerequisite_target_binding(
+                        descriptor
+                    )
                 return {"action": "prepare", "status": "already-ready", **ready}
             if descriptor_path.exists() or descriptor_path.is_symlink():
                 attempt = self._open_prepare_operation(
@@ -24829,6 +25415,7 @@ class PullDeployController:
                 adopted: dict[str, Any] | None = None
                 adopted_digest: str | None = None
                 adopted_prerequisites: dict[str, Any] | None = None
+                adopted_prerequisite_binding: dict[str, Any] | None = None
                 if (
                     self.current_state_path.exists()
                     or self.current_state_path.is_symlink()
@@ -24984,23 +25571,14 @@ class PullDeployController:
                         raise PullDeployError(
                             "target tree changed after target prepare handoff"
                         )
-                if adopted_prerequisites is not None and (
-                    adopted_prerequisites["source_sha"] != target_sha
-                    or adopted_prerequisites["source_tree"] != target_tree
-                ):
-                    raise PullDeployError(
-                        "first adopted deployment target differs from final "
-                        "prerequisite source authority"
-                    )
                 if adopted_prerequisites is not None:
-                    for record in adopted_prerequisites["plan"]["files"]:
-                        if sha256_bytes(
-                            self._git_show(target_sha, record["source_path"])
-                        ) != record["sha256"]:
-                            raise PullDeployError(
-                                "final prerequisite Git blob differs: "
-                                + str(record["name"])
-                            )
+                    adopted_prerequisite_binding = (
+                        self._prepared_adopted_prerequisite_target_binding(
+                            adopted_prerequisites,
+                            target_sha=target_sha,
+                            target_tree=target_tree,
+                        )
+                    )
                 self.validate_installed_controls_against_target(target_sha)
                 executor_control = (
                     bridge_handoff["executor_control"]
@@ -25090,12 +25668,16 @@ class PullDeployController:
                     postgres_restore_image = (
                         self.postgres_restore_image_evidence()
                     )
-                if adopted_prerequisites is not None and adopted_prerequisites[
-                    "plan"
-                ]["delivery_gate"] != {"remote_main": target_sha, "ci": ci}:
+                if (
+                    adopted_prerequisites is not None
+                    and adopted_prerequisite_binding is not None
+                    and adopted_prerequisite_binding["mode"] == "exact-source"
+                    and adopted_prerequisites["plan"]["delivery_gate"]
+                    != {"remote_main": target_sha, "ci": ci}
+                ):
                     raise PullDeployError(
                         "first adopted deployment CI differs from final "
-                        "prerequisite delivery gate"
+                        "prerequisite delivery gate (exact-source)"
                     )
                 worker_controls = self.prepare_worker_controls(
                     operation_id=operation_id,
@@ -25241,6 +25823,10 @@ class PullDeployController:
                     descriptor["monomer_dft"] = dft_controls
                     descriptor["adopted_deployment"] = adopted
                     descriptor["adopted_deployment_sha256"] = adopted_digest
+                    if adopted_prerequisite_binding is not None:
+                        descriptor[
+                            "adopted_prerequisite_target_binding"
+                        ] = adopted_prerequisite_binding
                 validate_descriptor(descriptor)
                 if descriptor_path.exists() or descriptor_path.is_symlink():
                     existing_descriptor = validate_descriptor(
@@ -25380,6 +25966,7 @@ class PullDeployController:
         self._revalidate_worker_controls(descriptor)
         self._revalidate_dft_controls(descriptor)
         self._revalidate_previous_deployment_state(descriptor)
+        self._revalidate_adopted_prerequisite_target_binding(descriptor)
         if (
             self.asset_evidence(
                 descriptor["release_input"]["asset_manifest_digest"]
@@ -26972,6 +27559,7 @@ class PullDeployController:
                 raise PullDeployError("prepared target tree changed")
             if self.ci_evidence(expected["target_sha"]) != descriptor["ci"]:
                 raise PullDeployError("target CI evidence changed after prepare")
+            self._revalidate_adopted_prerequisite_target_binding(descriptor)
         if bridge is not None:
             if (
                 self.prefetched_application_images(

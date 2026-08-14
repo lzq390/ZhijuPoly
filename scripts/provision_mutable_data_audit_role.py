@@ -28,6 +28,7 @@ import stat
 import stringprep
 import subprocess
 import sys
+import types
 import unicodedata
 from typing import Any, Iterator, Mapping
 
@@ -37,6 +38,7 @@ RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
 PRODUCTION_ROOT = Path("/data/lzq/gith/nexpoly")
 SCRIPT_PATH = "scripts/provision_mutable_data_audit_role.py"
 ROLE_SQL_PATH = "ops/config/mutable-data-audit-role.sql.example"
+BOOTSTRAP_SCRIPT_PATH = "scripts/bootstrap_pull_deploy.py"
 PGPASS_PATH = RUNTIME_ROOT / "config/mutable-data-audit.pgpass"
 GIT_DEPLOY_KEY_PATH = RUNTIME_ROOT / "config/git-deploy-key"
 GIT_KNOWN_HOSTS_PATH = RUNTIME_ROOT / "config/known_hosts"
@@ -48,6 +50,91 @@ PORT = "55432"
 SSH_ORIGIN = "git@github.com:lzq390/ZhijuPoly.git"
 ADOPTION_AUTHORITY_KIND = "manual-runtime-adoption"
 PREREQUISITE_AUTHORITY_KIND = "manual-runtime-adoption-prerequisites"
+PREREQUISITE_INSTALLS = (
+    (
+        "ops/config/bootstrap-quiesce.example",
+        "bootstrap-quiesce",
+        0o700,
+        "reviewed-wrapper",
+    ),
+    (
+        "ops/config/bootstrap-status.example",
+        "bootstrap-status",
+        0o700,
+        "reviewed-wrapper",
+    ),
+    (
+        "ops/config/bootstrap-resume-unchanged.example",
+        "bootstrap-resume-unchanged",
+        0o700,
+        "reviewed-wrapper",
+    ),
+    (
+        "ops/config/bootstrap-rollback.example",
+        "bootstrap-rollback",
+        0o700,
+        "reviewed-wrapper",
+    ),
+    (
+        "ops/config/bootstrap-active-jobs-probe.example",
+        "bootstrap-active-jobs-probe",
+        0o700,
+        "adopted-non-applicable-fail-closed",
+    ),
+    (
+        "ops/config/bootstrap-legacy-runtime-status.example",
+        "bootstrap-legacy-runtime-status",
+        0o700,
+        "adopted-non-applicable-fail-closed",
+    ),
+    (
+        "ops/config/bootstrap-legacy-runtime-resume-unchanged.example",
+        "bootstrap-legacy-runtime-resume-unchanged",
+        0o700,
+        "adopted-non-applicable-fail-closed",
+    ),
+    (
+        "ops/config/bootstrap-legacy-runtime-restore.example",
+        "bootstrap-legacy-runtime-restore",
+        0o700,
+        "adopted-non-applicable-fail-closed",
+    ),
+    (
+        "ops/config/deployment-mutable-data-audit.example",
+        "deployment-mutable-data-audit",
+        0o700,
+        "generic-mutable-audit",
+    ),
+    (
+        "ops/config/mutable-data-audit.pg_service.conf.example",
+        "mutable-data-audit.pg_service.conf",
+        0o600,
+        "generic-mutable-audit-service",
+    ),
+)
+SOURCE_READINESS_FIELDS = {
+    "schema_version",
+    "ready",
+    "source_root",
+    "source_sha",
+    "source_tree",
+    "branch",
+    "origin",
+    "remote_names",
+    "origin_fetch_urls",
+    "origin_push_urls",
+    "origin_main_sha",
+    "standalone_object_database",
+    "shallow",
+    "dirty_entries",
+    "ignored_entries",
+    "unreachable_objects",
+    "replace_refs",
+    "special_index_entries",
+    "sparse_index",
+    "owner_private",
+    "group_or_world_writable",
+}
 SCRAM_ITERATIONS = 4096
 SCRAM_SALT_BYTES = 16
 GOVERNED_SCHEMAS = (
@@ -69,6 +156,9 @@ DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 CONTAINER_RE = re.compile(r"^[0-9a-f]{64}$")
 SYSTEM_ID_RE = re.compile(r"^[0-9]{10,30}$")
 OPERATION_RE = re.compile(r"^mutable-role-[a-z0-9][a-z0-9._-]{7,95}$")
+PREREQUISITE_OPERATION_RE = re.compile(
+    r"^adopt-prereq-[a-z0-9][a-z0-9._-]{7,95}$"
+)
 SCRAM_RE = re.compile(
     r"^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]{22}==\$"
     r"[A-Za-z0-9+/]{43}=:[A-Za-z0-9+/]{43}=$"
@@ -107,6 +197,16 @@ def _digest(value: object) -> str:
 
 def _utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _is_strict_utc_timestamp(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return parsed.strftime("%Y-%m-%dT%H:%M:%SZ") == value
 
 
 def _clean_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -171,7 +271,11 @@ def _private_directory(path: Path) -> os.stat_result:
 
 
 def _read_private(
-    path: Path, *, maximum_bytes: int, allowed_nlinks: frozenset[int] = frozenset({1})
+    path: Path,
+    *,
+    maximum_bytes: int,
+    expected_mode: int = 0o600,
+    allowed_nlinks: frozenset[int] = frozenset({1}),
 ) -> bytes:
     try:
         descriptor = os.open(
@@ -187,7 +291,7 @@ def _read_private(
         _require(
             stat.S_ISREG(before.st_mode)
             and before.st_uid == os.geteuid()
-            and stat.S_IMODE(before.st_mode) == 0o600
+            and stat.S_IMODE(before.st_mode) == expected_mode
             and before.st_nlink in allowed_nlinks
             and 0 < before.st_size <= maximum_bytes,
             f"private file is unsafe: {path}",
@@ -864,6 +968,7 @@ def _source_authority(source_sha: str) -> tuple[dict[str, str], bytes]:
     _private_directory(SOURCE_ROOT)
     _private_directory(SOURCE_ROOT / ".git")
     head = _git("rev-parse", "--verify", "HEAD").decode().strip()
+    local_main = _git("rev-parse", "--verify", "refs/heads/main").decode().strip()
     tree = _git("rev-parse", "--verify", f"{source_sha}^{{tree}}").decode().strip()
     remote_main = _git("rev-parse", "--verify", "refs/remotes/origin/main").decode().strip()
     remote_lines = _git(
@@ -874,6 +979,7 @@ def _source_authority(source_sha: str) -> tuple[dict[str, str], bytes]:
     ).decode().splitlines()
     _require(
         head == source_sha
+        and local_main == source_sha
         and remote_main == source_sha
         and SHA_RE.fullmatch(tree) is not None
         and remote_lines == [f"{source_sha}\trefs/heads/main"],
@@ -882,6 +988,41 @@ def _source_authority(source_sha: str) -> tuple[dict[str, str], bytes]:
     _require(
         not _git("status", "--porcelain=v1", "--untracked-files=all"),
         "source checkout is not clean",
+    )
+    _require(
+        not _git("ls-files", "-z", "--others", "--ignored", "--exclude-standard"),
+        "source checkout contains ignored entries",
+    )
+    index_entries = _git("ls-files", "-z", "--stage").split(b"\0")
+    indexed_paths: list[bytes] = []
+    for entry in index_entries:
+        if not entry:
+            continue
+        try:
+            header, relative = entry.split(b"\t", 1)
+            mode, object_sha, stage = header.split(b" ", 2)
+        except ValueError as exc:
+            raise RoleProvisionError("source index entry is malformed") from exc
+        _require(
+            mode in {b"100644", b"100755"}
+            and SHA_RE.fullmatch(object_sha.decode("ascii")) is not None
+            and stage == b"0"
+            and bool(relative),
+            "source index contains sparse, conflicted, or special entries",
+        )
+        indexed_paths.append(relative)
+    flagged_paths: list[bytes] = []
+    for entry in _git("ls-files", "-z", "-v", "--cached").split(b"\0"):
+        if not entry:
+            continue
+        _require(
+            entry.startswith(b"H ") and len(entry) > 2,
+            "source index contains assume-unchanged or skip-worktree entries",
+        )
+        flagged_paths.append(entry[2:])
+    _require(
+        flagged_paths == indexed_paths,
+        "source index flag inventory differs from staged entries",
     )
     _require(
         _git("remote").decode().splitlines() == ["origin"]
@@ -904,6 +1045,10 @@ def _source_authority(source_sha: str) -> tuple[dict[str, str], bytes]:
     ):
         path = SOURCE_ROOT / relative
         _require(not path.exists() and not path.is_symlink(), "source object authority is external")
+    _require(
+        not _git("fsck", "--full", "--strict", "--unreachable", "--no-reflogs"),
+        "source object database contains unreachable objects",
+    )
     blobs: dict[str, bytes] = {}
     for relative in (SCRIPT_PATH, ROLE_SQL_PATH):
         blob = _git("show", f"{source_sha}:{relative}")
@@ -931,7 +1076,185 @@ def _source_authority(source_sha: str) -> tuple[dict[str, str], bytes]:
     }, role_sql
 
 
-def _strict_adopted_authority(source_sha: str) -> dict[str, str]:
+def _validated_delivery_gate(value: object, *, source_sha: str) -> dict[str, object]:
+    _require(isinstance(value, dict) and set(value) == {"remote_main", "ci"}, "delivery gate is invalid")
+    ci = value.get("ci")
+    _require(
+        value.get("remote_main") == source_sha
+        and isinstance(ci, dict)
+        and set(ci)
+        == {
+            "workflow_run_id",
+            "run_attempt",
+            "head_sha",
+            "head_branch",
+            "event",
+            "path",
+            "conclusion",
+            "required_jobs",
+        }
+        and isinstance(ci.get("workflow_run_id"), int)
+        and not isinstance(ci.get("workflow_run_id"), bool)
+        and ci["workflow_run_id"] > 0
+        and isinstance(ci.get("run_attempt"), int)
+        and not isinstance(ci.get("run_attempt"), bool)
+        and ci["run_attempt"] > 0
+        and ci.get("head_sha") == source_sha
+        and ci.get("head_branch") == "main"
+        and ci.get("event") == "push"
+        and ci.get("path") == ".github/workflows/ci.yml"
+        and ci.get("conclusion") == "success"
+        and isinstance(ci.get("required_jobs"), list)
+        and 0 < len(ci["required_jobs"]) <= 32
+        and all(isinstance(name, str) and bool(name) for name in ci["required_jobs"])
+        and len(ci["required_jobs"]) == len(set(ci["required_jobs"])),
+        "delivery gate is invalid",
+    )
+    return dict(value)
+
+
+def _current_delivery_gate(
+    source_sha: str, *, sealed: object = None
+) -> dict[str, object]:
+    blob = _git("show", f"{source_sha}:{BOOTSTRAP_SCRIPT_PATH}")
+    path = SOURCE_ROOT / BOOTSTRAP_SCRIPT_PATH
+    _require(
+        path.is_file() and not path.is_symlink() and path.read_bytes() == blob,
+        "current delivery contract differs from reviewed Git",
+    )
+    contract = types.ModuleType("nexpoly_mutable_role_bootstrap_contract")
+    contract.__file__ = str(path)
+    try:
+        exec(
+            compile(blob, f"git:{source_sha}:{BOOTSTRAP_SCRIPT_PATH}", "exec"),
+            contract.__dict__,
+        )
+        probe = getattr(contract, "_delivery_gate")
+        _assert_pre_git_source_safety(SOURCE_ROOT)
+        raw = probe(
+            SOURCE_ROOT,
+            RUNTIME_ROOT,
+            source_sha,
+            allow_test=False,
+            sealed=sealed,
+        )
+    except Exception as exc:
+        raise RoleProvisionError("cannot prove current protected-main CI authority") from exc
+    gate = _validated_delivery_gate(raw, source_sha=source_sha)
+    if sealed is not None:
+        _require(gate == sealed, "sealed current delivery gate changed")
+    return gate
+
+
+def _prerequisite_source_binding(
+    source_sha: str,
+    prerequisites: Mapping[str, Any],
+    prereq_plan: Mapping[str, Any],
+) -> dict[str, str]:
+    authority_sha = prereq_plan.get("source_sha")
+    authority_tree = prereq_plan.get("source_tree")
+    _require(
+        isinstance(authority_sha, str)
+        and SHA_RE.fullmatch(authority_sha) is not None
+        and isinstance(authority_tree, str)
+        and SHA_RE.fullmatch(authority_tree) is not None
+        and prerequisites.get("source_sha") == authority_sha
+        and prerequisites.get("source_tree") == authority_tree,
+        "prerequisite source identity is invalid",
+    )
+    observed_authority_tree = _git(
+        "rev-parse", "--verify", f"{authority_sha}^{{tree}}"
+    ).decode().strip()
+    target_tree = _git(
+        "rev-parse", "--verify", f"{source_sha}^{{tree}}"
+    ).decode().strip()
+    _require(
+        observed_authority_tree == authority_tree
+        and SHA_RE.fullmatch(target_tree) is not None,
+        "prerequisite source tree authority changed",
+    )
+    if authority_sha == source_sha:
+        relation = "exact"
+        _require(authority_tree == target_tree, "exact prerequisite source tree changed")
+    else:
+        try:
+            _git("merge-base", "--is-ancestor", authority_sha, source_sha)
+        except RoleProvisionError as exc:
+            raise RoleProvisionError(
+                "prerequisite source is not an ancestor of current remote main"
+            ) from exc
+        relation = "ancestor-byte-identical"
+
+    files = prereq_plan.get("files")
+    _require(
+        isinstance(files, list) and len(files) == len(PREREQUISITE_INSTALLS),
+        "prerequisite sealed file list is invalid",
+    )
+    verified_blobs: list[dict[str, str]] = []
+    for record, expected in zip(files, PREREQUISITE_INSTALLS, strict=True):
+        source_path, name, mode, classification = expected
+        expected_record = {
+            "source_path": source_path,
+            "destination": str(RUNTIME_ROOT / "config" / name),
+            "name": name,
+            "sha256": record.get("sha256") if isinstance(record, dict) else None,
+            "mode": f"{mode:04o}",
+            "classification": classification,
+            "disposition": record.get("disposition") if isinstance(record, dict) else None,
+        }
+        _require(
+            isinstance(record, dict)
+            and record == expected_record
+            and record.get("disposition") in {"create", "existing-exact"}
+            and isinstance(record.get("sha256"), str)
+            and DIGEST_RE.fullmatch(str(record["sha256"])) is not None,
+            "prerequisite sealed file record is invalid",
+        )
+        sealed_digest = str(record["sha256"])
+        authority_blob = _git("show", f"{authority_sha}:{source_path}")
+        target_blob = _git("show", f"{source_sha}:{source_path}")
+        installed = _read_private(
+            RUNTIME_ROOT / "config" / name,
+            maximum_bytes=16 * 1024 * 1024,
+            expected_mode=mode,
+        )
+        _require(
+            _digest_bytes(authority_blob) == sealed_digest
+            and _digest_bytes(target_blob) == sealed_digest
+            and _digest_bytes(installed) == sealed_digest,
+            "prerequisite source or installed file digest changed",
+        )
+        verified_blobs.append({"source_path": source_path, "sha256": sealed_digest})
+
+    pgpass = prereq_plan.get("preserved_pgpass")
+    pgpass_payload = _read_private(PGPASS_PATH, maximum_bytes=64 * 1024)
+    _require(
+        pgpass
+        == {
+            "path": str(PGPASS_PATH),
+            "sha256": pgpass.get("sha256") if isinstance(pgpass, dict) else None,
+            "mode": "0600",
+        }
+        and isinstance(pgpass.get("sha256"), str)
+        and DIGEST_RE.fullmatch(str(pgpass["sha256"])) is not None
+        and _digest_bytes(pgpass_payload) == pgpass["sha256"],
+        "preserved prerequisite pgpass changed",
+    )
+    return {
+        "authority_sha": authority_sha,
+        "authority_tree": authority_tree,
+        "target_sha": source_sha,
+        "target_tree": target_tree,
+        "relation": relation,
+        "files_sha256": _digest(files),
+        "verified_source_blobs_sha256": _digest(verified_blobs),
+        "preserved_pgpass_sha256": str(pgpass["sha256"]),
+    }
+
+
+def _strict_adopted_authority(
+    source_sha: str, *, sealed_delivery_gate: object = None
+) -> dict[str, Any]:
     state = RUNTIME_ROOT / "state"
     adopted, adopted_payload = _load_private_json(state / "adopted-deployment.json")
     bootstrap, bootstrap_payload = _load_private_json(state / "bootstrap-control.json")
@@ -997,25 +1320,102 @@ def _strict_adopted_authority(source_sha: str) -> dict[str, str]:
     )
     prereq_plan = prerequisites.get("plan")
     _require(
-        prerequisites.get("schema_version") == 1
+        isinstance(prereq_plan, dict)
+        and prerequisites.get("schema_version") == 1
         and prerequisites.get("status") == "completed"
         and prerequisites.get("authority_kind") == PREREQUISITE_AUTHORITY_KIND
-        and prerequisites.get("source_sha") == source_sha
-        and isinstance(prereq_plan, dict)
+        and set(prerequisites)
+        == {
+            "schema_version",
+            "status",
+            "authority_kind",
+            "operation_id",
+            "source_sha",
+            "source_tree",
+            "adopted_deployment_sha256",
+            "plan_sha256",
+            "plan",
+            "completed_at",
+        }
         and prerequisites.get("source_tree") == prereq_plan.get("source_tree")
         and prerequisites.get("plan_sha256") == _digest(prereq_plan)
-        and prereq_plan.get("source_sha") == source_sha
+        and prerequisites.get("adopted_deployment_sha256")
+        == _digest_bytes(adopted_payload)
+        and set(prereq_plan)
+        == {
+            "schema_version",
+            "authority_kind",
+            "operation_id",
+            "source_sha",
+            "source_tree",
+            "source_readiness",
+            "source_readiness_sha256",
+            "delivery_gate",
+            "delivery_gate_sha256",
+            "adopted_deployment_sha256",
+            "files",
+            "preserved_pgpass",
+            "mutations",
+        }
+        and prereq_plan.get("schema_version") == 1
+        and prerequisites.get("operation_id") == prereq_plan.get("operation_id")
+        and isinstance(prerequisites.get("operation_id"), str)
+        and PREREQUISITE_OPERATION_RE.fullmatch(
+            str(prerequisites["operation_id"])
+        )
+        is not None
+        and _is_strict_utc_timestamp(prerequisites.get("completed_at"))
+        and prerequisites.get("source_sha") == prereq_plan.get("source_sha")
         and prereq_plan.get("authority_kind") == PREREQUISITE_AUTHORITY_KIND
-        and prereq_plan.get("adopted_deployment_sha256") == _digest(adopted)
+        and prereq_plan.get("adopted_deployment_sha256")
+        == _digest_bytes(adopted_payload)
         and prereq_plan.get("delivery_gate_sha256") == _digest(prereq_plan.get("delivery_gate"))
-        and isinstance(prereq_plan.get("delivery_gate"), dict)
-        and prereq_plan["delivery_gate"].get("remote_main") == source_sha
-        and isinstance(prereq_plan["delivery_gate"].get("ci"), dict)
-        and prereq_plan["delivery_gate"]["ci"].get("head_sha") == source_sha
-        and prereq_plan["delivery_gate"]["ci"].get("conclusion") == "success"
-        and (prereq_plan.get("mutations") or {}).get("database") is False
-        and (prereq_plan.get("mutations") or {}).get("credentials") is False,
+        and prereq_plan.get("source_readiness_sha256")
+        == _digest(prereq_plan.get("source_readiness"))
+        and prereq_plan.get("mutations")
+        == {
+            "services": False,
+            "source": False,
+            "database": False,
+            "credentials": False,
+        },
         "completed adopted prerequisite authority is invalid",
+    )
+    prereq_source_sha = str(prereq_plan["source_sha"])
+    prereq_readiness = prereq_plan.get("source_readiness")
+    _require(
+        isinstance(prereq_readiness, dict)
+        and set(prereq_readiness) == SOURCE_READINESS_FIELDS
+        and prereq_readiness.get("schema_version") == 2
+        and prereq_readiness.get("ready") is True
+        and prereq_readiness.get("source_sha") == prereq_source_sha
+        and prereq_readiness.get("source_tree") == prereq_plan.get("source_tree")
+        and prereq_readiness.get("branch") == "main"
+        and prereq_readiness.get("origin") == SSH_ORIGIN
+        and prereq_readiness.get("remote_names") == ["origin"]
+        and prereq_readiness.get("origin_fetch_urls") == [SSH_ORIGIN]
+        and prereq_readiness.get("origin_push_urls") == [SSH_ORIGIN]
+        and prereq_readiness.get("origin_main_sha") == prereq_source_sha
+        and prereq_readiness.get("standalone_object_database") is True
+        and prereq_readiness.get("shallow") is False
+        and prereq_readiness.get("dirty_entries") == 0
+        and prereq_readiness.get("ignored_entries") == 0
+        and prereq_readiness.get("unreachable_objects") == 0
+        and prereq_readiness.get("replace_refs") == 0
+        and prereq_readiness.get("special_index_entries") == 0
+        and prereq_readiness.get("sparse_index") is False
+        and prereq_readiness.get("owner_private") is True
+        and prereq_readiness.get("group_or_world_writable") is False,
+        "sealed prerequisite source readiness is invalid",
+    )
+    _validated_delivery_gate(
+        prereq_plan.get("delivery_gate"), source_sha=prereq_source_sha
+    )
+    prerequisite_binding = _prerequisite_source_binding(
+        source_sha, prerequisites, prereq_plan
+    )
+    current_delivery = _current_delivery_gate(
+        source_sha, sealed=sealed_delivery_gate
     )
     for forbidden in (
         "deploy-in-progress.json",
@@ -1031,6 +1431,9 @@ def _strict_adopted_authority(source_sha: str) -> dict[str, str]:
         "active_file_sha256": _digest_bytes(active_payload),
         "prerequisites_file_sha256": _digest_bytes(prerequisites_payload),
         "prerequisites_plan_sha256": str(prerequisites["plan_sha256"]),
+        "prerequisite_source_binding": prerequisite_binding,
+        "current_delivery_gate": current_delivery,
+        "current_delivery_gate_sha256": _digest(current_delivery),
     }
 
 
@@ -1926,6 +2329,13 @@ def apply_plan(
         and (plan.get("source") or {}).get("sha") == source_sha,
         "sealed mutable role plan differs",
     )
+    sealed_adoption = plan.get("adoption")
+    _require(
+        isinstance(sealed_adoption, dict)
+        and isinstance(sealed_adoption.get("current_delivery_gate"), dict),
+        "sealed mutable role delivery authority is invalid",
+    )
+    sealed_delivery_gate = sealed_adoption["current_delivery_gate"]
     _promote_completed_staging(
         completed_path,
         source_sha=source_sha,
@@ -1941,7 +2351,9 @@ def apply_plan(
             journal = _advance_journal(journal_path, journal, "completed", plan)
         _require(journal["phase"] == "completed", "completed role authority has incomplete journal")
         source, role_sql = _source_authority(source_sha)
-        adoption = _strict_adopted_authority(source_sha)
+        adoption = _strict_adopted_authority(
+            source_sha, sealed_delivery_gate=sealed_delivery_gate
+        )
         password, pgpass_sha256 = _pgpass_authority(PGPASS_PATH)
         password[:] = b"\x00" * len(password)
         postgres = _live_postgres()
@@ -1957,7 +2369,9 @@ def apply_plan(
         )
         return completed
     source, role_sql = _source_authority(source_sha)
-    adoption = _strict_adopted_authority(source_sha)
+    adoption = _strict_adopted_authority(
+        source_sha, sealed_delivery_gate=sealed_delivery_gate
+    )
     password, pgpass_sha256 = _pgpass_authority(PGPASS_PATH)
     recovered_commit_response = False
     try:

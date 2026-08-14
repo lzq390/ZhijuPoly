@@ -204,6 +204,21 @@ Abort is permitted only before the prerequisite authority commit. It removes
 only inode- and digest-matched files created by that operation; a completed
 authority cannot be aborted.
 
+A completed prerequisite authority is immutable and must never be rewritten
+merely because a verifier is fixed in a later `main` commit. The role
+provisioner permits that later target only through a narrow successor binding:
+the current private checkout must itself be the clean, standalone protected
+remote `main` with successful CI; the sealed prerequisite SHA must be its Git
+ancestor; both source trees are recomputed from the full, replacement-free
+object database; and all ten fixed prerequisite blobs must have the same
+sealed digest at both commits and in their installed destinations. The
+preserved pgpass digest must also remain exact. The role plan records the
+authority SHA/tree, target SHA/tree, `ancestor-byte-identical` relation, and
+sealed file-list digest. A non-ancestor, changed blob, changed installed file,
+or pgpass drift remains fail-closed. The prerequisite plan's
+`adopted_deployment_sha256` binds the raw bytes of the pre-existing adoption
+file; its canonical JSON digest remains a separate bootstrap binding.
+
 Next provision the dedicated mutable-data audit login. This step is mandatory
 before formal Pull `plan` or `prepare`. The source-pinned provisioner reads the
 one exact private pgpass entry, derives a SCRAM verifier locally, and never
