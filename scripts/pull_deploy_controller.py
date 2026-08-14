@@ -1027,6 +1027,8 @@ DEPLOY_MARKER_PHASES = {
     "backup-started",
     "backup-verified",
     *STOP_INTENT_PHASES,
+    "rollback-admission-resume-started",
+    "rollback-admission-resumed",
     "failed",
 }
 ROLLBACK_MARKER_PHASES = {
@@ -1122,8 +1124,11 @@ MARKER_OPTIONAL_FIELDS = {
     "acceptance_not_before",
     "acceptance_authority_path",
     "acceptance_authority_sha256",
+    "acceptance_probe_intent",
     "acceptance_evidence",
     "acceptance_rejected",
+    "acceptance_resume_intent",
+    "rollback_admission_resume_intent",
     "postgres_rehearsal",
 }
 
@@ -1602,6 +1607,32 @@ def acceptance_runtime_stability_identity(verification: object) -> dict[str, Any
     dft_guard = projected.get("dft_guard")
     if isinstance(dft_guard, dict):
         dft_guard.pop("observed_at", None)
+    dft_worker = projected.get("dft_worker")
+    observe_guard = (
+        isinstance(dft_worker, dict)
+        and dft_worker.get("gpu_guard_mode") == "observe"
+    )
+    if observe_guard:
+        # Observe-only guard evidence is deliberately refreshed every minute.
+        # A ready/quarantined transition (or a temporarily lagging Worker
+        # projection of missing/stale/invalid) is a warning, not a runtime
+        # identity change.  Keep mode, GPU UUID, runtime readiness, model and
+        # process identity in the projection while normalising only those
+        # explicitly dynamic observation fields.
+        if isinstance(dft_guard, dict):
+            dft_guard["status"] = "observe-dynamic"
+            dft_guard["contention"] = "observe-dynamic"
+        dft_worker["gpu_guard_status"] = "observe-dynamic"
+        dft_worker["gpu_contention_observed"] = "observe-dynamic"
+        runtime = dft_worker.get("runtime")
+        if isinstance(runtime, dict):
+            for name in (
+                "guard_status",
+                "gpu_guard_status",
+                "gpu_contention_observed",
+            ):
+                if name in runtime:
+                    runtime[name] = "observe-dynamic"
     return projected
 
 
@@ -3271,6 +3302,278 @@ def mutable_data_identity(document: object) -> dict[str, Any]:
         "bridge_projection": validated["bridge_projection"],
         "snapshot_sha256": validated["snapshot_sha256"],
     }
+
+
+def acceptance_full_mutable_data_identity(document: object) -> dict[str, Any]:
+    """Return the complete schema-v7 database identity used by acceptance.
+
+    ``mutable_data_identity`` deliberately preserves the older deployment
+    backup contract.  Acceptance evidence is newer and must additionally
+    seal the audited role/security projection; capture time remains metadata,
+    while every database, ledger, relation, control and snapshot identity is
+    covered by this digest.
+    """
+
+    validated = validate_mutable_data_evidence(document)
+    identity = mutable_data_identity(validated)
+    identity["role_security"] = validated["role_security"]
+    return identity
+
+
+ACCEPTANCE_PROBE_MUTABLE_TABLES = frozenset(
+    {
+        "md.monomer_md_jobs",
+        "monomer_dft.jobs",
+        "monomer_dft.job_attempts",
+        "monomer_dft.artifacts",
+    }
+)
+ACCEPTANCE_PROBE_MUTABLE_SEQUENCES = frozenset(
+    {
+        "md.monomer_md_queue_sequence_seq",
+        "monomer_dft.jobs_enqueue_sequence_seq",
+    }
+)
+
+
+def _acceptance_owned_control_identity(
+    document: object,
+    *,
+    operation_id: str,
+    release_sha: str,
+) -> dict[str, Any]:
+    """Normalise only the current operation's drain bookkeeping."""
+
+    if not isinstance(document, dict) or set(document) != {"table", "row"}:
+        raise PullDeployError("acceptance deployment control is invalid")
+    table = document.get("table")
+    row = document.get("row")
+    if (
+        not isinstance(table, dict)
+        or table.get("state") != "present"
+        or table.get("row_count") != 1
+        or not isinstance(row, dict)
+        or set(row)
+        != {
+            "control_key",
+            "drain_enabled",
+            "reason",
+            "release_sha",
+            "activated_at",
+            "activated_by",
+            "updated_at",
+        }
+        or row.get("control_key") != "production"
+        or row.get("drain_enabled") is not True
+        or row.get("release_sha") != release_sha
+        or row.get("activated_by") != "pull-deploy-controller"
+        or row.get("reason")
+        not in {
+            f"pull deployment {operation_id}",
+            f"post-canary drain {operation_id}",
+            f"post-acceptance drain {operation_id}",
+        }
+    ):
+        raise PullDeployError(
+            "acceptance deployment control is not owned by this operation"
+        )
+    activated = require_utc_timestamp(
+        row.get("activated_at"), "acceptance drain activation"
+    )
+    updated = require_utc_timestamp(
+        row.get("updated_at"), "acceptance drain update"
+    )
+    if updated < activated:
+        raise PullDeployError("acceptance drain timestamps are inconsistent")
+    return {
+        "table": {
+            name: value
+            for name, value in table.items()
+            if name != "content_sha256"
+        },
+        "row": {
+            "control_key": "production",
+            "drain_enabled": True,
+            "reason": "operation-owned-drain",
+            "release_sha": release_sha,
+            "activated_by": "pull-deploy-controller",
+        },
+    }
+
+
+def acceptance_mutable_data_stability_identity(
+    document: object,
+    *,
+    operation_id: str,
+    release_sha: str,
+) -> dict[str, Any]:
+    """Project a post-probe snapshot onto its stable database identity.
+
+    All business rows, sequences, static data, schema and PostgreSQL identity
+    remain exact.  Only the controller-owned drain row's timestamps, reason
+    and resulting table content digest are normalised because every idempotent
+    re-drain is expected to refresh them.
+    """
+
+    validated = validate_mutable_data_evidence(document)
+    if validated["operation_id"] != operation_id:
+        raise PullDeployError("acceptance mutable data belongs to another operation")
+    identity = {
+        "operation_id": validated["operation_id"],
+        "database": validated["database"],
+        "database_system_identifier": validated[
+            "database_system_identifier"
+        ],
+        "connection": validated["connection"],
+        "postgres_runtime": validated["postgres_runtime"],
+        "role_security": validated["role_security"],
+        "digest_algorithm": validated["digest_algorithm"],
+        "migration_ledger": validated["migration_ledger"],
+        "business_tables": validated["business_tables"],
+        "governed_controls": validated["governed_controls"],
+        "static_tables": validated["static_tables"],
+        "migration_exception": validated["migration_exception"],
+        "migration_exception_archive_evidence": validated[
+            "migration_exception_archive_evidence"
+        ],
+        "sequences": validated["sequences"],
+        "bridge_projection": validated["bridge_projection"],
+    }
+    projected = json.loads(canonical_json_bytes(identity))
+    projected["governed_controls"]["deployment_control"] = (
+        _acceptance_owned_control_identity(
+            validated["governed_controls"]["deployment_control"],
+            operation_id=operation_id,
+            release_sha=release_sha,
+        )
+    )
+    return projected
+
+
+def _acceptance_probe_immutable_identity(
+    document: object,
+    *,
+    operation_id: str,
+    release_sha: str,
+) -> dict[str, Any]:
+    """Normalise only fields the reviewed acceptance probes may mutate."""
+
+    projected = acceptance_mutable_data_stability_identity(
+        document,
+        operation_id=operation_id,
+        release_sha=release_sha,
+    )
+    for record in projected["business_tables"]:
+        relation = f"{record['schema']}.{record['table']}"
+        if relation in ACCEPTANCE_PROBE_MUTABLE_TABLES:
+            record["row_count"] = "acceptance-probe-dynamic"
+            record["content_sha256"] = "acceptance-probe-dynamic"
+    for record in projected["sequences"]:
+        relation = f"{record['schema']}.{record['sequence']}"
+        if relation in ACCEPTANCE_PROBE_MUTABLE_SEQUENCES:
+            record["last_value"] = "acceptance-probe-dynamic"
+            record["is_called"] = "acceptance-probe-dynamic"
+    bridge = projected["bridge_projection"]
+    bridge["row_count"] = "acceptance-probe-dynamic"
+    bridge["content_sha256"] = "acceptance-probe-dynamic"
+    lease_columns = bridge.get("lease_columns")
+    if isinstance(lease_columns, dict) and isinstance(
+        lease_columns.get("non_null_counts"), dict
+    ):
+        lease_columns["non_null_counts"] = {
+            name: "acceptance-probe-dynamic"
+            for name in lease_columns["non_null_counts"]
+        }
+    return projected
+
+
+def validate_acceptance_pre_probe_mutable_transition(
+    candidate_document: object,
+    observed_document: object,
+    *,
+    operation_id: str,
+    release_sha: str,
+) -> dict[str, Any]:
+    """Permit only an owned re-drain before probe mutation authority."""
+
+    candidate = acceptance_mutable_data_stability_identity(
+        candidate_document,
+        operation_id=operation_id,
+        release_sha=release_sha,
+    )
+    observed = acceptance_mutable_data_stability_identity(
+        observed_document,
+        operation_id=operation_id,
+        release_sha=release_sha,
+    )
+    if candidate != observed:
+        raise PullDeployError(
+            "acceptance pre-probe database changed outside the owned drain"
+        )
+    return observed
+
+
+def validate_acceptance_probe_mutable_transition(
+    before_document: object,
+    after_document: object,
+    *,
+    operation_id: str,
+    release_sha: str,
+) -> dict[str, Any]:
+    """Require a first probe window to change only reviewed dynamic data."""
+
+    before = validate_mutable_data_evidence(before_document)
+    after = validate_mutable_data_evidence(after_document)
+    before_immutable = _acceptance_probe_immutable_identity(
+        before,
+        operation_id=operation_id,
+        release_sha=release_sha,
+    )
+    after_immutable = _acceptance_probe_immutable_identity(
+        after,
+        operation_id=operation_id,
+        release_sha=release_sha,
+    )
+    if before_immutable != after_immutable:
+        raise PullDeployError(
+            "acceptance probes changed immutable or non-probe database data"
+        )
+
+    before_tables = _mutable_table_map(before["business_tables"])
+    after_tables = _mutable_table_map(after["business_tables"])
+    for relation in ACCEPTANCE_PROBE_MUTABLE_TABLES:
+        before_record = before_tables[relation]
+        after_record = after_tables[relation]
+        if (
+            before_record["state"] == "present"
+            and after_record["row_count"] < before_record["row_count"]
+        ):
+            raise PullDeployError(
+                "acceptance probe history rows decreased unexpectedly"
+            )
+    before_sequences = _mutable_sequence_map(before["sequences"])
+    after_sequences = _mutable_sequence_map(after["sequences"])
+    for relation in ACCEPTANCE_PROBE_MUTABLE_SEQUENCES:
+        before_record = before_sequences[relation]
+        after_record = after_sequences[relation]
+        if (
+            before_record["state"] == "present"
+            and after_record["last_value"] < before_record["last_value"]
+        ):
+            raise PullDeployError(
+                "acceptance probe sequence moved backwards"
+            )
+    if (
+        before["bridge_projection"]["state"] == "present"
+        and after["bridge_projection"]["row_count"]
+        < before["bridge_projection"]["row_count"]
+    ):
+        raise PullDeployError("acceptance MD projection row count decreased")
+    return acceptance_mutable_data_stability_identity(
+        after,
+        operation_id=operation_id,
+        release_sha=release_sha,
+    )
 
 
 def _mutable_table_map(
@@ -8168,6 +8471,161 @@ def validate_alias_bridge_authority(
     return dict(document)
 
 
+ROLLBACK_ADMISSION_RESUME_INTENT_FIELDS = {
+    "schema_version",
+    "operation_id",
+    "descriptor_sha256",
+    "candidate_state_sha256",
+    "previous_authority_kind",
+    "previous_authority_sha256",
+    "database_change_started",
+    "database_backup_sha256",
+    "database_restore_sha256",
+    "mutable_data_restored_sha256",
+    "runtime_recovery_fence_sha256",
+    "recorded_at",
+}
+
+
+def _rollback_previous_authority_binding(
+    descriptor: Mapping[str, Any],
+) -> tuple[str, str]:
+    previous = descriptor.get("previous_deployment")
+    if isinstance(previous, dict):
+        return (
+            "current-deployment-state",
+            require_digest(
+                descriptor.get("previous_deployment_sha256"),
+                "rollback previous deployment",
+            ),
+        )
+    adopted = descriptor.get("adopted_deployment")
+    if isinstance(adopted, dict):
+        return (
+            "adopted-deployment",
+            require_digest(
+                descriptor.get("adopted_deployment_sha256"),
+                "rollback adopted deployment",
+            ),
+        )
+    raise PullDeployError(
+        "rollback admission resume lacks previous runtime authority"
+    )
+
+
+def _rollback_admission_resume_binding(
+    marker: Mapping[str, Any],
+    *,
+    descriptor: Mapping[str, Any],
+    descriptor_digest: str,
+) -> dict[str, Any]:
+    previous_kind, previous_sha256 = _rollback_previous_authority_binding(
+        descriptor
+    )
+    candidate_sha256 = marker.get("candidate_state_sha256")
+    if candidate_sha256 is not None:
+        candidate_sha256 = require_digest(
+            candidate_sha256,
+            "rollback failed candidate state",
+        )
+    backup = marker.get("database_backup")
+    backup_sha256 = None
+    if backup is not None:
+        if not isinstance(backup, dict):
+            raise PullDeployError(
+                "rollback admission resume database backup is invalid"
+            )
+        backup_sha256 = require_digest(
+            backup.get("sha256"),
+            "rollback admission resume database backup",
+        )
+    database_changed = marker.get("database_change_started") is True
+    restore_sha256 = None
+    mutable_restored_sha256 = None
+    if database_changed:
+        restore = marker.get("database_restore")
+        if (
+            backup_sha256 is None
+            or marker.get("database_restore_started") is not True
+            or marker.get("database_restored") is not True
+            or not isinstance(restore, dict)
+            or restore.get("restored") is not True
+            or restore.get("dump_sha256") != backup_sha256
+        ):
+            raise PullDeployError(
+                "rollback admission resume precedes the database restore commit"
+            )
+        restored_pair = validate_mutable_data_pair(
+            marker.get("mutable_data_restored")
+        )
+        restore_sha256 = canonical_json_digest(restore)
+        mutable_restored_sha256 = canonical_json_digest(restored_pair)
+    verification = PullDeployController._sealed_runtime_verification(
+        marker.get("verification")
+    )
+    return {
+        "schema_version": 1,
+        "operation_id": descriptor["operation_id"],
+        "descriptor_sha256": require_digest(
+            descriptor_digest,
+            "rollback admission resume descriptor",
+        ),
+        "candidate_state_sha256": candidate_sha256,
+        "previous_authority_kind": previous_kind,
+        "previous_authority_sha256": previous_sha256,
+        "database_change_started": database_changed,
+        "database_backup_sha256": backup_sha256,
+        "database_restore_sha256": restore_sha256,
+        "mutable_data_restored_sha256": mutable_restored_sha256,
+        "runtime_recovery_fence_sha256": canonical_json_digest(
+            verification["recovery_fence"]
+        ),
+    }
+
+
+def validate_rollback_admission_resume_intent(
+    document: object,
+    *,
+    marker: Mapping[str, Any],
+    descriptor: Mapping[str, Any],
+    descriptor_digest: str,
+) -> dict[str, Any]:
+    if (
+        not isinstance(document, dict)
+        or set(document) != ROLLBACK_ADMISSION_RESUME_INTENT_FIELDS
+        or document.get("schema_version") != 1
+    ):
+        raise PullDeployError(
+            "rollback admission resume intent has an invalid shape"
+        )
+    expected = _rollback_admission_resume_binding(
+        marker,
+        descriptor=descriptor,
+        descriptor_digest=descriptor_digest,
+    )
+    if {
+        name: value
+        for name, value in document.items()
+        if name != "recorded_at"
+    } != expected:
+        raise PullDeployError(
+            "rollback admission resume intent differs from restored authority"
+        )
+    recorded = require_utc_timestamp(
+        document.get("recorded_at"),
+        "rollback admission resume intent",
+    )
+    started = require_utc_timestamp(
+        marker.get("started_at"),
+        "rollback admission resume marker start",
+    )
+    if recorded < started or recorded > dt.datetime.now(dt.timezone.utc):
+        raise PullDeployError(
+            "rollback admission resume intent is outside its operation window"
+        )
+    return dict(document)
+
+
 def validate_recovery_marker(
     marker: object,
     *,
@@ -8494,16 +8952,53 @@ def validate_recovery_marker(
     effective_marker_phase = (
         marker.get("failed_phase") if phase == "failed" else phase
     )
+    rollback_resume_intent = marker.get(
+        "rollback_admission_resume_intent"
+    )
+    rollback_resume_phases = {
+        "rollback-admission-resume-started",
+        "rollback-admission-resumed",
+    }
+    if rollback_resume_intent is not None:
+        if (
+            marker.get("action") != "deploy"
+            or effective_marker_phase not in rollback_resume_phases
+        ):
+            raise PullDeployError(
+                "rollback admission resume intent precedes its commit boundary"
+            )
+        validate_rollback_admission_resume_intent(
+            rollback_resume_intent,
+            marker=marker,
+            descriptor=descriptor,
+            descriptor_digest=descriptor_digest,
+        )
+    elif effective_marker_phase in rollback_resume_phases:
+        raise PullDeployError(
+            "rollback admission resume boundary lacks durable intent"
+        )
     staged_phases = {
         "awaiting-acceptance",
         "acceptance-started",
         "acceptance-resume-started",
         "acceptance-rejected",
     }
+    acceptance_rollback_phases = {
+        "runtime-stop-started",
+        "runtime-stopped",
+        "database-restore-started",
+        "database-restored",
+        *rollback_resume_phases,
+    }
+    acceptance_rollback = bool(
+        effective_marker_phase in acceptance_rollback_phases
+        and marker.get("acceptance_rejected") is True
+        and "acceptance_started_at" in marker
+    )
     staged_acceptance = effective_marker_phase in staged_phases or (
         effective_marker_phase == "admission-resumed"
         and "acceptance_started_at" in marker
-    )
+    ) or acceptance_rollback
     if staged_acceptance:
         if (
             descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION
@@ -8532,19 +9027,109 @@ def validate_recovery_marker(
             "staged acceptance authority",
         )
         rejected = marker.get("acceptance_rejected")
-        if effective_marker_phase == "acceptance-rejected":
+        if (
+            effective_marker_phase == "acceptance-rejected"
+            or acceptance_rollback
+        ):
             if rejected is not True:
                 raise PullDeployError("staged rejection lacks durable intent")
         elif rejected is not None:
             raise PullDeployError("staged acceptance has unexpected rejection intent")
         evidence = marker.get("acceptance_evidence")
+        probe_intent = marker.get("acceptance_probe_intent")
+        if probe_intent is not None:
+            if (
+                not isinstance(probe_intent, dict)
+                or set(probe_intent)
+                != {
+                    "schema_version",
+                    "operation_id",
+                    "candidate_state_sha256",
+                    "pre_probe_mutable_data_evidence",
+                    "pre_probe_mutable_data_identity_sha256",
+                    "pre_probe_mutable_data_stability_sha256",
+                    "recorded_at",
+                }
+                or probe_intent.get("schema_version") != 2
+                or probe_intent.get("operation_id")
+                != descriptor["operation_id"]
+                or probe_intent.get("candidate_state_sha256")
+                != candidate_digest
+            ):
+                raise PullDeployError(
+                    "acceptance probe intent identity is invalid"
+                )
+            pre_probe_identity_sha256 = require_digest(
+                probe_intent.get(
+                    "pre_probe_mutable_data_identity_sha256"
+                ),
+                "acceptance pre-probe mutable data identity",
+            )
+            pre_probe_stability_sha256 = require_digest(
+                probe_intent.get(
+                    "pre_probe_mutable_data_stability_sha256"
+                ),
+                "acceptance pre-probe mutable data stability",
+            )
+            pre_probe_evidence = validate_mutable_data_evidence(
+                probe_intent.get("pre_probe_mutable_data_evidence")
+            )
+            if (
+                pre_probe_evidence.get("operation_id")
+                != descriptor["operation_id"]
+                or canonical_json_digest(
+                    acceptance_full_mutable_data_identity(pre_probe_evidence)
+                )
+                != pre_probe_identity_sha256
+            ):
+                raise PullDeployError(
+                    "acceptance pre-probe mutable data evidence differs"
+                )
+            candidate_mutable = validate_mutable_data_pair(
+                candidate.get("mutable_data_audit")
+            )["after"]
+            pre_probe_stability = (
+                validate_acceptance_pre_probe_mutable_transition(
+                    candidate_mutable,
+                    pre_probe_evidence,
+                    operation_id=descriptor["operation_id"],
+                    release_sha=descriptor["repository"]["target_sha"],
+                )
+            )
+            if (
+                canonical_json_digest(pre_probe_stability)
+                != pre_probe_stability_sha256
+            ):
+                raise PullDeployError(
+                    "acceptance pre-probe mutable stability differs"
+                )
+            probe_recorded_at = require_utc_timestamp(
+                probe_intent.get("recorded_at"),
+                "acceptance probe intent timestamp",
+            )
+            pre_probe_captured_at = _external_database_audit_timestamp(
+                pre_probe_evidence.get("captured_at"),
+                "acceptance pre-probe mutable capture",
+            )
+            if (
+                pre_probe_captured_at < started
+                or pre_probe_captured_at > probe_recorded_at
+                or probe_recorded_at < started
+                or probe_recorded_at > dt.datetime.now(dt.timezone.utc)
+            ):
+                raise PullDeployError(
+                    "acceptance probe intent is outside its authorized window"
+                )
         evidence_required = effective_marker_phase in {
             "acceptance-started",
             "acceptance-resume-started",
             "admission-resumed",
         }
         if evidence_required or (
-            effective_marker_phase == "acceptance-rejected"
+            (
+                effective_marker_phase == "acceptance-rejected"
+                or acceptance_rollback
+            )
             and evidence is not None
         ):
             if (
@@ -8560,12 +9145,17 @@ def validate_recovery_marker(
                     "probe_report_sha256",
                     "probe_report_file_sha256",
                     "probe_authority_sha256",
+                    "pre_probe_mutable_data_identity_sha256",
+                    "pre_probe_mutable_data_stability_sha256",
+                    "post_probe_mutable_data_evidence",
+                    "post_probe_mutable_data_identity_sha256",
+                    "post_probe_mutable_data_stability_sha256",
                     "probes_completed_at",
                     "observation_started_at",
                     "observation_not_before",
                     "verified_at",
                 }
-                or evidence.get("schema_version") != 1
+                or evidence.get("schema_version") != 2
                 or evidence.get("operation_id") != descriptor["operation_id"]
                 or evidence.get("candidate_state_sha256") != candidate_digest
             ):
@@ -8577,8 +9167,59 @@ def validate_recovery_marker(
                 "probe_report_sha256",
                 "probe_report_file_sha256",
                 "probe_authority_sha256",
+                "pre_probe_mutable_data_identity_sha256",
+                "pre_probe_mutable_data_stability_sha256",
+                "post_probe_mutable_data_identity_sha256",
+                "post_probe_mutable_data_stability_sha256",
             ):
                 require_digest(evidence.get(name), f"acceptance {name}")
+            if (
+                not isinstance(probe_intent, dict)
+                or evidence.get(
+                    "pre_probe_mutable_data_identity_sha256"
+                )
+                != probe_intent.get(
+                    "pre_probe_mutable_data_identity_sha256"
+                )
+                or evidence.get(
+                    "pre_probe_mutable_data_stability_sha256"
+                )
+                != probe_intent.get(
+                    "pre_probe_mutable_data_stability_sha256"
+                )
+            ):
+                raise PullDeployError(
+                    "staged acceptance evidence lacks its probe baseline"
+                )
+            post_probe_evidence = validate_mutable_data_evidence(
+                evidence.get("post_probe_mutable_data_evidence")
+            )
+            post_probe_identity_sha256 = canonical_json_digest(
+                acceptance_full_mutable_data_identity(post_probe_evidence)
+            )
+            post_probe_stability = (
+                validate_acceptance_probe_mutable_transition(
+                    pre_probe_evidence,
+                    post_probe_evidence,
+                    operation_id=descriptor["operation_id"],
+                    release_sha=descriptor["repository"]["target_sha"],
+                )
+            )
+            if (
+                post_probe_evidence.get("operation_id")
+                != descriptor["operation_id"]
+                or evidence.get(
+                    "post_probe_mutable_data_identity_sha256"
+                )
+                != post_probe_identity_sha256
+                or evidence.get(
+                    "post_probe_mutable_data_stability_sha256"
+                )
+                != canonical_json_digest(post_probe_stability)
+            ):
+                raise PullDeployError(
+                    "acceptance post-probe mutable data evidence differs"
+                )
             verified_at = _external_database_audit_timestamp(
                 evidence.get("verified_at"), "acceptance evidence verification"
             )
@@ -8594,8 +9235,15 @@ def validate_recovery_marker(
                 evidence.get("observation_not_before"),
                 "acceptance observation not-before",
             )
+            post_probe_captured_at = _external_database_audit_timestamp(
+                post_probe_evidence.get("captured_at"),
+                "acceptance post-probe mutable capture",
+            )
             if (
                 probes_completed < started
+                or probes_completed < probe_recorded_at
+                or post_probe_captured_at < probes_completed
+                or post_probe_captured_at > verified_at
                 or verified_at < probes_completed
                 or observation_started != verified_at
                 or observation_not_before - observation_started
@@ -8608,6 +9256,62 @@ def validate_recovery_marker(
             raise PullDeployError(
                 "staged acceptance evidence precedes completed probes"
             )
+        if evidence_required and probe_intent is None:
+            raise PullDeployError(
+                "staged acceptance lacks durable pre-probe intent"
+            )
+        resume_intent = marker.get("acceptance_resume_intent")
+        if resume_intent is not None:
+            if (
+                not isinstance(resume_intent, dict)
+                or set(resume_intent)
+                != {
+                    "operation_id",
+                    "candidate_state_sha256",
+                    "recorded_at",
+                }
+                or resume_intent.get("operation_id")
+                != descriptor["operation_id"]
+                or resume_intent.get("candidate_state_sha256")
+                != candidate_digest
+            ):
+                raise PullDeployError(
+                    "acceptance resume intent identity is invalid"
+                )
+            if not isinstance(evidence, dict):
+                raise PullDeployError(
+                    "acceptance resume intent lacks sealed acceptance evidence"
+                )
+            resume_recorded_at = require_utc_timestamp(
+                resume_intent.get("recorded_at"),
+                "acceptance resume intent timestamp",
+            )
+            resume_not_before = _external_database_audit_timestamp(
+                evidence.get("observation_not_before"),
+                "acceptance resume observation not-before",
+            )
+            if (
+                resume_recorded_at < resume_not_before
+                or resume_recorded_at > dt.datetime.now(dt.timezone.utc)
+            ):
+                raise PullDeployError(
+                    "acceptance resume intent is outside its authorized window"
+                )
+            if effective_marker_phase not in {
+                "acceptance-resume-started",
+                "acceptance-rejected",
+                "admission-resumed",
+            }:
+                raise PullDeployError(
+                    "acceptance resume intent precedes its commit boundary"
+                )
+        elif effective_marker_phase in {
+            "acceptance-resume-started",
+            "admission-resumed",
+        }:
+            raise PullDeployError(
+                "acceptance resume commit boundary lacks durable intent"
+            )
     elif any(
         name in marker
         for name in (
@@ -8615,8 +9319,10 @@ def validate_recovery_marker(
             "acceptance_not_before",
             "acceptance_authority_path",
             "acceptance_authority_sha256",
+            "acceptance_probe_intent",
             "acceptance_evidence",
             "acceptance_rejected",
+            "acceptance_resume_intent",
         )
     ):
         raise PullDeployError("non-staged deployment marker contains acceptance state")
@@ -8709,6 +9415,12 @@ class Lifecycle(Protocol):
         self, controller: "PullDeployController", descriptor: dict[str, Any]
     ) -> None: ...
 
+    def ensure_acceptance_ingress_isolated(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+    ) -> None: ...
+
     def run_acceptance_probes(
         self,
         controller: "PullDeployController",
@@ -8724,6 +9436,12 @@ class Lifecycle(Protocol):
 
     def verify(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
+    ) -> dict[str, Any]: ...
+
+    def verify_acceptance_stability(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
     ) -> dict[str, Any]: ...
 
     def resume(
@@ -10144,6 +10862,15 @@ class SystemLifecycle:
             raise PullDeployError(
                 "Web ingress remains active during runtime recovery"
             ) from stop_error
+
+    def ensure_acceptance_ingress_isolated(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+    ) -> None:
+        """Prove isolation before sealing a pre-probe database baseline."""
+
+        self._isolate_ingress(controller, descriptor)
 
     def _recovery_runtime_presence(
         self,
@@ -12586,9 +13313,20 @@ class SystemLifecycle:
                     None if allow_active_worker else require_ingress
                 ),
                 allow_active=allow_active_worker,
-                require_guard_readiness=True,
+                # Observe mode keeps serving when the Worker's cached guard
+                # projection is missing/stale/invalid.  The independently
+                # loaded observation above must still be fresh, canonical and
+                # bound to the descriptor GPU UUID.
+                require_guard_readiness=(
+                    descriptor["monomer_dft"]["gpu"]["guard_mode"]
+                    != "observe"
+                ),
             )
-            if (
+            worker_guard_is_fresh = dft_worker["gpu_guard_status"] in {
+                "ready",
+                "quarantined",
+            }
+            if worker_guard_is_fresh and (
                 dft_worker["gpu_guard_status"] != dft_guard["status"]
                 or dft_worker["gpu_contention_observed"]
                 is not dft_guard["contention"]
@@ -12643,32 +13381,7 @@ class SystemLifecycle:
             raise PullDeployError(
                 "Worker systemd enabled runtime identity differs from candidate"
             )
-        for role in ("backend", "web"):
-            record = descriptor["images"][role]
-            inspected = controller.runner.run(
-                ["docker", "image", "inspect", record["digest_ref"]],
-                env=controller.control_environment(),
-            )
-            try:
-                values = json.loads(str(inspected.stdout))
-            except json.JSONDecodeError as exc:
-                raise PullDeployError(
-                    f"{role} image inspection returned invalid JSON"
-                ) from exc
-            if not isinstance(values, list) or len(values) != 1:
-                raise PullDeployError(f"{role} immutable image is unavailable")
-            image = values[0]
-            labels = (
-                image.get("Config", {}).get("Labels", {})
-                if isinstance(image, dict)
-                else {}
-            )
-            if (
-                record["digest_ref"] not in image.get("RepoDigests", [])
-                or labels.get("org.opencontainers.image.revision")
-                != descriptor["repository"]["target_sha"]
-            ):
-                raise PullDeployError(f"{role} immutable image identity changed")
+        self._verify_candidate_image_inventory(controller, descriptor)
         controller.runner.run(
             self._compose(
                 controller,
@@ -12889,6 +13602,70 @@ class SystemLifecycle:
             "worker": worker,
             "web": web,
             "canary": canary,
+            "recovery_fence": recovery_fence,
+            "verified_at": utc_now(),
+        }
+
+    @staticmethod
+    def _verify_candidate_image_inventory(
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+    ) -> None:
+        """Revalidate both immutable OCI images without starting Web."""
+
+        for role in ("backend", "web"):
+            record = descriptor["images"][role]
+            inspected = controller.runner.run(
+                ["docker", "image", "inspect", record["digest_ref"]],
+                env=controller.control_environment(),
+            )
+            try:
+                values = json.loads(str(inspected.stdout))
+            except json.JSONDecodeError as exc:
+                raise PullDeployError(
+                    f"{role} image inspection returned invalid JSON"
+                ) from exc
+            if not isinstance(values, list) or len(values) != 1:
+                raise PullDeployError(f"{role} immutable image is unavailable")
+            image = values[0]
+            if not isinstance(image, dict):
+                raise PullDeployError(
+                    f"{role} immutable image inspection is malformed"
+                )
+            config = image.get("Config")
+            labels = config.get("Labels") if isinstance(config, dict) else None
+            repo_digests = image.get("RepoDigests")
+            if (
+                image.get("Id") != record["image_id"]
+                or not isinstance(repo_digests, list)
+                or record["digest_ref"] not in repo_digests
+                or not isinstance(labels, dict)
+                or labels.get("org.opencontainers.image.revision")
+                != descriptor["repository"]["target_sha"]
+            ):
+                raise PullDeployError(f"{role} immutable image identity changed")
+
+    def verify_acceptance_stability(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Revalidate the drained candidate without submitting any job."""
+
+        runtime_identity = self.verify_runtime_identity(
+            controller,
+            descriptor,
+            require_ingress=False,
+        )
+        self._verify_candidate_image_inventory(controller, descriptor)
+        recovery_fence = self._capture_runtime_recovery_fence(
+            controller,
+            descriptor,
+            resumed=False,
+        )
+        return {
+            "health": "ok",
+            "runtime_identity": runtime_identity,
             "recovery_fence": recovery_fence,
             "verified_at": utc_now(),
         }
@@ -25316,6 +26093,7 @@ class PullDeployController:
         descriptor: dict[str, Any],
         *,
         allow_unfenced: bool,
+        preserve_verification: bool = False,
     ) -> dict[str, Any]:
         """Persist an ingress-isolated live/stopped recovery phase.
 
@@ -25386,7 +26164,21 @@ class PullDeployController:
         if recovery["runtime_state"] == "drained":
             if not isinstance(verification, dict):
                 raise PullDeployError("drained recovery lacks runtime verification")
-            self._persist_runtime_verification(marker, verification)
+            if preserve_verification:
+                expected_sealed = self._sealed_runtime_verification(expected)
+                observed_sealed = self._sealed_runtime_verification(
+                    verification
+                )
+                if (
+                    observed_sealed["recovery_fence"]
+                    != expected_sealed["recovery_fence"]
+                ):
+                    raise PullDeployError(
+                        "re-drained runtime differs from preserved acceptance "
+                        "verification fence"
+                    )
+            else:
+                self._persist_runtime_verification(marker, verification)
         elif verification is not None:
             raise PullDeployError(
                 "stopped recovery unexpectedly contains live verification"
@@ -25400,6 +26192,7 @@ class PullDeployController:
         *,
         allow_unfenced: bool,
         bind_mutable_after: bool = True,
+        rollback_admission_resume: bool = False,
     ) -> dict[str, Any]:
         """Reconstruct one runtime from an explicit isolated recovery phase."""
 
@@ -25431,8 +26224,143 @@ class PullDeployController:
         )
         if bind_mutable_after and marker.get("mutable_data_before") is not None:
             self._bind_mutable_data_after(marker, descriptor)
+        if rollback_admission_resume:
+            self._persist_rollback_admission_resume_intent(
+                marker,
+                descriptor,
+            )
         self.lifecycle.resume(self, descriptor, verification)
+        if rollback_admission_resume:
+            self._advance(marker, "rollback-admission-resumed")
         return verification
+
+    def _persist_rollback_admission_resume_intent(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Seal rollback authority before the restored runtime can reopen."""
+
+        descriptor_digest = require_digest(
+            marker.get("descriptor_sha256"),
+            "rollback admission resume descriptor",
+        )
+        existing = marker.get("rollback_admission_resume_intent")
+        if existing is not None:
+            return validate_rollback_admission_resume_intent(
+                existing,
+                marker=marker,
+                descriptor=descriptor,
+                descriptor_digest=descriptor_digest,
+            )
+        intent = {
+            **_rollback_admission_resume_binding(
+                marker,
+                descriptor=descriptor,
+                descriptor_digest=descriptor_digest,
+            ),
+            "recorded_at": utc_now(),
+        }
+        self._advance(
+            marker,
+            "rollback-admission-resume-started",
+            rollback_admission_resume_intent=intent,
+        )
+        return intent
+
+    def _validate_rollback_resume_current_authority(
+        self,
+        descriptor: dict[str, Any],
+        intent: Mapping[str, Any],
+    ) -> None:
+        """Read-only CAS for the state restored before rollback admission."""
+
+        previous = descriptor.get("previous_deployment")
+        if intent["previous_authority_kind"] == "current-deployment-state":
+            if not isinstance(previous, dict):
+                raise PullDeployError(
+                    "rollback resume lost its previous deployment state"
+                )
+            self._validate_steady_deployment_state(previous)
+            if (
+                not self.current_state_path.is_file()
+                or self.current_state_path.is_symlink()
+                or sha256_file(self.current_state_path)
+                != intent["previous_authority_sha256"]
+                or load_private_json(self.current_state_path) != previous
+            ):
+                raise PullDeployError(
+                    "rollback resume current state differs from restored previous"
+                )
+            return
+        adopted = self._adopted_previous(descriptor)
+        if (
+            intent["previous_authority_kind"] != "adopted-deployment"
+            or adopted is None
+            or self.current_state_path.exists()
+            or self.current_state_path.is_symlink()
+        ):
+            raise PullDeployError(
+                "rollback resume adopted state differs from restored authority"
+            )
+        authority = self._load_adopted_deployment()
+        if (
+            authority is None
+            or authority[0] != adopted
+            or authority[1] != intent["previous_authority_sha256"]
+        ):
+            raise PullDeployError(
+                "rollback resume adopted deployment authority changed"
+            )
+
+    def _recover_rollback_admission_resume(
+        self,
+        descriptor: dict[str, Any],
+        marker: dict[str, Any],
+    ) -> None:
+        """Finish an unknown rollback resume without repeating rollback effects."""
+
+        intent = validate_rollback_admission_resume_intent(
+            marker.get("rollback_admission_resume_intent"),
+            marker=marker,
+            descriptor=descriptor,
+            descriptor_digest=require_digest(
+                marker.get("descriptor_sha256"),
+                "rollback admission resume descriptor",
+            ),
+        )
+        self._validate_rollback_resume_current_authority(descriptor, intent)
+        previous_descriptor = self._previous_runtime_descriptor(descriptor)
+        verification = self._marker_runtime_verification(marker)
+        phase = marker.get("phase")
+        admission_open = self.lifecycle.admission_is_open(
+            self,
+            previous_descriptor,
+        )
+        if admission_open:
+            # Persistent admission opens before nginx.  A fully committed
+            # unknown response is finalised read-only; a crash in that
+            # intermediate window falls through to exact-runtime re-drain and
+            # forward resume, never to database/effect rollback.
+            try:
+                self.lifecycle.verify_open_runtime(
+                    self,
+                    previous_descriptor,
+                    verification,
+                )
+            except PullDeployError:
+                pass
+            else:
+                if phase != "rollback-admission-resumed":
+                    self._advance(marker, "rollback-admission-resumed")
+                return
+        self._recover_runtime_and_resume(
+            marker,
+            previous_descriptor,
+            allow_unfenced=False,
+            bind_mutable_after=False,
+            rollback_admission_resume=True,
+        )
 
     def _persist_stopped_postgres_runtime_fence(
         self,
@@ -26762,7 +27690,7 @@ class PullDeployController:
         candidate: object,
         *,
         include_mutable: bool,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Freshly fence the database immediately around the bridge commit."""
 
         state = self._validate_external_database_state_provenance(candidate)
@@ -26813,6 +27741,8 @@ class PullDeployController:
                 raise PullDeployError(
                     "bridge candidate mutable data changed before commit"
                 )
+            return observed
+        return None
 
     def _revalidate_candidate_database_state(
         self,
@@ -26820,16 +27750,15 @@ class PullDeployController:
         candidate: object,
         *,
         include_mutable: bool,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Freshly fence one ordinary candidate around its state commit."""
 
         if descriptor["schema_version"] == BRIDGE_DESCRIPTOR_SCHEMA_VERSION:
-            self._revalidate_bridge_candidate_database_state(
+            return self._revalidate_bridge_candidate_database_state(
                 descriptor,
                 candidate,
                 include_mutable=include_mutable,
             )
-            return
         state = self._validate_external_database_state_provenance(candidate)
         raw_active = state.get("external_database_audit")
         if raw_active is not None:
@@ -26869,6 +27798,8 @@ class PullDeployController:
                 raise PullDeployError(
                     "candidate mutable data changed before commit"
                 )
+            return observed
+        return None
 
     def _load_bridge_token_for_candidate(
         self,
@@ -28603,6 +29534,7 @@ class PullDeployController:
             marker,
             previous_descriptor,
             allow_unfenced=marker.get("verification") is None,
+            rollback_admission_resume=True,
         )
 
     def _deployment_terminal_audit_binding(
@@ -29460,25 +30392,27 @@ class PullDeployController:
         state: object,
         *,
         revalidate_live: bool = True,
+        require_terminal_chain: bool = True,
     ) -> dict[str, Any]:
-        """Validate a marker-free state against its immutable terminal chain."""
+        """Validate deployment state and, by default, its terminal chain."""
 
         validated = self._validate_external_database_state_provenance(state)
         state_sha256 = sha256_bytes(
             canonical_json_bytes(validated) + b"\n"
         )
-        target_operation = self._load_operation_state(
-            validated["operation_id"]
-        )
-        if (
-            target_operation is None
-            or target_operation.get("outcome") != "deployed"
-            or target_operation.get("descriptor_sha256")
-            != validated["descriptor_sha256"]
-        ):
-            raise PullDeployError(
-                "current deployment lacks its deployed terminal outcome"
+        if require_terminal_chain:
+            target_operation = self._load_operation_state(
+                validated["operation_id"]
             )
+            if (
+                target_operation is None
+                or target_operation.get("outcome") != "deployed"
+                or target_operation.get("descriptor_sha256")
+                != validated["descriptor_sha256"]
+            ):
+                raise PullDeployError(
+                    "current deployment lacks its deployed terminal outcome"
+                )
         contract_deployment_operation: str | None = None
         if validated.get("last_contract_operation") is not None:
             contract_deployment_operation = (
@@ -29492,7 +30426,7 @@ class PullDeployController:
                 validated,
                 state_sha256=state_sha256,
             )
-        elif (
+        elif require_terminal_chain and (
             contract_deployment_operation is None
             or validated["operation_id"]
             != contract_deployment_operation
@@ -30126,6 +31060,60 @@ class PullDeployController:
         if marker["action"] == "explicit-rollback":
             return self._recover_explicit_rollback(
                 descriptor, descriptor_digest, marker
+            )
+        if marker.get("rollback_admission_resume_intent") is not None:
+            # Rollback effects and any required database restore committed
+            # before this sticky intent.  Repeating `_rollback_failed_attempt`
+            # after an unknown admission commit could restore the drain-final
+            # dump over writes accepted by the reopened previous runtime.
+            self._recover_rollback_admission_resume(descriptor, marker)
+            marker["rollback"] = "success"
+            if marker.get("acceptance_rejected") is True:
+                self._audit_attempt(marker, "rejected-before-acceptance")
+                self._record_operation_outcome(
+                    operation_id=operation_id,
+                    descriptor_sha256=descriptor_digest,
+                    outcome="failed",
+                )
+            else:
+                self._audit_attempt(marker, "recovered-rollback")
+                if not self._bridge_precommit_is_retryable(
+                    descriptor, descriptor_digest
+                ):
+                    self._record_operation_outcome(
+                        operation_id=operation_id,
+                        descriptor_sha256=descriptor_digest,
+                        outcome="failed",
+                    )
+            self.marker_path.unlink()
+            fsync_directory(self.marker_path.parent)
+            return None
+        if marker.get("acceptance_resume_intent") is not None:
+            if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+                raise PullDeployError(
+                    "legacy deployment contains acceptance resume intent"
+                )
+            current = self._candidate_current_state(
+                descriptor,
+                descriptor_digest,
+                marker,
+            )
+            if current is None:
+                raise PullDeployError(
+                    "acceptance forward recovery lost its candidate current state"
+                )
+            current = self._recover_acceptance_admission_resume(
+                descriptor,
+                descriptor_digest,
+                marker,
+                current,
+            )
+            return self._complete_candidate_acceptance(
+                descriptor,
+                descriptor_digest,
+                marker,
+                current,
+                audit_status="recovered-success",
             )
         if marker.get("acceptance_rejected") is True:
             if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
@@ -31176,6 +32164,300 @@ class PullDeployController:
         quarantine_regular_file_noreplace(report_path, target)
         return True
 
+    @staticmethod
+    def _acceptance_database_state_identity(
+        current: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Project the committed candidate onto non-live database authority."""
+
+        return {
+            "migrations": current.get("migrations"),
+            "database_backup": current.get("database_backup"),
+            "mutable_data_audit": current.get("mutable_data_audit"),
+            "final_mutable_data_audit": current.get(
+                "final_mutable_data_audit"
+            ),
+            "final_external_database_audit": current.get(
+                "final_external_database_audit"
+            ),
+        }
+
+    def _validate_acceptance_forward_authority(
+        self,
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+        marker: dict[str, Any],
+        current: dict[str, Any],
+        *,
+        bind_runtime_verification: bool,
+    ) -> dict[str, Any]:
+        """Read-only validation safe after public writes may have committed."""
+
+        observed_current = self._candidate_current_state(
+            descriptor,
+            descriptor_digest,
+            marker,
+        )
+        if observed_current is None or observed_current != current:
+            raise PullDeployError(
+                "acceptance forward recovery lost its exact candidate state"
+            )
+        repository = self.repository_identity(require_ssh_origin=True)
+        if (
+            repository.get("sha")
+            != descriptor["repository"]["target_sha"]
+            or repository.get("tree")
+            != descriptor["repository"]["target_tree"]
+            or repository.get("origin") != REPOSITORY_SSH_URL
+        ):
+            raise PullDeployError(
+                "acceptance forward recovery source identity changed"
+            )
+        self._revalidate_candidate_database_state(
+            descriptor,
+            current,
+            include_mutable=False,
+        )
+        evidence = marker.get("acceptance_evidence")
+        if not isinstance(evidence, dict):
+            raise PullDeployError(
+                "acceptance forward recovery lost sealed acceptance evidence"
+            )
+        report = self._load_acceptance_probe_report(
+            marker,
+            descriptor,
+            descriptor_digest,
+        )
+        if (
+            evidence.get("probe_report_sha256")
+            != report["report_sha256"]
+            or evidence.get("probe_report_file_sha256")
+            != report["file_sha256"]
+            or evidence.get("probe_authority_sha256")
+            != report["authority_sha256"]
+            or evidence.get("probes_completed_at")
+            != report["finished_at"]
+            or evidence.get("candidate_state_sha256")
+            != marker.get("candidate_state_sha256")
+            or evidence.get("database_state_sha256")
+            != canonical_json_digest(
+                self._acceptance_database_state_identity(current)
+            )
+        ):
+            raise PullDeployError(
+                "acceptance forward recovery authority changed"
+            )
+        if bind_runtime_verification:
+            marker_verification = self._marker_runtime_verification(marker)
+            runtime_identity = marker_verification.get("runtime_identity")
+            if (
+                not isinstance(runtime_identity, dict)
+                or runtime_identity.get("repository") != repository
+                or evidence.get("runtime_identity_sha256")
+                != canonical_json_digest(
+                    acceptance_runtime_stability_identity(
+                        marker_verification
+                    )
+                )
+                or evidence.get("worker_fence_sha256")
+                != canonical_json_digest(
+                    marker_verification["recovery_fence"]
+                )
+            ):
+                raise PullDeployError(
+                    "acceptance forward recovery sealed runtime/Worker/source "
+                    "authority changed"
+                )
+        return evidence
+
+    def _recover_acceptance_admission_resume(
+        self,
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+        marker: dict[str, Any],
+        current: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Converge a sticky acceptance resume without historical data CAS.
+
+        Once the resume intent exists, public writes may already have been
+        accepted.  This path never captures or compares live mutable rows,
+        reruns probes, stops a fully governed runtime, or restores a database.
+        """
+
+        evidence = self._validate_acceptance_forward_authority(
+            descriptor,
+            descriptor_digest,
+            marker,
+            current,
+            bind_runtime_verification=True,
+        )
+        effective_phase = (
+            marker.get("failed_phase")
+            if marker.get("phase") == "failed"
+            else marker.get("phase")
+        )
+        if effective_phase == "acceptance-rejected":
+            marker["forward_recovery_error"] = (
+                "acceptance was rejected after public-admission resume intent; "
+                "a separately reviewed forward fix is required"
+            )
+            marker["updated_at"] = utc_now()
+            self._write_marker(marker)
+            raise PullDeployError(
+                "acceptance was rejected after public-admission resume intent; "
+                "automatic convergence and rollback are forbidden and a "
+                "separately reviewed forward fix is required"
+            )
+        if effective_phase not in {
+            "acceptance-resume-started",
+            "admission-resumed",
+        }:
+            raise PullDeployError(
+                "acceptance resume intent has an invalid forward-recovery phase"
+            )
+        expected_verification = self._marker_runtime_verification(marker)
+        if self.lifecycle.admission_is_open(self, descriptor):
+            try:
+                self.lifecycle.verify_open_runtime(
+                    self,
+                    descriptor,
+                    expected_verification,
+                )
+            except PullDeployError:
+                # Persistent Backend admission becomes open before nginx.
+                # Failure to prove the complete public runtime therefore
+                # falls through to ingress-first exact re-drain and resume.
+                pass
+            else:
+                if marker.get("phase") != "admission-resumed":
+                    self._advance(marker, "admission-resumed")
+                return current
+
+        try:
+            recovery = self._prepare_runtime_recovery(
+                marker,
+                descriptor,
+                allow_unfenced=False,
+                preserve_verification=True,
+            )
+        except PullDeployError as exc:
+            marker["forward_recovery_error"] = (
+                "acceptance runtime could not be isolated and re-drained "
+                "after public-admission resume intent; forward fix is required"
+            )
+            marker["updated_at"] = utc_now()
+            self._write_marker(marker)
+            raise PullDeployError(
+                "acceptance runtime/Worker stability changed after public-"
+                "admission resume intent; admission remains isolated where "
+                "possible and a forward fix is required; automatic restart, "
+                "probes and rollback are forbidden"
+            ) from exc
+        if recovery["runtime_state"] == "stopped":
+            marker["forward_recovery_error"] = (
+                "acceptance runtime stopped after public-admission resume "
+                "intent; forward fix is required"
+            )
+            marker["updated_at"] = utc_now()
+            self._write_marker(marker)
+            raise PullDeployError(
+                "acceptance runtime stopped after public-admission resume "
+                "intent; admission remains isolated and a forward fix is "
+                "required; automatic restart, probes and rollback are forbidden"
+            )
+        observed_verification = self._sealed_runtime_verification(
+            self.lifecycle.verify_acceptance_stability(
+                self,
+                descriptor,
+            )
+        )
+        evidence = self._validate_acceptance_forward_authority(
+            descriptor,
+            descriptor_digest,
+            marker,
+            current,
+            bind_runtime_verification=True,
+        )
+        recovery_fence = observed_verification.get("recovery_fence")
+        if not isinstance(recovery_fence, dict) or not recovery_fence:
+            raise PullDeployError(
+                "acceptance forward recovery lacks a Worker recovery fence"
+            )
+        stability = {
+            "candidate_state_sha256": marker["candidate_state_sha256"],
+            "runtime_identity_sha256": canonical_json_digest(
+                acceptance_runtime_stability_identity(
+                    observed_verification
+                )
+            ),
+            "database_state_sha256": canonical_json_digest(
+                self._acceptance_database_state_identity(current)
+            ),
+            "worker_fence_sha256": canonical_json_digest(recovery_fence),
+        }
+        changed = [
+            name
+            for name, observed in stability.items()
+            if evidence.get(name) != observed
+        ]
+        if changed:
+            marker["forward_recovery_error"] = (
+                "acceptance forward stability changed ("
+                + ", ".join(changed)
+                + "); forward fix is required"
+            )[:500]
+            marker["updated_at"] = utc_now()
+            self._write_marker(marker)
+            raise PullDeployError(
+                "acceptance runtime/database/Worker stability changed after "
+                "public-admission resume intent; admission remains isolated "
+                "and a forward fix is required"
+            )
+        verification = self._persist_runtime_verification(
+            marker,
+            observed_verification,
+        )
+        self.lifecycle.resume(self, descriptor, verification)
+        self._advance(marker, "admission-resumed")
+        return current
+
+    def _complete_candidate_acceptance(
+        self,
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+        marker: dict[str, Any],
+        current: dict[str, Any],
+        *,
+        audit_status: str,
+    ) -> dict[str, Any]:
+        if marker.get("phase") != "admission-resumed":
+            raise PullDeployError(
+                "candidate acceptance did not commit public admission"
+            )
+        observed_current = self._candidate_current_state(
+            descriptor,
+            descriptor_digest,
+            marker,
+        )
+        if observed_current is None or observed_current != current:
+            raise PullDeployError(
+                "candidate current state changed before acceptance terminalization"
+            )
+        self._validate_steady_deployment_state(
+            current,
+            require_terminal_chain=False,
+        )
+        self._audit_attempt(marker, audit_status)
+        self._record_operation_outcome(
+            operation_id=descriptor["operation_id"],
+            descriptor_sha256=descriptor_digest,
+            outcome="deployed",
+        )
+        self._validate_steady_deployment_state(current)
+        self.marker_path.unlink()
+        fsync_directory(self.marker_path.parent)
+        return current
+
     def accept(self, *, target_sha: str, operation_id: str) -> dict[str, Any]:
         """Probe a V4 candidate, then open it only after a durable 15-minute hold."""
 
@@ -31231,29 +32513,27 @@ class PullDeployController:
                 if marker.get("phase") == "failed"
                 else marker.get("phase")
             )
-            if effective_phase == "admission-resumed":
+            if marker.get("acceptance_resume_intent") is not None:
                 current = self._candidate_current_state(
                     descriptor, descriptor_digest, marker
                 )
                 if current is None:
                     raise PullDeployError(
-                        "accepted deployment lost its candidate current state"
+                        "acceptance forward recovery lost its candidate current state"
                     )
-                self.lifecycle.verify_open_runtime(
-                    self,
+                current = self._recover_acceptance_admission_resume(
                     descriptor,
-                    self._marker_runtime_verification(marker),
+                    descriptor_digest,
+                    marker,
+                    current,
                 )
-                self._audit_attempt(marker, "recovered-success")
-                self._record_operation_outcome(
-                    operation_id=operation_id,
-                    descriptor_sha256=descriptor_digest,
-                    outcome="deployed",
+                return self._complete_candidate_acceptance(
+                    descriptor,
+                    descriptor_digest,
+                    marker,
+                    current,
+                    audit_status="recovered-success",
                 )
-                self._validate_steady_deployment_state(current)
-                self.marker_path.unlink()
-                fsync_directory(self.marker_path.parent)
-                return current
             if effective_phase not in {
                 "awaiting-acceptance",
                 "acceptance-started",
@@ -31286,6 +32566,24 @@ class PullDeployController:
                 raise PullDeployError(
                     "staged deployment lost its candidate current state"
                 )
+            # Isolation precedes runtime fencing.  The actual pre-probe
+            # database baseline is intentionally captured only after the
+            # exact live runtime has been re-drained below.
+            self.lifecycle.ensure_acceptance_ingress_isolated(
+                self,
+                descriptor,
+            )
+            mutable_pair = validate_mutable_data_pair(
+                current.get("mutable_data_audit")
+            )
+            probe_intent = marker.get("acceptance_probe_intent")
+            if (
+                probe_intent is None
+                and effective_phase != "awaiting-acceptance"
+            ):
+                raise PullDeployError(
+                    "acceptance observation lost its pre-probe intent"
+                )
             try:
                 recovery = self._prepare_runtime_recovery(
                     marker,
@@ -31294,24 +32592,142 @@ class PullDeployController:
                 )
             except PullDeployError as exc:
                 if effective_phase != "awaiting-acceptance":
+                    resume_intent_committed = (
+                        marker.get("acceptance_resume_intent") is not None
+                    )
                     marker["error"] = (
-                        "acceptance runtime fence changed during isolation; "
-                        "explicit rollback is required"
+                        "acceptance runtime fence changed after public-"
+                        "admission resume intent; forward fix is required "
+                        "and rollback/recovery is forbidden"
+                        if resume_intent_committed
+                        else "acceptance runtime fence changed during "
+                        "isolation; explicit rollback is required"
                     )
                     self._advance(
                         marker,
                         "acceptance-rejected",
                         acceptance_rejected=True,
                     )
+                    if resume_intent_committed:
+                        raise PullDeployError(
+                            "acceptance runtime/Worker stability changed after "
+                            "public-admission resume intent; admission remains "
+                            "isolated and a forward fix is required; rollback "
+                            "and automatic recovery are forbidden"
+                        ) from exc
                     raise PullDeployError(
                         "acceptance runtime/Worker stability changed; admission "
                         "remains isolated and explicit rollback is required"
                     ) from exc
                 raise
+            if (
+                recovery["runtime_state"] == "stopped"
+                and effective_phase != "awaiting-acceptance"
+            ):
+                resume_intent_committed = (
+                    marker.get("acceptance_resume_intent") is not None
+                )
+                marker["error"] = (
+                    "acceptance runtime stopped after public-admission resume "
+                    "intent; forward fix is required and rollback/recovery is "
+                    "forbidden"
+                    if resume_intent_committed
+                    else "acceptance runtime stopped during observation; "
+                    "explicit rollback followed by a fresh deployment operation "
+                    "is required"
+                )
+                self._advance(
+                    marker,
+                    "acceptance-rejected",
+                    acceptance_rejected=True,
+                )
+                if resume_intent_committed:
+                    raise PullDeployError(
+                        "acceptance runtime stopped after public-admission "
+                        "resume intent; admission remains isolated and a "
+                        "forward fix is required; automatic restart, probes, "
+                        "resume and rollback are forbidden"
+                    )
+                raise PullDeployError(
+                    "acceptance runtime stopped during the post-probe "
+                    "observation; admission remains isolated and explicit "
+                    "rollback followed by a fresh deployment operation is "
+                    "required"
+                )
             if recovery["runtime_state"] == "stopped":
                 self._persist_stopped_postgres_runtime_fence(marker, descriptor)
                 self._record_runtime_start_intent(marker, descriptor)
                 self._start_runtime(marker, descriptor)
+                # The stopped-runtime path has no live recovery fence.  Prove
+                # the newly started candidate is the exact drained runtime,
+                # without running another canary, before any probe authority
+                # or mutable-data baseline can be committed.
+                restarted_verification = self._sealed_runtime_verification(
+                    self.lifecycle.verify_acceptance_stability(
+                        self,
+                        descriptor,
+                    )
+                )
+                self._persist_runtime_verification(
+                    marker,
+                    restarted_verification,
+                )
+            self._revalidate_candidate_database_state(
+                descriptor,
+                current,
+                include_mutable=False,
+            )
+            if probe_intent is None:
+                observed_before = self._capture_mutable_data(descriptor)
+                pre_probe_stability = (
+                    validate_acceptance_pre_probe_mutable_transition(
+                        mutable_pair["after"],
+                        observed_before,
+                        operation_id=operation_id,
+                        release_sha=target_sha,
+                    )
+                )
+                pre_probe_identity_sha256 = canonical_json_digest(
+                    acceptance_full_mutable_data_identity(observed_before)
+                )
+                pre_probe_stability_sha256 = canonical_json_digest(
+                    pre_probe_stability
+                )
+                probe_intent = {
+                    "schema_version": 2,
+                    "operation_id": operation_id,
+                    "candidate_state_sha256": marker[
+                        "candidate_state_sha256"
+                    ],
+                    "pre_probe_mutable_data_evidence": observed_before,
+                    "pre_probe_mutable_data_identity_sha256": (
+                        pre_probe_identity_sha256
+                    ),
+                    "pre_probe_mutable_data_stability_sha256": (
+                        pre_probe_stability_sha256
+                    ),
+                    "recorded_at": utc_now(),
+                }
+                self._advance(
+                    marker,
+                    "awaiting-acceptance",
+                    acceptance_probe_intent=probe_intent,
+                )
+            pre_probe_evidence = validate_mutable_data_evidence(
+                probe_intent["pre_probe_mutable_data_evidence"]
+            )
+            pre_probe_identity_sha256 = require_digest(
+                probe_intent.get(
+                    "pre_probe_mutable_data_identity_sha256"
+                ),
+                "acceptance pre-probe mutable data identity",
+            )
+            pre_probe_stability_sha256 = require_digest(
+                probe_intent.get(
+                    "pre_probe_mutable_data_stability_sha256"
+                ),
+                "acceptance pre-probe mutable data stability",
+            )
             self.lifecycle.cleanup_acceptance_probe_proxy(self, descriptor)
             operation, _descriptor_path, _ready_path = self._operation_paths(
                 operation_id
@@ -31353,11 +32769,40 @@ class PullDeployController:
                 )
             observed_verification = self._sealed_runtime_verification(
                 self.lifecycle.verify(self, descriptor)
+                if effective_phase == "awaiting-acceptance"
+                else self.lifecycle.verify_acceptance_stability(
+                    self,
+                    descriptor,
+                )
             )
             self._revalidate_candidate_database_state(
                 descriptor,
                 current,
-                include_mutable=True,
+                include_mutable=False,
+            )
+            observed_mutable = self._capture_mutable_data(descriptor)
+            if effective_phase == "awaiting-acceptance":
+                post_probe_identity = (
+                    validate_acceptance_probe_mutable_transition(
+                        pre_probe_evidence,
+                        observed_mutable,
+                        operation_id=operation_id,
+                        release_sha=target_sha,
+                    )
+                )
+            else:
+                post_probe_identity = (
+                    acceptance_mutable_data_stability_identity(
+                        observed_mutable,
+                        operation_id=operation_id,
+                        release_sha=target_sha,
+                    )
+                )
+            post_probe_stability_sha256 = canonical_json_digest(
+                post_probe_identity
+            )
+            post_probe_full_identity_sha256 = canonical_json_digest(
+                acceptance_full_mutable_data_identity(observed_mutable)
             )
             current = self._candidate_current_state(
                 descriptor, descriptor_digest, marker
@@ -31396,6 +32841,9 @@ class PullDeployController:
                 "worker_fence_sha256": canonical_json_digest(
                     recovery_fence
                 ),
+                "post_probe_mutable_data_stability_sha256": (
+                    post_probe_stability_sha256
+                ),
             }
             if effective_phase == "awaiting-acceptance":
                 verified = dt.datetime.now(dt.timezone.utc)
@@ -31405,9 +32853,19 @@ class PullDeployController:
                     + dt.timedelta(seconds=ACCEPTANCE_HOLD_SECONDS)
                 ).isoformat().replace("+00:00", "Z")
                 acceptance = {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "operation_id": operation_id,
                     **stability,
+                    "pre_probe_mutable_data_identity_sha256": (
+                        pre_probe_identity_sha256
+                    ),
+                    "pre_probe_mutable_data_stability_sha256": (
+                        pre_probe_stability_sha256
+                    ),
+                    "post_probe_mutable_data_evidence": observed_mutable,
+                    "post_probe_mutable_data_identity_sha256": (
+                        post_probe_full_identity_sha256
+                    ),
                     "probe_report_sha256": probe_report["report_sha256"],
                     "probe_report_file_sha256": probe_report["file_sha256"],
                     "probe_authority_sha256": probe_report[
@@ -31452,41 +32910,65 @@ class PullDeployController:
                 if existing_acceptance.get(name) != observed
             ]
             if changed:
+                resume_intent_committed = (
+                    marker.get("acceptance_resume_intent") is not None
+                )
                 marker["error"] = (
                     "acceptance stability changed ("
                     + ", ".join(changed)
-                    + "); explicit rollback is required"
+                    + (
+                        "); forward fix is required and rollback/recovery "
+                        "is forbidden"
+                        if resume_intent_committed
+                        else "); explicit rollback is required"
+                    )
                 )[:500]
                 self._advance(
                     marker,
                     "acceptance-rejected",
                     acceptance_rejected=True,
                 )
+                if resume_intent_committed:
+                    raise PullDeployError(
+                        "acceptance runtime/database/Worker stability changed "
+                        "after public-admission resume intent; admission "
+                        "remains isolated and a forward fix is required; "
+                        "rollback and automatic recovery are forbidden"
+                    )
                 raise PullDeployError(
                     "acceptance runtime/database/Worker stability changed; "
                     "admission remains isolated and explicit rollback is required"
                 )
             acceptance = existing_acceptance
-            verification = self._persist_runtime_verification(
-                marker, observed_verification
-            )
+            self._persist_runtime_verification(marker, observed_verification)
             self._advance(
                 marker,
                 "acceptance-resume-started",
                 acceptance_evidence=acceptance,
+                acceptance_resume_intent=(
+                    marker.get("acceptance_resume_intent")
+                    or {
+                        "operation_id": operation_id,
+                        "candidate_state_sha256": marker[
+                            "candidate_state_sha256"
+                        ],
+                        "recorded_at": utc_now(),
+                    }
+                ),
             )
-            self.lifecycle.resume(self, descriptor, verification)
-            self._advance(marker, "admission-resumed")
-            self._audit_attempt(marker, "success")
-            self._record_operation_outcome(
-                operation_id=operation_id,
-                descriptor_sha256=descriptor_digest,
-                outcome="deployed",
+            current = self._recover_acceptance_admission_resume(
+                descriptor,
+                descriptor_digest,
+                marker,
+                current,
             )
-            self._validate_steady_deployment_state(current)
-            self.marker_path.unlink()
-            fsync_directory(self.marker_path.parent)
-            return current
+            return self._complete_candidate_acceptance(
+                descriptor,
+                descriptor_digest,
+                marker,
+                current,
+                audit_status="success",
+            )
 
     def apply_bridge(
         self, *, authority_sha: str, operation_id: str
@@ -31644,6 +33126,45 @@ class PullDeployController:
                         if marker.get("phase") == "failed"
                         else marker.get("phase")
                     )
+                    if marker.get("acceptance_resume_intent") is not None:
+                        raise PullDeployError(
+                            "acceptance resume has an unknown public-admission "
+                            "commit; rollback is forbidden and acceptance "
+                            "recovery must continue forward"
+                        )
+                    if (
+                        marker.get("rollback_admission_resume_intent")
+                        is not None
+                    ):
+                        if marker.get("acceptance_rejected") is not True:
+                            raise PullDeployError(
+                                "failed deployment rollback admission must be "
+                                "completed with interrupted recovery"
+                            )
+                        self._recover_rollback_admission_resume(
+                            descriptor,
+                            marker,
+                        )
+                        marker["rollback"] = "success"
+                        self._audit_attempt(
+                            marker,
+                            "rejected-before-acceptance",
+                        )
+                        self._record_operation_outcome(
+                            operation_id=operation_id,
+                            descriptor_sha256=descriptor_digest,
+                            outcome="failed",
+                        )
+                        self.marker_path.unlink()
+                        fsync_directory(self.marker_path.parent)
+                        return {
+                            "action": "rollback",
+                            "status": "rejected-before-acceptance",
+                            "operation_id": operation_id,
+                            "source_sha": descriptor["repository"][
+                                "previous_sha"
+                            ],
+                        }
                     if (
                         descriptor.get("schema_version")
                         != DESCRIPTOR_SCHEMA_VERSION
@@ -31651,7 +33172,6 @@ class PullDeployController:
                         not in {
                             "awaiting-acceptance",
                             "acceptance-started",
-                            "acceptance-resume-started",
                             "acceptance-rejected",
                         }
                     ):
@@ -31708,6 +33228,22 @@ class PullDeployController:
             ):
                 raise PullDeployError(
                     "explicit rollback requires the terminal deployed operation"
+                )
+            if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+                # A terminal V4 deployment has already reopened public
+                # admission. Its original drain-final backup predates every
+                # write accepted after that point, while the previous source
+                # is not allowed to run against the candidate migration
+                # ledger. The ordinary rollback transaction cannot choose
+                # between silently losing those writes and mixing old code
+                # with the new schema, so fail before creating a marker,
+                # draining, backing up, or stopping any service. A data-loss
+                # restore needs a separately reviewed maintenance authority.
+                raise PullDeployError(
+                    "ordinary descriptor V4 terminal rollback is forbidden "
+                    "after public admission; deploy a forward fix. Whole-"
+                    "database data-loss rollback requires a separately "
+                    "reviewed maintenance entrypoint"
                 )
             current_state_digest = sha256_file(self.current_state_path)
             current = self._validate_steady_deployment_state(

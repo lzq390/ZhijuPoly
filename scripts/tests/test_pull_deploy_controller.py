@@ -1274,6 +1274,12 @@ class FakeLifecycle:
         self.fail_at = fail_at
         self.admission_open = admission_open
         self.recovery_fence: dict[str, object] = {"fixture_instance": "instance-1"}
+        self.runtime_repository: dict[str, object] = {
+            "sha": TARGET_SHA,
+            "tree": TARGET_TREE,
+            "origin": CONTROLLER.REPOSITORY_SSH_URL,
+        }
+        self.runtime_instance = "fixture-runtime-1"
         self.runtime_state = "live"
 
     def _event(self, name: str) -> None:
@@ -1463,14 +1469,42 @@ class FakeLifecycle:
         self.runtime_state = "live"
         self.admission_open = False
 
+    def ensure_acceptance_ingress_isolated(
+        self, _controller: object, _descriptor: object
+    ) -> None:
+        self.admission_open = False
+
     def verification(self) -> dict[str, object]:
         return {
             "health": "ok",
+            "runtime_identity": {
+                "repository": json.loads(
+                    json.dumps(self.runtime_repository)
+                ),
+                "worker_instance_id": self.runtime_instance,
+            },
             "recovery_fence": dict(self.recovery_fence),
         }
 
+    def _capture_runtime_repository(self, controller: object) -> None:
+        self.runtime_repository = json.loads(
+            json.dumps(
+                getattr(controller, "repository_identity")(
+                    require_ssh_origin=True
+                )
+            )
+        )
+
     def verify(self, _controller: object, _descriptor: object) -> dict[str, object]:
         self._event("verify")
+        self._capture_runtime_repository(_controller)
+        return self.verification()
+
+    def verify_acceptance_stability(
+        self, _controller: object, _descriptor: object
+    ) -> dict[str, object]:
+        self._event("verify-acceptance-stability")
+        self._capture_runtime_repository(_controller)
         return self.verification()
 
     def resume(
@@ -1800,15 +1834,22 @@ class FixtureController(CONTROLLER.PullDeployController):
                 marker["acceptance_started_at"] = "2026-01-01T00:00:00Z"
                 marker["acceptance_not_before"] = "2026-01-01T00:15:00Z"
                 CONTROLLER.atomic_json(self.marker_path, marker)
+                probe_report = {
+                    "report_sha256": "sha256:" + "1" * 64,
+                    "file_sha256": "sha256:" + "2" * 64,
+                    "authority_sha256": "sha256:" + "3" * 64,
+                    "finished_at": None,
+                }
+
+                def load_probe_report(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+                    if probe_report["finished_at"] is None:
+                        probe_report["finished_at"] = CONTROLLER.utc_now()
+                    return dict(probe_report)
+
                 with mock.patch.object(
                     self,
                     "_load_acceptance_probe_report",
-                    return_value={
-                        "report_sha256": "sha256:" + "1" * 64,
-                        "file_sha256": "sha256:" + "2" * 64,
-                        "authority_sha256": "sha256:" + "3" * 64,
-                        "finished_at": "2026-01-01T00:15:02Z",
-                    },
+                    side_effect=load_probe_report,
                 ), mock.patch.object(
                     self.lifecycle,
                     "run_acceptance_probes",
@@ -1820,16 +1861,22 @@ class FixtureController(CONTROLLER.PullDeployController):
                     )
                     if observing.get("status") != "maintenance-observation":
                         raise AssertionError("fixture did not enter acceptance hold")
-                    marker = CONTROLLER.load_private_json(self.marker_path)
-                    evidence = marker["acceptance_evidence"]
-                    evidence["verified_at"] = "2026-01-01T00:15:03Z"
-                    evidence["observation_started_at"] = evidence["verified_at"]
-                    evidence["observation_not_before"] = "2026-01-01T00:30:03Z"
-                    CONTROLLER.atomic_json(self.marker_path, marker)
-                    return super().accept(
-                        target_sha=arguments["target_sha"],
-                        operation_id=arguments["operation_id"],
-                    )
+                    real_datetime = CONTROLLER.dt.datetime
+
+                    class FutureDateTime(real_datetime):
+                        @classmethod
+                        def now(cls, tz=None):  # type: ignore[no-untyped-def]
+                            return real_datetime.now(tz) + CONTROLLER.dt.timedelta(
+                                seconds=CONTROLLER.ACCEPTANCE_HOLD_SECONDS + 1
+                            )
+
+                    with mock.patch.object(
+                        CONTROLLER.dt, "datetime", FutureDateTime
+                    ):
+                        return super().accept(
+                            target_sha=arguments["target_sha"],
+                            operation_id=arguments["operation_id"],
+                        )
         return state
 
     def _git_show(self, _target_sha: str, relative: str) -> bytes:
@@ -1918,9 +1965,11 @@ class FixtureController(CONTROLLER.PullDeployController):
     def _capture_mutable_data(
         self, descriptor: dict[str, object]
     ) -> dict[str, object]:
-        return mutable_data_evidence(
+        evidence = mutable_data_evidence(
             operation_id=str(descriptor["operation_id"])
         )
+        evidence["captured_at"] = CONTROLLER.utc_now()
+        return evidence
 
     def asset_evidence(self, expected_digest: str) -> dict[str, object]:
         target = self.runtime_root / "fixture-assets" / expected_digest.split(":", 1)[1]
@@ -2330,6 +2379,11 @@ class FixtureController(CONTROLLER.PullDeployController):
         marker: dict[str, object],
         descriptor: dict[str, object],
     ) -> None:
+        if (
+            descriptor.get("schema_version")
+            != CONTROLLER.DESCRIPTOR_SCHEMA_VERSION
+        ):
+            return
         self._stop_dft_guard_scheduling(marker, descriptor)
         evidence = marker["dft_guard_stop_evidence"]
         marker["dft_guard_source_switch_fence"] = {
@@ -8728,6 +8782,209 @@ class SlotAndDescriptorTests(PullDeployTestCase):
 
 
 class StrictLifecycleEvidenceTests(unittest.TestCase):
+    def test_acceptance_stability_verifier_is_read_only(self) -> None:
+        lifecycle = CONTROLLER.SystemLifecycle()
+        runtime_identity = {"repository": {"sha": TARGET_SHA}}
+        recovery_fence = {"fixture_instance": "same-processes"}
+        with (
+            mock.patch.object(
+                lifecycle,
+                "verify_runtime_identity",
+                return_value=runtime_identity,
+            ) as runtime,
+            mock.patch.object(
+                lifecycle,
+                "_capture_runtime_recovery_fence",
+                return_value=recovery_fence,
+            ) as fence,
+            mock.patch.object(
+                lifecycle,
+                "_verify_candidate_image_inventory",
+            ) as image_inventory,
+            mock.patch.object(lifecycle, "verify") as mutating_verify,
+        ):
+            result = lifecycle.verify_acceptance_stability(
+                SimpleNamespace(),
+                {"operation_id": OPERATION_ID},
+            )
+
+        runtime.assert_called_once_with(
+            mock.ANY,
+            {"operation_id": OPERATION_ID},
+            require_ingress=False,
+        )
+        fence.assert_called_once_with(
+            mock.ANY,
+            {"operation_id": OPERATION_ID},
+            resumed=False,
+        )
+        image_inventory.assert_called_once_with(
+            mock.ANY,
+            {"operation_id": OPERATION_ID},
+        )
+        mutating_verify.assert_not_called()
+        self.assertEqual(result["runtime_identity"], runtime_identity)
+        self.assertEqual(result["recovery_fence"], recovery_fence)
+
+    def test_final_acceptance_verifier_rejects_lost_web_image(self) -> None:
+        lifecycle = CONTROLLER.SystemLifecycle()
+        descriptor = {
+            "operation_id": OPERATION_ID,
+            "repository": {"target_sha": TARGET_SHA},
+            "images": {
+                role: image_record(role)
+                for role in ("backend", "web")
+            },
+        }
+        runner = mock.Mock()
+
+        def inspect(command, **_kwargs):  # type: ignore[no-untyped-def]
+            digest_ref = command[3]
+            role = (
+                "backend"
+                if digest_ref == descriptor["images"]["backend"]["digest_ref"]
+                else "web"
+            )
+            record = descriptor["images"][role]
+            repo_digests = [record["digest_ref"]] if role == "backend" else []
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Id": record["image_id"],
+                            "RepoDigests": repo_digests,
+                            "Config": {
+                                "Labels": {
+                                    "org.opencontainers.image.revision": TARGET_SHA
+                                }
+                            },
+                        }
+                    ]
+                ),
+                "",
+            )
+
+        runner.run.side_effect = inspect
+        controller = SimpleNamespace(
+            runner=runner,
+            control_environment=lambda: {},
+        )
+        with (
+            mock.patch.object(
+                lifecycle,
+                "verify_runtime_identity",
+                return_value={"repository": {"sha": TARGET_SHA}},
+            ),
+            mock.patch.object(
+                lifecycle,
+                "_capture_runtime_recovery_fence",
+            ) as fence,
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "web immutable image identity changed",
+            ),
+        ):
+            lifecycle.verify_acceptance_stability(controller, descriptor)
+
+        self.assertEqual(runner.run.call_count, 2)
+        fence.assert_not_called()
+
+    def test_image_inventory_rejects_non_object_inspect_record(self) -> None:
+        descriptor = {
+            "repository": {"target_sha": TARGET_SHA},
+            "images": {
+                role: image_record(role)
+                for role in ("backend", "web")
+            },
+        }
+        runner = mock.Mock()
+        runner.run.return_value = subprocess.CompletedProcess(
+            ["docker", "image", "inspect"],
+            0,
+            "[null]",
+            "",
+        )
+        controller = SimpleNamespace(
+            runner=runner,
+            control_environment=lambda: {},
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "backend immutable image inspection is malformed",
+        ):
+            CONTROLLER.SystemLifecycle._verify_candidate_image_inventory(
+                controller,
+                descriptor,
+            )
+
+    def test_observe_worker_guard_warning_keeps_runtime_ready(self) -> None:
+        lifecycle = CONTROLLER.SystemLifecycle()
+        descriptor = {
+            "schema_version": CONTROLLER.DESCRIPTOR_SCHEMA_VERSION,
+            "monomer_dft": {
+                "runtime": {
+                    "release_sha": TARGET_SHA,
+                    "runtime_manifest_sha256": DIGEST_A,
+                },
+                "gpu": {
+                    "index": "2",
+                    "uuid": "GPU-" + "1" * 32,
+                    "guard_mode": "observe",
+                },
+            },
+        }
+        worker = {
+            "status": "ok",
+            "runtime_ready": True,
+            "release_sha": TARGET_SHA,
+            "runtime_contract_sha256": DIGEST_A,
+            "gpu_guard_mode": "observe",
+            "gpu_guard_status": "stale",
+            "gpu_contention_observed": False,
+            "active_jobs": 0,
+            "queued_jobs": 0,
+            "accepting_jobs": False,
+            "draining": True,
+            "runtime": {
+                "deployment": "prod",
+                "physical_gpu": "2",
+                "gpu_uuid": "GPU-" + "1" * 32,
+                "gpu_guard_mode": "observe",
+                "gpu_guard_status": "stale",
+                "gpu_contention_observed": False,
+                "fatal": False,
+                "fatal_reason": None,
+                "models": {
+                    name: {"loaded": True, "warmed_up": True}
+                    for name in CONTROLLER.MONOMER_DFT_MODEL_ALIASES
+                },
+            },
+        }
+
+        self.assertIs(
+            lifecycle._validate_dft_runtime_identity(
+                descriptor,
+                worker,
+                expected_accepting=False,
+                allow_active=False,
+                require_guard_readiness=False,
+            ),
+            worker,
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "runtime identity differs",
+        ):
+            lifecycle._validate_dft_runtime_identity(
+                descriptor,
+                worker,
+                expected_accepting=False,
+                allow_active=False,
+                require_guard_readiness=True,
+            )
+
     def test_test_root_mode_rejects_parent_child_overlap_with_production(self) -> None:
         with mock.patch.dict(os.environ, {"NEXPOLY_ALLOW_TEST_ROOT": "1"}):
             for runtime_root, production_root in (
@@ -9632,6 +9889,40 @@ class SystemDrainFencingTests(unittest.TestCase):
 
 
 class LifecycleStateMachineTests(PullDeployTestCase):
+    def _prepare_legacy_v2(
+        self,
+        controller: FixtureController,
+        operation_id: str,
+    ) -> None:
+        """Keep historical terminal-rollback tests outside ordinary V4."""
+
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=operation_id,
+        )
+        _operation, descriptor_path, ready_path = controller._operation_paths(
+            operation_id
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        self.assertEqual(
+            descriptor["schema_version"], CONTROLLER.DESCRIPTOR_SCHEMA_VERSION
+        )
+        descriptor["schema_version"] = (
+            CONTROLLER.LEGACY_DESCRIPTOR_SCHEMA_VERSION
+        )
+        descriptor["monomer_md"]["worker_env"] = descriptor["monomer_md"][
+            "worker_env"
+        ]["previous"]
+        descriptor.pop("monomer_dft")
+        descriptor.pop("adopted_deployment")
+        descriptor.pop("adopted_deployment_sha256")
+        CONTROLLER.validate_descriptor(descriptor)
+        CONTROLLER.atomic_json(descriptor_path, descriptor)
+        ready = CONTROLLER.load_private_json(ready_path)
+        ready["descriptor_sha256"] = CONTROLLER.sha256_file(descriptor_path)
+        CONTROLLER.atomic_json(ready_path, ready)
+        controller._validate_ready(ready, descriptor, descriptor_path)
+
     @staticmethod
     def _probe_report_binding() -> dict[str, str]:
         return {
@@ -9644,18 +9935,73 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         marker = CONTROLLER.load_private_json(controller.marker_path)
         evidence = marker.get("acceptance_evidence")
         if isinstance(evidence, dict):
-            completed = CONTROLLER._external_database_audit_timestamp(
-                evidence["probes_completed_at"], "fixture probe completion"
+            staged = CONTROLLER.dt.datetime(
+                2026, 1, 1, tzinfo=CONTROLLER.dt.timezone.utc
             )
-            verified = completed + CONTROLLER.dt.timedelta(seconds=1)
-            evidence["verified_at"] = verified.isoformat().replace("+00:00", "Z")
+            pre_captured = staged + CONTROLLER.dt.timedelta(seconds=1)
+            probes_completed = staged + CONTROLLER.dt.timedelta(seconds=2)
+            verified = staged + CONTROLLER.dt.timedelta(seconds=3)
+            wire = lambda value: value.isoformat().replace("+00:00", "Z")
+            marker["acceptance_started_at"] = wire(staged)
+            marker["acceptance_not_before"] = wire(
+                staged
+                + CONTROLLER.dt.timedelta(
+                    seconds=CONTROLLER.ACCEPTANCE_HOLD_SECONDS
+                )
+            )
+            authority_path = Path(marker["acceptance_authority_path"])
+            authority = CONTROLLER.load_private_json(authority_path)
+            authority["staged_at"] = marker["acceptance_started_at"]
+            authority["acceptance_not_before"] = marker[
+                "acceptance_not_before"
+            ]
+            CONTROLLER.atomic_json(authority_path, authority)
+            marker["acceptance_authority_sha256"] = (
+                CONTROLLER.sha256_file(authority_path)
+            )
+            probe_intent = marker["acceptance_probe_intent"]
+            probe_intent["recorded_at"] = wire(pre_captured)
+            probe_intent["pre_probe_mutable_data_evidence"][
+                "captured_at"
+            ] = wire(pre_captured)
+            operation, _descriptor, _ready = controller._operation_paths(
+                marker["operation_id"]
+            )
+            report_path = operation / (
+                f"production-acceptance-{marker['operation_id']}.json"
+            )
+            report = CONTROLLER.load_private_json(report_path)
+            report["authority"] = authority
+            report["authority_sha256"] = marker[
+                "acceptance_authority_sha256"
+            ]
+            report["started_at"] = wire(probes_completed)
+            report["finished_at"] = wire(probes_completed)
+            unsealed = dict(report)
+            unsealed.pop("report_sha256", None)
+            report["report_sha256"] = CONTROLLER.canonical_json_digest(
+                unsealed
+            )
+            CONTROLLER.atomic_json(report_path, report)
+            evidence["probe_report_sha256"] = report["report_sha256"]
+            evidence["probe_report_file_sha256"] = (
+                CONTROLLER.sha256_file(report_path)
+            )
+            evidence["probe_authority_sha256"] = marker[
+                "acceptance_authority_sha256"
+            ]
+            evidence["probes_completed_at"] = wire(probes_completed)
+            evidence["post_probe_mutable_data_evidence"][
+                "captured_at"
+            ] = wire(verified)
+            evidence["verified_at"] = wire(verified)
             evidence["observation_started_at"] = evidence["verified_at"]
-            evidence["observation_not_before"] = (
+            evidence["observation_not_before"] = wire(
                 verified
                 + CONTROLLER.dt.timedelta(
                     seconds=CONTROLLER.ACCEPTANCE_HOLD_SECONDS
                 )
-            ).isoformat().replace("+00:00", "Z")
+            )
             CONTROLLER.atomic_json(controller.marker_path, marker)
             return
         marker["acceptance_started_at"] = "2026-01-01T00:00:00Z"
@@ -9679,7 +10025,7 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         authority = CONTROLLER.load_private_json(
             Path(marker["acceptance_authority_path"])
         )
-        probe_timestamp = authority["staged_at"]
+        probe_timestamp = CONTROLLER.utc_now()
         report = {
             "schema_version": 1,
             "status": "passed",
@@ -9704,6 +10050,97 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             operation / f"production-acceptance-{marker['operation_id']}.json",
             report,
         )
+
+    @staticmethod
+    def _mutate_acceptance_history(
+        snapshot: dict[str, object],
+        *,
+        generation: int,
+        rows: int = 1,
+    ) -> None:
+        md_jobs = next(
+            record
+            for record in snapshot["business_tables"]
+            if (record["schema"], record["table"])
+            == ("md", "monomer_md_jobs")
+        )
+        md_jobs["row_count"] += rows
+        md_jobs["content_sha256"] = (
+            "sha256:" + f"{generation % 16:x}" * 64
+        )
+        bridge = snapshot["bridge_projection"]
+        bridge["row_count"] += rows
+        bridge["content_sha256"] = (
+            "sha256:" + f"{(generation + 1) % 16:x}" * 64
+        )
+        reseal_mutable_data_evidence(snapshot)
+
+    @staticmethod
+    def _refresh_acceptance_drain(
+        snapshot: dict[str, object],
+        *,
+        generation: int,
+        reason: str,
+    ) -> None:
+        control = snapshot["governed_controls"]["deployment_control"]
+        control["table"]["content_sha256"] = (
+            "sha256:" + f"{generation % 16:x}" * 64
+        )
+        control["row"]["reason"] = reason
+        control["row"]["updated_at"] = (
+            f"2026-07-17T00:{generation % 60:02d}:00Z"
+        )
+        reseal_mutable_data_evidence(snapshot)
+
+    def _rejected_acceptance_with_previous(
+        self,
+        lifecycle: FakeLifecycle,
+        *,
+        operation_id: str,
+    ) -> tuple[FixtureController, dict[str, object]]:
+        """Build a staged rejection whose rollback has governed old state."""
+
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        previous = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=operation_id,
+        )
+        controller.apply_staged(
+            target_sha=TARGET_SHA,
+            operation_id=operation_id,
+        )
+        self._write_passing_probe_report(controller)
+        controller.accept(
+            target_sha=TARGET_SHA,
+            operation_id=operation_id,
+        )
+        self._expire_acceptance_hold(controller)
+        original_fence = json.loads(json.dumps(lifecycle.recovery_fence))
+        lifecycle.recovery_fence["fixture_instance"] = "replacement-instance"
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "stability changed",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA,
+                operation_id=operation_id,
+            )
+        lifecycle.recovery_fence = original_fence
+        controller._rollback_failed_attempt = (  # type: ignore[method-assign]
+            CONTROLLER.PullDeployController._rollback_failed_attempt.__get__(
+                controller,
+                CONTROLLER.PullDeployController,
+            )
+        )
+        return controller, previous
 
     @staticmethod
     def _acceptance_runner_descriptor() -> dict[str, object]:
@@ -10222,6 +10659,29 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             (controller.audit_dir / OPERATION_ID / "operation-state.json").exists()
         )
         evidence = marker["acceptance_evidence"]
+        probe_intent = marker["acceptance_probe_intent"]
+        pre_probe = probe_intent["pre_probe_mutable_data_evidence"]
+        post_probe = evidence["post_probe_mutable_data_evidence"]
+        self.assertEqual(pre_probe["schema_version"], 7)
+        self.assertEqual(post_probe["schema_version"], 7)
+        self.assertEqual(
+            probe_intent["pre_probe_mutable_data_identity_sha256"],
+            CONTROLLER.canonical_json_digest(
+                CONTROLLER.acceptance_full_mutable_data_identity(pre_probe)
+            ),
+        )
+        self.assertEqual(
+            evidence["post_probe_mutable_data_identity_sha256"],
+            CONTROLLER.canonical_json_digest(
+                CONTROLLER.acceptance_full_mutable_data_identity(post_probe)
+            ),
+        )
+        self.assertNotEqual(
+            probe_intent["pre_probe_mutable_data_identity_sha256"],
+            CONTROLLER.canonical_json_digest(
+                CONTROLLER.mutable_data_identity(pre_probe)
+            ),
+        )
         started = CONTROLLER._external_database_audit_timestamp(
             evidence["observation_started_at"], "test observation start"
         )
@@ -10251,9 +10711,193 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             )
         rerun.assert_not_called()
 
-    def test_accept_resume_unknown_commit_isolated_and_retryable(self) -> None:
+    def test_acceptance_probe_transition_allows_only_reviewed_dynamics(
+        self,
+    ) -> None:
+        before = mutable_data_evidence(ledger_length=15)
+        after = json.loads(json.dumps(before))
+        self._mutate_acceptance_history(after, generation=5, rows=3)
+        dft_jobs = next(
+            record
+            for record in after["business_tables"]
+            if (record["schema"], record["table"])
+            == ("monomer_dft", "jobs")
+        )
+        dft_jobs["row_count"] += 1
+        dft_jobs["content_sha256"] = "sha256:" + "6" * 64
+        for sequence in after["sequences"]:
+            if (
+                f"{sequence['schema']}.{sequence['sequence']}"
+                in CONTROLLER.ACCEPTANCE_PROBE_MUTABLE_SEQUENCES
+            ):
+                sequence["last_value"] += 4
+                sequence["is_called"] = True
+        self._refresh_acceptance_drain(
+            after,
+            generation=8,
+            reason=f"post-acceptance drain {OPERATION_ID}",
+        )
+        reseal_mutable_data_evidence(after)
+
+        identity = CONTROLLER.validate_acceptance_probe_mutable_transition(
+            before,
+            after,
+            operation_id=OPERATION_ID,
+            release_sha=TARGET_SHA,
+        )
+        self.assertEqual(identity["business_tables"], after["business_tables"])
+
+        static_drift = json.loads(json.dumps(after))
+        static_drift["static_tables"][0]["content_sha256"] = (
+            "sha256:" + "0" * 64
+        )
+        reseal_mutable_data_evidence(static_drift)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "immutable or non-probe",
+        ):
+            CONTROLLER.validate_acceptance_probe_mutable_transition(
+                before,
+                static_drift,
+                operation_id=OPERATION_ID,
+                release_sha=TARGET_SHA,
+            )
+
+    def test_observe_guard_transitions_do_not_change_runtime_stability(
+        self,
+    ) -> None:
+        ready = {
+            "runtime_identity": {
+                "repository": {"sha": TARGET_SHA},
+                "containers": {"backend": {"container_id": "a" * 64}},
+                "dft_guard": {
+                    "status": "ready",
+                    "contention": False,
+                    "observed_at": "2026-08-14T00:00:00Z",
+                },
+                "dft_unit": {
+                    "unit_sha256": "sha256:" + "7" * 64,
+                    "invocation_id": "dft-invocation-1",
+                },
+                "dft_worker": {
+                    "worker_instance_id": "dft-worker-1",
+                    "runtime_ready": True,
+                    "gpu_guard_mode": "observe",
+                    "gpu_guard_status": "ready",
+                    "gpu_contention_observed": False,
+                    "runtime": {
+                        "gpu_uuid": "GPU-" + "1" * 32,
+                        "guard_status": "ready",
+                        "gpu_guard_mode": "observe",
+                        "gpu_guard_status": "ready",
+                        "gpu_contention_observed": False,
+                        "runtime_inventory_sha256": "sha256:" + "8" * 64,
+                    },
+                },
+                "verified_at": "2026-08-14T00:00:00Z",
+            },
+            "recovery_fence": {"fixture_instance": "same"},
+        }
+        quarantined = json.loads(json.dumps(ready))
+        quarantined["runtime_identity"]["dft_guard"].update(
+            status="quarantined",
+            contention=True,
+            observed_at="2026-08-14T00:01:00Z",
+        )
+        worker = quarantined["runtime_identity"]["dft_worker"]
+        worker["gpu_guard_status"] = "quarantined"
+        worker["gpu_contention_observed"] = True
+        worker["runtime"]["guard_status"] = "quarantined"
+        worker["runtime"]["gpu_guard_status"] = "quarantined"
+        worker["runtime"]["gpu_contention_observed"] = True
+
+        self.assertEqual(
+            CONTROLLER.acceptance_runtime_stability_identity(ready),
+            CONTROLLER.acceptance_runtime_stability_identity(quarantined),
+        )
+        quarantined["runtime_identity"]["dft_worker"][
+            "worker_instance_id"
+        ] = "dft-worker-2"
+        self.assertNotEqual(
+            CONTROLLER.acceptance_runtime_stability_identity(ready),
+            CONTROLLER.acceptance_runtime_stability_identity(quarantined),
+        )
+
+        enforce_ready = json.loads(json.dumps(ready))
+        enforce_ready["runtime_identity"]["dft_worker"][
+            "gpu_guard_mode"
+        ] = "enforce"
+        enforce_ready["runtime_identity"]["dft_worker"]["runtime"][
+            "gpu_guard_mode"
+        ] = "enforce"
+        enforce_quarantined = json.loads(json.dumps(enforce_ready))
+        enforce_quarantined["runtime_identity"]["dft_guard"].update(
+            status="quarantined",
+            contention=True,
+            observed_at="2026-08-14T00:01:00Z",
+        )
+        enforce_quarantined["runtime_identity"]["dft_worker"].update(
+            gpu_guard_status="quarantined",
+            gpu_contention_observed=True,
+        )
+        enforce_quarantined["runtime_identity"]["dft_worker"][
+            "runtime"
+        ].update(
+            guard_status="quarantined",
+            gpu_guard_status="quarantined",
+            gpu_contention_observed=True,
+        )
+        self.assertNotEqual(
+            CONTROLLER.acceptance_runtime_stability_identity(enforce_ready),
+            CONTROLLER.acceptance_runtime_stability_identity(
+                enforce_quarantined
+            ),
+        )
+
+        for label, mutate in (
+            (
+                "gpu-uuid",
+                lambda value: value["runtime_identity"]["dft_worker"][
+                    "runtime"
+                ].update(gpu_uuid="GPU-" + "2" * 32),
+            ),
+            (
+                "guard-mode",
+                lambda value: value["runtime_identity"]["dft_worker"].update(
+                    gpu_guard_mode="enforce"
+                ),
+            ),
+            (
+                "unit",
+                lambda value: value["runtime_identity"]["dft_unit"].update(
+                    invocation_id="dft-invocation-2"
+                ),
+            ),
+            (
+                "runtime",
+                lambda value: value["runtime_identity"]["dft_worker"][
+                    "runtime"
+                ].update(runtime_inventory_sha256="sha256:" + "9" * 64),
+            ),
+        ):
+            drifted = json.loads(json.dumps(ready))
+            mutate(drifted)
+            with self.subTest(label=label):
+                self.assertNotEqual(
+                    CONTROLLER.acceptance_runtime_stability_identity(ready),
+                    CONTROLLER.acceptance_runtime_stability_identity(drifted),
+                )
+
+    def test_accept_resume_lost_response_full_open_preserves_business_writes(
+        self,
+    ) -> None:
         lifecycle = LostResumeLifecycle()
         controller = self.controller(lifecycle=lifecycle)
+        repository_identity = controller.repository_identity
+        controller.repository_identity = lambda **kwargs: {  # type: ignore[method-assign]
+            **repository_identity(**kwargs),
+            "trust": {"fixture": "stable-trust-surface"},
+        }
         controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
         state = controller.apply_staged(
             target_sha=TARGET_SHA, operation_id=OPERATION_ID
@@ -10275,16 +10919,701 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             )
         marker = CONTROLLER.load_private_json(controller.marker_path)
         self.assertEqual(marker["phase"], "acceptance-resume-started")
+        self.assertEqual(
+            marker["acceptance_resume_intent"]["operation_id"],
+            OPERATION_ID,
+        )
+        self.assertEqual(
+            marker["acceptance_resume_intent"][
+                "candidate_state_sha256"
+            ],
+            marker["candidate_state_sha256"],
+        )
         self.assertTrue(lifecycle.admission_open)
 
+        # A public request may commit after the runtime opened and before the
+        # controller receives the resume response.  Recovery must prove the
+        # already-open runtime without recapturing or comparing mutable rows.
+        accepted_business_writes = 1
         lifecycle.events.clear()
-        recovered = controller.accept(
+        with mock.patch.object(
+            controller,
+            "_capture_mutable_data",
+            side_effect=AssertionError(
+                "full-open forward recovery recaptured mutable data"
+            ),
+        ) as mutable_capture:
+            recovered = controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+        self.assertEqual(recovered, state)
+        self.assertEqual(accepted_business_writes, 1)
+        mutable_capture.assert_not_called()
+        self.assertEqual(
+            lifecycle.events,
+            ["admission-status", "verify-open"],
+        )
+        self.assertFalse(controller.marker_path.exists())
+
+    def test_accept_resume_partial_persistent_open_redrains_forward_and_preserves_writes(
+        self,
+    ) -> None:
+        class PartialPersistentResumeLifecycle(FakeLifecycle):
+            def __init__(self) -> None:
+                super().__init__()
+                self.lose_after_internal_admission = False
+                self.public_ingress_open = False
+
+            def resume(
+                self,
+                controller: object,
+                descriptor: object,
+                expected_verification: object,
+            ) -> None:
+                marker = CONTROLLER.load_private_json(
+                    getattr(controller, "marker_path")
+                )
+                if marker.get("verification") != expected_verification:
+                    raise AssertionError(
+                        "runtime fence was not durable before resume"
+                    )
+                FakeLifecycle.resume(
+                    self,
+                    controller,
+                    descriptor,
+                    expected_verification,
+                )
+                if self.lose_after_internal_admission:
+                    self.lose_after_internal_admission = False
+                    raise CONTROLLER.PullDeployError(
+                        "injected lost response after partial admission commit"
+                    )
+                self.public_ingress_open = True
+
+            def verify_open_runtime(
+                self,
+                controller: object,
+                descriptor: object,
+                expected_verification: object,
+            ) -> None:
+                FakeLifecycle.verify_open_runtime(
+                    self,
+                    controller,
+                    descriptor,
+                    expected_verification,
+                )
+                if not self.public_ingress_open:
+                    raise CONTROLLER.PullDeployError(
+                        "public ingress did not commit"
+                    )
+
+        lifecycle = PartialPersistentResumeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        state = controller.apply_staged(
             target_sha=TARGET_SHA, operation_id=OPERATION_ID
         )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        controller.accept(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._expire_acceptance_hold(controller)
+        lifecycle.lose_after_internal_admission = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after partial admission commit",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(marker["phase"], "acceptance-resume-started")
+        self.assertTrue(lifecycle.admission_open)
+        self.assertFalse(lifecycle.public_ingress_open)
+
+        accepted_business_writes = 1
+        lifecycle.events.clear()
+        with mock.patch.object(
+            controller,
+            "_capture_mutable_data",
+            side_effect=AssertionError(
+                "partial-open forward recovery recaptured mutable data"
+            ),
+        ) as mutable_capture:
+            recovered = controller.recover_interrupted()
+
         self.assertEqual(recovered, state)
-        self.assertEqual(lifecycle.events[0], "recovery-isolate")
-        self.assertEqual(lifecycle.events[-1], "resume")
+        self.assertEqual(accepted_business_writes, 1)
+        mutable_capture.assert_not_called()
+        self.assertEqual(
+            lifecycle.events,
+            [
+                "admission-status",
+                "verify-open",
+                "recovery-isolate",
+                "recovery-redrain",
+                "verify-acceptance-stability",
+                "resume",
+            ],
+        )
+        self.assertTrue(lifecycle.admission_open)
+        self.assertTrue(lifecycle.public_ingress_open)
+        self.assertNotIn("restore_database", lifecycle.events)
+        self.assertNotIn("acceptance-probes", lifecycle.events)
         self.assertFalse(controller.marker_path.exists())
+
+    def test_accept_resume_rejects_repository_trust_drift_before_terminalization(
+        self,
+    ) -> None:
+        lifecycle = LostResumeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        repository_identity = controller.repository_identity
+
+        def trusted_repository(label: str):  # type: ignore[no-untyped-def]
+            return lambda **kwargs: {  # type: ignore[return-value]
+                **repository_identity(**kwargs),
+                "trust": {"fixture": label},
+            }
+
+        controller.repository_identity = trusted_repository(  # type: ignore[method-assign]
+            "sealed-trust"
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        controller.accept(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._expire_acceptance_hold(controller)
+        lifecycle.lose_next_resume = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after admission commit",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        controller.repository_identity = trusted_repository(  # type: ignore[method-assign]
+            "drifted-trust"
+        )
+        lifecycle.events.clear()
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "sealed runtime/Worker/source authority changed",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        retained = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(retained["phase"], "acceptance-resume-started")
+        self.assertEqual(lifecycle.events, [])
+        self.assertFalse(
+            (controller.audit_dir / OPERATION_ID / "operation-state.json").exists()
+        )
+
+    def test_accept_resume_rejects_synchronized_replacement_runtime_authority(
+        self,
+    ) -> None:
+        lifecycle = LostResumeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        controller.accept(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._expire_acceptance_hold(controller)
+        lifecycle.lose_next_resume = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after admission commit",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        lifecycle.runtime_instance = "fixture-runtime-2"
+        lifecycle.recovery_fence = {
+            "fixture_instance": "replacement-instance"
+        }
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        marker["verification"]["runtime_identity"][
+            "worker_instance_id"
+        ] = lifecycle.runtime_instance
+        marker["verification"]["recovery_fence"] = dict(
+            lifecycle.recovery_fence
+        )
+        CONTROLLER.atomic_json(controller.marker_path, marker)
+
+        lifecycle.events.clear()
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "sealed runtime/Worker/source authority changed",
+        ):
+            controller.recover_interrupted()
+
+        retained = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(retained["phase"], "acceptance-resume-started")
+        self.assertEqual(lifecycle.events, [])
+        self.assertFalse(
+            (controller.audit_dir / OPERATION_ID / "operation-state.json").exists()
+        )
+
+    def test_accept_resume_redrain_crash_preserves_full_authority_for_retry(
+        self,
+    ) -> None:
+        lifecycle = LostResumeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        state = controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        controller.accept(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._expire_acceptance_hold(controller)
+        lifecycle.lose_next_resume = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after admission commit",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        before = CONTROLLER.load_private_json(controller.marker_path)
+        sealed_verification = json.loads(json.dumps(before["verification"]))
+        lifecycle.admission_open = False
+        lifecycle.fail_at = "verify-acceptance-stability"
+        lifecycle.events.clear()
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "injected verify-acceptance-stability failure",
+        ):
+            controller.recover_interrupted()
+
+        crashed = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(crashed["phase"], "acceptance-resume-started")
+        self.assertEqual(crashed["verification"], sealed_verification)
+        self.assertEqual(
+            lifecycle.events,
+            [
+                "admission-status",
+                "recovery-isolate",
+                "recovery-redrain",
+                "verify-acceptance-stability",
+            ],
+        )
+
+        lifecycle.fail_at = None
+        lifecycle.events.clear()
+        recovered = controller.recover_interrupted()
+        self.assertEqual(recovered, state)
+        self.assertEqual(
+            lifecycle.events,
+            [
+                "admission-status",
+                "recovery-isolate",
+                "recovery-redrain",
+                "verify-acceptance-stability",
+                "resume",
+            ],
+        )
+        self.assertFalse(controller.marker_path.exists())
+
+    def test_accept_terminalization_rereads_exact_candidate_state(self) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        controller.accept(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._expire_acceptance_hold(controller)
+        original_resume = lifecycle.resume
+
+        def resume_then_remove_current(*args, **kwargs):  # type: ignore[no-untyped-def]
+            original_resume(*args, **kwargs)
+            controller.current_state_path.unlink()
+
+        lifecycle.resume = resume_then_remove_current  # type: ignore[method-assign]
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost its candidate current state",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(marker["phase"], "admission-resumed")
+        self.assertTrue(lifecycle.admission_open)
+        self.assertFalse(
+            (controller.audit_dir / OPERATION_ID / "success.json").exists()
+        )
+        self.assertFalse(
+            (
+                controller.audit_dir
+                / OPERATION_ID
+                / "operation-state.json"
+            ).exists()
+        )
+
+    def test_lost_acceptance_resume_blocks_rollback_before_side_effects(
+        self,
+    ) -> None:
+        lifecycle = LostResumeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        controller.accept(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._expire_acceptance_hold(controller)
+        lifecycle.lose_next_resume = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after admission commit",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        descriptor, descriptor_digest = controller._load_prepared(
+            OPERATION_ID,
+            TARGET_SHA,
+            allow_deployment_database_recovery=True,
+        )
+        sealed_marker = CONTROLLER.load_private_json(controller.marker_path)
+        for label, mutate in (
+            (
+                "missing",
+                lambda value: value.pop("acceptance_resume_intent"),
+            ),
+            (
+                "operation",
+                lambda value: value["acceptance_resume_intent"].update(
+                    operation_id="another-resume-operation"
+                ),
+            ),
+            (
+                "candidate",
+                lambda value: value["acceptance_resume_intent"].update(
+                    candidate_state_sha256="sha256:" + "f" * 64
+                ),
+            ),
+            (
+                "timestamp",
+                lambda value: value["acceptance_resume_intent"].update(
+                    recorded_at="not-a-timestamp"
+                ),
+            ),
+            (
+                "before-observation-deadline",
+                lambda value: value["acceptance_resume_intent"].update(
+                    recorded_at=value["acceptance_evidence"][
+                        "observation_started_at"
+                    ]
+                ),
+            ),
+            (
+                "future",
+                lambda value: value["acceptance_resume_intent"].update(
+                    recorded_at="2999-01-01T00:00:00Z"
+                ),
+            ),
+        ):
+            changed = json.loads(json.dumps(sealed_marker))
+            mutate(changed)
+            with self.subTest(label=label), self.assertRaises(
+                CONTROLLER.PullDeployError
+            ):
+                CONTROLLER.validate_recovery_marker(
+                    changed,
+                    descriptor=descriptor,
+                    descriptor_digest=descriptor_digest,
+                )
+
+        marker_bytes = controller.marker_path.read_bytes()
+        state_bytes = controller.current_state_path.read_bytes()
+        lifecycle.events.clear()
+        with (
+            mock.patch.object(controller, "_write_marker") as write_marker,
+            mock.patch.object(
+                controller, "_rollback_failed_attempt"
+            ) as rollback_attempt,
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "unknown public-admission commit; rollback is forbidden",
+            ),
+        ):
+            controller.rollback(operation_id=OPERATION_ID)
+
+        write_marker.assert_not_called()
+        rollback_attempt.assert_not_called()
+        self.assertEqual(lifecycle.events, [])
+        self.assertEqual(controller.marker_path.read_bytes(), marker_bytes)
+        self.assertEqual(controller.current_state_path.read_bytes(), state_bytes)
+
+    def test_resume_intent_fence_drift_stays_forward_only_and_blocks_rollback(
+        self,
+    ) -> None:
+        lifecycle = LostResumeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        controller.accept(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._expire_acceptance_hold(controller)
+        lifecycle.lose_next_resume = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after admission commit",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+        resume_started = CONTROLLER.load_private_json(controller.marker_path)
+        resume_intent = resume_started["acceptance_resume_intent"]
+
+        lifecycle.recovery_fence["fixture_instance"] = "replacement-instance"
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "forward fix is required",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+        forward_only = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(
+            forward_only["phase"], "acceptance-resume-started"
+        )
+        self.assertNotIn("acceptance_rejected", forward_only)
+        self.assertEqual(
+            forward_only["acceptance_resume_intent"], resume_intent
+        )
+        self.assertIn(
+            "forward fix is required",
+            forward_only["forward_recovery_error"],
+        )
+        self.assertNotIn(
+            "explicit rollback", forward_only["forward_recovery_error"]
+        )
+        descriptor, descriptor_digest = controller._load_prepared(
+            OPERATION_ID,
+            TARGET_SHA,
+            allow_deployment_database_recovery=True,
+        )
+        missing_evidence = json.loads(json.dumps(forward_only))
+        missing_evidence.pop("acceptance_evidence")
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "staged acceptance evidence is invalid",
+        ):
+            CONTROLLER.validate_recovery_marker(
+                missing_evidence,
+                descriptor=descriptor,
+                descriptor_digest=descriptor_digest,
+            )
+
+        marker_bytes = controller.marker_path.read_bytes()
+        state_bytes = controller.current_state_path.read_bytes()
+        lifecycle.events.clear()
+        with (
+            mock.patch.object(controller, "_write_marker") as write_marker,
+            mock.patch.object(
+                controller, "_rollback_failed_attempt"
+            ) as rollback_attempt,
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "unknown public-admission commit; rollback is forbidden",
+            ),
+        ):
+            controller.rollback(operation_id=OPERATION_ID)
+        write_marker.assert_not_called()
+        rollback_attempt.assert_not_called()
+        self.assertEqual(lifecycle.events, [])
+        self.assertEqual(controller.marker_path.read_bytes(), marker_bytes)
+        self.assertEqual(controller.current_state_path.read_bytes(), state_bytes)
+
+        lifecycle.events.clear()
+        with (
+            mock.patch.object(
+                controller, "_rollback_failed_attempt"
+            ) as rollback_attempt,
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError, "forward fix is required"
+            ),
+        ):
+            controller.recover_interrupted()
+        rollback_attempt.assert_not_called()
+        self.assertEqual(
+            lifecycle.events,
+            ["admission-status", "verify-open", "recovery-isolate"],
+        )
+        recovered_marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(
+            recovered_marker["phase"], "acceptance-resume-started"
+        )
+        self.assertEqual(
+            recovered_marker["acceptance_resume_intent"], resume_intent
+        )
+        self.assertEqual(controller.current_state_path.read_bytes(), state_bytes)
+
+    def test_stopped_runtime_after_resume_intent_never_restarts_or_probes(
+        self,
+    ) -> None:
+        lifecycle = LostResumeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        controller.accept(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._expire_acceptance_hold(controller)
+        lifecycle.lose_next_resume = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after admission commit",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+        sticky = CONTROLLER.load_private_json(controller.marker_path)[
+            "acceptance_resume_intent"
+        ]
+        lifecycle.runtime_state = "stopped"
+        lifecycle.admission_open = False
+        lifecycle.events.clear()
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "forward fix is required",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(marker["phase"], "acceptance-resume-started")
+        self.assertEqual(marker["acceptance_resume_intent"], sticky)
+        self.assertNotIn("acceptance_rejected", marker)
+        self.assertIn("forward fix is required", marker["forward_recovery_error"])
+        self.assertNotIn("explicit rollback", marker["forward_recovery_error"])
+        self.assertNotIn("start", lifecycle.events)
+        self.assertNotIn("acceptance-probes", lifecycle.events)
+        self.assertNotIn("verify", lifecycle.events)
+        self.assertNotIn("verify-acceptance-stability", lifecycle.events)
+        self.assertNotIn("resume", lifecycle.events)
+
+    def test_sticky_acceptance_rejection_remains_valid_and_requires_reviewed_fix(
+        self,
+    ) -> None:
+        lifecycle = LostResumeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        controller.accept(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._expire_acceptance_hold(controller)
+        lifecycle.lose_next_resume = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after admission commit",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        marker["phase"] = "acceptance-rejected"
+        marker["acceptance_rejected"] = True
+        marker["updated_at"] = CONTROLLER.utc_now()
+        CONTROLLER.atomic_json(controller.marker_path, marker)
+        descriptor, descriptor_digest = controller._load_prepared(
+            OPERATION_ID,
+            TARGET_SHA,
+            allow_deployment_database_recovery=True,
+        )
+        CONTROLLER.validate_recovery_marker(
+            marker,
+            descriptor=descriptor,
+            descriptor_digest=descriptor_digest,
+        )
+
+        lifecycle.events.clear()
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "separately reviewed forward fix is required",
+        ):
+            controller.recover_interrupted()
+
+        retained = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(retained["phase"], "acceptance-rejected")
+        self.assertTrue(retained["acceptance_rejected"])
+        self.assertEqual(
+            retained["acceptance_resume_intent"],
+            marker["acceptance_resume_intent"],
+        )
+        self.assertEqual(lifecycle.events, [])
+        CONTROLLER.validate_recovery_marker(
+            retained,
+            descriptor=descriptor,
+            descriptor_digest=descriptor_digest,
+        )
+
+    def test_stopped_observation_requires_rollback_then_fresh_deployment(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._write_passing_probe_report(controller)
+        controller.accept(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        self._expire_acceptance_hold(controller)
+        lifecycle.runtime_state = "stopped"
+        lifecycle.admission_open = False
+        lifecycle.events.clear()
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "explicit rollback followed by a fresh deployment operation",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(marker["phase"], "acceptance-rejected")
+        self.assertIn(
+            "explicit rollback followed by a fresh deployment operation",
+            marker["error"],
+        )
+        self.assertNotIn("acceptance reset", marker["error"])
+        self.assertNotIn("start", lifecycle.events)
+        self.assertNotIn("acceptance-probes", lifecycle.events)
 
     def test_final_accept_rejects_worker_fence_drift_and_requires_rollback(
         self,
@@ -10322,6 +11651,8 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         self.assertEqual(rejected["phase"], "acceptance-rejected")
         self.assertTrue(rejected["acceptance_rejected"])
         self.assertEqual(rejected["acceptance_evidence"], first_evidence)
+        self.assertIn("explicit rollback is required", rejected["error"])
+        self.assertNotIn("forward fix", rejected["error"])
         self.assertFalse(lifecycle.admission_open)
         with self.assertRaisesRegex(
             CONTROLLER.PullDeployError, "staged acceptance boundary"
@@ -10329,6 +11660,120 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             controller.accept(
                 target_sha=TARGET_SHA, operation_id=OPERATION_ID
             )
+
+    def test_final_accept_allows_only_owned_drain_refresh(self) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        state = controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        live_snapshot = json.loads(
+            json.dumps(
+                CONTROLLER.validate_mutable_data_pair(
+                    state["mutable_data_audit"]
+                )["after"]
+            )
+        )
+
+        def capture(*_args: object) -> dict[str, object]:
+            captured = json.loads(json.dumps(live_snapshot))
+            captured["captured_at"] = CONTROLLER.utc_now()
+            return captured
+
+        with (
+            mock.patch.object(
+                controller, "_capture_mutable_data", side_effect=capture
+            ),
+            mock.patch.object(
+                lifecycle,
+                "run_acceptance_probes",
+                side_effect=lambda *_args: self._write_passing_probe_report(
+                    controller
+                ),
+            ),
+        ):
+            observing = controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+            self._refresh_acceptance_drain(
+                live_snapshot,
+                generation=7,
+                reason=f"post-acceptance drain {OPERATION_ID}",
+            )
+            self._expire_acceptance_hold(controller)
+            lifecycle.events.clear()
+            accepted = controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        self.assertEqual(observing["status"], "maintenance-observation")
+        self.assertEqual(accepted, state)
+        self.assertIn("verify-acceptance-stability", lifecycle.events)
+        self.assertNotIn("verify", lifecycle.events)
+
+    def test_final_accept_rejects_post_probe_business_drift(self) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        state = controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        live_snapshot = json.loads(
+            json.dumps(
+                CONTROLLER.validate_mutable_data_pair(
+                    state["mutable_data_audit"]
+                )["after"]
+            )
+        )
+
+        def capture(*_args: object) -> dict[str, object]:
+            captured = json.loads(json.dumps(live_snapshot))
+            captured["captured_at"] = CONTROLLER.utc_now()
+            return captured
+
+        with (
+            mock.patch.object(
+                controller, "_capture_mutable_data", side_effect=capture
+            ),
+            mock.patch.object(
+                lifecycle,
+                "run_acceptance_probes",
+                side_effect=lambda *_args: self._write_passing_probe_report(
+                    controller
+                ),
+            ),
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+            history = next(
+                record
+                for record in live_snapshot["business_tables"]
+                if (record["schema"], record["table"])
+                == ("online_knowledge", "history")
+            )
+            history["row_count"] += 1
+            history["content_sha256"] = "sha256:" + "0" * 64
+            reseal_mutable_data_evidence(live_snapshot)
+            self._expire_acceptance_hold(controller)
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "stability changed",
+            ):
+                controller.accept(
+                    target_sha=TARGET_SHA, operation_id=OPERATION_ID
+                )
+
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(marker["phase"], "acceptance-rejected")
+        self.assertIn(
+            "post_probe_mutable_data_stability_sha256",
+            marker["error"],
+        )
+        self.assertFalse(lifecycle.admission_open)
 
     def test_accept_cleans_crash_left_proxy_before_consuming_report(self) -> None:
         lifecycle = FakeLifecycle()
@@ -10364,7 +11809,7 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         )
         self.assertLess(
             lifecycle.events.index("cleanup-acceptance-proxy"),
-            lifecycle.events.index("verify"),
+            lifecycle.events.index("verify-acceptance-stability"),
         )
 
     def test_failed_acceptance_probe_is_archived_before_retry(self) -> None:
@@ -10431,6 +11876,171 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             CONTROLLER.load_private_json(failed_path)["status"], "passed"
         )
 
+    def test_failed_partial_probe_mutation_retries_from_sealed_prebaseline(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        state = controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        live_snapshot = json.loads(
+            json.dumps(
+                CONTROLLER.validate_mutable_data_pair(
+                    state["mutable_data_audit"]
+                )["after"]
+            )
+        )
+        attempts = 0
+
+        def probes(*_args: object) -> None:
+            nonlocal attempts
+            attempts += 1
+            self._mutate_acceptance_history(
+                live_snapshot,
+                generation=attempts + 4,
+            )
+            if attempts == 1:
+                raise CONTROLLER.PullDeployError(
+                    "synthetic partial probe failure"
+                )
+            self._write_passing_probe_report(controller)
+
+        def capture(*_args: object) -> dict[str, object]:
+            captured = json.loads(json.dumps(live_snapshot))
+            captured["captured_at"] = CONTROLLER.utc_now()
+            return captured
+
+        with (
+            mock.patch.object(
+                controller, "_capture_mutable_data", side_effect=capture
+            ),
+            mock.patch.object(
+                lifecycle, "run_acceptance_probes", side_effect=probes
+            ),
+        ):
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "partial probe failure",
+            ):
+                controller.accept(
+                    target_sha=TARGET_SHA,
+                    operation_id=OPERATION_ID,
+                )
+            first_marker = CONTROLLER.load_private_json(
+                controller.marker_path
+            )
+            self.assertEqual(first_marker["phase"], "awaiting-acceptance")
+            first_intent = json.loads(
+                json.dumps(first_marker["acceptance_probe_intent"])
+            )
+
+            observing = controller.accept(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+            second_marker = CONTROLLER.load_private_json(
+                controller.marker_path
+            )
+            self.assertEqual(
+                second_marker["acceptance_probe_intent"], first_intent
+            )
+            self.assertNotEqual(
+                second_marker["acceptance_evidence"][
+                    "pre_probe_mutable_data_identity_sha256"
+                ],
+                second_marker["acceptance_evidence"][
+                    "post_probe_mutable_data_identity_sha256"
+                ],
+            )
+            self._expire_acceptance_hold(controller)
+            accepted = controller.accept(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+
+        self.assertEqual(attempts, 2)
+        self.assertEqual(observing["status"], "maintenance-observation")
+        self.assertEqual(accepted, state)
+
+    def test_recovery_failure_before_probe_intent_cannot_absorb_database_drift(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        state = controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        live_snapshot = json.loads(
+            json.dumps(
+                CONTROLLER.validate_mutable_data_pair(
+                    state["mutable_data_audit"]
+                )["after"]
+            )
+        )
+        original_recovery = controller._prepare_runtime_recovery
+        attempts = 0
+
+        def recover(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                self._mutate_acceptance_history(
+                    live_snapshot,
+                    generation=11,
+                )
+                raise CONTROLLER.PullDeployError(
+                    "synthetic recovery fence failure"
+                )
+            return original_recovery(*args, **kwargs)
+
+        def capture(*_args: object) -> dict[str, object]:
+            observed = json.loads(json.dumps(live_snapshot))
+            observed["captured_at"] = CONTROLLER.utc_now()
+            return observed
+
+        with (
+            mock.patch.object(
+                controller,
+                "_prepare_runtime_recovery",
+                side_effect=recover,
+            ),
+            mock.patch.object(
+                controller,
+                "_capture_mutable_data",
+                side_effect=capture,
+            ),
+            mock.patch.object(lifecycle, "run_acceptance_probes") as probes,
+        ):
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "recovery fence failure",
+            ):
+                controller.accept(
+                    target_sha=TARGET_SHA,
+                    operation_id=OPERATION_ID,
+                )
+            failed_recovery = CONTROLLER.load_private_json(
+                controller.marker_path
+            )
+            self.assertNotIn("acceptance_probe_intent", failed_recovery)
+
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "pre-probe database changed outside the owned drain",
+            ):
+                controller.accept(
+                    target_sha=TARGET_SHA,
+                    operation_id=OPERATION_ID,
+                )
+
+        probes.assert_not_called()
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertNotIn("acceptance_probe_intent", marker)
+
     def test_passing_probe_report_survives_crash_before_observation_marker(
         self,
     ) -> None:
@@ -10440,11 +12050,27 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         controller.apply_staged(
             target_sha=TARGET_SHA, operation_id=OPERATION_ID
         )
-        self._write_passing_probe_report(controller)
+        def write_then_lose_response(*_args: object) -> None:
+            self._write_passing_probe_report(controller)
+            raise CONTROLLER.PullDeployError("lost passing probe response")
 
         with mock.patch.object(
             lifecycle,
             "run_acceptance_probes",
+            side_effect=write_then_lose_response,
+        ):
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError, "lost passing probe response"
+            ):
+                controller.accept(
+                    target_sha=TARGET_SHA, operation_id=OPERATION_ID
+                )
+        crashed = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(crashed["phase"], "awaiting-acceptance")
+        self.assertIn("acceptance_probe_intent", crashed)
+
+        with mock.patch.object(
+            lifecycle, "run_acceptance_probes"
         ) as probes:
             observing = controller.accept(
                 target_sha=TARGET_SHA, operation_id=OPERATION_ID
@@ -10546,6 +12172,266 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         self.assertEqual(result["status"], "rejected-before-acceptance")
         self.assertIn("restore_database", lifecycle.events)
         self.assertFalse(controller.current_state_path.exists())
+        self.assertFalse(controller.marker_path.exists())
+
+    def test_staged_rollback_stop_crash_preserves_acceptance_provenance(
+        self,
+    ) -> None:
+        operation_id = "deploy-20260814-accept-stop-crash"
+        lifecycle = FakeLifecycle()
+        controller, previous = self._rejected_acceptance_with_previous(
+            lifecycle,
+            operation_id=operation_id,
+        )
+        rejected = CONTROLLER.load_private_json(controller.marker_path)
+        probe_intent = json.loads(
+            json.dumps(rejected["acceptance_probe_intent"])
+        )
+        evidence = json.loads(json.dumps(rejected["acceptance_evidence"]))
+        original_stop = lifecycle.stop
+        lose_response = True
+        stop_effects = 0
+
+        def stop(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal lose_response, stop_effects
+            if lifecycle.runtime_state != "stopped":
+                stop_effects += 1
+            original_stop(*args, **kwargs)
+            if lose_response:
+                lose_response = False
+                raise CONTROLLER.PullDeployError(
+                    "lost response after runtime stop commit"
+                )
+
+        lifecycle.stop = stop  # type: ignore[method-assign]
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after runtime stop commit",
+        ):
+            controller.rollback(operation_id=operation_id)
+
+        crashed = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(crashed["phase"], "runtime-stop-started")
+        self.assertEqual(lifecycle.runtime_state, "stopped")
+        self.assertEqual(stop_effects, 1)
+        self.assertTrue(crashed["acceptance_rejected"])
+        self.assertEqual(crashed["acceptance_probe_intent"], probe_intent)
+        self.assertEqual(crashed["acceptance_evidence"], evidence)
+
+        lifecycle.events.clear()
+        self.assertIsNone(controller.recover_interrupted())
+        self.assertEqual(stop_effects, 1)
+        self.assertIn("restore_database", lifecycle.events)
+        self.assertFalse(controller.marker_path.exists())
+        self.assertEqual(
+            CONTROLLER.load_private_json(controller.current_state_path),
+            previous,
+        )
+
+    def test_staged_rollback_database_restore_lost_response_replays_safely(
+        self,
+    ) -> None:
+        operation_id = "deploy-20260814-accept-restore-crash"
+        lifecycle = FakeLifecycle()
+        controller, previous = self._rejected_acceptance_with_previous(
+            lifecycle,
+            operation_id=operation_id,
+        )
+        rejected = CONTROLLER.load_private_json(controller.marker_path)
+        probe_intent = json.loads(
+            json.dumps(rejected["acceptance_probe_intent"])
+        )
+        evidence = json.loads(json.dumps(rejected["acceptance_evidence"]))
+        original_restore = lifecycle.restore_database
+        lose_response = True
+        restored_generation = 1
+        restore_effects = 0
+        restore_calls = 0
+
+        def restore(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal lose_response, restored_generation
+            nonlocal restore_effects, restore_calls
+            restore_calls += 1
+            result = original_restore(*args, **kwargs)
+            if restored_generation != 0:
+                restored_generation = 0
+                restore_effects += 1
+            if lose_response:
+                lose_response = False
+                raise CONTROLLER.PullDeployError(
+                    "lost response after database restore commit"
+                )
+            return result
+
+        lifecycle.restore_database = restore  # type: ignore[method-assign]
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after database restore commit",
+        ):
+            controller.rollback(operation_id=operation_id)
+
+        crashed = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(crashed["phase"], "database-restore-started")
+        self.assertTrue(crashed["database_restore_started"])
+        self.assertEqual(restored_generation, 0)
+        self.assertEqual(restore_effects, 1)
+        self.assertEqual(restore_calls, 1)
+        self.assertEqual(crashed["acceptance_probe_intent"], probe_intent)
+        self.assertEqual(crashed["acceptance_evidence"], evidence)
+
+        lifecycle.events.clear()
+        self.assertIsNone(controller.recover_interrupted())
+        # The controller cannot know whether the external restore committed
+        # when its response was lost, so it deliberately reissues the exact
+        # restore.  The fake generation models the required idempotence: the
+        # second call leaves the already-restored generation unchanged.
+        self.assertEqual(restore_calls, 2)
+        self.assertEqual(restore_effects, 1)
+        self.assertEqual(restored_generation, 0)
+        self.assertIn("restore_database", lifecycle.events)
+        self.assertFalse(controller.marker_path.exists())
+        self.assertEqual(
+            CONTROLLER.load_private_json(controller.current_state_path),
+            previous,
+        )
+
+    def test_lost_rollback_resume_preserves_post_open_writes(self) -> None:
+        operation_id = "deploy-20260814-accept-resume-loss"
+        lifecycle = LostResumeLifecycle()
+        controller, previous = self._rejected_acceptance_with_previous(
+            lifecycle,
+            operation_id=operation_id,
+        )
+        restore_calls = 0
+        accepted_writes = 0
+        original_restore = lifecycle.restore_database
+
+        def restore(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal restore_calls, accepted_writes
+            restore_calls += 1
+            accepted_writes = 0
+            return original_restore(*args, **kwargs)
+
+        lifecycle.restore_database = restore  # type: ignore[method-assign]
+        lifecycle.lose_next_resume = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after admission commit",
+        ):
+            controller.rollback(operation_id=operation_id)
+
+        crashed = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(
+            crashed["phase"], "rollback-admission-resume-started"
+        )
+        self.assertIn("rollback_admission_resume_intent", crashed)
+        self.assertIn("acceptance_probe_intent", crashed)
+        self.assertIn("acceptance_evidence", crashed)
+        intent = crashed["rollback_admission_resume_intent"]
+        self.assertEqual(
+            intent["candidate_state_sha256"],
+            crashed["candidate_state_sha256"],
+        )
+        self.assertEqual(
+            intent["previous_authority_sha256"],
+            CONTROLLER.sha256_file(controller.current_state_path),
+        )
+        self.assertTrue(lifecycle.admission_open)
+        self.assertEqual(restore_calls, 1)
+
+        # Model a write accepted after the old runtime became public but
+        # before the controller observed the resume response.
+        accepted_writes += 1
+        lifecycle.events.clear()
+        retried = controller.rollback(operation_id=operation_id)
+
+        self.assertEqual(retried["status"], "rejected-before-acceptance")
+        self.assertEqual(accepted_writes, 1)
+        self.assertEqual(restore_calls, 1)
+        self.assertEqual(lifecycle.events, ["admission-status", "verify-open"])
+        self.assertNotIn("restore_database", lifecycle.events)
+        self.assertNotIn("stop", lifecycle.events)
+        self.assertNotIn("recovery-isolate", lifecycle.events)
+        self.assertFalse(controller.marker_path.exists())
+        self.assertEqual(
+            CONTROLLER.load_private_json(controller.current_state_path),
+            previous,
+        )
+
+    def test_partial_rollback_resume_recovers_forward_without_restore(self) -> None:
+        class PartialResumeLifecycle(FakeLifecycle):
+            lose_after_persistent_resume = False
+            ingress_open = False
+
+            def resume(self, controller, descriptor, expected):  # type: ignore[no-untyped-def]
+                marker = CONTROLLER.load_private_json(
+                    getattr(controller, "marker_path")
+                )
+                if marker.get("verification") != expected:
+                    raise AssertionError("rollback resume fence was not durable")
+                if self.lose_after_persistent_resume:
+                    self.lose_after_persistent_resume = False
+                    self._event("resume")
+                    self.admission_open = True
+                    self.ingress_open = False
+                    raise CONTROLLER.PullDeployError(
+                        "lost response after persistent resume"
+                    )
+                super().resume(controller, descriptor, expected)
+                self.ingress_open = True
+
+            def verify_open_runtime(  # type: ignore[no-untyped-def]
+                self, controller, descriptor, expected
+            ):
+                self._event("verify-open")
+                if not self.ingress_open:
+                    raise CONTROLLER.PullDeployError(
+                        "public ingress is not open"
+                    )
+                if expected != self.verification():
+                    raise CONTROLLER.PullDeployError(
+                        "open runtime instance differs from committed verification"
+                    )
+
+        operation_id = "deploy-20260814-partial-resume"
+        lifecycle = PartialResumeLifecycle()
+        controller, _previous = self._rejected_acceptance_with_previous(
+            lifecycle,
+            operation_id=operation_id,
+        )
+        restore_calls = 0
+        original_restore = lifecycle.restore_database
+
+        def restore(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal restore_calls
+            restore_calls += 1
+            return original_restore(*args, **kwargs)
+
+        lifecycle.restore_database = restore  # type: ignore[method-assign]
+        lifecycle.lose_after_persistent_resume = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after persistent resume",
+        ):
+            controller.rollback(operation_id=operation_id)
+        self.assertEqual(restore_calls, 1)
+        self.assertTrue(lifecycle.admission_open)
+        self.assertFalse(lifecycle.ingress_open)
+
+        lifecycle.events.clear()
+        self.assertIsNone(controller.recover_interrupted())
+
+        self.assertEqual(restore_calls, 1)
+        self.assertTrue(lifecycle.admission_open)
+        self.assertTrue(lifecycle.ingress_open)
+        self.assertEqual(
+            lifecycle.events[:2], ["admission-status", "verify-open"]
+        )
+        self.assertIn("recovery-isolate", lifecycle.events)
+        self.assertIn("recovery-redrain", lifecycle.events)
+        self.assertIn("resume", lifecycle.events)
+        self.assertNotIn("restore_database", lifecycle.events)
+        self.assertNotIn("stop", lifecycle.events)
         self.assertFalse(controller.marker_path.exists())
 
     def test_staged_rollback_retires_candidate_before_acceptance(self) -> None:
@@ -10715,7 +12601,11 @@ class LifecycleStateMachineTests(PullDeployTestCase):
                 "verify",
                 "recovery-isolate",
                 "recovery-redrain",
-                "verify",
+                "verify-acceptance-stability",
+                "admission-status",
+                "recovery-isolate",
+                "recovery-redrain",
+                "verify-acceptance-stability",
                 "resume",
             ],
         )
@@ -10878,65 +12768,77 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         )
         self.assertTrue(controller.marker_path.exists())
 
-    def test_explicit_rollback_reloads_source_state_before_commit(self) -> None:
-        controller = self.controller()
+    def test_terminal_v4_rollback_requires_forward_fix_before_side_effects(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
         controller.prepare(
             target_sha=TARGET_SHA, operation_id=OPERATION_ID
         )
-        controller.apply(
+        deployed = controller.apply(
             target_sha=TARGET_SHA, operation_id=OPERATION_ID
         )
-        successor = "deploy-rollback-state-cas-drift"
-        controller.prepare(
-            target_sha=TARGET_SHA, operation_id=successor
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
         )
-        controller.apply(
-            target_sha=TARGET_SHA, operation_id=successor
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        self.assertEqual(
+            descriptor["schema_version"], CONTROLLER.DESCRIPTOR_SCHEMA_VERSION
         )
-        original_revalidate = (
-            controller._revalidate_candidate_database_state
-        )
-        drifted: dict[str, object] | None = None
-
-        def drift_before_commit(descriptor, state, **kwargs):  # type: ignore[no-untyped-def]
-            nonlocal drifted
-            result = original_revalidate(
-                descriptor, state, **kwargs
+        self.assertTrue(lifecycle.admission_open)
+        self.assertFalse(controller.marker_path.exists())
+        state_bytes = controller.current_state_path.read_bytes()
+        source_identity = controller.repository_identity()
+        backup_inventory = sorted(
+            (
+                path.relative_to(controller.backups_dir).as_posix(),
+                CONTROLLER.sha256_file(path),
             )
-            if state.get("rollback_provenance") is not None:
-                drifted = CONTROLLER.load_private_json(
-                    controller.current_state_path
-                )
-                drifted["deployed_at"] = "2026-07-18T12:00:03Z"
-                CONTROLLER.atomic_json(
-                    controller.current_state_path, drifted
-                )
-            return result
-
+            for path in controller.backups_dir.rglob("*")
+            if path.is_file()
+        )
+        lifecycle.events.clear()
         with (
-            mock.patch.object(
-                controller,
-                "_revalidate_candidate_database_state",
-                side_effect=drift_before_commit,
-            ),
+            mock.patch.object(controller, "_write_marker") as write_marker,
+            mock.patch.object(lifecycle, "drain") as drain,
+            mock.patch.object(lifecycle, "backup_rollback") as backup,
+            mock.patch.object(lifecycle, "stop") as stop,
             self.assertRaisesRegex(
                 CONTROLLER.PullDeployError,
-                "changed before commit",
+                "forbidden after public admission; deploy a forward fix",
             ),
         ):
-            controller.rollback(operation_id=successor)
+            controller.rollback(operation_id=OPERATION_ID)
+
+        write_marker.assert_not_called()
+        drain.assert_not_called()
+        backup.assert_not_called()
+        stop.assert_not_called()
+        self.assertEqual(lifecycle.events, [])
+        self.assertFalse(controller.marker_path.exists())
         self.assertEqual(
-            CONTROLLER.load_private_json(
-                controller.current_state_path
+            controller.current_state_path.read_bytes(), state_bytes
+        )
+        self.assertEqual(controller.repository_identity(), source_identity)
+        self.assertEqual(
+            sorted(
+                (
+                    path.relative_to(controller.backups_dir).as_posix(),
+                    CONTROLLER.sha256_file(path),
+                )
+                for path in controller.backups_dir.rglob("*")
+                if path.is_file()
             ),
-            drifted,
-        )
-        marker = CONTROLLER.load_private_json(
-            controller.marker_path
+            backup_inventory,
         )
         self.assertEqual(
-            marker["current_state_precondition_sha256"],
-            marker["rollback_current_state_sha256"],
+            controller._load_operation_state(OPERATION_ID)["outcome"],
+            "deployed",
+        )
+        self.assertEqual(
+            CONTROLLER.load_private_json(controller.current_state_path),
+            deployed,
         )
 
     def test_steady_state_requires_outcome_and_exact_success_audit(self) -> None:
@@ -11245,10 +13147,10 @@ class LifecycleStateMachineTests(PullDeployTestCase):
     def test_explicit_rollback_unknown_commit_rejects_changed_instance(self) -> None:
         lifecycle = LostResumeLifecycle()
         controller = self.controller(lifecycle=lifecycle)
-        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._prepare_legacy_v2(controller, OPERATION_ID)
         controller.apply(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
         second_operation = "deploy-20260716-explicit-fence"
-        controller.prepare(target_sha=TARGET_SHA, operation_id=second_operation)
+        self._prepare_legacy_v2(controller, second_operation)
         controller.apply(target_sha=TARGET_SHA, operation_id=second_operation)
         lifecycle.lose_next_resume = True
         with self.assertRaisesRegex(
@@ -11318,9 +13220,13 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         ):
             controller.recover_interrupted()
         self.assertTrue(controller.marker_path.is_file())
-        self.assertEqual(lifecycle.events, ["recovery-isolate"])
+        self.assertEqual(
+            lifecycle.events,
+            ["admission-status", "verify-open", "recovery-isolate"],
+        )
         self.assertNotIn("start", lifecycle.events)
         self.assertNotIn("stop", lifecycle.events)
+        self.assertNotIn("restore_database", lifecycle.events)
 
     def test_pre_stop_unknown_commit_rejects_changed_instance(self) -> None:
         lifecycle = LostUnchangedResumeLifecycle()
@@ -11682,11 +13588,11 @@ class LifecycleStateMachineTests(PullDeployTestCase):
     ) -> None:
         lifecycle = FakeLifecycle()
         controller = self.controller(lifecycle=lifecycle)
-        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._prepare_legacy_v2(controller, OPERATION_ID)
         controller.apply(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
 
         second_operation = "deploy-20260716-0002"
-        controller.prepare(target_sha=TARGET_SHA, operation_id=second_operation)
+        self._prepare_legacy_v2(controller, second_operation)
         controller.apply(target_sha=TARGET_SHA, operation_id=second_operation)
         lifecycle.events.clear()
 
@@ -11720,13 +13626,10 @@ class LifecycleStateMachineTests(PullDeployTestCase):
     def test_explicit_rollback_recovers_write_before_phase_commit(self) -> None:
         lifecycle = FakeLifecycle()
         controller = self.controller(lifecycle=lifecycle)
-        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._prepare_legacy_v2(controller, OPERATION_ID)
         controller.apply(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
         second_operation = "deploy-20260716-rollback-write-window"
-        controller.prepare(
-            target_sha=TARGET_SHA,
-            operation_id=second_operation,
-        )
+        self._prepare_legacy_v2(controller, second_operation)
         controller.apply(
             target_sha=TARGET_SHA,
             operation_id=second_operation,
@@ -11782,10 +13685,7 @@ class LifecycleStateMachineTests(PullDeployTestCase):
 
     def test_explicit_rollback_preserves_pretty_previous_file_digest(self) -> None:
         controller = self.controller(lifecycle=FakeLifecycle())
-        controller.prepare(
-            target_sha=TARGET_SHA,
-            operation_id=OPERATION_ID,
-        )
+        self._prepare_legacy_v2(controller, OPERATION_ID)
         previous = controller.apply(
             target_sha=TARGET_SHA,
             operation_id=OPERATION_ID,
@@ -11809,10 +13709,7 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         self.assertNotEqual(pretty_digest, canonical_digest)
 
         successor = "deploy-pretty-previous-rollback"
-        controller.prepare(
-            target_sha=TARGET_SHA,
-            operation_id=successor,
-        )
+        self._prepare_legacy_v2(controller, successor)
         _root, descriptor_path, _ready = controller._operation_paths(
             successor
         )
@@ -11841,13 +13738,10 @@ class LifecycleStateMachineTests(PullDeployTestCase):
     ) -> None:
         lifecycle = FakeLifecycle()
         controller = self.controller(lifecycle=lifecycle)
-        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._prepare_legacy_v2(controller, OPERATION_ID)
         controller.apply(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
         second_operation = "deploy-20260716-abort-retry"
-        controller.prepare(
-            target_sha=TARGET_SHA,
-            operation_id=second_operation,
-        )
+        self._prepare_legacy_v2(controller, second_operation)
         controller.apply(
             target_sha=TARGET_SHA,
             operation_id=second_operation,
@@ -11885,13 +13779,10 @@ class LifecycleStateMachineTests(PullDeployTestCase):
     ) -> None:
         lifecycle = FakeLifecycle()
         controller = self.controller(lifecycle=lifecycle)
-        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        self._prepare_legacy_v2(controller, OPERATION_ID)
         controller.apply(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
         second_operation = "deploy-20260716-source-audit-tamper"
-        controller.prepare(
-            target_sha=TARGET_SHA,
-            operation_id=second_operation,
-        )
+        self._prepare_legacy_v2(controller, second_operation)
         controller.apply(
             target_sha=TARGET_SHA,
             operation_id=second_operation,

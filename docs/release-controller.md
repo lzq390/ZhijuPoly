@@ -243,14 +243,49 @@ probe set covers six-model DFT warmup and a minimum single point, MD one-running
 plus two-queued capacity/fourth-submit 429/cancellation, property histogram and
 2D structure APIs, knowledge, and the main frontend routes.
 
+Ingress isolation and a candidate-bound `acceptance_probe_intent` are durable
+before the first probe. Its full mutable-data digest remains the pre-probe
+authority across a failed or crashed attempt that may leave partial MD/DFT
+history. The passing path validates a strict pre/post immutable projection:
+PostgreSQL/system/role/ledger identity, business schemas, static and analytics
+data, migration exceptions, sequence structure, bridge structure and all
+non-probe rows must remain unchanged. Only reviewed MD/DFT probe rows, their
+dynamic sequences/bridge values and this operation's drain bookkeeping may
+change. The resulting post-probe stability digest is sealed in acceptance
+evidence.
+
 After the returned `acceptance_not_before`, the operator invokes the same
-`accept` command a second time. The controller revalidates the sealed report and
-source/current-state/database/runtime/Worker/image identities. Only an
-unchanged candidate advances through `acceptance-resume-started` to
+`accept` command a second time. The controller uses a read-only runtime check,
+without submitting another canary, and revalidates the sealed report and
+source/current-state/database/runtime/Worker/image identities. Controller-owned
+drain timestamp/content refreshes are normalised, but post-probe business and
+sequence state remains exact. DFT observe-only `ready`/`quarantined` contention
+transitions are dynamic warning state; a valid fresh guard file bound to the
+descriptor GPU UUID plus unchanged runtime/process identity is still required.
+Only an unchanged candidate advances through `acceptance-resume-started` to
 `admission-resumed`, opens ingress and submissions, records the terminal
-outcome, and removes the marker. Failed probes or identity drift keep admission
-closed and require explicit rollback; staging time before probes never counts
-toward the 900-second observation.
+outcome, and removes the marker. Before `acceptance_resume_intent`, failed
+probes or identity drift keep admission closed and require explicit rollback;
+staging time before probes never counts toward the 900-second observation. A
+stopped runtime is restartable only from `awaiting-acceptance`; at later
+acceptance phases it remains stopped and is rejected. After the sticky resume
+intent, rollback is forbidden and recovery can proceed forward only. A retry
+first read-only validates the exact candidate current state, source, sealed
+probe report/authority, and non-mutable database provenance. If persistent
+admission and the complete public runtime are already open with the exact
+sealed fence, it records `admission-resumed` and terminalizes without isolating
+ingress or reading mutable rows. A partial persistent resume is isolated and
+exactly re-drained, then compares only candidate, runtime, non-mutable database,
+and Worker-fence identities before resuming. Legitimate writes accepted after
+the unknown resume commit are never compared with the pre-resume snapshot. A
+stopped or drifted runtime retains `acceptance-resume-started` and its sticky
+intent and requires a forward fix; it is not converted into a rollbackable
+rejection. On both paths, the top-level full runtime-verification and Worker
+fence digests must bind the sealed acceptance evidence, and the freshly read
+complete repository identity—including Git trust and permission-takeover
+evidence—must exactly equal the repository identity sealed by that runtime
+verification. A partial re-drain never overwrites this full authority with its
+recovery-only observation.
 
 ## Runtime and slot records
 
@@ -288,15 +323,14 @@ unknown fields and inconsistent current/previous records fail closed.
 
 ## Rollback and recovery
 
-`rollback --operation-id <id>` consumes the recorded attempt. It does not accept
-an arbitrary SHA. The controller keeps ingress isolated, stops candidate
-services, restores the recorded MD slot/unit and DFT runtime/env/unit as one
-coherent old-runtime set, restores previous image and asset identities, and
-moves the dedicated checkout's local `main` back to the exact commit protected
-by `refs/nexpoly/previous`. It never combines old source with a candidate Worker
-environment. The old runtime is admitted only after its source, database,
-Worker, image and smoke identities pass. A later deployment fetches and
-performs the normal fast-forward checks from that clean local `main`.
+`rollback --operation-id <id>` consumes an in-progress staged attempt. It does
+not accept an arbitrary SHA. Before public admission opens, the controller
+keeps ingress isolated, stops candidate services, restores the recorded MD
+slot/unit and DFT runtime/env/unit as one coherent old-runtime set, restores
+previous image and asset identities, and moves the dedicated checkout's local
+`main` back to the exact sealed predecessor. It never combines old source with
+a candidate Worker environment. The old runtime is admitted only after its
+source, database, Worker, image and smoke identities pass.
 
 For the exact 0013→0015 ordinary transition, entering the migration phase is an
 unconditional whole-database recovery boundary. Even when a transaction appears
@@ -306,6 +340,34 @@ that phase may restore only the sealed source/images/assets/Workers. A failed
 probe, observation drift, crash at an acceptance boundary, or ambiguous record
 never authorizes public admission; explicit rollback keeps the fence closed
 until recovery is proven.
+
+After a descriptor-v4 deployment has completed acceptance and reopened public
+admission, ordinary `rollback` fails before it writes a recovery marker, takes
+a backup, drains, or stops any service. The supported response is a forward
+fix. Restoring the drain-final post-0013 dump at that point would discard every
+write accepted after release, while retaining the post-0015 database would put
+the old source on an unsupported schema. Such a data-loss rollback therefore
+requires a separately reviewed and authorized maintenance entrypoint; the
+ordinary release controller deliberately has no override flag.
+
+The same fence begins before the final `resume` call. The controller first
+persists an `acceptance_resume_intent` bound to the operation and candidate
+state. `acceptance-resume-started` is therefore an unknown public-admission
+commit boundary, not a staged rollback phase. New recovery attempts preserve
+that phase on stopped-runtime or identity failure. A pre-existing marker that
+already combines the sticky intent with `acceptance-rejected` remains valid,
+but automatic convergence and rollback both refuse it; a separately reviewed
+forward fix is required. No path restores the database after this intent.
+
+A staged rollback has a separate sticky boundary. After the previous
+database/effects/current state are restored, but before old admission opens,
+the marker records `rollback_admission_resume_intent` bound to the failed
+candidate, previous deployment or adoption authority, backup/restore evidence,
+and runtime recovery fence. Resume success advances to
+`rollback-admission-resumed`. Recovery from either phase may verify a fully
+open exact runtime or re-drain and resume it forward, but cannot repeat the
+database restore or effect rollback; this preserves writes accepted after a
+lost resume response.
 
 On process death, the marker phase determines recovery. A missing or ambiguous
 record, changed Git tree, changed slot, missing image, unverified backup or
