@@ -1,18 +1,33 @@
 \set ON_ERROR_STOP on
 
--- Run this reviewed template as the cluster role administrator, connected to
--- nexpoly during the maintenance window.  It deliberately contains no
--- password.  Provision or rotate the LOGIN password out of band, then install
--- it only in the deploy-user-owned mode-0600 pgpass file.
+-- This file is consumed only by provision_mutable_data_audit_role.py.  The
+-- provisioner replaces the single verifier placeholder with a locally
+-- generated PostgreSQL SCRAM-SHA-256 verifier.  A plaintext password must
+-- never be substituted here.
 --
--- Existing object ownership and relation/column/sequence/routine/large-object
--- write ACLs are not removed here: the final assertions fail and roll this
--- transaction back so an operator can review and remediate that unexpected
--- authority explicitly.
-BEGIN;
+-- The contract is database-local: it deliberately does not grant the
+-- cluster-wide predefined read role.  Read authority is explicit for the
+-- governed schemas that exist in nexpoly at transaction time.  Future table
+-- and sequence SELECT grants are scoped to objects created by polyprop in
+-- those same schemas.
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+__IN_TRANSACTION_SEALED_CAS__
 
 DO $provision$
 BEGIN
+    IF current_database() <> 'nexpoly'
+       OR session_user <> 'polyprop'
+       OR NOT EXISTS (
+           SELECT 1
+           FROM pg_catalog.pg_roles
+           WHERE rolname = session_user
+             AND rolsuper
+       )
+    THEN
+        RAISE EXCEPTION
+            'mutable-audit role requires the polyprop cluster administrator in nexpoly';
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1
         FROM pg_catalog.pg_roles
@@ -42,10 +57,12 @@ ALTER ROLE nexpoly_mutable_audit RESET ALL;
 ALTER ROLE nexpoly_mutable_audit IN DATABASE nexpoly RESET ALL;
 ALTER ROLE nexpoly_mutable_audit
     SET default_transaction_read_only = on;
+ALTER ROLE nexpoly_mutable_audit
+    PASSWORD __SCRAM_VERIFIER_LITERAL__;
 
--- Membership is exact.  Remove every pre-existing direct membership before
--- granting the one read-only predefined role.  This also removes
--- pg_write_all_data and every other predefined or site-defined authority.
+-- Direct and inherited role membership is empty.  Database access is CONNECT
+-- only; TEMPORARY may remain effective through PostgreSQL's database-wide
+-- PUBLIC default, but it cannot create persistent state.
 DO $memberships$
 DECLARE
     membership record;
@@ -59,7 +76,7 @@ BEGIN
           ON parent.oid = member.roleid
         WHERE child.rolname = 'nexpoly_mutable_audit'
     LOOP
-        EXECUTE format(
+        EXECUTE pg_catalog.format(
             'REVOKE %I FROM nexpoly_mutable_audit',
             membership.rolname
         );
@@ -71,15 +88,211 @@ REVOKE ALL PRIVILEGES ON DATABASE nexpoly
     FROM nexpoly_mutable_audit;
 GRANT CONNECT ON DATABASE nexpoly
     TO nexpoly_mutable_audit;
-GRANT pg_read_all_data
-    TO nexpoly_mutable_audit
-    WITH INHERIT TRUE, SET TRUE;
 
--- PostgreSQL grants these large-object mutators to PUBLIC by default.  A role
--- with no table ACL could otherwise turn transaction_read_only off and create
--- persistent large objects.  Preserve the current database owner's existing
--- ability through pg_database_owner, but remove the implicit PUBLIC path for
--- this database.
+-- Remove every default ACL entry that directly names the audit role before
+-- installing the exact polyprop + governed-schema projection below.
+DO $clear_defaults$
+DECLARE
+    default_acl record;
+    object_class text;
+    schema_clause text;
+BEGIN
+    FOR default_acl IN
+        SELECT DISTINCT
+            owner.rolname AS owner_name,
+            namespace.nspname AS schema_name,
+            defaults.defaclobjtype AS object_type
+        FROM pg_catalog.pg_default_acl AS defaults
+        JOIN pg_catalog.pg_roles AS owner
+          ON owner.oid = defaults.defaclrole
+        LEFT JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = defaults.defaclnamespace
+        CROSS JOIN LATERAL
+            pg_catalog.aclexplode(defaults.defaclacl) AS acl
+        JOIN pg_catalog.pg_roles AS grantee
+          ON grantee.oid = acl.grantee
+        WHERE grantee.rolname = 'nexpoly_mutable_audit'
+    LOOP
+        object_class := CASE default_acl.object_type
+            WHEN 'r' THEN 'TABLES'
+            WHEN 'S' THEN 'SEQUENCES'
+            WHEN 'f' THEN 'FUNCTIONS'
+            WHEN 'T' THEN 'TYPES'
+            WHEN 'n' THEN 'SCHEMAS'
+            ELSE NULL
+        END;
+        IF object_class IS NULL THEN
+            RAISE EXCEPTION
+                'unsupported mutable-audit default ACL object type: %',
+                default_acl.object_type;
+        END IF;
+        schema_clause := CASE
+            WHEN default_acl.schema_name IS NULL THEN ''
+            ELSE pg_catalog.format(
+                ' IN SCHEMA %I', default_acl.schema_name
+            )
+        END;
+        EXECUTE pg_catalog.format(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE %I%s '
+            'REVOKE ALL PRIVILEGES ON %s FROM nexpoly_mutable_audit',
+            default_acl.owner_name,
+            schema_clause,
+            object_class
+        );
+    END LOOP;
+END
+$clear_defaults$;
+
+-- Column ACLs survive a table-level REVOKE, so clear any direct column grant
+-- before normalizing each governed schema.
+DO $clear_columns$
+DECLARE
+    relation_acl record;
+BEGIN
+    FOR relation_acl IN
+        SELECT
+            namespace.nspname AS schema_name,
+            relation.relname AS relation_name,
+            pg_catalog.string_agg(
+                pg_catalog.quote_ident(attribute.attname),
+                ', ' ORDER BY attribute.attnum
+            ) AS columns
+        FROM pg_catalog.pg_roles AS target
+        JOIN pg_catalog.pg_attribute AS attribute
+          ON attribute.attacl IS NOT NULL
+        JOIN pg_catalog.pg_class AS relation
+          ON relation.oid = attribute.attrelid
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        CROSS JOIN LATERAL
+            pg_catalog.aclexplode(attribute.attacl) AS acl
+        WHERE target.rolname = 'nexpoly_mutable_audit'
+          AND acl.grantee = target.oid
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped
+          AND namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+        GROUP BY namespace.nspname, relation.relname
+    LOOP
+        EXECUTE pg_catalog.format(
+            'REVOKE ALL PRIVILEGES (%s) ON TABLE %I.%I '
+            'FROM nexpoly_mutable_audit',
+            relation_acl.columns,
+            relation_acl.schema_name,
+            relation_acl.relation_name
+        );
+    END LOOP;
+END
+$clear_columns$;
+
+DO $schema_grants$
+DECLARE
+    schema_name text;
+BEGIN
+    FOR schema_name IN
+        SELECT namespace.nspname
+        FROM pg_catalog.pg_namespace AS namespace
+        WHERE namespace.nspname = ANY(ARRAY[
+            'core', 'dft', 'experimental', 'generation', 'governance',
+            'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
+            'online_knowledge', 'pi'
+        ]::text[])
+        ORDER BY namespace.nspname
+    LOOP
+        EXECUTE pg_catalog.format(
+            'REVOKE ALL PRIVILEGES ON SCHEMA %I '
+            'FROM nexpoly_mutable_audit',
+            schema_name
+        );
+        EXECUTE pg_catalog.format(
+            'GRANT USAGE ON SCHEMA %I TO nexpoly_mutable_audit',
+            schema_name
+        );
+        EXECUTE pg_catalog.format(
+            'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I '
+            'FROM nexpoly_mutable_audit',
+            schema_name
+        );
+        EXECUTE pg_catalog.format(
+            'GRANT SELECT ON ALL TABLES IN SCHEMA %I '
+            'TO nexpoly_mutable_audit',
+            schema_name
+        );
+        EXECUTE pg_catalog.format(
+            'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I '
+            'FROM nexpoly_mutable_audit',
+            schema_name
+        );
+        EXECUTE pg_catalog.format(
+            'GRANT SELECT ON ALL SEQUENCES IN SCHEMA %I '
+            'TO nexpoly_mutable_audit',
+            schema_name
+        );
+        EXECUTE pg_catalog.format(
+            'REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA %I '
+            'FROM nexpoly_mutable_audit',
+            schema_name
+        );
+        EXECUTE pg_catalog.format(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE polyprop IN SCHEMA %I '
+            'GRANT SELECT ON TABLES TO nexpoly_mutable_audit',
+            schema_name
+        );
+        EXECUTE pg_catalog.format(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE polyprop IN SCHEMA %I '
+            'GRANT SELECT ON SEQUENCES TO nexpoly_mutable_audit',
+            schema_name
+        );
+    END LOOP;
+END
+$schema_grants$;
+
+-- Direct authority outside the governed schema allowlist is removed.  PUBLIC
+-- privileges are not silently changed; the final assertions reject any such
+-- inherited relation or sequence authority.
+DO $outside_grants$
+DECLARE
+    schema_name text;
+BEGIN
+    FOR schema_name IN
+        SELECT namespace.nspname
+        FROM pg_catalog.pg_namespace AS namespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND namespace.nspname <> ALL(ARRAY[
+              'core', 'dft', 'experimental', 'generation', 'governance',
+              'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
+              'online_knowledge', 'pi'
+          ]::text[])
+        ORDER BY namespace.nspname
+    LOOP
+        EXECUTE pg_catalog.format(
+            'REVOKE ALL PRIVILEGES ON SCHEMA %I '
+            'FROM nexpoly_mutable_audit',
+            schema_name
+        );
+        EXECUTE pg_catalog.format(
+            'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I '
+            'FROM nexpoly_mutable_audit',
+            schema_name
+        );
+        EXECUTE pg_catalog.format(
+            'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I '
+            'FROM nexpoly_mutable_audit',
+            schema_name
+        );
+        EXECUTE pg_catalog.format(
+            'REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA %I '
+            'FROM nexpoly_mutable_audit',
+            schema_name
+        );
+    END LOOP;
+END
+$outside_grants$;
+
+-- PostgreSQL exposes these mutators through PUBLIC by default.  This is the
+-- only shared ACL mutation in the operation and its complete before/desired
+-- projection has a separate operator-confirmed digest in the plan.
 REVOKE EXECUTE ON FUNCTION
     pg_catalog.lo_creat(integer),
     pg_catalog.lo_create(oid),
@@ -89,7 +302,7 @@ REVOKE EXECUTE ON FUNCTION
     pg_catalog.lowrite(integer, bytea),
     pg_catalog.lo_truncate(integer, integer),
     pg_catalog.lo_truncate64(integer, bigint)
-FROM PUBLIC;
+FROM PUBLIC, nexpoly_mutable_audit;
 GRANT EXECUTE ON FUNCTION
     pg_catalog.lo_creat(integer),
     pg_catalog.lo_create(oid),
@@ -104,70 +317,36 @@ TO pg_database_owner;
 DO $assert_safe$
 DECLARE
     role_oid oid;
+    present_schema_count integer;
 BEGIN
-    IF current_database() <> 'nexpoly'
-       OR NOT EXISTS (
-           SELECT 1
-           FROM pg_catalog.pg_roles
-           WHERE rolname = current_user
-             AND rolsuper
-       )
-    THEN
-        RAISE EXCEPTION
-            'mutable-audit role must be provisioned by the cluster administrator in nexpoly';
-    END IF;
-
-    SELECT oid
+    SELECT roles.oid
     INTO STRICT role_oid
-    FROM pg_catalog.pg_roles
-    WHERE rolname = 'nexpoly_mutable_audit'
-      AND rolcanlogin
-      AND NOT rolsuper
-      AND NOT rolcreatedb
-      AND NOT rolcreaterole
-      AND rolinherit
-      AND NOT rolreplication
-      AND NOT rolbypassrls
-      AND rolconfig = ARRAY['default_transaction_read_only=on']::text[];
-
-    IF (
-        SELECT count(*) <> 1
-            OR bool_or(parent.rolname <> 'pg_read_all_data')
-            OR bool_or(member.admin_option)
-            OR bool_or(NOT member.inherit_option)
-            OR bool_or(NOT member.set_option)
-        FROM pg_catalog.pg_auth_members AS member
-        JOIN pg_catalog.pg_roles AS parent
-          ON parent.oid = member.roleid
-        WHERE member.member = role_oid
-    ) THEN
-        RAISE EXCEPTION 'mutable-audit direct membership is not exact';
-    END IF;
-
-    IF NOT pg_catalog.pg_has_role(
-        'nexpoly_mutable_audit',
-        'pg_read_all_data',
-        'MEMBER'
-    ) OR pg_catalog.pg_has_role(
-        'nexpoly_mutable_audit',
-        'pg_write_all_data',
-        'MEMBER'
-    ) THEN
-        RAISE EXCEPTION 'mutable-audit predefined role authority is unsafe';
-    END IF;
+    FROM pg_catalog.pg_roles AS roles
+    JOIN pg_catalog.pg_authid AS authentication
+      ON authentication.oid = roles.oid
+    WHERE roles.rolname = 'nexpoly_mutable_audit'
+      AND roles.rolcanlogin
+      AND NOT roles.rolsuper
+      AND NOT roles.rolcreatedb
+      AND NOT roles.rolcreaterole
+      AND roles.rolinherit
+      AND NOT roles.rolreplication
+      AND NOT roles.rolbypassrls
+      AND roles.rolconfig
+          = ARRAY['default_transaction_read_only=on']::text[]
+      AND authentication.rolpassword LIKE 'SCRAM-SHA-256$4096:%';
 
     IF EXISTS (
         SELECT 1
+        FROM pg_catalog.pg_auth_members
+        WHERE member = role_oid
+    ) OR EXISTS (
+        SELECT 1
         FROM pg_catalog.pg_roles AS candidate
         WHERE candidate.oid <> role_oid
-          AND candidate.rolname <> 'pg_read_all_data'
-          AND pg_catalog.pg_has_role(
-              'nexpoly_mutable_audit',
-              candidate.oid,
-              'MEMBER'
-          )
+          AND pg_catalog.pg_has_role(role_oid, candidate.oid, 'MEMBER')
     ) THEN
-        RAISE EXCEPTION 'mutable-audit inherited membership is unsafe';
+        RAISE EXCEPTION 'mutable-audit membership is not empty';
     END IF;
 
     IF EXISTS (
@@ -179,23 +358,61 @@ BEGIN
               OR setting.setconfig
                  <> ARRAY['default_transaction_read_only=on']::text[]
           )
+    ) OR NOT EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_db_role_setting AS setting
+        WHERE setting.setrole = role_oid
+          AND setting.setdatabase = 0
+          AND setting.setconfig
+              = ARRAY['default_transaction_read_only=on']::text[]
     ) THEN
         RAISE EXCEPTION 'mutable-audit role settings are unsafe';
     END IF;
 
-    IF pg_catalog.has_database_privilege(
-        'nexpoly_mutable_audit',
-        current_database(),
-        'CREATE'
-    ) OR EXISTS (
+    IF NOT pg_catalog.has_database_privilege(
+        role_oid, current_database(), 'CONNECT'
+    ) OR pg_catalog.has_database_privilege(
+        role_oid, current_database(), 'CREATE'
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit database privilege is unsafe';
+    END IF;
+
+    SELECT count(*)
+    INTO present_schema_count
+    FROM pg_catalog.pg_namespace
+    WHERE nspname = ANY(ARRAY[
+        'core', 'dft', 'experimental', 'generation', 'governance',
+        'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
+        'online_knowledge', 'pi'
+    ]::text[]);
+
+    IF present_schema_count < 11 OR EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_namespace AS namespace
+        WHERE namespace.nspname = ANY(ARRAY[
+            'core', 'dft', 'experimental', 'generation', 'governance',
+            'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
+            'online_knowledge', 'pi'
+        ]::text[])
+          AND (
+              NOT pg_catalog.has_schema_privilege(
+                  role_oid, namespace.oid, 'USAGE'
+              )
+              OR pg_catalog.has_schema_privilege(
+                  role_oid, namespace.oid, 'CREATE'
+              )
+          )
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit governed schema privilege is unsafe';
+    END IF;
+
+    IF EXISTS (
         SELECT 1
         FROM pg_catalog.pg_namespace AS namespace
         WHERE namespace.nspname !~ '^pg_'
           AND namespace.nspname <> 'information_schema'
           AND pg_catalog.has_schema_privilege(
-              'nexpoly_mutable_audit',
-              namespace.oid,
-              'CREATE'
+              role_oid, namespace.oid, 'CREATE'
           )
     ) OR EXISTS (
         SELECT 1
@@ -204,13 +421,105 @@ BEGIN
           ON namespace.oid = relation.relnamespace
         WHERE namespace.nspname !~ '^pg_'
           AND namespace.nspname <> 'information_schema'
+          AND namespace.nspname <> ALL(ARRAY[
+              'core', 'dft', 'experimental', 'generation', 'governance',
+              'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
+              'online_knowledge', 'pi'
+          ]::text[])
           AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
           AND pg_catalog.has_table_privilege(
-              'nexpoly_mutable_audit',
-              relation.oid,
-              'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+              role_oid, relation.oid,
+              'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
           )
     ) OR EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class AS sequence
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = sequence.relnamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND namespace.nspname <> ALL(ARRAY[
+              'core', 'dft', 'experimental', 'generation', 'governance',
+              'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
+              'online_knowledge', 'pi'
+          ]::text[])
+          AND CASE
+              WHEN sequence.relkind = 'S' THEN
+                  pg_catalog.has_sequence_privilege(
+                      role_oid, sequence.oid, 'SELECT,USAGE,UPDATE'
+                  )
+              ELSE false
+          END
+    ) OR EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_attribute AS attribute
+        JOIN pg_catalog.pg_class AS relation
+          ON relation.oid = attribute.attrelid
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname !~ '^pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND namespace.nspname <> ALL(ARRAY[
+              'core', 'dft', 'experimental', 'generation', 'governance',
+              'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
+              'online_knowledge', 'pi'
+          ]::text[])
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped
+          AND pg_catalog.has_column_privilege(
+              role_oid, relation.oid, attribute.attnum,
+              'SELECT,INSERT,UPDATE,REFERENCES'
+          )
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit outside-governed authority is unsafe';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = ANY(ARRAY[
+            'core', 'dft', 'experimental', 'generation', 'governance',
+            'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
+            'online_knowledge', 'pi'
+        ]::text[])
+          AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+          AND (
+              NOT pg_catalog.has_table_privilege(
+                  role_oid, relation.oid, 'SELECT'
+              )
+              OR pg_catalog.has_table_privilege(
+                  role_oid, relation.oid,
+                  'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+              )
+          )
+    ) OR EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class AS sequence
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = sequence.relnamespace
+        WHERE namespace.nspname = ANY(ARRAY[
+            'core', 'dft', 'experimental', 'generation', 'governance',
+            'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
+            'online_knowledge', 'pi'
+        ]::text[])
+          AND CASE
+              WHEN sequence.relkind = 'S' THEN (
+                  NOT pg_catalog.has_sequence_privilege(
+                      role_oid, sequence.oid, 'SELECT'
+                  )
+                  OR pg_catalog.has_sequence_privilege(
+                      role_oid, sequence.oid, 'USAGE,UPDATE'
+                  )
+              )
+              ELSE false
+          END
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit relation privilege is unsafe';
+    END IF;
+
+    IF EXISTS (
         SELECT 1
         FROM pg_catalog.pg_attribute AS attribute
         JOIN pg_catalog.pg_class AS relation
@@ -222,28 +531,46 @@ BEGIN
           AND attribute.attnum > 0
           AND NOT attribute.attisdropped
           AND pg_catalog.has_column_privilege(
-              'nexpoly_mutable_audit',
-              relation.oid,
-              attribute.attnum,
+              role_oid, relation.oid, attribute.attnum,
               'INSERT,UPDATE,REFERENCES'
           )
-    ) OR EXISTS (
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit column write privilege is unsafe';
+    END IF;
+
+    IF (
+        SELECT count(*)
+        FROM pg_catalog.pg_default_acl AS defaults
+        CROSS JOIN LATERAL
+            pg_catalog.aclexplode(defaults.defaclacl) AS acl
+        WHERE acl.grantee = role_oid
+    ) <> present_schema_count * 2 OR EXISTS (
         SELECT 1
-        FROM pg_catalog.pg_class AS sequence
-        JOIN pg_catalog.pg_namespace AS namespace
-          ON namespace.oid = sequence.relnamespace
-        WHERE namespace.nspname !~ '^pg_'
-          AND namespace.nspname <> 'information_schema'
-          AND CASE
-              WHEN sequence.relkind = 'S' THEN
-                  pg_catalog.has_sequence_privilege(
-                      'nexpoly_mutable_audit',
-                      sequence.oid,
-                      'USAGE,UPDATE'
-                  )
-              ELSE false
-          END
-    ) OR EXISTS (
+        FROM pg_catalog.pg_default_acl AS defaults
+        JOIN pg_catalog.pg_roles AS owner
+          ON owner.oid = defaults.defaclrole
+        LEFT JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = defaults.defaclnamespace
+        CROSS JOIN LATERAL
+            pg_catalog.aclexplode(defaults.defaclacl) AS acl
+        WHERE acl.grantee = role_oid
+          AND (
+              owner.rolname <> 'polyprop'
+              OR namespace.nspname IS NULL
+              OR namespace.nspname <> ALL(ARRAY[
+                  'core', 'dft', 'experimental', 'generation', 'governance',
+                  'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
+                  'online_knowledge', 'pi'
+              ]::text[])
+              OR defaults.defaclobjtype NOT IN ('r', 'S')
+              OR acl.privilege_type <> 'SELECT'
+              OR acl.is_grantable
+          )
+    ) THEN
+        RAISE EXCEPTION 'mutable-audit default privilege is unsafe';
+    END IF;
+
+    IF EXISTS (
         SELECT 1
         FROM pg_catalog.pg_proc AS routine
         JOIN pg_catalog.pg_namespace AS namespace
@@ -252,44 +579,42 @@ BEGIN
           AND namespace.nspname <> 'information_schema'
           AND routine.prosecdef
           AND pg_catalog.has_function_privilege(
-              'nexpoly_mutable_audit',
-              routine.oid,
-              'EXECUTE'
+              role_oid, routine.oid, 'EXECUTE'
           )
     ) OR EXISTS (
         SELECT 1
-        FROM unnest(
-            ARRAY[
-                'pg_catalog.lo_creat(integer)'::pg_catalog.regprocedure,
-                'pg_catalog.lo_create(oid)'::pg_catalog.regprocedure,
-                'pg_catalog.lo_from_bytea(oid,bytea)'::pg_catalog.regprocedure,
-                'pg_catalog.lo_put(oid,bigint,bytea)'::pg_catalog.regprocedure,
-                'pg_catalog.lo_unlink(oid)'::pg_catalog.regprocedure,
-                'pg_catalog.lowrite(integer,bytea)'::pg_catalog.regprocedure,
-                'pg_catalog.lo_truncate(integer,integer)'::pg_catalog.regprocedure,
-                'pg_catalog.lo_truncate64(integer,bigint)'::pg_catalog.regprocedure
-            ]
-        ) AS routine(oid)
+        FROM unnest(ARRAY[
+            'pg_catalog.lo_creat(integer)'::pg_catalog.regprocedure,
+            'pg_catalog.lo_create(oid)'::pg_catalog.regprocedure,
+            'pg_catalog.lo_from_bytea(oid,bytea)'::pg_catalog.regprocedure,
+            'pg_catalog.lo_put(oid,bigint,bytea)'::pg_catalog.regprocedure,
+            'pg_catalog.lo_unlink(oid)'::pg_catalog.regprocedure,
+            'pg_catalog.lowrite(integer,bytea)'::pg_catalog.regprocedure,
+            'pg_catalog.lo_truncate(integer,integer)'::pg_catalog.regprocedure,
+            'pg_catalog.lo_truncate64(integer,bigint)'::pg_catalog.regprocedure
+        ]) AS mutator(oid)
         WHERE pg_catalog.has_function_privilege(
-            'nexpoly_mutable_audit',
-            routine.oid,
-            'EXECUTE'
-        )
+                  role_oid, mutator.oid, 'EXECUTE'
+              )
+           OR pg_catalog.has_function_privilege(
+                  'public', mutator.oid, 'EXECUTE'
+              )
+           OR NOT pg_catalog.has_function_privilege(
+                  'pg_database_owner', mutator.oid, 'EXECUTE'
+              )
     ) OR EXISTS (
         SELECT 1
         FROM pg_catalog.pg_largeobject_metadata AS object
-        CROSS JOIN LATERAL pg_catalog.aclexplode(object.lomacl) AS acl
+        CROSS JOIN LATERAL pg_catalog.aclexplode(
+            coalesce(
+                object.lomacl,
+                pg_catalog.acldefault('L', object.lomowner)
+            )
+        ) AS acl
         WHERE acl.privilege_type = 'UPDATE'
-          AND CASE
-              WHEN acl.grantee = 0 THEN true
-              ELSE pg_catalog.pg_has_role(
-                  role_oid,
-                  acl.grantee,
-                  'USAGE'
-              )
-          END
+          AND acl.grantee IN (0, role_oid)
     ) THEN
-        RAISE EXCEPTION 'mutable-audit role has effective persistent write authority';
+        RAISE EXCEPTION 'mutable-audit effective write path is unsafe';
     END IF;
 
     IF EXISTS (
@@ -326,15 +651,16 @@ BEGIN
         SELECT 1 FROM pg_catalog.pg_foreign_server
           WHERE srvowner = role_oid
         UNION ALL
-        SELECT 1 FROM pg_catalog.pg_tablespace WHERE spcowner = role_oid
+        SELECT 1 FROM pg_catalog.pg_tablespace
+          WHERE spcowner = role_oid
+        UNION ALL
+        SELECT 1 FROM pg_catalog.pg_extension
+          WHERE extowner = role_oid
     ) THEN
         RAISE EXCEPTION 'mutable-audit role owns database objects';
     END IF;
 END
 $assert_safe$;
 
+__IN_TRANSACTION_DESIRED_ASSERT__
 COMMIT;
-
--- No password is emitted or accepted by this template.  Set/rotate it using a
--- secret channel after this transaction, then execute the deployment mutable
--- data helper; its schema-v6 evidence rechecks the complete role contract.

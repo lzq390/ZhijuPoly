@@ -13,6 +13,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from scripts.tests.mutable_audit_role_fixtures import role_security_evidence
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/site_helper_contracts.py"
@@ -33,6 +35,14 @@ def runtime_identity_fields() -> dict[str, str]:
         "web_image_id": DIGEST_B,
         "worker_unit_sha256": DIGEST_C,
     }
+
+
+def mutable_audit_role_security(
+    *, include_generation: bool = True
+) -> dict[str, object]:
+    return role_security_evidence(
+        CONTRACTS, include_generation=include_generation
+    )
 
 
 class SiteHelperContractTests(unittest.TestCase):
@@ -906,36 +916,7 @@ class SiteHelperContractTests(unittest.TestCase):
                 },
                 "system_identifier": "7659245354718314530",
             },
-            "role_security": {
-                "role": "nexpoly_mutable_audit",
-                "can_login": True,
-                "superuser": False,
-                "create_db": False,
-                "create_role": False,
-                "inherit": True,
-                "replication": False,
-                "bypass_rls": False,
-                "role_settings": [
-                    {
-                        "database": "*",
-                        "settings": ["default_transaction_read_only=on"],
-                    }
-                ],
-                "direct_memberships": [
-                    {
-                        "role": "pg_read_all_data",
-                        "admin_option": False,
-                        "inherit_option": True,
-                        "set_option": True,
-                    }
-                ],
-                "effective_memberships": ["pg_read_all_data"],
-                "has_pg_read_all_data": True,
-                "has_pg_write_all_data": False,
-                "owned_objects": [],
-                "direct_write_grants": [],
-                "effective_write_privileges": [],
-            },
+            "role_security": mutable_audit_role_security(),
             "digest_algorithm": "sha256-postgres-jsonb-copy-v4",
             "migration_ledger": [
                 {"version": version, "checksum": checksum}
@@ -1005,7 +986,7 @@ class SiteHelperContractTests(unittest.TestCase):
             },
         }
         document = {
-            "schema_version": 6,
+            "schema_version": 7,
             **identity,
             "transaction_isolation": "repeatable read",
             "transaction_read_only": True,
@@ -1075,16 +1056,57 @@ class SiteHelperContractTests(unittest.TestCase):
                 ].append("site_writer"),
             ),
             (
-                "direct-write",
+                "database-create",
                 lambda value: value["role_security"][
-                    "direct_write_grants"
-                ].append("relation:online_knowledge.jobs:UPDATE"),
+                    "database_privileges"
+                ].update(create=True),
             ),
             (
-                "effective-write",
+                "schema-create",
+                lambda value: value["role_security"]["governed_schemas"][0]
+                .update(create=True),
+            ),
+            (
+                "relation-update",
                 lambda value: value["role_security"][
-                    "effective_write_privileges"
-                ].append("relation:online_knowledge.jobs"),
+                    "governed_relations"
+                ][0].update(update=True),
+            ),
+            (
+                "sequence-usage",
+                lambda value: value["role_security"][
+                    "governed_sequences"
+                ][0].update(usage=True),
+            ),
+            (
+                "default-acl",
+                lambda value: value["role_security"][
+                    "default_privileges"
+                ].pop(),
+            ),
+            (
+                "outside-governed",
+                lambda value: value["role_security"][
+                    "outside_governed_privileges"
+                ].append("relation:public.foreign"),
+            ),
+            (
+                "security-definer",
+                lambda value: value["role_security"][
+                    "security_definer_execute"
+                ].append("unsafe()"),
+            ),
+            (
+                "column-write",
+                lambda value: value["role_security"][
+                    "column_write_grants"
+                ].append("core.polymers.name"),
+            ),
+            (
+                "lo-public-execute",
+                lambda value: value["role_security"][
+                    "large_object_mutators"
+                ][0].update(public_execute=True),
             ),
             (
                 "object-owner",
@@ -1239,6 +1261,40 @@ class SiteHelperContractTests(unittest.TestCase):
                 with self.assertRaises(CONTRACTS.SiteHelperContractError):
                     CONTRACTS.validate_monomer_dft_0013_creation(changed)
 
+    def test_mutable_role_accepts_optional_generation_schema_only(self) -> None:
+        with_generation = mutable_audit_role_security()
+        without_generation = mutable_audit_role_security(
+            include_generation=False
+        )
+        self.assertEqual(
+            CONTRACTS._validate_mutable_audit_role_security(with_generation),
+            with_generation,
+        )
+        self.assertEqual(
+            CONTRACTS._validate_mutable_audit_role_security(
+                without_generation
+            ),
+            without_generation,
+        )
+        self.assertEqual(len(with_generation["governed_schemas"]), 12)
+        self.assertEqual(len(with_generation["default_privileges"]), 24)
+        self.assertEqual(len(without_generation["governed_schemas"]), 11)
+        self.assertEqual(len(without_generation["default_privileges"]), 22)
+
+        missing_required = json.loads(json.dumps(with_generation))
+        missing_required["governed_schemas"] = [
+            record
+            for record in missing_required["governed_schemas"]
+            if record["schema"] != "core"
+        ]
+        missing_required["default_privileges"] = [
+            record
+            for record in missing_required["default_privileges"]
+            if record["schema"] != "core"
+        ]
+        with self.assertRaises(CONTRACTS.SiteHelperContractError):
+            CONTRACTS._validate_mutable_audit_role_security(missing_required)
+
     def test_mutable_helper_captures_identity_and_catalog_ownership(self) -> None:
         helper = (
             ROOT / "ops/config/deployment-mutable-data-audit.example"
@@ -1251,6 +1307,15 @@ class SiteHelperContractTests(unittest.TestCase):
             "'deptype',dependency.deptype",
             "to_regclass('governance.property_filter_options_snapshots')",
             "property_filter_options_snapshots_present",
+            "'database_privileges', database_privileges.value",
+            "'governed_schemas', schema_privileges.value",
+            "'governed_relations', relation_privileges.value",
+            "'governed_sequences', sequence_privileges.value",
+            "'default_privileges', default_privileges.value",
+            "'outside_governed_privileges', outside_governed_privileges.value",
+            "'security_definer_execute', security_definer_execute.value",
+            "'large_object_mutators', large_object_mutators.value",
+            "'pg_database_owner', mutator.oid, 'EXECUTE'",
         ):
             self.assertIn(required, helper)
 

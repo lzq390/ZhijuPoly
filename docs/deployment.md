@@ -17,12 +17,12 @@ The source checkout is fixed at:
 ```
 
 It must track `origin/main` and be completely clean: no tracked changes, no
-ordinary untracked paths, and no ignored paths. Before the first takeover,
-inventory every existing ignored path with its hash, owner and mode, and place
-the exact reviewed classification in the private bootstrap input. The
-source-pinned legacy takeover controller—not an operator shell command—moves
-only that sealed inventory to its fixed runtime, secret and asset roots. Never
-use `git clean` or manually move a classified path to satisfy this gate.
+ordinary untracked paths, and no ignored paths. The current production
+installation has already sealed its original checkout through manual adoption.
+The older takeover path, retained below only for historical recovery context,
+required every ignored path to be inventoried by hash/owner/mode and moved only
+by the source-pinned legacy controller. Never use `git clean` or manually move
+a path to satisfy either authority.
 Runtime state is never stored in that checkout:
 
 ```text
@@ -155,6 +155,95 @@ The stable entry point is installed outside the checkout:
 /data/lzq/gith/nexpoly-runtime/bin/nexpoly-pull-deploy
 ```
 
+### Current adopted production authority
+
+The current production runtime has already completed the one-time manual
+adoption. Its durable authority is `manual-runtime-adoption`, with
+`bootstrap-control.json` schema v3 and `adopted-deployment.json` preserving the
+original production provenance. Do not rerun the legacy takeover, bootstrap,
+ledger-alias bridge, or the original adoption to perform an ordinary update.
+They are retained later in this document only as historical recovery context.
+
+Before the first descriptor-v4 deployment from a newly reviewed `main` SHA,
+install the adopted-runtime prerequisites exactly once. Run the source-pinned
+script directly from a private, standalone, clean SSH clone whose `HEAD` and
+`origin/main` are both the full reviewed SHA and whose protected-main CI has
+succeeded. The existing private `mutable-data-audit.pgpass` must already have
+been installed by the approved secret provisioner; the installer only
+preserves and hashes it and never changes credentials, the database, Git, or a
+service.
+
+```bash
+prerequisite_operation_id=adopt-prereq-<utc-timestamp>
+
+./scripts/adopt_runtime_prerequisites.py plan \
+  --sha <full-main-sha> \
+  --operation-id "$prerequisite_operation_id"
+
+./scripts/adopt_runtime_prerequisites.py apply \
+  --sha <full-main-sha> \
+  --operation-id "$prerequisite_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest>
+```
+
+Review the plan's source/tree/CI/adoption authority, every destination digest,
+and the preserved pgpass digest before confirmation. `plan` is logically
+zero-write. `apply` is create-only and publishes
+`state/adopted-prerequisites.json`; it does not restart or reconfigure the
+serving runtime. If an uncommitted attempt must be abandoned, use only the same
+operation identity and reviewed plan digest:
+
+```bash
+./scripts/adopt_runtime_prerequisites.py abort \
+  --sha <full-main-sha> \
+  --operation-id "$prerequisite_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest>
+```
+
+Abort is permitted only before the prerequisite authority commit. It removes
+only inode- and digest-matched files created by that operation; a completed
+authority cannot be aborted.
+
+Next provision the dedicated mutable-data audit login. This step is mandatory
+before formal Pull `plan` or `prepare`. The source-pinned provisioner reads the
+one exact private pgpass entry, derives a SCRAM verifier locally, and never
+places the plaintext password in SQL, argv, JSON, journals, or logs:
+
+```bash
+role_operation_id=mutable-role-<utc-timestamp>
+
+./scripts/provision_mutable_data_audit_role.py \
+  --sha <full-main-sha> \
+  --operation-id "$role_operation_id" \
+  --plan
+
+./scripts/provision_mutable_data_audit_role.py \
+  --sha <full-main-sha> \
+  --operation-id "$role_operation_id" \
+  --apply \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-public-lo-acl-sha256 sha256:<reviewed-public-lo-impact-digest>
+```
+
+The schema-v7 mutable-data evidence is an explicit least-privilege projection:
+the role has no elevated attributes, role memberships, object ownership, or
+cluster-wide predefined read role. Its normalized direct grants are `CONNECT`
+on `nexpoly`, `USAGE` on the governed schemas that exist, `SELECT` on their
+current tables/views and sequences, and schema-scoped future `SELECT` defaults
+for objects created by `polyprop`. It has no create/write authority, column
+write grant, direct function grant, authority outside the governed schemas, or
+execution of security-definer routines. The independently confirmed impact
+also removes PUBLIC execution from the eight large-object mutators while
+retaining the database owner's authority. Review both confirmation digests
+before apply.
+
+### Historical bootstrap and F→B bridge only
+
+The remainder of this operator-workflow section records the former
+takeover/bootstrap/bridge path for provenance and recovery analysis. It is not
+the update procedure for the already adopted production runtime. Do not execute
+it merely because a new ordinary release is available.
+
 Before bootstrap, provision the following deploy-user-owned files outside the
 checkout. Directories are mode `0700`; credential/config files are mode `0600`;
 bootstrap executables are mode `0700`:
@@ -265,16 +354,18 @@ bootstrap executables are mode `0700`:
   captures use `revalidate` and must not regenerate the registry.
 - a reviewed, non-secret
   `ops/config/mutable-data-audit-role.sql.example` provisioning/check
-  contract. Run it as the cluster role administrator, connected to `nexpoly`
-  in the maintenance window; provision the `nexpoly_mutable_audit` password
-  out of band and install only the mode-`0600` pgpass value. The helper's
-  schema-v6 evidence rejects any role attribute, membership, ownership or
-  persistent write authority outside the exact `pg_read_all_data` contract.
-  One read-only, deferrable, repeatable-read transaction now also seals the
-  complete canonical PolyTAO row/schema/structure archive while 0012 is
-  pending. The controller requires that embedded seal to equal the later full
-  backup/isolated-restore evidence byte for byte before it may publish the
-  transaction guard; after 0012 the field must be exactly `null`.
+  contract. It is executed only by the source-pinned provisioner described
+  above, never manually. Provision the `nexpoly_mutable_audit` password out of
+  band and install only its mode-`0600` pgpass value. The helper's schema-v7
+  evidence seals the complete explicit grants described above and rejects any
+  elevated attribute, membership, ownership, write authority, direct function
+  grant, security-definer execution, or authority outside the governed schemas.
+  One read-only,
+  deferrable, repeatable-read transaction also seals the canonical PolyTAO
+  row/schema/structure archive while 0012 is pending. The controller requires
+  that embedded seal to equal the later full backup/isolated-restore evidence
+  byte for byte before it may publish the transaction guard; after 0012 the
+  field must be exactly `null`.
 - `bootstrap-input/legacy-takeover-classification.json`, mode `0600`, covering
   the production checkout's ignored paths exactly with `runtime`, `secret` or
   `asset` classifications. The reviewed file must contain no secret value.
@@ -618,60 +709,171 @@ a new operation ID and generation; the retired generation is first written to
 an immutable digest-addressed archive chain. `commit-intent` and `consumed`
 generations can never be retired or rearmed.
 
-### Subsequent ordinary deployments
+## Current ordinary deployments
 
-Only after the one-time F→B bridge and later B→F deployment are complete may
-the ordinary current-main path be used. Every attempt uses a unique lowercase
-operation ID and the full 40-character SHA currently at `origin/main`:
+The manually adopted production runtime uses descriptor v4 and current-state
+v3 for ordinary deployments. The prerequisite authority and the exact
+least-privilege mutable-data audit role described above must both be complete
+before this sequence starts. Every attempt uses one unique lowercase operation
+ID and the full 40-character SHA currently at `origin/main`:
+
+```bash
+deploy_operation_id=deploy-<utc-timestamp>
+
+/usr/bin/python3 -I -B ./scripts/pull_deploy_controller.py plan \
+  --sha <full-main-sha> \
+  --operation-id "$deploy_operation_id"
+
+nexpoly-pull-deploy prepare \
+  --sha <full-main-sha> \
+  --operation-id "$deploy_operation_id"
+```
+
+The direct controller invocation is a one-time exception for the first
+ordinary deployment while `current-deployment.json` is absent. Run it only
+from the same private, standalone, clean, source-pinned target clone used for
+the prerequisite and role transactions. The installed selector cannot route a
+pre-prepare `plan` to a target control release that does not exist yet, and its
+adopted `cff408…` controller intentionally rejects an active MD slot without a
+current-state record. The target controller instead validates that slot,
+source, active control, prerequisite source/CI, and adoption provenance
+directly against the raw manual-adoption authority, without writing files or
+changing services. Review `authority_kind=manual-runtime-adoption`, the
+adopted-deployment digest, and the prerequisite plan digest in its output.
+
+Do not invoke checkout code directly for `prepare`, `apply`, `accept`,
+`rollback`, or recovery. The installed launcher owns those mutations; its
+`prepare` command creates the candidate control release and performs the
+sealed target handoff. After the first deployment writes current-state v3 and
+activates the target controls, all later releases return to the normal
+installed command:
 
 ```bash
 nexpoly-pull-deploy plan \
-  --sha <main-sha> \
-  --operation-id deploy-<utc-timestamp>
-
-nexpoly-pull-deploy prepare \
-  --sha <main-sha> \
-  --operation-id deploy-<utc-timestamp>
-
-nexpoly-pull-deploy apply \
-  --sha <main-sha> \
-  --operation-id deploy-<utc-timestamp>
+  --sha <later-full-main-sha> \
+  --operation-id <later-deploy-operation-id>
 ```
 
-`plan` and `prepare` do not interrupt serving traffic. `prepare` must finish
+The one-time direct `plan` and installed `prepare` do not interrupt serving
+traffic. `prepare` must finish
 before the maintenance window. It verifies the protected-main candidate and CI
 checks, resolves image digests and labels, validates assets and migrations,
-downloads locked wheels, and builds the inactive Worker environment directly
-at its final A/B slot path.
+downloads locked wheels, builds the inactive MD Worker environment directly at
+its final A/B slot path, and builds the immutable DFT environment at
+`worker-venvs/dft/<full-main-sha>` without reading or changing either active
+Worker runtime.
+
+After `prepare`, rehearse the descriptor's exact PostgreSQL 16 restore and
+0013→0015 transition while production remains online. Run the target script
+from the same private, clean, source-pinned clone. First review the read-only
+plan, then repeat every confirmation emitted by that plan:
+
+```bash
+./scripts/production_postgres_rehearsal.py \
+  --sha <full-main-sha> \
+  --operation-id "$deploy_operation_id" \
+  --plan
+
+./scripts/production_postgres_rehearsal.py \
+  --sha <full-main-sha> \
+  --operation-id "$deploy_operation_id" \
+  --apply \
+  --confirm-descriptor-sha256 sha256:<reviewed-descriptor-digest> \
+  --confirm-source-system-identifier <reviewed-decimal-system-identifier> \
+  --confirm-source-ledger-sha256 sha256:<reviewed-ledger-digest> \
+  --confirm-source-property-records 615159 \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest>
+```
+
+The rehearsal creates a fresh custom dump, performs a network-isolated
+PostgreSQL 16 restore, applies exactly 0014 followed by 0015 in the candidate
+Backend image, and verifies the ledger, 615,159 property records, snapshot,
+indexes, and query plans. Backup plus restore must finish within 30 minutes and
+the two migrations within 10 minutes; the migration session proves
+`lock_timeout=30s` and `statement_timeout=15min`. Its terminal sealed authority
+is bound to the prepared descriptor and ready record. Ordinary `apply` refuses
+to begin its business mutation unless it can load and validate that exact
+report.
+
+Enter the authorized maintenance window only after the rehearsal passes:
+
+```bash
+nexpoly-pull-deploy apply \
+  --sha <full-main-sha> \
+  --operation-id "$deploy_operation_id"
+```
 
 An ordinary `apply` obtains the exclusive deployment lock and then:
 
-1. Enables Backend and Worker drain and waits for all active work to finish.
-2. Isolates public ingress and stops Backend, Web, MD Worker and DFT Worker.
+1. Revalidates and consumes the exact rehearsal authority before recording a
+   mutation marker or changing business state.
+2. Disables public writes and both task-submission paths, enables Backend and
+   Worker drain, and proves MD and DFT both have zero running and queued jobs.
+3. Isolates public ingress and stops Backend, Web, MD Worker and DFT Worker.
    Before the first stop call it durably seals the PostgreSQL container ID,
    image ID, named data volume and `pg_control_system().system_identifier`.
-   PostgreSQL remains running.
-3. Creates a private PostgreSQL backup and proves it can be restored in an
-   isolated PostgreSQL 16 instance.
-4. Records the previous source SHA, tree, image digests, asset pointer and
-   active Worker slots.
-5. Fetches again, revalidates the target and fast-forwards the production
+   It proves both Worker MainPIDs are zero, their sockets are gone, and no
+   process still reads the live checkout. PostgreSQL remains running.
+4. Creates and fsyncs the drain-final PostgreSQL backup, proves its isolated
+   PostgreSQL 16 recovery, and binds that exact evidence.
+5. Records the previous source SHA, tree, image digests, asset pointer, MD slot,
+   DFT runtime/environment, and both tracked systemd units.
+6. Fetches again, revalidates the target and fast-forwards the production
    checkout to that exact `origin/main` SHA.
-6. Verifies HEAD, tree hash, remote identity and clean worktree before running
+7. Verifies HEAD, tree hash, remote identity and clean worktree before running
    target code.
-7. Pulls the recorded image digests, applies only allowed expand migrations and
-   runs strict schema preflight.
-8. Switches the prepared A/B slots and starts Workers and Backend with
+8. Uses the recorded image digests, applies only the exact ordered 0014/0015
+   migration transition, and runs strict schema preflight.
+9. Atomically switches the prepared MD slot, DFT runtime/env/unit, MD unit, and
+   application images. It starts DFT, MD, Backend, and Web/entry in that order;
+   Backend uses
    `compose up --no-deps backend`; the sealed PostgreSQL container is never an
    `up` target and its full identity is rechecked before and after startup.
-   It then starts Web and runs required model, database, API, UI and
-   calculation smokes.
-9. Writes the successful deployment state atomically before restoring ingress.
+10. Verifies the candidate runtime and atomically writes current-state v3, but
+    leaves public ingress and both submission paths closed. The operation
+    remains durably staged at `awaiting-acceptance`; `apply` never opens it.
 
 All processes that import or execute checkout files are stopped before the Git
 working tree changes. Updating a running source tree in place is forbidden.
 
-## Migrations and first takeover
+Acceptance is deliberately two-step. The first invocation starts a private
+loopback-only candidate endpoint, runs the sealed DFT/MD/API/UI probes, cleans
+up that endpoint and re-drains the candidate. The probes include six-model DFT
+warmup and a minimum single-point calculation; MD one-running/two-queued
+capacity, fourth-submit 429 and cancellation; property histogram and 2D
+structure queries; knowledge; and the main frontend routes. Only after every
+probe passes does the controller durably start the 900-second maintenance
+observation:
+
+```bash
+nexpoly-pull-deploy accept \
+  --sha <full-main-sha> \
+  --operation-id "$deploy_operation_id"
+```
+
+The first `accept` returns `status=maintenance-observation`, keeps public
+admission closed, and reports `acceptance_not_before`. Do not substitute the
+earlier staging timestamp for this post-probe deadline. After that time, invoke
+the exact same command a second time. The controller revalidates the sealed
+probe report plus source, current-state, PostgreSQL, runtime, Worker fence, and
+image identities. It opens public ingress and submissions only if those
+identities are unchanged:
+
+```bash
+nexpoly-pull-deploy accept \
+  --sha <full-main-sha> \
+  --operation-id "$deploy_operation_id"
+```
+
+Any failed acceptance probe, changed identity, missing/stale authority, or
+maintenance-observation anomaly is a stop condition. Admission remains closed;
+use the exact operation's explicit rollback instead of opening services by
+hand.
+
+## Historical migrations and first takeover
+
+This section applies to the retired takeover/bridge sequence documented above,
+not to the current manually adopted ordinary-deployment path.
 
 An empty database uses the complete bootstrap mode. The first takeover of the
 existing production database uses the governed bootstrap-expand path and stops
@@ -715,17 +917,24 @@ nexpoly-pull-deploy rollback \
   --operation-id deploy-<utc-timestamp>
 ```
 
-The controller stops candidate services, restores the previous source SHA,
-image digests, asset pointer and Worker slots, and runs the old runtime smokes
-before restoring ingress. Compatible expand migrations may remain. A database
-change that is not backward-compatible requires restoration from the verified
-backup before the previous runtime can accept writes.
+The controller stops candidate services and restores the previous source SHA,
+image digests, asset pointer, MD slot/unit, and DFT runtime/env/unit before it
+can run old-runtime smokes. For the current 0013→0015 deployment, reaching the
+database migration phase is an unconditional whole-database rollback boundary:
+regardless of the apparent transaction result, rollback must restore the
+operation's verified drain-final post-0013 backup before the previous runtime
+can start or accept writes. Before that phase, rollback may restore the sealed
+source, images, assets, and Worker identities without replacing PostgreSQL.
+Ingress and submissions remain closed until the old source, database, MD/DFT
+runtime, and service identities all pass their recovery checks.
 
 The deployment marker and journal are stored below
 `nexpoly-runtime/state`. An interrupted or ambiguous operation fails closed;
 the operator must run the matching recovery or rollback command under the same
 deployment lock. Never delete the marker, edit the migration ledger, run
 `git clean`, or start services manually to bypass recovery.
+
+### Historical bridge rollback details
 
 For a failed first bootstrap/bridge, rollback order is fixed: the parent
 controller first CAS-restores the sealed legacy main SHA/tree and HTTPS return
@@ -766,6 +975,28 @@ paths, release SHA and runtime-manifest digest to the owner-private
 `config/monomer-dft-runtime.env`; the tracked systemd unit consumes that file.
 The active runtime must contain the six locked AIMNet models at mode `0600` and
 must not contain or reference a compatibility launcher.
+
+Production pins `NEXPOLY_DFT_GPU_GUARD_MODE=observe`; the software default
+remains fail-closed `enforce`. In observe mode, the periodic GPU2 inventory
+continues to validate and report `gpu_guard_mode`, `gpu_guard_status`, and
+`gpu_contention_observed`, but an unknown external GPU2 process is a structured
+warning only. A `quarantined` observation does not make DFT
+`available=false`, `runtime_ready=false`, or stop task admission/execution, and
+the deployment does not kill, migrate, or allowlist the external process.
+Missing, stale, or invalid observations during service operation also warn
+rather than disable the service; deployment readiness still requires a
+well-formed, current observation with the correct GPU UUID and permits
+`quarantined`.
+
+This is deliberately best-effort availability, not GPU isolation. Contention
+can still cause memory pressure, OOM, timeout, or CUDA failures. DFT remains
+fixed at one executing job plus eight queued jobs
+(`MONOMER_DFT_MAX_CONCURRENT_JOBS=1`,
+`MONOMER_DFT_MAX_QUEUED_JOBS=8`). MD independently uses
+`MONOMER_MD_MAX_ACTIVE_JOBS=3` as the total running-plus-queued admission cap
+and `MONOMER_MD_MAX_CONCURRENT_JOBS=1` as the execution cap. Consequently MD
+admits exactly one running job and two queued jobs; a fourth active submission
+returns 429. `MAX_ACTIVE_JOBS=3` never means three simultaneous MD executions.
 
 `production_readiness.py --dft-live-only` verifies the installed unit against
 the tracked unit, the release-bound runtime environment, six-model warmup,

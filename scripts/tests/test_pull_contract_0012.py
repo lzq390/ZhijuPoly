@@ -16,6 +16,7 @@ from scripts.tests.bridge_manifest_fixtures import (
     F_MANIFEST_SHA256,
     materialize_b_migration_directory,
 )
+from scripts.tests.mutable_audit_role_fixtures import role_security_evidence
 from scripts.tests.test_postgres_media_evidence import (
     audited_startup_fields,
     role_security_fields as external_role_security_fields,
@@ -211,36 +212,7 @@ def _mutable_data_evidence(
             },
             "system_identifier": "7659245354718314530",
         },
-        "role_security": {
-            "role": "nexpoly_mutable_audit",
-            "can_login": True,
-            "superuser": False,
-            "create_db": False,
-            "create_role": False,
-            "inherit": True,
-            "replication": False,
-            "bypass_rls": False,
-            "role_settings": [
-                {
-                    "database": "*",
-                    "settings": ["default_transaction_read_only=on"],
-                }
-            ],
-            "direct_memberships": [
-                {
-                    "role": "pg_read_all_data",
-                    "admin_option": False,
-                    "inherit_option": True,
-                    "set_option": True,
-                }
-            ],
-            "effective_memberships": ["pg_read_all_data"],
-            "has_pg_read_all_data": True,
-            "has_pg_write_all_data": False,
-            "owned_objects": [],
-            "direct_write_grants": [],
-            "effective_write_privileges": [],
-        },
+        "role_security": role_security_evidence(helpers),
         "digest_algorithm": "sha256-postgres-jsonb-copy-v4",
         "migration_ledger": [
             {"version": version, "checksum": checksum}
@@ -323,7 +295,7 @@ def _mutable_data_evidence(
         },
     }
     return {
-        "schema_version": 6,
+        "schema_version": 7,
         **identity,
         "transaction_isolation": "repeatable read",
         "transaction_read_only": True,

@@ -11855,11 +11855,11 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 label=label,
             )
 
-    def test_mutable_schema_v6_helper_runs_against_real_postgres(
+    def test_mutable_schema_v7_helper_runs_against_real_postgres(
         self,
     ) -> None:
         if self.postgres_major() != 16:
-            self.skipTest("mutable schema-v6 integration is fixed to PG16")
+            self.skipTest("mutable schema-v7 integration is fixed to PG16")
         if (
             os.environ.get("NEXPOLY_RUN_MUTABLE_HELPER_INTEGRATION")
             != "1"
@@ -11869,9 +11869,9 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
             )
         image = self.pinned_image()
         runner = MEDIA.CommandRunner()
-        volume = MEDIA._temp_name("integration-mutable-v6")
-        name = MEDIA._temp_name("integration-mutable-v6-pg")
-        label = "mutable-schema-v6-integration"
+        volume = MEDIA._temp_name("integration-mutable-v7")
+        name = MEDIA._temp_name("integration-mutable-v7-pg")
+        label = "mutable-schema-v7-integration"
         password = "mutable-v6-admin-secret"
         audit_password = "mutable-v6-audit-secret"
         production_host_port = 55432
@@ -11946,7 +11946,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 or len(container_record) != 1
             ):
                 self.fail(
-                    "mutable schema-v6 integration container is ambiguous"
+                    "mutable schema-v7 integration container is ambiguous"
                 )
             bindings = (
                 container_record[0]
@@ -11965,7 +11965,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 is None
             ):
                 self.fail(
-                    "mutable schema-v6 integration port is not isolated"
+                    "mutable schema-v7 integration port is not isolated"
                 )
             host_port = int(bindings[0]["HostPort"])
             if host_port == production_host_port:
@@ -12100,7 +12100,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
             }
 
             with tempfile.TemporaryDirectory(
-                prefix="mutable-v6-real-"
+                prefix="mutable-v7-real-"
             ) as raw:
                 root = Path(raw)
                 os.chmod(root, 0o700)
@@ -12206,8 +12206,8 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 )
                 after = capture("mutable-v6-post-0012")
 
-            self.assertEqual(before["schema_version"], 6)
-            self.assertEqual(after["schema_version"], 6)
+            self.assertEqual(before["schema_version"], 7)
+            self.assertEqual(after["schema_version"], 7)
             self.assertEqual(
                 before["business_tables"],
                 after["business_tables"],

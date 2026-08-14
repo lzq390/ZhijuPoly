@@ -267,6 +267,30 @@ POST_0013_BUSINESS_MUTABLE_TABLES = (
     ("monomer_dft", "job_attempts"),
     ("monomer_dft", "artifacts"),
 )
+MUTABLE_AUDIT_GOVERNED_SCHEMAS = (
+    "core",
+    "dft",
+    "experimental",
+    "generation",
+    "governance",
+    "knowledge",
+    "lab",
+    "md",
+    "model_registry",
+    "monomer_dft",
+    "online_knowledge",
+    "pi",
+)
+MUTABLE_AUDIT_LO_MUTATORS = (
+    "pg_catalog.lo_creat(integer)",
+    "pg_catalog.lo_create(oid)",
+    "pg_catalog.lo_from_bytea(oid,bytea)",
+    "pg_catalog.lo_put(oid,bigint,bytea)",
+    "pg_catalog.lo_truncate(integer,integer)",
+    "pg_catalog.lo_truncate64(integer,bigint)",
+    "pg_catalog.lo_unlink(oid)",
+    "pg_catalog.lowrite(integer,bytea)",
+)
 GOVERNED_CONTROL_TABLES = (
     ("governance", "deployment_control"),
     ("governance", "database_analytics_snapshots"),
@@ -5537,9 +5561,17 @@ def _validate_mutable_audit_role_security(
         "effective_memberships",
         "has_pg_read_all_data",
         "has_pg_write_all_data",
+        "database_privileges",
+        "governed_schemas",
+        "governed_relations",
+        "governed_sequences",
+        "column_write_grants",
+        "outside_governed_privileges",
+        "default_privileges",
         "owned_objects",
-        "direct_write_grants",
-        "effective_write_privileges",
+        "security_definer_execute",
+        "large_object_update_count",
+        "large_object_mutators",
     }
     if (
         not isinstance(document, dict)
@@ -5559,31 +5591,265 @@ def _validate_mutable_audit_role_security(
                 "settings": ["default_transaction_read_only=on"],
             }
         ]
-        or document.get("direct_memberships")
-        != [
-            {
-                "role": "pg_read_all_data",
-                "admin_option": False,
-                "inherit_option": True,
-                "set_option": True,
-            }
-        ]
-        or document.get("effective_memberships") != ["pg_read_all_data"]
-        or document.get("has_pg_read_all_data") is not True
+        or document.get("direct_memberships") != []
+        or document.get("effective_memberships") != []
+        or document.get("has_pg_read_all_data") is not False
         or document.get("has_pg_write_all_data") is not False
+        or document.get("database_privileges")
+        != {"database": "nexpoly", "connect": True, "create": False}
     ):
         raise SiteHelperContractError(
             "mutable-data audit role authority is unsafe"
         )
     for field in (
+        "column_write_grants",
+        "outside_governed_privileges",
         "owned_objects",
-        "direct_write_grants",
-        "effective_write_privileges",
+        "security_definer_execute",
     ):
         if document.get(field) != []:
             raise SiteHelperContractError(
                 f"mutable-data audit role has unsafe {field}"
             )
+
+    governed_schemas = document.get("governed_schemas")
+    required_schema_names = tuple(
+        schema
+        for schema in MUTABLE_AUDIT_GOVERNED_SCHEMAS
+        if schema != "generation"
+    )
+    if (
+        not isinstance(governed_schemas, list)
+        or [
+            record.get("schema") if isinstance(record, dict) else None
+            for record in governed_schemas
+        ]
+        not in [
+            list(required_schema_names),
+            list(MUTABLE_AUDIT_GOVERNED_SCHEMAS),
+        ]
+    ):
+        raise SiteHelperContractError(
+            "mutable-data audit governed-schema authority is incomplete"
+        )
+    normalized_schemas: list[dict[str, object]] = []
+    schema_oids: set[str] = set()
+    present_schema_names = tuple(record["schema"] for record in governed_schemas)
+    for expected_name, record in zip(
+        present_schema_names, governed_schemas, strict=True
+    ):
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"schema", "oid", "usage", "create"}
+            or record.get("schema") != expected_name
+            or not isinstance(record.get("oid"), str)
+            or not record["oid"].isdigit()
+            or int(record["oid"]) <= 0
+            or record["oid"] in schema_oids
+            or record.get("usage") is not True
+            or record.get("create") is not False
+        ):
+            raise SiteHelperContractError(
+                "mutable-data audit governed-schema authority is unsafe"
+            )
+        schema_oids.add(record["oid"])
+        normalized_schemas.append(dict(record))
+
+    governed_relations = document.get("governed_relations")
+    if not isinstance(governed_relations, list) or not governed_relations:
+        raise SiteHelperContractError(
+            "mutable-data audit governed-relation projection is incomplete"
+        )
+    normalized_relations: list[dict[str, object]] = []
+    relation_names: set[str] = set()
+    relation_oids: set[str] = set()
+    for record in governed_relations:
+        if not isinstance(record, dict):
+            raise SiteHelperContractError(
+                "mutable-data audit governed-relation projection is invalid"
+            )
+        relation = record.get("relation")
+        oid = record.get("oid")
+        owner = record.get("owner")
+        if (
+            set(record)
+            != {
+                "relation",
+                "oid",
+                "kind",
+                "owner",
+                "select",
+                "insert",
+                "update",
+                "delete",
+                "truncate",
+                "references",
+                "trigger",
+            }
+            or not isinstance(relation, str)
+            or not any(
+                relation.startswith(f"{schema}.")
+                and len(relation) > len(schema) + 1
+                for schema in present_schema_names
+            )
+            or relation in relation_names
+            or not isinstance(oid, str)
+            or not oid.isdigit()
+            or int(oid) <= 0
+            or oid in relation_oids
+            or record.get("kind") not in {"r", "p", "v", "m", "f"}
+            or not isinstance(owner, str)
+            or ROLE_RE.fullmatch(owner) is None
+            or record.get("select") is not True
+            or any(
+                record.get(privilege) is not False
+                for privilege in (
+                    "insert",
+                    "update",
+                    "delete",
+                    "truncate",
+                    "references",
+                    "trigger",
+                )
+            )
+        ):
+            raise SiteHelperContractError(
+                "mutable-data audit governed-relation authority is unsafe"
+            )
+        relation_names.add(relation)
+        relation_oids.add(oid)
+        normalized_relations.append(dict(record))
+    if [record["relation"] for record in normalized_relations] != sorted(
+        relation_names
+    ):
+        raise SiteHelperContractError(
+            "mutable-data audit governed-relation projection is non-canonical"
+        )
+
+    governed_sequences = document.get("governed_sequences")
+    if not isinstance(governed_sequences, list) or not governed_sequences:
+        raise SiteHelperContractError(
+            "mutable-data audit governed-sequence projection is incomplete"
+        )
+    normalized_sequences: list[dict[str, object]] = []
+    sequence_names: set[str] = set()
+    sequence_oids: set[str] = set()
+    for record in governed_sequences:
+        if not isinstance(record, dict):
+            raise SiteHelperContractError(
+                "mutable-data audit governed-sequence projection is invalid"
+            )
+        sequence = record.get("sequence")
+        oid = record.get("oid")
+        owner = record.get("owner")
+        if (
+            set(record)
+            != {
+                "sequence",
+                "oid",
+                "owner",
+                "select",
+                "usage",
+                "update",
+            }
+            or not isinstance(sequence, str)
+            or not any(
+                sequence.startswith(f"{schema}.")
+                and len(sequence) > len(schema) + 1
+                for schema in present_schema_names
+            )
+            or sequence in sequence_names
+            or not isinstance(oid, str)
+            or not oid.isdigit()
+            or int(oid) <= 0
+            or oid in sequence_oids
+            or not isinstance(owner, str)
+            or ROLE_RE.fullmatch(owner) is None
+            or record.get("select") is not True
+            or record.get("usage") is not False
+            or record.get("update") is not False
+        ):
+            raise SiteHelperContractError(
+                "mutable-data audit governed-sequence authority is unsafe"
+            )
+        sequence_names.add(sequence)
+        sequence_oids.add(oid)
+        normalized_sequences.append(dict(record))
+    if [record["sequence"] for record in normalized_sequences] != sorted(
+        sequence_names
+    ):
+        raise SiteHelperContractError(
+            "mutable-data audit governed-sequence projection is non-canonical"
+        )
+
+    expected_default_privileges = [
+        {
+            "owner": "polyprop",
+            "schema": schema,
+            "object_type": object_type,
+            "privilege": "SELECT",
+            "grantable": False,
+        }
+        for schema in present_schema_names
+        for object_type in ("S", "r")
+    ]
+    expected_default_privileges.sort(
+        key=lambda record: (
+            record["owner"],
+            record["schema"],
+            record["object_type"],
+            record["privilege"],
+        )
+    )
+    if document.get("default_privileges") != expected_default_privileges:
+        raise SiteHelperContractError(
+            "mutable-data audit default privileges differ"
+        )
+
+    if document.get("large_object_update_count") != 0:
+        raise SiteHelperContractError(
+            "mutable-data audit large-object write authority is unsafe"
+        )
+    large_object_mutators = document.get("large_object_mutators")
+    if (
+        not isinstance(large_object_mutators, list)
+        or len(large_object_mutators) != len(MUTABLE_AUDIT_LO_MUTATORS)
+    ):
+        raise SiteHelperContractError(
+            "mutable-data audit large-object mutator projection is incomplete"
+        )
+    mutator_oids: set[str] = set()
+    for expected_routine, record in zip(
+        MUTABLE_AUDIT_LO_MUTATORS,
+        large_object_mutators,
+        strict=True,
+    ):
+        if (
+            not isinstance(record, dict)
+            or set(record)
+            != {
+                "routine",
+                "oid",
+                "owner",
+                "public_execute",
+                "database_owner_execute",
+                "audit_execute",
+            }
+            or record.get("routine") != expected_routine
+            or not isinstance(record.get("oid"), str)
+            or not record["oid"].isdigit()
+            or int(record["oid"]) <= 0
+            or record["oid"] in mutator_oids
+            or not isinstance(record.get("owner"), str)
+            or ROLE_RE.fullmatch(record["owner"]) is None
+            or record.get("public_execute") is not False
+            or record.get("database_owner_execute") is not True
+            or record.get("audit_execute") is not False
+        ):
+            raise SiteHelperContractError(
+                "mutable-data audit large-object mutator authority is unsafe"
+            )
+        mutator_oids.add(record["oid"])
     return dict(document)
 
 
@@ -5618,7 +5884,7 @@ def _validate_mutable_data_audit(
     if (
         not isinstance(document, dict)
         or set(document) != fields
-        or document.get("schema_version") != 6
+        or document.get("schema_version") != 7
         or not isinstance(document.get("operation_id"), str)
         or OPERATION_ID_RE.fullmatch(document["operation_id"]) is None
         or document.get("database") != "nexpoly"
@@ -5821,7 +6087,7 @@ def _validate_mutable_data_audit(
     ):
         raise SiteHelperContractError("mutable-data snapshot digest differs")
     return {
-        "schema_version": 6,
+        "schema_version": 7,
         **identity,
         "transaction_isolation": "repeatable read",
         "transaction_read_only": True,
