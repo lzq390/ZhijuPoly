@@ -357,6 +357,7 @@ class WorkerSettings:
     executor_process: bool = False
     gpu1_only_session: bool = False
     gpu_guard_state: Path | None = None
+    gpu_guard_mode: Literal["enforce", "observe"] = "enforce"
     release_sha: str | None = None
     runtime_contract_sha256: str | None = None
 
@@ -531,6 +532,10 @@ class WorkerSettings:
                     leaf_kind="file",
                 ),
             )
+        if self.gpu_guard_mode not in {"enforce", "observe"}:
+            raise ValueError(
+                "NEXPOLY_DFT_GPU_GUARD_MODE must be enforce or observe"
+            )
 
 
 def load_settings() -> WorkerSettings:
@@ -689,6 +694,13 @@ def load_settings() -> WorkerSettings:
     active_threads = _positive_int("MONOMER_DFT_GPU_ACTIVE_THREAD_PERCENTAGE", 50)
     if active_threads != 50:
         raise ValueError("MONOMER_DFT_GPU_ACTIVE_THREAD_PERCENTAGE must be 50")
+    gpu_guard_mode = os.getenv(
+        "NEXPOLY_DFT_GPU_GUARD_MODE", "enforce"
+    ).strip().lower()
+    if gpu_guard_mode not in {"enforce", "observe"}:
+        raise ValueError(
+            "NEXPOLY_DFT_GPU_GUARD_MODE must be enforce or observe"
+        )
 
     return WorkerSettings(
         python=_runtime_path(
@@ -754,6 +766,7 @@ def load_settings() -> WorkerSettings:
             if deployment == "prod"
             else None
         ),
+        gpu_guard_mode=gpu_guard_mode,
         release_sha=release_sha,
         runtime_contract_sha256=runtime_contract_sha256,
     )

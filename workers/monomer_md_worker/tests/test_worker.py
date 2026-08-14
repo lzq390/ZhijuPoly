@@ -725,7 +725,7 @@ def test_submit_rejects_when_formal_capacity_is_full(tmp_path: Path, monkeypatch
     assert worker_main.active_formal_jobs == set(formal_jobs)
 
 
-def test_formal_jobs_use_fifo_queue_and_queued_job_can_be_cancelled(
+def test_formal_jobs_enforce_one_running_two_queued_capacity_and_cancellation(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -735,6 +735,8 @@ def test_formal_jobs_use_fifo_queue_and_queued_job_can_be_cancelled(
         app_postgres_dsn="postgresql://db/app",
         max_active_jobs=3,
     )
+    assert settings.max_active_jobs == 3
+    assert settings.max_concurrent_jobs == 1
     settings.byteff2_root.mkdir()
 
     class QueueRepository:
@@ -763,7 +765,11 @@ def test_formal_jobs_use_fifo_queue_and_queued_job_can_be_cancelled(
     monkeypatch.setattr(worker_main, "recovery_ready", True)
     monkeypatch.setattr(worker_main, "draining", False)
 
-    async def hold_job(*_args, **_kwargs):
+    started_jobs: list[str] = []
+
+    async def hold_job(request, *_args, **_kwargs):
+        await worker_main.job_start_events[request.job_id].wait()
+        started_jobs.append(request.job_id)
         await asyncio.Future()
 
     monkeypatch.setattr(worker_main, "_run_job", hold_job)
@@ -783,25 +789,64 @@ def test_formal_jobs_use_fifo_queue_and_queued_job_can_be_cancelled(
         await worker_main.submit_job(request("formal-1"))
         await worker_main.submit_job(request("formal-2"))
         await worker_main.submit_job(request("formal-3"))
+        for _ in range(5):
+            await asyncio.sleep(0)
         assert fake_repository.accepted == [
             ("formal-1", False),
             ("formal-2", True),
             ("formal-3", True),
         ]
+        assert started_jobs == ["formal-1"]
+        assert worker_main.execution_job_id == "formal-1"
         assert list(worker_main.formal_job_queue) == ["formal-2", "formal-3"]
         assert worker_main.job_start_events["formal-1"].is_set()
         assert not worker_main.job_start_events["formal-2"].is_set()
+        assert not worker_main.job_start_events["formal-3"].is_set()
+
+        with pytest.raises(worker_main.HTTPException) as rejected:
+            await worker_main.submit_job(request("formal-4"))
+        assert rejected.value.status_code == 429
+        assert fake_repository.accepted == [
+            ("formal-1", False),
+            ("formal-2", True),
+            ("formal-3", True),
+        ]
 
         response = await worker_main.cancel_job("formal-2")
         assert response.status == "cancel_requested"
-        for _ in range(5):
+        for _ in range(20):
             await asyncio.sleep(0)
+            if "formal-2" not in worker_main.active_jobs:
+                break
         assert list(worker_main.formal_job_queue) == ["formal-3"]
+        assert started_jobs == ["formal-1"]
+
+        await worker_main.submit_job(request("formal-4"))
+        assert fake_repository.accepted[-1] == ("formal-4", True)
+        assert list(worker_main.formal_job_queue) == ["formal-3", "formal-4"]
+        assert started_jobs == ["formal-1"]
+
+        running_task = worker_main.active_jobs["formal-1"]
+        response = await worker_main.cancel_job("formal-1")
+        assert response.status == "cancel_requested"
+        await asyncio.gather(running_task, return_exceptions=True)
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if started_jobs == ["formal-1", "formal-3"]:
+                break
+        assert fake_repository.promoted == ["formal-3"]
+        assert started_jobs == ["formal-1", "formal-3"]
+        assert worker_main.execution_job_id == "formal-3"
+        assert list(worker_main.formal_job_queue) == ["formal-4"]
+        assert not worker_main.job_start_events["formal-4"].is_set()
 
         for task in list(worker_main.active_jobs.values()):
             task.cancel()
         await asyncio.gather(*list(worker_main.active_jobs.values()), return_exceptions=True)
-        await asyncio.sleep(0)
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if not worker_main.active_jobs:
+                break
 
     asyncio.run(scenario())
 

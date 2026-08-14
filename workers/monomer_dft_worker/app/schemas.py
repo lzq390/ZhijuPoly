@@ -597,6 +597,11 @@ class HealthResponse(StrictModel):
     worker_version: str
     release_sha: str | None = None
     runtime_contract_sha256: str | None = None
+    gpu_guard_mode: Literal["enforce", "observe"]
+    gpu_guard_status: Literal[
+        "ready", "quarantined", "missing", "stale", "invalid"
+    ] | None = None
+    gpu_contention_observed: bool = False
     runtime: dict[str, Any]
 
 

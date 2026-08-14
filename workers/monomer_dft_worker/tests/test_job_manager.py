@@ -28,6 +28,7 @@ from workers.monomer_dft_worker.app.engine import (
     EngineExecution,
     ScientificComputationError,
 )
+from workers.monomer_dft_worker.app.executor_pool import SupervisorRuntimeProbe
 from workers.monomer_dft_worker.app.job_manager import (
     ArtifactDeletionFailed,
     ArtifactNotFound,
@@ -84,6 +85,35 @@ class ReadyRuntime:
 
     def empty_cuda_cache(self) -> None:
         self.empty_cache_calls += 1
+
+
+class MutableGuardRuntime(ReadyRuntime):
+    def __init__(self, mode: str) -> None:
+        super().__init__()
+        self.mode = mode
+        self.status = "ready"
+        self.settings = SimpleNamespace(
+            physical_gpu="2",
+            deployment="prod",
+            gpu_guard_mode=mode,
+        )
+
+    def probe(self) -> SupervisorRuntimeProbe:
+        payload = super().probe().to_dict()
+        ready = self.mode == "observe" or self.status == "ready"
+        payload.update(
+            {
+                "ready": ready,
+                "error": None if ready else "production GPU guard blocked admission",
+                "deployment": "prod",
+                "physical_gpu": "2",
+                "guard_status": self.status,
+                "gpu_guard_mode": self.mode,
+                "gpu_guard_status": self.status,
+                "gpu_contention_observed": self.status == "quarantined",
+            }
+        )
+        return SupervisorRuntimeProbe(**payload)
 
 
 class SafeFatalRuntime(ReadyRuntime):
@@ -417,6 +447,49 @@ def test_fifo_capacity_one_running_plus_eight_queued_and_idempotency(
         assert provenance["aimnet_wheel_sha256"] == "e" * 64
         assert provenance["model_family"] == "wb97m-d3"
         assert provenance["gpu_physical_device"] == "3"
+        await manager.stop()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("guard_status", ["quarantined", "missing", "stale", "invalid"])
+@pytest.mark.parametrize("guard_mode", ["enforce", "observe"])
+def test_queued_job_rechecks_gpu_guard_before_execution_without_stopping_running_job(
+    tmp_path: Path,
+    guard_mode: str,
+    guard_status: str,
+) -> None:
+    async def scenario() -> None:
+        runtime = MutableGuardRuntime(guard_mode)
+        engine = ControlledEngine()
+        manager = _manager(tmp_path, engine, runtime=runtime)
+        await manager.start()
+        manager.submit(_request(0))
+        await _wait_until(lambda: engine.started == ["job-0"])
+        manager.submit(_request(1))
+
+        runtime.status = guard_status
+        engine.release.set()
+        await _wait_until(lambda: manager.get("job-0").status == "completed")
+        await _wait_until(
+            lambda: manager.get("job-1").status in {"completed", "failed"}
+        )
+
+        first = manager.get("job-0")
+        second = manager.get("job-1")
+        assert first.status == "completed"
+        if guard_mode == "enforce":
+            assert second.status == "failed"
+            assert second.stage == "validating"
+            assert second.error is not None
+            assert second.error.code == "gpu_guard_blocked"
+            assert second.error.retryable is True
+            assert second.error.details == {"gpu_guard_status": guard_status}
+            assert engine.started == ["job-0"]
+        else:
+            assert second.status == "completed"
+            assert second.error is None
+            assert engine.started == ["job-0", "job-1"]
         await manager.stop()
 
     asyncio.run(scenario())

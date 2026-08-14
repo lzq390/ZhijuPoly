@@ -345,6 +345,64 @@ class _LedgerConnection:
         return _LedgerResult()
 
 
+class _ApplyingLedgerConnection(_LedgerConnection):
+    @contextmanager
+    def transaction(self):
+        yield self
+
+
+def test_expand_migration_uses_bounded_transaction_local_timeouts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    migrations: list[dict[str, object]] = [
+        {
+            "version": "0001_baseline",
+            "kind": "baseline",
+            "epoch": 1,
+            "requires_contracts": [],
+        },
+        {
+            "version": "0002_expand",
+            "kind": "expand",
+            "epoch": 1,
+            "requires_contracts": [],
+        }
+    ]
+    _write_v2_manifest(tmp_path, migrations)
+    connection = _ApplyingLedgerConnection(
+        [
+            {
+                "version": "0001_baseline",
+                "checksum": migrations[0]["checksum"],
+            }
+        ]
+    )
+
+    @contextmanager
+    def fake_connection(_dsn):
+        yield connection
+
+    monkeypatch.setattr(postgres_migrations, "postgres_connection", fake_connection)
+
+    results = postgres_migrations.apply_postgres_migrations(
+        "postgresql://fixture",
+        tmp_path,
+        allowed_kinds={"expand"},
+    )
+
+    assert [result.version for result in results if result.applied] == [
+        "0002_expand"
+    ]
+    lock = "SET LOCAL lock_timeout = '30s'"
+    statement = "SET LOCAL statement_timeout = '15min'"
+    migration_sql = (tmp_path / "0002_expand.sql").read_text(encoding="utf-8")
+    assert connection.queries.index(lock) < connection.queries.index(migration_sql)
+    assert connection.queries.index(statement) < connection.queries.index(
+        migration_sql
+    )
+
+
 def test_epoch_dependency_failure_precedes_any_migration_sql(
     tmp_path: Path,
     monkeypatch,

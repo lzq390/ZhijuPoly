@@ -269,6 +269,19 @@ async def _worker_health(request: Request) -> tuple[dict[str, Any], bool]:
     return health, available
 
 
+def _public_gpu_guard_state(
+    health: dict[str, Any],
+) -> tuple[str | None, str | None, bool]:
+    mode = health.get("gpu_guard_mode")
+    if mode not in {"enforce", "observe"}:
+        mode = None
+    status = health.get("gpu_guard_status")
+    if status not in {"ready", "quarantined", "missing", "stale", "invalid"}:
+        status = None
+    contention = health.get("gpu_contention_observed") is True
+    return mode, status, contention
+
+
 async def _schema_ready(request: Request) -> bool:
     repository = _repository(request)
     checker = getattr(repository, "schema_ready", None)
@@ -335,12 +348,26 @@ async def get_status(request: Request) -> MonomerDftStatusResponse:
         and bool(settings.monomer_dft_worker_uds)
     )
     worker_status = str(health.get("status") or "unavailable")
+    gpu_guard_mode, gpu_guard_status, gpu_contention_observed = (
+        _public_gpu_guard_state(health)
+    )
     if not schema_ready:
         message = "monomer DFT schema is not ready"
     elif not enabled:
         message = "monomer DFT submission is disabled"
     elif not settings.monomer_dft_worker_uds:
         message = "monomer DFT Unix socket is not configured"
+    elif available and gpu_contention_observed:
+        message = "monomer DFT worker is ready; GPU contention is observed"
+    elif (
+        available
+        and gpu_guard_mode == "observe"
+        and gpu_guard_status in {"missing", "stale", "invalid"}
+    ):
+        message = (
+            "monomer DFT worker is ready; GPU guard observation is "
+            f"{gpu_guard_status}"
+        )
     elif available:
         message = "monomer DFT worker is ready"
     elif health.get("draining") is True:
@@ -370,6 +397,9 @@ async def get_status(request: Request) -> MonomerDftStatusResponse:
         schema_ready=schema_ready,
         worker_status=worker_status,
         runtime_ready=health.get("runtime_ready") if isinstance(health.get("runtime_ready"), bool) else None,
+        gpu_guard_mode=gpu_guard_mode,
+        gpu_guard_status=gpu_guard_status,
+        gpu_contention_observed=gpu_contention_observed,
         draining=health.get("draining") if isinstance(health.get("draining"), bool) else None,
         active_jobs=active_jobs,
         max_active_jobs=settings.monomer_dft_max_active_jobs,
@@ -402,6 +432,9 @@ async def get_capabilities(request: Request) -> MonomerDftCapabilitiesResponse:
         and enabled
         and bool(settings.monomer_dft_worker_uds)
         and health_available
+    )
+    gpu_guard_mode, gpu_guard_status, gpu_contention_observed = (
+        _public_gpu_guard_state(health)
     )
 
     worker_models = {
@@ -449,6 +482,9 @@ async def get_capabilities(request: Request) -> MonomerDftCapabilitiesResponse:
         "worker_status": health.get("status", "unavailable"),
         "runtime_ready": health.get("runtime_ready"),
         "draining": health.get("draining"),
+        "gpu_guard_mode": gpu_guard_mode,
+        "gpu_guard_status": gpu_guard_status,
+        "gpu_contention_observed": gpu_contention_observed,
     }
     return MonomerDftCapabilitiesResponse.model_validate(
         {
@@ -480,7 +516,18 @@ async def get_capabilities(request: Request) -> MonomerDftCapabilitiesResponse:
             },
             "worker": worker_proxy,
             "message": (
-                "monomer DFT worker is ready"
+                "monomer DFT worker is ready; GPU contention is observed"
+                if available and gpu_contention_observed
+                else (
+                    "monomer DFT worker is ready; GPU guard observation is "
+                    f"{gpu_guard_status}"
+                )
+                if (
+                    available
+                    and gpu_guard_mode == "observe"
+                    and gpu_guard_status in {"missing", "stale", "invalid"}
+                )
+                else "monomer DFT worker is ready"
                 if available
                 else "monomer DFT schema is not ready"
                 if not schema_ready

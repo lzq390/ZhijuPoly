@@ -98,6 +98,7 @@ def test_launcher_rejects_configuration_selected_python(tmp_path: Path) -> None:
         ("NEXPOLY_GPU_DEVICE", "1"),
         ("MONOMER_MD_CUDA_VISIBLE_DEVICES", "1"),
         ("MONOMER_MD_GPU_BROKER_ENABLED", "true"),
+        ("MONOMER_MD_MAX_ACTIVE_JOBS", "1"),
         ("MONOMER_MD_MAX_CONCURRENT_JOBS", "2"),
     ),
 )

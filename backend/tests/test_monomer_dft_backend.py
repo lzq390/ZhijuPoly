@@ -2873,6 +2873,12 @@ def test_capabilities_publish_fixed_capacity_and_scientific_model_meanings() -> 
                 "runtime_ready": True,
                 "accepting_jobs": True,
                 "draining": False,
+                "gpu_guard_mode": "observe",
+                "gpu_guard_status": "quarantined",
+                "gpu_contention_observed": True,
+                "unknown_processes": [
+                    {"pid": 99, "process_name": "must-not-leak"}
+                ],
             }
 
         async def capabilities(self):
@@ -2919,6 +2925,20 @@ def test_capabilities_publish_fixed_capacity_and_scientific_model_meanings() -> 
     assert "CPCM(THF)" in descriptions["aimnet2-pd"]
     assert "reaction paths" in descriptions["aimnet2-rxn"]
     assert "SCF" not in " ".join(descriptions.values())
+    assert payload["available"] is True
+    assert payload["worker"]["gpu_guard_mode"] == "observe"
+    assert payload["worker"]["gpu_guard_status"] == "quarantined"
+    assert payload["worker"]["gpu_contention_observed"] is True
+    assert "must-not-leak" not in response.text
+
+    status = client.get("/api/v1/monomer-dft/status")
+    assert status.status_code == 200
+    assert status.json()["available"] is True
+    assert status.json()["runtime_ready"] is True
+    assert status.json()["gpu_guard_mode"] == "observe"
+    assert status.json()["gpu_guard_status"] == "quarantined"
+    assert status.json()["gpu_contention_observed"] is True
+    assert "must-not-leak" not in status.text
     client.close()
 
 

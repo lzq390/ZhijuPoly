@@ -9,6 +9,7 @@ import json
 import os
 import select
 import socket
+import stat
 import subprocess
 import threading
 import time
@@ -54,6 +55,96 @@ EXECUTOR_BROKER_TERMINATION_EXIT_TIMEOUT_SECONDS = 2.0
 LEASE_HEARTBEAT_SECONDS = 1.0
 PRIMARY_REBUILD_ATTEMPTS = 3
 PRIMARY_REBUILD_BACKOFF_SECONDS = 0.1
+GPU_GUARD_MAX_BYTES = 1024 * 1024
+
+
+def _read_private_gpu_guard(path: Path) -> tuple[dict[str, Any] | None, str]:
+    """Read one bounded, owner-only guard snapshot without following links."""
+
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+    except FileNotFoundError:
+        return None, "missing"
+    except OSError:
+        return None, "invalid"
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_nlink != 1
+            or not 1 <= before.st_size <= GPU_GUARD_MAX_BYTES
+        ):
+            return None, "invalid"
+        chunks: list[bytes] = []
+        size = 0
+        while size <= GPU_GUARD_MAX_BYTES:
+            chunk = os.read(
+                descriptor,
+                min(64 * 1024, GPU_GUARD_MAX_BYTES + 1 - size),
+            )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        after = os.fstat(descriptor)
+        current = path.lstat()
+    except OSError:
+        return None, "invalid"
+    finally:
+        os.close(descriptor)
+    identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_uid,
+        before.st_nlink,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    if (
+        size > GPU_GUARD_MAX_BYTES
+        or size != before.st_size
+        or identity
+        != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_uid,
+            after.st_nlink,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        or identity
+        != (
+            current.st_dev,
+            current.st_ino,
+            current.st_mode,
+            current.st_uid,
+            current.st_nlink,
+            current.st_size,
+            current.st_mtime_ns,
+            current.st_ctime_ns,
+        )
+    ):
+        return None, "invalid"
+    try:
+        document = json.loads(b"".join(chunks).decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError, RecursionError):
+        return None, "invalid"
+    if not isinstance(document, dict):
+        return None, "invalid"
+    return document, "valid"
 
 
 @dataclass(slots=True)
@@ -87,6 +178,11 @@ class SupervisorRuntimeProbe:
     deployment: str = "dev"
     physical_gpu: str | None = None
     guard_status: str | None = None
+    gpu_guard_mode: Literal["enforce", "observe"] = "enforce"
+    gpu_guard_status: Literal[
+        "ready", "quarantined", "missing", "stale", "invalid"
+    ] | None = None
+    gpu_contention_observed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -612,7 +708,12 @@ class ExecutorPool:
             handle = self._primary
             lease = self._primary_residency
             admission_uncertain = self.admission_uncertain
-            guard_error, guard_status = self._gpu_guard_error()
+            guard_error, guard_status, contention_observed = (
+                self._gpu_guard_observation()
+            )
+            guard_mode = getattr(self.settings, "gpu_guard_mode", "enforce")
+            if guard_mode == "observe":
+                guard_error = None
             if (
                 self._fatal
                 or admission_uncertain
@@ -636,6 +737,9 @@ class ExecutorPool:
                     deployment=self.settings.deployment,
                     physical_gpu=self.settings.physical_gpu,
                     guard_status=guard_status,
+                    gpu_guard_mode=guard_mode,
+                    gpu_guard_status=guard_status,
+                    gpu_contention_observed=contention_observed,
                 )
             payload = dict(handle.probe_payload)
             allowed = {field.name for field in SupervisorRuntimeProbe.__dataclass_fields__.values()}
@@ -650,39 +754,93 @@ class ExecutorPool:
                     "deployment": self.settings.deployment,
                     "physical_gpu": self.settings.physical_gpu,
                     "guard_status": guard_status,
+                    "gpu_guard_mode": guard_mode,
+                    "gpu_guard_status": guard_status,
+                    "gpu_contention_observed": contention_observed,
                 }
             )
             return SupervisorRuntimeProbe(**payload)
 
     def _gpu_guard_error(self) -> tuple[str | None, str | None]:
+        error, status, _contention_observed = self._gpu_guard_observation()
+        if getattr(self.settings, "gpu_guard_mode", "enforce") == "observe":
+            return None, status
+        return error, status
+
+    def _require_gpu_guard_for_execution(self) -> None:
+        """Recheck enforce-mode guard state immediately before GPU admission."""
+
+        error, status, _contention_observed = self._gpu_guard_observation()
+        if (
+            getattr(self.settings, "gpu_guard_mode", "enforce") == "enforce"
+            and error is not None
+        ):
+            raise ScientificComputationError(
+                "gpu_guard_blocked",
+                "The production GPU guard blocked execution before GPU admission.",
+                retryable=True,
+                details={"gpu_guard_status": status or "invalid"},
+            )
+
+    def _gpu_guard_observation(self) -> tuple[str | None, str | None, bool]:
         if self.settings.deployment != "prod":
-            return None, None
+            return None, None, False
         path = self.settings.gpu_guard_state
         if path is None:
-            return "production GPU2 guard state is not configured", "missing"
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return "production GPU2 guard state is unavailable", "missing"
-        status = str(payload.get("status", "invalid"))
-        if payload.get("gpu_uuid") != GPU_UUID_BY_INDEX["2"]:
-            return "production GPU2 guard UUID does not match policy", status
-        try:
-            observed_at = dt.datetime.fromisoformat(
-                str(payload["observed_at"]).removesuffix("Z") + "+00:00"
+            return (
+                "production GPU2 guard state is not configured",
+                "missing",
+                False,
             )
-        except (KeyError, TypeError, ValueError):
-            return "production GPU2 guard timestamp is invalid", status
+        payload, read_status = _read_private_gpu_guard(path)
+        if read_status == "missing":
+            return "production GPU2 guard state is unavailable", "missing", False
+        if read_status != "valid" or payload is None:
+            return "production GPU2 guard state is invalid", "invalid", False
         if (
-            observed_at.tzinfo is None
-            or dt.datetime.now(dt.timezone.utc) - observed_at
-            > dt.timedelta(seconds=150)
+            payload.get("schema_version") != 1
+            or payload.get("gpu_index") != "2"
+            or payload.get("gpu_uuid") != GPU_UUID_BY_INDEX["2"]
         ):
-            return "production GPU2 guard state is stale", status
+            return "production GPU2 guard identity is invalid", "invalid", False
+        try:
+            timestamp = payload["observed_at"]
+            if (
+                not isinstance(timestamp, str)
+                or len(timestamp) != 20
+                or timestamp[4] != "-"
+                or timestamp[7] != "-"
+                or timestamp[10] != "T"
+                or timestamp[13] != ":"
+                or timestamp[16] != ":"
+                or timestamp[19] != "Z"
+            ):
+                raise ValueError("non-canonical GPU guard timestamp")
+            observed_at = dt.datetime.strptime(
+                timestamp, "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=dt.timezone.utc)
+        except (KeyError, TypeError, ValueError):
+            return "production GPU2 guard timestamp is invalid", "invalid", False
+        age = dt.datetime.now(dt.timezone.utc) - observed_at
+        if age < -dt.timedelta(seconds=30):
+            return "production GPU2 guard timestamp is invalid", "invalid", False
+        if age > dt.timedelta(minutes=2):
+            return "production GPU2 guard state is stale", "stale", False
+        status = payload.get("status")
         unknown = payload.get("unknown_processes")
-        if status != "ready" or not isinstance(unknown, list) or unknown:
-            return "production GPU2 guard has quarantined DFT admission", status
-        return None, status
+        if (
+            status not in {"ready", "quarantined"}
+            or not isinstance(unknown, list)
+            or (status == "ready") != (not unknown)
+        ):
+            return "production GPU2 guard state is invalid", "invalid", False
+        if status == "quarantined":
+            return (
+                "production GPU2 guard has quarantined DFT admission",
+                "quarantined",
+                True,
+            )
+        return None, "ready", False
 
     @property
     def admission_uncertain(self) -> bool:
@@ -709,6 +867,7 @@ class ExecutorPool:
                 raise ComputationCancelled(
                     "calculation was cancelled before GPU admission"
                 )
+            self._require_gpu_guard_for_execution()
             if self.broker is None:
                 raise ScientificComputationError(
                     "gpu_runtime_unhealthy",
