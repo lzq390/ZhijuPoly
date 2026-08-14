@@ -336,26 +336,29 @@ def test_postgres_repository_advisory_capacity_is_one_running_plus_eight_queued(
     repository = MonomerDftRepository(postgres_dsn)
     prepared = _prepared()
 
-    def submit(index: int) -> str:
+    def submit(index: int) -> tuple[str, str]:
+        idempotency_key = f"capacity-{index:04d}"
         try:
             created = repository.create_job(
                 prepared,
-                idempotency_key=f"capacity-{index:04d}",
+                idempotency_key=idempotency_key,
                 max_active_jobs=9,
             )
         except MonomerDftCapacityError:
-            return "capacity"
-        return "created" if created.created else "replay"
+            return "capacity", idempotency_key
+        return ("created" if created.created else "replay"), idempotency_key
 
     with ThreadPoolExecutor(max_workers=12) as executor:
         outcomes = list(executor.map(submit, range(12)))
-    assert outcomes.count("created") == 9
-    assert outcomes.count("capacity") == 3
+    outcome_states = [state for state, _key in outcomes]
+    assert outcome_states.count("created") == 9
+    assert outcome_states.count("capacity") == 3
     assert repository.count_active_jobs() == 9
 
+    replay_key = next(key for state, key in outcomes if state == "created")
     replay = repository.create_job(
         prepared,
-        idempotency_key="capacity-0000",
+        idempotency_key=replay_key,
         max_active_jobs=9,
     )
     assert replay.created is False
