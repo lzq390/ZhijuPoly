@@ -292,21 +292,37 @@ class DevGpuOperatorTests(unittest.TestCase):
                     0o700,
                 )
 
-                status_result = subprocess.run(
-                    [
-                        sys.executable,
-                        "-I",
-                        str(OPERATOR_SCRIPT),
-                        "request",
-                        "--socket",
-                        str(socket_path),
-                        "--command",
-                        "status",
-                    ],
-                    check=True,
-                    text=True,
-                    capture_output=True,
+                status_command = [
+                    sys.executable,
+                    "-I",
+                    str(OPERATOR_SCRIPT),
+                    "request",
+                    "--socket",
+                    str(socket_path),
+                    "--command",
+                    "status",
+                ]
+                status_result = None
+                status_error = ""
+                while time.monotonic() < deadline:
+                    candidate = subprocess.run(
+                        status_command,
+                        check=False,
+                        text=True,
+                        capture_output=True,
+                    )
+                    if candidate.returncode == 0:
+                        status_result = candidate
+                        break
+                    status_error = candidate.stderr.strip()
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.05)
+                self.assertIsNotNone(
+                    status_result,
+                    f"GPU operator did not become ready: {status_error}",
                 )
+                assert status_result is not None
                 status = json.loads(status_result.stdout)
                 self.assertEqual(status["phase"], "stopped")
                 self.assertEqual(status["source_sha"], SOURCE_SHA)
