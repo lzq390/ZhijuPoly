@@ -2,11 +2,25 @@
 set -euo pipefail
 umask 077
 
-SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-REPO_ROOT="$(cd -P "$SCRIPT_DIR/../.." && pwd -P)"
 PRODUCTION_REPO_ROOT="/data/lzq/gith/nexpoly"
 PRODUCTION_RUNTIME_ROOT="/data/lzq/gith/nexpoly-runtime"
 PRODUCTION_GPU_UUID="GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+MONOMER_DFT_DEPLOYMENT="${MONOMER_DFT_DEPLOYMENT:-dev}"
+GOVERNED_FD_LAUNCH="${NEXPOLY_DFT_GOVERNED_FD_LAUNCH:-}"
+if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" && \
+      "$GOVERNED_FD_LAUNCH" == "1" && \
+      "${BASH_SOURCE[0]}" =~ ^/proc/self/fd/[0-9]+$ ]]; then
+  # The governed launcher executes this script through /proc/self/fd/N so the
+  # reviewed inode remains pinned across exec.  BASH_SOURCE consequently
+  # names procfs, not the live checkout; production source authority is the
+  # fixed repository root already verified by the launcher and controller.
+  REPO_ROOT="$PRODUCTION_REPO_ROOT"
+  SCRIPT_DIR="$REPO_ROOT/workers/monomer_dft_worker"
+else
+  SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  REPO_ROOT="$(cd -P "$SCRIPT_DIR/../.." && pwd -P)"
+fi
+unset NEXPOLY_DFT_GOVERNED_FD_LAUNCH GOVERNED_FD_LAUNCH
 DEFAULT_RUNTIME_ROOT="$REPO_ROOT/.runtime"
 GPU_AUTHORITY_VALIDATOR="$REPO_ROOT/gpu_resource/authority.py"
 RUNTIME_ROOT=""
@@ -427,7 +441,6 @@ if [[ -n "${PYTHONPATH:-}" ]]; then
 fi
 unset PYTHONPATH
 
-MONOMER_DFT_DEPLOYMENT="${MONOMER_DFT_DEPLOYMENT:-dev}"
 [[ "$MONOMER_DFT_DEPLOYMENT" == "dev" || "$MONOMER_DFT_DEPLOYMENT" == "prod" ]] || \
   fail "MONOMER_DFT_DEPLOYMENT must be dev or prod"
 if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]]; then
@@ -464,6 +477,9 @@ if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]]; then
     fail "production DFT direct mode requires the GPU Broker to be disabled"
   [[ "${MONOMER_DFT_STANDALONE_GPU_SMOKE:-0}" == "0" ]] || \
     fail "production DFT is not a standalone development smoke"
+  [[ "${NEXPOLY_DFT_GPU_GUARD_MODE:-enforce}" == "enforce" || \
+     "${NEXPOLY_DFT_GPU_GUARD_MODE:-enforce}" == "observe" ]] || \
+    fail "NEXPOLY_DFT_GPU_GUARD_MODE must be enforce or observe"
   observed_gpu_uuid="$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i 2 | tr -d '[:space:]')" || \
     fail "physical GPU 2 UUID could not be read"
   [[ "$observed_gpu_uuid" == "$PRODUCTION_GPU_UUID" ]] || \
@@ -543,6 +559,7 @@ validate_supervisor_configuration
 
 export MONOMER_DFT_MAX_CONCURRENT_JOBS=1
 export MONOMER_DFT_DEPLOYMENT
+export NEXPOLY_DFT_GPU_GUARD_MODE="${NEXPOLY_DFT_GPU_GUARD_MODE:-enforce}"
 export NEXPOLY_DFT_GPU_DEVICE="${NEXPOLY_DFT_GPU_DEVICE:-$([[ "$MONOMER_DFT_DEPLOYMENT" == "prod" ]] && printf 2 || printf 1)}"
 if [[ "$MONOMER_DFT_DEPLOYMENT" == "prod" || "${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" == "1" ]]; then
   export NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=""

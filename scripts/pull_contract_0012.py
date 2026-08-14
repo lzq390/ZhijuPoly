@@ -1886,6 +1886,7 @@ class PullRuntimeController(legacy.ReleaseController):
                 allow_unfenced=(
                     start_intent or self._allows_unfenced_pre_drain_recovery(marker)
                 ),
+                allow_partial_stop=start_intent,
             )
             state = recovery.get("runtime_state")
             if state == "stopped":
@@ -3500,6 +3501,7 @@ class PullContractMaintenance(legacy.PolytaoContractMaintenance):
             self.controller.runtime_descriptor,
             expected,
             allow_unfenced=pre_drain_intent or start_intent,
+            allow_partial_stop=start_intent,
         )
         runtime_state = recovery.get("runtime_state")
         if runtime_state not in {"drained", "stopped"}:

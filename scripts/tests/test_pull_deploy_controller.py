@@ -52,6 +52,24 @@ def write_private(path: Path, payload: str) -> None:
     os.chmod(path, 0o600)
 
 
+def v4_recovery_marker(marker: dict[str, object]) -> dict[str, object]:
+    """Upgrade legacy hand-written recovery fixtures to descriptor-v4 effects."""
+
+    upgraded = dict(marker)
+    upgraded["schema_version"] = CONTROLLER.MARKER_SCHEMA_VERSION
+    upgraded.setdefault(
+        "worker_env_switched", bool(upgraded.get("source_switched"))
+    )
+    upgraded.setdefault(
+        "dft_runtime_switched", bool(upgraded.get("source_switched"))
+    )
+    upgraded.setdefault(
+        "dft_unit_switched", bool(upgraded.get("unit_switched"))
+    )
+    upgraded.setdefault("dft_guard_scheduling_stopped", False)
+    return upgraded
+
+
 def image_record(role: str, sha: str = TARGET_SHA) -> dict[str, str]:
     root = CONTROLLER.BACKEND_TAG_ROOT if role == "backend" else CONTROLLER.WEB_TAG_ROOT
     return {
@@ -1358,6 +1376,60 @@ class FakeLifecycle:
         self._event("stop")
         self.runtime_state = "stopped"
 
+    @staticmethod
+    def _guard_evidence(
+        descriptor: dict[str, object], *, status: str
+    ) -> dict[str, object]:
+        controls = descriptor["monomer_dft"]["guard"]
+        service = json.loads(json.dumps(controls["service"]))
+        timer = json.loads(json.dumps(controls["timer"]))
+        service["systemd_state"]["ActiveState"] = "inactive"
+        service["systemd_state"]["SubState"] = "dead"
+        service["main_pid"] = 0
+        if status == "stopped":
+            timer["systemd_state"]["ActiveState"] = "inactive"
+            timer["systemd_state"]["SubState"] = "dead"
+            observation = None
+        else:
+            active = controls["timer_policy"]["active"]
+            timer["systemd_state"]["ActiveState"] = (
+                "active" if active else "inactive"
+            )
+            timer["systemd_state"]["SubState"] = (
+                "waiting" if active else "dead"
+            )
+            observation = {
+                "status": "quarantined",
+                "contention": True,
+                "observed_at": CONTROLLER.utc_now(),
+            }
+        timer["main_pid"] = 0
+        return {
+            "schema_version": 1,
+            "status": status,
+            "service": service,
+            "timer": timer,
+            "observation": observation,
+            "recorded_at": CONTROLLER.utc_now(),
+        }
+
+    def stop_dft_guard(
+        self,
+        _controller: object,
+        descriptor: dict[str, object],
+        *,
+        allow_already_stopped: bool,
+    ) -> dict[str, object]:
+        del allow_already_stopped
+        return self._guard_evidence(descriptor, status="stopped")
+
+    def restore_dft_guard(
+        self,
+        _controller: object,
+        descriptor: dict[str, object],
+    ) -> dict[str, object]:
+        return self._guard_evidence(descriptor, status="restored")
+
     def restore_database(
         self, _controller: object, _descriptor: object, backup: dict[str, object]
     ) -> dict[str, object]:
@@ -1458,16 +1530,43 @@ class FakeLifecycle:
         expected_verification: object,
         *,
         allow_unfenced: bool,
+        allow_partial_stop: bool = False,
     ) -> dict[str, object]:
         self._event("recovery-isolate")
-        if self.runtime_state == "partial":
-            raise CONTROLLER.PullDeployError(
-                "runtime is partially stopped during recovery"
-            )
-        if self.runtime_state == "stopped":
+        if self.runtime_state != "live":
+            if self.runtime_state not in {
+                "partial",
+                "stopped",
+                "failed",
+                "activating",
+                "deactivating",
+            }:
+                raise CONTROLLER.PullDeployError(
+                    "runtime process state is invalid during recovery"
+                )
+            if allow_partial_stop:
+                prior_state = self.runtime_state
+                self._event(f"recovery-{prior_state}-stop")
+                self.stop(_controller, _descriptor)
+                return {
+                    "runtime_state": "stopped",
+                    "ingress_isolated": True,
+                    "partial_runtime_converged": True,
+                    "postgres_runtime_fence": self.postgres_runtime_identity(
+                        _controller, _descriptor
+                    ),
+                }
+            if self.runtime_state != "stopped":
+                raise CONTROLLER.PullDeployError(
+                    "runtime is partially stopped during recovery"
+                )
+            self._event("recovery-stopped-prove")
             return {
                 "runtime_state": "stopped",
                 "ingress_isolated": True,
+                "postgres_runtime_fence": self.postgres_runtime_identity(
+                    _controller, _descriptor
+                ),
             }
         if expected_verification is not None:
             if expected_verification != self.verification():
@@ -1723,7 +1822,10 @@ class FixtureController(CONTROLLER.PullDeployController):
         return
 
     def production_deploy_values(self, *, check_free_space: bool) -> dict[str, str]:
-        return {"fixture": str(check_free_space)}
+        return {
+            "fixture": str(check_free_space),
+            "NEXPOLY_BOOTSTRAP_LEGACY_RUNTIME_SHA256": "sha256:" + "e" * 64,
+        }
 
     def external_database_audit_evidence(
         self,
@@ -1771,14 +1873,37 @@ class FixtureController(CONTROLLER.PullDeployController):
         target = self.runtime_root / "config" / CONTROLLER.MONOMER_MD_UNIT_NAME
         worker_env = self.runtime_root / "config/worker.env"
         if not worker_env.exists():
-            write_private(worker_env, "MONOMER_MD_WORKER_MODE=real\n")
+            write_private(
+                worker_env,
+                "MONOMER_MD_WORKER_MODE=real\n"
+                "MONOMER_MD_MAX_ACTIVE_JOBS=1\n",
+            )
+        previous_worker_env = {
+            "path": str(worker_env),
+            "sha256": CONTROLLER.sha256_file(worker_env),
+            "byteff2_python": "/opt/byteff2/bin/python",
+            "byteff2_openmm_dir": "/opt/byteff2/openmm",
+            "gmx_sha256": "sha256:" + "c" * 64,
+        }
+        candidate_worker_env = operation / "worker.env.candidate"
+        candidate_worker_env.write_bytes(
+            CONTROLLER.PullDeployController._md_worker_env_candidate_payload(
+                worker_env.read_bytes()
+            )
+        )
+        os.chmod(candidate_worker_env, 0o600)
+        previous_worker_env_backup = operation / "worker.env.previous"
+        previous_worker_env_backup.write_bytes(worker_env.read_bytes())
+        os.chmod(previous_worker_env_backup, 0o600)
         return {
             "worker_env": {
-                "path": str(worker_env),
-                "sha256": CONTROLLER.sha256_file(worker_env),
-                "byteff2_python": "/opt/byteff2/bin/python",
-                "byteff2_openmm_dir": "/opt/byteff2/openmm",
-                "gmx_sha256": "sha256:" + "c" * 64,
+                "target": {
+                    **previous_worker_env,
+                    "sha256": CONTROLLER.sha256_file(candidate_worker_env),
+                },
+                "candidate_path": str(candidate_worker_env),
+                "previous": previous_worker_env,
+                "previous_backup_path": str(previous_worker_env_backup),
             },
             "systemd_unit": {
                 "source_path": CONTROLLER.MONOMER_MD_UNIT_SOURCE,
@@ -1800,7 +1925,199 @@ class FixtureController(CONTROLLER.PullDeployController):
             },
         }
 
-    def _revalidate_worker_controls(self, _descriptor: object) -> None:
+    def prepare_dft_controls(
+        self,
+        *,
+        operation_id: str,
+        previous_sha: str,
+        target_sha: str,
+        target_tree: str,
+        executor_control: dict[str, object],
+    ) -> dict[str, object]:
+        del previous_sha
+        operation = self.prepared_root / operation_id
+        release_root = self.venv_root / "dft" / target_sha
+        release_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        runtime_manifest = release_root / "runtime.json"
+        if not runtime_manifest.exists():
+            write_private(runtime_manifest, '{"fixture":true}\n')
+        runtime = {
+            "root": str(release_root),
+            "runtime_manifest_path": str(runtime_manifest),
+            "runtime_manifest_sha256": CONTROLLER.sha256_file(runtime_manifest),
+            "release_sha": target_sha,
+            "source_tree": target_tree,
+            "python": str(release_root / "venv/bin/python"),
+            "requirements_lock_sha256": "sha256:" + "1" * 64,
+            "aimnet_source_lock_sha256": "sha256:" + "2" * 64,
+            "models": {
+                name: "sha256:" + f"{index:x}" * 64
+                for index, name in enumerate(
+                    sorted(CONTROLLER.MONOMER_DFT_MODEL_ALIASES), start=3
+                )
+            },
+            "runtime_inventory_sha256": "sha256:" + "9" * 64,
+            "prepared_operation_id": operation_id,
+            "prepared_at": CONTROLLER.utc_now(),
+        }
+        env_target = self.runtime_root / CONTROLLER.MONOMER_DFT_RUNTIME_ENV
+        previous_present = env_target.exists()
+        previous_sha256 = (
+            CONTROLLER.sha256_file(env_target) if previous_present else None
+        )
+        previous_backup_path = None
+        if previous_present:
+            backup = operation / "previous-monomer-dft-runtime.env"
+            backup.write_bytes(env_target.read_bytes())
+            os.chmod(backup, 0o600)
+            previous_backup_path = str(backup)
+        env_values = {
+            "MONOMER_DFT_RELEASE_SHA": target_sha,
+            "MONOMER_DFT_RUNTIME_CONTRACT_SHA256": runtime[
+                "runtime_manifest_sha256"
+            ],
+            "MONOMER_DFT_RUNTIME_INVENTORY_SHA256": runtime[
+                "runtime_inventory_sha256"
+            ],
+            "MONOMER_DFT_PYTHON": runtime["python"],
+            "AIMNET_CACHE_DIR": str(release_root / "aimnet-cache"),
+            "WARP_CACHE_PATH": str(
+                self.state_dir / "monomer-dft-warp-cache" / target_sha
+            ),
+            "NEXPOLY_DFT_GPU_GUARD_MODE": "observe",
+        }
+        env_candidate = operation / "monomer-dft-runtime.env"
+        write_private(
+            env_candidate,
+            "".join(f"{key}={value}\n" for key, value in env_values.items()),
+        )
+        unit_candidate = operation / CONTROLLER.MONOMER_DFT_UNIT_NAME
+        write_private(unit_candidate, "fixture DFT unit\n")
+        unit_target = self.runtime_root / "config" / CONTROLLER.MONOMER_DFT_UNIT_NAME
+        unit_previous_present = unit_target.exists()
+        unit_previous_sha256 = (
+            CONTROLLER.sha256_file(unit_target)
+            if unit_previous_present
+            else None
+        )
+        unit_previous_backup_path = None
+        if unit_previous_present:
+            backup = operation / f"previous-{CONTROLLER.MONOMER_DFT_UNIT_NAME}"
+            backup.write_bytes(unit_target.read_bytes())
+            os.chmod(backup, 0o600)
+            unit_previous_backup_path = str(backup)
+        guard_units: dict[str, dict[str, object]] = {}
+        for name, unit_file_state, active_state, sub_state in (
+            (
+                CONTROLLER.MONOMER_DFT_GUARD_SERVICE_NAME,
+                "static",
+                "inactive",
+                "dead",
+            ),
+            (
+                CONTROLLER.MONOMER_DFT_GUARD_TIMER_NAME,
+                "enabled",
+                "active",
+                "waiting",
+            ),
+        ):
+            target = self.runtime_root / "config" / name
+            if not target.exists():
+                write_private(target, f"fixture {name}\n")
+            guard_units[
+                "service"
+                if name == CONTROLLER.MONOMER_DFT_GUARD_SERVICE_NAME
+                else "timer"
+            ] = {
+                "name": name,
+                "target_path": str(target),
+                "sha256": CONTROLLER.sha256_file(target),
+                "systemd_state": {
+                    "LoadState": "loaded",
+                    "FragmentPath": str(target),
+                    "DropInPaths": "",
+                    "NeedDaemonReload": "no",
+                    "UnitFileState": unit_file_state,
+                    "ActiveState": active_state,
+                    "SubState": sub_state,
+                },
+                "main_pid": 0,
+                "invocation_id": "",
+            }
+        return CONTROLLER.validate_dft_descriptor(
+            {
+                "runtime": runtime,
+                "runtime_env": {
+                    "target": {
+                        "path": str(env_target),
+                        "sha256": CONTROLLER.sha256_file(env_candidate),
+                        "values": env_values,
+                    },
+                    "candidate_path": str(env_candidate),
+                    "previous_present": previous_present,
+                    "previous_sha256": previous_sha256,
+                    "previous_backup_path": previous_backup_path,
+                },
+                "systemd_unit": {
+                    "source_path": CONTROLLER.MONOMER_DFT_UNIT_SOURCE,
+                    "candidate_path": str(unit_candidate),
+                    "target_path": str(unit_target),
+                    "sha256": CONTROLLER.sha256_file(unit_candidate),
+                    "previous_present": unit_previous_present,
+                    "previous_sha256": unit_previous_sha256,
+                    "previous_backup_path": unit_previous_backup_path,
+                    "previous_systemd_state": {
+                        "LoadState": "loaded" if unit_previous_present else "not-found",
+                        "FragmentPath": str(unit_target) if unit_previous_present else "",
+                        "DropInPaths": "",
+                        "NeedDaemonReload": "no",
+                        "UnitFileState": "enabled" if unit_previous_present else "",
+                        "ActiveState": "active" if unit_previous_present else "inactive",
+                        "SubState": "running" if unit_previous_present else "dead",
+                    },
+                    "control_release_id": executor_control["release_id"],
+                    "launcher_path": str(
+                        self.control_releases_dir
+                        / str(executor_control["release_id"])
+                        / "worker_slot_runtime.py"
+                    ),
+                    "launcher_sha256": "sha256:" + "a" * 64,
+                },
+                "gpu": {
+                    "index": CONTROLLER.MONOMER_DFT_GPU_INDEX,
+                    "uuid": CONTROLLER.MONOMER_DFT_GPU_UUID,
+                    "guard_mode": "observe",
+                    "guard_state_path": str(CONTROLLER.MONOMER_DFT_GUARD_STATE),
+                    "guard_schema_version": 1,
+                },
+                "guard": {
+                    **guard_units,
+                    "timer_policy": {"enabled": True, "active": True},
+                    "git_units": {
+                        "service": {
+                            "source_path": CONTROLLER.MONOMER_DFT_GUARD_SERVICE_SOURCE,
+                            "sha256": guard_units["service"]["sha256"],
+                        },
+                        "timer": {
+                            "source_path": CONTROLLER.MONOMER_DFT_GUARD_TIMER_SOURCE,
+                            "sha256": guard_units["timer"]["sha256"],
+                        },
+                    },
+                },
+            },
+            operation_id=operation_id,
+        )
+
+    def _revalidate_worker_controls(
+        self,
+        _descriptor: object,
+        *,
+        allow_target_environment: bool = False,
+    ) -> None:
+        del allow_target_environment
+        return
+
+    def _revalidate_dft_controls(self, _descriptor: object) -> None:
         return
 
     def _install_candidate_worker_unit(self, _descriptor: object) -> None:
@@ -1808,6 +2125,47 @@ class FixtureController(CONTROLLER.PullDeployController):
 
     def _restore_previous_worker_unit(self, _descriptor: object) -> None:
         return
+
+    def _install_candidate_dft_unit(self, _descriptor: object) -> None:
+        return
+
+    def _restore_previous_dft_unit(self, _descriptor: object) -> None:
+        return
+
+    def _current_dft_projection(
+        self,
+        descriptor: dict[str, object],
+        _marker: dict[str, object],
+    ) -> dict[str, object]:
+        dft = descriptor["monomer_dft"]
+        unit = dft["systemd_unit"]
+        return CONTROLLER.validate_dft_current_projection(
+            {
+                "runtime": dft["runtime"],
+                "runtime_env": dft["runtime_env"]["target"],
+                "systemd_unit": {
+                    "target_path": unit["target_path"],
+                    "sha256": unit["sha256"],
+                    "systemd_state": {
+                        "LoadState": "loaded",
+                        "FragmentPath": unit["target_path"],
+                        "DropInPaths": "",
+                        "NeedDaemonReload": "no",
+                        "UnitFileState": "enabled",
+                        "ActiveState": "active",
+                        "SubState": "running",
+                    },
+                    "process_identity": {
+                        "main_pid": 456,
+                        "invocation_id": "fixture-dft-invocation",
+                    },
+                    "control_release_id": unit["control_release_id"],
+                    "launcher_path": unit["launcher_path"],
+                    "launcher_sha256": unit["launcher_sha256"],
+                },
+                "gpu": dft["gpu"],
+            }
+        )
 
     def _source_evidence(self, _target_sha: str):  # type: ignore[no-untyped-def]
         return (
@@ -1884,6 +2242,22 @@ class FixtureController(CONTROLLER.PullDeployController):
         assert isinstance(repository, dict)
         if self.source_sha != repository["previous_sha"]:
             raise CONTROLLER.PullDeployError("fixture source changed")
+
+    def _refresh_dft_guard_source_switch_fence(
+        self,
+        marker: dict[str, object],
+        descriptor: dict[str, object],
+    ) -> None:
+        self._stop_dft_guard_scheduling(marker, descriptor)
+        evidence = marker["dft_guard_stop_evidence"]
+        marker["dft_guard_source_switch_fence"] = {
+            "guard_stop_evidence_sha256": CONTROLLER.canonical_json_digest(
+                evidence
+            ),
+            "checked_at": CONTROLLER.utc_now(),
+        }
+        marker["updated_at"] = CONTROLLER.utc_now()
+        self._write_marker(marker)
 
     def _switch_source(self, _descriptor: dict[str, object]) -> None:
         self.source_sha = TARGET_SHA
@@ -2829,6 +3203,8 @@ class PostgresRuntimeFencingTests(unittest.TestCase):
             elif command[:3] == ["systemctl", "--user", "is-active"]:
                 output = "inactive\n"
                 returncode = 3
+            elif command[:3] == ["systemctl", "--user", "show"]:
+                output = "ActiveState=inactive\nMainPID=0\n"
             elif command[:2] == ["systemctl", "is-active"]:
                 output = "inactive\n"
                 returncode = 3
@@ -2840,6 +3216,10 @@ class PostgresRuntimeFencingTests(unittest.TestCase):
     class Lifecycle(CONTROLLER.SystemLifecycle):
         def _drain_started_runtime(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
             return {"fixture": True}
+
+        @staticmethod
+        def _assert_no_checkout_readers(_production_root: Path) -> None:
+            return
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="postgres-fence-")
@@ -3568,6 +3948,12 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             "schema_version": 2,
             "records": json.loads(json.dumps(B_MANIFEST_RECORDS)),
         }
+        descriptor["monomer_md"]["worker_env"] = descriptor["monomer_md"][
+            "worker_env"
+        ]["previous"]
+        descriptor.pop("monomer_dft")
+        descriptor.pop("adopted_deployment")
+        descriptor.pop("adopted_deployment_sha256")
         descriptor["schema_version"] = CONTROLLER.BRIDGE_DESCRIPTOR_SCHEMA_VERSION
         descriptor["bridge"] = CONTROLLER._bridge_core.build_bridge_descriptor(
             operation_id=OPERATION_ID,
@@ -4781,6 +5167,16 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         CONTROLLER.atomic_json(ready_path, ready)
 
         state["descriptor_sha256"] = descriptor_digest
+        state["schema_version"] = CONTROLLER.LEGACY_CURRENT_STATE_SCHEMA_VERSION
+        state["monomer_md_worker_env"] = descriptor["monomer_md"]["worker_env"]
+        for field in (
+            "authority_kind",
+            "adoption_evidence",
+            "adoption_evidence_sha256",
+            "adopted_deployment_sha256",
+            "monomer_dft",
+        ):
+            state.pop(field)
         state["migrations"] = json.loads(
             json.dumps(descriptor["migrations"]["records"])
         )
@@ -8419,8 +8815,10 @@ class SystemDrainFencingTests(unittest.TestCase):
         def _backend_process_identity(self, _controller, _descriptor):  # type: ignore[no-untyped-def]
             return self._next(self.backend_processes)
 
-        def _worker_sockets(self, _controller, *, require_md=False):  # type: ignore[no-untyped-def]
-            del require_md
+        def _worker_sockets(  # type: ignore[no-untyped-def]
+            self, _controller, *, require_md=False, require_dft=False
+        ):
+            del require_md, require_dft
             return self._next(self.socket_sets)
 
         def _worker_request(self, _controller, _socket, *, method, endpoint):  # type: ignore[no-untyped-def]
@@ -8627,8 +9025,10 @@ class SystemDrainFencingTests(unittest.TestCase):
             def _worker_process_identity(self, _controller, _descriptor):  # type: ignore[no-untyped-def]
                 return worker_process
 
-            def _worker_sockets(self, _controller, *, require_md=False):  # type: ignore[no-untyped-def]
-                del require_md
+            def _worker_sockets(  # type: ignore[no-untyped-def]
+                self, _controller, *, require_md=False, require_dft=False
+            ):
+                del require_md, require_dft
                 return [("monomer-md", Path("/fixture/md.sock"))]
 
             def _worker_request(self, _controller, _socket, *, method, endpoint):  # type: ignore[no-untyped-def]
@@ -9002,6 +9402,7 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         fake = SimpleNamespace(
             lifecycle=mock.Mock(),
             _is_pre_stop_abort_marker=mock.Mock(return_value=True),
+            _adopted_previous=CONTROLLER.PullDeployController._adopted_previous,
             _validate_steady_deployment_state=mock.Mock(
                 side_effect=CONTROLLER.PullDeployError(
                     "injected previous terminal failure"
@@ -9480,7 +9881,9 @@ class LifecycleStateMachineTests(PullDeployTestCase):
                 CONTROLLER.canonical_json_bytes(state) + b"\n"
             ),
         }
-        CONTROLLER.atomic_json(controller.marker_path, marker)
+        CONTROLLER.atomic_json(
+            controller.marker_path, v4_recovery_marker(marker)
+        )
         lifecycle.events.clear()
         recovered = controller.recover_interrupted()
         self.assertEqual(recovered, state)
@@ -9524,7 +9927,9 @@ class LifecycleStateMachineTests(PullDeployTestCase):
                 CONTROLLER.canonical_json_bytes(state) + b"\n"
             ),
         }
-        CONTROLLER.atomic_json(controller.marker_path, marker)
+        CONTROLLER.atomic_json(
+            controller.marker_path, v4_recovery_marker(marker)
+        )
 
         class RestartedOpenLifecycle(FakeLifecycle):
             def verify_open_runtime(
@@ -9590,7 +9995,9 @@ class LifecycleStateMachineTests(PullDeployTestCase):
                 CONTROLLER.canonical_json_bytes(state) + b"\n"
             ),
         }
-        CONTROLLER.atomic_json(controller.marker_path, marker)
+        CONTROLLER.atomic_json(
+            controller.marker_path, v4_recovery_marker(marker)
+        )
         lifecycle.admission_open = False
         lifecycle.runtime_state = "stopped"
         lifecycle.recovery_fence = {"fixture_instance": "reverified-instance"}
@@ -9653,7 +10060,9 @@ class LifecycleStateMachineTests(PullDeployTestCase):
                 CONTROLLER.canonical_json_bytes(state) + b"\n"
             ),
         }
-        CONTROLLER.atomic_json(controller.marker_path, marker)
+        CONTROLLER.atomic_json(
+            controller.marker_path, v4_recovery_marker(marker)
+        )
         lifecycle.events.clear()
 
         recovered = controller.recover_interrupted()
@@ -9778,7 +10187,9 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             "database_change_started": False,
             "drain": {"active_total": 0},
         }
-        CONTROLLER.atomic_json(controller.marker_path, marker)
+        CONTROLLER.atomic_json(
+            controller.marker_path, v4_recovery_marker(marker)
+        )
         lifecycle.admission_open = False
         lifecycle.lose_next_unchanged_resume = True
         lifecycle.events.clear()
@@ -9849,7 +10260,9 @@ class LifecycleStateMachineTests(PullDeployTestCase):
                 marker["drain"] = {"active_total": 0}
             if failed_phase is not None:
                 marker["failed_phase"] = failed_phase
-            CONTROLLER.atomic_json(controller.marker_path, marker)
+            CONTROLLER.atomic_json(
+                controller.marker_path, v4_recovery_marker(marker)
+            )
             lifecycle.admission_open = False
             lifecycle.events.clear()
             recovered = controller.recover_interrupted()
@@ -9899,7 +10312,9 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             "asset_switched": False,
             "database_change_started": False,
         }
-        CONTROLLER.atomic_json(controller.marker_path, marker)
+        CONTROLLER.atomic_json(
+            controller.marker_path, v4_recovery_marker(marker)
+        )
         lifecycle.events.clear()
         self.assertIsNone(controller.recover_interrupted())
         self.assertFalse(controller.marker_path.exists())
@@ -9938,7 +10353,9 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             "asset_switched": False,
             "database_change_started": False,
         }
-        CONTROLLER.atomic_json(controller.marker_path, marker)
+        CONTROLLER.atomic_json(
+            controller.marker_path, v4_recovery_marker(marker)
+        )
         controller._rollback_failed_attempt = (  # type: ignore[method-assign]
             CONTROLLER.PullDeployController._rollback_failed_attempt.__get__(
                 controller, CONTROLLER.PullDeployController
@@ -9978,6 +10395,7 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             "asset_switched": False,
             "database_change_started": False,
         }
+        marker = v4_recovery_marker(marker)
         controller._reconcile_effect_commit_windows = lambda *_args: None  # type: ignore[method-assign]
         CONTROLLER.PullDeployController._rollback_failed_attempt(
             controller, descriptor, marker
@@ -10065,6 +10483,7 @@ class LifecycleStateMachineTests(PullDeployTestCase):
             "database_change_started": False,
             "pre_stop_abort": False,
         }
+        marker = v4_recovery_marker(marker)
         with self.assertRaisesRegex(CONTROLLER.PullDeployError, "pre-stop abort flag"):
             CONTROLLER.validate_recovery_marker(
                 marker,
@@ -10451,7 +10870,9 @@ class WorkerUnitTransitionTests(PullDeployTestCase):
             self.production, self.runtime, runner=runner, apply=True
         )
         controller.control_environment = lambda: {}  # type: ignore[method-assign]
-        controller._revalidate_worker_controls = lambda _descriptor: None  # type: ignore[method-assign]
+        controller._revalidate_worker_controls = (  # type: ignore[method-assign]
+            lambda _descriptor, **_kwargs: None
+        )
         unit = {
             "candidate_path": str(candidate),
             "target_path": str(target),
@@ -10487,6 +10908,1502 @@ class WorkerUnitTransitionTests(PullDeployTestCase):
             ["systemctl", "--user", "disable", CONTROLLER.MONOMER_MD_UNIT_NAME],
             controller.runner.commands,
         )
+
+
+class DescriptorV4TransactionTests(PullDeployTestCase):
+    def test_descriptor_seals_guard_installation_runtime_and_timer_policy(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        guard = descriptor["monomer_dft"]["guard"]
+
+        self.assertEqual(
+            guard["service"]["name"],
+            CONTROLLER.MONOMER_DFT_GUARD_SERVICE_NAME,
+        )
+        self.assertEqual(
+            guard["timer"]["name"],
+            CONTROLLER.MONOMER_DFT_GUARD_TIMER_NAME,
+        )
+        self.assertEqual(guard["timer_policy"], {"enabled": True, "active": True})
+        for unit in (guard["service"], guard["timer"]):
+            self.assertIn("main_pid", unit)
+            self.assertIn("invocation_id", unit)
+            self.assertTrue(unit["sha256"].startswith("sha256:"))
+        self.assertEqual(
+            guard["git_units"]["service"]["sha256"],
+            guard["service"]["sha256"],
+        )
+        self.assertEqual(
+            guard["git_units"]["timer"]["sha256"],
+            guard["timer"]["sha256"],
+        )
+
+        changed = json.loads(json.dumps(descriptor))
+        changed["monomer_dft"]["guard"]["timer"]["sha256"] = DIGEST_A
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "guard control identity|guard unit",
+        ):
+            CONTROLLER.validate_descriptor(changed)
+
+    def test_prepare_switches_md_queue_capacity_from_one_to_three_and_rolls_back(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        transition = descriptor["monomer_md"]["worker_env"]
+        target = Path(transition["target"]["path"])
+
+        self.assertIn(b"MONOMER_MD_MAX_ACTIVE_JOBS=1\n", target.read_bytes())
+        self.assertIn(
+            b"MONOMER_MD_MAX_ACTIVE_JOBS=3\n",
+            Path(transition["candidate_path"]).read_bytes(),
+        )
+        controller._switch_worker_environment(descriptor)
+        self.assertEqual(
+            CONTROLLER.sha256_file(target), transition["target"]["sha256"]
+        )
+        controller._restore_previous_worker_environment(descriptor)
+        self.assertEqual(
+            CONTROLLER.sha256_file(target), transition["previous"]["sha256"]
+        )
+        self.assertIn(b"MONOMER_MD_MAX_ACTIVE_JOBS=1\n", target.read_bytes())
+
+    def test_dft_environment_and_unit_switch_restore_exact_previous_bytes(
+        self,
+    ) -> None:
+        unit_root = self.root / "dft-systemd"
+        unit_root.mkdir(mode=0o700)
+        unit_target = unit_root / CONTROLLER.MONOMER_DFT_UNIT_NAME
+        unit_target.write_bytes(b"previous DFT unit\n")
+        os.chmod(unit_target, 0o600)
+        unit_candidate = self.runtime / "state/prepared/dft-candidate.service"
+        unit_candidate.write_bytes(b"candidate DFT unit\n")
+        os.chmod(unit_candidate, 0o600)
+        env_target = self.runtime / CONTROLLER.MONOMER_DFT_RUNTIME_ENV
+        write_private(env_target, "MONOMER_DFT_RELEASE_SHA=" + PREVIOUS_SHA + "\n")
+        env_candidate = self.runtime / "state/prepared/dft-candidate.env"
+        write_private(env_candidate, "MONOMER_DFT_RELEASE_SHA=" + TARGET_SHA + "\n")
+        env_backup = self.runtime / "state/prepared/dft-previous.env"
+        write_private(env_backup, env_target.read_text(encoding="utf-8"))
+        unit_backup = self.runtime / "state/prepared/dft-previous.service"
+        write_private(unit_backup, unit_target.read_text(encoding="utf-8"))
+        runner = UnitTransitionRunner(unit_target, enabled=True)
+        controller = CONTROLLER.PullDeployController(
+            self.production, self.runtime, runner=runner, apply=True
+        )
+        controller.control_environment = lambda: {}  # type: ignore[method-assign]
+        controller._revalidate_dft_controls = (  # type: ignore[method-assign]
+            lambda _descriptor: None
+        )
+        descriptor = {
+            "schema_version": CONTROLLER.DESCRIPTOR_SCHEMA_VERSION,
+            "monomer_dft": {
+                "runtime_env": {
+                    "target": {
+                        "path": str(env_target),
+                        "sha256": CONTROLLER.sha256_file(env_candidate),
+                    },
+                    "candidate_path": str(env_candidate),
+                    "previous_present": True,
+                    "previous_sha256": CONTROLLER.sha256_file(env_target),
+                    "previous_backup_path": str(env_backup),
+                },
+                "systemd_unit": {
+                    "candidate_path": str(unit_candidate),
+                    "target_path": str(unit_target),
+                    "sha256": CONTROLLER.sha256_file(unit_candidate),
+                    "previous_present": True,
+                    "previous_sha256": CONTROLLER.sha256_file(unit_target),
+                    "previous_backup_path": str(unit_backup),
+                    "previous_systemd_state": {
+                        "UnitFileState": "enabled",
+                    },
+                },
+            },
+        }
+
+        controller._switch_dft_runtime(descriptor)
+        controller._install_candidate_dft_unit(descriptor)
+        self.assertEqual(env_target.read_bytes(), env_candidate.read_bytes())
+        self.assertEqual(unit_target.read_bytes(), unit_candidate.read_bytes())
+        controller._restore_previous_dft_runtime(descriptor)
+        controller._restore_previous_dft_unit(descriptor)
+        self.assertEqual(env_target.read_bytes(), env_backup.read_bytes())
+        self.assertEqual(unit_target.read_bytes(), unit_backup.read_bytes())
+
+    def test_descriptor_v4_and_current_v3_require_dual_worker_authority(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        self.assertEqual(
+            descriptor["schema_version"], CONTROLLER.DESCRIPTOR_SCHEMA_VERSION
+        )
+        self.assertEqual(
+            set(descriptor["monomer_dft"]),
+            {"runtime", "runtime_env", "systemd_unit", "gpu", "guard"},
+        )
+        self.assertIn("adopted_deployment", descriptor)
+        for field in (
+            "monomer_dft",
+            "adopted_deployment",
+            "adopted_deployment_sha256",
+        ):
+            changed = json.loads(json.dumps(descriptor))
+            changed.pop(field)
+            with self.subTest(descriptor_field=field), self.assertRaises(
+                CONTROLLER.PullDeployError
+            ):
+                CONTROLLER.validate_descriptor(changed)
+
+        state = controller.apply(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self.assertEqual(
+            state["schema_version"], CONTROLLER.CURRENT_STATE_SCHEMA_VERSION
+        )
+        self.assertEqual(state["authority_kind"], "governed-deployment")
+        self.assertIsNone(state["adoption_evidence"])
+        self.assertIsNone(state["adoption_evidence_sha256"])
+        self.assertIsNone(state["adopted_deployment_sha256"])
+        self.assertEqual(
+            state["monomer_dft"]["runtime"]["release_sha"], TARGET_SHA
+        )
+        for field in (
+            "authority_kind",
+            "adoption_evidence",
+            "adoption_evidence_sha256",
+            "adopted_deployment_sha256",
+            "monomer_dft",
+        ):
+            changed = json.loads(json.dumps(state))
+            changed.pop(field)
+            with self.subTest(current_field=field), self.assertRaises(
+                CONTROLLER.PullDeployError
+            ):
+                CONTROLLER.validate_current_deployment_state(changed)
+
+
+class DftGuardTransactionTests(PullDeployTestCase):
+    class RecordingLifecycle(FakeLifecycle):
+        def __init__(self, *, lose_first_stop_response: bool = False) -> None:
+            super().__init__()
+            self.guard_events: list[str] = []
+            self.lose_first_stop_response = lose_first_stop_response
+
+        def stop_dft_guard(
+            self,
+            controller: object,
+            descriptor: dict[str, object],
+            *,
+            allow_already_stopped: bool,
+        ) -> dict[str, object]:
+            self.guard_events.append(
+                "guard-stop-retry" if allow_already_stopped else "guard-stop"
+            )
+            evidence = super().stop_dft_guard(
+                controller,
+                descriptor,
+                allow_already_stopped=allow_already_stopped,
+            )
+            if self.lose_first_stop_response:
+                self.lose_first_stop_response = False
+                raise CONTROLLER.PullDeployError(
+                    "injected lost guard-stop response"
+                )
+            return evidence
+
+        def restore_dft_guard(
+            self,
+            controller: object,
+            descriptor: dict[str, object],
+        ) -> dict[str, object]:
+            self.guard_events.append("guard-restore")
+            return super().restore_dft_guard(controller, descriptor)
+
+        def start(self, controller: object, descriptor: object) -> None:
+            self.guard_events.append("dft-start")
+            super().start(controller, descriptor)
+
+    def _prepared(self, lifecycle: FakeLifecycle) -> tuple[object, dict[str, object]]:
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        return controller, CONTROLLER.load_private_json(descriptor_path)
+
+    def test_lost_guard_stop_response_recovers_and_restores_before_dft_start(
+        self,
+    ) -> None:
+        lifecycle = self.RecordingLifecycle(lose_first_stop_response=True)
+        controller, descriptor = self._prepared(lifecycle)
+        marker: dict[str, object] = {"dft_guard_scheduling_stopped": False}
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost guard-stop response",
+        ):
+            controller._stop_dft_guard_scheduling(marker, descriptor)
+        persisted = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertIn("dft_guard_stop_intent", persisted)
+        self.assertFalse(persisted["dft_guard_scheduling_stopped"])
+
+        controller._stop_dft_guard_scheduling(marker, descriptor)
+        self.assertTrue(marker["dft_guard_scheduling_stopped"])
+        self.assertEqual(
+            lifecycle.guard_events,
+            ["guard-stop", "guard-stop-retry"],
+        )
+        controller._record_runtime_start_intent(marker, descriptor)
+        controller._start_runtime(marker, descriptor)
+        self.assertFalse(marker["dft_guard_scheduling_stopped"])
+        self.assertEqual(
+            lifecycle.guard_events[-2:],
+            ["guard-restore", "dft-start"],
+        )
+
+    def test_second_stop_cycle_clears_old_restore_commit_before_rollback_stop(
+        self,
+    ) -> None:
+        lifecycle = self.RecordingLifecycle()
+        controller, descriptor = self._prepared(lifecycle)
+        marker: dict[str, object] = {"dft_guard_scheduling_stopped": False}
+        controller._stop_dft_guard_scheduling(marker, descriptor)
+        controller._record_runtime_start_intent(marker, descriptor)
+        controller._start_runtime(marker, descriptor)
+        controller._stop_dft_guard_scheduling(marker, descriptor)
+
+        self.assertTrue(marker["dft_guard_scheduling_stopped"])
+        self.assertNotIn("dft_guard_restore_evidence", marker)
+        self.assertIn("dft_guard_stop_evidence", marker)
+        self.assertEqual(lifecycle.guard_events[-1], "guard-stop")
+
+    def test_start_crash_after_guard_restore_reestablishes_stop_before_retry(
+        self,
+    ) -> None:
+        lifecycle = self.RecordingLifecycle()
+        controller, descriptor = self._prepared(lifecycle)
+        marker: dict[str, object] = {"dft_guard_scheduling_stopped": False}
+        controller._stop_dft_guard_scheduling(marker, descriptor)
+        controller._record_runtime_start_intent(marker, descriptor)
+        controller._restore_dft_guard_scheduling(marker, descriptor)
+        self.assertFalse(marker["dft_guard_scheduling_stopped"])
+
+        # This is the crash window: guard restore committed, DFT start did
+        # not.  A rollback/forward retry records a new start intent only after
+        # returning the guard to its stopped fence.
+        controller._record_runtime_start_intent(marker, descriptor)
+
+        self.assertTrue(marker["dft_guard_scheduling_stopped"])
+        self.assertEqual(lifecycle.guard_events[-1], "guard-stop")
+
+    def test_source_switch_refences_guard_and_checkout_after_long_backup(
+        self,
+    ) -> None:
+        lifecycle = self.RecordingLifecycle()
+        controller, descriptor = self._prepared(lifecycle)
+        marker: dict[str, object] = {"dft_guard_scheduling_stopped": False}
+        controller._stop_dft_guard_scheduling(marker, descriptor)
+        first_evidence = marker["dft_guard_stop_evidence"]
+
+        with mock.patch.object(
+            CONTROLLER.SystemLifecycle,
+            "_assert_no_checkout_readers",
+        ) as reader_fence:
+            CONTROLLER.PullDeployController._refresh_dft_guard_source_switch_fence(
+                controller,
+                marker,
+                descriptor,
+            )
+
+        self.assertEqual(lifecycle.guard_events[-1], "guard-stop-retry")
+        reader_fence.assert_called_once_with(controller.production_root)
+        self.assertTrue(marker["dft_guard_scheduling_stopped"])
+        self.assertEqual(
+            marker["dft_guard_source_switch_fence"][
+                "guard_stop_evidence_sha256"
+            ],
+            CONTROLLER.canonical_json_digest(
+                marker["dft_guard_stop_evidence"]
+            ),
+        )
+        self.assertIsNot(first_evidence, marker["dft_guard_stop_evidence"])
+
+    def test_lost_guard_restore_response_is_externally_restopped_before_source_switch(
+        self,
+    ) -> None:
+        lifecycle = self.RecordingLifecycle()
+        controller, descriptor = self._prepared(lifecycle)
+        marker: dict[str, object] = {"dft_guard_scheduling_stopped": False}
+        controller._stop_dft_guard_scheduling(marker, descriptor)
+
+        # Simulate systemctl/timer restoration committing while the marker
+        # update is lost: disk still says stopped=True, external state is live.
+        lifecycle.restore_dft_guard(controller, descriptor)
+        self.assertTrue(marker["dft_guard_scheduling_stopped"])
+        with mock.patch.object(
+            CONTROLLER.SystemLifecycle,
+            "_assert_no_checkout_readers",
+        ):
+            CONTROLLER.PullDeployController._refresh_dft_guard_source_switch_fence(
+                controller,
+                marker,
+                descriptor,
+            )
+
+        self.assertEqual(lifecycle.guard_events[-1], "guard-stop-retry")
+        self.assertTrue(marker["dft_guard_scheduling_stopped"])
+        self.assertIn("dft_guard_source_switch_fence", marker)
+
+    def test_partial_start_with_durable_intent_converges_to_stop_then_restarts(
+        self,
+    ) -> None:
+        lifecycle = self.RecordingLifecycle()
+        controller, descriptor = self._prepared(lifecycle)
+        lifecycle.runtime_state = "partial"
+        marker: dict[str, object] = {
+            "action": "deploy",
+            "phase": "runtime-start-started",
+            "runtime_stopped": True,
+            "dft_guard_scheduling_stopped": False,
+            "runtime_start_intent": {
+                "target_sha": TARGET_SHA,
+                "recorded_at": CONTROLLER.utc_now(),
+            },
+        }
+
+        controller._recover_runtime_and_resume(
+            marker,
+            descriptor,
+            allow_unfenced=True,
+        )
+
+        self.assertIn("recovery-partial-stop", lifecycle.events)
+        self.assertIn("start", lifecycle.events)
+        self.assertEqual(lifecycle.runtime_state, "live")
+        self.assertTrue(lifecycle.admission_open)
+        self.assertEqual(lifecycle.guard_events[-2:], ["guard-restore", "dft-start"])
+        self.assertIn("postgres_runtime_fence", marker)
+
+    def test_partial_stop_with_durable_stop_phase_converges_without_restart(
+        self,
+    ) -> None:
+        lifecycle = self.RecordingLifecycle()
+        controller, descriptor = self._prepared(lifecycle)
+        lifecycle.runtime_state = "partial"
+        marker: dict[str, object] = {
+            "action": "deploy",
+            "phase": "runtime-stop-started",
+            "runtime_stopped": False,
+            "dft_guard_scheduling_stopped": False,
+        }
+
+        recovery = controller._prepare_runtime_recovery(
+            marker,
+            descriptor,
+            allow_unfenced=True,
+        )
+
+        self.assertEqual(recovery["runtime_state"], "stopped")
+        self.assertTrue(recovery["partial_runtime_converged"])
+        self.assertEqual(lifecycle.runtime_state, "stopped")
+        self.assertNotIn("start", lifecycle.events)
+        self.assertTrue(marker["dft_guard_scheduling_stopped"])
+        self.assertIn("postgres_runtime_fence", marker)
+
+    def test_stopped_runtime_after_lost_stop_response_reissues_full_stop_proof(
+        self,
+    ) -> None:
+        lifecycle = self.RecordingLifecycle()
+        controller, descriptor = self._prepared(lifecycle)
+        # The prior stop committed externally, but its response and the
+        # runtime_stopped marker update were lost.
+        lifecycle.runtime_state = "stopped"
+        marker: dict[str, object] = {
+            "action": "deploy",
+            "phase": "runtime-stop-started",
+            "runtime_stopped": False,
+            "dft_guard_scheduling_stopped": False,
+        }
+
+        recovery = controller._prepare_runtime_recovery(
+            marker,
+            descriptor,
+            allow_unfenced=True,
+        )
+
+        self.assertEqual(recovery["runtime_state"], "stopped")
+        self.assertTrue(recovery["partial_runtime_converged"])
+        self.assertIn("recovery-stopped-stop", lifecycle.events)
+        self.assertIn("stop", lifecycle.events)
+        self.assertIn("postgres_runtime_fence", marker)
+
+    def test_system_stopped_recovery_never_trusts_presence_probe_alone(
+        self,
+    ) -> None:
+        lifecycle = CONTROLLER.SystemLifecycle()
+        controller = SimpleNamespace()
+        descriptor: dict[str, object] = {}
+        postgres = {"fixture": "postgres-fence"}
+        with (
+            mock.patch.object(lifecycle, "_isolate_ingress"),
+            mock.patch.object(
+                lifecycle,
+                "_recovery_runtime_presence",
+                return_value="stopped",
+            ),
+            mock.patch.object(
+                lifecycle,
+                "stop",
+                return_value=postgres,
+            ) as stop,
+            mock.patch.object(
+                lifecycle,
+                "_prove_runtime_stopped",
+                return_value=postgres,
+            ) as prove,
+        ):
+            authorized = lifecycle.prepare_recovery_runtime(
+                controller,
+                descriptor,
+                None,
+                allow_unfenced=True,
+                allow_partial_stop=True,
+            )
+            self.assertIs(authorized["postgres_runtime_fence"], postgres)
+            stop.assert_called_once_with(controller, descriptor)
+            prove.assert_not_called()
+
+            stop.reset_mock()
+            read_only = lifecycle.prepare_recovery_runtime(
+                controller,
+                descriptor,
+                None,
+                allow_unfenced=True,
+            )
+            self.assertIs(read_only["postgres_runtime_fence"], postgres)
+            prove.assert_called_once_with(controller, descriptor)
+            stop.assert_not_called()
+
+    def test_transitional_worker_states_with_durable_stop_intent_converge(
+        self,
+    ) -> None:
+        for runtime_state in ("failed", "activating", "deactivating"):
+            with self.subTest(runtime_state=runtime_state):
+                lifecycle = self.RecordingLifecycle()
+                controller, descriptor = self._prepared(lifecycle)
+                lifecycle.runtime_state = runtime_state
+                marker: dict[str, object] = {
+                    "action": "deploy",
+                    "phase": "runtime-stop-started",
+                    "runtime_stopped": False,
+                    "dft_guard_scheduling_stopped": False,
+                }
+
+                recovery = controller._prepare_runtime_recovery(
+                    marker,
+                    descriptor,
+                    allow_unfenced=True,
+                )
+
+                self.assertEqual(recovery["runtime_state"], "stopped")
+                self.assertIn(
+                    f"recovery-{runtime_state}-stop", lifecycle.events
+                )
+                self.assertEqual(lifecycle.runtime_state, "stopped")
+                self.assertIn("postgres_runtime_fence", marker)
+                controller.marker_path.unlink()
+
+    def test_systemd_transitional_states_are_determinate_partial_runtime(
+        self,
+    ) -> None:
+        class Lifecycle(CONTROLLER.SystemLifecycle):
+            @staticmethod
+            def _environment(_controller, _descriptor):  # type: ignore[no-untyped-def]
+                return {}
+
+            @staticmethod
+            def _compose(_controller, *arguments):  # type: ignore[no-untyped-def]
+                return ["fixture-compose", *arguments]
+
+        class Runner:
+            def __init__(self, state: str, returncode: int) -> None:
+                self.state = state
+                self.returncode = returncode
+
+            def run(self, command, **_kwargs):  # type: ignore[no-untyped-def]
+                if list(command) == [
+                    "fixture-compose",
+                    "ps",
+                    "--quiet",
+                    "backend",
+                ]:
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                if list(command) == [
+                    "systemctl",
+                    "--user",
+                    "is-active",
+                    CONTROLLER.MONOMER_MD_UNIT_NAME,
+                ]:
+                    return subprocess.CompletedProcess(
+                        command,
+                        self.returncode,
+                        self.state + "\n",
+                        "",
+                    )
+                raise AssertionError(command)
+
+        lifecycle = Lifecycle()
+        for state, returncode in (
+            ("failed", 3),
+            ("activating", 0),
+            ("deactivating", 0),
+        ):
+            with self.subTest(state=state):
+                controller = SimpleNamespace(
+                    production_root=self.production,
+                    runner=Runner(state, returncode),
+                )
+                self.assertEqual(
+                    lifecycle._recovery_runtime_presence(controller, {}),
+                    "partial",
+                )
+
+    def test_transitional_worker_states_without_durable_intent_fail_closed(
+        self,
+    ) -> None:
+        for runtime_state in ("failed", "activating", "deactivating"):
+            with self.subTest(runtime_state=runtime_state):
+                lifecycle = self.RecordingLifecycle()
+                controller, descriptor = self._prepared(lifecycle)
+                lifecycle.runtime_state = runtime_state
+                marker: dict[str, object] = {
+                    "action": "deploy",
+                    "phase": "drained",
+                    "runtime_stopped": False,
+                    "dft_guard_scheduling_stopped": False,
+                }
+
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    "partially stopped",
+                ):
+                    controller._prepare_runtime_recovery(
+                        marker,
+                        descriptor,
+                        allow_unfenced=True,
+                    )
+
+                self.assertEqual(lifecycle.runtime_state, runtime_state)
+                self.assertNotIn("stop", lifecycle.events)
+
+    def test_partial_runtime_without_durable_start_or_stop_intent_fails_closed(
+        self,
+    ) -> None:
+        lifecycle = self.RecordingLifecycle()
+        controller, descriptor = self._prepared(lifecycle)
+        lifecycle.runtime_state = "partial"
+        marker: dict[str, object] = {
+            "action": "deploy",
+            "phase": "drained",
+            "runtime_stopped": False,
+            "dft_guard_scheduling_stopped": False,
+        }
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "partially stopped",
+        ):
+            controller._prepare_runtime_recovery(
+                marker,
+                descriptor,
+                allow_unfenced=True,
+            )
+
+        self.assertEqual(lifecycle.runtime_state, "partial")
+        self.assertEqual(lifecycle.guard_events, [])
+
+    def test_system_guard_stop_and_restore_order_accepts_quarantine(self) -> None:
+        lifecycle = CONTROLLER.SystemLifecycle()
+        fixture_lifecycle = FakeLifecycle()
+        controller, descriptor = self._prepared(fixture_lifecycle)
+        guard = descriptor["monomer_dft"]["guard"]
+        state_path = self.runtime / "state/guard-transaction.json"
+        descriptor["monomer_dft"]["gpu"]["guard_state_path"] = str(state_path)
+
+        class Runner:
+            def __init__(self) -> None:
+                self.commands: list[list[str]] = []
+                self.timer_enabled = True
+                self.timer_active = True
+
+            def run(self, command, **_kwargs):  # type: ignore[no-untyped-def]
+                self.commands.append(list(command))
+                if command[:3] == ["systemctl", "--user", "is-active"]:
+                    return subprocess.CompletedProcess(
+                        command, 3, "inactive\n", ""
+                    )
+                if command[:3] == ["systemctl", "--user", "stop"]:
+                    if command[-1] == CONTROLLER.MONOMER_DFT_GUARD_TIMER_NAME:
+                        self.timer_active = False
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                if command[:3] == ["systemctl", "--user", "enable"]:
+                    self.timer_enabled = True
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                if command[:3] == ["systemctl", "--user", "disable"]:
+                    self.timer_enabled = False
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                if command[:3] == ["systemctl", "--user", "start"]:
+                    if command[-1] == CONTROLLER.MONOMER_DFT_GUARD_TIMER_NAME:
+                        self.timer_active = True
+                    else:
+                        write_private(
+                            state_path,
+                            json.dumps(
+                                {
+                                    "schema_version": 1,
+                                    "observed_at": CONTROLLER.utc_now(),
+                                    "gpu_index": CONTROLLER.MONOMER_DFT_GPU_INDEX,
+                                    "gpu_uuid": CONTROLLER.MONOMER_DFT_GPU_UUID,
+                                    "status": "quarantined",
+                                    "allowed_processes": [],
+                                    "unknown_processes": [{"redacted": True}],
+                                    "authorities": {},
+                                },
+                                sort_keys=True,
+                            )
+                            + "\n",
+                        )
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                raise AssertionError(f"unexpected command: {command}")
+
+        runner = Runner()
+        controller.runner = runner
+        controller.control_environment = lambda: {}  # type: ignore[method-assign]
+
+        def snapshot(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+            result = json.loads(json.dumps(guard))
+            result["timer"]["systemd_state"]["UnitFileState"] = (
+                "enabled" if runner.timer_enabled else "disabled"
+            )
+            result["timer"]["systemd_state"]["ActiveState"] = (
+                "active" if runner.timer_active else "inactive"
+            )
+            result["timer"]["systemd_state"]["SubState"] = (
+                "waiting" if runner.timer_active else "dead"
+            )
+            result["service"]["systemd_state"]["ActiveState"] = "inactive"
+            result["service"]["systemd_state"]["SubState"] = "dead"
+            result["timer_policy"] = {
+                "enabled": runner.timer_enabled,
+                "active": runner.timer_active,
+            }
+            return result
+
+        controller._revalidate_dft_guard_controls = snapshot  # type: ignore[method-assign]
+        stopped = lifecycle.stop_dft_guard(
+            controller,
+            descriptor,
+            allow_already_stopped=False,
+        )
+        self.assertEqual(stopped["status"], "stopped")
+        timer_stop = runner.commands.index(
+            [
+                "systemctl",
+                "--user",
+                "stop",
+                CONTROLLER.MONOMER_DFT_GUARD_TIMER_NAME,
+            ]
+        )
+        service_stop = runner.commands.index(
+            [
+                "systemctl",
+                "--user",
+                "stop",
+                CONTROLLER.MONOMER_DFT_GUARD_SERVICE_NAME,
+            ]
+        )
+        self.assertLess(timer_stop, service_stop)
+
+        restored = lifecycle.restore_dft_guard(controller, descriptor)
+        self.assertEqual(restored["observation"]["status"], "quarantined")
+        service_start = max(
+            index
+            for index, command in enumerate(runner.commands)
+            if command
+            == [
+                "systemctl",
+                "--user",
+                "start",
+                CONTROLLER.MONOMER_DFT_GUARD_SERVICE_NAME,
+            ]
+        )
+        timer_start = max(
+            index
+            for index, command in enumerate(runner.commands)
+            if command
+            == [
+                "systemctl",
+                "--user",
+                "start",
+                CONTROLLER.MONOMER_DFT_GUARD_TIMER_NAME,
+            ]
+        )
+        self.assertLess(service_start, timer_start)
+        self.assertTrue(runner.timer_active)
+
+
+class DftBuildCrashAndAbortTests(PullDeployTestCase):
+    class BuildRunner:
+        def __init__(self, python: Path) -> None:
+            self.python = python
+            self.fail_download = True
+            self.commands: list[list[str]] = []
+
+        def run(
+            self, command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            self.commands.append(command)
+            if command[-1:] == ["--version"]:
+                return subprocess.CompletedProcess(
+                    command, 0, "uv 0.11.21 fixture\n", ""
+                )
+            if command[0] == str(self.python) and "import sys" in command[-1]:
+                return subprocess.CompletedProcess(command, 0, "3.12\n", "")
+            if "download" in command:
+                if self.fail_download:
+                    self.fail_download = False
+                    raise CONTROLLER.PullDeployError(
+                        "injected DFT wheel download crash"
+                    )
+                return subprocess.CompletedProcess(command, 0, "", "")
+            if "venv" in command:
+                venv = Path(command[-1])
+                (venv / "bin").mkdir(parents=True, mode=0o700)
+                (venv / "bin/python").symlink_to(self.python)
+                (venv / "bin/python3").symlink_to("python")
+                (venv / "bin/python3.12").symlink_to("python")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        def request_json(self, *_args: object, **_kwargs: object) -> object:
+            raise AssertionError("unexpected network request")
+
+    def test_dft_prepare_rebuilds_owned_wheelhouse_after_download_crash(
+        self,
+    ) -> None:
+        tool_root = self.root / "dft-tools"
+        artifact_root = self.root / "dft-artifacts"
+        tool_root.mkdir(mode=0o700)
+        artifact_root.mkdir(mode=0o700)
+        uv = Path("/usr/bin/true")
+        python = tool_root / "python3.12"
+        python.write_bytes(b"fixture python\n")
+        os.chmod(python, 0o755)
+        wheel_name = "aimnet_fixture-1.0-py3-none-any.whl"
+        artifact_payloads = {wheel_name: b"fixture wheel\n"}
+        for index in range(6):
+            artifact_payloads[f"model-{index}.pt"] = f"model-{index}\n".encode()
+        for name, payload in artifact_payloads.items():
+            path = artifact_root / name
+            path.write_bytes(payload)
+            os.chmod(path, 0o600)
+        source_lock = {
+            "schema_version": 1,
+            "source": {"python_minor": "3.12", "uv_version": "0.11.21"},
+            "wheel": {
+                "filename": wheel_name,
+                "sha256": CONTROLLER.sha256_file(
+                    artifact_root / wheel_name
+                ).removeprefix("sha256:"),
+                "file_count": 1,
+                "inventory_sha256": "d" * 64,
+                "record_path": "aimnet_fixture-1.0.dist-info/RECORD",
+                "record_sha256": "e" * 64,
+            },
+            "registry": {
+                "path": "aimnet/calculators/model_registry.yaml",
+                "sha256": "f" * 64,
+            },
+            "models": [
+                {
+                    "file": f"model-{index}.pt",
+                    "alias": alias,
+                    "sha256": CONTROLLER.sha256_file(
+                        artifact_root / f"model-{index}.pt"
+                    ).removeprefix("sha256:"),
+                    "registry_sha256": CONTROLLER.sha256_file(
+                        artifact_root / f"model-{index}.pt"
+                    ).removeprefix("sha256:"),
+                    "cache_sha256": CONTROLLER.sha256_file(
+                        artifact_root / f"model-{index}.pt"
+                    ).removeprefix("sha256:"),
+                }
+                for index, alias in enumerate(
+                    sorted(CONTROLLER.MONOMER_DFT_MODEL_ALIASES)
+                )
+            ],
+        }
+        source_lock_payload = (
+            json.dumps(source_lock, sort_keys=True) + "\n"
+        ).encode()
+        requirements = b"fixture==1.0 --hash=sha256:" + b"f" * 64 + b"\n"
+        runner = self.BuildRunner(python)
+        controller = CONTROLLER.PullDeployController(
+            self.production, self.runtime, runner=runner, apply=True
+        )
+        controller._git_show = (  # type: ignore[method-assign]
+            lambda _sha, relative: (
+                requirements
+                if relative.endswith("requirements.lock")
+                else source_lock_payload
+            )
+        )
+        uv_digest = CONTROLLER.sha256_file(uv)
+        inventory_digest = "sha256:" + "e" * 64
+        with (
+            mock.patch.object(CONTROLLER, "MONOMER_DFT_UV", uv),
+            mock.patch.object(CONTROLLER, "MONOMER_DFT_UV_SHA256", uv_digest),
+            mock.patch.object(CONTROLLER, "MONOMER_DFT_PYTHON", python),
+            mock.patch.object(
+                CONTROLLER,
+                "MONOMER_DFT_PYTHON_SHA256",
+                CONTROLLER.sha256_file(python),
+            ),
+            mock.patch.object(
+                CONTROLLER, "MONOMER_DFT_RUNTIME_ARTIFACT_ROOT", artifact_root
+            ),
+            mock.patch.object(
+                CONTROLLER.PullDeployController,
+                "_validate_dft_pip_toolchain",
+                return_value=None,
+            ),
+            mock.patch.object(
+                CONTROLLER.PullDeployController,
+                "_validate_dft_aimnet_wheel",
+                return_value=None,
+            ),
+            mock.patch.object(
+                CONTROLLER.PullDeployController,
+                "_validate_installed_dft_aimnet",
+                return_value=None,
+            ),
+            mock.patch.object(
+                CONTROLLER.PullDeployController,
+                "_dft_wheelhouse_inventory",
+                return_value=inventory_digest,
+            ),
+            controller.deployment_lock(),
+        ):
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError, "wheel download crash"
+            ):
+                controller.prepare_dft_runtime(
+                    operation_id=OPERATION_ID,
+                    target_sha=TARGET_SHA,
+                    target_tree=TARGET_TREE,
+                )
+            staging = (
+                controller.venv_root
+                / "dft"
+                / f".{TARGET_SHA}.preparing-{OPERATION_ID}"
+            )
+            build_cache = (
+                controller.venv_root
+                / "dft/.build-cache"
+                / TARGET_SHA
+                / OPERATION_ID
+            )
+            self.assertTrue((staging / ".preparing.json").is_file())
+            self.assertTrue((build_cache / "owner.json").is_file())
+
+            runtime = controller.prepare_dft_runtime(
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+                target_tree=TARGET_TREE,
+            )
+
+        self.assertEqual(runtime["release_sha"], TARGET_SHA)
+        self.assertFalse(staging.exists())
+        self.assertFalse(build_cache.exists())
+        downloads = [command for command in runner.commands if "download" in command]
+        installs = [command for command in runner.commands if "install" in command]
+        self.assertEqual(len(downloads), 2)
+        self.assertTrue(installs)
+        for command in installs:
+            self.assertIn("--offline", command)
+            self.assertIn("--no-cache", command)
+
+    def test_prepare_abort_archives_owned_dft_runtime_and_build_cache(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+        owner = {
+            "schema_version": 1,
+            "operation_id": OPERATION_ID,
+            "release_sha": TARGET_SHA,
+            "source_tree": TARGET_TREE,
+        }
+        dft_root = controller.venv_root / "dft"
+        staging = dft_root / f".{TARGET_SHA}.preparing-{OPERATION_ID}"
+        staging.mkdir(parents=True, mode=0o700)
+        CONTROLLER.atomic_json(staging / ".preparing.json", owner)
+        write_private(staging / "partial-runtime", "partial\n")
+        cache = dft_root / ".build-cache" / TARGET_SHA / OPERATION_ID
+        cache.mkdir(parents=True, mode=0o700)
+        CONTROLLER.atomic_json(
+            cache / "owner.json",
+            {
+                **owner,
+                "requirements_lock_sha256": "sha256:" + "1" * 64,
+            },
+        )
+        write_private(cache / "partial-wheel", "partial\n")
+
+        result = controller.abort_prepare(operation_id=OPERATION_ID)
+        journal = CONTROLLER.load_private_json(
+            controller.prepare_aborts_dir / f"{OPERATION_ID}.json"
+        )
+        archive = Path(result["archive_path"]) / "monomer-dft-runtime"
+        self.assertFalse(staging.exists())
+        self.assertFalse(cache.exists())
+        self.assertTrue((archive / "staging/.preparing.json").is_file())
+        self.assertTrue((archive / "build-cache/owner.json").is_file())
+        self.assertIsNotNone(
+            journal["dft_staging"]["staging_inventory_sha256"]
+        )
+        self.assertIsNotNone(journal["dft_staging"]["cache_inventory_sha256"])
+
+
+class DualWorkerStopTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="dual-worker-stop-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.production = self.root / "production"
+        self.runtime = self.root / "runtime"
+        self.config = self.runtime / "config"
+        self.state = self.runtime / "state"
+        for path in (self.production, self.runtime, self.config, self.state):
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(path, 0o700)
+        self.descriptor = {
+            "images": {
+                "backend": {"digest_ref": "example.invalid/backend@" + DIGEST_A},
+                "web": {"digest_ref": "example.invalid/web@" + DIGEST_B},
+            }
+        }
+
+    def controller(self, runner: object) -> object:
+        return SimpleNamespace(
+            runner=runner,
+            production_root=self.production,
+            runtime_root=self.runtime,
+            config_dir=self.config,
+            state_dir=self.state,
+            marker_path=self.state / "deploy-in-progress.json",
+            control_environment=lambda: {},
+            production_deploy_values=lambda **_kwargs: {
+                "NEXPOLY_POSTGRES_USER": "nexpoly",
+                "NEXPOLY_POSTGRES_DB": "nexpoly",
+            },
+        )
+
+    def test_descriptor_v4_stops_and_proves_both_worker_processes_zero(
+        self,
+    ) -> None:
+        runner = PostgresRuntimeFencingTests.Runner()
+        controller = self.controller(runner)
+        descriptor = {
+            **self.descriptor,
+            "schema_version": CONTROLLER.DESCRIPTOR_SCHEMA_VERSION,
+        }
+        PostgresRuntimeFencingTests.Lifecycle().stop(controller, descriptor)
+        for unit in (
+            CONTROLLER.MONOMER_MD_UNIT_NAME,
+            CONTROLLER.MONOMER_DFT_UNIT_NAME,
+        ):
+            self.assertIn(
+                ["systemctl", "--user", "stop", unit], runner.commands
+            )
+            self.assertIn(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    unit,
+                    "--property=ActiveState",
+                    "--property=MainPID",
+                ],
+                runner.commands,
+            )
+
+    def test_checkout_reader_probe_rejects_same_uid_process(self) -> None:
+        checkout = self.root / "checkout"
+        checkout.mkdir(mode=0o700)
+        proc_root = self.root / "proc"
+        process = proc_root / "4242"
+        (process / "fd").mkdir(parents=True, mode=0o700)
+        (process / "cwd").symlink_to(checkout)
+        (process / "exe").symlink_to("/usr/bin/python3")
+        (process / "stat").write_text(
+            "4242 (fixture) S " + " ".join(str(index) for index in range(1, 24)),
+            encoding="utf-8",
+        )
+        (process / "cmdline").write_bytes(b"fixture\0")
+        (process / "maps").write_text("", encoding="utf-8")
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "live checkout retains 1"
+        ):
+            CONTROLLER.SystemLifecycle._assert_no_checkout_readers(
+                checkout, proc_root=proc_root
+            )
+
+
+class AdoptedFirstDeploymentTests(PullDeployTestCase):
+    def _seed_adopted_authority(
+        self, controller: FixtureController
+    ) -> dict[str, object]:
+        adoption_operation = "adopt-runtime-fixture-001"
+        slot = controller.prepare_md_slot(
+            operation_id=adoption_operation,
+            target_sha=PREVIOUS_SHA,
+            target_tree=PREVIOUS_TREE,
+            lock_payload=b"adopted-lock\n",
+        )
+        active_slot = {
+            "schema_version": CONTROLLER.ACTIVE_SLOT_SCHEMA_VERSION,
+            "component": "monomer-md",
+            "slot": slot["slot"],
+            "source_sha": PREVIOUS_SHA,
+            "source_tree": PREVIOUS_TREE,
+            "worker_lock_sha256": slot["worker_lock_sha256"],
+            "slot_record_sha256": CONTROLLER.worker_record_digest(slot),
+            "operation_id": adoption_operation,
+            "activated_at": CONTROLLER.utc_now(),
+        }
+        CONTROLLER.atomic_json(controller.active_slot_path, active_slot)
+        worker_env = controller.config_dir / "worker.env"
+        write_private(
+            worker_env,
+            "MONOMER_MD_WORKER_MODE=real\nMONOMER_MD_MAX_ACTIVE_JOBS=1\n",
+        )
+        dft_root = controller.runtime_root / "adopted-dft-runtime"
+        dft_root.mkdir(mode=0o700)
+        dft_manifest = dft_root / "runtime.json"
+        write_private(dft_manifest, '{"adopted":true}\n')
+        dft_env = controller.config_dir / "monomer-dft-runtime.env"
+        dft_inventory = "sha256:" + "8" * 64
+        dft_values = {
+            "MONOMER_DFT_RELEASE_SHA": PREVIOUS_SHA,
+            "MONOMER_DFT_RUNTIME_CONTRACT_SHA256": CONTROLLER.sha256_file(
+                dft_manifest
+            ),
+            "MONOMER_DFT_RUNTIME_INVENTORY_SHA256": dft_inventory,
+            "MONOMER_DFT_PYTHON": str(dft_root / "venv/bin/python"),
+            "AIMNET_CACHE_DIR": str(dft_root / "aimnet-cache"),
+            "WARP_CACHE_PATH": str(dft_root / "warp-cache"),
+            "NEXPOLY_DFT_GPU_GUARD_MODE": "enforce",
+        }
+        write_private(
+            dft_env,
+            "".join(f"{key}={value}\n" for key, value in dft_values.items()),
+        )
+        md_unit = controller.config_dir / CONTROLLER.MONOMER_MD_UNIT_NAME
+        dft_unit = controller.config_dir / CONTROLLER.MONOMER_DFT_UNIT_NAME
+        write_private(md_unit, "adopted MD unit\n")
+        write_private(dft_unit, "adopted DFT unit\n")
+        active_control = controller.active_control_evidence()
+        adoption_evidence = {"plan_sha256": "sha256:" + "7" * 64}
+        migrations = json.loads(json.dumps(B_MANIFEST_RECORDS[:11]))
+        adopted = {
+            "schema_version": 1,
+            "status": "adopted",
+            "authority_kind": "manual-runtime-adoption",
+            "operation_id": adoption_operation,
+            "source_sha": PREVIOUS_SHA,
+            "source_tree": PREVIOUS_TREE,
+            "bootstrap_source_sha": active_control["source_sha"],
+            "bootstrap_source_tree": active_control["source_tree"],
+            "active_control": active_control,
+            "adoption_evidence": adoption_evidence,
+            "adoption_evidence_sha256": CONTROLLER.canonical_json_digest(
+                adoption_evidence
+            ),
+            "images": {
+                role: {
+                    "digest_ref": image_record(role, PREVIOUS_SHA)["digest_ref"],
+                    "image_id": "sha256:" + value * 64,
+                    "container_id": value * 64,
+                    "restart_count": 0,
+                }
+                for role, value in (("backend", "a"), ("web", "b"))
+            },
+            "production_config": {
+                name: {
+                    "path": str(controller.config_dir / f"{name}.env"),
+                    "sha256": "sha256:" + value * 64,
+                    "size": 10,
+                    "mode": "0600",
+                }
+                for name, value in (("deploy_env", "c"), ("app_env", "d"))
+            },
+            "asset_identity": {
+                "pointer": str(controller.state_dir / "current-assets"),
+                "root": str(controller.runtime_root / "adopted-assets"),
+                "manifest_sha256": CONTROLLER.SCHEMA_V2_ASSET_MANIFEST_DIGEST,
+            },
+            "migrations": migrations,
+            "database": {
+                "postgres_major": 16,
+                "ledger": [
+                    {"version": record["version"], "checksum": record["checksum"]}
+                    for record in migrations
+                ],
+            },
+            "maintenance": {"active": False, "queued": False},
+            "monomer_md": {
+                "active_slot_path": str(controller.active_slot_path),
+                "active_slot_file_sha256": CONTROLLER.sha256_file(
+                    controller.active_slot_path
+                ),
+                "active_slot": active_slot,
+                "slot_record_path": str(
+                    controller.slots_state_dir / f"md-{slot['slot']}.json"
+                ),
+                "slot_record_file_sha256": CONTROLLER.sha256_file(
+                    controller.slots_state_dir / f"md-{slot['slot']}.json"
+                ),
+                "slot_record": slot,
+                "worker_env": {
+                    "path": str(worker_env),
+                    "sha256": CONTROLLER.sha256_file(worker_env),
+                    "size": worker_env.stat().st_size,
+                    "mode": "0600",
+                },
+                "systemd_unit": {"target_path": str(md_unit), "sha256": CONTROLLER.sha256_file(md_unit)},
+                "health": {"active": 0, "queued": 0},
+            },
+            "monomer_dft": {
+                "runtime": {
+                    "root": str(dft_root),
+                    "runtime_manifest_path": str(dft_manifest),
+                    "runtime_manifest_sha256": CONTROLLER.sha256_file(dft_manifest),
+                    "release_sha": PREVIOUS_SHA,
+                    "source_tree": PREVIOUS_TREE,
+                    "python": str(dft_root / "venv/bin/python"),
+                    "requirements_lock_sha256": "sha256:" + "1" * 64,
+                    "aimnet_source_lock_sha256": "sha256:" + "2" * 64,
+                    "models": {
+                        name: "sha256:" + f"{index:x}" * 64
+                        for index, name in enumerate(
+                            sorted(CONTROLLER.MONOMER_DFT_MODEL_ALIASES), start=3
+                        )
+                    },
+                    "runtime_inventory_sha256": dft_inventory,
+                },
+                "runtime_env": {
+                    "path": str(dft_env),
+                    "sha256": CONTROLLER.sha256_file(dft_env),
+                    "values": dft_values,
+                },
+                "systemd_unit": {
+                    "target_path": str(dft_unit),
+                    "sha256": CONTROLLER.sha256_file(dft_unit),
+                    "systemd_state": {
+                        "LoadState": "loaded",
+                        "FragmentPath": str(dft_unit),
+                        "DropInPaths": "",
+                        "NeedDaemonReload": "no",
+                        "UnitFileState": "enabled",
+                        "ActiveState": "active",
+                        "SubState": "running",
+                    },
+                    "process_identity": {
+                        "main_pid": 321,
+                        "invocation_id": "adopted-dft-invocation",
+                    },
+                    "control_release_id": active_control["release_id"],
+                    "launcher_path": str(
+                        controller.control_releases_dir
+                        / active_control["release_id"]
+                        / "worker_slot_runtime.py"
+                    ),
+                    "launcher_sha256": "sha256:" + "a" * 64,
+                },
+                "gpu": {
+                    "index": CONTROLLER.MONOMER_DFT_GPU_INDEX,
+                    "uuid": CONTROLLER.MONOMER_DFT_GPU_UUID,
+                    "guard_mode": "enforce",
+                    "guard_state_path": str(CONTROLLER.MONOMER_DFT_GUARD_STATE),
+                    "guard_schema_version": 1,
+                    "guard_status": "quarantined",
+                    "contention_observed": True,
+                },
+                "health": {"active": 0, "queued": 0},
+            },
+            "adopted_at": CONTROLLER.utc_now(),
+        }
+        self.assertNotEqual(
+            adopted["monomer_md"]["slot_record_file_sha256"],
+            active_slot["slot_record_sha256"],
+        )
+        CONTROLLER.validate_adopted_deployment(adopted)
+        CONTROLLER.atomic_json(controller.adopted_state_path, adopted)
+        bootstrap = CONTROLLER.load_private_json(
+            controller.state_dir / "bootstrap-control.json"
+        )
+        bootstrap.update(
+            {
+                "schema_version": 3,
+                "status": "completed",
+                "authority_kind": "manual-runtime-adoption",
+                "adopted_deployment": adopted,
+                "adopted_deployment_sha256": CONTROLLER.canonical_json_digest(
+                    adopted
+                ),
+                "adoption_evidence_sha256": adopted[
+                    "adoption_evidence_sha256"
+                ],
+                "active_control": active_control,
+            }
+        )
+        CONTROLLER.atomic_json(
+            controller.state_dir / "bootstrap-control.json", bootstrap
+        )
+        return adopted
+
+    def test_first_governed_deploy_uses_adopted_runtime_as_previous_authority(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller.active_control_evidence = (  # type: ignore[method-assign]
+            lambda: CONTROLLER._control_runtime.validate_active_control_record(
+                CONTROLLER.load_private_json(controller.active_control_path)
+            )
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        self.assertIsNone(descriptor["previous_deployment"])
+        self.assertEqual(descriptor["adopted_deployment"], adopted)
+        self.assertEqual(
+            descriptor["adopted_deployment_sha256"],
+            CONTROLLER.canonical_json_digest(adopted),
+        )
+        state = controller.apply(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self.assertEqual(state["authority_kind"], "manual-runtime-adoption")
+        self.assertEqual(state["adoption_evidence"], adopted["adoption_evidence"])
+        self.assertEqual(
+            state["adoption_evidence_sha256"],
+            adopted["adoption_evidence_sha256"],
+        )
+        self.assertEqual(
+            state["adopted_deployment_sha256"],
+            CONTROLLER.canonical_json_digest(adopted),
+        )
+
+    def test_adopted_slot_separates_canonical_identity_from_raw_file_cas(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        monomer_md = adopted["monomer_md"]
+        self.assertEqual(
+            CONTROLLER.worker_record_digest(monomer_md["slot_record"]),
+            monomer_md["active_slot"]["slot_record_sha256"],
+        )
+        self.assertNotEqual(
+            monomer_md["slot_record_file_sha256"],
+            monomer_md["active_slot"]["slot_record_sha256"],
+        )
+        with mock.patch.object(
+            CONTROLLER._control_runtime,
+            "adopted_dft_runtime_inventory",
+            return_value=adopted["monomer_dft"]["runtime"][
+                "runtime_inventory_sha256"
+            ],
+        ):
+            controller._revalidate_adopted_runtime(adopted)
+            write_private(
+                Path(monomer_md["slot_record_path"]),
+                CONTROLLER.canonical_json_bytes(
+                    monomer_md["slot_record"]
+                ).decode("utf-8"),
+            )
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "slot record changed",
+            ):
+                controller._revalidate_adopted_runtime(adopted)
+
+    def test_adoption_lineage_survives_successor_and_fences_recovery_and_rollback(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller.active_control_evidence = (  # type: ignore[method-assign]
+            lambda: CONTROLLER._control_runtime.validate_active_control_record(
+                CONTROLLER.load_private_json(controller.active_control_path)
+            )
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        first = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        successor_operation = "deploy-20260716-adoption-successor"
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=successor_operation,
+        )
+        second = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=successor_operation,
+        )
+        lineage_fields = (
+            "authority_kind",
+            "adoption_evidence",
+            "adoption_evidence_sha256",
+            "adopted_deployment_sha256",
+        )
+        self.assertEqual(
+            {field: second[field] for field in lineage_fields},
+            {field: first[field] for field in lineage_fields},
+        )
+        operation, descriptor_path, _ready = controller._operation_paths(
+            successor_operation
+        )
+        self.assertEqual(operation, descriptor_path.parent)
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        descriptor_digest = CONTROLLER.sha256_file(descriptor_path)
+
+        replaced = json.loads(json.dumps(second))
+        replaced["adoption_evidence"] = {
+            "plan_sha256": "sha256:" + "8" * 64
+        }
+        replaced["adoption_evidence_sha256"] = (
+            CONTROLLER.canonical_json_digest(replaced["adoption_evidence"])
+        )
+        replaced["adopted_deployment_sha256"] = "sha256:" + "9" * 64
+        CONTROLLER.validate_current_deployment_state(replaced)
+        deploy_marker = v4_recovery_marker(
+            {
+                "schema_version": 2,
+                "action": "deploy",
+                "operation_id": successor_operation,
+                "source_sha": TARGET_SHA,
+                "descriptor_sha256": descriptor_digest,
+                "executor_control": descriptor["controller"][
+                    "executor_control"
+                ],
+                "executor_control_sha256": descriptor["controller"][
+                    "executor_control_sha256"
+                ],
+                "current_state_precondition_sha256": descriptor[
+                    "previous_deployment_sha256"
+                ],
+                "phase": "state-commit-started",
+                "started_at": CONTROLLER.utc_now(),
+                "updated_at": CONTROLLER.utc_now(),
+                "runtime_stopped": True,
+                "source_switched": True,
+                "slot_switched": True,
+                "control_switched": True,
+                "unit_switched": True,
+                "asset_switched": True,
+                "database_change_started": True,
+                "candidate_state": replaced,
+                "candidate_state_sha256": CONTROLLER.sha256_bytes(
+                    CONTROLLER.canonical_json_bytes(replaced) + b"\n"
+                ),
+            }
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "adoption lineage differs",
+        ):
+            CONTROLLER.validate_recovery_marker(
+                deploy_marker,
+                descriptor=descriptor,
+                descriptor_digest=descriptor_digest,
+            )
+
+        dropped = json.loads(json.dumps(first))
+        dropped.update(
+            {
+                "authority_kind": "governed-deployment",
+                "adoption_evidence": None,
+                "adoption_evidence_sha256": None,
+                "adopted_deployment_sha256": None,
+            }
+        )
+        CONTROLLER.validate_current_deployment_state(dropped)
+        rollback_source_digest = CONTROLLER.sha256_file(
+            controller.current_state_path
+        )
+        rollback_marker = {
+            **deploy_marker,
+            "action": "explicit-rollback",
+            "phase": "explicit-rollback-state-commit-started",
+            "current_state_precondition_sha256": rollback_source_digest,
+            "rollback_current_state_sha256": rollback_source_digest,
+            "rollback_source_terminal_audit_sha256": "sha256:" + "a" * 64,
+            "rollback_attempt_id": "rollback-attempt-adoption-fixture",
+            "rollback_backup_operation_id": "rollback-backup-adoption-fixture",
+            "drain": {},
+            "rollback_candidate_state": dropped,
+            "rollback_candidate_state_sha256": CONTROLLER.sha256_bytes(
+                CONTROLLER.canonical_json_bytes(dropped) + b"\n"
+            ),
+        }
+        rollback_marker.pop("candidate_state")
+        rollback_marker.pop("candidate_state_sha256")
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "adoption lineage differs",
+        ):
+            CONTROLLER.validate_recovery_marker(
+                rollback_marker,
+                descriptor=descriptor,
+                descriptor_digest=descriptor_digest,
+            )
 
 
 class BootstrapQuiesceContractTests(unittest.TestCase):

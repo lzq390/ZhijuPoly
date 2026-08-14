@@ -21,6 +21,7 @@ import base64
 import binascii
 import configparser
 import contextlib
+import csv
 import ctypes
 import datetime as dt
 import errno
@@ -43,6 +44,7 @@ from typing import Any, BinaryIO, Callable, Iterable, Mapping, Protocol
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 
 
 _PRODUCTION_RUNTIME_ROOT = Path("/data/lzq/gith/nexpoly-runtime")
@@ -426,6 +428,43 @@ WEB_TAG_ROOT = "ghcr.io/lzq390/nexpoly-web"
 POSTGRES16_IMAGE = "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
 MONOMER_MD_UNIT_NAME = "nexpoly-monomer-md-worker.service"
 MONOMER_MD_UNIT_SOURCE = "ops/systemd/nexpoly-monomer-md-worker.service"
+MONOMER_DFT_UNIT_NAME = "nexpoly-monomer-dft-worker.service"
+MONOMER_DFT_UNIT_SOURCE = "ops/systemd/nexpoly-monomer-dft-worker.service"
+MONOMER_DFT_GUARD_SERVICE_NAME = "nexpoly-gpu2-guard.service"
+MONOMER_DFT_GUARD_TIMER_NAME = "nexpoly-gpu2-guard.timer"
+MONOMER_DFT_GUARD_SERVICE_SOURCE = "ops/systemd/nexpoly-gpu2-guard.service"
+MONOMER_DFT_GUARD_TIMER_SOURCE = "ops/systemd/nexpoly-gpu2-guard.timer"
+MONOMER_DFT_RUNTIME_ENV = Path("config/monomer-dft-runtime.env")
+MONOMER_DFT_RUNTIME_ARTIFACT_ROOT = Path(
+    "/data/lzq/gith/nexpoly-runtime/bootstrap-input/monomer-dft"
+)
+MONOMER_DFT_UV = Path("/snap/astral-uv/1551/bin/uv")
+MONOMER_DFT_UV_SHA256 = (
+    "sha256:f985abdfdbef9a69f47f5a88f800eae0488bdcb0d7868f5cc1e0aa3e11a8f47e"
+)
+MONOMER_DFT_PYTHON = Path("/usr/bin/python3.12")
+MONOMER_DFT_PYTHON_SHA256 = (
+    "sha256:1643dacd9feaedc58f3cc581e4d22577dfe25c09b10282936186ccf0f2e61118"
+)
+MONOMER_DFT_PIP_ROOT = Path("/usr/lib/python3/dist-packages/pip")
+MONOMER_DFT_PIP_INVENTORY_SHA256 = (
+    "sha256:645e76321f3088ac750fb5d96eda0f21cca88d21311916874c4c8d73e2146b7b"
+)
+MONOMER_DFT_GPU_INDEX = "2"
+MONOMER_DFT_GPU_UUID = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+MONOMER_DFT_MODEL_ALIASES = frozenset(
+    {
+        "aimnet2",
+        "aimnet2-b973c",
+        "aimnet2-2025",
+        "aimnet2-nse",
+        "aimnet2-pd",
+        "aimnet2-rxn",
+    }
+)
+MONOMER_DFT_GUARD_STATE = Path(
+    "/data/lzq/gith/nexpoly-runtime/state/gpu2-guard.json"
+)
 MUTABLE_DATA_AUDIT_HELPER = "deployment-mutable-data-audit"
 MUTABLE_DATA_SERVICE_CONFIG = "mutable-data-audit.pg_service.conf"
 MUTABLE_DATA_PGPASS = "mutable-data-audit.pgpass"
@@ -528,8 +567,13 @@ CONTROL_SOURCE_PATHS = {
 }
 CONTROL_SOURCE_MANIFEST = "scripts/control-release.json"
 CONTROLLER_SCHEMA_VERSION = 1
-DESCRIPTOR_SCHEMA_VERSION = 2
+LEGACY_DESCRIPTOR_SCHEMA_VERSION = 2
+DESCRIPTOR_SCHEMA_VERSION = 4
 BRIDGE_DESCRIPTOR_SCHEMA_VERSION = 3
+LEGACY_CURRENT_STATE_SCHEMA_VERSION = 2
+CURRENT_STATE_SCHEMA_VERSION = 3
+LEGACY_MARKER_SCHEMA_VERSION = 2
+MARKER_SCHEMA_VERSION = 3
 BRIDGE_RECOVERY_CAPSULE_FILES = (
     "bridge_deploy_core.py",
     "bridge_recovery_capsule.py",
@@ -574,7 +618,7 @@ FORBIDDEN_IN_TREE_RUNTIME_PATHS = (
     "ops/logs",
 )
 
-DESCRIPTOR_FIELDS = {
+LEGACY_DESCRIPTOR_FIELDS = {
     "schema_version",
     "operation_id",
     "controller",
@@ -592,7 +636,12 @@ DESCRIPTOR_FIELDS = {
     "previous_deployment_sha256",
     "prepared_at",
 }
-BRIDGE_DESCRIPTOR_FIELDS = DESCRIPTOR_FIELDS | {
+DESCRIPTOR_FIELDS = LEGACY_DESCRIPTOR_FIELDS | {
+    "monomer_dft",
+    "adopted_deployment",
+    "adopted_deployment_sha256",
+}
+BRIDGE_DESCRIPTOR_FIELDS = LEGACY_DESCRIPTOR_FIELDS | {
     "bridge",
     "legacy_takeover",
     "prefetch",
@@ -647,6 +696,7 @@ PREPARE_ABORT_FIELDS = {
     "descriptor_sha256",
     "prepare_staging",
     "wheel_staging",
+    "dft_staging",
     "owned_slots",
     "prepared_ref",
     "current_state_sha256",
@@ -704,7 +754,7 @@ ASSET_RELEASE_FIELDS = {
     "byteff2_commit",
     "inventory_sha256",
 }
-CURRENT_STATE_FIELDS = {
+LEGACY_CURRENT_STATE_FIELDS = {
     "schema_version",
     "status",
     "operation_id",
@@ -732,6 +782,13 @@ CURRENT_STATE_FIELDS = {
     "mutable_data_audit",
     "deployed_at",
 }
+CURRENT_STATE_FIELDS = LEGACY_CURRENT_STATE_FIELDS | {
+    "authority_kind",
+    "adoption_evidence",
+    "adoption_evidence_sha256",
+    "adopted_deployment_sha256",
+    "monomer_dft",
+}
 CURRENT_STATE_OPTIONAL_FIELDS = {
     "contract_mutable_data_audit",
     "final_mutable_data_audit",
@@ -741,6 +798,28 @@ CURRENT_STATE_OPTIONAL_FIELDS = {
     "final_external_database_audit",
     "queue_mutable_data_audit",
     "rollback_provenance",
+}
+ADOPTED_DEPLOYMENT_FIELDS = {
+    "schema_version",
+    "status",
+    "authority_kind",
+    "operation_id",
+    "source_sha",
+    "source_tree",
+    "bootstrap_source_sha",
+    "bootstrap_source_tree",
+    "active_control",
+    "adoption_evidence",
+    "adoption_evidence_sha256",
+    "images",
+    "production_config",
+    "asset_identity",
+    "migrations",
+    "database",
+    "maintenance",
+    "monomer_md",
+    "monomer_dft",
+    "adopted_at",
 }
 ROLLBACK_PROVENANCE_FIELDS = {
     "schema_version",
@@ -811,8 +890,14 @@ STOP_INTENT_PHASES = {
     "asset-switched",
     "source-switch-started",
     "source-switched",
+    "worker-env-switch-started",
+    "worker-env-switched",
+    "dft-runtime-switch-started",
+    "dft-runtime-switched",
     "worker-unit-install-started",
     "worker-unit-installed",
+    "dft-unit-install-started",
+    "dft-unit-installed",
     "migrations-started",
     "migrations-complete",
     "slot-switch-started",
@@ -844,8 +929,11 @@ ROLLBACK_MARKER_PHASES = {
     "explicit-rollback-stop-started",
     "explicit-rollback-runtime-stopped",
     "explicit-rollback-source-restored",
+    "explicit-rollback-dft-runtime-restored",
+    "explicit-rollback-worker-env-restored",
     "explicit-rollback-slot-restored",
     "explicit-rollback-unit-restored",
+    "explicit-rollback-dft-unit-restored",
     "explicit-rollback-asset-restored",
     "explicit-rollback-control-restored",
     "explicit-rollback-state-commit-started",
@@ -854,7 +942,7 @@ ROLLBACK_MARKER_PHASES = {
     "explicit-rollback-recovered",
     "explicit-rollback-complete",
 }
-MARKER_BASE_FIELDS = {
+LEGACY_MARKER_BASE_FIELDS = {
     "schema_version",
     "action",
     "operation_id",
@@ -872,6 +960,12 @@ MARKER_BASE_FIELDS = {
     "unit_switched",
     "asset_switched",
     "database_change_started",
+}
+MARKER_BASE_FIELDS = LEGACY_MARKER_BASE_FIELDS | {
+    "worker_env_switched",
+    "dft_runtime_switched",
+    "dft_unit_switched",
+    "dft_guard_scheduling_stopped",
 }
 MARKER_OPTIONAL_FIELDS = {
     "drain",
@@ -898,6 +992,10 @@ MARKER_OPTIONAL_FIELDS = {
     "rollback_attempt_id",
     "rollback_backup",
     "rollback_backup_operation_id",
+    "dft_guard_stop_intent",
+    "dft_guard_stop_evidence",
+    "dft_guard_restore_evidence",
+    "dft_guard_source_switch_fence",
     "rollback_candidate_state",
     "rollback_candidate_state_sha256",
     "pre_stop_abort",
@@ -4105,7 +4203,7 @@ def load_private_json(path: Path) -> dict[str, Any]:
         raise PullDeployError(f"file must be deploy-user-owned mode 0600: {path}")
     try:
         document = json.loads(payload.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise PullDeployError(f"private JSON file is invalid: {path}") from exc
     if not isinstance(document, dict):
         raise PullDeployError(f"private JSON file must contain an object: {path}")
@@ -5191,6 +5289,11 @@ def validate_worker_control_evidence(
     active = document.get("active_jobs")
     if not isinstance(active, int) or isinstance(active, bool) or active < 0:
         raise PullDeployError(f"Worker {action} active-job count is invalid")
+    queued = document.get("queued_jobs")
+    if queued is not None and (
+        not isinstance(queued, int) or isinstance(queued, bool) or queued < 0
+    ):
+        raise PullDeployError(f"Worker {action} queued-job count is invalid")
     if (
         not isinstance(document.get("worker_instance_id"), str)
         or not document["worker_instance_id"]
@@ -5228,8 +5331,8 @@ def validate_worker_control_evidence(
         # running, so a single-capacity Worker may correctly report
         # ``accepting_jobs=false`` until that job reaches a terminal state.
         raise PullDeployError("Worker did not resume unchanged admission")
-    if require_zero and active != 0:
-        raise PullDeployError("Worker still has active jobs")
+    if require_zero and (active != 0 or queued not in {None, 0}):
+        raise PullDeployError("Worker still has active or queued jobs")
     return document
 
 
@@ -5852,19 +5955,757 @@ def validate_rollback_provenance(
     return dict(document)
 
 
-def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any]:
-    """Validate the durable state that a new prepare seals by digest."""
+def _validate_dft_runtime_identity(document: object) -> dict[str, Any]:
+    required = {
+        "root",
+        "runtime_manifest_path",
+        "runtime_manifest_sha256",
+        "release_sha",
+        "source_tree",
+        "python",
+        "requirements_lock_sha256",
+        "aimnet_source_lock_sha256",
+        "models",
+    }
+    optional = {
+        "runtime_inventory_sha256",
+        "prepared_operation_id",
+        "prepared_at",
+    }
+    if (
+        not isinstance(document, dict)
+        or not required.issubset(document)
+        or not set(document).issubset(required | optional)
+    ):
+        raise PullDeployError("monomer DFT runtime identity has an invalid shape")
+    for field in ("root", "runtime_manifest_path", "python"):
+        value = document.get(field)
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise PullDeployError("monomer DFT runtime path is invalid")
+    require_sha(document.get("release_sha"), "monomer DFT release SHA")
+    require_sha(document.get("source_tree"), "monomer DFT source tree")
+    for field in (
+        "runtime_manifest_sha256",
+        "requirements_lock_sha256",
+        "aimnet_source_lock_sha256",
+    ):
+        require_digest(document.get(field), f"monomer DFT {field}")
+    if "runtime_inventory_sha256" in document:
+        require_digest(
+            document.get("runtime_inventory_sha256"),
+            "monomer DFT runtime inventory",
+        )
+    models = document.get("models")
+    if (
+        not isinstance(models, dict)
+        or len(models) != 6
+        or any(
+            not isinstance(name, str)
+            or Path(name).name != name
+            or require_digest(digest, f"monomer DFT model {name}") != digest
+            for name, digest in models.items()
+        )
+    ):
+        raise PullDeployError("monomer DFT model identity is invalid")
+    if "prepared_operation_id" in document:
+        require_operation_id(str(document["prepared_operation_id"]))
+    if "prepared_at" in document and (
+        not isinstance(document["prepared_at"], str) or not document["prepared_at"]
+    ):
+        raise PullDeployError("monomer DFT preparation timestamp is invalid")
+    return dict(document)
+
+
+def _validate_dft_runtime_environment(
+    document: object, *, require_guard_mode: bool = False
+) -> dict[str, Any]:
+    fields = {"path", "sha256", "values"}
+    if not isinstance(document, dict) or set(document) != fields:
+        raise PullDeployError("monomer DFT runtime environment identity is invalid")
+    path = document.get("path")
+    if not isinstance(path, str) or not Path(path).is_absolute():
+        raise PullDeployError("monomer DFT runtime environment path is invalid")
+    require_digest(document.get("sha256"), "monomer DFT runtime environment")
+    values = document.get("values")
+    base_keys = {
+        "MONOMER_DFT_RELEASE_SHA",
+        "MONOMER_DFT_RUNTIME_CONTRACT_SHA256",
+        "MONOMER_DFT_PYTHON",
+        "AIMNET_CACHE_DIR",
+        "WARP_CACHE_PATH",
+    }
+    expected_keys = base_keys | {"NEXPOLY_DFT_GPU_GUARD_MODE"}
+    target_keys = expected_keys | {"MONOMER_DFT_RUNTIME_INVENTORY_SHA256"}
+    if (
+        not isinstance(values, dict)
+        or set(values)
+        not in (
+            (base_keys, expected_keys, target_keys)
+            if not require_guard_mode
+            else (target_keys,)
+        )
+        or any(not isinstance(value, str) or not value for value in values.values())
+    ):
+        raise PullDeployError("monomer DFT runtime environment values are invalid")
+    require_sha(values["MONOMER_DFT_RELEASE_SHA"], "monomer DFT env release SHA")
+    require_digest(
+        values["MONOMER_DFT_RUNTIME_CONTRACT_SHA256"],
+        "monomer DFT env runtime contract",
+    )
+    for field in ("MONOMER_DFT_PYTHON", "AIMNET_CACHE_DIR", "WARP_CACHE_PATH"):
+        if not Path(values[field]).is_absolute():
+            raise PullDeployError("monomer DFT runtime environment value is not absolute")
+    if "NEXPOLY_DFT_GPU_GUARD_MODE" in values and values[
+        "NEXPOLY_DFT_GPU_GUARD_MODE"
+    ] not in {"enforce", "observe"}:
+        raise PullDeployError("monomer DFT runtime guard mode is invalid")
+    if "MONOMER_DFT_RUNTIME_INVENTORY_SHA256" in values:
+        require_digest(
+            values["MONOMER_DFT_RUNTIME_INVENTORY_SHA256"],
+            "monomer DFT runtime inventory environment",
+        )
+    return dict(document)
+
+
+def _validate_dft_gpu_identity(document: object) -> dict[str, Any]:
+    fields = {
+        "index",
+        "uuid",
+        "guard_mode",
+        "guard_state_path",
+        "guard_schema_version",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("index") != MONOMER_DFT_GPU_INDEX
+        or document.get("uuid") != MONOMER_DFT_GPU_UUID
+        or document.get("guard_mode") not in {"enforce", "observe"}
+        or document.get("guard_state_path") != str(MONOMER_DFT_GUARD_STATE)
+        or document.get("guard_schema_version") != 1
+    ):
+        raise PullDeployError("monomer DFT GPU identity is invalid")
+    return dict(document)
+
+
+def _validate_dft_systemd_state(document: object) -> dict[str, str]:
+    fields = {
+        "LoadState",
+        "FragmentPath",
+        "DropInPaths",
+        "NeedDaemonReload",
+        "UnitFileState",
+        "ActiveState",
+        "SubState",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or any(not isinstance(value, str) for value in document.values())
+    ):
+        raise PullDeployError("monomer DFT systemd state is invalid")
+    return dict(document)
+
+
+def _validate_dft_guard_unit_snapshot(document: object) -> dict[str, Any]:
+    fields = {
+        "name",
+        "target_path",
+        "sha256",
+        "systemd_state",
+        "main_pid",
+        "invocation_id",
+    }
+    if not isinstance(document, dict) or set(document) != fields:
+        raise PullDeployError("monomer DFT guard unit evidence has an invalid shape")
+    name = document.get("name")
+    if name not in {
+        MONOMER_DFT_GUARD_SERVICE_NAME,
+        MONOMER_DFT_GUARD_TIMER_NAME,
+    }:
+        raise PullDeployError("monomer DFT guard unit name is invalid")
+    target_path = document.get("target_path")
+    if not isinstance(target_path, str) or not Path(target_path).is_absolute():
+        raise PullDeployError("monomer DFT guard unit path is invalid")
+    require_digest(document.get("sha256"), "monomer DFT guard unit")
+    state = _validate_dft_systemd_state(document.get("systemd_state"))
+    main_pid = document.get("main_pid")
+    invocation_id = document.get("invocation_id")
+    if (
+        not isinstance(main_pid, int)
+        or isinstance(main_pid, bool)
+        or main_pid < 0
+        or not isinstance(invocation_id, str)
+        or (main_pid > 0 and not invocation_id)
+        or state["LoadState"] != "loaded"
+        or state["FragmentPath"] != target_path
+        or state["DropInPaths"] != ""
+        or state["NeedDaemonReload"] != "no"
+    ):
+        raise PullDeployError("monomer DFT guard unit identity is invalid")
+    return {
+        **document,
+        "systemd_state": state,
+    }
+
+
+def validate_dft_guard_controls(document: object) -> dict[str, Any]:
+    if not isinstance(document, dict) or set(document) != {
+        "service",
+        "timer",
+        "timer_policy",
+        "git_units",
+    }:
+        raise PullDeployError("monomer DFT guard controls have an invalid shape")
+    service = _validate_dft_guard_unit_snapshot(document["service"])
+    timer = _validate_dft_guard_unit_snapshot(document["timer"])
+    git_units = document.get("git_units")
+    if not isinstance(git_units, dict) or set(git_units) != {"service", "timer"}:
+        raise PullDeployError("monomer DFT guard Git unit evidence is invalid")
+    expected_sources = {
+        "service": MONOMER_DFT_GUARD_SERVICE_SOURCE,
+        "timer": MONOMER_DFT_GUARD_TIMER_SOURCE,
+    }
+    validated_git_units: dict[str, dict[str, str]] = {}
+    for name, source_path in expected_sources.items():
+        record = git_units.get(name)
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"source_path", "sha256"}
+            or record.get("source_path") != source_path
+        ):
+            raise PullDeployError("monomer DFT guard Git unit evidence is invalid")
+        require_digest(record.get("sha256"), "monomer DFT guard Git unit")
+        validated_git_units[name] = dict(record)
+    policy = document.get("timer_policy")
+    if (
+        service["name"] != MONOMER_DFT_GUARD_SERVICE_NAME
+        or timer["name"] != MONOMER_DFT_GUARD_TIMER_NAME
+        or not isinstance(policy, dict)
+        or set(policy) != {"enabled", "active"}
+        or any(not isinstance(value, bool) for value in policy.values())
+        or service["systemd_state"]["UnitFileState"]
+        not in {"static", "disabled", "enabled", "indirect"}
+        or timer["systemd_state"]["UnitFileState"] not in {"enabled", "disabled"}
+        or policy["enabled"]
+        is not (
+            timer["systemd_state"]["UnitFileState"]
+            == "enabled"
+        )
+        or timer["systemd_state"]["ActiveState"] not in {"active", "inactive"}
+        or policy["active"]
+        is not (timer["systemd_state"]["ActiveState"] == "active")
+        or timer["main_pid"] != 0
+        or service["sha256"] != validated_git_units["service"]["sha256"]
+        or timer["sha256"] != validated_git_units["timer"]["sha256"]
+    ):
+        raise PullDeployError("monomer DFT guard control identity is invalid")
+    return {
+        "service": service,
+        "timer": timer,
+        "timer_policy": dict(policy),
+        "git_units": validated_git_units,
+    }
+
+
+def validate_dft_guard_lifecycle_evidence(
+    document: object,
+    *,
+    controls: dict[str, Any],
+    status: str,
+) -> dict[str, Any]:
+    expected_fields = {
+        "schema_version",
+        "status",
+        "service",
+        "timer",
+        "observation",
+        "recorded_at",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != expected_fields
+        or document.get("schema_version") != 1
+        or document.get("status") != status
+        or not isinstance(document.get("recorded_at"), str)
+        or not document["recorded_at"]
+    ):
+        raise PullDeployError("monomer DFT guard lifecycle evidence is invalid")
+    sealed = validate_dft_guard_controls(controls)
+    service = _validate_dft_guard_unit_snapshot(document["service"])
+    timer = _validate_dft_guard_unit_snapshot(document["timer"])
+    for name, observed in (("service", service), ("timer", timer)):
+        expected = sealed[name]
+        if (
+            any(
+                observed[field] != expected[field]
+                for field in ("name", "target_path", "sha256")
+            )
+            or any(
+                observed["systemd_state"][field]
+                != expected["systemd_state"][field]
+                for field in (
+                    "LoadState",
+                    "FragmentPath",
+                    "DropInPaths",
+                    "NeedDaemonReload",
+                    "UnitFileState",
+                )
+            )
+        ):
+            raise PullDeployError("monomer DFT guard installation changed")
+    if (
+        service["systemd_state"]["ActiveState"] != "inactive"
+        or service["main_pid"] != 0
+    ):
+        raise PullDeployError("monomer DFT guard service retained a checkout reader")
+    if status == "stopped":
+        if (
+            timer["systemd_state"]["ActiveState"] != "inactive"
+            or timer["main_pid"] != 0
+            or document.get("observation") is not None
+        ):
+            raise PullDeployError("monomer DFT guard scheduling did not stop")
+    elif status == "restored":
+        policy = sealed["timer_policy"]
+        observation = document.get("observation")
+        if (
+            (timer["systemd_state"]["ActiveState"] == "active")
+            is not policy["active"]
+            or (
+                timer["systemd_state"]["UnitFileState"]
+                == "enabled"
+            )
+            is not policy["enabled"]
+            or not isinstance(observation, dict)
+            or set(observation) != {"status", "contention", "observed_at"}
+            or observation.get("status") not in {"ready", "quarantined"}
+            or not isinstance(observation.get("contention"), bool)
+            or observation["contention"]
+            is not (observation["status"] == "quarantined")
+            or not isinstance(observation.get("observed_at"), str)
+        ):
+            raise PullDeployError("monomer DFT guard scheduling was not restored")
+        try:
+            observed_at = observation["observed_at"]
+            if len(observed_at) != 20:
+                raise ValueError("timestamp length differs")
+            parsed_observed = dt.datetime.strptime(
+                observed_at, "%Y-%m-%dT%H:%M:%SZ"
+            )
+            if parsed_observed.strftime("%Y-%m-%dT%H:%M:%SZ") != observed_at:
+                raise ValueError("timestamp is not canonical")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PullDeployError(
+                "monomer DFT guard restore timestamp is invalid"
+            ) from exc
+    else:
+        raise PullDeployError("monomer DFT guard lifecycle status is invalid")
+    return {
+        **document,
+        "service": service,
+        "timer": timer,
+        "observation": (
+            dict(document["observation"])
+            if isinstance(document["observation"], dict)
+            else None
+        ),
+    }
+
+
+def _validate_dft_process_identity(document: object) -> dict[str, Any]:
+    if not isinstance(document, dict) or set(document) != {
+        "main_pid",
+        "invocation_id",
+    }:
+        raise PullDeployError("monomer DFT process identity is invalid")
+    if (
+        isinstance(document.get("main_pid"), bool)
+        or not isinstance(document.get("main_pid"), int)
+        or document["main_pid"] <= 0
+        or not isinstance(document.get("invocation_id"), str)
+        or not document["invocation_id"]
+    ):
+        raise PullDeployError("monomer DFT process identity is invalid")
+    return dict(document)
+
+
+def validate_dft_current_projection(document: object) -> dict[str, Any]:
+    if not isinstance(document, dict) or set(document) != {
+        "runtime",
+        "runtime_env",
+        "systemd_unit",
+        "gpu",
+    }:
+        raise PullDeployError("current monomer DFT identity has an invalid shape")
+    runtime = _validate_dft_runtime_identity(document["runtime"])
+    runtime_env = _validate_dft_runtime_environment(document["runtime_env"])
+    unit = document["systemd_unit"]
+    if not isinstance(unit, dict) or set(unit) != {
+        "target_path",
+        "sha256",
+        "systemd_state",
+        "process_identity",
+        "control_release_id",
+        "launcher_path",
+        "launcher_sha256",
+    }:
+        raise PullDeployError("current monomer DFT unit identity is invalid")
+    if not isinstance(unit["target_path"], str) or not Path(
+        unit["target_path"]
+    ).is_absolute():
+        raise PullDeployError("current monomer DFT unit path is invalid")
+    require_digest(unit["sha256"], "current monomer DFT unit")
+    require_digest(unit["launcher_sha256"], "current monomer DFT launcher")
+    if not isinstance(unit["launcher_path"], str) or not Path(
+        unit["launcher_path"]
+    ).is_absolute():
+        raise PullDeployError("current monomer DFT launcher path is invalid")
+    control_release_id = unit["control_release_id"]
+    if control_release_id is not None and (
+        not isinstance(control_release_id, str)
+        or _control_runtime.RELEASE_ID_RE.fullmatch(control_release_id) is None
+    ):
+        raise PullDeployError("current monomer DFT control release is invalid")
+    _validate_dft_systemd_state(unit["systemd_state"])
+    _validate_dft_process_identity(unit["process_identity"])
+    gpu = _validate_dft_gpu_identity(document["gpu"])
+    if (
+        runtime_env["values"]["MONOMER_DFT_RELEASE_SHA"] != runtime["release_sha"]
+        or runtime_env["values"]["MONOMER_DFT_PYTHON"] != runtime["python"]
+        or Path(runtime_env["values"]["AIMNET_CACHE_DIR"]).parent
+        != Path(runtime["root"])
+        or runtime_env["values"].get("NEXPOLY_DFT_GPU_GUARD_MODE", "enforce")
+        != gpu["guard_mode"]
+        or "MONOMER_DFT_RUNTIME_INVENTORY_SHA256" in runtime_env["values"]
+        and runtime_env["values"]["MONOMER_DFT_RUNTIME_INVENTORY_SHA256"]
+        != runtime.get("runtime_inventory_sha256")
+    ):
+        raise PullDeployError("current monomer DFT runtime identities differ")
+    return {
+        "runtime": runtime,
+        "runtime_env": runtime_env,
+        "systemd_unit": dict(unit),
+        "gpu": gpu,
+    }
+
+
+def validate_dft_descriptor(document: object, *, operation_id: str) -> dict[str, Any]:
+    if not isinstance(document, dict) or set(document) != {
+        "runtime",
+        "runtime_env",
+        "systemd_unit",
+        "gpu",
+        "guard",
+    }:
+        raise PullDeployError("descriptor monomer DFT evidence is invalid")
+    runtime = _validate_dft_runtime_identity(document["runtime"])
+    runtime_env = document["runtime_env"]
+    if not isinstance(runtime_env, dict) or set(runtime_env) != {
+        "target",
+        "candidate_path",
+        "previous_present",
+        "previous_sha256",
+        "previous_backup_path",
+    }:
+        raise PullDeployError("descriptor monomer DFT environment transition is invalid")
+    target_env = _validate_dft_runtime_environment(
+        runtime_env["target"], require_guard_mode=True
+    )
+    unit = document["systemd_unit"]
+    transition_fields = {
+        "source_path",
+        "candidate_path",
+        "target_path",
+        "sha256",
+        "previous_present",
+        "previous_sha256",
+        "previous_backup_path",
+        "previous_systemd_state",
+        "control_release_id",
+        "launcher_path",
+        "launcher_sha256",
+    }
+    if not isinstance(unit, dict) or set(unit) != transition_fields:
+        raise PullDeployError("descriptor monomer DFT unit transition is invalid")
+    if unit.get("source_path") != MONOMER_DFT_UNIT_SOURCE:
+        raise PullDeployError("descriptor monomer DFT unit source is invalid")
+    for value in (
+        runtime_env.get("candidate_path"),
+        unit.get("candidate_path"),
+        unit.get("target_path"),
+    ):
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise PullDeployError("descriptor monomer DFT transition path is invalid")
+    require_digest(unit.get("sha256"), "descriptor monomer DFT unit")
+    require_digest(unit.get("launcher_sha256"), "descriptor monomer DFT launcher")
+    if not isinstance(unit.get("launcher_path"), str) or not Path(
+        unit["launcher_path"]
+    ).is_absolute():
+        raise PullDeployError("descriptor monomer DFT launcher path is invalid")
+    if (
+        not isinstance(unit.get("control_release_id"), str)
+        or _control_runtime.RELEASE_ID_RE.fullmatch(unit["control_release_id"]) is None
+    ):
+        raise PullDeployError("descriptor monomer DFT control release is invalid")
+    _validate_dft_systemd_state(unit.get("previous_systemd_state"))
+    for transition in (runtime_env, unit):
+        if not isinstance(transition.get("previous_present"), bool):
+            raise PullDeployError("descriptor monomer DFT previous state is invalid")
+        if transition["previous_present"]:
+            require_digest(transition.get("previous_sha256"), "previous monomer DFT payload")
+            backup = transition.get("previous_backup_path")
+            if not isinstance(backup, str) or not Path(backup).is_absolute():
+                raise PullDeployError("previous monomer DFT backup path is invalid")
+        elif transition.get("previous_sha256") is not None or transition.get(
+            "previous_backup_path"
+        ) is not None:
+            raise PullDeployError("absent previous monomer DFT payload has backup metadata")
+    gpu = _validate_dft_gpu_identity(document["gpu"])
+    guard = validate_dft_guard_controls(document["guard"])
+    if (
+        target_env["values"]["MONOMER_DFT_RELEASE_SHA"] != runtime["release_sha"]
+        or target_env["values"]["MONOMER_DFT_PYTHON"] != runtime["python"]
+        or target_env["values"]["NEXPOLY_DFT_GPU_GUARD_MODE"]
+        != gpu["guard_mode"]
+        or target_env["values"]["MONOMER_DFT_RUNTIME_INVENTORY_SHA256"]
+        != runtime.get("runtime_inventory_sha256")
+    ):
+        raise PullDeployError("descriptor monomer DFT runtime identities differ")
+    return {
+        "runtime": runtime,
+        "runtime_env": {**runtime_env, "target": target_env},
+        "systemd_unit": dict(unit),
+        "gpu": gpu,
+        "guard": guard,
+    }
+
+
+def validate_adopted_deployment(document: object) -> dict[str, Any]:
+    """Validate the independent manual-runtime authority used by first deploy."""
 
     if (
         not isinstance(document, dict)
-        or not CURRENT_STATE_FIELDS.issubset(document)
+        or set(document) != ADOPTED_DEPLOYMENT_FIELDS
+        or document.get("schema_version") != 1
+        or document.get("status") != "adopted"
+        or document.get("authority_kind") != "manual-runtime-adoption"
+    ):
+        raise PullDeployError("adopted deployment authority has an invalid shape")
+    require_operation_id(str(document.get("operation_id", "")))
+    for field in (
+        "source_sha",
+        "source_tree",
+        "bootstrap_source_sha",
+        "bootstrap_source_tree",
+    ):
+        require_sha(document.get(field), f"adopted deployment {field}")
+    try:
+        active_control = _control_runtime.validate_active_control_record(
+            document.get("active_control")
+        )
+    except Exception as exc:
+        raise PullDeployError("adopted active control is invalid") from exc
+    if (
+        active_control["source_sha"] != document["bootstrap_source_sha"]
+        or active_control["source_tree"] != document["bootstrap_source_tree"]
+    ):
+        raise PullDeployError("adopted active control differs from bootstrap source")
+    evidence = document.get("adoption_evidence")
+    if (
+        not isinstance(evidence, dict)
+        or not evidence
+        or canonical_json_digest(evidence)
+        != require_digest(
+            document.get("adoption_evidence_sha256"),
+            "adoption evidence",
+        )
+    ):
+        raise PullDeployError("adoption evidence digest differs")
+    images = document.get("images")
+    if not isinstance(images, dict) or set(images) != {"backend", "web"}:
+        raise PullDeployError("adopted image evidence is invalid")
+    for role, image in images.items():
+        if (
+            not isinstance(image, dict)
+            or not isinstance(image.get("digest_ref"), str)
+            or re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", image["digest_ref"])
+            is None
+            or require_digest(image.get("image_id"), f"adopted {role} image")
+            != image["image_id"]
+            or not isinstance(image.get("container_id"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", image["container_id"]) is None
+            or not isinstance(image.get("restart_count"), int)
+            or isinstance(image.get("restart_count"), bool)
+            or image["restart_count"] < 0
+        ):
+            raise PullDeployError("adopted image runtime evidence is invalid")
+    production_config = document.get("production_config")
+    if not isinstance(production_config, dict) or set(production_config) != {
+        "deploy_env",
+        "app_env",
+    }:
+        raise PullDeployError("adopted production configuration is invalid")
+    for record in production_config.values():
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"path", "sha256", "size", "mode"}
+            or not isinstance(record["path"], str)
+            or not Path(record["path"]).is_absolute()
+            or record["mode"] != "0600"
+            or not isinstance(record["size"], int)
+            or isinstance(record["size"], bool)
+            or record["size"] <= 0
+        ):
+            raise PullDeployError("adopted production configuration record is invalid")
+        require_digest(record["sha256"], "adopted production configuration")
+    asset = document.get("asset_identity")
+    if (
+        not isinstance(asset, dict)
+        or set(asset) != {"pointer", "root", "manifest_sha256"}
+        or any(
+            not isinstance(asset.get(field), str)
+            or not Path(asset[field]).is_absolute()
+            for field in ("pointer", "root")
+        )
+    ):
+        raise PullDeployError("adopted asset identity is invalid")
+    require_digest(asset["manifest_sha256"], "adopted asset manifest")
+    migrations = document.get("migrations")
+    database = document.get("database")
+    if (
+        not isinstance(migrations, list)
+        or not migrations
+        or not isinstance(database, dict)
+        or database.get("postgres_major") != 16
+        or database.get("ledger")
+        != [
+            {"version": record.get("version"), "checksum": record.get("checksum")}
+            for record in migrations
+            if isinstance(record, dict)
+        ]
+    ):
+        raise PullDeployError("adopted PostgreSQL ledger authority is invalid")
+    monomer_md = document.get("monomer_md")
+    md_fields = {
+        "active_slot_path",
+        "active_slot_file_sha256",
+        "active_slot",
+        "slot_record_path",
+        "slot_record_file_sha256",
+        "slot_record",
+        "worker_env",
+        "systemd_unit",
+        "health",
+    }
+    if not isinstance(monomer_md, dict) or set(monomer_md) != md_fields:
+        raise PullDeployError("adopted monomer MD authority is invalid")
+    active_slot = validate_active_slot_record(monomer_md["active_slot"])
+    slot_record = monomer_md["slot_record"]
+    if (
+        not isinstance(slot_record, dict)
+        or slot_record.get("schema_version") != SLOT_RECORD_SCHEMA_VERSION
+        or slot_record.get("status") != "ready"
+        or slot_record.get("component") != "monomer-md"
+        or slot_record.get("slot") != active_slot["slot"]
+    ):
+        raise PullDeployError("adopted monomer MD slot record is invalid")
+    if (
+        active_slot["source_sha"] != document["source_sha"]
+        or active_slot["source_tree"] != document["source_tree"]
+        or slot_record["source_sha"] != document["source_sha"]
+        or slot_record["source_tree"] != document["source_tree"]
+        or worker_record_digest(slot_record)
+        != active_slot["slot_record_sha256"]
+    ):
+        raise PullDeployError("adopted monomer MD slot differs from source")
+    for path_field in ("active_slot_path", "slot_record_path"):
+        if not isinstance(monomer_md[path_field], str) or not Path(
+            monomer_md[path_field]
+        ).is_absolute():
+            raise PullDeployError("adopted monomer MD slot path is invalid")
+    for digest_field in (
+        "active_slot_file_sha256",
+        "slot_record_file_sha256",
+    ):
+        require_digest(monomer_md[digest_field], "adopted monomer MD slot file")
+    worker_env = monomer_md["worker_env"]
+    if (
+        not isinstance(worker_env, dict)
+        or set(worker_env) != {"path", "sha256", "size", "mode"}
+        or not isinstance(worker_env["path"], str)
+        or not Path(worker_env["path"]).is_absolute()
+        or worker_env["mode"] != "0600"
+        or not isinstance(worker_env["size"], int)
+        or isinstance(worker_env["size"], bool)
+        or worker_env["size"] <= 0
+    ):
+        raise PullDeployError("adopted monomer MD environment is invalid")
+    require_digest(worker_env["sha256"], "adopted monomer MD environment")
+    dft_raw = document.get("monomer_dft")
+    if not isinstance(dft_raw, dict) or set(dft_raw) != {
+        "runtime",
+        "runtime_env",
+        "systemd_unit",
+        "gpu",
+        "health",
+    }:
+        raise PullDeployError("adopted monomer DFT authority is invalid")
+    gpu_raw = dft_raw["gpu"]
+    if not isinstance(gpu_raw, dict):
+        raise PullDeployError("adopted monomer DFT GPU authority is invalid")
+    dft = validate_dft_current_projection(
+        {
+            "runtime": dft_raw["runtime"],
+            "runtime_env": dft_raw["runtime_env"],
+            "systemd_unit": dft_raw["systemd_unit"],
+            "gpu": {
+                key: gpu_raw[key]
+                for key in (
+                    "index",
+                    "uuid",
+                    "guard_mode",
+                    "guard_state_path",
+                    "guard_schema_version",
+                )
+            },
+        }
+    )
+    if (
+        dft["runtime"]["release_sha"] != document["source_sha"]
+        or dft["runtime"]["source_tree"] != document["source_tree"]
+        or gpu_raw.get("guard_status") not in {"ready", "quarantined"}
+        or gpu_raw.get("contention_observed")
+        is not (gpu_raw.get("guard_status") == "quarantined")
+    ):
+        raise PullDeployError("adopted monomer DFT source or guard differs")
+    if not isinstance(document.get("adopted_at"), str) or not document["adopted_at"]:
+        raise PullDeployError("adopted deployment timestamp is invalid")
+    return dict(document)
+
+
+def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any]:
+    """Validate the durable state that a new prepare seals by digest."""
+
+    schema_version = document.get("schema_version") if isinstance(document, dict) else None
+    required_fields = (
+        LEGACY_CURRENT_STATE_FIELDS
+        if schema_version == LEGACY_CURRENT_STATE_SCHEMA_VERSION
+        else CURRENT_STATE_FIELDS
+        if schema_version == CURRENT_STATE_SCHEMA_VERSION
+        else None
+    )
+    if (
+        not isinstance(document, dict)
+        or required_fields is None
+        or not required_fields.issubset(document)
         or not set(document).issubset(
-            CURRENT_STATE_FIELDS | CURRENT_STATE_OPTIONAL_FIELDS
+            required_fields | CURRENT_STATE_OPTIONAL_FIELDS
         )
     ):
         raise PullDeployError("current deployment state has an invalid shape")
-    if document.get("schema_version") != 2 or document.get("status") != "success":
-        raise PullDeployError("current deployment state is not successful schema V2")
+    if document.get("status") != "success":
+        raise PullDeployError("current deployment state is not successful")
     require_operation_id(str(document.get("operation_id", "")))
     require_sha(document.get("source_sha"), "current deployment source SHA")
     require_sha(document.get("source_tree"), "current deployment source tree")
@@ -5953,6 +6794,53 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
         )
     require_digest(worker_env.get("sha256"), "current Worker environment digest")
     require_digest(worker_env.get("gmx_sha256"), "current Worker GMX digest")
+    dft = None
+    if schema_version == CURRENT_STATE_SCHEMA_VERSION:
+        authority_kind = document.get("authority_kind")
+        adoption_evidence = document.get("adoption_evidence")
+        adoption_evidence_sha256 = document.get(
+            "adoption_evidence_sha256"
+        )
+        adopted_deployment_sha256 = document.get(
+            "adopted_deployment_sha256"
+        )
+        if authority_kind not in {
+            "manual-runtime-adoption",
+            "governed-deployment",
+        }:
+            raise PullDeployError("current deployment authority kind is invalid")
+        if authority_kind == "manual-runtime-adoption":
+            if (
+                not isinstance(adoption_evidence, dict)
+                or not adoption_evidence
+                or canonical_json_digest(adoption_evidence)
+                != require_digest(
+                    adoption_evidence_sha256,
+                    "current adoption evidence",
+                )
+            ):
+                raise PullDeployError("manual adoption provenance is missing")
+            require_digest(
+                adopted_deployment_sha256,
+                "current adopted deployment authority",
+            )
+        elif any(
+            value is not None
+            for value in (
+                adoption_evidence,
+                adoption_evidence_sha256,
+                adopted_deployment_sha256,
+            )
+        ):
+            raise PullDeployError(
+                "governed deployment has unbound adoption provenance"
+            )
+        dft = validate_dft_current_projection(document.get("monomer_dft"))
+        if (
+            dft["runtime"]["release_sha"] != document["source_sha"]
+            or dft["runtime"]["source_tree"] != document["source_tree"]
+        ):
+            raise PullDeployError("current monomer DFT runtime differs from source")
     control_helpers = document.get("control_helpers")
     if not isinstance(control_helpers, dict) or set(control_helpers) != set(
         STABLE_HELPER_FILES
@@ -5978,6 +6866,12 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
         raise PullDeployError(
             "current deployment controls differ from source or Worker"
         )
+    if dft is not None:
+        dft_control = dft["systemd_unit"]["control_release_id"]
+        if dft_control is not None and dft_control != active_control["release_id"]:
+            raise PullDeployError(
+                "current monomer DFT control release differs from authority"
+            )
     validate_production_config_evidence(document.get("production_config"))
     mutable_pair = validate_mutable_data_pair(
         document.get("mutable_data_audit")
@@ -6295,7 +7189,9 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
 def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
     schema_version = document.get("schema_version")
     expected_fields = (
-        DESCRIPTOR_FIELDS
+        LEGACY_DESCRIPTOR_FIELDS
+        if schema_version == LEGACY_DESCRIPTOR_SCHEMA_VERSION
+        else DESCRIPTOR_FIELDS
         if schema_version == DESCRIPTOR_SCHEMA_VERSION
         else (
             BRIDGE_DESCRIPTOR_FIELDS
@@ -6363,13 +7259,29 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
     if (
         not isinstance(ci, dict)
         or (
-            schema_version == DESCRIPTOR_SCHEMA_VERSION
+            schema_version in {
+                LEGACY_DESCRIPTOR_SCHEMA_VERSION,
+                DESCRIPTOR_SCHEMA_VERSION,
+            }
             and ci.get("head_sha") != repository["target_sha"]
         )
         or ci.get("conclusion") != "success"
     ):
         raise PullDeployError("descriptor CI evidence is invalid")
     validate_image_records(document.get("images"), source_sha=repository["target_sha"])
+    if schema_version == DESCRIPTOR_SCHEMA_VERSION:
+        dft = validate_dft_descriptor(
+            document.get("monomer_dft"), operation_id=operation_id
+        )
+        if (
+            dft["runtime"]["release_sha"] != repository["target_sha"]
+            or dft["runtime"]["source_tree"] != repository["target_tree"]
+            or dft["systemd_unit"]["control_release_id"]
+            != executor["release_id"]
+        ):
+            raise PullDeployError(
+                "descriptor monomer DFT authority differs from repository"
+            )
     monomer = document.get("monomer_md")
     if not isinstance(monomer, dict) or set(monomer) != {
         "slot",
@@ -6385,27 +7297,57 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
     if slot_record["prepared_operation_id"] != operation_id:
         raise PullDeployError("descriptor monomer MD slot belongs to another operation")
     worker_env = monomer.get("worker_env")
-    if not isinstance(worker_env, dict) or set(worker_env) != {
+    identity_fields = {
         "path",
         "sha256",
         "byteff2_python",
         "byteff2_openmm_dir",
         "gmx_sha256",
-    }:
-        raise PullDeployError("descriptor Worker environment evidence is invalid")
-    if (
-        not isinstance(worker_env["path"], str)
-        or not Path(worker_env["path"]).is_absolute()
-    ):
-        raise PullDeployError("descriptor Worker environment path is invalid")
-    require_digest(worker_env["sha256"], "Worker environment digest")
-    require_digest(worker_env["gmx_sha256"], "Worker GMX digest")
-    for key in ("byteff2_python", "byteff2_openmm_dir"):
+    }
+
+    def validate_worker_env_identity(value: object) -> dict[str, str]:
+        if not isinstance(value, dict) or set(value) != identity_fields:
+            raise PullDeployError("descriptor Worker environment evidence is invalid")
+        if not isinstance(value["path"], str) or not Path(
+            value["path"]
+        ).is_absolute():
+            raise PullDeployError("descriptor Worker environment path is invalid")
+        require_digest(value["sha256"], "Worker environment digest")
+        require_digest(value["gmx_sha256"], "Worker GMX digest")
+        for key in ("byteff2_python", "byteff2_openmm_dir"):
+            if not isinstance(value[key], str) or not Path(value[key]).is_absolute():
+                raise PullDeployError("descriptor Worker runtime path is invalid")
+        return dict(value)
+
+    if schema_version == DESCRIPTOR_SCHEMA_VERSION:
+        if not isinstance(worker_env, dict) or set(worker_env) != {
+            "target",
+            "candidate_path",
+            "previous",
+            "previous_backup_path",
+        }:
+            raise PullDeployError("descriptor Worker environment transition is invalid")
+        target_worker_env = validate_worker_env_identity(worker_env["target"])
+        previous_worker_env = validate_worker_env_identity(worker_env["previous"])
+        for path_field in ("candidate_path", "previous_backup_path"):
+            if not isinstance(worker_env[path_field], str) or not Path(
+                worker_env[path_field]
+            ).is_absolute():
+                raise PullDeployError("descriptor Worker environment transition path is invalid")
         if (
-            not isinstance(worker_env[key], str)
-            or not Path(worker_env[key]).is_absolute()
+            target_worker_env["path"] != previous_worker_env["path"]
+            or any(
+                target_worker_env[field] != previous_worker_env[field]
+                for field in (
+                    "byteff2_python",
+                    "byteff2_openmm_dir",
+                    "gmx_sha256",
+                )
+            )
         ):
-            raise PullDeployError("descriptor Worker runtime path is invalid")
+            raise PullDeployError("descriptor Worker environment runtime drifted")
+    else:
+        validate_worker_env_identity(worker_env)
     unit = monomer.get("systemd_unit")
     if not isinstance(unit, dict) or set(unit) != {
         "source_path",
@@ -6518,6 +7460,24 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
         raise PullDeployError("descriptor has no preparation timestamp")
     previous = document.get("previous_deployment")
     previous_digest = document.get("previous_deployment_sha256")
+    adopted: dict[str, Any] | None = None
+    adopted_digest: str | None = None
+    if schema_version == DESCRIPTOR_SCHEMA_VERSION:
+        raw_adopted = document.get("adopted_deployment")
+        raw_adopted_digest = document.get("adopted_deployment_sha256")
+        if raw_adopted is not None:
+            adopted = validate_adopted_deployment(raw_adopted)
+            adopted_digest = require_digest(
+                raw_adopted_digest, "adopted deployment digest"
+            )
+            if canonical_json_digest(adopted) != adopted_digest:
+                raise PullDeployError("descriptor adopted deployment digest differs")
+        elif raw_adopted_digest is not None:
+            raise PullDeployError("descriptor absent adopted deployment has a digest")
+        if previous is not None and adopted is not None:
+            raise PullDeployError(
+                "descriptor has two previous deployment authorities"
+            )
     if previous is None:
         if previous_digest is not None:
             raise PullDeployError("descriptor absent previous deployment has a digest")
@@ -6532,6 +7492,16 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             raise PullDeployError(
                 "descriptor previous control authority differs from governed state"
             )
+    if adopted is not None and (
+        previous_control != adopted["active_control"]
+        or previous_control["source_sha"] != adopted["bootstrap_source_sha"]
+        or previous_control["source_tree"] != adopted["bootstrap_source_tree"]
+        or repository["previous_sha"] != adopted["source_sha"]
+        or repository["previous_tree"] != adopted["source_tree"]
+    ):
+        raise PullDeployError(
+            "descriptor adopted control or source authority differs"
+        )
     if schema_version == BRIDGE_DESCRIPTOR_SCHEMA_VERSION:
         if previous is not None:
             raise PullDeployError(
@@ -6625,11 +7595,74 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             raise PullDeployError(
                 "bridge descriptor differs from deployment evidence"
             )
-    elif previous is None and previous_control["release_id"] != executor["release_id"]:
+    elif (
+        previous is None
+        and adopted is None
+        and previous_control["release_id"] != executor["release_id"]
+    ):
         raise PullDeployError(
             "bootstrap takeover controls must already be the target release"
         )
     return document
+
+
+def descriptor_adoption_lineage(
+    descriptor: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Project the immutable adoption lineage a descriptor must preserve."""
+
+    if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+        return None
+    previous = descriptor.get("previous_deployment")
+    if (
+        isinstance(previous, dict)
+        and previous.get("schema_version") == CURRENT_STATE_SCHEMA_VERSION
+    ):
+        return {
+            "authority_kind": previous["authority_kind"],
+            "adoption_evidence": previous["adoption_evidence"],
+            "adoption_evidence_sha256": previous[
+                "adoption_evidence_sha256"
+            ],
+            "adopted_deployment_sha256": previous[
+                "adopted_deployment_sha256"
+            ],
+        }
+    adopted = descriptor.get("adopted_deployment")
+    if isinstance(adopted, dict):
+        return {
+            "authority_kind": adopted["authority_kind"],
+            "adoption_evidence": adopted["adoption_evidence"],
+            "adoption_evidence_sha256": adopted[
+                "adoption_evidence_sha256"
+            ],
+            "adopted_deployment_sha256": descriptor[
+                "adopted_deployment_sha256"
+            ],
+        }
+    return {
+        "authority_kind": "governed-deployment",
+        "adoption_evidence": None,
+        "adoption_evidence_sha256": None,
+        "adopted_deployment_sha256": None,
+    }
+
+
+def validate_current_state_adoption_lineage(
+    state: Mapping[str, Any],
+    *,
+    descriptor: Mapping[str, Any],
+) -> None:
+    """Reject deletion or replacement of a descriptor's adoption lineage."""
+
+    expected = descriptor_adoption_lineage(descriptor)
+    if expected is None:
+        return
+    observed = {key: state.get(key) for key in expected}
+    if observed != expected:
+        raise PullDeployError(
+            "deployment state adoption lineage differs from descriptor authority"
+        )
 
 
 def alias_bridge_authority_projection(
@@ -6853,13 +7886,22 @@ def validate_recovery_marker(
 ) -> dict[str, Any]:
     if not isinstance(marker, dict):
         raise PullDeployError("interrupted deployment marker is invalid")
-    if not MARKER_BASE_FIELDS.issubset(marker) or not set(marker).issubset(
-        MARKER_BASE_FIELDS | MARKER_OPTIONAL_FIELDS
+    marker_schema = marker.get("schema_version")
+    marker_fields = (
+        LEGACY_MARKER_BASE_FIELDS
+        if marker_schema == LEGACY_MARKER_SCHEMA_VERSION
+        else MARKER_BASE_FIELDS
+        if marker_schema == MARKER_SCHEMA_VERSION
+        else None
+    )
+    if (
+        marker_fields is None
+        or not marker_fields.issubset(marker)
+        or not set(marker).issubset(marker_fields | MARKER_OPTIONAL_FIELDS)
     ):
         raise PullDeployError("interrupted deployment marker has an invalid shape")
     if (
-        marker.get("schema_version") != 2
-        or marker.get("action") not in {"deploy", "explicit-rollback"}
+        marker.get("action") not in {"deploy", "explicit-rollback"}
         or marker.get("operation_id") != descriptor["operation_id"]
         or marker.get("source_sha") != descriptor["repository"]["target_sha"]
         or marker.get("descriptor_sha256") != descriptor_digest
@@ -6869,6 +7911,11 @@ def validate_recovery_marker(
         != descriptor["controller"]["executor_control_sha256"]
     ):
         raise PullDeployError("interrupted deployment marker identity differs")
+    if (
+        descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION
+        and marker_schema != MARKER_SCHEMA_VERSION
+    ):
+        raise PullDeployError("descriptor V4 requires a recovery marker V3")
     if marker["action"] == "deploy":
         expected_precondition = descriptor.get(
             "previous_deployment_sha256"
@@ -6896,7 +7943,7 @@ def validate_recovery_marker(
             precondition,
             "interrupted deployment current-state precondition",
         )
-    for field in (
+    effect_fields = [
         "runtime_stopped",
         "source_switched",
         "slot_switched",
@@ -6904,7 +7951,17 @@ def validate_recovery_marker(
         "unit_switched",
         "asset_switched",
         "database_change_started",
-    ):
+    ]
+    if marker_schema == MARKER_SCHEMA_VERSION:
+        effect_fields.extend(
+            (
+                "worker_env_switched",
+                "dft_runtime_switched",
+                "dft_unit_switched",
+                "dft_guard_scheduling_stopped",
+            )
+        )
+    for field in effect_fields:
         if not isinstance(marker.get(field), bool):
             raise PullDeployError(
                 "interrupted deployment marker effect flag is invalid"
@@ -6912,6 +7969,50 @@ def validate_recovery_marker(
     for field in ("database_restore_started", "database_restored"):
         if field in marker and not isinstance(marker[field], bool):
             raise PullDeployError("interrupted deployment restore flag is invalid")
+    if marker_schema == MARKER_SCHEMA_VERSION:
+        intent = marker.get("dft_guard_stop_intent")
+        stopped_evidence = marker.get("dft_guard_stop_evidence")
+        restored_evidence = marker.get("dft_guard_restore_evidence")
+        if intent is not None and (
+            not isinstance(intent, dict)
+            or set(intent) != {"operation_id", "recorded_at"}
+            or intent.get("operation_id") != descriptor["operation_id"]
+            or not isinstance(intent.get("recorded_at"), str)
+            or not intent["recorded_at"]
+        ):
+            raise PullDeployError("interrupted DFT guard stop intent is invalid")
+        if stopped_evidence is not None:
+            if intent is None:
+                raise PullDeployError("DFT guard stop evidence lacks durable intent")
+            validate_dft_guard_lifecycle_evidence(
+                stopped_evidence,
+                controls=descriptor["monomer_dft"]["guard"],
+                status="stopped",
+            )
+        if restored_evidence is not None:
+            if intent is None or marker["dft_guard_scheduling_stopped"] is True:
+                raise PullDeployError("DFT guard restore evidence is inconsistent")
+            validate_dft_guard_lifecycle_evidence(
+                restored_evidence,
+                controls=descriptor["monomer_dft"]["guard"],
+                status="restored",
+            )
+        if (
+            marker["dft_guard_scheduling_stopped"] is True
+            and (intent is None or stopped_evidence is None)
+        ):
+            raise PullDeployError("stopped DFT guard lacks durable evidence")
+        source_fence = marker.get("dft_guard_source_switch_fence")
+        if source_fence is not None and (
+            not isinstance(source_fence, dict)
+            or set(source_fence) != {"guard_stop_evidence_sha256", "checked_at"}
+            or stopped_evidence is None
+            or source_fence.get("guard_stop_evidence_sha256")
+            != canonical_json_digest(stopped_evidence)
+            or not isinstance(source_fence.get("checked_at"), str)
+            or not source_fence["checked_at"]
+        ):
+            raise PullDeployError("DFT guard source-switch fence is invalid")
     restore_started = marker.get("database_restore_started")
     database_restored = marker.get("database_restored")
     phase = marker.get("phase")
@@ -7077,6 +8178,10 @@ def validate_recovery_marker(
         if marker["action"] != "deploy" or not isinstance(candidate, dict):
             raise PullDeployError("deployment marker candidate state is invalid")
         validate_current_deployment_state(candidate)
+        validate_current_state_adoption_lineage(
+            candidate,
+            descriptor=descriptor,
+        )
         require_digest(candidate_digest, "deployment marker candidate-state digest")
     rollback_candidate = marker.get("rollback_candidate_state")
     rollback_candidate_digest = marker.get("rollback_candidate_state_sha256")
@@ -7090,6 +8195,10 @@ def validate_recovery_marker(
         ):
             raise PullDeployError("explicit rollback candidate state is invalid")
         validate_current_deployment_state(rollback_candidate)
+        validate_current_state_adoption_lineage(
+            rollback_candidate,
+            descriptor=descriptor,
+        )
         expected_rollback_digest = require_digest(
             rollback_candidate_digest,
             "explicit rollback candidate-state digest",
@@ -7133,6 +8242,20 @@ class Lifecycle(Protocol):
     def stop(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
     ) -> dict[str, Any] | None: ...
+
+    def stop_dft_guard(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+        *,
+        allow_already_stopped: bool,
+    ) -> dict[str, Any]: ...
+
+    def restore_dft_guard(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]: ...
 
     def restore_database(
         self,
@@ -7194,6 +8317,7 @@ class Lifecycle(Protocol):
         expected_verification: dict[str, Any] | None,
         *,
         allow_unfenced: bool,
+        allow_partial_stop: bool = False,
     ) -> dict[str, Any]: ...
 
 
@@ -7819,12 +8943,37 @@ class SystemLifecycle:
         controller: "PullDeployController",
         descriptor: dict[str, Any],
     ) -> dict[str, Any]:
+        """Return the MD process identity using the legacy override ABI."""
+
+        return self._systemd_worker_process_identity(
+            controller,
+            descriptor,
+            MONOMER_MD_UNIT_NAME,
+        )
+
+    def _dft_worker_process_identity(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._systemd_worker_process_identity(
+            controller,
+            descriptor,
+            MONOMER_DFT_UNIT_NAME,
+        )
+
+    def _systemd_worker_process_identity(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+        unit_name: str,
+    ) -> dict[str, Any]:
         shown = controller.runner.run(
             [
                 "systemctl",
                 "--user",
                 "show",
-                MONOMER_MD_UNIT_NAME,
+                unit_name,
                 "--property=ActiveState",
                 "--property=SubState",
                 "--property=MainPID",
@@ -7880,7 +9029,10 @@ class SystemLifecycle:
         *,
         resumed: bool | None,
     ) -> dict[str, Any]:
-        sockets = self._worker_sockets(controller, require_md=True)
+        governed_dft = descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION
+        sockets = self._required_worker_sockets(
+            controller, require_md=True, require_dft=governed_dft
+        )
         workers: dict[str, dict[str, str]] = {}
         for name, socket in sockets:
             health = self._worker_request(
@@ -7920,15 +9072,34 @@ class SystemLifecycle:
                     action=action,
                     require_zero=resumed is False,
                 )
+                self._validate_dft_runtime_identity(
+                    descriptor,
+                    health,
+                    expected_accepting=False if resumed is False else None,
+                    allow_active=resumed is not False,
+                )
             workers[name] = {
                 "socket": str(socket),
                 "worker_instance_id": health["worker_instance_id"],
             }
-        return {
+        fence = {
             "backend_process": self._backend_process_identity(controller, descriptor),
-            "monomer_md_process": self._worker_process_identity(controller, descriptor),
             "workers": workers,
         }
+        if governed_dft:
+            fence["worker_processes"] = {
+                "monomer-md": self._worker_process_identity(
+                    controller, descriptor
+                ),
+                "monomer-dft": self._dft_worker_process_identity(
+                    controller, descriptor
+                ),
+            }
+        else:
+            fence["monomer_md_process"] = self._worker_process_identity(
+                controller, descriptor
+            )
+        return fence
 
     @staticmethod
     def _expected_runtime_recovery_fence(
@@ -7939,17 +9110,22 @@ class SystemLifecycle:
                 "committed runtime lacks verification recovery evidence"
             )
         fence = verification.get("recovery_fence")
+        legacy_shape = {"backend_process", "monomer_md_process", "workers"}
+        current_shape = {"backend_process", "worker_processes", "workers"}
         if (
             not isinstance(fence, dict)
-            or set(fence) != {"backend_process", "monomer_md_process", "workers"}
+            or frozenset(fence) not in {frozenset(legacy_shape), frozenset(current_shape)}
             or not isinstance(fence.get("backend_process"), dict)
-            or not isinstance(fence.get("monomer_md_process"), dict)
             or not isinstance(fence.get("workers"), dict)
             or "monomer-md" not in fence["workers"]
         ):
             raise PullDeployError("runtime recovery fence has an invalid shape")
         backend = fence["backend_process"]
-        monomer_md = fence["monomer_md_process"]
+        processes = (
+            {"monomer-md": fence["monomer_md_process"]}
+            if "monomer_md_process" in fence
+            else fence["worker_processes"]
+        )
         workers = fence["workers"]
         if (
             set(backend)
@@ -7966,18 +9142,36 @@ class SystemLifecycle:
             or not isinstance(backend.get("restart_count"), int)
             or isinstance(backend.get("restart_count"), bool)
             or backend["restart_count"] < 0
-            or set(monomer_md)
-            != {"main_pid", "invocation_id", "active_enter_monotonic"}
-            or not isinstance(monomer_md.get("main_pid"), int)
-            or isinstance(monomer_md.get("main_pid"), bool)
-            or monomer_md["main_pid"] <= 0
-            or not isinstance(monomer_md.get("invocation_id"), str)
-            or not monomer_md["invocation_id"]
-            or not isinstance(monomer_md.get("active_enter_monotonic"), int)
-            or isinstance(monomer_md.get("active_enter_monotonic"), bool)
-            or monomer_md["active_enter_monotonic"] <= 0
         ):
             raise PullDeployError("runtime recovery process fence is invalid")
+        if (
+            not isinstance(processes, dict)
+            or frozenset(processes)
+            not in {
+                frozenset({"monomer-md"}),
+                frozenset({"monomer-md", "monomer-dft"}),
+            }
+        ):
+            raise PullDeployError("runtime recovery Worker process set is invalid")
+        for process in processes.values():
+            if (
+                not isinstance(process, dict)
+                or set(process)
+                != {"main_pid", "invocation_id", "active_enter_monotonic"}
+                or not isinstance(process.get("main_pid"), int)
+                or isinstance(process.get("main_pid"), bool)
+                or process["main_pid"] <= 0
+                or not isinstance(process.get("invocation_id"), str)
+                or not process["invocation_id"]
+                or not isinstance(process.get("active_enter_monotonic"), int)
+                or isinstance(process.get("active_enter_monotonic"), bool)
+                or process["active_enter_monotonic"] <= 0
+            ):
+                raise PullDeployError("runtime recovery Worker process is invalid")
+        if "worker_processes" in fence and (
+            "monomer-dft" not in workers or "monomer-dft" not in processes
+        ):
+            raise PullDeployError("runtime recovery monomer DFT fence is incomplete")
         for name, worker in workers.items():
             if (
                 name not in {"monomer-md", "monomer-dft"}
@@ -8044,30 +9238,45 @@ class SystemLifecycle:
             raise PullDeployError(
                 "multiple Backend processes exist during runtime recovery"
             )
-        worker = controller.runner.run(
-            [
-                "systemctl",
-                "--user",
-                "is-active",
-                "nexpoly-monomer-md-worker.service",
-            ],
-            env=environment,
-            check=False,
-        )
-        worker_state = str(worker.stdout).strip()
         backend_live = len(backend_ids) == 1
-        worker_live = worker.returncode == 0 and worker_state == "active"
-        worker_stopped = worker.returncode in {3, 4} and worker_state in {
-            "inactive",
-            "unknown",
-        }
-        if not worker_live and not worker_stopped:
-            raise PullDeployError(
-                "Worker process state is unknown during runtime recovery"
+        units = [MONOMER_MD_UNIT_NAME]
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            units.append(MONOMER_DFT_UNIT_NAME)
+        worker_states: list[str] = []
+        for unit_name in units:
+            worker = controller.runner.run(
+                ["systemctl", "--user", "is-active", unit_name],
+                env=environment,
+                check=False,
             )
-        if backend_live and worker_live:
+            worker_state = str(worker.stdout).strip()
+            if worker.returncode == 0 and worker_state == "active":
+                worker_states.append("live")
+            elif worker.returncode in {3, 4} and worker_state in {
+                "inactive",
+                "unknown",
+            }:
+                worker_states.append("stopped")
+            elif worker_state in {
+                "activating",
+                "deactivating",
+                "failed",
+                "maintenance",
+                "refreshing",
+                "reloading",
+            }:
+                # These are determinate non-steady states.  A durable stop or
+                # start intent may converge them through the same idempotent
+                # stop-and-prove path as a mixed runtime; without that
+                # authority recovery fails closed below.
+                worker_states.append("transitional")
+            else:
+                raise PullDeployError(
+                    f"{unit_name} process state is unknown during runtime recovery"
+                )
+        if backend_live and all(state == "live" for state in worker_states):
             return "live"
-        if not backend_live and worker_stopped:
+        if not backend_live and all(state == "stopped" for state in worker_states):
             return "stopped"
         return "partial"
 
@@ -8078,6 +9287,7 @@ class SystemLifecycle:
         expected_verification: dict[str, Any] | None,
         *,
         allow_unfenced: bool,
+        allow_partial_stop: bool = False,
     ) -> dict[str, Any]:
         """Isolate, identify and drain a live runtime before stop/restart.
 
@@ -8090,12 +9300,36 @@ class SystemLifecycle:
         # query admission before this has been proven.
         self._isolate_ingress(controller, descriptor)
         presence = self._recovery_runtime_presence(controller, descriptor)
-        if presence == "partial":
-            raise PullDeployError("runtime is partially stopped during recovery")
-        if presence == "stopped":
+        if presence != "live":
+            if presence not in {"partial", "stopped"}:
+                raise PullDeployError(
+                    "runtime process state is invalid during recovery"
+                )
+            if allow_partial_stop:
+                # A prior stop may have committed even when its response was
+                # lost.  Reissue every stop idempotently and require the full
+                # MainPID/UDS/container/PostgreSQL/reader proof; a superficial
+                # is-active classification is never sufficient authority.
+                postgres = self.stop(controller, descriptor)
+                return {
+                    "runtime_state": "stopped",
+                    "ingress_isolated": True,
+                    "partial_runtime_converged": True,
+                    "postgres_runtime_fence": postgres,
+                    "verified_at": utc_now(),
+                }
+            if presence != "stopped":
+                raise PullDeployError(
+                    "runtime is partially stopped during recovery"
+                )
+            # Without a durable mutation intent this branch must remain
+            # read-only, but still prove every source reader is absent and
+            # PostgreSQL survived unchanged.
+            postgres = self._prove_runtime_stopped(controller, descriptor)
             return {
                 "runtime_state": "stopped",
                 "ingress_isolated": True,
+                "postgres_runtime_fence": postgres,
                 "verified_at": utc_now(),
             }
 
@@ -8249,7 +9483,7 @@ class SystemLifecycle:
             if not path.exists() and not path.is_symlink():
                 if name == "monomer-md" and require_md:
                     raise PullDeployError(
-                        "governed monomer MD Worker socket is missing"
+                        f"governed {name} Worker socket is missing"
                     )
                 continue
             try:
@@ -8269,6 +9503,31 @@ class SystemLifecycle:
                 raise PullDeployError(f"{name} Worker socket is unsafe")
             result.append((name, path))
         return result
+
+    def _required_worker_sockets(
+        self,
+        controller: "PullDeployController",
+        *,
+        require_md: bool = False,
+        require_dft: bool = False,
+    ) -> list[tuple[str, Path]]:
+        """Apply new Worker requirements without widening override ABI.
+
+        ``_worker_sockets`` predates the governed DFT Worker and is overridden
+        by contract-maintenance lifecycles.  Keeping its keyword surface
+        stable lets those controls run against a newer deployment runtime;
+        this non-overridden wrapper enforces the additional DFT requirement.
+        """
+
+        sockets = self._worker_sockets(controller, require_md=require_md)
+        names = [name for name, _socket in sockets]
+        if len(names) != len(set(names)):
+            raise PullDeployError("governed Worker socket set contains duplicates")
+        if require_md and "monomer-md" not in names:
+            raise PullDeployError("governed monomer-md Worker socket is missing")
+        if require_dft and "monomer-dft" not in names:
+            raise PullDeployError("governed monomer-dft Worker socket is missing")
+        return sockets
 
     def _validate_worker_runtime_identity(
         self,
@@ -8350,6 +9609,139 @@ class SystemLifecycle:
             raise PullDeployError("monomer MD Transport runtime is not strictly ready")
         return worker
 
+    def _validate_dft_runtime_identity(
+        self,
+        descriptor: dict[str, Any],
+        worker: dict[str, Any],
+        *,
+        expected_accepting: bool | None,
+        allow_active: bool,
+        require_guard_readiness: bool = False,
+    ) -> dict[str, Any]:
+        if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+            return worker
+        runtime = descriptor["monomer_dft"]["runtime"]
+        gpu = descriptor["monomer_dft"]["gpu"]
+        active = worker.get("active_jobs")
+        queued = worker.get("queued_jobs")
+        guard_status = worker.get("gpu_guard_status")
+        guard_states = (
+            {"ready", "quarantined"}
+            if require_guard_readiness
+            else {"ready", "quarantined", "missing", "stale", "invalid"}
+        )
+        runtime_payload = worker.get("runtime")
+        if (
+            worker.get("status") != "ok"
+            or worker.get("runtime_ready") is not True
+            or worker.get("release_sha") != runtime["release_sha"]
+            or worker.get("runtime_contract_sha256")
+            != runtime["runtime_manifest_sha256"]
+            or worker.get("gpu_guard_mode") != gpu["guard_mode"]
+            or guard_status not in guard_states
+            or not isinstance(worker.get("gpu_contention_observed"), bool)
+            or worker.get("gpu_contention_observed")
+            is not (guard_status == "quarantined")
+            or not isinstance(active, int)
+            or isinstance(active, bool)
+            or active < 0
+            or active > 1
+            or not isinstance(queued, int)
+            or isinstance(queued, bool)
+            or queued < 0
+            or queued > 8
+            or (not allow_active and active != 0)
+        ):
+            raise PullDeployError("monomer DFT Worker runtime identity differs")
+        if expected_accepting is not None and (
+            worker.get("accepting_jobs") is not expected_accepting
+            or worker.get("draining") is expected_accepting
+        ):
+            raise PullDeployError("monomer DFT Worker admission state differs")
+        if (
+            not isinstance(runtime_payload, dict)
+            or runtime_payload.get("deployment") != "prod"
+            or runtime_payload.get("physical_gpu") != gpu["index"]
+            or runtime_payload.get("gpu_uuid") != gpu["uuid"]
+            or runtime_payload.get("gpu_guard_mode") != worker["gpu_guard_mode"]
+            or runtime_payload.get("gpu_guard_status") != guard_status
+            or runtime_payload.get("gpu_contention_observed")
+            is not worker["gpu_contention_observed"]
+            or runtime_payload.get("fatal") is not False
+            or runtime_payload.get("fatal_reason") is not None
+        ):
+            raise PullDeployError("monomer DFT Worker runtime payload differs")
+        loaded = runtime_payload.get("models")
+        if (
+            not isinstance(loaded, dict)
+            or set(loaded) != MONOMER_DFT_MODEL_ALIASES
+            or any(
+                not isinstance(value, dict)
+                or value.get("loaded") is not True
+                or value.get("warmed_up") is not True
+                for value in loaded.values()
+            )
+        ):
+            raise PullDeployError("monomer DFT six-model warmup is incomplete")
+        return worker
+
+    @staticmethod
+    def _validate_dft_guard_observation(
+        descriptor: dict[str, Any],
+        *,
+        not_before: dt.datetime | None = None,
+    ) -> dict[str, Any]:
+        gpu = descriptor["monomer_dft"]["gpu"]
+        payload, _digest = private_regular_file(
+            Path(gpu["guard_state_path"]),
+            mode=0o600,
+            maximum_bytes=1024 * 1024,
+        )
+        try:
+            document = json.loads(payload)
+        except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise PullDeployError("monomer DFT guard observation is invalid") from exc
+        unknown = document.get("unknown_processes") if isinstance(document, dict) else None
+        if (
+            not isinstance(document, dict)
+            or document.get("schema_version") != gpu["guard_schema_version"]
+            or document.get("gpu_index") != gpu["index"]
+            or document.get("gpu_uuid") != gpu["uuid"]
+            or document.get("status") not in {"ready", "quarantined"}
+            or not isinstance(unknown, list)
+            or (document["status"] == "ready") != (not unknown)
+        ):
+            raise PullDeployError("monomer DFT guard observation identity differs")
+        observed_at = document.get("observed_at")
+        if not isinstance(observed_at, str):
+            raise PullDeployError("monomer DFT guard timestamp is missing")
+        try:
+            # The Worker and production readiness gate publish one canonical,
+            # second-resolution UTC wire format.  Accepting offsets or
+            # fractional seconds here would let deploy admit evidence that the
+            # running service itself classifies as invalid.
+            if len(observed_at) != 20:
+                raise ValueError("timestamp length differs")
+            observed = dt.datetime.strptime(
+                observed_at, "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=dt.timezone.utc)
+            if observed.strftime("%Y-%m-%dT%H:%M:%SZ") != observed_at:
+                raise ValueError("timestamp is not canonical")
+        except ValueError as exc:
+            raise PullDeployError("monomer DFT guard timestamp is invalid") from exc
+        age = dt.datetime.now(dt.timezone.utc) - observed
+        if age < -dt.timedelta(seconds=30) or age > dt.timedelta(minutes=2):
+            raise PullDeployError("monomer DFT guard observation is stale")
+        if not_before is not None and observed < not_before:
+            raise PullDeployError(
+                "monomer DFT guard observation predates the guarded restart"
+            )
+        return {
+            "status": document["status"],
+            "contention": bool(unknown),
+            "observed_at": observed_at,
+        }
+
     def _wait_for_zero_work(
         self,
         controller: "PullDeployController",
@@ -8375,7 +9767,11 @@ class SystemLifecycle:
                 raise PullDeployError("Backend instance changed during drain")
             workers: dict[str, Any] = {}
             all_zero = backend["active_total"] == 0
-            sockets = self._worker_sockets(controller, require_md=True)
+            sockets = self._required_worker_sockets(
+                controller,
+                require_md=True,
+                require_dft=descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION,
+            )
             if {name for name, _socket in sockets} != set(worker_instances):
                 raise PullDeployError("governed Worker socket set changed during drain")
             for name, socket in sockets:
@@ -8399,7 +9795,15 @@ class SystemLifecycle:
                         allow_active=True,
                     )
                 workers[name] = snapshot
-                all_zero = all_zero and snapshot["active_jobs"] == 0
+                worker_zero = snapshot["active_jobs"] == 0
+                if name == "monomer-dft":
+                    queued = snapshot.get("queued_jobs")
+                    if not isinstance(queued, int) or isinstance(queued, bool):
+                        raise PullDeployError(
+                            "monomer DFT Worker queued-job evidence is missing"
+                        )
+                    worker_zero = worker_zero and queued == 0
+                all_zero = all_zero and worker_zero
             if all_zero:
                 return {
                     "backend": backend,
@@ -8408,7 +9812,7 @@ class SystemLifecycle:
                 }
             if time.monotonic() >= deadline:
                 raise PullDeployError(
-                    "timed out waiting for Backend and Worker active jobs"
+                    "timed out waiting for Backend and Worker active/queued jobs"
                 )
             time.sleep(DRAIN_POLL_SECONDS)
 
@@ -8806,7 +10210,10 @@ class SystemLifecycle:
     def drain(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
     ) -> dict[str, Any]:
-        if descriptor["previous_deployment"] is None:
+        if (
+            descriptor["previous_deployment"] is None
+            and not isinstance(descriptor.get("adopted_deployment"), dict)
+        ):
             evidence = self._run_bootstrap_hook(
                 controller,
                 "bootstrap-quiesce",
@@ -8845,7 +10252,11 @@ class SystemLifecycle:
             authority_sha=self._drain_authority_sha(descriptor),
         )
         worker_instances: dict[str, str] = {}
-        sockets = self._worker_sockets(controller, require_md=True)
+        sockets = self._required_worker_sockets(
+            controller,
+            require_md=True,
+            require_dft=descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION,
+        )
         for name, socket in sockets:
             response = validate_worker_control_evidence(
                 self._worker_request(
@@ -9197,30 +10608,250 @@ class SystemLifecycle:
             "restored_at": utc_now(),
         }
 
-    def stop(
-        self, controller: "PullDeployController", descriptor: dict[str, Any]
-    ) -> dict[str, Any]:
-        environment = self._environment(controller, descriptor)
-        before = self.postgres_runtime_identity(controller, descriptor)
-        controller.runner.run(
-            ["systemctl", "--user", "stop", "nexpoly-monomer-md-worker.service"],
-            env=environment,
-        )
-        controller.runner.run(
-            self._compose(controller, "stop", "nginx", "backend"),
-            cwd=controller.production_root,
-            env=environment,
-        )
-        unit = controller.runner.run(
-            ["systemctl", "--user", "is-active", "nexpoly-monomer-md-worker.service"],
-            env=environment,
+    @staticmethod
+    def _require_inactive_guard_unit(
+        controller: "PullDeployController",
+        unit_name: str,
+    ) -> None:
+        active = controller.runner.run(
+            ["systemctl", "--user", "is-active", unit_name],
+            env=controller.control_environment(),
             check=False,
         )
-        if unit.returncode not in {3, 4} or str(unit.stdout).strip() not in {
+        if active.returncode not in {3, 4} or str(active.stdout).strip() not in {
             "inactive",
             "unknown",
         }:
-            raise PullDeployError("monomer MD Worker did not stop")
+            raise PullDeployError(f"{unit_name} did not stop")
+
+    def stop_dft_guard(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+        *,
+        allow_already_stopped: bool,
+    ) -> dict[str, Any]:
+        """Fence the live-checkout guard before the ordinary reader stop."""
+
+        sealed = validate_dft_guard_controls(
+            descriptor["monomer_dft"]["guard"]
+        )
+        before = controller._revalidate_dft_guard_controls(descriptor)
+        if before["timer_policy"]["enabled"] is not sealed["timer_policy"][
+            "enabled"
+        ]:
+            raise PullDeployError("monomer DFT guard timer enablement drifted")
+        if (
+            not allow_already_stopped
+            and before["timer_policy"] != sealed["timer_policy"]
+        ):
+            raise PullDeployError("monomer DFT guard timer policy drifted before stop")
+
+        environment = controller.control_environment()
+        controller.runner.run(
+            ["systemctl", "--user", "stop", MONOMER_DFT_GUARD_TIMER_NAME],
+            env=environment,
+        )
+        self._require_inactive_guard_unit(
+            controller, MONOMER_DFT_GUARD_TIMER_NAME
+        )
+        controller.runner.run(
+            ["systemctl", "--user", "stop", MONOMER_DFT_GUARD_SERVICE_NAME],
+            env=environment,
+        )
+        self._require_inactive_guard_unit(
+            controller, MONOMER_DFT_GUARD_SERVICE_NAME
+        )
+        # Re-probe the timer after the service has reached MainPID=0.  This is
+        # the source-switch fence: the timer cannot enqueue another service
+        # invocation and neither unit retains a live-checkout reader.
+        self._require_inactive_guard_unit(
+            controller, MONOMER_DFT_GUARD_TIMER_NAME
+        )
+        after = controller._revalidate_dft_guard_controls(descriptor)
+        evidence = {
+            "schema_version": 1,
+            "status": "stopped",
+            "service": after["service"],
+            "timer": after["timer"],
+            "observation": None,
+            "recorded_at": utc_now(),
+        }
+        return validate_dft_guard_lifecycle_evidence(
+            evidence,
+            controls=sealed,
+            status="stopped",
+        )
+
+    def restore_dft_guard(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Publish a fresh target-source observation and restore timer policy."""
+
+        sealed = validate_dft_guard_controls(
+            descriptor["monomer_dft"]["guard"]
+        )
+        # This is intentionally idempotent.  A lost response after a previous
+        # restore is converted back into a known stopped state before one new
+        # oneshot invocation is issued.
+        self.stop_dft_guard(
+            controller,
+            descriptor,
+            allow_already_stopped=True,
+        )
+        environment = controller.control_environment()
+        not_before = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        service_error: BaseException | None = None
+        observation: dict[str, Any] | None = None
+        try:
+            started = controller.runner.run(
+                [
+                    "systemctl",
+                    "--user",
+                    "start",
+                    MONOMER_DFT_GUARD_SERVICE_NAME,
+                ],
+                env=environment,
+                check=False,
+            )
+            if started.returncode != 0:
+                service_error = PullDeployError(
+                    "monomer DFT guard oneshot failed during runtime restore"
+                )
+            else:
+                try:
+                    observation = self._validate_dft_guard_observation(
+                        descriptor,
+                        not_before=not_before,
+                    )
+                except BaseException as exc:
+                    service_error = exc
+        except BaseException as exc:
+            service_error = exc
+
+        policy = sealed["timer_policy"]
+        policy_error: BaseException | None = None
+        try:
+            controller.runner.run(
+                [
+                    "systemctl",
+                    "--user",
+                    "enable" if policy["enabled"] else "disable",
+                    MONOMER_DFT_GUARD_TIMER_NAME,
+                ],
+                env=environment,
+            )
+            controller.runner.run(
+                [
+                    "systemctl",
+                    "--user",
+                    "start" if policy["active"] else "stop",
+                    MONOMER_DFT_GUARD_TIMER_NAME,
+                ],
+                env=environment,
+            )
+        except BaseException as exc:
+            policy_error = exc
+
+        after = controller._revalidate_dft_guard_controls(
+            descriptor,
+            require_timer_policy=True,
+        )
+        self._require_inactive_guard_unit(
+            controller, MONOMER_DFT_GUARD_SERVICE_NAME
+        )
+        if observation is None:
+            if policy_error is not None:
+                raise PullDeployError(
+                    "monomer DFT guard timer policy could not be restored"
+                ) from policy_error
+            raise PullDeployError(
+                "monomer DFT guard did not publish a fresh observation"
+            ) from service_error
+        evidence = {
+            "schema_version": 1,
+            "status": "restored",
+            "service": after["service"],
+            "timer": after["timer"],
+            "observation": observation,
+            "recorded_at": utc_now(),
+        }
+        validated = validate_dft_guard_lifecycle_evidence(
+            evidence,
+            controls=sealed,
+            status="restored",
+        )
+        if policy_error is not None:
+            raise PullDeployError(
+                "monomer DFT guard timer policy could not be restored"
+            ) from policy_error
+        if service_error is not None:
+            raise PullDeployError(
+                "monomer DFT guard oneshot failed during runtime restore"
+            ) from service_error
+        return validated
+
+    def _prove_runtime_stopped(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+        *,
+        expected_postgres: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Read-only proof that every live-checkout reader is absent."""
+
+        environment = self._environment(controller, descriptor)
+        before = expected_postgres
+        if before is None:
+            before = self.postgres_runtime_identity(controller, descriptor)
+        if before is None:
+            raise PullDeployError(
+                "PostgreSQL runtime identity is unavailable during stop proof"
+            )
+        before = validate_postgres_runtime_fence(before)
+        worker_units = [MONOMER_MD_UNIT_NAME]
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            worker_units.append(MONOMER_DFT_UNIT_NAME)
+        for unit_name in worker_units:
+            unit = controller.runner.run(
+                ["systemctl", "--user", "is-active", unit_name],
+                env=environment,
+                check=False,
+            )
+            if unit.returncode not in {3, 4} or str(unit.stdout).strip() not in {
+                "inactive",
+                "unknown",
+            }:
+                raise PullDeployError(f"{unit_name} did not stop")
+            shown = controller.runner.run(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    unit_name,
+                    "--property=ActiveState",
+                    "--property=MainPID",
+                ],
+                env=environment,
+            )
+            fields = dict(
+                line.split("=", 1)
+                for line in str(shown.stdout).splitlines()
+                if "=" in line
+            )
+            if fields != {"ActiveState": "inactive", "MainPID": "0"}:
+                raise PullDeployError(f"{unit_name} retained a checkout reader")
+        sockets = [
+            controller.state_dir / "monomer-md-worker-socket/worker.sock",
+        ]
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            sockets.append(
+                controller.state_dir / "monomer-dft-worker-socket/worker.sock"
+            )
+        if any(path.exists() or path.is_symlink() for path in sockets):
+            raise PullDeployError("Worker UDS remained after source-reader stop")
         remaining = controller.runner.run(
             self._compose(controller, "ps", "--quiet", "backend", "nginx"),
             cwd=controller.production_root,
@@ -9245,6 +10876,11 @@ class SystemLifecycle:
         if str(state.stdout).strip() != "true":
             raise PullDeployError("PostgreSQL was not preserved during source switch")
         after = self.postgres_runtime_identity(controller, descriptor)
+        if after is None:
+            raise PullDeployError(
+                "PostgreSQL runtime identity is unavailable after reader stop"
+            )
+        after = validate_postgres_runtime_fence(after)
         if postgres_runtime_fence_identity(after) != postgres_runtime_fence_identity(
             before
         ):
@@ -9269,7 +10905,243 @@ class SystemLifecycle:
                 raise PullDeployError(
                     f"live-source GPU unit must be inactive before Git switch: {unit_name}"
                 )
+        self._assert_no_checkout_readers(controller.production_root)
         return before
+
+    def stop(
+        self, controller: "PullDeployController", descriptor: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Idempotently stop all source readers and prove the final state.
+
+        Stop command responses are not commit evidence: if a response is lost,
+        continue issuing the remaining stops and trust only the complete
+        read-only proof below.
+        """
+
+        environment = self._environment(controller, descriptor)
+        before = self.postgres_runtime_identity(controller, descriptor)
+        if before is None:
+            raise PullDeployError(
+                "PostgreSQL runtime identity is unavailable before reader stop"
+            )
+        before = validate_postgres_runtime_fence(before)
+        worker_units = [MONOMER_MD_UNIT_NAME]
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            worker_units.append(MONOMER_DFT_UNIT_NAME)
+        for unit_name in worker_units:
+            try:
+                controller.runner.run(
+                    ["systemctl", "--user", "stop", unit_name],
+                    env=environment,
+                )
+            except BaseException:
+                # Unknown commit.  Continue convergence and let the proof
+                # decide whether the operation completed.
+                pass
+        try:
+            controller.runner.run(
+                self._compose(controller, "stop", "nginx", "backend"),
+                cwd=controller.production_root,
+                env=environment,
+            )
+        except BaseException:
+            # Docker may have committed the stop before transport failed.
+            pass
+        return self._prove_runtime_stopped(
+            controller,
+            descriptor,
+            expected_postgres=before,
+        )
+
+    @staticmethod
+    def _assert_no_checkout_readers(
+        checkout: Path, *, proc_root: Path = Path("/proc")
+    ) -> None:
+        """Fence same-UID readers of the live checkout with PID reuse checks."""
+
+        checkout = checkout.resolve(strict=True)
+        maximum_processes = 65_536
+        maximum_fds_per_process = 65_536
+        maximum_link_bytes = 64 * 1024
+        maximum_path_evidence_bytes = 64 * 1024 * 1024
+
+        def bounded_proc_bytes(path: Path, maximum_bytes: int) -> bytes:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+            )
+            try:
+                metadata = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()
+                ):
+                    raise PullDeployError(
+                        "checkout reader proc evidence is unsafe"
+                    )
+                chunks: list[bytes] = []
+                observed = 0
+                while observed <= maximum_bytes:
+                    chunk = os.read(
+                        descriptor,
+                        min(64 * 1024, maximum_bytes + 1 - observed),
+                    )
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    observed += len(chunk)
+                if observed > maximum_bytes:
+                    raise PullDeployError(
+                        "checkout reader proc evidence exceeds its bound"
+                    )
+                return b"".join(chunks)
+            finally:
+                os.close(descriptor)
+
+        def bounded_readlink(path: Path) -> str:
+            value = os.readlink(path)
+            if len(os.fsencode(value)) > maximum_link_bytes:
+                raise PullDeployError(
+                    "checkout reader path evidence exceeds its bound"
+                )
+            return value
+
+        def under_checkout(raw: str) -> bool:
+            if raw.endswith(" (deleted)"):
+                raw = raw[: -len(" (deleted)")]
+            try:
+                candidate = Path(raw)
+                return candidate == checkout or checkout in candidate.parents
+            except (OSError, ValueError):
+                return False
+
+        def start_time(process: Path) -> str:
+            payload = bounded_proc_bytes(
+                process / "stat", 16 * 1024
+            ).decode("utf-8")
+            closing = payload.rfind(")")
+            fields = payload[closing + 2 :].split() if closing >= 1 else []
+            if len(fields) <= 19:
+                raise PullDeployError("checkout reader process identity is invalid")
+            return fields[19]
+
+        # Excluding our own PID is safe only when the controller itself is not
+        # rooted in the checkout that is about to move.  The production path
+        # uses procfs for this assertion; synthetic proc trees used by tests
+        # can omit the controller PID.
+        self_process = proc_root / str(os.getpid())
+        if self_process.exists():
+            try:
+                controller_cwd = bounded_readlink(self_process / "cwd")
+            except OSError as exc:
+                raise PullDeployError(
+                    "cannot prove controller is outside the live checkout"
+                ) from exc
+            if under_checkout(controller_cwd):
+                raise PullDeployError(
+                    "deployment controller is running from the live checkout"
+                )
+
+        readers = 0
+        process_count = 0
+        try:
+            processes = proc_root.iterdir()
+        except OSError as exc:
+            raise PullDeployError("cannot enumerate checkout readers") from exc
+        try:
+            for process in processes:
+                if not process.name.isdigit():
+                    continue
+                process_count += 1
+                if process_count > maximum_processes:
+                    raise PullDeployError(
+                        "checkout reader process inventory exceeds its bound"
+                    )
+                if int(process.name) == os.getpid():
+                    continue
+                try:
+                    metadata = process.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:
+                    raise PullDeployError(
+                        "cannot enumerate checkout readers"
+                    ) from exc
+                if metadata.st_uid != os.geteuid():
+                    continue
+                if not stat.S_ISDIR(metadata.st_mode) or process.is_symlink():
+                    raise PullDeployError(
+                        "checkout reader process evidence is unsafe"
+                    )
+                try:
+                    before = start_time(process)
+                    paths: list[str] = []
+                    path_evidence_bytes = 0
+
+                    def add_path(value: str) -> None:
+                        nonlocal path_evidence_bytes
+                        path_evidence_bytes += len(
+                            value.encode("utf-8", "surrogateescape")
+                        )
+                        if path_evidence_bytes > maximum_path_evidence_bytes:
+                            raise PullDeployError(
+                                "checkout reader path inventory exceeds its bound"
+                            )
+                        paths.append(value)
+
+                    for name in ("cwd", "exe"):
+                        add_path(bounded_readlink(process / name))
+                    command = bounded_proc_bytes(
+                        process / "cmdline", 1024 * 1024
+                    )
+                    for value in command.split(b"\0"):
+                        if value.startswith(b"/"):
+                            add_path(value.decode("utf-8", "surrogateescape"))
+                    descriptor_count = 0
+                    with os.scandir(process / "fd") as descriptors:
+                        for entry in descriptors:
+                            descriptor_count += 1
+                            if descriptor_count > maximum_fds_per_process:
+                                raise PullDeployError(
+                                    "checkout reader fd inventory exceeds its bound"
+                                )
+                            add_path(bounded_readlink(Path(entry.path)))
+                    maps = bounded_proc_bytes(
+                        process / "maps", 32 * 1024 * 1024
+                    ).decode("utf-8", "surrogateescape")
+                    for line in maps.splitlines():
+                        fields = line.split(maxsplit=5)
+                        if len(fields) == 6 and fields[5].startswith("/"):
+                            add_path(fields[5])
+                    after = start_time(process)
+                except FileNotFoundError as exc:
+                    # ENOENT for one evidence file is not enough to infer
+                    # process exit.  Only disappearance of the PID directory
+                    # may be treated as a benign race.
+                    if process.exists():
+                        raise PullDeployError(
+                            "cannot inspect checkout reader"
+                        ) from exc
+                    continue
+                except (OSError, UnicodeError) as exc:
+                    raise PullDeployError(
+                        "cannot inspect checkout reader"
+                    ) from exc
+                if before != after:
+                    raise PullDeployError(
+                        "checkout reader process changed during inspection"
+                    )
+                if any(under_checkout(path) for path in paths):
+                    readers += 1
+        except OSError as exc:
+            raise PullDeployError("cannot enumerate checkout readers") from exc
+        if readers:
+            raise PullDeployError(
+                f"live checkout retains {readers} same-UID reader(s)"
+            )
 
     def migrate(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
@@ -9283,6 +11155,7 @@ class SystemLifecycle:
         mode = (
             "bootstrap-expand"
             if descriptor["previous_deployment"] is None
+            and not isinstance(descriptor.get("adopted_deployment"), dict)
             else "expand"
         )
         try:
@@ -9301,6 +11174,7 @@ class SystemLifecycle:
                 ),
                 cwd=controller.production_root,
                 env=environment,
+                timeout=16 * 60,
             )
         except BaseException as migration_error:
             try:
@@ -9408,8 +11282,13 @@ class SystemLifecycle:
         )
         if str(ingress.stdout).strip():
             raise PullDeployError("Web ingress remains active before runtime recovery")
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            controller.runner.run(
+                ["systemctl", "--user", "restart", MONOMER_DFT_UNIT_NAME],
+                env=environment,
+            )
         controller.runner.run(
-            ["systemctl", "--user", "restart", "nexpoly-monomer-md-worker.service"],
+            ["systemctl", "--user", "restart", MONOMER_MD_UNIT_NAME],
             env=environment,
         )
         controller.runner.run(
@@ -9469,7 +11348,12 @@ class SystemLifecycle:
         while True:
             try:
                 worker_instances = {}
-                for name, socket in self._worker_sockets(controller, require_md=True):
+                for name, socket in self._required_worker_sockets(
+                    controller,
+                    require_md=True,
+                    require_dft=descriptor.get("schema_version")
+                    == DESCRIPTOR_SCHEMA_VERSION,
+                ):
                     response = validate_worker_control_evidence(
                         self._worker_request(
                             controller,
@@ -9568,6 +11452,54 @@ class SystemLifecycle:
             raise PullDeployError(
                 "Worker systemd enabled runtime identity differs from candidate"
             )
+
+        dft_unit_fields: dict[str, str] | None = None
+        dft_guard: dict[str, Any] | None = None
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            worker_env = descriptor["monomer_md"]["worker_env"]
+            worker_env_path = Path(worker_env["target"]["path"])
+            _worker_payload, worker_env_digest = private_regular_file(
+                worker_env_path, mode=0o600, maximum_bytes=64 * 1024
+            )
+            if worker_env_digest != worker_env["target"]["sha256"]:
+                raise PullDeployError(
+                    "running Worker environment differs from candidate"
+                )
+            dft = descriptor["monomer_dft"]
+            controller._revalidate_dft_guard_controls(
+                descriptor,
+                require_timer_policy=True,
+            )
+            dft_guard = self._validate_dft_guard_observation(descriptor)
+            adopted_runtime = descriptor.get("_adopted_runtime_authority")
+            if isinstance(adopted_runtime, dict):
+                controller._revalidate_adopted_runtime(adopted_runtime)
+            else:
+                controller._validate_dft_runtime_directory(dft["runtime"])
+            env_target = dft["runtime_env"]["target"]
+            _env_payload, env_digest = private_regular_file(
+                Path(env_target["path"]), mode=0o600, maximum_bytes=64 * 1024
+            )
+            if env_digest != env_target["sha256"]:
+                raise PullDeployError("running monomer DFT environment differs")
+            dft_unit = dft["systemd_unit"]
+            if sha256_file(Path(dft_unit["target_path"])) != dft_unit["sha256"]:
+                raise PullDeployError("running monomer DFT unit differs")
+            dft_unit_fields = controller._systemd_unit_state(
+                MONOMER_DFT_UNIT_NAME,
+                Path(dft_unit["target_path"]),
+                include_runtime=True,
+            )
+            if dft_unit_fields != {
+                "LoadState": "loaded",
+                "FragmentPath": dft_unit["target_path"],
+                "DropInPaths": "",
+                "NeedDaemonReload": "no",
+                "UnitFileState": "enabled",
+                "ActiveState": "active",
+                "SubState": "running",
+            }:
+                raise PullDeployError("monomer DFT systemd runtime identity differs")
 
         running: dict[str, Any] = {}
         roles = [("backend", "backend")]
@@ -9691,7 +11623,14 @@ class SystemLifecycle:
             for key in ("source_sha", "source_tree", "worker_lock_sha256")
         ):
             raise PullDeployError("active Worker slot identity differs from candidate")
-        sockets = dict(self._worker_sockets(controller, require_md=True))
+        sockets = dict(
+            self._required_worker_sockets(
+                controller,
+                require_md=True,
+                require_dft=descriptor.get("schema_version")
+                == DESCRIPTOR_SCHEMA_VERSION,
+            )
+        )
         worker = self._worker_request(
             controller, sockets["monomer-md"], method="GET", endpoint="/health"
         )
@@ -9707,12 +11646,40 @@ class SystemLifecycle:
             expected_accepting=expected_accepting,
             allow_active=allow_active_worker,
         )
+        dft_worker: dict[str, Any] | None = None
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            dft_worker = self._worker_request(
+                controller,
+                sockets["monomer-dft"],
+                method="GET",
+                endpoint="/health",
+            )
+            self._validate_dft_runtime_identity(
+                descriptor,
+                dft_worker,
+                expected_accepting=(
+                    None if allow_active_worker else require_ingress
+                ),
+                allow_active=allow_active_worker,
+                require_guard_readiness=True,
+            )
+            if (
+                dft_worker["gpu_guard_status"] != dft_guard["status"]
+                or dft_worker["gpu_contention_observed"]
+                is not dft_guard["contention"]
+            ):
+                raise PullDeployError(
+                    "monomer DFT Worker differs from the fresh guard observation"
+                )
         return {
             "repository": repository,
             "asset": {key: asset[key] for key in ASSET_RELEASE_FIELDS},
             "unit": unit_fields,
             "containers": running,
             "worker": worker,
+            "dft_worker": dft_worker,
+            "dft_unit": dft_unit_fields,
+            "dft_guard": dft_guard,
             "postgres_loopback": True,
             "verified_at": utc_now(),
         }
@@ -9813,7 +11780,14 @@ class SystemLifecycle:
             for key in ("source_sha", "source_tree", "worker_lock_sha256")
         ):
             raise PullDeployError("active Worker slot identity differs from candidate")
-        sockets = dict(self._worker_sockets(controller, require_md=True))
+        sockets = dict(
+            self._required_worker_sockets(
+                controller,
+                require_md=True,
+                require_dft=descriptor.get("schema_version")
+                == DESCRIPTOR_SCHEMA_VERSION,
+            )
+        )
         md_socket = sockets.get("monomer-md")
         if md_socket is None:
             raise PullDeployError("monomer MD Worker socket is missing after start")
@@ -9847,7 +11821,12 @@ class SystemLifecycle:
                 expected_enabled=False,
                 authority_sha=self._drain_authority_sha(descriptor),
             )
-            for _name, socket in self._worker_sockets(controller, require_md=True):
+            for _name, socket in self._required_worker_sockets(
+                controller,
+                require_md=True,
+                require_dft=descriptor.get("schema_version")
+                == DESCRIPTOR_SCHEMA_VERSION,
+            ):
                 validate_worker_control_evidence(
                     self._worker_request(
                         controller, socket, method="POST", endpoint="/resume"
@@ -9926,7 +11905,12 @@ class SystemLifecycle:
                     authority_sha=self._drain_authority_sha(descriptor),
                 )
                 worker_instances: dict[str, str] = {}
-                for name, socket in self._worker_sockets(controller, require_md=True):
+                for name, socket in self._required_worker_sockets(
+                    controller,
+                    require_md=True,
+                    require_dft=descriptor.get("schema_version")
+                    == DESCRIPTOR_SCHEMA_VERSION,
+                ):
                     response = validate_worker_control_evidence(
                         self._worker_request(
                             controller, socket, method="POST", endpoint="/drain"
@@ -10011,7 +11995,12 @@ class SystemLifecycle:
                 raise PullDeployError(
                     "drained runtime instance differs from committed verification"
                 )
-            for _name, socket in self._worker_sockets(controller, require_md=True):
+            for _name, socket in self._required_worker_sockets(
+                controller,
+                require_md=True,
+                require_dft=descriptor.get("schema_version")
+                == DESCRIPTOR_SCHEMA_VERSION,
+            ):
                 validate_worker_control_evidence(
                     self._worker_request(
                         controller, socket, method="POST", endpoint="/resume"
@@ -10141,6 +12130,7 @@ class SystemLifecycle:
             descriptor,
             expected_verification,
             allow_unfenced=expected_verification is None,
+            allow_partial_stop=False,
         )
         if recovery.get("runtime_state") != "drained" or not isinstance(
             recovery.get("verification"), dict
@@ -10168,7 +12158,12 @@ class SystemLifecycle:
                 raise PullDeployError(
                     "pre-stop runtime changed after recovery fence was persisted"
                 )
-            for name, socket in self._worker_sockets(controller, require_md=True):
+            for name, socket in self._required_worker_sockets(
+                controller,
+                require_md=True,
+                require_dft=descriptor.get("schema_version")
+                == DESCRIPTOR_SCHEMA_VERSION,
+            ):
                 resumed = validate_worker_control_evidence(
                     self._worker_request(
                         controller, socket, method="POST", endpoint="/resume"
@@ -10300,9 +12295,99 @@ class PullDeployController:
             )
         )
         self.current_state_path = self.state_dir / "current-deployment.json"
+        self.adopted_state_path = self.state_dir / "adopted-deployment.json"
         self.active_slot_path = self.state_dir / "monomer-md-active-slot.json"
         self.active_control_path = self.state_dir / "active-control.json"
         self._held_deploy_lock_fd: int | None = None
+
+    def _load_adopted_deployment(self) -> tuple[dict[str, Any], str] | None:
+        if not (
+            self.adopted_state_path.exists()
+            or self.adopted_state_path.is_symlink()
+        ):
+            return None
+        adopted = validate_adopted_deployment(
+            load_private_json(self.adopted_state_path)
+        )
+        digest = canonical_json_digest(adopted)
+        bootstrap = load_private_json(self.state_dir / "bootstrap-control.json")
+        if (
+            bootstrap.get("schema_version") != 3
+            or bootstrap.get("status") != "completed"
+            or bootstrap.get("authority_kind") != "manual-runtime-adoption"
+            or bootstrap.get("adopted_deployment") != adopted
+            or bootstrap.get("adopted_deployment_sha256") != digest
+            or bootstrap.get("adoption_evidence_sha256")
+            != adopted["adoption_evidence_sha256"]
+            or bootstrap.get("active_control") != adopted["active_control"]
+        ):
+            raise PullDeployError("adopted deployment bootstrap authority differs")
+        return adopted, digest
+
+    @staticmethod
+    def _adopted_previous(descriptor: Mapping[str, Any]) -> dict[str, Any] | None:
+        adopted = descriptor.get("adopted_deployment")
+        return adopted if isinstance(adopted, dict) else None
+
+    def _revalidate_adopted_runtime(self, adopted: dict[str, Any]) -> None:
+        """CAS the old manual runtime without applying target-runtime policy."""
+
+        adopted = validate_adopted_deployment(adopted)
+        runtime = adopted["monomer_dft"]["runtime"]
+        root = Path(runtime["root"])
+        try:
+            observed_inventory = _control_runtime.adopted_dft_runtime_inventory(root)
+        except Exception as exc:
+            raise PullDeployError("adopted monomer DFT runtime changed") from exc
+        if observed_inventory != runtime.get("runtime_inventory_sha256"):
+            raise PullDeployError("adopted monomer DFT runtime inventory changed")
+        monomer_md = adopted["monomer_md"]
+        for label, path_field, digest_field, document_field in (
+            (
+                "active slot",
+                "active_slot_path",
+                "active_slot_file_sha256",
+                "active_slot",
+            ),
+            (
+                "slot record",
+                "slot_record_path",
+                "slot_record_file_sha256",
+                "slot_record",
+            ),
+        ):
+            payload, observed_digest = private_regular_file(
+                Path(monomer_md[path_field]),
+                mode=0o600,
+                maximum_bytes=1024 * 1024,
+            )
+            try:
+                observed_document = json.loads(payload.decode("utf-8"))
+            except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+                raise PullDeployError(
+                    f"adopted monomer MD {label} is invalid"
+                ) from exc
+            if (
+                observed_digest != monomer_md[digest_field]
+                or observed_document != monomer_md[document_field]
+            ):
+                raise PullDeployError(f"adopted monomer MD {label} changed")
+        for component in ("monomer_md", "monomer_dft"):
+            unit = adopted[component]["systemd_unit"]
+            if sha256_file(Path(unit["target_path"])) != unit["sha256"]:
+                raise PullDeployError(f"adopted {component} unit changed")
+        worker_env = adopted["monomer_md"]["worker_env"]
+        _payload, worker_env_digest = private_regular_file(
+            Path(worker_env["path"]), mode=0o600, maximum_bytes=64 * 1024
+        )
+        if worker_env_digest != worker_env["sha256"]:
+            raise PullDeployError("adopted monomer MD environment changed")
+        dft_env = adopted["monomer_dft"]["runtime_env"]
+        _payload, dft_env_digest = private_regular_file(
+            Path(dft_env["path"]), mode=0o600, maximum_bytes=64 * 1024
+        )
+        if dft_env_digest != dft_env["sha256"]:
+            raise PullDeployError("adopted monomer DFT environment changed")
 
     def _require_no_contract_maintenance(
         self, *, require_alias_completed: bool = True
@@ -10965,8 +13050,19 @@ class PullDeployController:
                 self.state_dir / "bootstrap-control.json"
             )
             immutable = bootstrap.get("immutable_files")
+            adoption_bootstrap = (
+                bootstrap.get("schema_version") == 3
+                and bootstrap.get("authority_kind")
+                == "manual-runtime-adoption"
+            )
+            if adoption_bootstrap:
+                # Validate the complete embedded/file-backed adoption
+                # authority before accepting bootstrap-v3 immutable helpers.
+                self._load_adopted_deployment()
             if (
-                bootstrap.get("schema_version") != 2
+                bootstrap.get("schema_version") not in {2, 3}
+                or bootstrap.get("schema_version") == 3
+                and not adoption_bootstrap
                 or bootstrap.get("status") != "completed"
                 or not isinstance(immutable, dict)
                 or immutable.get(EXTERNAL_DATABASE_AUDIT_HELPER)
@@ -11800,7 +13896,12 @@ class PullDeployController:
             != descriptor["production_config"]
             or state.get("control_helpers")
             != descriptor["controller"]["helpers"]
-            or state.get("monomer_md_worker_env") != monomer["worker_env"]
+            or state.get("monomer_md_worker_env")
+            != (
+                monomer["worker_env"]["target"]
+                if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION
+                else monomer["worker_env"]
+            )
             or state.get("monomer_md_systemd_unit") != expected_unit
             or any(
                 active.get(field) != value
@@ -11814,6 +13915,10 @@ class PullDeployController:
             raise PullDeployError(
                 "deployment state differs from its exact source descriptor"
             )
+        validate_current_state_adoption_lineage(
+            state,
+            descriptor=descriptor,
+        )
 
         previous_state = descriptor.get("previous_deployment")
         governance_fields = (
@@ -13392,6 +15497,29 @@ class PullDeployController:
                     f"previous {role} image material differs from sealed rollback evidence"
                 )
 
+    @staticmethod
+    def _adopted_image_projection(
+        adopted: Mapping[str, Any],
+    ) -> dict[str, dict[str, str]]:
+        source_sha = require_sha(adopted.get("source_sha"), "adopted source SHA")
+        images = adopted.get("images")
+        if not isinstance(images, dict) or set(images) != {"backend", "web"}:
+            raise PullDeployError("adopted image authority is incomplete")
+        result: dict[str, dict[str, str]] = {}
+        for role, root in (("backend", BACKEND_TAG_ROOT), ("web", WEB_TAG_ROOT)):
+            record = images[role]
+            if not isinstance(record, dict):
+                raise PullDeployError("adopted image authority is invalid")
+            result[role] = {
+                "tag": f"{root}:sha-{source_sha}",
+                "digest_ref": record["digest_ref"],
+                "image_id": record["image_id"],
+                "revision": source_sha,
+                "source": SOURCE_URL,
+                "version": f"sha-{source_sha}",
+            }
+        return validate_image_records(result, source_sha=source_sha)
+
     def postgres_restore_image_evidence(self) -> dict[str, str]:
         self.runner.run(
             ["docker", "pull", POSTGRES16_IMAGE], env=self.control_environment()
@@ -13494,8 +15622,8 @@ class PullDeployController:
         required_versions = {
             "handoff_protocol_versions": _control_runtime.PROTOCOL_VERSION,
             "descriptor_schema_versions": DESCRIPTOR_SCHEMA_VERSION,
-            "current_state_schema_versions": 2,
-            "marker_schema_versions": 2,
+            "current_state_schema_versions": CURRENT_STATE_SCHEMA_VERSION,
+            "marker_schema_versions": MARKER_SCHEMA_VERSION,
             "worker_slot_schema_versions": SLOT_RECORD_SCHEMA_VERSION,
             "prepare_abort_abi_versions": 1,
         }
@@ -13668,8 +15796,14 @@ class PullDeployController:
         else:
             atomic_symlink(pointer, str(previous))
 
-    def _validate_worker_env(self, control_root: Path) -> dict[str, str]:
-        path = self.config_dir / "worker.env"
+    def _validate_worker_env(
+        self,
+        control_root: Path,
+        *,
+        path: Path | None = None,
+        expected_max_active_jobs: frozenset[str] = frozenset({"1", "3"}),
+    ) -> dict[str, str]:
+        path = self.config_dir / "worker.env" if path is None else path
         try:
             metadata = path.lstat()
         except OSError as exc:
@@ -13727,7 +15861,6 @@ class PullDeployController:
             ),
             "MONOMER_MD_WORKER_ID": "monomer-md-production-worker",
             "MONOMER_MD_WORKER_MODE": "real",
-            "MONOMER_MD_MAX_ACTIVE_JOBS": "3",
             "MONOMER_MD_MAX_CONCURRENT_JOBS": "1",
             "MONOMER_MD_DEFAULT_STEPS": "300",
             "MONOMER_MD_MAX_STEPS": "300",
@@ -13746,6 +15879,11 @@ class PullDeployController:
                 raise PullDeployError(
                     f"external Worker production setting {key} is not pinned"
                 )
+        if values.get("MONOMER_MD_MAX_ACTIVE_JOBS") not in expected_max_active_jobs:
+            raise PullDeployError(
+                "external Worker production setting MONOMER_MD_MAX_ACTIVE_JOBS "
+                "is not pinned"
+            )
         if values.get("MONOMER_MD_CUDA_VISIBLE_DEVICES") not in {None, "2"}:
             raise PullDeployError(
                 "external Worker production setting "
@@ -13788,6 +15926,27 @@ class PullDeployController:
             "byteff2_openmm_dir": openmm_dir,
             "gmx_sha256": sha256_file(gmx.resolve(strict=True)),
         }
+
+    @staticmethod
+    def _md_worker_env_candidate_payload(payload: bytes) -> bytes:
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeError as exc:
+            raise PullDeployError("production Worker environment is not UTF-8") from exc
+        result: list[str] = []
+        found = 0
+        for line in text.splitlines(keepends=True):
+            content = line.rstrip("\r\n")
+            ending = line[len(content) :]
+            if content.startswith("MONOMER_MD_MAX_ACTIVE_JOBS="):
+                found += 1
+                content = "MONOMER_MD_MAX_ACTIVE_JOBS=3"
+            result.append(content + ending)
+        if found != 1:
+            raise PullDeployError(
+                "production Worker environment queue setting is not unique"
+            )
+        return "".join(result).encode("utf-8")
 
     def _validate_candidate_unit_payload(self, payload: bytes) -> None:
         try:
@@ -13835,8 +15994,33 @@ class PullDeployController:
         if not isinstance(role, dict) or role.get("kind") != "worker":
             raise PullDeployError("candidate controls lack the monomer-md role")
         launcher_name = role["launcher"]
-        worker_env = self._validate_worker_env(control_root)
         operation, _descriptor, _ready = self._operation_paths(operation_id)
+        worker_env_path = self.config_dir / "worker.env"
+        previous_worker_env = self._validate_worker_env(
+            control_root,
+            path=worker_env_path,
+            expected_max_active_jobs=frozenset({"1", "3"}),
+        )
+        previous_payload, previous_digest = private_regular_file(
+            worker_env_path, mode=0o600, maximum_bytes=64 * 1024
+        )
+        candidate_payload = self._md_worker_env_candidate_payload(previous_payload)
+        worker_env_candidate = operation / "worker.env.candidate"
+        atomic_bytes(worker_env_candidate, candidate_payload)
+        target_worker_env = self._validate_worker_env(
+            control_root,
+            path=worker_env_candidate,
+            expected_max_active_jobs=frozenset({"3"}),
+        )
+        # The identity path is the eventual stable production location, not
+        # the operation-owned candidate file used to validate its bytes.
+        target_worker_env["path"] = str(worker_env_path)
+        worker_env_backup = operation / "worker.env.previous"
+        if worker_env_backup.exists() or worker_env_backup.is_symlink():
+            if sha256_file(worker_env_backup) != previous_digest:
+                raise PullDeployError("previous Worker environment backup changed")
+        else:
+            atomic_bytes(worker_env_backup, previous_payload)
         payload = self._git_show(target_sha, MONOMER_MD_UNIT_SOURCE)
         self._validate_candidate_unit_payload(payload)
         candidate = operation / MONOMER_MD_UNIT_NAME
@@ -13905,7 +16089,12 @@ class PullDeployController:
                 "installed Worker systemd state is not the governed enabled baseline"
             )
         return {
-            "worker_env": worker_env,
+            "worker_env": {
+                "target": target_worker_env,
+                "candidate_path": str(worker_env_candidate),
+                "previous": previous_worker_env,
+                "previous_backup_path": str(worker_env_backup),
+            },
             "systemd_unit": {
                 "source_path": MONOMER_MD_UNIT_SOURCE,
                 "candidate_path": str(candidate),
@@ -13920,7 +16109,1163 @@ class PullDeployController:
             },
         }
 
-    def _revalidate_worker_controls(self, descriptor: dict[str, Any]) -> None:
+    @staticmethod
+    def _dft_runtime_inventory(root: Path) -> str:
+        records: list[dict[str, Any]] = []
+        allowed_links = {
+            "venv/bin/python": str(MONOMER_DFT_PYTHON),
+            "venv/bin/python3": "python",
+            "venv/bin/python3.12": "python",
+            "venv/lib64": "lib",
+        }
+        for path in sorted(root.rglob("*"), key=lambda value: value.as_posix()):
+            relative = path.relative_to(root).as_posix()
+            if relative in {"READY.json", ".preparing.json"}:
+                continue
+            metadata = path.lstat()
+            mode = stat.S_IMODE(metadata.st_mode)
+            if metadata.st_uid != os.geteuid():
+                raise PullDeployError("monomer DFT runtime ownership is unsafe")
+            if stat.S_ISLNK(metadata.st_mode):
+                target = os.readlink(path)
+                if allowed_links.get(relative) != target:
+                    raise PullDeployError("monomer DFT runtime contains an unknown symlink")
+                records.append(
+                    {
+                        "path": relative,
+                        "kind": "symlink",
+                        "uid": metadata.st_uid,
+                        "mode": mode,
+                        "target": target,
+                    }
+                )
+                continue
+            if mode & 0o022:
+                raise PullDeployError("monomer DFT runtime mode is unsafe")
+            if stat.S_ISDIR(metadata.st_mode):
+                records.append(
+                    {
+                        "path": relative,
+                        "kind": "directory",
+                        "uid": metadata.st_uid,
+                        "mode": mode,
+                    }
+                )
+            elif stat.S_ISREG(metadata.st_mode):
+                if metadata.st_nlink != 1:
+                    raise PullDeployError("monomer DFT runtime contains a hard-linked file")
+                records.append(
+                    {
+                        "path": relative,
+                        "kind": "file",
+                        "uid": metadata.st_uid,
+                        "mode": mode,
+                        "size": metadata.st_size,
+                        "sha256": sha256_file(path),
+                    }
+                )
+            elif not stat.S_ISLNK(metadata.st_mode):
+                raise PullDeployError("monomer DFT runtime contains a special file")
+        return canonical_json_digest(records)
+
+    @staticmethod
+    def _fsync_dft_runtime_tree(root: Path) -> None:
+        """Flush a DFT staging tree while allowing only uv's fixed venv links."""
+
+        # Inventory validation proves the exact link allowlist, modes, owners,
+        # and link counts before any directory rename makes the tree visible.
+        PullDeployController._dft_runtime_inventory(root)
+        directories = [root]
+        for path in sorted(root.rglob("*"), key=lambda value: value.as_posix()):
+            metadata = path.lstat()
+            if stat.S_ISREG(metadata.st_mode):
+                descriptor = os.open(
+                    path,
+                    os.O_RDONLY
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NOFOLLOW", 0),
+                )
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            elif stat.S_ISDIR(metadata.st_mode):
+                directories.append(path)
+        for directory in reversed(directories):
+            fsync_directory(directory)
+
+    @staticmethod
+    def _seal_dft_artifact(
+        source: Path,
+        target: Path,
+        *,
+        expected_sha256: str,
+        expected_uid: int,
+        allowed_modes: frozenset[int],
+        maximum_bytes: int,
+    ) -> None:
+        """Stream one pinned input into operation-owned immutable storage."""
+
+        expected_sha256 = require_digest(expected_sha256, "monomer DFT artifact")
+        if target.exists() or target.is_symlink():
+            metadata = target.lstat()
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or target.is_symlink()
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_nlink != 1
+                or sha256_file(target) != expected_sha256
+            ):
+                raise PullDeployError("sealed monomer DFT artifact changed")
+            return
+        descriptor = os.open(
+            source,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        temporary = target.parent / f".{target.name}.{secrets.token_hex(16)}.tmp"
+        output: int | None = None
+        try:
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != expected_uid
+                or stat.S_IMODE(before.st_mode) not in allowed_modes
+                or before.st_nlink != 1
+                or before.st_size < 1
+                or before.st_size > maximum_bytes
+            ):
+                raise PullDeployError("monomer DFT artifact input is unsafe")
+            output = os.open(
+                temporary,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            digest_value = hashlib.sha256()
+            copied = 0
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                digest_value.update(chunk)
+                copied += len(chunk)
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(output, view)
+                    view = view[written:]
+            os.fsync(output)
+            after = os.fstat(descriptor)
+            path_after = source.lstat()
+            identity = (
+                before.st_dev,
+                before.st_ino,
+                before.st_mode,
+                before.st_uid,
+                before.st_nlink,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            )
+            if (
+                identity
+                != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_mode,
+                    after.st_uid,
+                    after.st_nlink,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                )
+                or identity
+                != (
+                    path_after.st_dev,
+                    path_after.st_ino,
+                    path_after.st_mode,
+                    path_after.st_uid,
+                    path_after.st_nlink,
+                    path_after.st_size,
+                    path_after.st_mtime_ns,
+                    path_after.st_ctime_ns,
+                )
+                or copied != before.st_size
+                or "sha256:" + digest_value.hexdigest() != expected_sha256
+            ):
+                raise PullDeployError("monomer DFT artifact changed while sealing")
+            os.close(output)
+            output = None
+            os.replace(temporary, target)
+            fsync_directory(target.parent)
+        finally:
+            os.close(descriptor)
+            if output is not None:
+                os.close(output)
+            with contextlib.suppress(OSError):
+                temporary.unlink()
+
+    @staticmethod
+    def _dft_wheelhouse_inventory(root: Path) -> str:
+        ensure_private_directory(root)
+        records: list[dict[str, Any]] = []
+        for path in sorted(root.iterdir(), key=lambda value: value.name):
+            metadata = path.lstat()
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or path.is_symlink()
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_nlink != 1
+                or path.suffix != ".whl"
+            ):
+                raise PullDeployError("monomer DFT wheelhouse is unsafe")
+            try:
+                with zipfile.ZipFile(path) as archive:
+                    for info in archive.infolist():
+                        member = PurePosixPath(info.filename)
+                        member_mode = info.external_attr >> 16
+                        if (
+                            member.is_absolute()
+                            or ".." in member.parts
+                            or "\\" in info.filename
+                            or stat.S_ISLNK(member_mode)
+                        ):
+                            raise PullDeployError(
+                                "monomer DFT wheel member is unsafe"
+                            )
+                evidence = _prefetch_evidence.wheel_archive_evidence(path)
+            except Exception as exc:
+                raise PullDeployError("monomer DFT wheel archive is invalid") from exc
+            records.append(evidence)
+        if not records:
+            raise PullDeployError("monomer DFT wheelhouse is empty")
+        return canonical_json_digest(records)
+
+    @staticmethod
+    def _validate_dft_aimnet_wheel(
+        path: Path, wheel_lock: Mapping[str, Any]
+    ) -> None:
+        try:
+            evidence = _prefetch_evidence.wheel_archive_evidence(path)
+            with zipfile.ZipFile(path) as archive:
+                files = [info for info in archive.infolist() if not info.is_dir()]
+                inventory = [
+                    {
+                        "path": info.filename,
+                        "size": info.file_size,
+                        "sha256": hashlib.sha256(
+                            archive.read(info.filename)
+                        ).hexdigest(),
+                    }
+                    for info in sorted(files, key=lambda value: value.filename)
+                ]
+        except Exception as exc:
+            raise PullDeployError("AIMNet wheel archive is invalid") from exc
+        expected_digest = "sha256:" + str(wheel_lock.get("sha256", ""))
+        if (
+            path.name != wheel_lock.get("filename")
+            or evidence["sha256"] != expected_digest
+            or evidence["member_count"] != wheel_lock.get("file_count")
+            or evidence["record_path"] != wheel_lock.get("record_path")
+            or evidence["record_sha256"]
+            != "sha256:" + str(wheel_lock.get("record_sha256", ""))
+            or canonical_json_digest(inventory)
+            != "sha256:" + str(wheel_lock.get("inventory_sha256", ""))
+        ):
+            raise PullDeployError("AIMNet wheel differs from source lock")
+
+    @staticmethod
+    def _validate_installed_dft_aimnet(
+        venv: Path, source_lock: Mapping[str, Any]
+    ) -> None:
+        source = source_lock.get("source")
+        registry = source_lock.get("registry")
+        if not isinstance(source, dict) or not isinstance(registry, dict):
+            raise PullDeployError("AIMNet source lock is incomplete")
+        site = venv / "lib/python3.12/site-packages"
+        metadata_roots = list(site.glob("aimnet-*.dist-info"))
+        if len(metadata_roots) != 1 or metadata_roots[0].is_symlink():
+            raise PullDeployError("installed AIMNet distribution is ambiguous")
+        metadata = metadata_roots[0]
+        record_path = metadata / "RECORD"
+        try:
+            rows = list(
+                csv.reader(
+                    record_path.read_text(encoding="utf-8").splitlines(),
+                    strict=True,
+                )
+            )
+        except (OSError, UnicodeError, csv.Error) as exc:
+            raise PullDeployError("installed AIMNet RECORD is invalid") from exc
+        checked = 0
+        if not rows or any(len(row) != 3 or not row[0] for row in rows):
+            raise PullDeployError("installed AIMNet RECORD rows are invalid")
+        for relative, hash_value, size_value in rows:
+            member = PurePosixPath(relative)
+            if (
+                member.is_absolute()
+                or ".." in member.parts
+                or "\0" in relative
+            ):
+                raise PullDeployError("installed AIMNet RECORD path is unsafe")
+            target = site.joinpath(*member.parts)
+            if target == record_path:
+                if hash_value or size_value:
+                    raise PullDeployError("installed AIMNet RECORD self row differs")
+                continue
+            if not target.is_file() or target.is_symlink() or not hash_value.startswith(
+                "sha256="
+            ):
+                raise PullDeployError("installed AIMNet RECORD entry is unsafe")
+            payload = target.read_bytes()
+            encoded = hash_value.split("=", 1)[1]
+            try:
+                expected = base64.b64decode(
+                    encoded + "=" * (-len(encoded) % 4),
+                    altchars=b"-_",
+                    validate=True,
+                )
+            except (binascii.Error, ValueError) as exc:
+                raise PullDeployError(
+                    "installed AIMNet RECORD hash is invalid"
+                ) from exc
+            if len(expected) != hashlib.sha256().digest_size:
+                raise PullDeployError(
+                    "installed AIMNet RECORD hash is invalid"
+                )
+            if hashlib.sha256(payload).digest() != expected or str(
+                len(payload)
+            ) != size_value:
+                raise PullDeployError("installed AIMNet RECORD entry changed")
+            checked += 1
+        registry_path = site / str(registry.get("path", ""))
+        if (
+            checked < 1
+            or sha256_file(registry_path)
+            != "sha256:" + str(registry.get("sha256", ""))
+        ):
+            raise PullDeployError("installed AIMNet registry differs from source lock")
+
+    @staticmethod
+    def _validate_dft_pip_toolchain() -> None:
+        python_metadata = MONOMER_DFT_PYTHON.lstat()
+        if (
+            not stat.S_ISREG(python_metadata.st_mode)
+            or MONOMER_DFT_PYTHON.is_symlink()
+            or python_metadata.st_uid != 0
+            or python_metadata.st_mode & 0o022
+            or sha256_file(MONOMER_DFT_PYTHON) != MONOMER_DFT_PYTHON_SHA256
+        ):
+            raise PullDeployError("monomer DFT base Python changed")
+        for path in MONOMER_DFT_PIP_ROOT.rglob("*"):
+            metadata = path.lstat()
+            if (
+                metadata.st_uid != 0
+                or metadata.st_mode & 0o022
+                or not (
+                    stat.S_ISDIR(metadata.st_mode)
+                    or stat.S_ISREG(metadata.st_mode)
+                    or stat.S_ISLNK(metadata.st_mode)
+                )
+            ):
+                raise PullDeployError("monomer DFT pip toolchain is unsafe")
+        if directory_inventory_digest(
+            MONOMER_DFT_PIP_ROOT
+        ) != MONOMER_DFT_PIP_INVENTORY_SHA256:
+            raise PullDeployError("monomer DFT pip toolchain changed")
+
+    @staticmethod
+    def _parse_dft_source_lock(payload: bytes) -> dict[str, Any]:
+        try:
+            document = json.loads(payload)
+        except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise PullDeployError("monomer DFT source lock is invalid") from exc
+        if (
+            not isinstance(document, dict)
+            or document.get("schema_version") != 1
+            or not isinstance(document.get("source"), dict)
+            or not isinstance(document.get("wheel"), dict)
+            or not isinstance(document.get("models"), list)
+            or len(document["models"]) != 6
+            or document["source"].get("python_minor") != "3.12"
+            or document["source"].get("uv_version") != "0.11.21"
+        ):
+            raise PullDeployError("monomer DFT source lock has an invalid shape")
+        artifacts: list[dict[str, str]] = []
+        wheel = document["wheel"]
+        artifacts.append(
+            {
+                "name": str(wheel.get("filename", "")),
+                "sha256": str(wheel.get("sha256", "")),
+                "kind": "wheel",
+            }
+        )
+        aliases: set[str] = set()
+        names: set[str] = set()
+        for model in document["models"]:
+            if not isinstance(model, dict):
+                raise PullDeployError("monomer DFT model lock is invalid")
+            name = model.get("file")
+            alias = model.get("alias")
+            checksum = model.get("sha256")
+            if (
+                not isinstance(name, str)
+                or Path(name).name != name
+                or name in names
+                or not isinstance(alias, str)
+                or not alias
+                or alias in aliases
+                or not isinstance(checksum, str)
+                or re.fullmatch(r"[0-9a-f]{64}", checksum) is None
+                or model.get("registry_sha256") != checksum
+                or model.get("cache_sha256") != checksum
+            ):
+                raise PullDeployError("monomer DFT model lock is invalid")
+            names.add(name)
+            aliases.add(alias)
+            artifacts.append({"name": name, "sha256": checksum, "kind": "model"})
+        first = artifacts[0]
+        record_path = wheel.get("record_path")
+        record_member = (
+            PurePosixPath(record_path)
+            if isinstance(record_path, str)
+            else None
+        )
+        if (
+            Path(first["name"]).name != first["name"]
+            or re.fullmatch(r"[0-9a-f]{64}", first["sha256"]) is None
+            or not isinstance(wheel.get("file_count"), int)
+            or isinstance(wheel.get("file_count"), bool)
+            or wheel["file_count"] < 1
+            or re.fullmatch(
+                r"[0-9a-f]{64}", str(wheel.get("inventory_sha256", ""))
+            )
+            is None
+            or re.fullmatch(
+                r"[0-9a-f]{64}", str(wheel.get("record_sha256", ""))
+            )
+            is None
+            or record_member is None
+            or record_member.is_absolute()
+            or ".." in record_member.parts
+            or record_member.name != "RECORD"
+            or aliases != MONOMER_DFT_MODEL_ALIASES
+        ):
+            raise PullDeployError("monomer DFT wheel lock is invalid")
+        registry = document.get("registry")
+        registry_path = (
+            PurePosixPath(registry.get("path"))
+            if isinstance(registry, dict)
+            and isinstance(registry.get("path"), str)
+            else None
+        )
+        if (
+            registry_path is None
+            or not registry_path.parts
+            or registry_path.is_absolute()
+            or ".." in registry_path.parts
+            or re.fullmatch(
+                r"[0-9a-f]{64}", str(registry.get("sha256", ""))
+            )
+            is None
+        ):
+            raise PullDeployError("monomer DFT registry lock is invalid")
+        return {"document": document, "artifacts": artifacts}
+
+    def _validate_dft_runtime_directory(
+        self,
+        identity: dict[str, Any],
+    ) -> dict[str, Any]:
+        identity = _validate_dft_runtime_identity(identity)
+        runtime_inventory = require_digest(
+            identity.get("runtime_inventory_sha256"),
+            "monomer DFT runtime inventory",
+        )
+        root = Path(identity["root"])
+        manifest_path = Path(identity["runtime_manifest_path"])
+        root_metadata = root.lstat()
+        python = Path(identity["python"])
+        expected_root = self.venv_root / "dft" / identity["release_sha"]
+        if (
+            root != expected_root
+            or root.resolve(strict=True) != root
+            or not root.is_dir()
+            or root.is_symlink()
+            or root_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(root_metadata.st_mode) != 0o700
+            or manifest_path != root / "runtime.json"
+            or sha256_file(manifest_path) != identity["runtime_manifest_sha256"]
+            or not python.is_file()
+            or python != root / "venv/bin/python"
+            or not python.is_symlink()
+            or os.readlink(python) != str(MONOMER_DFT_PYTHON)
+            or not os.access(python, os.X_OK)
+        ):
+            raise PullDeployError("prepared monomer DFT runtime changed")
+        manifest = load_private_json(manifest_path)
+        if (
+            manifest.get("schema_version") != 1
+            or manifest.get("release") != identity["release_sha"]
+            or manifest.get("source_tree") != identity["source_tree"]
+            or manifest.get("python") != "3.12"
+            or manifest.get("uv") != "0.11.21"
+            or manifest.get("uv_sha256") != MONOMER_DFT_UV_SHA256
+            or manifest.get("base_python_sha256") != MONOMER_DFT_PYTHON_SHA256
+            or manifest.get("pip_inventory_sha256")
+            != MONOMER_DFT_PIP_INVENTORY_SHA256
+            or manifest.get("requirements_lock_sha256")
+            != identity["requirements_lock_sha256"]
+            or manifest.get("aimnet_source_lock_sha256")
+            != identity["aimnet_source_lock_sha256"]
+            or require_digest(
+                manifest.get("wheelhouse_inventory_sha256"),
+                "monomer DFT wheelhouse inventory",
+            )
+            != manifest.get("wheelhouse_inventory_sha256")
+        ):
+            raise PullDeployError("prepared monomer DFT runtime manifest changed")
+        if self._dft_runtime_inventory(root) != runtime_inventory:
+            raise PullDeployError("prepared monomer DFT runtime inventory changed")
+        for name, digest in identity["models"].items():
+            if sha256_file(root / "aimnet-cache" / name) != digest:
+                raise PullDeployError("prepared monomer DFT model changed")
+        return identity
+
+    def prepare_dft_runtime(
+        self,
+        *,
+        operation_id: str,
+        target_sha: str,
+        target_tree: str,
+    ) -> dict[str, Any]:
+        self._require_deploy_lock_for_staging()
+        operation_id = require_operation_id(operation_id)
+        target_sha = require_sha(target_sha, "monomer DFT target SHA")
+        target_tree = require_sha(target_tree, "monomer DFT target tree")
+        requirements = self._git_show(
+            target_sha, "workers/monomer_dft_worker/requirements.lock"
+        )
+        source_lock_payload = self._git_show(
+            target_sha, "workers/monomer_dft_worker/aimnet-source.lock.json"
+        )
+        parsed = self._parse_dft_source_lock(source_lock_payload)
+        requirements_digest = sha256_bytes(requirements)
+        source_lock_digest = sha256_bytes(source_lock_payload)
+        dft_root = self.venv_root / "dft"
+        ensure_private_directory(dft_root, create=True)
+        release_root = dft_root / target_sha
+        ready_path = release_root / "READY.json"
+        owner = {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "release_sha": target_sha,
+            "source_tree": target_tree,
+        }
+        if ready_path.exists() and not ready_path.is_symlink():
+            ready = load_private_json(ready_path)
+            if (
+                ready.get("schema_version") != 1
+                or ready.get("status") != "ready"
+                or ready.get("release_sha") != target_sha
+                or ready.get("source_tree") != target_tree
+                or ready.get("requirements_lock_sha256") != requirements_digest
+                or ready.get("aimnet_source_lock_sha256") != source_lock_digest
+                or not isinstance(ready.get("runtime"), dict)
+            ):
+                raise PullDeployError("existing monomer DFT runtime belongs to another build")
+            runtime = self._validate_dft_runtime_directory(ready["runtime"])
+            if (
+                runtime["release_sha"] != ready["release_sha"]
+                or runtime["source_tree"] != ready["source_tree"]
+                or runtime["requirements_lock_sha256"]
+                != ready["requirements_lock_sha256"]
+                or runtime["aimnet_source_lock_sha256"]
+                != ready["aimnet_source_lock_sha256"]
+            ):
+                raise PullDeployError(
+                    "existing monomer DFT READY differs from runtime"
+                )
+            preparing = release_root / ".preparing.json"
+            if preparing.exists() or preparing.is_symlink():
+                if load_private_json(preparing) != owner:
+                    raise PullDeployError("existing monomer DFT runtime has foreign ownership")
+                preparing.unlink()
+                fsync_directory(release_root)
+            return runtime
+        if release_root.exists() or release_root.is_symlink():
+            preparing = release_root / ".preparing.json"
+            if (
+                not release_root.is_dir()
+                or release_root.is_symlink()
+                or load_private_json(preparing) != owner
+            ):
+                raise PullDeployError("incomplete monomer DFT release runtime is unsafe")
+            models = {
+                artifact["name"]: "sha256:" + artifact["sha256"]
+                for artifact in parsed["artifacts"][1:]
+            }
+            runtime = {
+                "root": str(release_root),
+                "runtime_manifest_path": str(release_root / "runtime.json"),
+                "runtime_manifest_sha256": sha256_file(release_root / "runtime.json"),
+                "release_sha": target_sha,
+                "source_tree": target_tree,
+                "python": str(release_root / "venv/bin/python"),
+                "requirements_lock_sha256": requirements_digest,
+                "aimnet_source_lock_sha256": source_lock_digest,
+                "models": models,
+                "runtime_inventory_sha256": self._dft_runtime_inventory(release_root),
+            }
+            ready = {
+                "schema_version": 1,
+                "status": "ready",
+                "release_sha": target_sha,
+                "source_tree": target_tree,
+                "requirements_lock_sha256": requirements_digest,
+                "aimnet_source_lock_sha256": source_lock_digest,
+                "runtime": runtime,
+                "ready_at": utc_now(),
+            }
+            self._validate_dft_runtime_directory(runtime)
+            atomic_json(ready_path, ready)
+            preparing.unlink()
+            fsync_directory(release_root)
+            return runtime
+        staging = dft_root / f".{target_sha}.preparing-{operation_id}"
+        if staging.exists() or staging.is_symlink():
+            if (
+                not staging.is_dir()
+                or staging.is_symlink()
+                or load_private_json(staging / ".preparing.json") != owner
+            ):
+                raise PullDeployError("monomer DFT runtime staging has foreign ownership")
+            shutil.rmtree(staging)
+        staging.mkdir(mode=0o700)
+        atomic_json(staging / ".preparing.json", owner)
+        locks = staging / "locks"
+        locks.mkdir(mode=0o700)
+        atomic_bytes(locks / "requirements.lock", requirements)
+        atomic_bytes(locks / "aimnet-source.lock.json", source_lock_payload)
+        tools = staging / "tools"
+        tools.mkdir(mode=0o700)
+        sealed_uv = tools / "uv"
+        self._seal_dft_artifact(
+            MONOMER_DFT_UV,
+            sealed_uv,
+            expected_sha256=MONOMER_DFT_UV_SHA256,
+            expected_uid=0,
+            allowed_modes=frozenset({0o755}),
+            maximum_bytes=256 * 1024 * 1024,
+        )
+        os.chmod(sealed_uv, 0o700)
+        uv_version = self.runner.run(
+            [str(sealed_uv), "--version"], env=self.control_environment()
+        )
+        uv_metadata = MONOMER_DFT_UV.lstat()
+        if (
+            not stat.S_ISREG(uv_metadata.st_mode)
+            or MONOMER_DFT_UV.is_symlink()
+            or uv_metadata.st_uid != 0
+            or uv_metadata.st_mode & 0o022
+            or sha256_file(sealed_uv) != MONOMER_DFT_UV_SHA256
+            or not str(uv_version.stdout).startswith("uv 0.11.21 ")
+        ):
+            raise PullDeployError("monomer DFT uv toolchain differs")
+        version = self.runner.run(
+            [
+                str(MONOMER_DFT_PYTHON),
+                "-I",
+                "-c",
+                "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+            ],
+            env=self.control_environment(),
+        )
+        if str(version.stdout).strip() != "3.12":
+            raise PullDeployError("monomer DFT Python toolchain differs")
+        self._validate_dft_pip_toolchain()
+        cache_base = dft_root / ".build-cache"
+        cache_target = cache_base / target_sha
+        cache_root = cache_target / operation_id
+        for directory in (cache_base, cache_target, cache_root):
+            ensure_private_directory(directory, create=True)
+        cache_owner = {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "release_sha": target_sha,
+            "source_tree": target_tree,
+            "requirements_lock_sha256": requirements_digest,
+        }
+        cache_owner_path = cache_root / "owner.json"
+        if cache_owner_path.exists() or cache_owner_path.is_symlink():
+            if load_private_json(cache_owner_path) != cache_owner:
+                raise PullDeployError("monomer DFT build cache has foreign ownership")
+            for child in cache_root.iterdir():
+                if child == cache_owner_path:
+                    continue
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            fsync_directory(cache_root)
+        else:
+            if any(cache_root.iterdir()):
+                raise PullDeployError(
+                    "monomer DFT build cache lacks exact ownership"
+                )
+            atomic_json(cache_owner_path, cache_owner)
+        sealed_inputs = cache_root / "sealed-inputs"
+        wheelhouse = cache_root / "wheelhouse"
+        sealed_inputs.mkdir(mode=0o700)
+        wheelhouse.mkdir(mode=0o700)
+        artifact_paths: dict[str, Path] = {}
+        for artifact in parsed["artifacts"]:
+            sealed = sealed_inputs / artifact["name"]
+            self._seal_dft_artifact(
+                MONOMER_DFT_RUNTIME_ARTIFACT_ROOT / artifact["name"],
+                sealed,
+                expected_sha256="sha256:" + artifact["sha256"],
+                expected_uid=os.geteuid(),
+                allowed_modes=frozenset({0o600}),
+                maximum_bytes=2 * 1024 * 1024 * 1024,
+            )
+            artifact_paths[artifact["name"]] = sealed
+        self.runner.run(
+            [
+                str(MONOMER_DFT_PYTHON),
+                "-I",
+                "-m",
+                "pip",
+                "download",
+                "--require-hashes",
+                "--only-binary=:all:",
+                "--no-deps",
+                "--no-cache-dir",
+                "--dest",
+                str(wheelhouse),
+                "--index-url",
+                "https://pypi.org/simple",
+                "--extra-index-url",
+                "https://download.pytorch.org/whl/cu128",
+                "-r",
+                str(locks / "requirements.lock"),
+            ],
+            env={
+                "PATH": SAFE_PATH,
+                "PIP_CONFIG_FILE": os.devnull,
+                "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+                "PIP_NO_INPUT": "1",
+                "PIP_NO_CACHE_DIR": "1",
+                "PYTHONNOUSERSITE": "1",
+            },
+        )
+        for downloaded in wheelhouse.iterdir():
+            if downloaded.is_file() and not downloaded.is_symlink():
+                os.chmod(downloaded, 0o600)
+        wheel = parsed["artifacts"][0]
+        aimnet_wheel = wheelhouse / wheel["name"]
+        if aimnet_wheel.exists() or aimnet_wheel.is_symlink():
+            raise PullDeployError("dependency wheelhouse collides with AIMNet wheel")
+        self._seal_dft_artifact(
+            artifact_paths[wheel["name"]],
+            aimnet_wheel,
+            expected_sha256="sha256:" + wheel["sha256"],
+            expected_uid=os.geteuid(),
+            allowed_modes=frozenset({0o600}),
+            maximum_bytes=2 * 1024 * 1024 * 1024,
+        )
+        self._validate_dft_aimnet_wheel(
+            aimnet_wheel, parsed["document"]["wheel"]
+        )
+        allowed_requirement_hashes = {
+            "sha256:" + value.decode("ascii")
+            for value in re.findall(
+                rb"--hash=sha256:([0-9a-f]{64})", requirements
+            )
+        }
+        for downloaded in wheelhouse.glob("*.whl"):
+            digest_value = sha256_file(downloaded)
+            if downloaded != aimnet_wheel and digest_value not in allowed_requirement_hashes:
+                raise PullDeployError(
+                    "downloaded monomer DFT wheel is outside requirements hashes"
+                )
+        wheelhouse_inventory_sha256 = self._dft_wheelhouse_inventory(wheelhouse)
+        atomic_json(
+            cache_root / "prefetch-ready.json",
+            {
+                **cache_owner,
+                "uv_version": "0.11.21",
+                "base_python_sha256": MONOMER_DFT_PYTHON_SHA256,
+                "pip_inventory_sha256": MONOMER_DFT_PIP_INVENTORY_SHA256,
+                "wheelhouse_inventory_sha256": wheelhouse_inventory_sha256,
+                "prefetched_at": utc_now(),
+            },
+        )
+        venv = staging / "venv"
+        build_environment = {
+            **self.control_environment(),
+            "UV_LINK_MODE": "copy",
+            "UV_NO_PROGRESS": "1",
+            "UV_NO_CONFIG": "1",
+            "UV_PYTHON_DOWNLOADS": "never",
+            "UV_NO_CACHE": "1",
+        }
+        if self._dft_wheelhouse_inventory(wheelhouse) != wheelhouse_inventory_sha256:
+            raise PullDeployError("monomer DFT wheelhouse changed")
+        self._validate_dft_pip_toolchain()
+        self.runner.run(
+            [
+                str(sealed_uv),
+                "venv",
+                "--python",
+                str(MONOMER_DFT_PYTHON),
+                "--link-mode",
+                "copy",
+                "--offline",
+                str(venv),
+            ],
+            env=build_environment,
+        )
+        if self._dft_wheelhouse_inventory(wheelhouse) != wheelhouse_inventory_sha256:
+            raise PullDeployError("monomer DFT wheelhouse changed")
+        self.runner.run(
+            [
+                str(sealed_uv),
+                "pip",
+                "install",
+                "--python",
+                str(venv / "bin/python"),
+                "--require-hashes",
+                "--no-deps",
+                "--link-mode",
+                "copy",
+                "--offline",
+                "--no-cache",
+                "--no-index",
+                "--find-links",
+                str(wheelhouse),
+                "-r",
+                str(locks / "requirements.lock"),
+            ],
+            env=build_environment,
+        )
+        if self._dft_wheelhouse_inventory(wheelhouse) != wheelhouse_inventory_sha256:
+            raise PullDeployError("monomer DFT wheelhouse changed")
+        self.runner.run(
+            [
+                str(sealed_uv),
+                "pip",
+                "install",
+                "--python",
+                str(venv / "bin/python"),
+                "--no-deps",
+                "--link-mode",
+                "copy",
+                "--offline",
+                "--no-cache",
+                "--no-index",
+                str(aimnet_wheel),
+            ],
+            env=build_environment,
+        )
+        if self._dft_wheelhouse_inventory(wheelhouse) != wheelhouse_inventory_sha256:
+            raise PullDeployError("monomer DFT wheelhouse changed")
+        self._validate_installed_dft_aimnet(venv, parsed["document"])
+        model_root = staging / "aimnet-cache"
+        model_root.mkdir(mode=0o700)
+        models: dict[str, str] = {}
+        for artifact in parsed["artifacts"][1:]:
+            target = model_root / artifact["name"]
+            self._seal_dft_artifact(
+                artifact_paths[artifact["name"]],
+                target,
+                expected_sha256="sha256:" + artifact["sha256"],
+                expected_uid=os.geteuid(),
+                allowed_modes=frozenset({0o600}),
+                maximum_bytes=2 * 1024 * 1024 * 1024,
+            )
+            models[artifact["name"]] = "sha256:" + artifact["sha256"]
+        manifest = {
+            "schema_version": 1,
+            "release": target_sha,
+            "source_tree": target_tree,
+            "created_at": utc_now(),
+            "python": "3.12",
+            "uv": "0.11.21",
+            "uv_sha256": MONOMER_DFT_UV_SHA256,
+            "base_python_sha256": MONOMER_DFT_PYTHON_SHA256,
+            "pip_inventory_sha256": MONOMER_DFT_PIP_INVENTORY_SHA256,
+            "wheelhouse_inventory_sha256": wheelhouse_inventory_sha256,
+            "requirements_lock_sha256": requirements_digest,
+            "aimnet_source_lock_sha256": source_lock_digest,
+        }
+        atomic_json(staging / "runtime.json", manifest)
+        shutil.rmtree(cache_root)
+        with contextlib.suppress(OSError):
+            cache_target.rmdir()
+        self._fsync_dft_runtime_tree(staging)
+        rename_directory_noreplace(staging, release_root)
+        runtime = {
+            "root": str(release_root),
+            "runtime_manifest_path": str(release_root / "runtime.json"),
+            "runtime_manifest_sha256": sha256_file(release_root / "runtime.json"),
+            "release_sha": target_sha,
+            "source_tree": target_tree,
+            "python": str(release_root / "venv/bin/python"),
+            "requirements_lock_sha256": requirements_digest,
+            "aimnet_source_lock_sha256": source_lock_digest,
+            "models": models,
+            "runtime_inventory_sha256": self._dft_runtime_inventory(release_root),
+        }
+        ready = {
+            "schema_version": 1,
+            "status": "ready",
+            "release_sha": target_sha,
+            "source_tree": target_tree,
+            "requirements_lock_sha256": requirements_digest,
+            "aimnet_source_lock_sha256": source_lock_digest,
+            "runtime": runtime,
+            "ready_at": utc_now(),
+        }
+        atomic_json(ready_path, ready)
+        (release_root / ".preparing.json").unlink()
+        fsync_directory(release_root)
+        return self._validate_dft_runtime_directory(runtime)
+
+    @staticmethod
+    def _dft_runtime_env_bytes(
+        runtime: dict[str, Any], *, guard_mode: str, warp_cache_path: Path
+    ) -> bytes:
+        if guard_mode not in {"enforce", "observe"}:
+            raise PullDeployError("monomer DFT target guard mode is invalid")
+        root = Path(runtime["root"])
+        values = (
+            ("MONOMER_DFT_RELEASE_SHA", runtime["release_sha"]),
+            ("MONOMER_DFT_RUNTIME_CONTRACT_SHA256", runtime["runtime_manifest_sha256"]),
+            (
+                "MONOMER_DFT_RUNTIME_INVENTORY_SHA256",
+                runtime["runtime_inventory_sha256"],
+            ),
+            ("MONOMER_DFT_PYTHON", runtime["python"]),
+            ("AIMNET_CACHE_DIR", str(root / "aimnet-cache")),
+            ("WARP_CACHE_PATH", str(warp_cache_path)),
+            ("NEXPOLY_DFT_GPU_GUARD_MODE", guard_mode),
+        )
+        return ("".join(f"{key}={value}\n" for key, value in values)).encode("utf-8")
+
+    @staticmethod
+    def _dft_runtime_env_values(payload: bytes) -> dict[str, str]:
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeError as exc:
+            raise PullDeployError("monomer DFT runtime environment is not UTF-8") from exc
+        values: dict[str, str] = {}
+        for line in text.splitlines():
+            key, separator, value = line.partition("=")
+            if not separator or not key or not value or key in values:
+                raise PullDeployError("monomer DFT runtime environment is malformed")
+            values[key] = value
+        return values
+
+    def prepare_dft_controls(
+        self,
+        *,
+        operation_id: str,
+        previous_sha: str,
+        target_sha: str,
+        target_tree: str,
+        executor_control: dict[str, Any],
+    ) -> dict[str, Any]:
+        runtime = self.prepare_dft_runtime(
+            operation_id=operation_id,
+            target_sha=target_sha,
+            target_tree=target_tree,
+        )
+        try:
+            _candidate, manifest, control_root = _control_runtime.load_candidate_control(
+                self.runtime_root, executor_control
+            )
+        except Exception as exc:
+            raise PullDeployError("candidate monomer DFT controls are unavailable") from exc
+        role = manifest["entrypoints"].get("monomer-dft")
+        if not isinstance(role, dict) or role.get("kind") != "worker":
+            raise PullDeployError("candidate controls lack the monomer-dft role")
+        launcher = manifest["files"].get(role.get("launcher"))
+        if not isinstance(launcher, dict):
+            raise PullDeployError("candidate monomer DFT launcher is unavailable")
+        unit_payload = self._git_show(target_sha, MONOMER_DFT_UNIT_SOURCE)
+        unit_text = unit_payload.decode("utf-8")
+        modes = re.findall(
+            r'^Environment="NEXPOLY_DFT_GPU_GUARD_MODE=(enforce|observe)"$',
+            unit_text,
+            flags=re.MULTILINE,
+        )
+        if len(modes) != 1:
+            raise PullDeployError("candidate monomer DFT guard mode is ambiguous")
+        guard_mode = modes[0]
+        operation, _descriptor, _ready = self._operation_paths(operation_id)
+        warp_parent = self.state_dir / "monomer-dft-warp-cache"
+        ensure_private_directory(warp_parent, create=True)
+        warp_cache = warp_parent / target_sha
+        ensure_private_directory(warp_cache, create=True)
+        env_payload = self._dft_runtime_env_bytes(
+            runtime, guard_mode=guard_mode, warp_cache_path=warp_cache
+        )
+        env_candidate = operation / "monomer-dft-runtime.env"
+        atomic_bytes(env_candidate, env_payload)
+        env_target = self.runtime_root / MONOMER_DFT_RUNTIME_ENV
+        env_previous_present = env_target.exists() or env_target.is_symlink()
+        env_previous_sha = None
+        env_previous_backup = None
+        if env_previous_present:
+            previous_payload, env_previous_sha = private_regular_file(
+                env_target,
+                mode=0o600,
+                maximum_bytes=64 * 1024,
+            )
+            backup = operation / "previous-monomer-dft-runtime.env"
+            atomic_bytes(backup, previous_payload)
+            env_previous_backup = str(backup)
+        required = {
+            "WorkingDirectory=/data/lzq/gith/nexpoly",
+            "EnvironmentFile=/data/lzq/gith/nexpoly-runtime/config/monomer-dft-runtime.env",
+            "ExecStart=/usr/bin/python3 -I -B /data/lzq/gith/nexpoly-runtime/bin/control_runtime_selector.py run monomer-dft",
+            "UMask=0077",
+            "NoNewPrivileges=true",
+        }
+        if not required.issubset(set(unit_text.splitlines())):
+            raise PullDeployError("candidate monomer DFT unit lacks sealed launcher contract")
+        unit_candidate = operation / MONOMER_DFT_UNIT_NAME
+        atomic_bytes(unit_candidate, unit_payload)
+        home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
+        unit_target = home / ".config/systemd/user" / MONOMER_DFT_UNIT_NAME
+        unit_previous_present = unit_target.exists() or unit_target.is_symlink()
+        unit_previous_sha = None
+        unit_previous_backup = None
+        if unit_previous_present:
+            metadata = unit_target.lstat()
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or unit_target.is_symlink()
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o022
+            ):
+                raise PullDeployError("installed monomer DFT unit is unsafe")
+            unit_previous_sha = sha256_file(unit_target)
+            backup = operation / f"previous-{MONOMER_DFT_UNIT_NAME}"
+            atomic_bytes(backup, unit_target.read_bytes())
+            unit_previous_backup = str(backup)
+        previous_state = self._systemd_unit_state(
+            MONOMER_DFT_UNIT_NAME, unit_target, include_runtime=True
+        )
+        guard_payloads = {
+            "service": (
+                MONOMER_DFT_GUARD_SERVICE_SOURCE,
+                self._git_show(target_sha, MONOMER_DFT_GUARD_SERVICE_SOURCE),
+                self._git_show(previous_sha, MONOMER_DFT_GUARD_SERVICE_SOURCE),
+            ),
+            "timer": (
+                MONOMER_DFT_GUARD_TIMER_SOURCE,
+                self._git_show(target_sha, MONOMER_DFT_GUARD_TIMER_SOURCE),
+                self._git_show(previous_sha, MONOMER_DFT_GUARD_TIMER_SOURCE),
+            ),
+        }
+        for name, (_source, target_payload, previous_payload) in guard_payloads.items():
+            if target_payload != previous_payload:
+                raise PullDeployError(
+                    f"monomer DFT guard {name} unit changed across this deployment"
+                )
+        try:
+            guard_service_text = guard_payloads["service"][1].decode("utf-8")
+            guard_timer_text = guard_payloads["timer"][1].decode("utf-8")
+        except UnicodeError as exc:
+            raise PullDeployError("monomer DFT guard unit is not UTF-8") from exc
+        service_lines = guard_service_text.splitlines()
+        timer_lines = guard_timer_text.splitlines()
+        required_service = {
+            "Type=oneshot",
+            "WorkingDirectory=/data/lzq/gith/nexpoly",
+            "ExecStart=/usr/bin/python3 -I -B /data/lzq/gith/nexpoly/scripts/gpu2_guard.py",
+            "UMask=0077",
+            "NoNewPrivileges=true",
+        }
+        required_timer = {
+            "OnBootSec=15s",
+            "OnUnitActiveSec=60s",
+            "AccuracySec=5s",
+            "Persistent=true",
+            f"Unit={MONOMER_DFT_GUARD_SERVICE_NAME}",
+            "WantedBy=timers.target",
+        }
+        if (
+            not required_service.issubset(service_lines)
+            or sum(line.startswith("ExecStart=") for line in service_lines) != 1
+            or any("--require-ready" in line for line in service_lines)
+            or any(line.startswith("Restart=") for line in service_lines)
+            or not required_timer.issubset(timer_lines)
+            or sum(line.startswith("Unit=") for line in timer_lines) != 1
+            or sum(line.startswith("OnUnitActiveSec=") for line in timer_lines) != 1
+        ):
+            raise PullDeployError(
+                "monomer DFT guard unit semantics differ from the reviewed contract"
+            )
+        guard_git_units = {
+            name: {
+                "source_path": source,
+                "sha256": sha256_bytes(target_payload),
+            }
+            for name, (source, target_payload, _previous_payload) in guard_payloads.items()
+        }
+        guard = self.dft_guard_controls_evidence(git_units=guard_git_units)
+        target_env = {
+            "path": str(env_target),
+            "sha256": sha256_bytes(env_payload),
+            "values": self._dft_runtime_env_values(env_payload),
+        }
+        result = {
+            "runtime": runtime,
+            "runtime_env": {
+                "target": target_env,
+                "candidate_path": str(env_candidate),
+                "previous_present": env_previous_present,
+                "previous_sha256": env_previous_sha,
+                "previous_backup_path": env_previous_backup,
+            },
+            "systemd_unit": {
+                "source_path": MONOMER_DFT_UNIT_SOURCE,
+                "candidate_path": str(unit_candidate),
+                "target_path": str(unit_target),
+                "sha256": sha256_bytes(unit_payload),
+                "previous_present": unit_previous_present,
+                "previous_sha256": unit_previous_sha,
+                "previous_backup_path": unit_previous_backup,
+                "previous_systemd_state": previous_state,
+                "control_release_id": executor_control["release_id"],
+                "launcher_path": str(control_root / role["launcher"]),
+                "launcher_sha256": launcher["sha256"],
+            },
+            "gpu": {
+                "index": MONOMER_DFT_GPU_INDEX,
+                "uuid": MONOMER_DFT_GPU_UUID,
+                "guard_mode": guard_mode,
+                "guard_state_path": str(MONOMER_DFT_GUARD_STATE),
+                "guard_schema_version": 1,
+            },
+            "guard": guard,
+        }
+        return validate_dft_descriptor(result, operation_id=operation_id)
+
+    def _revalidate_worker_controls(
+        self,
+        descriptor: dict[str, Any],
+        *,
+        allow_target_environment: bool = False,
+    ) -> None:
         controls = descriptor["monomer_md"]
         executor = descriptor["controller"]["executor_control"]
         try:
@@ -13929,7 +17274,35 @@ class PullDeployController:
             )
         except Exception as exc:
             raise PullDeployError("candidate Worker controls changed") from exc
-        if self._validate_worker_env(control_root) != controls["worker_env"]:
+        worker_env = controls["worker_env"]
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            previous = worker_env["previous"]
+            observed_worker_env = self._validate_worker_env(
+                    control_root,
+                    path=Path(previous["path"]),
+                    expected_max_active_jobs=frozenset({"1", "3"}),
+                )
+            if (
+                observed_worker_env
+                not in (
+                    previous,
+                    worker_env["target"] if allow_target_environment else previous,
+                )
+                or sha256_file(Path(worker_env["previous_backup_path"]))
+                != previous["sha256"]
+                or sha256_file(Path(worker_env["candidate_path"]))
+                != worker_env["target"]["sha256"]
+                or self._validate_worker_env(
+                    control_root,
+                    path=Path(worker_env["candidate_path"]),
+                    expected_max_active_jobs=frozenset({"3"}),
+                )["sha256"]
+                != worker_env["target"]["sha256"]
+            ):
+                raise PullDeployError(
+                    "external Worker environment changed after prepare"
+                )
+        elif self._validate_worker_env(control_root) != worker_env:
             raise PullDeployError("external Worker environment changed after prepare")
         unit = controls["systemd_unit"]
         role = manifest["entrypoints"].get("monomer-md")
@@ -13970,34 +17343,519 @@ class PullDeployController:
                 "installed Worker unit appeared after absent-unit prepare"
             )
 
+    def _revalidate_dft_controls(self, descriptor: dict[str, Any]) -> None:
+        if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+            return
+        controls = validate_dft_descriptor(
+            descriptor["monomer_dft"], operation_id=descriptor["operation_id"]
+        )
+        runtime = self._validate_dft_runtime_directory(controls["runtime"])
+        if (
+            runtime["release_sha"] != descriptor["repository"]["target_sha"]
+            or runtime["source_tree"] != descriptor["repository"]["target_tree"]
+        ):
+            raise PullDeployError("prepared monomer DFT runtime source changed")
+        executor = descriptor["controller"]["executor_control"]
+        try:
+            _candidate, manifest, _control_root = _control_runtime.load_candidate_control(
+                self.runtime_root, executor
+            )
+        except Exception as exc:
+            raise PullDeployError("candidate monomer DFT controls changed") from exc
+        role = manifest["entrypoints"].get("monomer-dft")
+        unit = controls["systemd_unit"]
+        if (
+            not isinstance(role, dict)
+            or role.get("kind") != "worker"
+            or unit["control_release_id"] != executor["release_id"]
+            or unit["launcher_sha256"]
+            != manifest["files"].get(role.get("launcher"), {}).get("sha256")
+            or unit["launcher_path"] != str(_control_root / role["launcher"])
+        ):
+            raise PullDeployError("candidate monomer DFT launcher authority changed")
+        runtime_env = controls["runtime_env"]
+        env_candidate = Path(runtime_env["candidate_path"])
+        env_payload, env_digest = private_regular_file(
+            env_candidate, mode=0o600, maximum_bytes=64 * 1024
+        )
+        if (
+            env_digest != runtime_env["target"]["sha256"]
+            or self._dft_runtime_env_values(env_payload)
+            != runtime_env["target"]["values"]
+            or env_payload
+            != self._dft_runtime_env_bytes(
+                runtime,
+                guard_mode=controls["gpu"]["guard_mode"],
+                warp_cache_path=(
+                    self.state_dir
+                    / "monomer-dft-warp-cache"
+                    / runtime["release_sha"]
+                ),
+            )
+        ):
+            raise PullDeployError("candidate monomer DFT environment changed")
+        env_target = Path(runtime_env["target"]["path"])
+        if runtime_env["previous_present"]:
+            _payload, previous_digest = private_regular_file(
+                env_target, mode=0o600, maximum_bytes=64 * 1024
+            )
+            if previous_digest != runtime_env["previous_sha256"]:
+                raise PullDeployError("previous monomer DFT environment changed")
+        elif env_target.exists() or env_target.is_symlink():
+            raise PullDeployError("monomer DFT environment appeared after prepare")
+        unit_candidate = Path(unit["candidate_path"])
+        if sha256_file(unit_candidate) != unit["sha256"]:
+            raise PullDeployError("candidate monomer DFT unit changed")
+        unit_payload = self._git_show(
+            descriptor["repository"]["target_sha"], MONOMER_DFT_UNIT_SOURCE
+        )
+        if sha256_bytes(unit_payload) != unit["sha256"] or unit_payload != unit_candidate.read_bytes():
+            raise PullDeployError("candidate monomer DFT unit differs from target Git")
+        target = Path(unit["target_path"])
+        observed_unit_state = self._systemd_unit_state(
+            MONOMER_DFT_UNIT_NAME, target, include_runtime=True
+        )
+        previous_unit_state = unit["previous_systemd_state"]
+        stopped_unit_state = {
+            **previous_unit_state,
+            "ActiveState": "inactive",
+            "SubState": "dead",
+        }
+        if observed_unit_state not in (previous_unit_state, stopped_unit_state):
+            raise PullDeployError("installed monomer DFT unit state changed after prepare")
+        if unit["previous_present"]:
+            if (
+                not target.is_file()
+                or target.is_symlink()
+                or sha256_file(target) != unit["previous_sha256"]
+            ):
+                raise PullDeployError("installed monomer DFT unit changed after prepare")
+        elif target.exists() or target.is_symlink():
+            raise PullDeployError("monomer DFT unit appeared after prepare")
+        self._revalidate_dft_guard_controls(descriptor)
+
+    def _switch_worker_environment(self, descriptor: dict[str, Any]) -> None:
+        if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+            return
+        transition = descriptor["monomer_md"]["worker_env"]
+        target = Path(transition["target"]["path"])
+        previous = transition["previous"]
+        current_payload, current_digest = private_regular_file(
+            target, mode=0o600, maximum_bytes=64 * 1024
+        )
+        if current_digest == transition["target"]["sha256"]:
+            return
+        if current_digest != previous["sha256"]:
+            raise PullDeployError("Worker environment is neither previous nor candidate")
+        payload, digest = private_regular_file(
+            Path(transition["candidate_path"]),
+            mode=0o600,
+            maximum_bytes=64 * 1024,
+        )
+        if digest != transition["target"]["sha256"] or payload == current_payload:
+            raise PullDeployError("candidate Worker environment changed")
+        atomic_control_file(target, payload, mode=0o600)
+        _installed, installed_digest = private_regular_file(
+            target, mode=0o600, maximum_bytes=64 * 1024
+        )
+        if installed_digest != digest:
+            raise PullDeployError("Worker environment did not switch")
+
+    def _restore_previous_worker_environment(
+        self, descriptor: dict[str, Any]
+    ) -> None:
+        if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+            return
+        transition = descriptor["monomer_md"]["worker_env"]
+        target = Path(transition["target"]["path"])
+        _payload, current_digest = private_regular_file(
+            target, mode=0o600, maximum_bytes=64 * 1024
+        )
+        previous = transition["previous"]
+        if current_digest == previous["sha256"]:
+            return
+        if current_digest != transition["target"]["sha256"]:
+            raise PullDeployError("Worker environment is neither previous nor candidate")
+        payload, digest = private_regular_file(
+            Path(transition["previous_backup_path"]),
+            mode=0o600,
+            maximum_bytes=64 * 1024,
+        )
+        if digest != previous["sha256"]:
+            raise PullDeployError("previous Worker environment backup changed")
+        atomic_control_file(target, payload, mode=0o600)
+
+    def _switch_dft_runtime(self, descriptor: dict[str, Any]) -> None:
+        self._revalidate_dft_controls(descriptor)
+        transition = descriptor["monomer_dft"]["runtime_env"]
+        target = Path(transition["target"]["path"])
+        candidate = Path(transition["candidate_path"])
+        payload, digest = private_regular_file(
+            candidate, mode=0o600, maximum_bytes=64 * 1024
+        )
+        if digest != transition["target"]["sha256"]:
+            raise PullDeployError("candidate monomer DFT environment changed")
+        atomic_control_file(target, payload, mode=0o600)
+        _installed, installed_digest = private_regular_file(
+            target, mode=0o600, maximum_bytes=64 * 1024
+        )
+        if installed_digest != digest:
+            raise PullDeployError("monomer DFT runtime environment did not switch")
+
+    def _restore_previous_dft_runtime(self, descriptor: dict[str, Any]) -> None:
+        if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+            return
+        transition = descriptor["monomer_dft"]["runtime_env"]
+        target = Path(transition["target"]["path"])
+        current_digest: str | None = None
+        if target.exists() or target.is_symlink():
+            _payload, current_digest = private_regular_file(
+                target, mode=0o600, maximum_bytes=64 * 1024
+            )
+        allowed = {transition["target"]["sha256"]}
+        if transition["previous_present"]:
+            allowed.add(transition["previous_sha256"])
+        if current_digest is not None and current_digest not in allowed:
+            raise PullDeployError("monomer DFT environment is neither previous nor candidate")
+        if transition["previous_present"]:
+            backup = Path(transition["previous_backup_path"])
+            payload, digest = private_regular_file(
+                backup, mode=0o600, maximum_bytes=64 * 1024
+            )
+            if digest != transition["previous_sha256"]:
+                raise PullDeployError("previous monomer DFT environment backup changed")
+            if current_digest != digest:
+                atomic_control_file(target, payload, mode=0o600)
+        elif target.exists() or target.is_symlink():
+            if current_digest != transition["target"]["sha256"]:
+                raise PullDeployError("refusing to remove unknown monomer DFT environment")
+            target.unlink()
+            fsync_directory(target.parent)
+
+    def _reload_and_verify_dft_unit(
+        self,
+        *,
+        target: Path,
+        expected_digest: str | None,
+        expected_unit_file_state: str,
+    ) -> None:
+        self.runner.run(
+            ["systemctl", "--user", "daemon-reload"],
+            env=self.control_environment(),
+        )
+        if expected_digest is not None and sha256_file(target) != expected_digest:
+            raise PullDeployError("installed monomer DFT unit digest differs")
+        fields = self._systemd_unit_state(MONOMER_DFT_UNIT_NAME, target)
+        if expected_digest is None:
+            expected = {
+                "LoadState": "not-found",
+                "FragmentPath": "",
+                "DropInPaths": "",
+                "NeedDaemonReload": "no",
+                "UnitFileState": "",
+            }
+        else:
+            expected = {
+                "LoadState": "loaded",
+                "FragmentPath": str(target),
+                "DropInPaths": "",
+                "NeedDaemonReload": "no",
+                "UnitFileState": expected_unit_file_state,
+            }
+        if fields != expected:
+            raise PullDeployError("monomer DFT systemd unit identity differs")
+
+    def _install_candidate_dft_unit(self, descriptor: dict[str, Any]) -> None:
+        unit = descriptor["monomer_dft"]["systemd_unit"]
+        target = Path(unit["target_path"])
+        current_digest = (
+            sha256_file(target)
+            if target.exists() and target.is_file() and not target.is_symlink()
+            else None
+        )
+        if (
+            current_digest
+            != (unit["previous_sha256"] if unit["previous_present"] else None)
+            or sha256_file(Path(unit["candidate_path"])) != unit["sha256"]
+        ):
+            raise PullDeployError("monomer DFT unit changed before installation")
+        atomic_control_file(target, Path(unit["candidate_path"]).read_bytes(), mode=0o600)
+        if unit["previous_systemd_state"]["UnitFileState"] != "enabled":
+            self.runner.run(
+                ["systemctl", "--user", "enable", MONOMER_DFT_UNIT_NAME],
+                env=self.control_environment(),
+            )
+        self._reload_and_verify_dft_unit(
+            target=target,
+            expected_digest=unit["sha256"],
+            expected_unit_file_state="enabled",
+        )
+
+    def _restore_previous_dft_unit(self, descriptor: dict[str, Any]) -> None:
+        if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+            return
+        unit = descriptor["monomer_dft"]["systemd_unit"]
+        target = Path(unit["target_path"])
+        current_digest: str | None = None
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or not target.is_file():
+                raise PullDeployError("installed monomer DFT unit became unsafe")
+            current_digest = sha256_file(target)
+        allowed = {unit["sha256"]}
+        if unit["previous_present"]:
+            allowed.add(unit["previous_sha256"])
+        if current_digest is not None and current_digest not in allowed:
+            raise PullDeployError("monomer DFT unit is neither previous nor candidate")
+        previous_state = unit["previous_systemd_state"]["UnitFileState"]
+        if unit["previous_present"]:
+            backup = Path(unit["previous_backup_path"])
+            if sha256_file(backup) != unit["previous_sha256"]:
+                raise PullDeployError("previous monomer DFT unit backup changed")
+            if current_digest != unit["previous_sha256"]:
+                atomic_control_file(target, backup.read_bytes(), mode=0o600)
+            if previous_state != "enabled":
+                self.runner.run(
+                    ["systemctl", "--user", "disable", MONOMER_DFT_UNIT_NAME],
+                    env=self.control_environment(),
+                )
+        elif target.exists() or target.is_symlink():
+            self.runner.run(
+                ["systemctl", "--user", "disable", MONOMER_DFT_UNIT_NAME],
+                env=self.control_environment(),
+            )
+            target.unlink()
+            fsync_directory(target.parent)
+        self._reload_and_verify_dft_unit(
+            target=target,
+            expected_digest=unit["previous_sha256"] if unit["previous_present"] else None,
+            expected_unit_file_state=previous_state,
+        )
+
     def _worker_unit_state(self, target: Path) -> dict[str, str]:
+        return self._systemd_unit_state(MONOMER_MD_UNIT_NAME, target)
+
+    def _systemd_unit_state(
+        self,
+        unit_name: str,
+        target: Path,
+        *,
+        include_runtime: bool = False,
+    ) -> dict[str, str]:
+        properties = [
+            "LoadState",
+            "FragmentPath",
+            "DropInPaths",
+            "NeedDaemonReload",
+            "UnitFileState",
+        ]
+        if include_runtime:
+            properties.extend(("ActiveState", "SubState"))
         shown = self.runner.run(
             [
                 "systemctl",
                 "--user",
                 "show",
-                MONOMER_MD_UNIT_NAME,
-                "--property=LoadState",
-                "--property=FragmentPath",
-                "--property=DropInPaths",
-                "--property=NeedDaemonReload",
-                "--property=UnitFileState",
+                unit_name,
+                *(f"--property={name}" for name in properties),
             ],
             env=self.control_environment(),
         )
         fields = dict(
             line.split("=", 1) for line in str(shown.stdout).splitlines() if "=" in line
         )
-        expected_fields = {
+        expected_fields = set(properties)
+        if set(fields) != expected_fields:
+            raise PullDeployError("systemd Worker unit evidence has an invalid shape")
+        return fields
+
+    @staticmethod
+    def _owned_systemd_unit_digest(path: Path) -> str:
+        try:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+        except OSError as exc:
+            raise PullDeployError(
+                f"monomer DFT guard unit is unavailable: {path}"
+            ) from exc
+        try:
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.geteuid()
+                or before.st_mode & 0o022
+                or before.st_nlink != 1
+                or before.st_size < 1
+                or before.st_size > 64 * 1024
+            ):
+                raise PullDeployError("monomer DFT guard unit is unsafe")
+            payload = b""
+            while len(payload) <= 64 * 1024:
+                chunk = os.read(descriptor, 64 * 1024 + 1 - len(payload))
+                if not chunk:
+                    break
+                payload += chunk
+            after = os.fstat(descriptor)
+            if (
+                len(payload) > 64 * 1024
+                or (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_size,
+                    before.st_mtime_ns,
+                    before.st_mode,
+                    before.st_uid,
+                )
+                != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_mode,
+                    after.st_uid,
+                )
+            ):
+                raise PullDeployError(
+                    "monomer DFT guard unit changed while being sealed"
+                )
+            return sha256_bytes(payload)
+        finally:
+            os.close(descriptor)
+
+    def _dft_guard_unit_snapshot(
+        self, unit_name: str, target: Path
+    ) -> dict[str, Any]:
+        digest = self._owned_systemd_unit_digest(target)
+        properties = (
             "LoadState",
             "FragmentPath",
             "DropInPaths",
             "NeedDaemonReload",
             "UnitFileState",
-        }
-        if set(fields) != expected_fields:
-            raise PullDeployError("systemd Worker unit evidence has an invalid shape")
-        return fields
+            "ActiveState",
+            "SubState",
+            "MainPID",
+            "InvocationID",
+        )
+        shown = self.runner.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                unit_name,
+                *(f"--property={name}" for name in properties),
+            ],
+            env=self.control_environment(),
+        )
+        fields = dict(
+            line.split("=", 1)
+            for line in str(shown.stdout).splitlines()
+            if "=" in line
+        )
+        if set(fields) != set(properties):
+            raise PullDeployError(
+                "monomer DFT guard systemd evidence has an invalid shape"
+            )
+        try:
+            main_pid = int(fields.pop("MainPID"))
+        except (KeyError, ValueError) as exc:
+            raise PullDeployError(
+                "monomer DFT guard process evidence is malformed"
+            ) from exc
+        invocation_id = fields.pop("InvocationID")
+        return _validate_dft_guard_unit_snapshot(
+            {
+                "name": unit_name,
+                "target_path": str(target),
+                "sha256": digest,
+                "systemd_state": fields,
+                "main_pid": main_pid,
+                "invocation_id": invocation_id,
+            }
+        )
+
+    def dft_guard_controls_evidence(
+        self,
+        *,
+        git_units: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
+        unit_root = home / ".config/systemd/user"
+        service = self._dft_guard_unit_snapshot(
+            MONOMER_DFT_GUARD_SERVICE_NAME,
+            unit_root / MONOMER_DFT_GUARD_SERVICE_NAME,
+        )
+        timer = self._dft_guard_unit_snapshot(
+            MONOMER_DFT_GUARD_TIMER_NAME,
+            unit_root / MONOMER_DFT_GUARD_TIMER_NAME,
+        )
+        if git_units is None:
+            git_units = {
+                "service": {
+                    "source_path": MONOMER_DFT_GUARD_SERVICE_SOURCE,
+                    "sha256": service["sha256"],
+                },
+                "timer": {
+                    "source_path": MONOMER_DFT_GUARD_TIMER_SOURCE,
+                    "sha256": timer["sha256"],
+                },
+            }
+        return validate_dft_guard_controls(
+            {
+                "service": service,
+                "timer": timer,
+                "timer_policy": {
+                    "enabled": timer["systemd_state"]["UnitFileState"]
+                    == "enabled",
+                    "active": timer["systemd_state"]["ActiveState"] == "active",
+                },
+                "git_units": git_units,
+            }
+        )
+
+    def _revalidate_dft_guard_controls(
+        self,
+        descriptor: dict[str, Any],
+        *,
+        require_timer_policy: bool = False,
+    ) -> dict[str, Any]:
+        sealed = validate_dft_guard_controls(
+            descriptor["monomer_dft"]["guard"]
+        )
+        observed = self.dft_guard_controls_evidence(
+            git_units=sealed["git_units"]
+        )
+        for name in ("service", "timer"):
+            expected_unit = sealed[name]
+            observed_unit = observed[name]
+            if (
+                any(
+                    observed_unit[field] != expected_unit[field]
+                    for field in ("name", "target_path", "sha256")
+                )
+                or any(
+                    observed_unit["systemd_state"][field]
+                    != expected_unit["systemd_state"][field]
+                    for field in (
+                        "LoadState",
+                        "FragmentPath",
+                        "DropInPaths",
+                        "NeedDaemonReload",
+                        "UnitFileState",
+                    )
+                )
+            ):
+                raise PullDeployError(
+                    "monomer DFT guard installation changed after prepare"
+                )
+        if require_timer_policy and observed["timer_policy"] != sealed["timer_policy"]:
+            raise PullDeployError(
+                "monomer DFT guard timer policy changed after prepare"
+            )
+        return observed
 
     def _reload_and_verify_worker_unit(
         self,
@@ -14039,7 +17897,9 @@ class PullDeployController:
                 raise PullDeployError("removed Worker unit remains loaded or enabled")
 
     def _install_candidate_worker_unit(self, descriptor: dict[str, Any]) -> None:
-        self._revalidate_worker_controls(descriptor)
+        self._revalidate_worker_controls(
+            descriptor, allow_target_environment=True
+        )
         unit = descriptor["monomer_md"]["systemd_unit"]
         target = Path(unit["target_path"])
         current_present = target.exists() or target.is_symlink()
@@ -16192,6 +20052,231 @@ class PullDeployController:
             )
         return result
 
+    @staticmethod
+    def _validate_prepare_abort_dft_owner(
+        document: object,
+        *,
+        operation_id: str,
+        target_sha: str,
+        expected_target_tree: str | None,
+    ) -> dict[str, Any]:
+        expected_fields = {
+            "schema_version",
+            "operation_id",
+            "release_sha",
+            "source_tree",
+        }
+        if (
+            not isinstance(document, dict)
+            or set(document) != expected_fields
+            or document.get("schema_version") != 1
+            or document.get("operation_id") != operation_id
+            or document.get("release_sha") != target_sha
+        ):
+            raise PullDeployError(
+                "prepare-abort monomer DFT runtime has different ownership"
+            )
+        source_tree = require_sha(
+            document.get("source_tree"),
+            "prepare-abort monomer DFT source tree",
+        )
+        if (
+            expected_target_tree is not None
+            and source_tree != expected_target_tree
+        ):
+            raise PullDeployError(
+                "prepare-abort monomer DFT target tree differs"
+            )
+        return dict(document)
+
+    def _capture_prepare_abort_dft_staging(
+        self,
+        *,
+        operation_id: str,
+        target_sha: str,
+        expected_target_tree: str | None,
+    ) -> tuple[dict[str, Any], str | None]:
+        """Seal every operation-owned DFT build crash window.
+
+        The two ownerless cases are deliberately limited to an empty,
+        deterministic directory: a crash can occur immediately after mkdir
+        and before the first durable owner record.  Any content without that
+        owner is foreign and therefore fail-closed.
+        """
+
+        dft_root = self.venv_root / "dft"
+        staging = dft_root / f".{target_sha}.preparing-{operation_id}"
+        cache = dft_root / ".build-cache" / target_sha / operation_id
+        release = dft_root / target_sha
+        target_tree = expected_target_tree
+
+        def owned_inventory(path: Path, *, owner_name: str) -> str | None:
+            nonlocal target_tree
+            if not (path.exists() or path.is_symlink()):
+                return None
+            ensure_private_directory(path)
+            owner_path = path / owner_name
+            if owner_path.exists() or owner_path.is_symlink():
+                owner = self._validate_prepare_abort_dft_owner(
+                    load_private_json(owner_path),
+                    operation_id=operation_id,
+                    target_sha=target_sha,
+                    expected_target_tree=target_tree,
+                )
+                target_tree = owner["source_tree"]
+            elif any(path.iterdir()):
+                raise PullDeployError(
+                    "prepare-abort monomer DFT staging lacks exact ownership"
+                )
+            return directory_inventory_digest(path)
+
+        staging_inventory = owned_inventory(
+            staging,
+            owner_name=".preparing.json",
+        )
+
+        cache_inventory: str | None = None
+        if cache.exists() or cache.is_symlink():
+            ensure_private_directory(cache)
+            cache_owner_path = cache / "owner.json"
+            if cache_owner_path.exists() or cache_owner_path.is_symlink():
+                cache_owner = load_private_json(cache_owner_path)
+                expected_cache_fields = {
+                    "schema_version",
+                    "operation_id",
+                    "release_sha",
+                    "source_tree",
+                    "requirements_lock_sha256",
+                }
+                if (
+                    not isinstance(cache_owner, dict)
+                    or set(cache_owner) != expected_cache_fields
+                    or cache_owner.get("schema_version") != 1
+                    or cache_owner.get("operation_id") != operation_id
+                    or cache_owner.get("release_sha") != target_sha
+                ):
+                    raise PullDeployError(
+                        "prepare-abort monomer DFT cache has different ownership"
+                    )
+                cache_tree = require_sha(
+                    cache_owner.get("source_tree"),
+                    "prepare-abort monomer DFT cache source tree",
+                )
+                require_digest(
+                    cache_owner.get("requirements_lock_sha256"),
+                    "prepare-abort monomer DFT cache requirements lock",
+                )
+                if target_tree is not None and cache_tree != target_tree:
+                    raise PullDeployError(
+                        "prepare-abort monomer DFT cache target tree differs"
+                    )
+                target_tree = cache_tree
+            elif any(cache.iterdir()):
+                raise PullDeployError(
+                    "prepare-abort monomer DFT cache lacks exact ownership"
+                )
+            cache_inventory = directory_inventory_digest(cache)
+
+        incomplete_release_inventory: str | None = None
+        ready_sha256: str | None = None
+        ready_runtime_inventory: str | None = None
+        ready_owner_sha256: str | None = None
+        if release.exists() or release.is_symlink():
+            ensure_private_directory(release)
+            ready_path = release / "READY.json"
+            owner_path = release / ".preparing.json"
+            if ready_path.exists() or ready_path.is_symlink():
+                ready = load_private_json(ready_path)
+                expected_ready_fields = {
+                    "schema_version",
+                    "status",
+                    "release_sha",
+                    "source_tree",
+                    "requirements_lock_sha256",
+                    "aimnet_source_lock_sha256",
+                    "runtime",
+                    "ready_at",
+                }
+                if (
+                    set(ready) != expected_ready_fields
+                    or ready.get("schema_version") != 1
+                    or ready.get("status") != "ready"
+                    or ready.get("release_sha") != target_sha
+                    or not isinstance(ready.get("ready_at"), str)
+                    or not ready["ready_at"]
+                ):
+                    raise PullDeployError(
+                        "prepare-abort monomer DFT READY is invalid"
+                    )
+                ready_tree = require_sha(
+                    ready.get("source_tree"),
+                    "prepare-abort monomer DFT READY source tree",
+                )
+                require_digest(
+                    ready.get("requirements_lock_sha256"),
+                    "prepare-abort monomer DFT READY requirements lock",
+                )
+                require_digest(
+                    ready.get("aimnet_source_lock_sha256"),
+                    "prepare-abort monomer DFT READY source lock",
+                )
+                if target_tree is not None and ready_tree != target_tree:
+                    raise PullDeployError(
+                        "prepare-abort monomer DFT READY target tree differs"
+                    )
+                target_tree = ready_tree
+                runtime = self._validate_dft_runtime_directory(ready.get("runtime"))
+                if (
+                    runtime["release_sha"] != ready["release_sha"]
+                    or runtime["source_tree"] != ready["source_tree"]
+                    or runtime["requirements_lock_sha256"]
+                    != ready["requirements_lock_sha256"]
+                    or runtime["aimnet_source_lock_sha256"]
+                    != ready["aimnet_source_lock_sha256"]
+                ):
+                    raise PullDeployError(
+                        "prepare-abort monomer DFT READY differs from runtime"
+                    )
+                ready_sha256 = sha256_file(ready_path)
+                ready_runtime_inventory = runtime["runtime_inventory_sha256"]
+                if owner_path.exists() or owner_path.is_symlink():
+                    self._validate_prepare_abort_dft_owner(
+                        load_private_json(owner_path),
+                        operation_id=operation_id,
+                        target_sha=target_sha,
+                        expected_target_tree=target_tree,
+                    )
+                    ready_owner_sha256 = sha256_file(owner_path)
+            else:
+                if not (owner_path.exists() or owner_path.is_symlink()):
+                    raise PullDeployError(
+                        "incomplete monomer DFT release lacks exact ownership"
+                    )
+                owner = self._validate_prepare_abort_dft_owner(
+                    load_private_json(owner_path),
+                    operation_id=operation_id,
+                    target_sha=target_sha,
+                    expected_target_tree=target_tree,
+                )
+                target_tree = owner["source_tree"]
+                incomplete_release_inventory = directory_inventory_digest(
+                    release
+                )
+
+        return (
+            {
+                "staging_inventory_sha256": staging_inventory,
+                "cache_inventory_sha256": cache_inventory,
+                "incomplete_release_inventory_sha256": (
+                    incomplete_release_inventory
+                ),
+                "ready_sha256": ready_sha256,
+                "ready_runtime_inventory_sha256": ready_runtime_inventory,
+                "ready_owner_sha256": ready_owner_sha256,
+            },
+            target_tree,
+        )
+
     def _observe_prepare_abort_prepared_ref(self, ref: str) -> str | None:
         observed: str | None = None
         if not (self.test_root_mode and not self._has_complete_test_git_layout()):
@@ -16507,6 +20592,47 @@ class PullDeployController:
         if seen_wheel_keys != sorted(seen_wheel_keys):
             raise PullDeployError(
                 "prepare-abort Worker wheel staging is not canonical"
+            )
+        dft = document.get("dft_staging")
+        expected_dft_fields = {
+            "staging_inventory_sha256",
+            "cache_inventory_sha256",
+            "incomplete_release_inventory_sha256",
+            "ready_sha256",
+            "ready_runtime_inventory_sha256",
+            "ready_owner_sha256",
+        }
+        if not isinstance(dft, dict) or set(dft) != expected_dft_fields:
+            raise PullDeployError(
+                "prepare-abort monomer DFT staging evidence is invalid"
+            )
+        for field, value in dft.items():
+            if value is not None:
+                require_digest(
+                    value,
+                    f"prepare-abort monomer DFT {field}",
+                )
+        ready_pair = (
+            dft["ready_sha256"],
+            dft["ready_runtime_inventory_sha256"],
+        )
+        if (ready_pair[0] is None) != (ready_pair[1] is None):
+            raise PullDeployError(
+                "prepare-abort monomer DFT READY evidence is incomplete"
+            )
+        if (
+            dft["ready_owner_sha256"] is not None
+            and dft["ready_sha256"] is None
+        ):
+            raise PullDeployError(
+                "prepare-abort monomer DFT READY owner lacks authority"
+            )
+        if (
+            dft["incomplete_release_inventory_sha256"] is not None
+            and dft["ready_sha256"] is not None
+        ):
+            raise PullDeployError(
+                "prepare-abort monomer DFT release authority is ambiguous"
             )
         slots = document.get("owned_slots")
         if not isinstance(slots, list) or len(slots) > 2:
@@ -16918,6 +21044,142 @@ class PullDeployController:
                 label=f"Worker wheel staging quarantine {key}",
             )
 
+    def _reconcile_prepare_abort_dft_staging(
+        self,
+        journal: Mapping[str, Any],
+    ) -> None:
+        evidence = journal["dft_staging"]
+        operation_id = journal["operation_id"]
+        target_sha = journal["target_sha"]
+        dft_root = self.venv_root / "dft"
+        staging = dft_root / f".{target_sha}.preparing-{operation_id}"
+        cache = dft_root / ".build-cache" / target_sha / operation_id
+        release = dft_root / target_sha
+        archive = self._ensure_prepare_abort_archive(journal)
+        dft_archive = self._ensure_prepare_abort_archive_parent(
+            archive,
+            "monomer-dft-runtime",
+        )
+        self._archive_prepare_abort_directory(
+            source=staging,
+            target=dft_archive / "staging",
+            expected_inventory_sha256=evidence[
+                "staging_inventory_sha256"
+            ],
+            label="monomer DFT runtime staging",
+        )
+        self._archive_prepare_abort_directory(
+            source=cache,
+            target=dft_archive / "build-cache",
+            expected_inventory_sha256=evidence["cache_inventory_sha256"],
+            label="monomer DFT build cache",
+        )
+        ready_sha256 = evidence["ready_sha256"]
+        ready_owner_sha256 = evidence["ready_owner_sha256"]
+        ready_owner_archive = dft_archive / "ready-owner.json"
+        if ready_sha256 is None:
+            self._archive_prepare_abort_directory(
+                source=release,
+                target=dft_archive / "incomplete-release",
+                expected_inventory_sha256=evidence[
+                    "incomplete_release_inventory_sha256"
+                ],
+                label="incomplete monomer DFT release",
+            )
+            if ready_owner_archive.exists() or ready_owner_archive.is_symlink():
+                raise PullDeployError(
+                    "unrecorded monomer DFT READY owner archive appeared"
+                )
+        else:
+            incomplete_archive = dft_archive / "incomplete-release"
+            if incomplete_archive.exists() or incomplete_archive.is_symlink():
+                raise PullDeployError(
+                    "unrecorded incomplete monomer DFT release archive appeared"
+                )
+            ensure_private_directory(release)
+            ready_path = release / "READY.json"
+            self._validate_prepare_abort_archive_file(
+                ready_path,
+                ready_sha256,
+            )
+            ready = load_private_json(ready_path)
+            runtime = self._validate_dft_runtime_directory(
+                ready.get("runtime")
+            )
+            if (
+                ready.get("schema_version") != 1
+                or ready.get("status") != "ready"
+                or ready.get("release_sha") != target_sha
+                or ready.get("source_tree") != journal["target_tree"]
+                or runtime["release_sha"] != target_sha
+                or runtime["source_tree"] != journal["target_tree"]
+                or runtime["runtime_inventory_sha256"]
+                != evidence["ready_runtime_inventory_sha256"]
+            ):
+                raise PullDeployError(
+                    "monomer DFT READY changed after prepare-abort intent"
+                )
+            owner_path = release / ".preparing.json"
+            self._archive_prepare_abort_file(
+                source=owner_path,
+                target=ready_owner_archive,
+                expected_sha256=ready_owner_sha256,
+                label="monomer DFT READY owner",
+            )
+
+        # Only prune the deterministic operation leaf's empty parents.  These
+        # rmdir calls cannot remove another operation's cache contents.
+        for parent in (cache.parent, cache.parent.parent):
+            with contextlib.suppress(OSError):
+                parent.rmdir()
+
+    def _assert_prepare_abort_dft_terminal(
+        self,
+        journal: Mapping[str, Any],
+    ) -> None:
+        evidence = journal["dft_staging"]
+        operation_id = journal["operation_id"]
+        target_sha = journal["target_sha"]
+        dft_root = self.venv_root / "dft"
+        staging = dft_root / f".{target_sha}.preparing-{operation_id}"
+        cache = dft_root / ".build-cache" / target_sha / operation_id
+        release = dft_root / target_sha
+        if (
+            staging.exists()
+            or staging.is_symlink()
+            or cache.exists()
+            or cache.is_symlink()
+        ):
+            raise PullDeployError(
+                "completed prepare-abort retained monomer DFT staging"
+            )
+        if evidence["ready_sha256"] is None:
+            if release.exists() or release.is_symlink():
+                raise PullDeployError(
+                    "completed prepare-abort has an unrecorded monomer DFT release"
+                )
+            return
+        ensure_private_directory(release)
+        ready_path = release / "READY.json"
+        self._validate_prepare_abort_archive_file(
+            ready_path,
+            evidence["ready_sha256"],
+        )
+        runtime = self._validate_dft_runtime_directory(
+            load_private_json(ready_path).get("runtime")
+        )
+        if (
+            runtime["release_sha"] != target_sha
+            or runtime["source_tree"] != journal["target_tree"]
+            or runtime["runtime_inventory_sha256"]
+            != evidence["ready_runtime_inventory_sha256"]
+            or (release / ".preparing.json").exists()
+            or (release / ".preparing.json").is_symlink()
+        ):
+            raise PullDeployError(
+                "completed prepare-abort monomer DFT READY changed"
+            )
+
     def _reconcile_prepare_abort_slot(
         self,
         journal: Mapping[str, Any],
@@ -17225,6 +21487,7 @@ class PullDeployController:
                     raise PullDeployError(
                         "completed prepare-abort operation provenance changed"
                     )
+                self._assert_prepare_abort_dft_terminal(journal)
                 return {
                     "action": "prepare-abort",
                     "status": "already-aborted",
@@ -17299,6 +21562,22 @@ class PullDeployController:
                         operation_id=operation_id,
                     )
                 )
+                dft_staging, dft_target_tree = (
+                    self._capture_prepare_abort_dft_staging(
+                        operation_id=operation_id,
+                        target_sha=owner["target_sha"],
+                        expected_target_tree=target_tree,
+                    )
+                )
+                if (
+                    target_tree is not None
+                    and dft_target_tree is not None
+                    and target_tree != dft_target_tree
+                ):
+                    raise PullDeployError(
+                        "prepare-abort monomer DFT and source target trees differ"
+                    )
+                target_tree = target_tree or dft_target_tree
                 owned_slots, slot_target_tree = (
                     self._capture_prepare_abort_slots(
                         operation_id=operation_id,
@@ -17338,6 +21617,7 @@ class PullDeployController:
                     "descriptor_sha256": descriptor_sha256,
                     "prepare_staging": prepare_staging,
                     "wheel_staging": wheel_staging,
+                    "dft_staging": dft_staging,
                     "owned_slots": owned_slots,
                     "prepared_ref": (
                         self._capture_prepare_abort_prepared_ref(
@@ -17374,6 +21654,7 @@ class PullDeployController:
             if journal["phase"] == "slot-cleanup-intent":
                 self._reconcile_prepare_abort_staging(journal)
                 self._reconcile_prepare_abort_wheel_staging(journal)
+                self._reconcile_prepare_abort_dft_staging(journal)
                 for slot_evidence in journal["owned_slots"]:
                     self._reconcile_prepare_abort_slot(
                         journal,
@@ -17407,6 +21688,7 @@ class PullDeployController:
                     archive_inventory_sha256=archive_digest,
                     completed_at=utc_now(),
                 )
+            self._assert_prepare_abort_dft_terminal(journal)
             return {
                 "action": "prepare-abort",
                 "status": "aborted",
@@ -18507,6 +22789,8 @@ class PullDeployController:
                 )
                 previous: dict[str, Any] | None = None
                 previous_digest: str | None = None
+                adopted: dict[str, Any] | None = None
+                adopted_digest: str | None = None
                 if (
                     self.current_state_path.exists()
                     or self.current_state_path.is_symlink()
@@ -18515,6 +22799,10 @@ class PullDeployController:
                     previous = self._validate_steady_deployment_state(
                         load_private_json(self.current_state_path)
                     )
+                else:
+                    adopted_authority = self._load_adopted_deployment()
+                    if adopted_authority is not None:
+                        adopted, adopted_digest = adopted_authority
                 if bridge_relation is not None and previous is not None:
                     raise PullDeployError(
                         "historical bridge is restricted to first governed takeover"
@@ -18522,12 +22810,20 @@ class PullDeployController:
                 anchor = {
                     "previous_deployment": previous,
                     "previous_deployment_sha256": previous_digest,
+                    "adopted_deployment": adopted,
+                    "adopted_deployment_sha256": adopted_digest,
                 }
                 self._revalidate_previous_deployment_state(anchor)
                 if previous is not None:
                     self._revalidate_materialized_images(
                         previous["images"],
                         source_sha=previous["source_sha"],
+                        pull=True,
+                    )
+                elif adopted is not None:
+                    self._revalidate_materialized_images(
+                        self._adopted_image_projection(adopted),
+                        source_sha=adopted["source_sha"],
                         pull=True,
                     )
                 # Configuration and credential digests are a per-operation
@@ -18561,6 +22857,14 @@ class PullDeployController:
                 ):
                     raise PullDeployError(
                         "active controls differ from the production source identity"
+                    )
+                if adopted is not None and (
+                    previous_active_control != adopted["active_control"]
+                    or current["sha"] != adopted["source_sha"]
+                    or current["tree"] != adopted["source_tree"]
+                ):
+                    raise PullDeployError(
+                        "adopted controls or production source identity changed"
                     )
                 if bridge_relation is not None:
                     (
@@ -18727,6 +23031,17 @@ class PullDeployController:
                     target_sha=target_sha,
                     executor_control=executor_control,
                 )
+                dft_controls = (
+                    None
+                    if bridge_relation is not None
+                    else self.prepare_dft_controls(
+                        operation_id=operation_id,
+                        previous_sha=current["sha"],
+                        target_sha=target_sha,
+                        target_tree=target_tree,
+                        executor_control=executor_control,
+                    )
+                )
                 # Recheck the active pointer/state immediately before the
                 # only operation that may recycle an inactive A/B slot.
                 self._revalidate_previous_deployment_state(anchor)
@@ -18851,6 +23166,10 @@ class PullDeployController:
                     descriptor["external_database_audit"] = (
                         external_database_audit
                     )
+                else:
+                    descriptor["monomer_dft"] = dft_controls
+                    descriptor["adopted_deployment"] = adopted
+                    descriptor["adopted_deployment_sha256"] = adopted_digest
                 validate_descriptor(descriptor)
                 if descriptor_path.exists() or descriptor_path.is_symlink():
                     existing_descriptor = validate_descriptor(
@@ -18988,6 +23307,8 @@ class PullDeployController:
                 "interrupted descriptor controller authority changed"
             )
         self._revalidate_worker_controls(descriptor)
+        self._revalidate_dft_controls(descriptor)
+        self._revalidate_previous_deployment_state(descriptor)
         if (
             self.asset_evidence(
                 descriptor["release_input"]["asset_manifest_digest"]
@@ -19624,6 +23945,7 @@ class PullDeployController:
         ):
             raise PullDeployError("prepared monomer MD slot record changed")
         self._revalidate_worker_controls(descriptor)
+        self._revalidate_dft_controls(descriptor)
         return descriptor, ready["descriptor_sha256"]
 
     def _write_marker(self, marker: dict[str, Any]) -> None:
@@ -19672,6 +23994,15 @@ class PullDeployController:
     ) -> None:
         """Authorize recovery of a same-descriptor start with unknown commit."""
 
+        if (
+            descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION
+            and marker.get("dft_guard_scheduling_stopped") is not True
+        ):
+            # A previous start may have restored the timer and then crashed
+            # before any Worker process was created.  Re-establish the stop
+            # fence here so explicit rollback and forward recovery cannot get
+            # stuck on a transient marker=false state.
+            self._stop_dft_guard_scheduling(marker, descriptor)
         marker.pop("verification", None)
         marker["runtime_start_intent"] = {
             "target_sha": descriptor["repository"]["target_sha"],
@@ -19708,11 +24039,35 @@ class PullDeployController:
             isinstance(start_intent, dict)
             and start_intent.get("target_sha") == descriptor["repository"]["target_sha"]
         )
+        effective_phase = marker.get(
+            "failed_phase" if marker.get("phase") == "failed" else "phase"
+        )
+        rollback_stop_phases = ROLLBACK_MARKER_PHASES - {
+            "explicit-rollback-started",
+            "explicit-rollback-drained",
+        }
+        partial_stop_authorized = bool(
+            start_intent_authorized
+            or marker.get("runtime_stopped") is True
+            or marker.get("action") == "deploy"
+            and effective_phase in STOP_INTENT_PHASES
+            or marker.get("action") == "explicit-rollback"
+            and effective_phase in rollback_stop_phases
+        )
+        if (
+            partial_stop_authorized
+            and descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION
+        ):
+            # Never trust the marker's guard boolean at an unknown-commit
+            # boundary.  A lost restore response may have left the external
+            # timer active while disk still says stopped=True.
+            self._stop_dft_guard_scheduling(marker, descriptor)
         recovery = self.lifecycle.prepare_recovery_runtime(
             self,
             descriptor,
             expected,
             allow_unfenced=allow_unfenced or start_intent_authorized,
+            allow_partial_stop=partial_stop_authorized,
         )
         if not isinstance(recovery, dict) or recovery.get("runtime_state") not in {
             "drained",
@@ -19720,6 +24075,17 @@ class PullDeployController:
         }:
             raise PullDeployError("runtime recovery returned invalid lifecycle state")
         marker["drain"] = recovery
+        partial_postgres = recovery.get("postgres_runtime_fence")
+        if partial_postgres is not None:
+            partial_postgres = validate_postgres_runtime_fence(partial_postgres)
+            existing_postgres = marker.get("postgres_runtime_fence")
+            if existing_postgres is not None and postgres_runtime_fence_identity(
+                existing_postgres
+            ) != postgres_runtime_fence_identity(partial_postgres):
+                raise PullDeployError(
+                    "PostgreSQL identity changed while converging partial runtime"
+                )
+            marker["postgres_runtime_fence"] = partial_postgres
         marker["updated_at"] = utc_now()
         self._write_marker(marker)
         verification = recovery.get("verification")
@@ -19750,8 +24116,22 @@ class PullDeployController:
         )
         if recovery["runtime_state"] == "stopped":
             self._persist_stopped_postgres_runtime_fence(marker, descriptor)
+            if (
+                descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION
+                and marker.get("dft_guard_scheduling_stopped") is not True
+            ):
+                self._stop_dft_guard_scheduling(marker, descriptor)
             self._record_runtime_start_intent(marker, descriptor)
-            self.lifecycle.start(self, descriptor)
+            self._start_runtime(marker, descriptor)
+        elif descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION and (
+            marker.get("dft_guard_scheduling_stopped") is True
+            or marker.get("dft_guard_stop_intent") is not None
+            and marker.get("dft_guard_restore_evidence") is None
+        ):
+            # A crash can stop only the guard schedule while the rest of the
+            # drained runtime remains live.  Restore it before verification or
+            # admission resume; restarting healthy Workers is unnecessary.
+            self._restore_dft_guard_scheduling(marker, descriptor)
         verification = self._persist_runtime_verification(
             marker, self.lifecycle.verify(self, descriptor)
         )
@@ -19824,6 +24204,100 @@ class PullDeployController:
         marker["updated_at"] = utc_now()
         self._write_marker(marker)
 
+    def _stop_dft_guard_scheduling(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+    ) -> None:
+        if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+            return
+        existing_intent = marker.get("dft_guard_stop_intent")
+        new_stop_cycle = (
+            existing_intent is None
+            or marker.get("dft_guard_restore_evidence") is not None
+        )
+        if new_stop_cycle:
+            marker["dft_guard_stop_intent"] = {
+                "operation_id": descriptor["operation_id"],
+                "recorded_at": utc_now(),
+            }
+            marker.pop("dft_guard_stop_evidence", None)
+            marker.pop("dft_guard_restore_evidence", None)
+            marker.pop("dft_guard_source_switch_fence", None)
+            marker["dft_guard_scheduling_stopped"] = False
+            marker["updated_at"] = utc_now()
+            self._write_marker(marker)
+        stopper = getattr(self.lifecycle, "stop_dft_guard", None)
+        if not callable(stopper):
+            raise PullDeployError("deployment lifecycle cannot fence the DFT guard")
+        evidence = stopper(
+            self,
+            descriptor,
+            allow_already_stopped=not new_stop_cycle,
+        )
+        evidence = validate_dft_guard_lifecycle_evidence(
+            evidence,
+            controls=descriptor["monomer_dft"]["guard"],
+            status="stopped",
+        )
+        marker["dft_guard_stop_evidence"] = evidence
+        marker["dft_guard_scheduling_stopped"] = True
+        marker["updated_at"] = utc_now()
+        self._write_marker(marker)
+
+    def _restore_dft_guard_scheduling(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+    ) -> None:
+        if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+            return
+        restorer = getattr(self.lifecycle, "restore_dft_guard", None)
+        if not callable(restorer):
+            raise PullDeployError("deployment lifecycle cannot restore the DFT guard")
+        evidence = restorer(self, descriptor)
+        evidence = validate_dft_guard_lifecycle_evidence(
+            evidence,
+            controls=descriptor["monomer_dft"]["guard"],
+            status="restored",
+        )
+        marker["dft_guard_restore_evidence"] = evidence
+        marker["dft_guard_scheduling_stopped"] = False
+        marker["updated_at"] = utc_now()
+        self._write_marker(marker)
+
+    def _refresh_dft_guard_source_switch_fence(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+    ) -> None:
+        if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+            return
+        # Backups and database rehearsals may run for many minutes after the
+        # first stop.  Re-stop immediately beside Git mutation, then scan the
+        # complete same-UID proc view so a Persistent timer, user-manager
+        # restart, or external start cannot silently reuse the old checkout.
+        self._stop_dft_guard_scheduling(marker, descriptor)
+        SystemLifecycle._assert_no_checkout_readers(self.production_root)
+        stop_evidence = marker["dft_guard_stop_evidence"]
+        marker["dft_guard_source_switch_fence"] = {
+            "guard_stop_evidence_sha256": canonical_json_digest(stop_evidence),
+            "checked_at": utc_now(),
+        }
+        marker["updated_at"] = utc_now()
+        self._write_marker(marker)
+
+    def _start_runtime(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+    ) -> None:
+        # Commit the guard restoration before DFT is allowed to start.  A
+        # crash after this write is safely retried as an ordinary stopped
+        # runtime start; a lost guard response is retried idempotently.
+        self._restore_dft_guard_scheduling(marker, descriptor)
+        self.lifecycle.start(self, descriptor)
+
     def _stop_runtime(
         self,
         marker: dict[str, Any],
@@ -19846,6 +24320,7 @@ class PullDeployController:
             raise PullDeployError(
                 "runtime stop lacks a pre-stop PostgreSQL identity fence"
             )
+        self._stop_dft_guard_scheduling(marker, descriptor)
         observed = self.lifecycle.stop(self, descriptor)
         if observed is None:
             if not self.test_root_mode:
@@ -19942,6 +24417,8 @@ class PullDeployController:
     def _revalidate_previous_deployment_state(self, descriptor: dict[str, Any]) -> None:
         expected = descriptor.get("previous_deployment")
         expected_digest = descriptor.get("previous_deployment_sha256")
+        adopted = self._adopted_previous(descriptor)
+        adopted_digest = descriptor.get("adopted_deployment_sha256")
         exists = (
             self.current_state_path.exists() or self.current_state_path.is_symlink()
         )
@@ -19950,6 +24427,22 @@ class PullDeployController:
                 raise PullDeployError(
                     "current deployment state appeared after bootstrap prepare"
                 )
+            if adopted is not None:
+                authority = self._load_adopted_deployment()
+                if (
+                    authority is None
+                    or authority[0] != adopted
+                    or authority[1] != adopted_digest
+                    or self._active_slot() != adopted["monomer_md"]["active_slot"]
+                    or self.active_control_evidence() != adopted["active_control"]
+                ):
+                    raise PullDeployError(
+                        "adopted deployment authority changed after prepare"
+                    )
+                self._revalidate_adopted_runtime(adopted)
+                return
+            if adopted_digest is not None:
+                raise PullDeployError("absent adopted deployment has a digest")
             if self._active_slot() is not None:
                 raise PullDeployError(
                     "active Worker slot exists without a governed deployment"
@@ -20118,6 +24611,7 @@ class PullDeployController:
                 "external production asset identity changed after prepare"
             )
         self._revalidate_worker_controls(descriptor)
+        self._revalidate_dft_controls(descriptor)
         repository = self.repository_identity(require_ssh_origin=True)
         expected = descriptor["repository"]
         if (
@@ -20368,6 +24862,7 @@ class PullDeployController:
 
     def _restore_previous_slot(self, descriptor: dict[str, Any]) -> None:
         previous = descriptor.get("previous_deployment")
+        adopted = self._adopted_previous(descriptor)
         current: dict[str, Any] | None = None
         if self.active_slot_path.exists() or self.active_slot_path.is_symlink():
             current = validate_active_slot_record(
@@ -20389,7 +24884,7 @@ class PullDeployController:
                 }.items()
             )
 
-        if not isinstance(previous, dict):
+        if not isinstance(previous, dict) and adopted is None:
             if current is None:
                 return
             if not is_candidate(current):
@@ -20399,7 +24894,11 @@ class PullDeployController:
             self.active_slot_path.unlink()
             fsync_directory(self.active_slot_path.parent)
             return
-        active = previous.get("active_monomer_md_slot")
+        active = (
+            previous.get("active_monomer_md_slot")
+            if isinstance(previous, dict)
+            else adopted["monomer_md"]["active_slot"]
+        )
         if not isinstance(active, dict):
             raise PullDeployError("previous deployment has no active Worker slot")
         validate_active_slot_record(active)
@@ -20407,7 +24906,11 @@ class PullDeployController:
             raise PullDeployError(
                 "active Worker slot is neither sealed previous nor candidate"
             )
-        record_path = self.slots_state_dir / f"md-{active['slot']}.json"
+        record_path = (
+            self.slots_state_dir / f"md-{active['slot']}.json"
+            if isinstance(previous, dict)
+            else Path(adopted["monomer_md"]["slot_record_path"])
+        )
         record = validate_slot_record(load_private_json(record_path), active["slot"])
         if worker_record_digest(record) != active["slot_record_sha256"]:
             raise PullDeployError("previous monomer MD slot record is unavailable")
@@ -20419,25 +24922,49 @@ class PullDeployController:
         """Project the prior governed state into lifecycle image/source inputs."""
 
         previous = descriptor.get("previous_deployment")
-        if not isinstance(previous, dict):
+        adopted = self._adopted_previous(descriptor)
+        if not isinstance(previous, dict) and adopted is None:
             raise PullDeployError(
                 "previous governed deployment evidence is unavailable"
             )
-        if previous.get("control_helpers") != descriptor["controller"]["helpers"]:
+        if isinstance(previous, dict) and previous.get(
+            "control_helpers"
+        ) != descriptor["controller"]["helpers"]:
             raise PullDeployError(
                 "stable control upgrade closed the previous runtime rollback window"
             )
-        images = previous.get("images")
-        previous_sha = previous.get("source_sha")
-        previous_tree = previous.get("source_tree")
+        authority = previous if isinstance(previous, dict) else adopted
+        images = (
+            authority.get("images")
+            if isinstance(previous, dict)
+            else self._adopted_image_projection(authority)
+        )
+        previous_sha = authority.get("source_sha")
+        previous_tree = authority.get("source_tree")
         if not isinstance(images, dict) or set(images) != {"backend", "web"}:
             raise PullDeployError("previous deployment image evidence is invalid")
         require_sha(previous_sha, "previous governed source SHA")
         require_sha(previous_tree, "previous governed source tree")
-        active = previous.get("active_monomer_md_slot")
-        unit = previous.get("monomer_md_systemd_unit")
-        worker_env = previous.get("monomer_md_worker_env")
-        asset = previous.get("asset_identity")
+        active = (
+            previous.get("active_monomer_md_slot")
+            if isinstance(previous, dict)
+            else adopted["monomer_md"]["active_slot"]
+        )
+        unit = (
+            previous.get("monomer_md_systemd_unit")
+            if isinstance(previous, dict)
+            else adopted["monomer_md"]["systemd_unit"]
+        )
+        worker_env = (
+            previous.get("monomer_md_worker_env")
+            if isinstance(previous, dict)
+            else descriptor["monomer_md"]["worker_env"]["previous"]
+        )
+        asset = (
+            previous.get("asset_identity")
+            if isinstance(previous, dict)
+            else descriptor["release_input"]["asset"].get("previous")
+        )
         if (
             not isinstance(active, dict)
             or not isinstance(unit, dict)
@@ -20445,21 +24972,31 @@ class PullDeployController:
         ):
             raise PullDeployError("previous Worker runtime evidence is incomplete")
         validate_active_slot_record(active)
+        slot_record_path = (
+            self.slots_state_dir / f"md-{active['slot']}.json"
+            if isinstance(previous, dict)
+            else Path(adopted["monomer_md"]["slot_record_path"])
+        )
         slot_record = validate_slot_record(
-            load_private_json(self.slots_state_dir / f"md-{active['slot']}.json"),
-            active["slot"],
+            load_private_json(slot_record_path), active["slot"]
         )
         if worker_record_digest(slot_record) != active["slot_record_sha256"]:
             raise PullDeployError("previous Worker slot evidence changed")
         if (
-            set(unit)
-            != {"target_path", "sha256", "control_release_id", "launcher_sha256"}
+            not {
+                "target_path",
+                "sha256",
+                "control_release_id",
+                "launcher_sha256",
+            }.issubset(unit)
             or not isinstance(unit["target_path"], str)
             or not Path(unit["target_path"]).is_absolute()
         ):
             raise PullDeployError("previous Worker systemd evidence is incomplete")
         require_digest(unit["sha256"], "previous Worker unit digest")
-        if unit["control_release_id"] != previous["active_control"]["release_id"]:
+        if isinstance(previous, dict) and unit["control_release_id"] != previous[
+            "active_control"
+        ]["release_id"]:
             raise PullDeployError(
                 "previous Worker control release differs from authority"
             )
@@ -20471,18 +25008,31 @@ class PullDeployController:
         projected["images"] = images
         projected["repository"]["target_sha"] = previous_sha
         projected["repository"]["target_tree"] = previous_tree
-        projected["release_input"]["asset_manifest_digest"] = previous.get(
-            "asset_manifest_digest"
+        projected["release_input"]["asset_manifest_digest"] = (
+            previous.get("asset_manifest_digest")
+            if isinstance(previous, dict)
+            else adopted["asset_identity"]["manifest_sha256"]
         )
         projected["release_input"]["asset"] = asset
-        compatibility = previous.get("migration_compatibility")
+        compatibility = (
+            previous.get("migration_compatibility")
+            if isinstance(previous, dict)
+            else None
+        )
         if isinstance(compatibility, dict):
             projected["_migration_compatibility"] = compatibility
         projected["monomer_md"] = {
             "slot": active["slot"],
             "slot_record": slot_record,
             "slot_record_sha256": active["slot_record_sha256"],
-            "worker_env": worker_env,
+            "worker_env": (
+                worker_env
+                if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION
+                else {
+                    **descriptor["monomer_md"]["worker_env"],
+                    "target": worker_env,
+                }
+            ),
             "systemd_unit": {
                 **descriptor["monomer_md"]["systemd_unit"],
                 "target_path": unit["target_path"],
@@ -20491,8 +25041,79 @@ class PullDeployController:
                 "launcher_sha256": unit["launcher_sha256"],
             },
         }
-        projected["_runtime_active_control"] = previous["active_control"]
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            previous_dft = validate_dft_current_projection(
+                previous.get("monomer_dft")
+                if isinstance(previous, dict)
+                else {
+                    key: value
+                    for key, value in adopted["monomer_dft"].items()
+                    if key != "health"
+                }
+            )
+            previous_unit = previous_dft["systemd_unit"]
+            projected["monomer_dft"] = {
+                "runtime": previous_dft["runtime"],
+                "runtime_env": {
+                    **descriptor["monomer_dft"]["runtime_env"],
+                    "target": previous_dft["runtime_env"],
+                },
+                "systemd_unit": {
+                    **descriptor["monomer_dft"]["systemd_unit"],
+                    "target_path": previous_unit["target_path"],
+                    "sha256": previous_unit["sha256"],
+                    "control_release_id": previous_unit["control_release_id"],
+                    "launcher_path": previous_unit["launcher_path"],
+                    "launcher_sha256": previous_unit["launcher_sha256"],
+                },
+                "gpu": previous_dft["gpu"],
+                # Guard units are stable installed controls.  Their source is
+                # selected by the restored checkout, while this descriptor
+                # preserves the pre-deploy timer policy for both directions.
+                "guard": descriptor["monomer_dft"]["guard"],
+            }
+        projected["_runtime_active_control"] = authority["active_control"]
+        if adopted is not None and not isinstance(previous, dict):
+            projected["_adopted_runtime_authority"] = adopted
         return projected
+
+    def _current_dft_projection(
+        self,
+        descriptor: dict[str, Any],
+        marker: dict[str, Any],
+    ) -> dict[str, Any]:
+        dft = descriptor["monomer_dft"]
+        verification = self._marker_runtime_verification(marker)
+        fence = SystemLifecycle._expected_runtime_recovery_fence(verification)
+        processes = fence.get("worker_processes")
+        if not isinstance(processes, dict) or not isinstance(
+            processes.get("monomer-dft"), dict
+        ):
+            raise PullDeployError("candidate state lacks monomer DFT process evidence")
+        process = processes["monomer-dft"]
+        unit = dft["systemd_unit"]
+        projection = {
+            "runtime": dft["runtime"],
+            "runtime_env": dft["runtime_env"]["target"],
+            "systemd_unit": {
+                "target_path": unit["target_path"],
+                "sha256": unit["sha256"],
+                "systemd_state": self._systemd_unit_state(
+                    MONOMER_DFT_UNIT_NAME,
+                    Path(unit["target_path"]),
+                    include_runtime=True,
+                ),
+                "process_identity": {
+                    "main_pid": process["main_pid"],
+                    "invocation_id": process["invocation_id"],
+                },
+                "control_release_id": unit["control_release_id"],
+                "launcher_path": unit["launcher_path"],
+                "launcher_sha256": unit["launcher_sha256"],
+            },
+            "gpu": dft["gpu"],
+        }
+        return validate_dft_current_projection(projection)
 
     def _current_state(
         self, descriptor: dict[str, Any], descriptor_digest: str, marker: dict[str, Any]
@@ -20571,7 +25192,11 @@ class PullDeployController:
         elif mutable_pair["transition"]["kind"] == "expand-0014":
             queue_mutable_data_audit = mutable_pair
         state = {
-            "schema_version": 2,
+            "schema_version": (
+                CURRENT_STATE_SCHEMA_VERSION
+                if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION
+                else LEGACY_CURRENT_STATE_SCHEMA_VERSION
+            ),
             "status": "success",
             "operation_id": descriptor["operation_id"],
             "source_sha": descriptor["repository"]["target_sha"],
@@ -20592,7 +25217,11 @@ class PullDeployController:
             "contract_mutable_data_audit": contract_mutable_data_audit,
             "migration_compatibility": migration_compatibility,
             "active_monomer_md_slot": active,
-            "monomer_md_worker_env": descriptor["monomer_md"]["worker_env"],
+            "monomer_md_worker_env": (
+                descriptor["monomer_md"]["worker_env"]["target"]
+                if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION
+                else descriptor["monomer_md"]["worker_env"]
+            ),
             "monomer_md_systemd_unit": {
                 "target_path": descriptor["monomer_md"]["systemd_unit"]["target_path"],
                 "sha256": descriptor["monomer_md"]["systemd_unit"]["sha256"],
@@ -20610,6 +25239,20 @@ class PullDeployController:
             "mutable_data_audit": mutable_pair,
             "deployed_at": utc_now(),
         }
+        if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION:
+            adoption_lineage = descriptor_adoption_lineage(descriptor)
+            if adoption_lineage is None:
+                raise PullDeployError(
+                    "descriptor lost its current-state adoption lineage"
+                )
+            state.update(
+                {
+                    **adoption_lineage,
+                    "monomer_dft": self._current_dft_projection(
+                        descriptor, marker
+                    ),
+                }
+            )
         external_database_transition_chain = None
         if (
             descriptor["schema_version"]
@@ -20674,6 +25317,10 @@ class PullDeployController:
             state["final_mutable_data_audit"] = final_mutable_data_audit
         if queue_mutable_data_audit is not None:
             state["queue_mutable_data_audit"] = queue_mutable_data_audit
+        validate_current_state_adoption_lineage(
+            state,
+            descriptor=descriptor,
+        )
         return state
 
     def _audit_attempt(self, marker: dict[str, Any], status: str) -> Path:
@@ -21836,6 +26483,8 @@ class PullDeployController:
             previous_active = (
                 previous.get("active_monomer_md_slot")
                 if isinstance(previous, dict)
+                else self._adopted_previous(descriptor)["monomer_md"]["active_slot"]
+                if self._adopted_previous(descriptor) is not None
                 else None
             )
             if active == previous_active or (
@@ -21858,6 +26507,58 @@ class PullDeployController:
             raise PullDeployError(
                 "active controls are neither sealed previous nor candidate"
             )
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            worker_env = descriptor["monomer_md"]["worker_env"]
+            _payload, worker_env_digest = private_regular_file(
+                Path(worker_env["target"]["path"]),
+                mode=0o600,
+                maximum_bytes=64 * 1024,
+            )
+            if worker_env_digest == worker_env["target"]["sha256"]:
+                marker["worker_env_switched"] = True
+            elif worker_env_digest == worker_env["previous"]["sha256"]:
+                marker["worker_env_switched"] = False
+            else:
+                raise PullDeployError(
+                    "Worker environment is neither previous nor candidate"
+                )
+            dft = descriptor["monomer_dft"]
+            env = dft["runtime_env"]
+            env_path = Path(env["target"]["path"])
+            env_digest = None
+            if env_path.exists() or env_path.is_symlink():
+                _payload, env_digest = private_regular_file(
+                    env_path, mode=0o600, maximum_bytes=64 * 1024
+                )
+            if env_digest == env["target"]["sha256"]:
+                marker["dft_runtime_switched"] = True
+            elif (
+                env["previous_present"]
+                and env_digest == env["previous_sha256"]
+            ) or (not env["previous_present"] and env_digest is None):
+                marker["dft_runtime_switched"] = False
+            else:
+                raise PullDeployError(
+                    "monomer DFT environment is neither previous nor candidate"
+                )
+            dft_unit = dft["systemd_unit"]
+            dft_unit_path = Path(dft_unit["target_path"])
+            dft_unit_digest = None
+            if dft_unit_path.exists() or dft_unit_path.is_symlink():
+                if dft_unit_path.is_symlink() or not dft_unit_path.is_file():
+                    raise PullDeployError("installed monomer DFT unit became unsafe")
+                dft_unit_digest = sha256_file(dft_unit_path)
+            if dft_unit_digest == dft_unit["sha256"]:
+                marker["dft_unit_switched"] = True
+            elif (
+                dft_unit["previous_present"]
+                and dft_unit_digest == dft_unit["previous_sha256"]
+            ) or (not dft_unit["previous_present"] and dft_unit_digest is None):
+                marker["dft_unit_switched"] = False
+            else:
+                raise PullDeployError(
+                    "monomer DFT unit is neither previous nor candidate"
+                )
         marker["reconciled_at"] = utc_now()
         self._write_marker(marker)
 
@@ -21880,11 +26581,31 @@ class PullDeployController:
             "unit_switched",
             "control_switched",
             "asset_switched",
+            "dft_runtime_switched",
+            "dft_unit_switched",
+            "worker_env_switched",
         }:
             raise PullDeployError("unknown deployment effect restoration field")
         marker[field] = False
         marker["updated_at"] = utc_now()
         self._write_marker(marker)
+
+    @staticmethod
+    def _effect_fields(descriptor: dict[str, Any]) -> tuple[str, ...]:
+        fields = (
+            "source_switched",
+            "slot_switched",
+            "unit_switched",
+            "control_switched",
+            "asset_switched",
+        )
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            return fields + (
+                "worker_env_switched",
+                "dft_runtime_switched",
+                "dft_unit_switched",
+            )
+        return fields
 
     @staticmethod
     def _is_first_bridge(descriptor: dict[str, Any]) -> bool:
@@ -22250,15 +26971,10 @@ class PullDeployController:
             and failed_phase in {"prepared", "drain-started", "drained"}
             and marker.get("runtime_stopped") is False
             and marker.get("database_change_started") is False
+            and marker.get("dft_guard_stop_intent") is None
             and all(
                 marker.get(field) is False
-                for field in (
-                    "source_switched",
-                    "slot_switched",
-                    "unit_switched",
-                    "control_switched",
-                    "asset_switched",
-                )
+                for field in self._effect_fields(descriptor)
             )
         ):
             return False
@@ -22268,6 +26984,17 @@ class PullDeployController:
             self.current_state_path.exists() or self.current_state_path.is_symlink()
         )
         if previous is None:
+            adopted = self._adopted_previous(descriptor)
+            if adopted is not None:
+                authority = self._load_adopted_deployment()
+                return bool(
+                    not current_exists
+                    and previous_digest is None
+                    and authority is not None
+                    and authority[0] == adopted
+                    and authority[1]
+                    == descriptor.get("adopted_deployment_sha256")
+                )
             return not current_exists and previous_digest is None
         if not isinstance(previous, dict) or not isinstance(previous_digest, str):
             return False
@@ -22341,16 +27068,24 @@ class PullDeployController:
     ) -> None:
         failed_phase = marker.get("failed_phase", marker.get("phase"))
         abort_before_stop = self._is_pre_stop_abort_marker(descriptor, marker)
+        adopted = self._adopted_previous(descriptor)
+        has_previous_authority = (
+            isinstance(descriptor.get("previous_deployment"), dict)
+            or adopted is not None
+        )
         if abort_before_stop:
             # Drain may have timed out with an accepted job still running.  No
             # stop or switch intent was committed, so never restart/restore a
             # process here.  Re-open the unchanged runtime in place; failure
             # leaves the marker and partial drain fail-closed for an operator.
-            if descriptor.get("previous_deployment") is None:
+            if not has_previous_authority:
                 self.lifecycle.resume_bootstrap_unchanged(self, descriptor)
             else:
-                previous = descriptor["previous_deployment"]
-                self._validate_steady_deployment_state(previous)
+                previous = descriptor.get("previous_deployment")
+                if isinstance(previous, dict):
+                    self._validate_steady_deployment_state(previous)
+                else:
+                    self._revalidate_adopted_runtime(adopted)
                 previous_runtime = self._previous_runtime_descriptor(descriptor)
                 self._recover_unchanged_and_resume(
                     marker,
@@ -22369,16 +27104,10 @@ class PullDeployController:
         self._reconcile_effect_commit_windows(descriptor, marker)
         bootstrap_effects_restored = descriptor.get(
             "previous_deployment"
-        ) is None and all(
+        ) is None and adopted is None and all(
             marker.get(field) is False
-            for field in (
-                "source_switched",
-                "slot_switched",
-                "unit_switched",
-                "control_switched",
-                "asset_switched",
-            )
-        )
+            for field in self._effect_fields(descriptor)
+        ) and marker.get("dft_guard_stop_intent") is None
         if bootstrap_effects_restored and self.lifecycle.bootstrap_can_resume_unchanged(
             self, descriptor
         ):
@@ -22391,13 +27120,19 @@ class PullDeployController:
         stop_required = (
             marker.get("runtime_stopped") is True
             or failed_phase in STOP_INTENT_PHASES
+            or marker.get("dft_guard_scheduling_stopped") is True
+            or marker.get("dft_guard_stop_intent") is not None
             or any(
                 marker.get(field) is True
                 for field in (
                     "source_switched",
                     "slot_switched",
                     "control_switched",
+                    "worker_env_switched",
+                    "dft_runtime_switched",
+                    "dft_unit_switched",
                 )
+                if field in marker
             )
         )
         if stop_required:
@@ -22409,15 +27144,9 @@ class PullDeployController:
             if (
                 all(
                     marker.get(field) is False
-                    for field in (
-                        "source_switched",
-                        "slot_switched",
-                        "control_switched",
-                        "unit_switched",
-                        "asset_switched",
-                    )
+                    for field in self._effect_fields(descriptor)
                 )
-                and descriptor.get("previous_deployment") is not None
+                and has_previous_authority
                 and isinstance(descriptor.get("controller"), dict)
             ):
                 runtime_descriptor = self._previous_runtime_descriptor(descriptor)
@@ -22440,19 +27169,28 @@ class PullDeployController:
             self._advance(marker, "runtime-stopped", runtime_stopped=True)
         self._restore_database_after_failed_apply(descriptor, marker)
         if marker.get("source_switched") is True:
+            self._refresh_dft_guard_source_switch_fence(marker, descriptor)
             self._restore_source(descriptor)
             self._record_restored_effect(marker, "source_switched")
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            self._restore_previous_worker_environment(descriptor)
+            self._record_restored_effect(marker, "worker_env_switched")
+            self._restore_previous_dft_runtime(descriptor)
+            self._record_restored_effect(marker, "dft_runtime_switched")
         if marker.get("slot_switched") is True:
             self._restore_previous_slot(descriptor)
             self._record_restored_effect(marker, "slot_switched")
         self._restore_previous_worker_unit(descriptor)
         self._record_restored_effect(marker, "unit_switched")
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            self._restore_previous_dft_unit(descriptor)
+            self._record_restored_effect(marker, "dft_unit_switched")
         self._restore_previous_asset_pointer(descriptor)
         self._record_restored_effect(marker, "asset_switched")
         if marker.get("control_switched") is True:
             self._restore_previous_control(descriptor)
             self._record_restored_effect(marker, "control_switched")
-        if descriptor.get("previous_deployment") is None:
+        if not has_previous_authority:
             # A previous restore may have committed and reopened legacy
             # admission before its stdout/marker write was lost.  Probe first:
             # restarting that exact open runtime could kill newly accepted
@@ -22470,19 +27208,16 @@ class PullDeployController:
             return
         if any(
             marker.get(field) is not False
-            for field in (
-                "source_switched",
-                "slot_switched",
-                "unit_switched",
-                "control_switched",
-                "asset_switched",
-            )
+            for field in self._effect_fields(descriptor)
         ):
             raise PullDeployError(
                 "failed deployment rollback did not restore every governed effect"
             )
-        previous = descriptor["previous_deployment"]
-        self._validate_steady_deployment_state(previous)
+        previous = descriptor.get("previous_deployment")
+        if isinstance(previous, dict):
+            self._validate_steady_deployment_state(previous)
+        else:
+            self._revalidate_adopted_runtime(adopted)
         previous_descriptor = self._previous_runtime_descriptor(descriptor)
         self._recover_runtime_and_resume(
             marker,
@@ -23310,13 +28045,7 @@ class PullDeployController:
                     or marker.get("runtime_stopped") is not True
                     or any(
                         marker.get(field) is not False
-                        for field in (
-                            "source_switched",
-                            "slot_switched",
-                            "control_switched",
-                            "unit_switched",
-                            "asset_switched",
-                        )
+                        for field in self._effect_fields(source_descriptor)
                     )
                 ):
                     continue
@@ -23666,13 +28395,7 @@ class PullDeployController:
                 )
             if any(
                 marker.get(field) is not False
-                for field in (
-                    "source_switched",
-                    "slot_switched",
-                    "unit_switched",
-                    "control_switched",
-                    "asset_switched",
-                )
+                for field in self._effect_fields(descriptor)
             ):
                 raise PullDeployError(
                     "sealed explicit rollback candidate precedes complete effect restoration"
@@ -23781,13 +28504,7 @@ class PullDeployController:
         self._reconcile_effect_commit_windows(descriptor, marker)
         candidate_effects = all(
             marker.get(name) is True
-            for name in (
-                "source_switched",
-                "slot_switched",
-                "control_switched",
-                "unit_switched",
-                "asset_switched",
-            )
+            for name in self._effect_fields(descriptor)
         )
         if (
             marker.get("runtime_stopped") is not True
@@ -23854,13 +28571,7 @@ class PullDeployController:
         # persistent admission remained closed.
         effects_are_previous = all(
             marker.get(field) is False
-            for field in (
-                "source_switched",
-                "slot_switched",
-                "unit_switched",
-                "control_switched",
-                "asset_switched",
-            )
+            for field in self._effect_fields(descriptor)
         )
         recovery_descriptor = (
             previous_descriptor
@@ -23898,25 +28609,28 @@ class PullDeployController:
             require_operation_backup=True,
         )
         if marker.get("source_switched") is True:
+            self._refresh_dft_guard_source_switch_fence(marker, descriptor)
             self._restore_source(descriptor)
             self._record_restored_effect(marker, "source_switched")
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            self._restore_previous_worker_environment(descriptor)
+            self._record_restored_effect(marker, "worker_env_switched")
+            self._restore_previous_dft_runtime(descriptor)
+            self._record_restored_effect(marker, "dft_runtime_switched")
         self._restore_previous_slot(descriptor)
         self._record_restored_effect(marker, "slot_switched")
         self._restore_previous_worker_unit(descriptor)
         self._record_restored_effect(marker, "unit_switched")
+        if descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION:
+            self._restore_previous_dft_unit(descriptor)
+            self._record_restored_effect(marker, "dft_unit_switched")
         self._restore_previous_asset_pointer(descriptor)
         self._record_restored_effect(marker, "asset_switched")
         self._restore_previous_control(descriptor)
         self._record_restored_effect(marker, "control_switched")
         if any(
             marker.get(field) is not False
-            for field in (
-                "source_switched",
-                "slot_switched",
-                "unit_switched",
-                "control_switched",
-                "asset_switched",
-            )
+            for field in self._effect_fields(descriptor)
         ):
             raise PullDeployError(
                 "explicit rollback recovery did not restore every governed effect"
@@ -23931,7 +28645,7 @@ class PullDeployController:
                 marker, previous_descriptor
             )
             self._record_runtime_start_intent(marker, previous_descriptor)
-            self.lifecycle.start(self, previous_descriptor)
+            self._start_runtime(marker, previous_descriptor)
         verification = self._persist_runtime_verification(
             marker,
             self.lifecycle.verify(self, previous_descriptor),
@@ -24103,13 +28817,7 @@ class PullDeployController:
         previous = descriptor.get("previous_deployment")
         restored = all(
             marker.get(field) is False
-            for field in (
-                "source_switched",
-                "slot_switched",
-                "unit_switched",
-                "control_switched",
-                "asset_switched",
-            )
+            for field in self._effect_fields(descriptor)
         )
         if isinstance(previous, dict) and restored:
             previous_runtime = self._previous_runtime_descriptor(descriptor)
@@ -24201,7 +28909,11 @@ class PullDeployController:
             )
             self._revalidate_pre_switch(descriptor)
             marker = {
-                "schema_version": 2,
+                "schema_version": (
+                    MARKER_SCHEMA_VERSION
+                    if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION
+                    else LEGACY_MARKER_SCHEMA_VERSION
+                ),
                 "action": "deploy",
                 "operation_id": operation_id,
                 "source_sha": target_sha,
@@ -24224,6 +28936,15 @@ class PullDeployController:
                 "asset_switched": False,
                 "database_change_started": False,
             }
+            if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION:
+                marker.update(
+                    {
+                        "worker_env_switched": False,
+                        "dft_runtime_switched": False,
+                        "dft_unit_switched": False,
+                        "dft_guard_scheduling_stopped": False,
+                    }
+                )
             self._write_marker(marker)
             try:
                 first_bridge = bool(
@@ -24273,11 +28994,35 @@ class PullDeployController:
                 self._switch_asset_pointer(descriptor)
                 self._advance(marker, "asset-switched", asset_switched=True)
                 self._advance(marker, "source-switch-started")
+                self._refresh_dft_guard_source_switch_fence(marker, descriptor)
                 self._switch_source(descriptor)
                 self._advance(marker, "source-switched", source_switched=True)
+                if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION:
+                    self._advance(marker, "worker-env-switch-started")
+                    self._switch_worker_environment(descriptor)
+                    self._advance(
+                        marker,
+                        "worker-env-switched",
+                        worker_env_switched=True,
+                    )
+                    self._advance(marker, "dft-runtime-switch-started")
+                    self._switch_dft_runtime(descriptor)
+                    self._advance(
+                        marker,
+                        "dft-runtime-switched",
+                        dft_runtime_switched=True,
+                    )
                 self._advance(marker, "worker-unit-install-started")
                 self._install_candidate_worker_unit(descriptor)
                 self._advance(marker, "worker-unit-installed", unit_switched=True)
+                if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION:
+                    self._advance(marker, "dft-unit-install-started")
+                    self._install_candidate_dft_unit(descriptor)
+                    self._advance(
+                        marker,
+                        "dft-unit-installed",
+                        dft_unit_switched=True,
+                    )
                 self._advance(
                     marker, "migrations-started", database_change_started=True
                 )
@@ -24350,7 +29095,7 @@ class PullDeployController:
                 )
                 self._advance(marker, "runtime-start-started")
                 self._record_runtime_start_intent(marker, descriptor)
-                self.lifecycle.start(self, descriptor)
+                self._start_runtime(marker, descriptor)
                 self._advance(marker, "runtime-started")
                 self._advance(marker, "verifying")
                 verification = self._persist_runtime_verification(
@@ -24710,7 +29455,11 @@ class PullDeployController:
             # rollback to a state bound to older executable helpers.
             self._previous_runtime_descriptor(descriptor)
             marker = {
-                "schema_version": 2,
+                "schema_version": (
+                    MARKER_SCHEMA_VERSION
+                    if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION
+                    else LEGACY_MARKER_SCHEMA_VERSION
+                ),
                 "action": "explicit-rollback",
                 "operation_id": operation_id,
                 "source_sha": current["source_sha"],
@@ -24747,6 +29496,15 @@ class PullDeployController:
                 "asset_switched": True,
                 "database_change_started": False,
             }
+            if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION:
+                marker.update(
+                    {
+                        "worker_env_switched": True,
+                        "dft_runtime_switched": True,
+                        "dft_unit_switched": True,
+                        "dft_guard_scheduling_stopped": False,
+                    }
+                )
             self._write_marker(marker)
             drain = self.lifecycle.drain(self, descriptor)
             self._advance(marker, "explicit-rollback-drained", drain=drain)
@@ -24778,10 +29536,24 @@ class PullDeployController:
                 "mutable_data_before_sha256"
             ] = canonical_json_digest(mutable_data_identity(mutable_before))
             self._write_marker(marker)
+            self._refresh_dft_guard_source_switch_fence(marker, descriptor)
             self._restore_source(descriptor)
             self._advance(
                 marker, "explicit-rollback-source-restored", source_switched=False
             )
+            if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION:
+                self._restore_previous_worker_environment(descriptor)
+                self._advance(
+                    marker,
+                    "explicit-rollback-worker-env-restored",
+                    worker_env_switched=False,
+                )
+                self._restore_previous_dft_runtime(descriptor)
+                self._advance(
+                    marker,
+                    "explicit-rollback-dft-runtime-restored",
+                    dft_runtime_switched=False,
+                )
             self._restore_previous_slot(descriptor)
             self._advance(
                 marker, "explicit-rollback-slot-restored", slot_switched=False
@@ -24790,6 +29562,13 @@ class PullDeployController:
             self._advance(
                 marker, "explicit-rollback-unit-restored", unit_switched=False
             )
+            if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION:
+                self._restore_previous_dft_unit(descriptor)
+                self._advance(
+                    marker,
+                    "explicit-rollback-dft-unit-restored",
+                    dft_unit_switched=False,
+                )
             self._restore_previous_asset_pointer(descriptor)
             self._advance(
                 marker, "explicit-rollback-asset-restored", asset_switched=False
@@ -24802,7 +29581,7 @@ class PullDeployController:
             )
             previous_descriptor = self._previous_runtime_descriptor(descriptor)
             self._record_runtime_start_intent(marker, previous_descriptor)
-            self.lifecycle.start(self, previous_descriptor)
+            self._start_runtime(marker, previous_descriptor)
             verification = self._persist_runtime_verification(
                 marker, self.lifecycle.verify(self, previous_descriptor)
             )

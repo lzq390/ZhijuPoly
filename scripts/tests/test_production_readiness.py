@@ -21,6 +21,14 @@ SPEC = importlib.util.spec_from_file_location("production_readiness", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 READINESS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(READINESS)
+CONTROLLER_SCRIPT = REPOSITORY_ROOT / "scripts" / "pull_deploy_controller.py"
+CONTROLLER_SPEC = importlib.util.spec_from_file_location(
+    "readiness_contract_pull_deploy_controller",
+    CONTROLLER_SCRIPT,
+)
+assert CONTROLLER_SPEC is not None and CONTROLLER_SPEC.loader is not None
+CONTROLLER = importlib.util.module_from_spec(CONTROLLER_SPEC)
+CONTROLLER_SPEC.loader.exec_module(CONTROLLER)
 
 AUTHORITY_SHA = "a" * 40
 AUTHORITY_TREE = "b" * 40
@@ -1828,6 +1836,46 @@ class ProductionReadinessTests(unittest.TestCase):
         self.assertEqual(error["error"]["code"], "evidence_rejected")
         self.assertNotIn("usage:", stderr.getvalue())
 
+    def test_private_json_reader_rejects_hardlink_and_nlink_drift(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="readiness-hardlink-") as raw:
+            root = Path(raw)
+            path = root / "private.json"
+            alias = root / "private.alias"
+            path.write_text('{"schema_version":1}', encoding="utf-8")
+            path.chmod(0o600)
+            os.link(path, alias)
+            with self.assertRaisesRegex(
+                READINESS.ProductionReadinessError, "unsafe"
+            ):
+                READINESS._read_json_file(path, private=True)
+
+        with tempfile.TemporaryDirectory(prefix="readiness-nlink-race-") as raw:
+            root = Path(raw)
+            path = root / "private.json"
+            alias = root / "private.alias"
+            path.write_text('{"schema_version":1}', encoding="utf-8")
+            path.chmod(0o600)
+            original_read = os.read
+            linked = False
+
+            def read_with_alias(descriptor: int, size: int) -> bytes:
+                nonlocal linked
+                if not linked:
+                    os.link(path, alias)
+                    linked = True
+                return original_read(descriptor, size)
+
+            with mock.patch.object(
+                READINESS.os,
+                "read",
+                side_effect=read_with_alias,
+            ):
+                with self.assertRaisesRegex(
+                    READINESS.ProductionReadinessError, "unsafe"
+                ):
+                    READINESS._read_json_file(path, private=True)
+            self.assertTrue(linked)
+
     def test_output_schema_is_closed(self) -> None:
         schema = READINESS.output_json_schema()
         self.assertFalse(schema["additionalProperties"])
@@ -1887,27 +1935,35 @@ class ProductionReadinessTests(unittest.TestCase):
             )
             runtime_manifest.chmod(0o600)
             runtime_contract = READINESS.sha256_file(runtime_manifest)
+            runtime_inventory = CONTROLLER.PullDeployController._dft_runtime_inventory(
+                release_runtime
+            )
+            self.assertEqual(
+                runtime_inventory,
+                READINESS._dft_runtime_inventory(release_runtime),
+            )
+            warp_cache_parent = state / "monomer-dft-warp-cache"
+            warp_cache_parent.mkdir(mode=0o700)
+            warp_cache_parent.chmod(0o700)
+            warp_cache = warp_cache_parent / AUTHORITY_SHA
+            warp_cache.mkdir(mode=0o700)
+            warp_cache.chmod(0o700)
             config = runtime_root / "config"
             config.mkdir(mode=0o700)
             runtime_environment = config / "monomer-dft-runtime.env"
-            runtime_environment.write_text(
-                "\n".join(
-                    (
-                        f"MONOMER_DFT_RELEASE_SHA={AUTHORITY_SHA}",
-                        (
-                            "MONOMER_DFT_RUNTIME_CONTRACT_SHA256="
-                            f"{runtime_contract}"
-                        ),
-                        (
-                            "MONOMER_DFT_PYTHON="
-                            f"{release_runtime}/venv/bin/python"
-                        ),
-                        f"AIMNET_CACHE_DIR={release_runtime}/aimnet-cache",
-                        f"WARP_CACHE_PATH={release_runtime}/warp-cache",
-                        "",
-                    )
-                ),
-                encoding="utf-8",
+            runtime_identity = {
+                "root": str(release_runtime),
+                "release_sha": AUTHORITY_SHA,
+                "runtime_manifest_sha256": runtime_contract,
+                "runtime_inventory_sha256": runtime_inventory,
+                "python": str(release_runtime / "venv/bin/python"),
+            }
+            runtime_environment.write_bytes(
+                CONTROLLER.PullDeployController._dft_runtime_env_bytes(
+                    runtime_identity,
+                    guard_mode="observe",
+                    warp_cache_path=warp_cache,
+                )
             )
             runtime_environment.chmod(0o600)
             guard = {
@@ -1918,24 +1974,32 @@ class ProductionReadinessTests(unittest.TestCase):
                 .replace("+00:00", "Z"),
                 "gpu_index": "2",
                 "gpu_uuid": READINESS.GPU2_UUID,
-                "status": "ready",
-                "unknown_processes": [],
+                "status": "quarantined",
+                "unknown_processes": [{"pid": 99}],
             }
-            (state / "gpu2-guard.json").write_text(
+            guard_path = state / "gpu2-guard.json"
+            guard_path.write_text(
                 json.dumps(guard),
                 encoding="utf-8",
             )
+            guard_path.chmod(0o600)
             worker = {
                 "status": "ok",
                 "runtime_ready": True,
                 "accepting_jobs": True,
                 "release_sha": AUTHORITY_SHA,
                 "runtime_contract_sha256": runtime_contract,
+                "gpu_guard_mode": "observe",
+                "gpu_guard_status": "quarantined",
+                "gpu_contention_observed": True,
                 "runtime": {
                     "deployment": "prod",
                     "physical_gpu": "2",
                     "gpu_uuid": READINESS.GPU2_UUID,
-                    "guard_status": "ready",
+                    "guard_status": "quarantined",
+                    "gpu_guard_mode": "observe",
+                    "gpu_guard_status": "quarantined",
+                    "gpu_contention_observed": True,
                     "models": {
                         name: {"loaded": True, "warmed_up": True}
                         for name in READINESS.DFT_MODEL_ALIASES
@@ -1972,6 +2036,9 @@ class ProductionReadinessTests(unittest.TestCase):
                         "available": True,
                         "schema_ready": True,
                         "runtime_ready": True,
+                        "gpu_guard_mode": "observe",
+                        "gpu_guard_status": "quarantined",
+                        "gpu_contention_observed": True,
                     },
                 ),
             ):
@@ -1982,10 +2049,84 @@ class ProductionReadinessTests(unittest.TestCase):
                     installed_unit_path=installed_unit,
                 )
 
+                warp_cache.chmod(0o755)
+                with self.assertRaisesRegex(
+                    READINESS.ProductionReadinessError,
+                    "directory is unsafe",
+                ):
+                    READINESS.dft_live_readiness(
+                        AUTHORITY_SHA,
+                        runtime_root=runtime_root,
+                        repo_root=runtime_root,
+                        installed_unit_path=installed_unit,
+                    )
+                warp_cache.chmod(0o700)
+
+                inventory_drift = release_runtime / "unexpected-runtime-file"
+                inventory_drift.write_text("drift", encoding="utf-8")
+                inventory_drift.chmod(0o600)
+                with self.assertRaisesRegex(
+                    READINESS.ProductionReadinessError,
+                    "not bound to the release",
+                ):
+                    READINESS.dft_live_readiness(
+                        AUTHORITY_SHA,
+                        runtime_root=runtime_root,
+                        repo_root=runtime_root,
+                        installed_unit_path=installed_unit,
+                    )
+                inventory_drift.unlink()
+
+                invalid_observations = (
+                    {
+                        **guard,
+                        "observed_at": (
+                            dt.datetime.now(dt.timezone.utc)
+                            - dt.timedelta(minutes=3)
+                        )
+                        .replace(microsecond=0)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                    },
+                    {**guard, "schema_version": 2},
+                    {
+                        **guard,
+                        "observed_at": (
+                            dt.datetime.now(dt.timezone.utc)
+                            + dt.timedelta(minutes=1)
+                        )
+                        .replace(microsecond=0)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                    },
+                    {
+                        **guard,
+                        "observed_at": dt.datetime.now(dt.timezone.utc)
+                        .replace(microsecond=0)
+                        .isoformat(),
+                    },
+                )
+                for invalid_guard in invalid_observations:
+                    guard_path.write_text(
+                        json.dumps(invalid_guard),
+                        encoding="utf-8",
+                    )
+                    guard_path.chmod(0o600)
+                    with self.assertRaises(READINESS.ProductionReadinessError):
+                        READINESS.dft_live_readiness(
+                            AUTHORITY_SHA,
+                            runtime_root=runtime_root,
+                            repo_root=runtime_root,
+                            installed_unit_path=installed_unit,
+                        )
+
             self.assertTrue(result["ready"])
             self.assertEqual(result["gpu_index"], "2")
             self.assertEqual(result["models"], sorted(READINESS.DFT_MODEL_ALIASES))
             self.assertEqual(result["runtime_contract_sha256"], runtime_contract)
+            self.assertEqual(result["runtime_inventory_sha256"], runtime_inventory)
+            self.assertEqual(result["gpu_guard_status"], "quarantined")
+            self.assertTrue(result["gpu_contention_observed"])
 
 
 if __name__ == "__main__":

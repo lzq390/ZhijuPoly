@@ -3,9 +3,9 @@
   "protocol_version": 1,
   "compatibility": {
     "handoff_protocol_versions": [1],
-    "descriptor_schema_versions": [2, 3],
-    "current_state_schema_versions": [2],
-    "marker_schema_versions": [2],
+    "descriptor_schema_versions": [2, 3, 4],
+    "current_state_schema_versions": [2, 3],
+    "marker_schema_versions": [2, 3],
     "worker_slot_schema_versions": [2],
     "prepare_abort_abi_versions": [1]
   },
@@ -47,6 +47,12 @@
       "environment_loader": "monomer_worker_env.py",
       "launcher": "monomer_md_worker_launcher.py",
       "config_relative": "config/worker.env"
+    },
+    "monomer-dft": {
+      "kind": "worker",
+      "environment_loader": "monomer_dft_worker_env.py",
+      "launcher": "monomer_dft_worker_launcher.py",
+      "config_relative": "config/monomer-dft-runtime.env"
     }
   },
   "files": [
@@ -93,6 +99,16 @@
     {
       "name": "monomer_md_worker_launcher.py",
       "source": "scripts/monomer_md_worker_launcher.py",
+      "mode": 448
+    },
+    {
+      "name": "monomer_dft_worker_env.py",
+      "source": "scripts/monomer_dft_worker_env.py",
+      "mode": 448
+    },
+    {
+      "name": "monomer_dft_worker_launcher.py",
+      "source": "scripts/monomer_dft_worker_launcher.py",
       "mode": 448
     },
     {
