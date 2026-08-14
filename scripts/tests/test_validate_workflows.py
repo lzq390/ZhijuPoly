@@ -21,9 +21,86 @@ BACKEND_IMAGE_ASSERTION_PATH = (
 EXACT_B_TEXT = (ROOT / "scripts/ci/test_exact_b_bridge.sh").read_text(
     encoding="utf-8"
 )
+DEPLOYMENT_TEXT = (ROOT / "docs/deployment.md").read_text(encoding="utf-8")
+RELEASE_CONTROLLER_TEXT = (ROOT / "docs/release-controller.md").read_text(
+    encoding="utf-8"
+)
 
 
 class StructuredWorkflowPolicyTests(unittest.TestCase):
+    def test_adopted_git_permission_documentation_is_complete(self) -> None:
+        failures: list[str] = []
+        policy.validate_adopted_permission_documentation_text(
+            DEPLOYMENT_TEXT,
+            RELEASE_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertEqual(failures, [])
+
+    def test_adopted_git_permission_docs_require_both_confirmations(self) -> None:
+        changed = DEPLOYMENT_TEXT.replace(
+            "  --confirm-permission-impact-sha256 sha256:<reviewed-impact-digest>\n",
+            "",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_adopted_permission_documentation_text(
+            changed,
+            RELEASE_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertTrue(
+            any("plan and impact confirmations" in failure for failure in failures),
+            failures,
+        )
+
+    def test_adopted_git_permission_docs_reject_legacy_execution(self) -> None:
+        insertion = "./scripts/install_legacy_takeover_prerequisites.py \\\n"
+        marker = "Next provision the dedicated mutable-data audit login."
+        changed = DEPLOYMENT_TEXT.replace(marker, insertion + marker, 1)
+        failures: list[str] = []
+        policy.validate_adopted_permission_documentation_text(
+            changed,
+            RELEASE_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertTrue(
+            any("must not execute" in failure for failure in failures),
+            failures,
+        )
+
+    def test_adopted_git_permission_docs_bind_exact_chmod_scope(self) -> None:
+        changed = DEPLOYMENT_TEXT.replace(".git/**", ".git/*", 1)
+        failures: list[str] = []
+        policy.validate_adopted_permission_documentation_text(
+            changed,
+            RELEASE_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertTrue(
+            any("checkout root and `.git/**`" in failure for failure in failures),
+            failures,
+        )
+
+    def test_adopted_git_permission_docs_forbid_old_controller_probe(
+        self,
+    ) -> None:
+        changed = DEPLOYMENT_TEXT.replace(
+            "does not invoke that old controller",
+            "may invoke that old controller",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_adopted_permission_documentation_text(
+            changed,
+            RELEASE_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertTrue(
+            any("does not invoke" in failure for failure in failures),
+            failures,
+        )
+
     def test_complete_history_is_bound_to_all_consuming_jobs(self) -> None:
         failures: list[str] = []
         policy.validate_complete_history_checkouts(CI_TEXT, failures)

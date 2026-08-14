@@ -103,6 +103,152 @@ def image_record(role: str, sha: str = TARGET_SHA) -> dict[str, str]:
     }
 
 
+def git_permission_marker_fixture(
+    repository: Path,
+    marker_path: Path,
+    *,
+    phase: str = "hardened",
+) -> dict[str, object]:
+    records: list[dict[str, object]] = [
+        {
+            "path": ".",
+            "type": "directory",
+            "mode": "0755",
+            "target_mode": "0700",
+            "uid": os.geteuid(),
+            "gid": os.getegid(),
+            "device": 1,
+            "inode": 1,
+            "nlink": None,
+            "size": None,
+            "content_sha256": None,
+            "mutable": False,
+        },
+        {
+            "path": ".git",
+            "type": "directory",
+            "mode": "0700",
+            "target_mode": "0700",
+            "uid": os.geteuid(),
+            "gid": os.getegid(),
+            "device": 1,
+            "inode": 2,
+            "nlink": None,
+            "size": None,
+            "content_sha256": None,
+            "mutable": False,
+        },
+        {
+            "path": ".git/config",
+            "type": "file",
+            "mode": "0600",
+            "target_mode": "0600",
+            "uid": os.geteuid(),
+            "gid": os.getegid(),
+            "device": 1,
+            "inode": 3,
+            "nlink": 1,
+            "size": 1,
+            "content_sha256": "sha256:" + "1" * 64,
+            "mutable": True,
+        },
+        {
+            "path": ".git/objects",
+            "type": "directory",
+            "mode": "0700",
+            "target_mode": "0700",
+            "uid": os.geteuid(),
+            "gid": os.getegid(),
+            "device": 1,
+            "inode": 4,
+            "nlink": None,
+            "size": None,
+            "content_sha256": None,
+            "mutable": False,
+        },
+    ]
+    trust = CONTROLLER._git_source_trust
+    marker: dict[str, object] = {
+        "schema_version": trust.PERMISSION_SCHEMA_VERSION,
+        "policy": trust.PERMISSION_POLICY_NAME,
+        "repository": str(repository.absolute()),
+        "marker_path": str(marker_path.absolute()),
+        "phase": phase,
+        "generation": 9 if phase == "hardened" else 1,
+        "records": records,
+        "inventory_sha256": trust.sha256_bytes(
+            trust.canonical_json_bytes(records)
+        ),
+        "original_permissions_sha256": trust.sha256_bytes(
+            trust.canonical_json_bytes(
+                trust._permission_identity(records, hardened=False)
+            )
+        ),
+        "hardened_permissions_sha256": trust.sha256_bytes(
+            trust.canonical_json_bytes(
+                trust._permission_identity(records, hardened=True)
+            )
+        ),
+    }
+    marker["evidence_sha256"] = trust._permission_document_digest(marker)
+    return trust.validate_permission_takeover_evidence(
+        marker,
+        repository=repository,
+        marker_path=marker_path,
+        allowed_phases={phase},
+    )
+
+
+def adopted_git_permission_takeover_fixture(
+    repository: Path,
+    runtime: Path,
+    *,
+    source_sha: str = TARGET_SHA,
+    source_tree: str = TARGET_TREE,
+    production_source_sha: str = PREVIOUS_SHA,
+    production_source_tree: str = PREVIOUS_TREE,
+    adopted_deployment_sha256: str = "sha256:" + "2" * 64,
+) -> dict[str, object]:
+    marker_path = CONTROLLER._git_source_trust.permission_takeover_marker_path(
+        runtime
+    )
+    marker = git_permission_marker_fixture(
+        repository, marker_path, phase="hardened"
+    )
+    authority = {
+        "authority_kind": CONTROLLER.ADOPTED_GIT_PERMISSION_AUTHORITY_KIND,
+        "operation_id": "adopt-git-permission-fixture-001",
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "production_source_sha": production_source_sha,
+        "production_source_tree": production_source_tree,
+        "adopted_deployment_sha256": adopted_deployment_sha256,
+        "bootstrap_control_sha256": "sha256:" + "3" * 64,
+        "adopted_prerequisites_sha256": "sha256:" + "4" * 64,
+        "plan_sha256": "sha256:" + "5" * 64,
+        "permission_impact_sha256": "sha256:" + "6" * 64,
+        "permission_marker_sha256": "sha256:" + "7" * 64,
+        "permission_evidence_sha256": marker["evidence_sha256"],
+        "permission_inventory_sha256": marker["inventory_sha256"],
+        "original_permissions_sha256": marker[
+            "original_permissions_sha256"
+        ],
+        "hardened_permissions_sha256": marker[
+            "hardened_permissions_sha256"
+        ],
+        "completed_at": "2026-08-14T00:00:00Z",
+    }
+    combined: dict[str, object] = {
+        "schema_version": 1,
+        "authority_kind": CONTROLLER.ADOPTED_GIT_PERMISSION_AUTHORITY_KIND,
+        "authority_file_sha256": "sha256:" + "8" * 64,
+        "authority": authority,
+        "hardened_marker": marker,
+    }
+    combined["identity_sha256"] = CONTROLLER.canonical_json_digest(combined)
+    return CONTROLLER.validate_adopted_git_permission_takeover(combined)
+
+
 def mutable_data_evidence(
     *,
     ledger_length: int = 11,
@@ -1257,6 +1403,19 @@ class AdoptedPrerequisitePrivateSourceTests(unittest.TestCase):
             }
             controller = object.__new__(CONTROLLER.PullDeployController)
             controller.runtime_root = root / "runtime"
+            controller._git_permission_takeover = (  # type: ignore[method-assign]
+                lambda: adopted_git_permission_takeover_fixture(
+                    source,
+                    controller.runtime_root,
+                    source_sha=target_sha,
+                    source_tree=target_tree,
+                    production_source_sha=authority_sha,
+                    production_source_tree=authority_tree,
+                    adopted_deployment_sha256=str(
+                        authority["adopted_deployment_sha256"]
+                    ),
+                )
+            )
             with mock.patch.object(
                 CONTROLLER, "__file__", str(controller_path)
             ):
@@ -2017,6 +2176,12 @@ class FixtureController(CONTROLLER.PullDeployController):
     def _git_show(self, _target_sha: str, relative: str) -> bytes:
         return (REPOSITORY_ROOT / relative).read_bytes()
 
+    def _git_permission_takeover(self) -> dict[str, object] | None:
+        fixture = getattr(self, "_fixture_git_permission_takeover", None)
+        if fixture is not None:
+            return json.loads(json.dumps(fixture))
+        return super()._git_permission_takeover()
+
     def repository_identity(
         self, *, require_ssh_origin: bool = False
     ) -> dict[str, str]:
@@ -2069,6 +2234,7 @@ class FixtureController(CONTROLLER.PullDeployController):
             is_ancestor=self.prerequisite_is_ancestor,
             authority_file_digests=authority_digests,
             target_file_digests=target_digests,
+            git_permission_takeover=self._git_permission_takeover(),
         )
 
     def _plan_adopted_prerequisite_target_binding(
@@ -15608,6 +15774,15 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
                 CONTROLLER.load_private_json(controller.active_control_path)
             )
         )
+        controller._fixture_git_permission_takeover = (  # type: ignore[attr-defined]
+            adopted_git_permission_takeover_fixture(
+                controller.production_root,
+                controller.runtime_root,
+                adopted_deployment_sha256=CONTROLLER.sha256_file(
+                    controller.adopted_state_path
+                ),
+            )
+        )
         return adopted
 
     @staticmethod
@@ -15655,6 +15830,563 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
         )
         CONTROLLER.atomic_json(authority_path, authority)
         return authority
+
+    def _seed_git_permission_wrapper(
+        self,
+        controller: FixtureController,
+        adopted: dict[str, object],
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        marker_path = controller.git_permission_marker_path
+        captured = git_permission_marker_fixture(
+            controller.production_root, marker_path, phase="captured"
+        )
+        hardened = git_permission_marker_fixture(
+            controller.production_root, marker_path, phase="hardened"
+        )
+        CONTROLLER.atomic_json(marker_path, hardened)
+        bootstrap_path = controller.state_dir / "bootstrap-control.json"
+        prerequisite_path = (
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        bootstrap = CONTROLLER.load_private_json(bootstrap_path)
+        prerequisites = CONTROLLER.load_private_json(prerequisite_path)
+        impact_fields = (
+            "schema_version",
+            "policy",
+            "repository",
+            "marker_path",
+            "records",
+            "inventory_sha256",
+            "original_permissions_sha256",
+            "hardened_permissions_sha256",
+        )
+        impact = {field: captured[field] for field in impact_fields}
+        plan = {
+            "schema_version": 1,
+            "authority_kind": (
+                CONTROLLER.ADOPTED_GIT_PERMISSION_AUTHORITY_KIND
+            ),
+            "operation_id": "adopt-git-permission-fixture-001",
+            "source_sha": TARGET_SHA,
+            "source_tree": TARGET_TREE,
+            "source_readiness": bootstrap["source_readiness"],
+            "source_readiness_sha256": CONTROLLER.canonical_json_digest(
+                bootstrap["source_readiness"]
+            ),
+            "delivery_gate": bootstrap["delivery_gate"],
+            "delivery_gate_sha256": CONTROLLER.canonical_json_digest(
+                bootstrap["delivery_gate"]
+            ),
+            "adopted_deployment_sha256": CONTROLLER.sha256_file(
+                controller.adopted_state_path
+            ),
+            "bootstrap_control_sha256": CONTROLLER.sha256_file(
+                bootstrap_path
+            ),
+            "adopted_prerequisites_sha256": CONTROLLER.sha256_file(
+                prerequisite_path
+            ),
+            "adopted_prerequisites_plan_sha256": prerequisites[
+                "plan_sha256"
+            ],
+            "production_source": {
+                "source_sha": adopted["source_sha"],
+                "source_tree": adopted["source_tree"],
+            },
+            "permission_takeover": captured,
+            "permission_impact_sha256": (
+                CONTROLLER.canonical_json_digest(impact)
+            ),
+            "mutations": {
+                "services": False,
+                "source_content": False,
+                "source_refs": False,
+                "database": False,
+                "credentials": False,
+                "git_permissions": True,
+                "runtime_authority": True,
+            },
+        }
+        authority = {
+            "schema_version": 1,
+            "status": "completed",
+            "authority_kind": plan["authority_kind"],
+            "operation_id": plan["operation_id"],
+            "source_sha": plan["source_sha"],
+            "source_tree": plan["source_tree"],
+            "production_source_sha": adopted["source_sha"],
+            "production_source_tree": adopted["source_tree"],
+            "adopted_deployment_sha256": plan[
+                "adopted_deployment_sha256"
+            ],
+            "bootstrap_control_sha256": plan[
+                "bootstrap_control_sha256"
+            ],
+            "adopted_prerequisites_sha256": plan[
+                "adopted_prerequisites_sha256"
+            ],
+            "plan_sha256": CONTROLLER.canonical_json_digest(plan),
+            "permission_impact_sha256": plan[
+                "permission_impact_sha256"
+            ],
+            "permission_marker_sha256": CONTROLLER.sha256_file(marker_path),
+            "permission_evidence_sha256": hardened["evidence_sha256"],
+            "permission_inventory_sha256": hardened[
+                "inventory_sha256"
+            ],
+            "original_permissions_sha256": hardened[
+                "original_permissions_sha256"
+            ],
+            "hardened_permissions_sha256": hardened[
+                "hardened_permissions_sha256"
+            ],
+            "plan": plan,
+            "completed_at": "2026-08-14T00:00:00Z",
+        }
+        CONTROLLER.atomic_json(
+            controller.adopted_git_permissions_path, authority
+        )
+        return hardened, authority
+
+    def test_production_git_permission_takeover_rejects_missing_marker(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.test_root_mode = False
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "permission takeover is unavailable",
+        ):
+            CONTROLLER.PullDeployController._git_permission_takeover(
+                controller
+            )
+
+    def test_manual_adoption_rejects_raw_permission_marker_without_wrapper(
+        self,
+    ) -> None:
+        controller = self.controller()
+        self._seed_adopted_authority(controller)
+        marker = git_permission_marker_fixture(
+            controller.production_root,
+            controller.git_permission_marker_path,
+            phase="hardened",
+        )
+        CONTROLLER.atomic_json(controller.git_permission_marker_path, marker)
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+        controller.test_root_mode = False
+        with mock.patch.object(
+            controller,
+            "_verified_raw_git_permission_takeover",
+            return_value=(marker, marker_digest),
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "adopted prerequisite lineage requires",
+        ):
+            CONTROLLER.PullDeployController._git_permission_takeover(
+                controller
+            )
+
+    def test_adopted_git_permission_wrapper_digest_drift_is_rejected(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, authority = self._seed_git_permission_wrapper(
+            controller, adopted
+        )
+        authority["permission_marker_sha256"] = "sha256:" + "f" * 64
+        CONTROLLER.atomic_json(
+            controller.adopted_git_permissions_path, authority
+        )
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+        with mock.patch.object(
+            controller,
+            "_verified_raw_git_permission_takeover",
+            return_value=(marker, marker_digest),
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "marker differs from wrapper",
+        ):
+            CONTROLLER.PullDeployController._git_permission_takeover(
+                controller
+            )
+
+    def test_adopted_git_permission_wrapper_cannot_downgrade_to_legacy(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, _authority = self._seed_git_permission_wrapper(
+            controller, adopted
+        )
+        bootstrap_path = controller.state_dir / "bootstrap-control.json"
+        bootstrap = CONTROLLER.load_private_json(bootstrap_path)
+        bootstrap["schema_version"] = 2
+        bootstrap.pop("authority_kind", None)
+        bootstrap.pop("adopted_deployment", None)
+        bootstrap.pop("adopted_deployment_sha256", None)
+        bootstrap.pop("adoption_evidence_sha256", None)
+        bootstrap.pop("active_control", None)
+        CONTROLLER.atomic_json(bootstrap_path, bootstrap)
+        controller.adopted_state_path.unlink()
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+
+        with mock.patch.object(
+            controller,
+            "_verified_raw_git_permission_takeover",
+            return_value=(marker, marker_digest),
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost its adoption binding",
+        ):
+            CONTROLLER.PullDeployController._git_permission_takeover(
+                controller
+            )
+
+    def test_manual_current_lineage_rejects_complete_authority_removal(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.test_root_mode = False
+        CONTROLLER.atomic_json(controller.current_state_path, {})
+        manual_state = {
+            "schema_version": CONTROLLER.CURRENT_STATE_SCHEMA_VERSION,
+            "authority_kind": "manual-runtime-adoption",
+        }
+
+        with mock.patch.object(
+            CONTROLLER,
+            "validate_current_deployment_state",
+            return_value=manual_state,
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "manual adoption lineage requires",
+        ):
+            CONTROLLER.PullDeployController._git_permission_takeover(
+                controller
+            )
+
+    def test_manual_prerequisite_lineage_rejects_first_deploy_downgrade(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, _authority = self._seed_git_permission_wrapper(
+            controller, adopted
+        )
+        controller.adopted_git_permissions_path.unlink()
+        controller.adopted_state_path.unlink()
+        (controller.state_dir / "bootstrap-control.json").unlink()
+        self.assertFalse(controller.current_state_path.exists())
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+
+        with mock.patch.object(
+            controller,
+            "_verified_raw_git_permission_takeover",
+            return_value=(marker, marker_digest),
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "adopted prerequisite lineage requires",
+        ):
+            CONTROLLER.PullDeployController._git_permission_takeover(
+                controller
+            )
+
+    def test_legacy_raw_permission_marker_without_adoption_residue_is_valid(
+        self,
+    ) -> None:
+        controller = self.controller()
+        controller.test_root_mode = False
+        marker = git_permission_marker_fixture(
+            controller.production_root,
+            controller.git_permission_marker_path,
+            phase="hardened",
+        )
+        CONTROLLER.atomic_json(controller.git_permission_marker_path, marker)
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+
+        with mock.patch.object(
+            controller,
+            "_verified_raw_git_permission_takeover",
+            return_value=(marker, marker_digest),
+        ):
+            observed = (
+                CONTROLLER.PullDeployController._git_permission_takeover(
+                    controller
+                )
+            )
+        self.assertEqual(observed, marker)
+
+    def test_adopted_git_permission_wrapper_happy_path_is_sealed_in_plan(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        marker, _authority = self._seed_git_permission_wrapper(
+            controller, adopted
+        )
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+        with mock.patch.object(
+            controller,
+            "_verified_raw_git_permission_takeover",
+            return_value=(marker, marker_digest),
+        ):
+            combined = (
+                CONTROLLER.PullDeployController._git_permission_takeover(
+                    controller
+                )
+            )
+        self.assertEqual(
+            combined["authority_kind"],
+            CONTROLLER.ADOPTED_GIT_PERMISSION_AUTHORITY_KIND,
+        )
+        self.assertEqual(
+            combined["authority"]["permission_marker_sha256"],
+            marker_digest,
+        )
+        controller._fixture_git_permission_takeover = combined  # type: ignore[attr-defined]
+        trust = {
+            "schema_version": 1,
+            "evidence_sha256": "sha256:" + "9" * 64,
+        }
+
+        def repository_git(*arguments: str, **_kwargs: object):
+            output = {
+                ("symbolic-ref", "--short", "HEAD"): "main\n",
+                (
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                ): "",
+                ("ls-files", "-z", "--cached"): "",
+                ("remote", "get-url", "origin"): (
+                    CONTROLLER.REPOSITORY_HTTPS_URL + "\n"
+                ),
+                ("rev-parse", "HEAD"): PREVIOUS_SHA + "\n",
+                ("rev-parse", "HEAD^{tree}"): PREVIOUS_TREE + "\n",
+            }[arguments]
+            return subprocess.CompletedProcess([], 0, output, "")
+
+        with mock.patch.object(
+            controller, "_git_trust_preflight", return_value={"fixture": True}
+        ), mock.patch.object(
+            controller, "_git", side_effect=repository_git
+        ), mock.patch.object(
+            controller,
+            "_clean_environment",
+            return_value={"GIT_SSH_COMMAND": "fixture-ssh"},
+        ), mock.patch.object(
+            CONTROLLER._git_source_trust,
+            "repository_trust_evidence",
+            return_value=trust,
+        ), mock.patch.object(
+            CONTROLLER._git_source_trust,
+            "require_stable_trust_surface",
+            return_value=None,
+        ):
+            repository = (
+                CONTROLLER.PullDeployController.repository_identity(
+                    controller
+                )
+            )
+        self.assertEqual(repository["permission_takeover"], combined)
+        plan = controller.plan(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        binding = plan["adopted_prerequisite_target_binding"]
+        self.assertEqual(binding["schema_version"], 2)
+        self.assertEqual(
+            binding["git_permission_authority"]["authority_file_sha256"],
+            combined["authority_file_sha256"],
+        )
+
+    def test_adopted_git_permission_descriptor_replay_rejects_wrapper_drift(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        descriptor = CONTROLLER.load_private_json(
+            controller.prepared_root / OPERATION_ID / "descriptor.json"
+        )
+        changed = json.loads(
+            json.dumps(controller._fixture_git_permission_takeover)  # type: ignore[attr-defined]
+        )
+        changed["authority_file_sha256"] = "sha256:" + "f" * 64
+        changed["identity_sha256"] = CONTROLLER.canonical_json_digest(
+            {
+                key: value
+                for key, value in changed.items()
+                if key != "identity_sha256"
+            }
+        )
+        controller._fixture_git_permission_takeover = changed  # type: ignore[attr-defined]
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "target binding changed after prepare",
+        ):
+            controller._revalidate_adopted_prerequisite_target_binding(
+                descriptor
+            )
+
+    def test_adopted_git_permission_wrapper_hardlink_is_rejected(self) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, _authority = self._seed_git_permission_wrapper(
+            controller, adopted
+        )
+        os.link(
+            controller.adopted_git_permissions_path,
+            controller.state_dir / "adopted-git-permissions-hardlink.json",
+        )
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+        with mock.patch.object(
+            controller,
+            "_verified_raw_git_permission_takeover",
+            return_value=(marker, marker_digest),
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "private input is unsafe",
+        ):
+            CONTROLLER.PullDeployController._git_permission_takeover(
+                controller
+            )
+
+    def test_adopted_git_permission_marker_toctou_is_rejected(self) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, _authority = self._seed_git_permission_wrapper(
+            controller, adopted
+        )
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+        changed = json.loads(json.dumps(marker))
+        changed["generation"] = int(changed["generation"]) + 1
+        changed["evidence_sha256"] = (
+            CONTROLLER._git_source_trust._permission_document_digest(
+                changed
+            )
+        )
+        with mock.patch.object(
+            controller,
+            "_verified_raw_git_permission_takeover",
+            side_effect=[
+                (marker, marker_digest),
+                (changed, "sha256:" + "f" * 64),
+            ],
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "changed while validating",
+        ):
+            CONTROLLER.PullDeployController._git_permission_takeover(
+                controller
+            )
+
+    def test_adopted_git_permission_wrapper_toctou_is_rejected(self) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, _authority = self._seed_git_permission_wrapper(
+            controller, adopted
+        )
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+        validate = controller._validate_adopted_git_permission_authority
+
+        def validate_then_replace(**arguments):  # type: ignore[no-untyped-def]
+            combined = validate(**arguments)
+            replacement = CONTROLLER.load_private_json(
+                controller.adopted_git_permissions_path
+            )
+            replacement["completed_at"] = "2026-08-14T00:00:01Z"
+            CONTROLLER.atomic_json(
+                controller.adopted_git_permissions_path, replacement
+            )
+            return combined
+
+        with mock.patch.object(
+            controller,
+            "_verified_raw_git_permission_takeover",
+            return_value=(marker, marker_digest),
+        ), mock.patch.object(
+            controller,
+            "_validate_adopted_git_permission_authority",
+            side_effect=validate_then_replace,
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "changed while validating",
+        ):
+            CONTROLLER.PullDeployController._git_permission_takeover(
+                controller
+            )
+
+    def test_adopted_git_permission_base_authority_toctou_is_rejected(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, _authority = self._seed_git_permission_wrapper(
+            controller, adopted
+        )
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+        validate = controller._validate_adopted_git_permission_authority
+        prerequisite_path = (
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        calls = 0
+
+        def validate_then_replace(**arguments):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            combined = validate(**arguments)
+            if calls == 0:
+                replacement = CONTROLLER.load_private_json(
+                    prerequisite_path
+                )
+                replacement["completed_at"] = "2026-08-14T00:00:01Z"
+                CONTROLLER.atomic_json(prerequisite_path, replacement)
+            calls += 1
+            return combined
+
+        with mock.patch.object(
+            controller,
+            "_verified_raw_git_permission_takeover",
+            return_value=(marker, marker_digest),
+        ), mock.patch.object(
+            controller,
+            "_validate_adopted_git_permission_authority",
+            side_effect=validate_then_replace,
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "permission plan authority differs",
+        ):
+            CONTROLLER.PullDeployController._git_permission_takeover(
+                controller
+            )
 
     def test_adopted_legacy_image_values_are_exact_inert_and_stripped(self) -> None:
         controller = self.controller()

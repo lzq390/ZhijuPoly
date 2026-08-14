@@ -1,10 +1,11 @@
 #!/usr/bin/python3 -I
-"""Create-only adoption of production deployment prerequisites.
+"""Adopt production prerequisites and one permission-hardening successor.
 
 This tool runs from an exact private Git checkout.  It installs only tracked
-configuration helpers that the governed controller requires after a manual
-runtime adoption.  It never contacts PostgreSQL, changes Git, or controls a
-service.
+configuration helpers for the original plan/apply transaction.  Its separate
+permission-* transaction can owner-harden the adopted checkout and publish a
+content-bound successor authority.  Neither transaction contacts PostgreSQL
+or controls a service.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import datetime as dt
 import errno
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -39,6 +41,29 @@ OPERATION_RE = re.compile(r"adopt-prereq-[a-z0-9][a-z0-9._-]{7,95}\Z")
 AUTHORITY_KIND = "manual-runtime-adoption-prerequisites"
 TRANSACTION_DIRECTORY = Path("state/adopted-prerequisite-transactions")
 AUTHORITY_PATH = Path("state/adopted-prerequisites.json")
+PERMISSION_TRANSACTION_DIRECTORY = Path(
+    "state/adopted-git-permission-transactions"
+)
+PERMISSION_AUTHORITY_PATH = Path("state/adopted-git-permissions.json")
+PERMISSION_AUTHORITY_KIND = "manual-runtime-adoption-permission-hardening"
+PERMISSION_OPERATION_RE = re.compile(
+    r"adopt-git-permission-[a-z0-9][a-z0-9._-]{7,95}\Z"
+)
+PERMISSION_TRANSACTION_PHASES = frozenset(
+    {
+        "intent",
+        "permission-change-intent",
+        "permission-ready",
+        "source-verified",
+        "authority-commit-intent",
+        "completed",
+        "aborted",
+    }
+)
+# The wrapper embeds one complete permission marker plan plus bounded source
+# and adoption evidence, so its journal/authority ceiling must exceed the
+# marker engine's independent 128 MiB ceiling.
+PERMISSION_JSON_MAX_BYTES = 256 * 1024 * 1024
 ADOPTED_DEPLOYMENT_PATH = Path("state/adopted-deployment.json")
 BOOTSTRAP_CONTROL_PATH = Path("state/bootstrap-control.json")
 ADOPTION_AUTHORITY_KIND = "manual-runtime-adoption"
@@ -130,6 +155,28 @@ TRACKED_INSTALLS = (
     ),
 )
 PGPASS_NAME = "mutable-data-audit.pgpass"
+
+
+def _load_git_source_trust() -> Any:
+    module_name = "nexpoly_adopt_git_source_trust"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    path = Path(__file__).with_name("git_source_trust.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Git source trust policy cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+GIT_SOURCE_TRUST = _load_git_source_trust()
 
 
 class PrerequisiteError(RuntimeError):
@@ -269,6 +316,49 @@ def _descriptor_bytes(descriptor: int, *, maximum_bytes: int) -> bytes:
     return bytes(payload)
 
 
+def _stable_regular_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int, int]:
+    """Return every non-atime field needed to detect an in-place rewrite."""
+
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _stable_private_json_descriptor(
+    descriptor: int,
+    *,
+    label: str,
+    maximum_bytes: int,
+) -> tuple[dict[str, object], str, os.stat_result]:
+    """Parse and hash exactly the same stable bytes from one open inode."""
+
+    before = os.fstat(descriptor)
+    payload = _descriptor_bytes(descriptor, maximum_bytes=maximum_bytes)
+    after = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or _stable_regular_identity(before) != _stable_regular_identity(after)
+    ):
+        raise PrerequisiteError(f"{label} changed while reading")
+    try:
+        document = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise PrerequisiteError(f"{label} is invalid") from exc
+    if not isinstance(document, dict):
+        raise PrerequisiteError(f"{label} is not an object")
+    return document, _digest(payload), after
+
+
 def _canonical_bytes(document: object) -> bytes:
     return json.dumps(
         document,
@@ -301,6 +391,12 @@ def _fsync_directory(path: Path) -> None:
 def _require_operation_id(value: str) -> str:
     if OPERATION_RE.fullmatch(value) is None:
         raise PrerequisiteError("prerequisite adoption operation ID is invalid")
+    return value
+
+
+def _require_permission_operation_id(value: str) -> str:
+    if not isinstance(value, str) or PERMISSION_OPERATION_RE.fullmatch(value) is None:
+        raise PrerequisiteError("permission hardening operation ID is invalid")
     return value
 
 
@@ -390,6 +486,61 @@ def _open_private_directory(
         raise
 
 
+def _owned_directory_inode_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int]:
+    """Identity stable across the permission transaction's planned chmods."""
+
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_uid,
+        metadata.st_gid,
+    )
+
+
+def _open_owned_directory_for_cas(
+    path: Path,
+    *,
+    parent_fd: int | None = None,
+) -> tuple[int, tuple[int, int, int, int]]:
+    """Pin an owned directory while deliberately allowing its mode to change."""
+
+    flags = (
+        os.O_RDONLY
+        | os.O_DIRECTORY
+        | os.O_CLOEXEC
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(path, flags, dir_fd=parent_fd)
+    except OSError as exc:
+        raise PrerequisiteError(
+            f"permission authority directory is unsafe: {path}"
+        ) from exc
+    try:
+        metadata = os.fstat(descriptor)
+        observed = (
+            path.stat(follow_symlinks=False)
+            if parent_fd is None
+            else os.stat(path, dir_fd=parent_fd, follow_symlinks=False)
+        )
+        identity = _owned_directory_inode_identity(metadata)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or not stat.S_ISDIR(observed.st_mode)
+            or _owned_directory_inode_identity(observed) != identity
+        ):
+            raise PrerequisiteError(
+                f"permission authority directory is unsafe: {path}"
+            )
+        return descriptor, identity
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
 def _open_private_regular_at(
     directory_fd: int,
     name: str,
@@ -431,24 +582,20 @@ def _open_private_regular_at(
         raise
 
 
-def _fd_json(descriptor: int, *, label: str) -> dict[str, object]:
+def _fd_json(
+    descriptor: int,
+    *,
+    label: str,
+    maximum_bytes: int = 8 * 1024 * 1024,
+) -> dict[str, object]:
     try:
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = os.read(descriptor, 64 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > 8 * 1024 * 1024:
-                raise PrerequisiteError(f"{label} is oversized")
-            chunks.append(chunk)
-        document = json.loads(b"".join(chunks).decode("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        document, _digest_value, _metadata = _stable_private_json_descriptor(
+            descriptor,
+            label=label,
+            maximum_bytes=maximum_bytes,
+        )
+    except OSError as exc:
         raise PrerequisiteError(f"{label} is invalid") from exc
-    if not isinstance(document, dict):
-        raise PrerequisiteError(f"{label} is not an object")
     return document
 
 
@@ -1267,6 +1414,7 @@ def _load_json(
     path: Path,
     *,
     require_single_link: bool = True,
+    maximum_bytes: int = 8 * 1024 * 1024,
 ) -> dict[str, object]:
     try:
         descriptor, _noatime = _open_readonly_noatime(path)
@@ -1286,7 +1434,11 @@ def _load_json(
             or _stat_identity(observed) != _stat_identity(metadata)
         ):
             raise PrerequisiteError(f"private JSON is unsafe: {path}")
-        return _fd_json(descriptor, label=f"private JSON {path}")
+        return _fd_json(
+            descriptor,
+            label=f"private JSON {path}",
+            maximum_bytes=maximum_bytes,
+        )
     finally:
         os.close(descriptor)
 
@@ -1296,6 +1448,7 @@ def _load_json_at(
     name: str,
     *,
     require_single_link: bool = True,
+    maximum_bytes: int = 8 * 1024 * 1024,
 ) -> dict[str, object]:
     descriptor = _open_private_regular_at(
         directory_fd,
@@ -1306,7 +1459,79 @@ def _load_json_at(
         ),
     )
     try:
-        return _fd_json(descriptor, label=f"private JSON {name}")
+        return _fd_json(
+            descriptor,
+            label=f"private JSON {name}",
+            maximum_bytes=maximum_bytes,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _load_json_with_digest(
+    path: Path,
+    *,
+    maximum_bytes: int = 8 * 1024 * 1024,
+) -> tuple[dict[str, object], str]:
+    """Read one path-stable private JSON document and its exact raw digest."""
+
+    try:
+        descriptor, _noatime = _open_readonly_noatime(path)
+    except OSError as exc:
+        raise PrerequisiteError(f"private JSON is unavailable: {path}") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+        ):
+            raise PrerequisiteError(f"private JSON is unsafe: {path}")
+        document, digest, stable = _stable_private_json_descriptor(
+            descriptor,
+            label=f"private JSON {path}",
+            maximum_bytes=maximum_bytes,
+        )
+        observed = path.stat(follow_symlinks=False)
+        if _stable_regular_identity(observed) != _stable_regular_identity(
+            stable
+        ):
+            raise PrerequisiteError(f"private JSON changed while reading: {path}")
+        return document, digest
+    finally:
+        os.close(descriptor)
+
+
+def _load_json_with_digest_at(
+    directory_fd: int,
+    name: str,
+    *,
+    maximum_bytes: int = 8 * 1024 * 1024,
+) -> tuple[dict[str, object], str]:
+    """Read one dirfd-bound private JSON document and hash the same bytes."""
+
+    descriptor = _open_private_regular_at(
+        directory_fd,
+        name,
+        mode=0o600,
+    )
+    try:
+        document, digest, stable = _stable_private_json_descriptor(
+            descriptor,
+            label=f"private JSON {name}",
+            maximum_bytes=maximum_bytes,
+        )
+        observed = os.stat(
+            name,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        if _stable_regular_identity(observed) != _stable_regular_identity(
+            stable
+        ):
+            raise PrerequisiteError(f"private JSON changed while reading: {name}")
+        return document, digest
     finally:
         os.close(descriptor)
 
@@ -1469,10 +1694,13 @@ def _create_owned_json_once_at(
     *,
     operation_id: str,
     checkpoint: Callable[[str], None],
+    maximum_bytes: int = 8 * 1024 * 1024,
 ) -> None:
     """Crash-safely publish one authority without replacing an existing inode."""
 
     payload = _canonical_bytes(document) + b"\n"
+    if len(payload) > maximum_bytes:
+        raise PrerequisiteError("prerequisite authority is oversized")
     temporary_name = f".{name}.create-{operation_id}"
     quarantine_name = f"{temporary_name}.quarantine"
     authority_exists = _entry_exists_at(directory_fd, name)
@@ -1491,7 +1719,7 @@ def _create_owned_json_once_at(
         )
         try:
             authority_metadata = os.fstat(authority_fd)
-            if _descriptor_bytes(authority_fd, maximum_bytes=8 * 1024 * 1024) != payload:
+            if _descriptor_bytes(authority_fd, maximum_bytes=maximum_bytes) != payload:
                 raise PrerequisiteError("prerequisite authority path is occupied")
             if authority_metadata.st_nlink == 2:
                 companion_name = (
@@ -1546,7 +1774,7 @@ def _create_owned_json_once_at(
             try:
                 temporary_payload = _descriptor_bytes(
                     temporary_fd,
-                    maximum_bytes=8 * 1024 * 1024,
+                    maximum_bytes=maximum_bytes,
                 )
             finally:
                 os.close(temporary_fd)
@@ -1613,7 +1841,7 @@ def _create_owned_json_once_at(
             if (
                 _stat_identity(os.fstat(authority_fd))
                 != _stat_identity(os.fstat(temporary_fd))
-                or _descriptor_bytes(authority_fd, maximum_bytes=8 * 1024 * 1024)
+                or _descriptor_bytes(authority_fd, maximum_bytes=maximum_bytes)
                 != payload
             ):
                 raise PrerequisiteError(
@@ -1630,7 +1858,7 @@ def _create_owned_json_once_at(
         mode=0o600,
     )
     try:
-        if _descriptor_bytes(final_fd, maximum_bytes=8 * 1024 * 1024) != payload:
+        if _descriptor_bytes(final_fd, maximum_bytes=maximum_bytes) != payload:
             raise PrerequisiteError("published prerequisite authority differs")
     finally:
         os.close(final_fd)
@@ -2948,6 +3176,1304 @@ class PrerequisiteInstaller:
             return transaction
 
 
+def _permission_impact_document(
+    evidence: dict[str, object],
+) -> dict[str, object]:
+    fields = (
+        "schema_version",
+        "policy",
+        "repository",
+        "marker_path",
+        "records",
+        "inventory_sha256",
+        "original_permissions_sha256",
+        "hardened_permissions_sha256",
+    )
+    if any(field not in evidence for field in fields):
+        raise PrerequisiteError("permission hardening impact is incomplete")
+    return {field: evidence[field] for field in fields}
+
+
+class PermissionHardeningInstaller(PrerequisiteInstaller):
+    """One-time successor authority for an already adopted production tree."""
+
+    def __init__(
+        self,
+        source_root: Path,
+        runtime_root: Path,
+        *,
+        production_root: Path = PRODUCTION_ROOT,
+        checkpoint: Callable[[str], None] | None = None,
+        source_readiness_probe: Callable[[Path, str], dict[str, object]] | None = None,
+        delivery_gate_probe: Callable[
+            [Path, Path, str, dict[str, object] | None], dict[str, object]
+        ]
+        | None = None,
+    ) -> None:
+        super().__init__(
+            source_root,
+            runtime_root,
+            checkpoint=checkpoint,
+            source_readiness_probe=source_readiness_probe,
+            delivery_gate_probe=delivery_gate_probe,
+        )
+        self.production_root = production_root.absolute()
+        self.permission_transaction_root = (
+            self.runtime_root / PERMISSION_TRANSACTION_DIRECTORY
+        )
+        self.permission_authority_path = (
+            self.runtime_root / PERMISSION_AUTHORITY_PATH
+        )
+        self.permission_marker_path = (
+            GIT_SOURCE_TRUST.permission_takeover_marker_path(self.runtime_root)
+        )
+        self._pinned_production_directories: dict[
+            str,
+            tuple[int, tuple[int, int, int, int]],
+        ] = {}
+
+    @contextlib.contextmanager
+    def _deployment_lock(self) -> Any:
+        """Pin both state authority and the checkout across the outer journal."""
+
+        with super()._deployment_lock():
+            if self._pinned_production_directories:
+                raise PrerequisiteError(
+                    "production permission authority is already pinned"
+                )
+            root_fd, root_identity = _open_owned_directory_for_cas(
+                self.production_root
+            )
+            opened = [root_fd]
+            try:
+                git_fd, git_identity = _open_owned_directory_for_cas(
+                    Path(".git"),
+                    parent_fd=root_fd,
+                )
+                opened.append(git_fd)
+                self._pinned_production_directories = {
+                    "root": (root_fd, root_identity),
+                    "git": (git_fd, git_identity),
+                }
+                self._assert_permission_paths_pinned()
+                yield
+                self._assert_permission_paths_pinned()
+            finally:
+                self._pinned_production_directories = {}
+                for descriptor in reversed(opened):
+                    with contextlib.suppress(OSError):
+                        os.close(descriptor)
+
+    def _assert_pinned_production(self) -> None:
+        if set(self._pinned_production_directories) != {"root", "git"}:
+            raise PrerequisiteError(
+                "production permission authority is not pinned"
+            )
+        root_fd, root_expected = self._pinned_production_directories["root"]
+        git_fd, git_expected = self._pinned_production_directories["git"]
+        try:
+            root_descriptor = os.fstat(root_fd)
+            root_path = self.production_root.stat(follow_symlinks=False)
+            git_descriptor = os.fstat(git_fd)
+            git_at_root = os.stat(
+                ".git",
+                dir_fd=root_fd,
+                follow_symlinks=False,
+            )
+            git_path = (self.production_root / ".git").stat(
+                follow_symlinks=False
+            )
+        except OSError as exc:
+            raise PrerequisiteError(
+                "pinned production permission authority changed"
+            ) from exc
+        if (
+            not stat.S_ISDIR(root_descriptor.st_mode)
+            or not stat.S_ISDIR(root_path.st_mode)
+            or _owned_directory_inode_identity(root_descriptor) != root_expected
+            or _owned_directory_inode_identity(root_path) != root_expected
+            or not stat.S_ISDIR(git_descriptor.st_mode)
+            or not stat.S_ISDIR(git_at_root.st_mode)
+            or not stat.S_ISDIR(git_path.st_mode)
+            or _owned_directory_inode_identity(git_descriptor) != git_expected
+            or _owned_directory_inode_identity(git_at_root) != git_expected
+            or _owned_directory_inode_identity(git_path) != git_expected
+        ):
+            raise PrerequisiteError(
+                "pinned production permission authority changed"
+            )
+
+    def _assert_permission_paths_pinned(self) -> None:
+        self._assert_pinned_runtime()
+        self._assert_pinned_production()
+
+    def _assert_permission_paths_if_pinned(self) -> None:
+        if self._pinned_directories or self._pinned_production_directories:
+            self._assert_permission_paths_pinned()
+
+    def _permission_marker_exists(self) -> bool:
+        self._assert_permission_paths_if_pinned()
+        observed = (
+            self.permission_marker_path.exists()
+            or self.permission_marker_path.is_symlink()
+        )
+        self._assert_permission_paths_if_pinned()
+        return observed
+
+    def _permission_marker_digest(self) -> str:
+        self._assert_permission_paths_if_pinned()
+        try:
+            return _file_digest(self.permission_marker_path, mode=0o600)
+        finally:
+            self._assert_permission_paths_if_pinned()
+
+    def _plan_current_permission_inventory(self) -> dict[str, object]:
+        self._assert_permission_paths_if_pinned()
+        try:
+            return GIT_SOURCE_TRUST.plan_repository_permission_takeover(
+                self.production_root,
+                self.permission_marker_path,
+            )
+        finally:
+            self._assert_permission_paths_if_pinned()
+
+    def _permission_transaction_path(self, operation_id: str) -> Path:
+        return self.permission_transaction_root / (
+            f"{_require_permission_operation_id(operation_id)}.json"
+        )
+
+    def _permission_transaction_directory_fd(
+        self,
+        *,
+        create: bool,
+    ) -> int | None:
+        if "state" not in self._pinned_directories:
+            if not (
+                self.permission_transaction_root.exists()
+                or self.permission_transaction_root.is_symlink()
+            ):
+                return None
+            return _open_private_directory(self.permission_transaction_root)
+        state_fd = self._pinned_directories["state"][0]
+        try:
+            return _open_private_directory(
+                Path(PERMISSION_TRANSACTION_DIRECTORY.name),
+                parent_fd=state_fd,
+            )
+        except PrerequisiteError:
+            try:
+                os.stat(
+                    PERMISSION_TRANSACTION_DIRECTORY.name,
+                    dir_fd=state_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                if not create:
+                    return None
+            else:
+                raise
+        try:
+            os.mkdir(
+                PERMISSION_TRANSACTION_DIRECTORY.name,
+                mode=0o700,
+                dir_fd=state_fd,
+            )
+            os.fsync(state_fd)
+        except FileExistsError:
+            pass
+        return _open_private_directory(
+            Path(PERMISSION_TRANSACTION_DIRECTORY.name),
+            parent_fd=state_fd,
+        )
+
+    def _load_permission_transaction(
+        self,
+        operation_id: str,
+    ) -> dict[str, object] | None:
+        operation_id = _require_permission_operation_id(operation_id)
+        name = f"{operation_id}.json"
+        directory_fd = self._permission_transaction_directory_fd(create=False)
+        if directory_fd is None:
+            return None
+        try:
+            if not _entry_exists_at(directory_fd, name):
+                return None
+            document = _load_json_at(
+                directory_fd,
+                name,
+                maximum_bytes=PERMISSION_JSON_MAX_BYTES,
+            )
+        finally:
+            os.close(directory_fd)
+        fields = {
+            "schema_version",
+            "status",
+            "phase",
+            "operation_id",
+            "plan",
+            "plan_sha256",
+            "permission_impact_sha256",
+            "permission_checkpoint",
+            "permission_marker_sha256",
+            "permission_evidence_sha256",
+            "source_trust_sha256",
+            "created_at",
+            "completed_at",
+            "aborted_at",
+        }
+        if (
+            set(document) != fields
+            or document.get("schema_version") != 1
+            or document.get("operation_id") != operation_id
+            or document.get("status") not in {"applying", "completed", "aborted"}
+            or document.get("phase") not in PERMISSION_TRANSACTION_PHASES
+            or not isinstance(document.get("plan"), dict)
+            or document.get("plan_sha256")
+            != _canonical_digest(document["plan"])
+            or document.get("permission_impact_sha256")
+            != document["plan"].get("permission_impact_sha256")
+            or (
+                document["status"] == "completed"
+                and document["phase"] != "completed"
+            )
+            or (
+                document["status"] == "aborted"
+                and document["phase"] != "aborted"
+            )
+            or (
+                document["status"] == "applying"
+                and document["phase"] in {"completed", "aborted"}
+            )
+        ):
+            raise PrerequisiteError(
+                "permission hardening transaction is invalid"
+            )
+        for field in (
+            "permission_marker_sha256",
+            "permission_evidence_sha256",
+            "source_trust_sha256",
+        ):
+            value = document.get(field)
+            if value is not None and (
+                not isinstance(value, str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
+            ):
+                raise PrerequisiteError(
+                    "permission hardening journal digest is invalid"
+                )
+        checkpoint = document.get("permission_checkpoint")
+        if checkpoint is not None and (
+            not isinstance(checkpoint, str)
+            or not checkpoint.startswith("permission:")
+            or len(checkpoint) > 512
+        ):
+            raise PrerequisiteError(
+                "permission hardening journal checkpoint is invalid"
+            )
+        return document
+
+    def _write_permission_transaction(
+        self,
+        document: dict[str, object],
+    ) -> None:
+        if not self._pinned_directories:
+            raise PrerequisiteError(
+                "permission hardening journal requires the deploy lock"
+            )
+        directory_fd = self._permission_transaction_directory_fd(create=True)
+        if directory_fd is None:  # pragma: no cover - create owns
+            raise PrerequisiteError(
+                "permission hardening transaction directory is unavailable"
+            )
+        try:
+            _atomic_owned_json_at(
+                directory_fd,
+                self._permission_transaction_path(
+                    str(document["operation_id"])
+                ).name,
+                document,
+            )
+        finally:
+            os.close(directory_fd)
+
+    def _permission_authority_exists(self) -> bool:
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        if state_fd is not None:
+            return _entry_exists_at(
+                state_fd, PERMISSION_AUTHORITY_PATH.name
+            )
+        return (
+            self.permission_authority_path.exists()
+            or self.permission_authority_path.is_symlink()
+        )
+
+    def _load_permission_authority(
+        self,
+        *,
+        require_single_link: bool = True,
+    ) -> dict[str, object]:
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        if state_fd is not None:
+            return _load_json_at(
+                state_fd,
+                PERMISSION_AUTHORITY_PATH.name,
+                require_single_link=require_single_link,
+                maximum_bytes=PERMISSION_JSON_MAX_BYTES,
+            )
+        return _load_json(
+            self.permission_authority_path,
+            require_single_link=require_single_link,
+            maximum_bytes=PERMISSION_JSON_MAX_BYTES,
+        )
+
+    def _publish_permission_authority(
+        self,
+        authority: dict[str, object],
+        operation_id: str,
+    ) -> None:
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        if state_fd is None:
+            raise PrerequisiteError(
+                "permission authority requires the pinned state directory"
+            )
+        _create_owned_json_once_at(
+            state_fd,
+            PERMISSION_AUTHORITY_PATH.name,
+            authority,
+            operation_id=operation_id,
+            checkpoint=self.checkpoint,
+            maximum_bytes=PERMISSION_JSON_MAX_BYTES,
+        )
+
+    def _assert_permission_exclusive(self, operation_id: str) -> None:
+        operation_id = _require_permission_operation_id(operation_id)
+        if self._permission_authority_exists():
+            authority = self._load_permission_authority(
+                require_single_link=False
+            )
+            if authority.get("operation_id") != operation_id:
+                raise PrerequisiteError(
+                    "adopted Git permissions already have another authority"
+                )
+            state_fd = self._pinned_directory_fd(
+                self.runtime_root / "state"
+            )
+            metadata = (
+                os.stat(
+                    PERMISSION_AUTHORITY_PATH.name,
+                    dir_fd=state_fd,
+                    follow_symlinks=False,
+                )
+                if state_fd is not None
+                else self.permission_authority_path.stat(
+                    follow_symlinks=False
+                )
+            )
+            if metadata.st_nlink == 2:
+                temporary_name = (
+                    f".{PERMISSION_AUTHORITY_PATH.name}.create-{operation_id}"
+                )
+                quarantine_name = f"{temporary_name}.quarantine"
+                if state_fd is not None:
+                    companions = [
+                        name
+                        for name in (temporary_name, quarantine_name)
+                        if _entry_exists_at(state_fd, name)
+                    ]
+                    if len(companions) != 1:
+                        raise PrerequisiteError(
+                            "permission authority has an unowned hard link"
+                        )
+                    companion_fd = _open_private_regular_at(
+                        state_fd,
+                        companions[0],
+                        mode=0o600,
+                        allowed_nlinks=frozenset({2}),
+                    )
+                    try:
+                        companion_identity = _stat_identity(
+                            os.fstat(companion_fd)
+                        )
+                    finally:
+                        os.close(companion_fd)
+                else:
+                    companions = [
+                        self.permission_authority_path.parent / name
+                        for name in (temporary_name, quarantine_name)
+                        if (
+                            self.permission_authority_path.parent / name
+                        ).exists()
+                        or (
+                            self.permission_authority_path.parent / name
+                        ).is_symlink()
+                    ]
+                    if len(companions) != 1:
+                        raise PrerequisiteError(
+                            "permission authority has an unowned hard link"
+                        )
+                    companion_metadata = _private_metadata(
+                        companions[0],
+                        mode=0o600,
+                        regular=True,
+                        require_single_link=False,
+                    )
+                    companion_identity = _stat_identity(companion_metadata)
+                if companion_identity != _stat_identity(metadata):
+                    raise PrerequisiteError(
+                        "permission authority staging identity differs"
+                    )
+        directory_fd = self._permission_transaction_directory_fd(create=False)
+        if directory_fd is None:
+            return
+        try:
+            entries = sorted(os.listdir(directory_fd))
+            for name in entries:
+                if name in {
+                    f".{operation_id}.json.tmp",
+                    f".{operation_id}.json.tmp.quarantine",
+                }:
+                    continue
+                if not name.endswith(".json") or name == ".json":
+                    raise PrerequisiteError(
+                        "permission transaction inventory has an unknown entry"
+                    )
+                other = name.removesuffix(".json")
+                _require_permission_operation_id(other)
+                document = _load_json_at(
+                    directory_fd,
+                    name,
+                    maximum_bytes=PERMISSION_JSON_MAX_BYTES,
+                )
+                if (
+                    document.get("schema_version") != 1
+                    or document.get("operation_id") != other
+                    or document.get("status")
+                    not in {"applying", "completed", "aborted"}
+                ):
+                    raise PrerequisiteError(
+                        "permission transaction inventory is invalid"
+                    )
+                if (
+                    other != operation_id
+                    and document.get("status") == "applying"
+                ):
+                    raise PrerequisiteError(
+                        "another permission hardening transaction is active"
+                    )
+        finally:
+            os.close(directory_fd)
+
+    def _read_adoption_permission_authorities(
+        self,
+    ) -> dict[str, tuple[dict[str, object], str]]:
+        """Read each base document and its raw digest from one stable inode."""
+
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        if state_fd is None:
+            adopted = _load_json_with_digest(
+                self.runtime_root / ADOPTED_DEPLOYMENT_PATH
+            )
+            bootstrap = _load_json_with_digest(
+                self.runtime_root / BOOTSTRAP_CONTROL_PATH
+            )
+            base = _load_json_with_digest(self.authority_path)
+        else:
+            adopted = _load_json_with_digest_at(
+                state_fd,
+                ADOPTED_DEPLOYMENT_PATH.name,
+            )
+            bootstrap = _load_json_with_digest_at(
+                state_fd,
+                BOOTSTRAP_CONTROL_PATH.name,
+            )
+            base = _load_json_with_digest_at(
+                state_fd,
+                AUTHORITY_PATH.name,
+            )
+        return {
+            "adopted": adopted,
+            "bootstrap": bootstrap,
+            "base": base,
+        }
+
+    def _adoption_permission_context(self) -> dict[str, object]:
+        for relative in (
+            Path("state/current-deployment.json"),
+            Path("state/deploy-in-progress.json"),
+        ):
+            path = self.runtime_root / relative
+            if path.exists() or path.is_symlink():
+                raise PrerequisiteError(
+                    "permission hardening is restricted to raw manual adoption"
+                )
+        prepared_root = self.runtime_root / "state/prepared"
+        if prepared_root.exists() or prepared_root.is_symlink():
+            _private_metadata(
+                prepared_root,
+                mode=0o700,
+                regular=False,
+            )
+            if any(prepared_root.iterdir()):
+                raise PrerequisiteError(
+                    "prepared deployment exists before permission hardening"
+                )
+        self._assert_permission_paths_if_pinned()
+        adopted_digest = self._runtime_adopted_digest()
+        authorities = self._read_adoption_permission_authorities()
+        self._assert_permission_paths_if_pinned()
+        adopted, stable_adopted_digest = authorities["adopted"]
+        bootstrap, bootstrap_digest = authorities["bootstrap"]
+        base, base_digest = authorities["base"]
+        # The runtime validator and every document+digest read must describe
+        # one unchanged generation. A second complete pass rejects atomic
+        # replacement between otherwise individually stable file opens.
+        authorities_after = self._read_adoption_permission_authorities()
+        adopted_digest_after = self._runtime_adopted_digest()
+        self._assert_permission_paths_if_pinned()
+        if (
+            adopted_digest != stable_adopted_digest
+            or adopted_digest_after != stable_adopted_digest
+            or authorities_after != authorities
+        ):
+            raise PrerequisiteError(
+                "manual adoption permission authorities changed while validating"
+            )
+        production_sha = adopted.get("source_sha")
+        production_tree = adopted.get("source_tree")
+        if (
+            adopted.get("schema_version") != 1
+            or adopted.get("status") != "adopted"
+            or adopted.get("authority_kind") != ADOPTION_AUTHORITY_KIND
+            or not isinstance(production_sha, str)
+            or SHA_RE.fullmatch(production_sha) is None
+            or not isinstance(production_tree, str)
+            or SHA_RE.fullmatch(production_tree) is None
+            or bootstrap.get("schema_version") != 3
+            or bootstrap.get("status") != "completed"
+            or bootstrap.get("authority_kind") != ADOPTION_AUTHORITY_KIND
+            or bootstrap.get("adopted_deployment") != adopted
+            or bootstrap.get("adopted_deployment_sha256")
+            != _canonical_digest(adopted)
+        ):
+            raise PrerequisiteError(
+                "manual adoption permission context is invalid"
+            )
+        base_fields = {
+            "schema_version",
+            "status",
+            "authority_kind",
+            "operation_id",
+            "source_sha",
+            "source_tree",
+            "adopted_deployment_sha256",
+            "plan_sha256",
+            "plan",
+            "completed_at",
+        }
+        base_plan = base.get("plan")
+        base_operation = str(base.get("operation_id", ""))
+        base_source_sha = str(base.get("source_sha", ""))
+        base_source_tree = str(base.get("source_tree", ""))
+        if (
+            set(base) != base_fields
+            or base.get("schema_version") != 1
+            or base.get("status") != "completed"
+            or base.get("authority_kind") != AUTHORITY_KIND
+            or OPERATION_RE.fullmatch(base_operation) is None
+            or SHA_RE.fullmatch(base_source_sha) is None
+            or SHA_RE.fullmatch(base_source_tree) is None
+            or not isinstance(base_plan, dict)
+            or base.get("plan_sha256") != _canonical_digest(base_plan)
+            or base.get("adopted_deployment_sha256") != adopted_digest
+            or base_plan.get("adopted_deployment_sha256") != adopted_digest
+            or base_plan.get("operation_id") != base.get("operation_id")
+            or base_plan.get("source_sha") != base.get("source_sha")
+            or base_plan.get("source_tree") != base.get("source_tree")
+        ):
+            raise PrerequisiteError(
+                "completed adopted prerequisite authority is invalid"
+            )
+        self._validate_plan_targets(dict(base_plan))
+        return {
+            "adopted_deployment_sha256": adopted_digest,
+            "bootstrap_control_sha256": bootstrap_digest,
+            "adopted_prerequisites_sha256": base_digest,
+            "adopted_prerequisites_plan_sha256": base["plan_sha256"],
+            "production_source": {
+                "source_sha": production_sha,
+                "source_tree": production_tree,
+            },
+        }
+
+    def _permission_source_plan(
+        self,
+        source_sha: str,
+        operation_id: str,
+    ) -> dict[str, object]:
+        source_sha = _require_sha(source_sha)
+        operation_id = _require_permission_operation_id(operation_id)
+        source_tree, source_readiness, delivery_gate = self._source_authority(
+            source_sha
+        )
+        context = self._adoption_permission_context()
+        if self._permission_marker_exists():
+            raise PrerequisiteError(
+                "unowned production Git permission marker already exists"
+            )
+        try:
+            permission = self._plan_current_permission_inventory()
+        except Exception as exc:
+            raise PrerequisiteError(
+                "cannot plan production Git permission hardening"
+            ) from exc
+        impact = _permission_impact_document(permission)
+        impact_digest = _canonical_digest(impact)
+        return {
+            "schema_version": 1,
+            "authority_kind": PERMISSION_AUTHORITY_KIND,
+            "operation_id": operation_id,
+            "source_sha": source_sha,
+            "source_tree": source_tree,
+            "source_readiness": source_readiness,
+            "source_readiness_sha256": _canonical_digest(source_readiness),
+            "delivery_gate": delivery_gate,
+            "delivery_gate_sha256": _canonical_digest(delivery_gate),
+            **context,
+            "permission_takeover": permission,
+            "permission_impact_sha256": impact_digest,
+            "mutations": {
+                "services": False,
+                "source_content": False,
+                "source_refs": False,
+                "database": False,
+                "credentials": False,
+                "git_permissions": True,
+                "runtime_authority": True,
+            },
+        }
+
+    def _permission_plan_result(
+        self,
+        plan: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "action": "adopt-git-permission-plan",
+            "apply": False,
+            "logical_zero_write": True,
+            "atime_zero_write": (
+                _mount_suppresses_atime(self.source_root)
+                and _mount_suppresses_atime(self.runtime_root)
+                and _mount_suppresses_atime(self.production_root)
+            ),
+            "plan": plan,
+            "plan_sha256": _canonical_digest(plan),
+            "permission_impact_sha256": plan[
+                "permission_impact_sha256"
+            ],
+        }
+
+    @staticmethod
+    def _permission_immutable_projection(
+        evidence: dict[str, object],
+    ) -> dict[str, object]:
+        return _permission_impact_document(evidence)
+
+    def _validate_permission_plan_context(
+        self,
+        plan: dict[str, object],
+        source_sha: str,
+        operation_id: str,
+        *,
+        durable: bool,
+    ) -> None:
+        expected_fields = {
+            "schema_version",
+            "authority_kind",
+            "operation_id",
+            "source_sha",
+            "source_tree",
+            "source_readiness",
+            "source_readiness_sha256",
+            "delivery_gate",
+            "delivery_gate_sha256",
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+            "adopted_prerequisites_plan_sha256",
+            "production_source",
+            "permission_takeover",
+            "permission_impact_sha256",
+            "mutations",
+        }
+        context = self._adoption_permission_context()
+        if (
+            set(plan) != expected_fields
+            or plan.get("schema_version") != 1
+            or plan.get("authority_kind") != PERMISSION_AUTHORITY_KIND
+            or plan.get("operation_id") != operation_id
+            or plan.get("source_sha") != source_sha
+            or any(plan.get(field) != value for field, value in context.items())
+            or plan.get("mutations")
+            != {
+                "services": False,
+                "source_content": False,
+                "source_refs": False,
+                "database": False,
+                "credentials": False,
+                "git_permissions": True,
+                "runtime_authority": True,
+            }
+        ):
+            raise PrerequisiteError(
+                "permission hardening plan context changed"
+            )
+        sealed_delivery = plan.get("delivery_gate")
+        if not isinstance(sealed_delivery, dict):
+            raise PrerequisiteError(
+                "permission hardening delivery authority is invalid"
+            )
+        if durable:
+            source_tree, readiness, delivery = self._sealed_source_authority(
+                source_sha,
+                sealed_readiness=plan.get("source_readiness"),
+                sealed_delivery_gate=sealed_delivery,
+            )
+        else:
+            source_tree, readiness, delivery = self._source_authority(
+                source_sha,
+                sealed_delivery_gate=dict(sealed_delivery),
+            )
+        if (
+            plan.get("source_tree") != source_tree
+            or plan.get("source_readiness") != readiness
+            or plan.get("source_readiness_sha256")
+            != _canonical_digest(readiness)
+            or plan.get("delivery_gate") != delivery
+            or plan.get("delivery_gate_sha256")
+            != _canonical_digest(delivery)
+        ):
+            raise PrerequisiteError(
+                "permission hardening source authority changed"
+            )
+        raw_permission = plan.get("permission_takeover")
+        try:
+            permission = GIT_SOURCE_TRUST.validate_permission_takeover_evidence(
+                raw_permission,
+                repository=self.production_root,
+                marker_path=self.permission_marker_path,
+                allowed_phases={"captured"},
+            )
+        except Exception as exc:
+            raise PrerequisiteError(
+                "sealed permission hardening inventory is invalid"
+            ) from exc
+        impact = self._permission_immutable_projection(permission)
+        if plan.get("permission_impact_sha256") != _canonical_digest(impact):
+            raise PrerequisiteError(
+                "permission hardening impact digest changed"
+            )
+
+    def _validate_permission_marker_against_plan(
+        self,
+        plan: dict[str, object],
+        *,
+        require_hardened: bool,
+        require_original_mutable: bool = False,
+    ) -> dict[str, object]:
+        captured = dict(plan["permission_takeover"])
+        self._assert_permission_paths_if_pinned()
+        try:
+            try:
+                if require_hardened:
+                    observed = (
+                        GIT_SOURCE_TRUST.verify_repository_permission_takeover(
+                            self.production_root,
+                            self.permission_marker_path,
+                            verify_content=True,
+                            require_original_mutable=require_original_mutable,
+                        )
+                    )
+                else:
+                    observed = (
+                        GIT_SOURCE_TRUST.read_repository_permission_takeover(
+                            self.production_root,
+                            self.permission_marker_path,
+                            allowed_phases={
+                                "captured",
+                                "root-intent",
+                                "root-hardened",
+                                "metadata-directories-intent",
+                                "metadata-directories-hardened",
+                                "metadata-files-intent",
+                                "metadata-files-hardened",
+                                "hardened",
+                            },
+                        )
+                    )
+            except Exception as exc:
+                raise PrerequisiteError(
+                    "production Git permission marker is invalid"
+                ) from exc
+        finally:
+            self._assert_permission_paths_if_pinned()
+        if self._permission_immutable_projection(observed) != (
+            self._permission_immutable_projection(captured)
+        ):
+            raise PrerequisiteError(
+                "production Git permission inventory differs from the plan"
+            )
+        return dict(observed)
+
+    def plan(
+        self,
+        *,
+        source_sha: str,
+        operation_id: str,
+    ) -> dict[str, object]:
+        source_sha = _require_sha(source_sha)
+        operation_id = _require_permission_operation_id(operation_id)
+        self._assert_permission_exclusive(operation_id)
+        transaction = self._load_permission_transaction(operation_id)
+        if transaction is None:
+            if self._permission_authority_exists():
+                raise PrerequisiteError(
+                    "permission authority exists without its transaction"
+                )
+            plan = self._permission_source_plan(source_sha, operation_id)
+            return self._permission_plan_result(plan)
+        if transaction["status"] == "aborted":
+            raise PrerequisiteError(
+                "permission hardening operation was aborted"
+            )
+        plan = dict(transaction["plan"])
+        self._validate_permission_plan_context(
+            plan, source_sha, operation_id, durable=True
+        )
+        marker_exists = self._permission_marker_exists()
+        if transaction["phase"] == "intent" or (
+            transaction["phase"] == "permission-change-intent"
+            and not marker_exists
+        ):
+            if transaction["phase"] == "intent" and marker_exists:
+                raise PrerequisiteError(
+                    "permission marker appeared before durable mutation intent"
+                )
+            current = self._plan_current_permission_inventory()
+            if current != plan["permission_takeover"]:
+                raise PrerequisiteError(
+                    "permission inventory changed after durable intent"
+                )
+        else:
+            self._validate_permission_marker_against_plan(
+                plan,
+                require_hardened=transaction["phase"]
+                in {
+                    "permission-ready",
+                    "source-verified",
+                    "authority-commit-intent",
+                    "completed",
+                },
+            )
+        if transaction["status"] == "completed":
+            if self._load_permission_authority() != self._authority(transaction):
+                raise PrerequisiteError(
+                    "completed permission authority differs"
+                )
+        return self._permission_plan_result(plan)
+
+    def _production_source_trust(
+        self,
+        plan: dict[str, object],
+    ) -> str:
+        expected = plan["production_source"]
+        if not isinstance(expected, dict):  # pragma: no cover - validator owns
+            raise PrerequisiteError("production source authority is invalid")
+        self._assert_permission_paths_if_pinned()
+        try:
+            try:
+                before = GIT_SOURCE_TRUST.repository_preflight_evidence(
+                    self.production_root,
+                    ambient={},
+                )
+                status = GIT_SOURCE_TRUST.run_git(
+                    self.production_root,
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                    ambient={},
+                ).stdout
+                if status:
+                    raise PrerequisiteError(
+                        "production checkout changed after manual adoption"
+                    )
+                trust = GIT_SOURCE_TRUST.repository_trust_evidence(
+                    self.production_root,
+                    source_sha=str(expected["source_sha"]),
+                    source_tree=str(expected["source_tree"]),
+                    branch="refs/heads/main",
+                    origin=None,
+                    ambient={},
+                )
+                GIT_SOURCE_TRUST.require_stable_trust_surface(before, trust)
+            except PrerequisiteError:
+                raise
+            except Exception as exc:
+                raise PrerequisiteError(
+                    "production source differs from manual adoption"
+                ) from exc
+        finally:
+            self._assert_permission_paths_if_pinned()
+        return str(trust["evidence_sha256"])
+
+    def _authority(
+        self,
+        transaction: dict[str, object],
+    ) -> dict[str, object]:
+        plan = transaction["plan"]
+        production = plan["production_source"]
+        return {
+            "schema_version": 1,
+            "status": "completed",
+            "authority_kind": PERMISSION_AUTHORITY_KIND,
+            "operation_id": transaction["operation_id"],
+            "source_sha": plan["source_sha"],
+            "source_tree": plan["source_tree"],
+            "production_source_sha": production["source_sha"],
+            "production_source_tree": production["source_tree"],
+            "adopted_deployment_sha256": plan[
+                "adopted_deployment_sha256"
+            ],
+            "bootstrap_control_sha256": plan[
+                "bootstrap_control_sha256"
+            ],
+            "adopted_prerequisites_sha256": plan[
+                "adopted_prerequisites_sha256"
+            ],
+            "plan_sha256": transaction["plan_sha256"],
+            "permission_impact_sha256": transaction[
+                "permission_impact_sha256"
+            ],
+            "permission_marker_sha256": transaction[
+                "permission_marker_sha256"
+            ],
+            "permission_evidence_sha256": transaction[
+                "permission_evidence_sha256"
+            ],
+            "permission_inventory_sha256": plan[
+                "permission_takeover"
+            ]["inventory_sha256"],
+            "original_permissions_sha256": plan[
+                "permission_takeover"
+            ]["original_permissions_sha256"],
+            "hardened_permissions_sha256": plan[
+                "permission_takeover"
+            ]["hardened_permissions_sha256"],
+            "plan": plan,
+            "completed_at": transaction["completed_at"],
+        }
+
+    def _revalidate_permission_commit_evidence(
+        self,
+        transaction: dict[str, object],
+        plan: dict[str, object],
+    ) -> None:
+        """Keep live evidence and both pinned roots adjacent to publication."""
+
+        self._assert_permission_paths_pinned()
+        marker = self._validate_permission_marker_against_plan(
+            plan,
+            require_hardened=True,
+        )
+        if (
+            self._permission_marker_digest()
+            != transaction["permission_marker_sha256"]
+            or marker["evidence_sha256"]
+            != transaction["permission_evidence_sha256"]
+            or self._production_source_trust(plan)
+            != transaction["source_trust_sha256"]
+        ):
+            raise PrerequisiteError(
+                "permission authority commit evidence changed"
+            )
+        self._assert_permission_paths_pinned()
+
+    def apply(
+        self,
+        *,
+        source_sha: str,
+        operation_id: str,
+        confirm_plan_sha256: str,
+        confirm_permission_impact_sha256: str,
+    ) -> dict[str, object]:
+        planned = self.plan(
+            source_sha=source_sha,
+            operation_id=operation_id,
+        )
+        if planned["plan_sha256"] != confirm_plan_sha256:
+            raise PrerequisiteError(
+                "permission hardening plan confirmation differs"
+            )
+        if (
+            planned["permission_impact_sha256"]
+            != confirm_permission_impact_sha256
+        ):
+            raise PrerequisiteError(
+                "permission hardening impact confirmation differs"
+            )
+        with self._deployment_lock():
+            self.checkpoint("permission-apply-lock-acquired")
+            self._assert_permission_paths_pinned()
+            self._assert_permission_exclusive(operation_id)
+            transaction = self._load_permission_transaction(operation_id)
+            if transaction is None:
+                locked_plan = self._permission_source_plan(
+                    source_sha, operation_id
+                )
+                if (
+                    locked_plan != planned["plan"]
+                    or _canonical_digest(locked_plan) != confirm_plan_sha256
+                    or locked_plan["permission_impact_sha256"]
+                    != confirm_permission_impact_sha256
+                ):
+                    raise PrerequisiteError(
+                        "permission hardening plan changed before locked apply"
+                    )
+                transaction = {
+                    "schema_version": 1,
+                    "status": "applying",
+                    "phase": "intent",
+                    "operation_id": operation_id,
+                    "plan": locked_plan,
+                    "plan_sha256": confirm_plan_sha256,
+                    "permission_impact_sha256": (
+                        confirm_permission_impact_sha256
+                    ),
+                    "permission_checkpoint": None,
+                    "permission_marker_sha256": None,
+                    "permission_evidence_sha256": None,
+                    "source_trust_sha256": None,
+                    "created_at": _utc_now(),
+                    "completed_at": None,
+                    "aborted_at": None,
+                }
+                self._write_permission_transaction(transaction)
+                self.checkpoint("permission-intent")
+            if transaction["status"] == "aborted":
+                raise PrerequisiteError(
+                    "permission hardening operation was aborted"
+                )
+            if (
+                transaction["plan_sha256"] != confirm_plan_sha256
+                or transaction["permission_impact_sha256"]
+                != confirm_permission_impact_sha256
+            ):
+                raise PrerequisiteError(
+                    "durable permission hardening plan differs"
+                )
+            plan = dict(transaction["plan"])
+            self._validate_permission_plan_context(
+                plan, source_sha, operation_id, durable=True
+            )
+            if transaction["status"] == "completed":
+                authority = self._load_permission_authority()
+                if authority != self._authority(transaction):
+                    raise PrerequisiteError(
+                        "completed permission authority differs"
+                    )
+                self._revalidate_permission_commit_evidence(
+                    transaction,
+                    plan,
+                )
+                return authority
+            if transaction["phase"] == "authority-commit-intent":
+                self._revalidate_permission_commit_evidence(
+                    transaction,
+                    plan,
+                )
+                authority = self._authority(transaction)
+                self._publish_permission_authority(authority, operation_id)
+                self._assert_permission_paths_pinned()
+                transaction["phase"] = "completed"
+                transaction["status"] = "completed"
+                self._write_permission_transaction(transaction)
+                return authority
+            if transaction["phase"] == "intent":
+                if self._permission_marker_exists():
+                    raise PrerequisiteError(
+                        "permission marker appeared before mutation intent"
+                    )
+                transaction["phase"] = "permission-change-intent"
+                self._write_permission_transaction(transaction)
+                self.checkpoint("permission-change-intent")
+            if transaction["phase"] == "permission-change-intent":
+                captured = dict(plan["permission_takeover"])
+
+                def permission_checkpoint(label: str) -> None:
+                    self._assert_permission_paths_pinned()
+                    if label in {
+                        "permission:captured",
+                        "permission:root-intent",
+                        "permission:root-hardened",
+                        "permission:metadata-directories-intent",
+                        "permission:metadata-directories-hardened",
+                        "permission:metadata-files-intent",
+                        "permission:metadata-files-hardened",
+                        "permission:hardened",
+                    }:
+                        transaction["permission_checkpoint"] = label
+                        self._write_permission_transaction(transaction)
+                    self.checkpoint(label)
+                    self._assert_permission_paths_pinned()
+
+                try:
+                    self._assert_permission_paths_pinned()
+                    try:
+                        marker = (
+                            GIT_SOURCE_TRUST.takeover_repository_permissions(
+                                self.production_root,
+                                self.permission_marker_path,
+                                checkpoint=permission_checkpoint,
+                                expected_inventory_sha256=captured[
+                                    "inventory_sha256"
+                                ],
+                                expected_original_permissions_sha256=captured[
+                                    "original_permissions_sha256"
+                                ],
+                                expected_hardened_permissions_sha256=captured[
+                                    "hardened_permissions_sha256"
+                                ],
+                            )
+                        )
+                    finally:
+                        self._assert_permission_paths_pinned()
+                except Exception as exc:
+                    raise PrerequisiteError(
+                        "production Git permission hardening did not complete"
+                    ) from exc
+                if self._permission_immutable_projection(marker) != (
+                    self._permission_immutable_projection(captured)
+                ):
+                    raise PrerequisiteError(
+                        "hardened permission inventory differs"
+                    )
+                transaction["permission_marker_sha256"] = (
+                    self._permission_marker_digest()
+                )
+                transaction["permission_evidence_sha256"] = marker[
+                    "evidence_sha256"
+                ]
+                transaction["phase"] = "permission-ready"
+                transaction["permission_checkpoint"] = "permission:hardened"
+                self._write_permission_transaction(transaction)
+                self.checkpoint("permission-ready")
+            if transaction["phase"] == "permission-ready":
+                marker = self._validate_permission_marker_against_plan(
+                    plan,
+                    require_hardened=True,
+                    require_original_mutable=True,
+                )
+                if (
+                    self._permission_marker_digest()
+                    != transaction["permission_marker_sha256"]
+                    or marker["evidence_sha256"]
+                    != transaction["permission_evidence_sha256"]
+                ):
+                    raise PrerequisiteError(
+                        "permission marker changed before source verification"
+                    )
+                transaction["source_trust_sha256"] = (
+                    self._production_source_trust(plan)
+                )
+                transaction["phase"] = "source-verified"
+                self._write_permission_transaction(transaction)
+                self.checkpoint("permission-source-verified")
+            if transaction["phase"] == "source-verified":
+                marker = self._validate_permission_marker_against_plan(
+                    plan, require_hardened=True
+                )
+                if (
+                    self._permission_marker_digest()
+                    != transaction["permission_marker_sha256"]
+                    or marker["evidence_sha256"]
+                    != transaction["permission_evidence_sha256"]
+                    or self._production_source_trust(plan)
+                    != transaction["source_trust_sha256"]
+                ):
+                    raise PrerequisiteError(
+                        "permission source evidence changed before commit"
+                    )
+                transaction["phase"] = "authority-commit-intent"
+                transaction["completed_at"] = _utc_now()
+                self._write_permission_transaction(transaction)
+                self.checkpoint("permission-authority-commit-intent")
+                self._revalidate_permission_commit_evidence(
+                    transaction,
+                    plan,
+                )
+                authority = self._authority(transaction)
+                self._publish_permission_authority(authority, operation_id)
+                self._assert_permission_paths_pinned()
+                transaction["phase"] = "completed"
+                transaction["status"] = "completed"
+                self._write_permission_transaction(transaction)
+                return authority
+            raise PrerequisiteError(
+                "permission hardening transaction is in an unknown phase"
+            )
+
+    def abort(
+        self,
+        *,
+        source_sha: str,
+        operation_id: str,
+        confirm_plan_sha256: str,
+        confirm_permission_impact_sha256: str,
+    ) -> dict[str, object]:
+        _require_sha(source_sha)
+        _require_permission_operation_id(operation_id)
+        with self._deployment_lock():
+            self.checkpoint("permission-abort-lock-acquired")
+            self._assert_permission_paths_pinned()
+            self._assert_permission_exclusive(operation_id)
+            transaction = self._load_permission_transaction(operation_id)
+            if transaction is None:
+                raise PrerequisiteError(
+                    "permission hardening transaction is unavailable"
+                )
+            if (
+                transaction["plan_sha256"] != confirm_plan_sha256
+                or transaction["permission_impact_sha256"]
+                != confirm_permission_impact_sha256
+            ):
+                raise PrerequisiteError(
+                    "permission abort confirmation differs"
+                )
+            if transaction["status"] == "aborted":
+                return transaction
+            if transaction["phase"] != "intent":
+                raise PrerequisiteError(
+                    "permission change intent is forward-only and cannot be aborted"
+                )
+            plan = dict(transaction["plan"])
+            self._validate_permission_plan_context(
+                plan, source_sha, operation_id, durable=True
+            )
+            if self._permission_marker_exists():
+                raise PrerequisiteError(
+                    "permission marker exists before abortable boundary"
+                )
+            current = self._plan_current_permission_inventory()
+            if current != plan["permission_takeover"]:
+                raise PrerequisiteError(
+                    "permission inventory changed before abort"
+                )
+            transaction["status"] = "aborted"
+            transaction["phase"] = "aborted"
+            transaction["aborted_at"] = _utc_now()
+            self._write_permission_transaction(transaction)
+            return transaction
+
+
 def _parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
@@ -2957,25 +4483,69 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--operation-id", required=True)
         if name in {"apply", "abort"}:
             command.add_argument("--confirm-plan-sha256", required=True)
+    for name in (
+        "permission-plan",
+        "permission-apply",
+        "permission-abort",
+    ):
+        command = commands.add_parser(name)
+        command.add_argument("--sha", required=True)
+        command.add_argument("--operation-id", required=True)
+        if name in {"permission-apply", "permission-abort"}:
+            command.add_argument("--confirm-plan-sha256", required=True)
+            command.add_argument(
+                "--confirm-permission-impact-sha256",
+                required=True,
+            )
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     args = _parser().parse_args(argv)
-    installer = PrerequisiteInstaller(REPOSITORY_ROOT, RUNTIME_ROOT)
     try:
-        if args.command == "plan":
+        if args.command.startswith("permission-"):
+            permission_installer = PermissionHardeningInstaller(
+                REPOSITORY_ROOT,
+                RUNTIME_ROOT,
+            )
+            if args.command == "permission-plan":
+                result = permission_installer.plan(
+                    source_sha=args.sha,
+                    operation_id=args.operation_id,
+                )
+            elif args.command == "permission-apply":
+                result = permission_installer.apply(
+                    source_sha=args.sha,
+                    operation_id=args.operation_id,
+                    confirm_plan_sha256=args.confirm_plan_sha256,
+                    confirm_permission_impact_sha256=(
+                        args.confirm_permission_impact_sha256
+                    ),
+                )
+            else:
+                result = permission_installer.abort(
+                    source_sha=args.sha,
+                    operation_id=args.operation_id,
+                    confirm_plan_sha256=args.confirm_plan_sha256,
+                    confirm_permission_impact_sha256=(
+                        args.confirm_permission_impact_sha256
+                    ),
+                )
+        elif args.command == "plan":
+            installer = PrerequisiteInstaller(REPOSITORY_ROOT, RUNTIME_ROOT)
             result = installer.plan(
                 source_sha=args.sha, operation_id=args.operation_id
             )
         elif args.command == "apply":
+            installer = PrerequisiteInstaller(REPOSITORY_ROOT, RUNTIME_ROOT)
             result = installer.apply(
                 source_sha=args.sha,
                 operation_id=args.operation_id,
                 confirm_plan_sha256=args.confirm_plan_sha256,
             )
         else:
+            installer = PrerequisiteInstaller(REPOSITORY_ROOT, RUNTIME_ROOT)
             result = installer.abort(
                 source_sha=args.sha,
                 operation_id=args.operation_id,

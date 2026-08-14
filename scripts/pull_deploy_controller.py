@@ -473,6 +473,75 @@ MUTABLE_DATA_PGPASS = "mutable-data-audit.pgpass"
 ADOPTED_PREREQUISITES_RELATIVE_PATH = Path(
     "state/adopted-prerequisites.json"
 )
+ADOPTED_GIT_PERMISSIONS_RELATIVE_PATH = Path(
+    "state/adopted-git-permissions.json"
+)
+ADOPTED_GIT_PERMISSION_AUTHORITY_KIND = (
+    "manual-runtime-adoption-permission-hardening"
+)
+ADOPTED_GIT_PERMISSION_MAX_BYTES = 256 * 1024 * 1024
+ADOPTED_GIT_PERMISSION_AUTHORITY_FIELDS = {
+    "schema_version",
+    "status",
+    "authority_kind",
+    "operation_id",
+    "source_sha",
+    "source_tree",
+    "production_source_sha",
+    "production_source_tree",
+    "adopted_deployment_sha256",
+    "bootstrap_control_sha256",
+    "adopted_prerequisites_sha256",
+    "plan_sha256",
+    "permission_impact_sha256",
+    "permission_marker_sha256",
+    "permission_evidence_sha256",
+    "permission_inventory_sha256",
+    "original_permissions_sha256",
+    "hardened_permissions_sha256",
+    "plan",
+    "completed_at",
+}
+ADOPTED_GIT_PERMISSION_PLAN_FIELDS = {
+    "schema_version",
+    "authority_kind",
+    "operation_id",
+    "source_sha",
+    "source_tree",
+    "source_readiness",
+    "source_readiness_sha256",
+    "delivery_gate",
+    "delivery_gate_sha256",
+    "adopted_deployment_sha256",
+    "bootstrap_control_sha256",
+    "adopted_prerequisites_sha256",
+    "adopted_prerequisites_plan_sha256",
+    "production_source",
+    "permission_takeover",
+    "permission_impact_sha256",
+    "mutations",
+}
+ADOPTED_GIT_PERMISSION_BINDING_FIELDS = {
+    "authority_kind",
+    "operation_id",
+    "source_sha",
+    "source_tree",
+    "production_source_sha",
+    "production_source_tree",
+    "adopted_deployment_sha256",
+    "bootstrap_control_sha256",
+    "adopted_prerequisites_sha256",
+    "plan_sha256",
+    "permission_impact_sha256",
+    "permission_marker_sha256",
+    "permission_evidence_sha256",
+    "permission_inventory_sha256",
+    "original_permissions_sha256",
+    "hardened_permissions_sha256",
+    "completed_at",
+    "authority_file_sha256",
+    "identity_sha256",
+}
 ADOPTED_PREREQUISITE_FILES = (
     (
         "ops/config/bootstrap-quiesce.example",
@@ -1464,6 +1533,7 @@ def private_regular_file(
             not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.geteuid()
             or stat.S_IMODE(before.st_mode) != mode
+            or before.st_nlink != 1
             or before.st_size < 1
             or before.st_size > maximum_bytes
         ):
@@ -7278,6 +7348,149 @@ def validate_adopted_deployment(document: object) -> dict[str, Any]:
     return dict(document)
 
 
+def validate_adopted_git_permission_binding(
+    document: object,
+) -> dict[str, Any]:
+    """Validate the compact, path-independent adopted Git authority."""
+
+    if (
+        not isinstance(document, dict)
+        or set(document) != ADOPTED_GIT_PERMISSION_BINDING_FIELDS
+        or document.get("authority_kind")
+        != ADOPTED_GIT_PERMISSION_AUTHORITY_KIND
+        or re.fullmatch(
+            r"adopt-git-permission-[a-z0-9][a-z0-9._-]{7,95}",
+            str(document.get("operation_id", "")),
+        )
+        is None
+    ):
+        raise PullDeployError(
+            "adopted Git permission authority binding has an invalid shape"
+        )
+    for field in (
+        "source_sha",
+        "source_tree",
+        "production_source_sha",
+        "production_source_tree",
+    ):
+        require_sha(document.get(field), f"adopted Git permission {field}")
+    for field in (
+        "adopted_deployment_sha256",
+        "bootstrap_control_sha256",
+        "adopted_prerequisites_sha256",
+        "plan_sha256",
+        "permission_impact_sha256",
+        "permission_marker_sha256",
+        "permission_evidence_sha256",
+        "permission_inventory_sha256",
+        "original_permissions_sha256",
+        "hardened_permissions_sha256",
+        "authority_file_sha256",
+    ):
+        require_digest(
+            document.get(field), f"adopted Git permission {field}"
+        )
+    require_utc_timestamp(
+        document.get("completed_at"), "adopted Git permission completion"
+    )
+    identity = {
+        key: value for key, value in document.items() if key != "identity_sha256"
+    }
+    if document.get("identity_sha256") != canonical_json_digest(identity):
+        raise PullDeployError(
+            "adopted Git permission authority binding digest differs"
+        )
+    return dict(document)
+
+
+def validate_adopted_git_permission_takeover(
+    document: object,
+) -> dict[str, Any]:
+    """Validate repository evidence that combines the raw marker and wrapper."""
+
+    fields = {
+        "schema_version",
+        "authority_kind",
+        "authority_file_sha256",
+        "authority",
+        "hardened_marker",
+        "identity_sha256",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != 1
+        or document.get("authority_kind")
+        != ADOPTED_GIT_PERMISSION_AUTHORITY_KIND
+    ):
+        raise PullDeployError(
+            "adopted Git permission takeover evidence has an invalid shape"
+        )
+    binding_raw = document.get("authority")
+    if not isinstance(binding_raw, dict):
+        raise PullDeployError(
+            "adopted Git permission takeover authority is invalid"
+        )
+    binding = validate_adopted_git_permission_binding(
+        {
+            **binding_raw,
+            "authority_file_sha256": document.get("authority_file_sha256"),
+            "identity_sha256": canonical_json_digest(
+                {
+                    **binding_raw,
+                    "authority_file_sha256": document.get(
+                        "authority_file_sha256"
+                    ),
+                }
+            ),
+        }
+    )
+    expected_authority_fields = (
+        ADOPTED_GIT_PERMISSION_BINDING_FIELDS
+        - {"authority_file_sha256", "identity_sha256"}
+    )
+    if (
+        set(binding_raw) != expected_authority_fields
+        or binding["authority_kind"] != document["authority_kind"]
+    ):
+        raise PullDeployError(
+            "adopted Git permission takeover authority differs"
+        )
+    require_digest(
+        document.get("authority_file_sha256"),
+        "adopted Git permission authority file",
+    )
+    try:
+        marker = _git_source_trust.validate_permission_takeover_evidence(
+            document.get("hardened_marker"),
+            allowed_phases={"hardened"},
+        )
+    except Exception as exc:
+        raise PullDeployError(
+            "adopted Git permission hardened marker is invalid"
+        ) from exc
+    if any(
+        binding[field] != marker[marker_field]
+        for field, marker_field in (
+            ("permission_evidence_sha256", "evidence_sha256"),
+            ("permission_inventory_sha256", "inventory_sha256"),
+            ("original_permissions_sha256", "original_permissions_sha256"),
+            ("hardened_permissions_sha256", "hardened_permissions_sha256"),
+        )
+    ):
+        raise PullDeployError(
+            "adopted Git permission marker differs from wrapper authority"
+        )
+    identity = {
+        key: value for key, value in document.items() if key != "identity_sha256"
+    }
+    if document.get("identity_sha256") != canonical_json_digest(identity):
+        raise PullDeployError(
+            "adopted Git permission takeover evidence digest differs"
+        )
+    return dict(document)
+
+
 def validate_adopted_prerequisite_target_binding(
     document: object,
 ) -> dict[str, Any]:
@@ -7295,10 +7508,17 @@ def validate_adopted_prerequisite_target_binding(
         "files_sha256",
         "identity_sha256",
     }
+    schema_version = (
+        document.get("schema_version")
+        if isinstance(document, dict)
+        else None
+    )
+    if schema_version == 2:
+        fields.add("git_permission_authority")
     if (
         not isinstance(document, dict)
         or set(document) != fields
-        or document.get("schema_version") != 1
+        or schema_version not in {1, 2}
         or document.get("policy") != ADOPTED_PREREQUISITE_TARGET_POLICY
         or document.get("mode")
         not in ADOPTED_PREREQUISITE_TARGET_RELATIONS
@@ -7392,6 +7612,19 @@ def validate_adopted_prerequisite_target_binding(
         raise PullDeployError(
             "adopted prerequisite target file inventory digest differs"
         )
+    if schema_version == 2:
+        permission = validate_adopted_git_permission_binding(
+            document.get("git_permission_authority")
+        )
+        if (
+            permission["source_sha"] != target["source_sha"]
+            or permission["source_tree"] != target["source_tree"]
+            or permission["adopted_deployment_sha256"]
+            != authority["adopted_deployment_sha256"]
+        ):
+            raise PullDeployError(
+                "adopted Git permission authority differs from target binding"
+            )
     identity = {
         key: value for key, value in document.items() if key != "identity_sha256"
     }
@@ -8225,6 +8458,7 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             )
             if (
                 adopted is None
+                or prerequisite_binding["schema_version"] != 2
                 or prerequisite_binding["target"]
                 != {
                     "source_sha": repository["target_sha"],
@@ -14171,6 +14405,9 @@ class PullDeployController:
                 self.runtime_root
             )
         )
+        self.adopted_git_permissions_path = (
+            self.runtime_root / ADOPTED_GIT_PERMISSIONS_RELATIVE_PATH
+        )
         self.current_state_path = self.state_dir / "current-deployment.json"
         self.adopted_state_path = self.state_dir / "adopted-deployment.json"
         self.active_slot_path = self.state_dir / "monomer-md-active-slot.json"
@@ -14532,27 +14769,425 @@ class PullDeployController:
                 "production Git trust preflight failed"
             ) from exc
 
-    def _git_permission_takeover(self) -> dict[str, Any] | None:
-        if (
-            self.test_root_mode
-            and not self.git_permission_marker_path.exists()
-            and not self.git_permission_marker_path.is_symlink()
-        ):
-            # Unit-test repositories are not production authority. Complete
-            # tests may opt into the real marker by creating it explicitly.
-            return None
+    @staticmethod
+    def _private_json_with_digest(
+        path: Path,
+        *,
+        label: str,
+        maximum_bytes: int = MAX_GITHUB_RESPONSE_BYTES,
+    ) -> tuple[dict[str, Any], str]:
+        payload, digest = private_regular_file(
+            path,
+            mode=0o600,
+            maximum_bytes=maximum_bytes,
+        )
         try:
-            return (
-                _git_source_trust.verify_repository_permission_takeover(
-                    self.production_root,
-                    self.git_permission_marker_path,
-                    verify_content=False,
-                )
+            document = json.loads(payload.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise PullDeployError(f"{label} is invalid") from exc
+        if not isinstance(document, dict):
+            raise PullDeployError(f"{label} must contain an object")
+        return document, digest
+
+    def _verified_raw_git_permission_takeover(
+        self,
+    ) -> tuple[dict[str, Any], str]:
+        """Pin the generic marker bytes around its filesystem verification."""
+
+        try:
+            before = _git_source_trust.verify_repository_permission_takeover(
+                self.production_root,
+                self.git_permission_marker_path,
+                verify_content=False,
+            )
+            raw, marker_digest = self._private_json_with_digest(
+                self.git_permission_marker_path,
+                label="production Git permission takeover marker",
+                maximum_bytes=ADOPTED_GIT_PERMISSION_MAX_BYTES,
+            )
+            after = _git_source_trust.verify_repository_permission_takeover(
+                self.production_root,
+                self.git_permission_marker_path,
+                verify_content=False,
             )
         except Exception as exc:
             raise PullDeployError(
                 "production Git permission takeover is unavailable"
             ) from exc
+        if raw != before or after != before:
+            raise PullDeployError(
+                "production Git permission takeover changed while validating"
+            )
+        return before, marker_digest
+
+    def _validate_adopted_git_permission_authority(
+        self,
+        *,
+        adopted: Mapping[str, Any],
+        marker: Mapping[str, Any],
+        marker_digest: str,
+    ) -> dict[str, Any]:
+        """Bind the one-time manual wrapper to every raw authority byte."""
+
+        adopted_document, adopted_digest = self._private_json_with_digest(
+            self.adopted_state_path,
+            label="adopted deployment authority",
+        )
+        bootstrap_path = self.state_dir / "bootstrap-control.json"
+        bootstrap, bootstrap_digest = self._private_json_with_digest(
+            bootstrap_path,
+            label="manual adoption bootstrap authority",
+        )
+        prerequisites_path = (
+            self.runtime_root / ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        prerequisites, prerequisites_digest = self._private_json_with_digest(
+            prerequisites_path,
+            label="adopted prerequisite authority",
+        )
+        authority, authority_file_digest = self._private_json_with_digest(
+            self.adopted_git_permissions_path,
+            label="adopted Git permission authority",
+            maximum_bytes=ADOPTED_GIT_PERMISSION_MAX_BYTES,
+        )
+        prerequisite_plan = prerequisites.get("plan")
+        if (
+            adopted_document != adopted
+            or bootstrap.get("adopted_deployment") != adopted_document
+            or bootstrap.get("adopted_deployment_sha256")
+            != canonical_json_digest(adopted_document)
+            or prerequisites.get("schema_version") != 1
+            or prerequisites.get("status") != "completed"
+            or prerequisites.get("authority_kind")
+            != "manual-runtime-adoption-prerequisites"
+            or not isinstance(prerequisite_plan, dict)
+            or prerequisites.get("plan_sha256")
+            != canonical_json_digest(prerequisite_plan)
+            or prerequisites.get("adopted_deployment_sha256")
+            != adopted_digest
+        ):
+            raise PullDeployError(
+                "adopted Git permission base authority differs"
+            )
+        if (
+            set(authority) != ADOPTED_GIT_PERMISSION_AUTHORITY_FIELDS
+            or authority.get("schema_version") != 1
+            or authority.get("status") != "completed"
+            or authority.get("authority_kind")
+            != ADOPTED_GIT_PERMISSION_AUTHORITY_KIND
+            or re.fullmatch(
+                r"adopt-git-permission-[a-z0-9][a-z0-9._-]{7,95}",
+                str(authority.get("operation_id", "")),
+            )
+            is None
+        ):
+            raise PullDeployError(
+                "adopted Git permission authority has an invalid shape"
+            )
+        for field in (
+            "source_sha",
+            "source_tree",
+            "production_source_sha",
+            "production_source_tree",
+        ):
+            require_sha(authority.get(field), f"adopted Git permission {field}")
+        for field in (
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+            "plan_sha256",
+            "permission_impact_sha256",
+            "permission_marker_sha256",
+            "permission_evidence_sha256",
+            "permission_inventory_sha256",
+            "original_permissions_sha256",
+            "hardened_permissions_sha256",
+        ):
+            require_digest(
+                authority.get(field), f"adopted Git permission {field}"
+            )
+        require_utc_timestamp(
+            authority.get("completed_at"),
+            "adopted Git permission completion",
+        )
+        plan = authority.get("plan")
+        if (
+            not isinstance(plan, dict)
+            or set(plan) != ADOPTED_GIT_PERMISSION_PLAN_FIELDS
+            or authority.get("plan_sha256") != canonical_json_digest(plan)
+            or plan.get("schema_version") != 1
+            or plan.get("authority_kind") != authority["authority_kind"]
+            or plan.get("operation_id") != authority["operation_id"]
+            or plan.get("source_sha") != authority["source_sha"]
+            or plan.get("source_tree") != authority["source_tree"]
+            or plan.get("adopted_deployment_sha256") != adopted_digest
+            or plan.get("bootstrap_control_sha256") != bootstrap_digest
+            or plan.get("adopted_prerequisites_sha256")
+            != prerequisites_digest
+            or plan.get("adopted_prerequisites_plan_sha256")
+            != prerequisites["plan_sha256"]
+            or plan.get("production_source")
+            != {
+                "source_sha": adopted["source_sha"],
+                "source_tree": adopted["source_tree"],
+            }
+            or plan.get("mutations")
+            != {
+                "services": False,
+                "source_content": False,
+                "source_refs": False,
+                "database": False,
+                "credentials": False,
+                "git_permissions": True,
+                "runtime_authority": True,
+            }
+        ):
+            raise PullDeployError("adopted Git permission plan authority differs")
+        readiness = plan.get("source_readiness")
+        source_root = (
+            Path(str(readiness.get("source_root", "")))
+            if isinstance(readiness, dict)
+            else Path("")
+        )
+        if (
+            not isinstance(readiness, dict)
+            or set(readiness)
+            != ADOPTED_PREREQUISITE_SOURCE_READINESS_FIELDS
+            or readiness.get("schema_version") != 2
+            or readiness.get("ready") is not True
+            or not source_root.is_absolute()
+            or readiness.get("source_sha") != authority["source_sha"]
+            or readiness.get("source_tree") != authority["source_tree"]
+            or readiness.get("branch") != "main"
+            or readiness.get("origin") != REPOSITORY_SSH_URL
+            or readiness.get("remote_names") != ["origin"]
+            or readiness.get("origin_fetch_urls") != [REPOSITORY_SSH_URL]
+            or readiness.get("origin_push_urls") != [REPOSITORY_SSH_URL]
+            or readiness.get("origin_main_sha") != authority["source_sha"]
+            or readiness.get("standalone_object_database") is not True
+            or readiness.get("shallow") is not False
+            or readiness.get("dirty_entries") != 0
+            or readiness.get("ignored_entries") != 0
+            or readiness.get("unreachable_objects") != 0
+            or readiness.get("replace_refs") != 0
+            or readiness.get("special_index_entries") != 0
+            or readiness.get("sparse_index") is not False
+            or readiness.get("owner_private") is not True
+            or readiness.get("group_or_world_writable") is not False
+            or plan.get("source_readiness_sha256")
+            != canonical_json_digest(readiness)
+        ):
+            raise PullDeployError(
+                "adopted Git permission source readiness differs"
+            )
+        delivery = plan.get("delivery_gate")
+        ci = delivery.get("ci") if isinstance(delivery, dict) else None
+        if (
+            not isinstance(delivery, dict)
+            or set(delivery) != {"remote_main", "ci"}
+            or delivery.get("remote_main") != authority["source_sha"]
+            or not isinstance(ci, dict)
+            or set(ci)
+            != {
+                "workflow_run_id",
+                "run_attempt",
+                "head_sha",
+                "head_branch",
+                "event",
+                "path",
+                "conclusion",
+                "required_jobs",
+            }
+            or not isinstance(ci.get("workflow_run_id"), int)
+            or isinstance(ci.get("workflow_run_id"), bool)
+            or ci.get("workflow_run_id", 0) <= 0
+            or not isinstance(ci.get("run_attempt"), int)
+            or isinstance(ci.get("run_attempt"), bool)
+            or ci.get("run_attempt", 0) <= 0
+            or ci.get("head_sha") != authority["source_sha"]
+            or ci.get("head_branch") != "main"
+            or ci.get("event") != "push"
+            or ci.get("path") != ".github/workflows/ci.yml"
+            or ci.get("conclusion") != "success"
+            or not isinstance(ci.get("required_jobs"), list)
+            or not ci["required_jobs"]
+            or len(ci["required_jobs"]) > 32
+            or any(
+                not isinstance(name, str) or not name
+                for name in ci["required_jobs"]
+            )
+            or len(ci["required_jobs"]) != len(set(ci["required_jobs"]))
+            or plan.get("delivery_gate_sha256")
+            != canonical_json_digest(delivery)
+        ):
+            raise PullDeployError(
+                "adopted Git permission delivery gate differs"
+            )
+        try:
+            captured = _git_source_trust.validate_permission_takeover_evidence(
+                plan.get("permission_takeover"),
+                repository=self.production_root,
+                marker_path=self.git_permission_marker_path,
+                allowed_phases={"captured"},
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "adopted Git permission captured inventory is invalid"
+            ) from exc
+        impact_fields = (
+            "schema_version",
+            "policy",
+            "repository",
+            "marker_path",
+            "records",
+            "inventory_sha256",
+            "original_permissions_sha256",
+            "hardened_permissions_sha256",
+        )
+        impact = {field: captured[field] for field in impact_fields}
+        marker_impact = {field: marker[field] for field in impact_fields}
+        if (
+            impact != marker_impact
+            or plan.get("permission_impact_sha256")
+            != canonical_json_digest(impact)
+            or authority.get("adopted_deployment_sha256") != adopted_digest
+            or authority.get("bootstrap_control_sha256") != bootstrap_digest
+            or authority.get("adopted_prerequisites_sha256")
+            != prerequisites_digest
+            or authority.get("permission_impact_sha256")
+            != plan["permission_impact_sha256"]
+            or authority.get("permission_marker_sha256") != marker_digest
+            or authority.get("permission_evidence_sha256")
+            != marker.get("evidence_sha256")
+            or authority.get("permission_inventory_sha256")
+            != marker.get("inventory_sha256")
+            or authority.get("original_permissions_sha256")
+            != marker.get("original_permissions_sha256")
+            or authority.get("hardened_permissions_sha256")
+            != marker.get("hardened_permissions_sha256")
+            or authority.get("production_source_sha")
+            != adopted["source_sha"]
+            or authority.get("production_source_tree")
+            != adopted["source_tree"]
+        ):
+            raise PullDeployError(
+                "adopted Git permission marker differs from wrapper"
+            )
+        projection = {
+            field: authority[field]
+            for field in (
+                ADOPTED_GIT_PERMISSION_BINDING_FIELDS
+                - {"authority_file_sha256", "identity_sha256"}
+            )
+        }
+        combined: dict[str, Any] = {
+            "schema_version": 1,
+            "authority_kind": ADOPTED_GIT_PERMISSION_AUTHORITY_KIND,
+            "authority_file_sha256": authority_file_digest,
+            "authority": projection,
+            "hardened_marker": dict(marker),
+        }
+        combined["identity_sha256"] = canonical_json_digest(combined)
+        return validate_adopted_git_permission_takeover(combined)
+
+    def _git_permission_takeover(self) -> dict[str, Any] | None:
+        adoption_binding = self._adoption_bootstrap_binding()
+        adopted_prerequisites_path = (
+            self.runtime_root / ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        adopted_prerequisites_present = (
+            adopted_prerequisites_path.exists()
+            or adopted_prerequisites_path.is_symlink()
+        )
+        adopted_wrapper_present = (
+            self.adopted_git_permissions_path.exists()
+            or self.adopted_git_permissions_path.is_symlink()
+        )
+        if adopted_wrapper_present and adoption_binding is None:
+            # Once the one-time wrapper exists, its manual-adoption chain is
+            # permanent provenance.  Replacing bootstrap v3 with an ordinary
+            # v2 document (or removing adopted-deployment) must not silently
+            # downgrade the checkout to the legacy raw-marker path.
+            raise PullDeployError(
+                "adopted Git permission authority lost its adoption binding"
+            )
+        if adopted_prerequisites_present and (
+            adoption_binding is None or not adopted_wrapper_present
+        ):
+            # This create-once authority is unique to manual adoption.  Treat
+            # even an unsafe/malformed path as a lineage sentinel so removing
+            # the newer wrapper/base authorities cannot downgrade the first
+            # formal deployment (before current-state v3 exists) to legacy.
+            raise PullDeployError(
+                "adopted prerequisite lineage requires the adopted Git permission authority"
+            )
+        if (
+            self.test_root_mode
+            and not self.git_permission_marker_path.exists()
+            and not self.git_permission_marker_path.is_symlink()
+            and adoption_binding is None
+        ):
+            # Unit-test repositories are not production authority. Complete
+            # tests may opt into the real marker by creating it explicitly.
+            return None
+        manual_lineage_present = False
+        if self.current_state_path.exists() or self.current_state_path.is_symlink():
+            current_state = validate_current_deployment_state(
+                load_private_json(self.current_state_path)
+            )
+            manual_lineage_present = (
+                current_state.get("schema_version")
+                == CURRENT_STATE_SCHEMA_VERSION
+                and current_state.get("authority_kind")
+                == "manual-runtime-adoption"
+            )
+        if manual_lineage_present and (
+            adoption_binding is None or not adopted_wrapper_present
+        ):
+            # Current-state v3 deliberately carries the first manual
+            # adoption lineage forever.  Removing the wrapper and its base
+            # v3 authorities must not make a later deployment look like an
+            # unrelated legacy raw-marker installation.
+            raise PullDeployError(
+                "manual adoption lineage requires the adopted Git permission authority"
+            )
+        marker, marker_digest = self._verified_raw_git_permission_takeover()
+        if adoption_binding is None:
+            return marker
+        adopted, _adopted_digest = adoption_binding
+        combined = self._validate_adopted_git_permission_authority(
+            adopted=adopted,
+            marker=marker,
+            marker_digest=marker_digest,
+        )
+        # Re-read the raw marker and then revalidate the complete adoption,
+        # prerequisite, and wrapper chain. This CAS prevents same-owner atomic
+        # renames from producing a mixed proof across authority generations.
+        marker_after, marker_digest_after = (
+            self._verified_raw_git_permission_takeover()
+        )
+        if (
+            marker_after != marker
+            or marker_digest_after != marker_digest
+        ):
+            raise PullDeployError(
+                "adopted Git permission authority changed while validating"
+            )
+        adoption_after = self._adoption_bootstrap_binding()
+        if adoption_after is None or adoption_after != adoption_binding:
+            raise PullDeployError(
+                "adopted Git permission base authority changed while validating"
+            )
+        combined_after = self._validate_adopted_git_permission_authority(
+            adopted=adoption_after[0],
+            marker=marker_after,
+            marker_digest=marker_digest_after,
+        )
+        if combined_after != combined:
+            raise PullDeployError(
+                "adopted Git permission authority changed while validating"
+            )
+        return combined
 
     def control_environment(self) -> dict[str, str]:
         return clean_control_environment(self.runtime_root)
@@ -14921,6 +15556,7 @@ class PullDeployController:
         is_ancestor: bool,
         authority_file_digests: Mapping[str, str],
         target_file_digests: Mapping[str, str],
+        git_permission_takeover: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Project independently verified Git facts into stable audit evidence."""
 
@@ -14995,7 +15631,9 @@ class PullDeployController:
             "replace_refs": 0,
         }
         body: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": (
+                2 if git_permission_takeover is not None else 1
+            ),
             "policy": ADOPTED_PREREQUISITE_TARGET_POLICY,
             "mode": "exact-source" if exact else "ancestor-byte-identical",
             "authority": {
@@ -15024,6 +15662,24 @@ class PullDeployController:
             "files": files,
             "files_sha256": canonical_json_digest(files),
         }
+        if git_permission_takeover is not None:
+            combined = validate_adopted_git_permission_takeover(
+                dict(git_permission_takeover)
+            )
+            permission_binding: dict[str, Any] = {
+                **combined["authority"],
+                "authority_file_sha256": combined[
+                    "authority_file_sha256"
+                ],
+            }
+            permission_binding["identity_sha256"] = canonical_json_digest(
+                permission_binding
+            )
+            body["git_permission_authority"] = (
+                validate_adopted_git_permission_binding(
+                    permission_binding
+                )
+            )
         body["identity_sha256"] = canonical_json_digest(body)
         return validate_adopted_prerequisite_target_binding(body)
 
@@ -15175,6 +15831,11 @@ class PullDeployController:
             raise PullDeployError(
                 "private target source changed during compatibility proof"
             )
+        permission_takeover = self._git_permission_takeover()
+        if permission_takeover is None:
+            raise PullDeployError(
+                "adopted target lacks Git permission authority"
+            )
         return self._build_adopted_prerequisite_target_binding(
             authority,
             target_sha=target_sha,
@@ -15182,6 +15843,7 @@ class PullDeployController:
             is_ancestor=ancestor.returncode == 0,
             authority_file_digests=authority_digests,
             target_file_digests=target_digests,
+            git_permission_takeover=permission_takeover,
         )
 
     def _prepared_adopted_prerequisite_target_binding(
@@ -15264,6 +15926,11 @@ class PullDeployController:
             raise PullDeployError(
                 "prerequisite compatibility target changed during proof"
             )
+        permission_takeover = self._git_permission_takeover()
+        if permission_takeover is None:
+            raise PullDeployError(
+                "adopted target lacks Git permission authority"
+            )
         return self._build_adopted_prerequisite_target_binding(
             authority,
             target_sha=target_sha,
@@ -15271,6 +15938,7 @@ class PullDeployController:
             is_ancestor=ancestor.returncode == 0,
             authority_file_digests=authority_digests,
             target_file_digests=target_digests,
+            git_permission_takeover=permission_takeover,
         )
 
     def _revalidate_adopted_prerequisite_target_binding(
