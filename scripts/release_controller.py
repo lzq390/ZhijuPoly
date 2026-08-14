@@ -4833,6 +4833,7 @@ class ReleaseController:
             check=True,
             text=True,
             stdout=subprocess.PIPE,
+            timeout=16 * 60,
         )
 
         applied: list[str] = []

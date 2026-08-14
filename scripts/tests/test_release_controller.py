@@ -1680,11 +1680,14 @@ class ReleaseControllerTests(unittest.TestCase):
             0,
             stdout=output(statuses={"0011_monomer_md_demo_steps": "applied"}),
         )
-        with mock.patch.object(release_controller.subprocess, "run", return_value=valid):
+        with mock.patch.object(
+            release_controller.subprocess, "run", return_value=valid
+        ) as migration_run:
             self.assertEqual(
                 controller.run_migrations({}, mode="expand"),
                 ["0011_monomer_md_demo_steps"],
             )
+        self.assertEqual(migration_run.call_args.kwargs["timeout"], 16 * 60)
 
         invalid_cases = (
             (

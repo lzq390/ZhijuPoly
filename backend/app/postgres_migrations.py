@@ -35,6 +35,8 @@ POLYTAO_GUARDED_JOB_TABLES = (
     "md.monomer_md_jobs",
     "online_knowledge.jobs",
 )
+EXPAND_MIGRATION_LOCK_TIMEOUT = "30s"
+EXPAND_MIGRATION_STATEMENT_TIMEOUT = "15min"
 _SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _BARE_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _FULL_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -872,6 +874,17 @@ def database_is_fresh_for_bootstrap(connection) -> bool:
     )
 
 
+def _set_expand_migration_timeouts(connection) -> None:
+    """Bound one migration transaction without changing connection defaults."""
+
+    connection.execute(
+        f"SET LOCAL lock_timeout = '{EXPAND_MIGRATION_LOCK_TIMEOUT}'"
+    )
+    connection.execute(
+        f"SET LOCAL statement_timeout = '{EXPAND_MIGRATION_STATEMENT_TIMEOUT}'"
+    )
+
+
 def apply_postgres_migrations(
     dsn: str,
     migrations_dir: Path = MIGRATIONS_DIR,
@@ -1108,6 +1121,7 @@ def apply_postgres_migrations(
                 # SQL, and the ledger INSERT commit or roll back together.
                 connection.commit()
                 with connection.transaction():
+                    _set_expand_migration_timeouts(connection)
                     _verify_polytao_contract_guard(connection, contract_guard)
                     connection.execute(sql)
                     connection.execute(
@@ -1127,6 +1141,7 @@ def apply_postgres_migrations(
                     )
             else:
                 with connection.transaction():
+                    _set_expand_migration_timeouts(connection)
                     connection.execute(sql)
                     connection.execute(
                         """

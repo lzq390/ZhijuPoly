@@ -217,6 +217,11 @@ def create_app(
             "physical_gpu": active_settings.physical_gpu,
             "gpu_uuid": getattr(probe, "gpu_uuid", None),
             "guard_status": getattr(probe, "guard_status", None),
+            "gpu_guard_mode": active_settings.gpu_guard_mode,
+            "gpu_guard_status": getattr(probe, "gpu_guard_status", None),
+            "gpu_contention_observed": bool(
+                getattr(probe, "gpu_contention_observed", False)
+            ),
             "model_name": probe.model_name,
             "model_sha256": probe.model_sha256,
             "aimnet_version": getattr(probe, "aimnet_version", None),
@@ -245,6 +250,11 @@ def create_app(
             worker_version=active_settings.worker_version,
             release_sha=active_settings.release_sha,
             runtime_contract_sha256=active_settings.runtime_contract_sha256,
+            gpu_guard_mode=active_settings.gpu_guard_mode,
+            gpu_guard_status=getattr(probe, "gpu_guard_status", None),
+            gpu_contention_observed=bool(
+                getattr(probe, "gpu_contention_observed", False)
+            ),
             runtime=runtime_payload,
         )
 

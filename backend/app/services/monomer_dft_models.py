@@ -257,6 +257,11 @@ class MonomerDftStatusResponse(StrictApiModel):
     schema_ready: StrictBool
     worker_status: StrictStr
     runtime_ready: StrictBool | None = None
+    gpu_guard_mode: Literal["enforce", "observe"] | None = None
+    gpu_guard_status: Literal[
+        "ready", "quarantined", "missing", "stale", "invalid"
+    ] | None = None
+    gpu_contention_observed: StrictBool = False
     draining: StrictBool | None = None
     active_jobs: Annotated[StrictInt, Field(ge=0)]
     max_active_jobs: Annotated[StrictInt, Field(ge=1)]

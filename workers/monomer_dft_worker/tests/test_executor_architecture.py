@@ -63,8 +63,15 @@ def test_production_guard_quarantine_and_staleness_fail_admission(
     settings = SimpleNamespace(
         deployment="prod",
         gpu_guard_state=guard_path,
+        gpu_guard_mode="enforce",
+        model_name="aimnet2",
+        physical_gpu="2",
     )
     pool = ExecutorPool(settings)  # type: ignore[arg-type]
+    pool._primary = SimpleNamespace(broken=False, probe_payload={})
+    pool._primary_residency = SimpleNamespace(
+        gpu_uuid="GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+    )
     current = (
         dt.datetime.now(dt.timezone.utc)
         .replace(microsecond=0)
@@ -74,16 +81,28 @@ def test_production_guard_quarantine_and_staleness_fail_admission(
     guard_path.write_text(
         json.dumps(
             {
+                "schema_version": 1,
                 "observed_at": current,
+                "gpu_index": "2",
                 "status": "quarantined",
                 "gpu_uuid": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
                 "unknown_processes": [{"pid": 99}],
             }
         )
     )
+    guard_path.chmod(0o600)
     error, status = pool._gpu_guard_error()
     assert status == "quarantined"
     assert error is not None
+    quarantined_probe = pool.probe()
+    assert quarantined_probe.ready is False
+    assert quarantined_probe.gpu_guard_mode == "enforce"
+    assert quarantined_probe.gpu_guard_status == "quarantined"
+    assert quarantined_probe.gpu_contention_observed is True
+    with pytest.raises(ScientificComputationError) as blocked:
+        pool._require_gpu_guard_for_execution()
+    assert blocked.value.code == "gpu_guard_blocked"
+    assert blocked.value.details == {"gpu_guard_status": "quarantined"}
 
     stale = (
         dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=3)
@@ -91,16 +110,223 @@ def test_production_guard_quarantine_and_staleness_fail_admission(
     guard_path.write_text(
         json.dumps(
             {
+                "schema_version": 1,
                 "observed_at": stale,
+                "gpu_index": "2",
                 "status": "ready",
                 "gpu_uuid": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
                 "unknown_processes": [],
             }
         )
     )
+    guard_path.chmod(0o600)
     error, status = pool._gpu_guard_error()
-    assert status == "ready"
+    assert status == "stale"
     assert error is not None and "stale" in error
+    stale_probe = pool.probe()
+    assert stale_probe.ready is False
+    assert stale_probe.gpu_guard_mode == "enforce"
+    assert stale_probe.gpu_guard_status == "stale"
+    with pytest.raises(ScientificComputationError) as blocked:
+        pool._require_gpu_guard_for_execution()
+    assert blocked.value.code == "gpu_guard_blocked"
+    assert blocked.value.details == {"gpu_guard_status": "stale"}
+
+
+@pytest.mark.parametrize(
+    ("guard_payload", "observed_at_kind", "expected_status", "contention"),
+    [
+        (
+            {
+                "schema_version": 1,
+                "gpu_index": "2",
+                "gpu_uuid": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
+                "status": "quarantined",
+                "unknown_processes": [{"pid": 99, "process_name": "private"}],
+            },
+            "current",
+            "quarantined",
+            True,
+        ),
+        (None, "current", "missing", False),
+        (
+            {
+                "schema_version": 1,
+                "gpu_index": "2",
+                "gpu_uuid": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
+                "status": "ready",
+                "unknown_processes": [],
+            },
+            "stale",
+            "stale",
+            False,
+        ),
+        (
+            {
+                "schema_version": 2,
+                "gpu_index": "2",
+                "gpu_uuid": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
+                "status": "ready",
+                "unknown_processes": [],
+            },
+            "current",
+            "invalid",
+            False,
+        ),
+        (
+            {
+                "schema_version": 1,
+                "gpu_index": "2",
+                "gpu_uuid": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
+                "status": "ready",
+                "unknown_processes": [],
+            },
+            "future",
+            "invalid",
+            False,
+        ),
+        (
+            {
+                "schema_version": 1,
+                "gpu_index": "2",
+                "gpu_uuid": "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe",
+                "status": "ready",
+                "unknown_processes": [],
+            },
+            "offset",
+            "invalid",
+            False,
+        ),
+    ],
+)
+def test_production_observe_mode_reports_guard_without_closing_runtime(
+    tmp_path: Path,
+    guard_payload: dict[str, object] | None,
+    observed_at_kind: str,
+    expected_status: str,
+    contention: bool,
+) -> None:
+    guard_path = tmp_path / "gpu2-guard.json"
+    if guard_payload is not None:
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        observed_at = {
+            "current": now.isoformat().replace("+00:00", "Z"),
+            "stale": (now - dt.timedelta(minutes=3))
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "future": (now + dt.timedelta(minutes=1))
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "offset": now.isoformat(),
+        }[observed_at_kind]
+        guard_path.write_text(
+            json.dumps(
+                {
+                    **guard_payload,
+                    "observed_at": observed_at,
+                }
+            )
+        )
+        guard_path.chmod(0o600)
+    settings = SimpleNamespace(
+        deployment="prod",
+        gpu_guard_state=guard_path,
+        gpu_guard_mode="observe",
+        model_name="aimnet2",
+        physical_gpu="2",
+    )
+    pool = ExecutorPool(settings)  # type: ignore[arg-type]
+    pool._primary = SimpleNamespace(broken=False, probe_payload={})
+    pool._primary_residency = SimpleNamespace(
+        gpu_uuid="GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+    )
+
+    probe = pool.probe()
+
+    assert probe.ready is True
+    assert probe.gpu_guard_mode == "observe"
+    assert probe.gpu_guard_status == expected_status
+    assert probe.gpu_contention_observed is contention
+    assert probe.error is None
+    assert "private" not in json.dumps(probe.to_dict())
+    pool._require_gpu_guard_for_execution()
+
+
+@pytest.mark.parametrize(
+    "raw_guard",
+    [
+        b"\xff",
+        (b"[" * 1100) + b"0" + (b"]" * 1100),
+        b"{" + (b" " * (1024 * 1024)) + b"}",
+    ],
+    ids=("non-utf8", "deep-json", "oversize"),
+)
+def test_production_observe_mode_contains_unsafe_guard_payloads(
+    tmp_path: Path,
+    raw_guard: bytes,
+) -> None:
+    guard_path = tmp_path / "gpu2-guard.json"
+    guard_path.write_bytes(raw_guard)
+    guard_path.chmod(0o600)
+    settings = SimpleNamespace(
+        deployment="prod",
+        gpu_guard_state=guard_path,
+        gpu_guard_mode="observe",
+        model_name="aimnet2",
+        physical_gpu="2",
+    )
+    pool = ExecutorPool(settings)  # type: ignore[arg-type]
+    pool._primary = SimpleNamespace(broken=False, probe_payload={})
+    pool._primary_residency = SimpleNamespace(
+        gpu_uuid="GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
+    )
+
+    probe = pool.probe()
+
+    assert probe.ready is True
+    assert probe.gpu_guard_status == "invalid"
+    assert probe.gpu_contention_observed is False
+    assert probe.error is None
+
+
+def test_private_gpu_guard_rejects_preexisting_hardlink(tmp_path: Path) -> None:
+    guard_path = tmp_path / "gpu2-guard.json"
+    alias = tmp_path / "gpu2-guard.alias"
+    guard_path.write_text("{}", encoding="utf-8")
+    guard_path.chmod(0o600)
+    os.link(guard_path, alias)
+
+    payload, status = executor_pool_module._read_private_gpu_guard(guard_path)
+
+    assert payload is None
+    assert status == "invalid"
+
+
+def test_private_gpu_guard_rejects_nlink_drift_while_reading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guard_path = tmp_path / "gpu2-guard.json"
+    alias = tmp_path / "gpu2-guard.alias"
+    guard_path.write_text('{"schema_version":1}', encoding="utf-8")
+    guard_path.chmod(0o600)
+    original_read = os.read
+    linked = False
+
+    def read_with_alias(descriptor: int, size: int) -> bytes:
+        nonlocal linked
+        if not linked:
+            os.link(guard_path, alias)
+            linked = True
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(executor_pool_module.os, "read", read_with_alias)
+
+    payload, status = executor_pool_module._read_private_gpu_guard(guard_path)
+
+    assert linked is True
+    assert payload is None
+    assert status == "invalid"
 
 
 def _settings(tmp_path: Path) -> WorkerSettings:

@@ -34,8 +34,8 @@ class ProductionDftPreflightTests(unittest.TestCase):
         self.assertNotIn("runtime-launcher", unit)
         self.assertNotIn("worker-venvs/dft-a", unit)
         self.assertNotIn("NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY=0", unit)
-        self.assertIn("NEXPOLY_DFT_GPU_GUARD_MODE=enforce", unit)
-        self.assertIn("gpu2_guard.py --require-ready", unit)
+        self.assertIn("NEXPOLY_DFT_GPU_GUARD_MODE=observe", unit)
+        self.assertNotIn("gpu2_guard.py --require-ready", unit)
         self.assertIn(
             "/data/lzq/gith/nexpoly-runtime/bin/"
             "control_runtime_selector.py run monomer-dft",

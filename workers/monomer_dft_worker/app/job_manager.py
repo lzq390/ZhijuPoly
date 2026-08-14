@@ -892,6 +892,20 @@ class JobManager:
 
     async def _run(self, record: _JobRecord, queue_wait_ms: float) -> None:
         snapshot = record.snapshot
+        guard_failure = self._enforced_gpu_guard_admission_failure()
+        if guard_failure is not None:
+            with self._state_lock:
+                if (
+                    record.snapshot.status != "queued"
+                    or self._draining
+                    or self._shutdown
+                    or self._fatal
+                ):
+                    return
+                with contextlib.suppress(ValueError):
+                    self._queue.remove(record.snapshot.job_id)
+                self._finish_failed(record, guard_failure, stage="validating")
+            return
         output_directory = self._artifact_directory(snapshot)
         ensure_private_directory(output_directory)
         event_loop = asyncio.get_running_loop()
@@ -1151,6 +1165,38 @@ class JobManager:
         if stage is not None:
             changes["stage"] = stage
         self._update_snapshot(record, **changes)
+
+    def _enforced_gpu_guard_admission_failure(self) -> StructuredError | None:
+        """Return a safe terminal error for a queued enforce-mode admission."""
+
+        settings = getattr(self.runtime, "settings", None)
+        try:
+            probe = self.runtime.probe()
+        except Exception:
+            probe = None
+
+        def value(source: object, name: str) -> object:
+            if isinstance(source, dict):
+                return source.get(name)
+            return getattr(source, name, None)
+
+        deployment = value(probe, "deployment") or value(settings, "deployment")
+        mode = value(probe, "gpu_guard_mode") or value(
+            settings, "gpu_guard_mode"
+        )
+        if deployment != "prod" or mode != "enforce":
+            return None
+        status = value(probe, "gpu_guard_status")
+        if status == "ready":
+            return None
+        if status not in {"quarantined", "missing", "stale", "invalid"}:
+            status = "invalid"
+        return StructuredError(
+            code="gpu_guard_blocked",
+            message="The production GPU guard blocked execution before GPU admission.",
+            retryable=True,
+            details={"gpu_guard_status": status},
+        )
 
     @staticmethod
     def _structured_failure(exc: BaseException) -> StructuredError:

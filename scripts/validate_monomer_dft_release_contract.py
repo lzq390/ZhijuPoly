@@ -747,11 +747,11 @@ def validate_production_activation(root: Path, failures: list[str]) -> None:
     for marker in (
         "MONOMER_DFT_DEPLOYMENT=prod",
         "NEXPOLY_DFT_GPU_DEVICE=2",
-        "NEXPOLY_DFT_GPU_GUARD_MODE=enforce",
+        "NEXPOLY_DFT_GPU_GUARD_MODE=observe",
         "NEXPOLY_DFT_OVERFLOW_GPU_DEVICES=",
         "MONOMER_DFT_GPU_BROKER_ENABLED=0",
         "Restart=always",
-        "gpu2_guard.py --require-ready",
+        "scripts/gpu2_guard.py",
         (
             "/data/lzq/gith/nexpoly-runtime/bin/"
             "control_runtime_selector.py run monomer-dft"
@@ -760,6 +760,8 @@ def validate_production_activation(root: Path, failures: list[str]) -> None:
     ):
         if marker not in worker_unit:
             failures.append(f"production DFT unit is missing policy marker: {marker}")
+    if "gpu2_guard.py --require-ready" in worker_unit:
+        failures.append("production DFT unit must observe rather than enforce GPU2 guard")
     if "ExecStart=/data/lzq/gith/nexpoly/workers/monomer_dft_worker/run_host_worker.sh" in worker_unit:
         failures.append("production DFT unit must not execute the live checkout launcher")
 

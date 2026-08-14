@@ -6,6 +6,7 @@ import signal
 import stat
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from workers.monomer_dft_worker.app.artifacts import (
 )
 from workers.monomer_dft_worker.app.config import REPO_ROOT, WorkerSettings
 from workers.monomer_dft_worker.app.engine import EngineExecution
+from workers.monomer_dft_worker.app.executor_pool import SupervisorRuntimeProbe
 from workers.monomer_dft_worker.app.main import create_app
 from workers.monomer_dft_worker.app.runtime import RuntimeProbe
 
@@ -214,6 +216,9 @@ def test_lifespan_preloads_model_and_exposes_worker_protocol(tmp_path: Path) -> 
         assert payload["runtime"]["visible_gpu_count"] == 1
         assert payload["release_sha"] is None
         assert payload["runtime_contract_sha256"] is None
+        assert payload["gpu_guard_mode"] == "enforce"
+        assert payload["gpu_guard_status"] is None
+        assert payload["gpu_contention_observed"] is False
         assert payload["max_concurrent_jobs"] == 1
         invalid = client.post("/jobs", json={})
         assert invalid.status_code == 422
@@ -223,6 +228,39 @@ def test_lifespan_preloads_model_and_exposes_worker_protocol(tmp_path: Path) -> 
         assert client.get("/docs").status_code == 404
 
     assert runtime.close_calls == 1
+
+
+def test_observe_quarantine_keeps_worker_ready_and_accepting(
+    tmp_path: Path,
+) -> None:
+    runtime = FakeRuntime()
+
+    def observed_probe() -> SupervisorRuntimeProbe:
+        return SupervisorRuntimeProbe(
+            ready=runtime.loaded,
+            model_loaded=runtime.loaded,
+            model_name="aimnet2",
+            gpu_guard_mode="observe",
+            gpu_guard_status="quarantined",
+            guard_status="quarantined",
+            gpu_contention_observed=True,
+        )
+
+    runtime.probe = observed_probe  # type: ignore[method-assign]
+    settings = replace(_settings(tmp_path), gpu_guard_mode="observe")
+    app = create_app(settings, runtime)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["runtime_ready"] is True
+    assert payload["accepting_jobs"] is True
+    assert payload["gpu_guard_mode"] == "observe"
+    assert payload["gpu_guard_status"] == "quarantined"
+    assert payload["gpu_contention_observed"] is True
 
 
 def test_lifespan_fails_closed_when_model_preload_fails(tmp_path: Path) -> None:

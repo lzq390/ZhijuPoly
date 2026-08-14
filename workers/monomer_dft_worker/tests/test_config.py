@@ -28,6 +28,7 @@ ENV_NAMES = (
     "MONOMER_DFT_RELEASE_SHA",
     "MONOMER_DFT_RUNTIME_CONTRACT_SHA256",
     "MONOMER_DFT_GPU_GUARD_STATE",
+    "NEXPOLY_DFT_GPU_GUARD_MODE",
     "MONOMER_DFT_MAX_CONCURRENT_JOBS",
     "MONOMER_DFT_MAX_QUEUED_JOBS",
     "MONOMER_DFT_SINGLE_POINT_TIMEOUT_SECONDS",
@@ -101,6 +102,7 @@ def test_load_settings_uses_isolated_runtime_defaults(monkeypatch: pytest.Monkey
     assert settings.single_point_timeout_seconds == 600
     assert settings.optimization_timeout_seconds == 1800
     assert settings.model_name == "aimnet2"
+    assert settings.gpu_guard_mode == "enforce"
 
 
 def test_gpu1_only_session_has_no_dft_overflow_candidate(
@@ -369,6 +371,7 @@ def test_load_settings_accepts_locked_production_gpu2_direct_mode(
 ) -> None:
     _clean_environment(monkeypatch)
     runtime_root = _configure_production_test_roots(monkeypatch, tmp_path)
+    monkeypatch.setenv("NEXPOLY_DFT_GPU_GUARD_MODE", "observe")
 
     settings = config.load_settings()
 
@@ -378,8 +381,19 @@ def test_load_settings_accepts_locked_production_gpu2_direct_mode(
     assert settings.broker_enabled is False
     assert settings.standalone_gpu_smoke is False
     assert settings.gpu_guard_state == runtime_root / "state/gpu2-guard.json"
+    assert settings.gpu_guard_mode == "observe"
     assert settings.release_sha == "a" * 40
     assert settings.runtime_contract_sha256 == "sha256:" + "b" * 64
+
+
+def test_load_settings_rejects_invalid_gpu_guard_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clean_environment(monkeypatch)
+    monkeypatch.setenv("NEXPOLY_DFT_GPU_GUARD_MODE", "disabled")
+
+    with pytest.raises(ValueError, match="must be enforce or observe"):
+        config.load_settings()
 
 
 def test_load_settings_rejects_missing_production_release_identity(
