@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Governed, commit-pinned production deployment from the live Git checkout.
 
-The controller executes from a content-addressed control release outside the
-checkout.  ``runtime/bin`` contains only an immutable selector and four stable
-Python wrappers;
+Mutating commands execute from a content-addressed control release outside the
+checkout.  The first raw-adoption plan may execute read-only from the exact
+source-pinned target clone because no target control release exists yet.
+``runtime/bin`` contains only an immutable selector and four stable Python
+wrappers;
 source fetch, candidate preparation and image pulls happen before the
 maintenance window, while ``apply`` consumes sealed evidence using the target
 release's controller.
@@ -468,6 +470,104 @@ MONOMER_DFT_GUARD_STATE = Path(
 MUTABLE_DATA_AUDIT_HELPER = "deployment-mutable-data-audit"
 MUTABLE_DATA_SERVICE_CONFIG = "mutable-data-audit.pg_service.conf"
 MUTABLE_DATA_PGPASS = "mutable-data-audit.pgpass"
+ADOPTED_PREREQUISITES_RELATIVE_PATH = Path(
+    "state/adopted-prerequisites.json"
+)
+ADOPTED_PREREQUISITE_FILES = (
+    (
+        "ops/config/bootstrap-quiesce.example",
+        "bootstrap-quiesce",
+        "0700",
+        "reviewed-wrapper",
+        "bootstrap_quiesce_sha256",
+    ),
+    (
+        "ops/config/bootstrap-status.example",
+        "bootstrap-status",
+        "0700",
+        "reviewed-wrapper",
+        "bootstrap_status_sha256",
+    ),
+    (
+        "ops/config/bootstrap-resume-unchanged.example",
+        "bootstrap-resume-unchanged",
+        "0700",
+        "reviewed-wrapper",
+        "bootstrap_resume_unchanged_sha256",
+    ),
+    (
+        "ops/config/bootstrap-rollback.example",
+        "bootstrap-rollback",
+        "0700",
+        "reviewed-wrapper",
+        "bootstrap_rollback_sha256",
+    ),
+    (
+        "ops/config/bootstrap-active-jobs-probe.example",
+        "bootstrap-active-jobs-probe",
+        "0700",
+        "adopted-non-applicable-fail-closed",
+        "bootstrap_active_jobs_probe_sha256",
+    ),
+    (
+        "ops/config/bootstrap-legacy-runtime-status.example",
+        "bootstrap-legacy-runtime-status",
+        "0700",
+        "adopted-non-applicable-fail-closed",
+        "bootstrap_legacy_runtime_status_sha256",
+    ),
+    (
+        "ops/config/bootstrap-legacy-runtime-resume-unchanged.example",
+        "bootstrap-legacy-runtime-resume-unchanged",
+        "0700",
+        "adopted-non-applicable-fail-closed",
+        "bootstrap_legacy_runtime_resume_unchanged_sha256",
+    ),
+    (
+        "ops/config/bootstrap-legacy-runtime-restore.example",
+        "bootstrap-legacy-runtime-restore",
+        "0700",
+        "adopted-non-applicable-fail-closed",
+        "bootstrap_legacy_runtime_restore_sha256",
+    ),
+    (
+        "ops/config/deployment-mutable-data-audit.example",
+        "deployment-mutable-data-audit",
+        "0700",
+        "generic-mutable-audit",
+        "deployment_mutable_data_audit_sha256",
+    ),
+    (
+        "ops/config/mutable-data-audit.pg_service.conf.example",
+        "mutable-data-audit.pg_service.conf",
+        "0600",
+        "generic-mutable-audit-service",
+        "mutable_data_audit_pg_service_sha256",
+    ),
+)
+ADOPTED_PREREQUISITE_SOURCE_READINESS_FIELDS = {
+    "schema_version",
+    "ready",
+    "source_root",
+    "source_sha",
+    "source_tree",
+    "branch",
+    "origin",
+    "remote_names",
+    "origin_fetch_urls",
+    "origin_push_urls",
+    "origin_main_sha",
+    "standalone_object_database",
+    "shallow",
+    "dirty_entries",
+    "ignored_entries",
+    "unreachable_objects",
+    "replace_refs",
+    "special_index_entries",
+    "sparse_index",
+    "owner_private",
+    "group_or_world_writable",
+}
 MUTABLE_DATA_SERVICE = "nexpoly-mutable-audit"
 MUTABLE_DATA_HOST = "127.0.0.1"
 MUTABLE_DATA_PORT = 55432
@@ -591,6 +691,7 @@ MAX_GITHUB_RESPONSE_BYTES = 2 * 1024 * 1024
 SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 DRAIN_TIMEOUT_SECONDS = 1800
 DRAIN_POLL_SECONDS = 2
+ACCEPTANCE_HOLD_SECONDS = 15 * 60
 ACTIVE_JOB_FIELDS_V1 = frozenset(
     {
         "monomer_md",
@@ -798,6 +899,7 @@ CURRENT_STATE_OPTIONAL_FIELDS = {
     "final_external_database_audit",
     "queue_mutable_data_audit",
     "rollback_provenance",
+    "postgres_rehearsal",
 }
 ADOPTED_DEPLOYMENT_FIELDS = {
     "schema_version",
@@ -910,6 +1012,10 @@ STOP_INTENT_PHASES = {
     "verified",
     "state-commit-started",
     "state-committed",
+    "awaiting-acceptance",
+    "acceptance-started",
+    "acceptance-resume-started",
+    "acceptance-rejected",
     "admission-resumed",
     "database-restore-started",
     "database-restored",
@@ -1012,6 +1118,26 @@ MARKER_OPTIONAL_FIELDS = {
     "bridge_external_database_audit",
     "final_external_database_audit",
     "current_state_precondition_sha256",
+    "acceptance_started_at",
+    "acceptance_not_before",
+    "acceptance_authority_path",
+    "acceptance_authority_sha256",
+    "acceptance_evidence",
+    "acceptance_rejected",
+    "postgres_rehearsal",
+}
+
+POSTGRES_REHEARSAL_BINDING_FIELDS = {
+    "schema_version",
+    "operation_id",
+    "target_sha",
+    "descriptor_sha256",
+    "path",
+    "file_sha256",
+    "report_sha256",
+    "completed_at",
+    "dump_sha256",
+    "journal_head_sha256",
 }
 
 POSTGRES_RUNTIME_FENCE_FIELDS = {
@@ -1259,6 +1385,20 @@ def utc_now() -> str:
     )
 
 
+def require_utc_timestamp(value: object, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise PullDeployError(f"{label} timestamp is invalid")
+    try:
+        parsed = dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=dt.timezone.utc
+        )
+    except ValueError as exc:
+        raise PullDeployError(f"{label} timestamp is invalid") from exc
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
+        raise PullDeployError(f"{label} timestamp is invalid")
+    return parsed
+
+
 def require_sha(value: object, label: str = "SHA") -> str:
     if not isinstance(value, str) or SHA_RE.fullmatch(value) is None:
         raise PullDeployError(f"{label} must be 40 lowercase hexadecimal characters")
@@ -1436,6 +1576,33 @@ def canonical_json_bytes(value: object) -> bytes:
 
 def canonical_json_digest(value: object) -> str:
     return sha256_bytes(canonical_json_bytes(value))
+
+
+def acceptance_runtime_stability_identity(verification: object) -> dict[str, Any]:
+    """Project runtime evidence onto stable process/container identity fields."""
+
+    if not isinstance(verification, dict):
+        raise PullDeployError("acceptance runtime verification is invalid")
+    raw = verification.get("runtime_identity", verification)
+    if not isinstance(raw, dict) or not raw:
+        raise PullDeployError("acceptance runtime identity is missing")
+    try:
+        projected = json.loads(canonical_json_bytes(raw))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise PullDeployError(
+            "acceptance runtime identity is not canonical JSON"
+        ) from exc
+    if not isinstance(projected, dict):
+        raise PullDeployError("acceptance runtime identity is invalid")
+    # Freshness timestamps are expected to advance between the two acceptance
+    # invocations.  Container IDs/restart counts, systemd MainPID/InvocationID,
+    # worker identities, guard state and every other runtime field remain in
+    # the digest and therefore must be byte-for-byte stable.
+    projected.pop("verified_at", None)
+    dft_guard = projected.get("dft_guard")
+    if isinstance(dft_guard, dict):
+        dft_guard.pop("observed_at", None)
+    return projected
 
 
 def validate_production_config_evidence(document: object) -> dict[str, str]:
@@ -3233,6 +3400,7 @@ def _derive_mutable_data_transition(
     before_ledger = before["migration_ledger"]
     after_ledger = after["migration_ledger"]
     migration: dict[str, Any] | None = None
+    migrations: list[dict[str, Any]] | None = None
     if after_ledger == before_ledger:
         kind = "code-deploy"
     elif (
@@ -3253,11 +3421,30 @@ def _derive_mutable_data_transition(
             "0014_monomer_md_task_queue_cancel": "expand-0014",
             "0015_property_filter_performance": "expand-0015",
         }[migration["version"]]
+    elif (
+        len(after_ledger) == len(before_ledger) + 2
+        and after_ledger[:-2] == before_ledger
+        and [entry["version"] for entry in after_ledger[-2:]]
+        == [
+            "0014_monomer_md_task_queue_cancel",
+            "0015_property_filter_performance",
+        ]
+    ):
+        # The first governed deployment after manual post-0013 adoption applies
+        # both remaining expand migrations in one migration-runner invocation.
+        # Preserve that exact two-record authority instead of weakening the
+        # general ledger-prefix rule to accept an arbitrary multi-step jump.
+        migrations = [dict(entry) for entry in after_ledger[-2:]]
+        kind = "expand-0014-0015"
     else:
         raise PullDeployError(
             "mutable-data audit observed an unauthorized migration transition"
         )
     migration_version = None if migration is None else migration["version"]
+    migration_versions = {
+        *(entry["version"] for entry in migrations or []),
+        *([migration_version] if migration_version is not None else []),
+    }
 
     before_business = _mutable_table_map(before["business_tables"])
     after_business = _mutable_table_map(after["business_tables"])
@@ -3268,7 +3455,7 @@ def _derive_mutable_data_transition(
     )
     for relation in MUTABLE_DATA_BUSINESS_TABLES:
         if (
-            migration_version == "0013_monomer_dft_jobs"
+            "0013_monomer_dft_jobs" in migration_versions
             and relation in dft_relations
         ):
             created = after_business[relation]
@@ -3281,7 +3468,7 @@ def _derive_mutable_data_transition(
                     "0013 did not create one empty DFT business relation"
                 )
         elif (
-            migration_version == "0014_monomer_md_task_queue_cancel"
+            "0014_monomer_md_task_queue_cancel" in migration_versions
             and relation == "md.monomer_md_jobs"
         ):
             previous = before_business[relation]
@@ -3299,7 +3486,7 @@ def _derive_mutable_data_transition(
             raise PullDeployError(
                 f"mutable business table changed during deployment: {relation}"
             )
-    if migration_version == "0013_monomer_dft_jobs":
+    if "0013_monomer_dft_jobs" in migration_versions:
         try:
             _site_helper_contracts.validate_monomer_dft_0013_creation(
                 after
@@ -3316,7 +3503,7 @@ def _derive_mutable_data_transition(
     )
     for relation in MUTABLE_DATA_STATIC_TABLES:
         if (
-            migration_version == "0015_property_filter_performance"
+            "0015_property_filter_performance" in migration_versions
             and relation == property_filter_snapshot
         ):
             created = after_static[relation]
@@ -3346,7 +3533,7 @@ def _derive_mutable_data_transition(
     before_exception = before["migration_exception"]
     after_exception = after["migration_exception"]
     exception: dict[str, Any] | None = None
-    if migration_version == "0012_drop_polytao_jobs":
+    if "0012_drop_polytao_jobs" in migration_versions:
         if (
             before_exception["state"] != "present"
             or after_exception
@@ -3387,7 +3574,7 @@ def _derive_mutable_data_transition(
     md_queue_sequence = "md.monomer_md_queue_sequence_seq"
     for name in MUTABLE_DATA_SEQUENCES:
         if (
-            migration_version == "0013_monomer_dft_jobs"
+            "0013_monomer_dft_jobs" in migration_versions
             and name == dft_sequence
         ):
             created = after_sequences[name]
@@ -3401,7 +3588,7 @@ def _derive_mutable_data_transition(
                     "0013 DFT identity sequence is not pristine"
                 )
         elif (
-            migration_version == "0014_monomer_md_task_queue_cancel"
+            "0014_monomer_md_task_queue_cancel" in migration_versions
             and name == md_queue_sequence
         ):
             created = after_sequences[name]
@@ -3429,12 +3616,13 @@ def _derive_mutable_data_transition(
         "kind": kind,
         "operation_id": operation_id,
         "migration": migration,
+        **({"migrations": migrations} if migrations is not None else {}),
         "control": control,
         "analytics": "unchanged",
         "polytao_exception": exception,
         "dft_relations": (
             sorted(dft_relations)
-            if migration_version == "0013_monomer_dft_jobs"
+            if "0013_monomer_dft_jobs" in migration_versions
             else []
         ),
     }
@@ -3843,6 +4031,70 @@ def validate_postgres_runtime_fence(document: object) -> dict[str, Any]:
         "data_volume": dict(volume),
         "host_endpoint": dict(endpoint),
     }
+
+
+def validate_postgres_rehearsal_binding(
+    document: object,
+    *,
+    operation_id: str | None = None,
+    target_sha: str | None = None,
+    descriptor_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Validate the immutable rehearsal authority carried by a deployment."""
+
+    if (
+        not isinstance(document, dict)
+        or set(document) != POSTGRES_REHEARSAL_BINDING_FIELDS
+        or document.get("schema_version") != 1
+    ):
+        raise PullDeployError("PostgreSQL rehearsal binding has an invalid shape")
+    observed_operation = require_operation_id(
+        str(document.get("operation_id", ""))
+    )
+    observed_target = require_sha(
+        document.get("target_sha"), "PostgreSQL rehearsal target SHA"
+    )
+    observed_descriptor = require_digest(
+        document.get("descriptor_sha256"),
+        "PostgreSQL rehearsal descriptor digest",
+    )
+    if (
+        operation_id is not None
+        and observed_operation != require_operation_id(operation_id)
+        or target_sha is not None
+        and observed_target
+        != require_sha(target_sha, "expected PostgreSQL rehearsal target SHA")
+        or descriptor_sha256 is not None
+        and observed_descriptor
+        != require_digest(
+            descriptor_sha256,
+            "expected PostgreSQL rehearsal descriptor digest",
+        )
+    ):
+        raise PullDeployError("PostgreSQL rehearsal binding identity differs")
+    path_value = document.get("path")
+    path = Path(path_value) if isinstance(path_value, str) else Path()
+    if (
+        not isinstance(path_value, str)
+        or not path.is_absolute()
+        or path.name != "report.json"
+        or path.parent.name != observed_operation
+        or path.parent.parent.name != "deployment-rehearsals"
+    ):
+        raise PullDeployError("PostgreSQL rehearsal report path is invalid")
+    for field in (
+        "file_sha256",
+        "report_sha256",
+        "dump_sha256",
+        "journal_head_sha256",
+    ):
+        require_digest(
+            document.get(field), f"PostgreSQL rehearsal {field}"
+        )
+    _external_database_audit_timestamp(
+        document.get("completed_at"), "PostgreSQL rehearsal completion"
+    )
+    return dict(document)
 
 
 def postgres_runtime_fence_identity(document: object) -> dict[str, Any]:
@@ -4366,8 +4618,42 @@ def parse_literal_env(path: Path) -> dict[str, str]:
 
 
 def validate_deploy_control_values(
-    values: dict[str, str], *, runtime_root: Path
+    values: dict[str, str],
+    *,
+    runtime_root: Path,
+    adopted_deployment: object | None = None,
 ) -> dict[str, str]:
+    values = dict(values)
+    legacy_image_keys = {
+        "NEXPOLY_BACKEND_IMAGE": "backend",
+        "NEXPOLY_WEB_IMAGE": "web",
+    }
+    present_legacy_images = {
+        key for key in legacy_image_keys if key in values
+    }
+    if present_legacy_images:
+        if present_legacy_images != set(legacy_image_keys):
+            raise PullDeployError(
+                "deploy.env legacy image variables are incomplete"
+            )
+        if adopted_deployment is None:
+            raise PullDeployError(
+                "deploy.env legacy image variables lack manual-adoption authority"
+            )
+        adopted = validate_adopted_deployment(adopted_deployment)
+        if any(
+            values[key]
+            != adopted["images"][role]["digest_ref"]
+            for key, role in legacy_image_keys.items()
+        ):
+            raise PullDeployError(
+                "deploy.env legacy image variables differ from manual adoption"
+            )
+        # These preserved production values describe only the adopted runtime.
+        # They must never enter target Compose interpolation or descriptor
+        # authority; SystemLifecycle injects the candidate digests explicitly.
+        for key in legacy_image_keys:
+            values.pop(key)
     forbidden_exact = {
         "PATH",
         "HOME",
@@ -4387,8 +4673,6 @@ def validate_deploy_control_values(
         "TEMP",
         "IFS",
         "CDPATH",
-        "NEXPOLY_BACKEND_IMAGE",
-        "NEXPOLY_WEB_IMAGE",
         "COMPOSE_PROJECT_NAME",
     }
     forbidden_prefixes = (
@@ -6835,6 +7119,12 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
             raise PullDeployError(
                 "governed deployment has unbound adoption provenance"
             )
+        validate_postgres_rehearsal_binding(
+            document.get("postgres_rehearsal"),
+            operation_id=document["operation_id"],
+            target_sha=document["source_sha"],
+            descriptor_sha256=document["descriptor_sha256"],
+        )
         dft = validate_dft_current_projection(document.get("monomer_dft"))
         if (
             dft["runtime"]["release_sha"] != document["source_sha"]
@@ -7916,6 +8206,16 @@ def validate_recovery_marker(
         and marker_schema != MARKER_SCHEMA_VERSION
     ):
         raise PullDeployError("descriptor V4 requires a recovery marker V3")
+    if (
+        descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION
+        and marker.get("action") == "deploy"
+    ):
+        validate_postgres_rehearsal_binding(
+            marker.get("postgres_rehearsal"),
+            operation_id=descriptor["operation_id"],
+            target_sha=descriptor["repository"]["target_sha"],
+            descriptor_sha256=descriptor_digest,
+        )
     if marker["action"] == "deploy":
         expected_precondition = descriptor.get(
             "previous_deployment_sha256"
@@ -8178,11 +8478,148 @@ def validate_recovery_marker(
         if marker["action"] != "deploy" or not isinstance(candidate, dict):
             raise PullDeployError("deployment marker candidate state is invalid")
         validate_current_deployment_state(candidate)
+        if (
+            descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION
+            and candidate.get("postgres_rehearsal")
+            != marker.get("postgres_rehearsal")
+        ):
+            raise PullDeployError(
+                "candidate state PostgreSQL rehearsal authority differs"
+            )
         validate_current_state_adoption_lineage(
             candidate,
             descriptor=descriptor,
         )
         require_digest(candidate_digest, "deployment marker candidate-state digest")
+    effective_marker_phase = (
+        marker.get("failed_phase") if phase == "failed" else phase
+    )
+    staged_phases = {
+        "awaiting-acceptance",
+        "acceptance-started",
+        "acceptance-resume-started",
+        "acceptance-rejected",
+    }
+    staged_acceptance = effective_marker_phase in staged_phases or (
+        effective_marker_phase == "admission-resumed"
+        and "acceptance_started_at" in marker
+    )
+    if staged_acceptance:
+        if (
+            descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION
+            or marker.get("action") != "deploy"
+            or candidate is None
+        ):
+            raise PullDeployError(
+                "staged acceptance is restricted to ordinary descriptor V4 deployments"
+            )
+        started = require_utc_timestamp(
+            marker.get("acceptance_started_at"), "acceptance start"
+        )
+        not_before = require_utc_timestamp(
+            marker.get("acceptance_not_before"), "acceptance not-before"
+        )
+        if not_before - started < dt.timedelta(seconds=ACCEPTANCE_HOLD_SECONDS):
+            raise PullDeployError("staged acceptance interval is shorter than 15 minutes")
+        authority_path = marker.get("acceptance_authority_path")
+        if (
+            not isinstance(authority_path, str)
+            or not Path(authority_path).is_absolute()
+        ):
+            raise PullDeployError("staged acceptance authority path is invalid")
+        require_digest(
+            marker.get("acceptance_authority_sha256"),
+            "staged acceptance authority",
+        )
+        rejected = marker.get("acceptance_rejected")
+        if effective_marker_phase == "acceptance-rejected":
+            if rejected is not True:
+                raise PullDeployError("staged rejection lacks durable intent")
+        elif rejected is not None:
+            raise PullDeployError("staged acceptance has unexpected rejection intent")
+        evidence = marker.get("acceptance_evidence")
+        evidence_required = effective_marker_phase in {
+            "acceptance-started",
+            "acceptance-resume-started",
+            "admission-resumed",
+        }
+        if evidence_required or (
+            effective_marker_phase == "acceptance-rejected"
+            and evidence is not None
+        ):
+            if (
+                not isinstance(evidence, dict)
+                or set(evidence)
+                != {
+                    "schema_version",
+                    "operation_id",
+                    "candidate_state_sha256",
+                    "runtime_identity_sha256",
+                    "database_state_sha256",
+                    "worker_fence_sha256",
+                    "probe_report_sha256",
+                    "probe_report_file_sha256",
+                    "probe_authority_sha256",
+                    "probes_completed_at",
+                    "observation_started_at",
+                    "observation_not_before",
+                    "verified_at",
+                }
+                or evidence.get("schema_version") != 1
+                or evidence.get("operation_id") != descriptor["operation_id"]
+                or evidence.get("candidate_state_sha256") != candidate_digest
+            ):
+                raise PullDeployError("staged acceptance evidence is invalid")
+            for name in (
+                "runtime_identity_sha256",
+                "database_state_sha256",
+                "worker_fence_sha256",
+                "probe_report_sha256",
+                "probe_report_file_sha256",
+                "probe_authority_sha256",
+            ):
+                require_digest(evidence.get(name), f"acceptance {name}")
+            verified_at = _external_database_audit_timestamp(
+                evidence.get("verified_at"), "acceptance evidence verification"
+            )
+            probes_completed = _external_database_audit_timestamp(
+                evidence.get("probes_completed_at"),
+                "acceptance probes completed",
+            )
+            observation_started = _external_database_audit_timestamp(
+                evidence.get("observation_started_at"),
+                "acceptance observation start",
+            )
+            observation_not_before = _external_database_audit_timestamp(
+                evidence.get("observation_not_before"),
+                "acceptance observation not-before",
+            )
+            if (
+                probes_completed < started
+                or verified_at < probes_completed
+                or observation_started != verified_at
+                or observation_not_before - observation_started
+                < dt.timedelta(seconds=ACCEPTANCE_HOLD_SECONDS)
+            ):
+                raise PullDeployError(
+                    "staged acceptance observation does not follow completed probes"
+                )
+        elif evidence is not None:
+            raise PullDeployError(
+                "staged acceptance evidence precedes completed probes"
+            )
+    elif any(
+        name in marker
+        for name in (
+            "acceptance_started_at",
+            "acceptance_not_before",
+            "acceptance_authority_path",
+            "acceptance_authority_sha256",
+            "acceptance_evidence",
+            "acceptance_rejected",
+        )
+    ):
+        raise PullDeployError("non-staged deployment marker contains acceptance state")
     rollback_candidate = marker.get("rollback_candidate_state")
     rollback_candidate_digest = marker.get("rollback_candidate_state_sha256")
     if (rollback_candidate is None) != (rollback_candidate_digest is None):
@@ -8272,6 +8709,19 @@ class Lifecycle(Protocol):
         self, controller: "PullDeployController", descriptor: dict[str, Any]
     ) -> None: ...
 
+    def run_acceptance_probes(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+        authority_path: Path,
+    ) -> None: ...
+
+    def cleanup_acceptance_probe_proxy(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+    ) -> None: ...
+
     def verify(
         self, controller: "PullDeployController", descriptor: dict[str, Any]
     ) -> dict[str, Any]: ...
@@ -8319,7 +8769,6 @@ class Lifecycle(Protocol):
         allow_unfenced: bool,
         allow_partial_stop: bool = False,
     ) -> dict[str, Any]: ...
-
 
 class SystemLifecycle:
     @staticmethod
@@ -8502,6 +8951,57 @@ class SystemLifecycle:
         return container_id
 
     @staticmethod
+    def _exact_container_id_by_name(
+        controller: "PullDeployController",
+        name: str,
+        *,
+        label: str,
+    ) -> str | None:
+        """Enumerate one exact Docker name; rc=0 plus no row alone proves absence."""
+
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name) is None:
+            raise PullDeployError(f"{label} container name is invalid")
+        try:
+            listed = controller.runner.run(
+                [
+                    "docker",
+                    "container",
+                    "ls",
+                    "--all",
+                    "--no-trunc",
+                    "--filter",
+                    f"name=^/{name}$",
+                    "--format",
+                    "{{.ID}}\t{{.Names}}",
+                ],
+                env=controller.control_environment(),
+                check=False,
+            )
+        except BaseException as exc:
+            raise PullDeployError(
+                f"cannot enumerate {label} container"
+            ) from exc
+        if listed.returncode != 0:
+            raise PullDeployError(f"cannot enumerate {label} container")
+        rows = [
+            line
+            for line in str(listed.stdout).splitlines()
+            if line.strip()
+        ]
+        if not rows:
+            return None
+        if len(rows) != 1:
+            raise PullDeployError(f"{label} container identity is ambiguous")
+        fields = rows[0].split("\t")
+        if (
+            len(fields) != 2
+            or re.fullmatch(r"[0-9a-f]{64}", fields[0]) is None
+            or fields[1] != name
+        ):
+            raise PullDeployError(f"{label} container enumeration is malformed")
+        return fields[0]
+
+    @staticmethod
     def _remove_container_and_prove_absent(
         controller: "PullDeployController",
         name: str,
@@ -8519,22 +9019,16 @@ class SystemLifecycle:
         except BaseException as exc:
             removal_error = exc
         try:
-            absent = controller.runner.run(
-                ["docker", "container", "inspect", name],
-                env=controller.control_environment(),
-                check=False,
+            observed = SystemLifecycle._exact_container_id_by_name(
+                controller, name, label=label
             )
         except BaseException as exc:
             raise PullDeployError(f"cannot prove {label} container cleanup") from (
                 removal_error or exc
             )
-        if absent.returncode == 1:
+        if observed is None:
             return
-        if absent.returncode == 0:
-            raise PullDeployError(f"{label} container still exists after cleanup")
-        raise PullDeployError(
-            f"cannot prove {label} container cleanup"
-        ) from removal_error
+        raise PullDeployError(f"{label} container still exists after cleanup")
 
     """Fixed production actions; tests replace this object, not shell strings."""
 
@@ -8554,6 +9048,437 @@ class SystemLifecycle:
             str(controller.config_dir / "deploy.env"),
             *arguments,
         ]
+
+    def _inspect_acceptance_proxy(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+        *,
+        name: str,
+        expected_networks: dict[str, str],
+    ) -> str | None:
+        """Return an exact owned loopback proxy ID, or prove it is absent."""
+
+        enumerated_id = self._exact_container_id_by_name(
+            controller, name, label="acceptance proxy"
+        )
+        if enumerated_id is None:
+            return None
+        inspected = controller.runner.run(
+            ["docker", "container", "inspect", enumerated_id],
+            env=controller.control_environment(),
+            check=False,
+        )
+        if inspected.returncode != 0:
+            raise PullDeployError("cannot prove acceptance proxy identity")
+        try:
+            records = json.loads(str(inspected.stdout))
+            record = records[0]
+            config = record["Config"]
+            host = record["HostConfig"]
+            network = record["NetworkSettings"]
+        except (json.JSONDecodeError, IndexError, KeyError, TypeError) as exc:
+            raise PullDeployError(
+                "acceptance proxy inspection is malformed"
+            ) from exc
+        labels = config.get("Labels")
+        bindings = host.get("PortBindings")
+        networks = network.get("Networks")
+        restart = host.get("RestartPolicy")
+        container_id = record.get("Id")
+        if (
+            not isinstance(container_id, str)
+            or re.fullmatch(r"[0-9a-f]{64}", container_id) is None
+            or container_id != enumerated_id
+            or record.get("Name") != f"/{name}"
+            or config.get("Image") != descriptor["images"]["web"]["digest_ref"]
+            or record.get("Image") != descriptor["images"]["web"]["image_id"]
+            or not isinstance(labels, dict)
+            or labels.get("com.nexpoly.acceptance-operation")
+            != descriptor["operation_id"]
+            or bindings
+            != {"80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "9000"}]}
+            or network.get("Ports") != bindings
+            or not isinstance(networks, dict)
+            or set(networks) != set(expected_networks)
+            or any(
+                not isinstance(attachment, dict)
+                or attachment.get("NetworkID") != expected_networks[network_name]
+                or not attachment.get("IPAddress")
+                for network_name, attachment in networks.items()
+            )
+            or host.get("Privileged") not in {None, False}
+            or host.get("PublishAllPorts") not in {None, False}
+            or host.get("AutoRemove") is not True
+            or host.get("NetworkMode") not in expected_networks
+            or not isinstance(restart, dict)
+            or restart.get("Name") not in {"", "no"}
+            or restart.get("MaximumRetryCount") not in {None, 0}
+        ):
+            raise PullDeployError(
+                "acceptance proxy is not the exact loopback-only candidate"
+            )
+        return container_id
+
+    def _candidate_control_payload(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+        name: str,
+    ) -> bytes:
+        """Read one manifest-sealed file from the target control release."""
+
+        executor = descriptor["controller"]["executor_control"]
+        try:
+            _record, manifest, release_root = (
+                _control_runtime.load_candidate_control(
+                    controller.runtime_root, executor
+                )
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "candidate control release is unavailable for acceptance"
+            ) from exc
+        file_record = manifest["files"].get(name)
+        if not isinstance(file_record, dict):
+            raise PullDeployError(
+                f"candidate control release omits acceptance file: {name}"
+            )
+        payload, digest = private_regular_file(
+            release_root / name,
+            mode=file_record["mode"],
+            maximum_bytes=8 * 1024 * 1024,
+        )
+        if digest != file_record["sha256"] or len(payload) != file_record["size"]:
+            raise PullDeployError(
+                f"candidate control acceptance file changed: {name}"
+            )
+        return payload
+
+    def _acceptance_backend_networks(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        backend_process = self._backend_process_identity(controller, descriptor)
+        backend_inspect = controller.runner.run(
+            [
+                "docker",
+                "container",
+                "inspect",
+                backend_process["container_id"],
+            ],
+            env=controller.control_environment(),
+        )
+        try:
+            backend_attachments = json.loads(str(backend_inspect.stdout))[0][
+                "NetworkSettings"
+            ]["Networks"]
+        except (json.JSONDecodeError, IndexError, KeyError, TypeError) as exc:
+            raise PullDeployError("Backend network evidence is malformed") from exc
+        if (
+            not isinstance(backend_attachments, dict)
+            or not backend_attachments
+            or any(
+                not isinstance(attachment, dict)
+                or re.fullmatch(
+                    r"[0-9a-f]{64}", str(attachment.get("NetworkID", ""))
+                )
+                is None
+                for attachment in backend_attachments.values()
+            )
+        ):
+            raise PullDeployError("Backend has no candidate application network")
+        return backend_process, {
+            network_name: attachment["NetworkID"]
+            for network_name, attachment in backend_attachments.items()
+        }
+
+    def cleanup_acceptance_probe_proxy(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+    ) -> None:
+        """Remove an exact one-off proxy left by a hard controller crash."""
+
+        name = f"nexpoly-acceptance-{descriptor['operation_id']}"
+        regular = controller.runner.run(
+            self._compose(controller, "ps", "--quiet", "nginx"),
+            cwd=controller.production_root,
+            env=self._environment(controller, descriptor),
+        )
+        if str(regular.stdout).strip():
+            raise PullDeployError(
+                "public Web ingress is open before acceptance proxy cleanup"
+            )
+        _backend_process, backend_networks = self._acceptance_backend_networks(
+            controller, descriptor
+        )
+        proxy_id = self._inspect_acceptance_proxy(
+            controller,
+            descriptor,
+            name=name,
+            expected_networks=backend_networks,
+        )
+        if proxy_id is not None:
+            self._remove_container_and_prove_absent(
+                controller,
+                name,
+                container_id=proxy_id,
+                label="interrupted acceptance proxy",
+            )
+
+    def run_acceptance_probes(
+        self,
+        controller: "PullDeployController",
+        descriptor: dict[str, Any],
+        authority_path: Path,
+    ) -> None:
+        """Open only an owned loopback Web path, then restore full drain."""
+
+        operation_id = descriptor["operation_id"]
+        name = f"nexpoly-acceptance-{operation_id}"
+        environment = self._environment(controller, descriptor)
+        regular = controller.runner.run(
+            self._compose(controller, "ps", "--quiet", "nginx"),
+            cwd=controller.production_root,
+            env=environment,
+        )
+        if str(regular.stdout).strip():
+            raise PullDeployError(
+                "public Web ingress must remain stopped during acceptance probes"
+            )
+        backend_process, backend_networks = self._acceptance_backend_networks(
+            controller, descriptor
+        )
+
+        existing_id = self._inspect_acceptance_proxy(
+            controller,
+            descriptor,
+            name=name,
+            expected_networks=backend_networks,
+        )
+        if existing_id is not None:
+            self._remove_container_and_prove_absent(
+                controller,
+                name,
+                container_id=existing_id,
+                label="interrupted acceptance proxy",
+            )
+
+        resume_attempted = False
+        proxy_id: str | None = None
+        failure: BaseException | None = None
+        try:
+            resume_attempted = True
+            validate_persistent_drain_evidence(
+                self._control_cli(
+                    controller,
+                    descriptor,
+                    "resume",
+                    "--actor",
+                    "pull-deploy-controller",
+                    "--release-sha",
+                    self._drain_authority_sha(descriptor),
+                ),
+                expected_enabled=False,
+                authority_sha=self._drain_authority_sha(descriptor),
+            )
+            for _worker_name, socket in self._required_worker_sockets(
+                controller,
+                require_md=True,
+                require_dft=True,
+            ):
+                validate_worker_control_evidence(
+                    self._worker_request(
+                        controller, socket, method="POST", endpoint="/resume"
+                    ),
+                    action="resume",
+                    require_zero=True,
+                )
+            started = controller.runner.run(
+                self._compose(
+                    controller,
+                    "run",
+                    "--detach",
+                    "--rm",
+                    "--no-deps",
+                    "--name",
+                    name,
+                    "--label",
+                    f"com.nexpoly.acceptance-operation={operation_id}",
+                    "--publish",
+                    "127.0.0.1:9000:80",
+                    "nginx",
+                ),
+                cwd=controller.production_root,
+                env=environment,
+                check=False,
+            )
+            # Inspect after every start response, including non-zero/unknown
+            # responses: Docker may have committed the container first.
+            proxy_id = self._inspect_acceptance_proxy(
+                controller,
+                descriptor,
+                name=name,
+                expected_networks=backend_networks,
+            )
+            if proxy_id is None:
+                if started.returncode != 0:
+                    raise PullDeployError(
+                        "loopback acceptance proxy could not be started"
+                    )
+                raise PullDeployError(
+                    "acceptance proxy start returned without a container"
+                )
+            candidate_id = str(started.stdout).strip()
+            if started.returncode != 0 or candidate_id not in {
+                proxy_id,
+                proxy_id[:12],
+            }:
+                raise PullDeployError(
+                    "acceptance proxy start response differs from inspection"
+                )
+            deadline = time.monotonic() + 120
+            while True:
+                ready = controller.runner.run(
+                    [
+                        "curl",
+                        "--disable",
+                        "--fail",
+                        "--silent",
+                        "--show-error",
+                        "--noproxy",
+                        "*",
+                        "--proto",
+                        "=http",
+                        "--max-time",
+                        "10",
+                        "http://127.0.0.1:9000/health",
+                    ],
+                    env=controller.control_environment(),
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                )
+                if ready.returncode == 0:
+                    break
+                if time.monotonic() >= deadline:
+                    raise PullDeployError(
+                        "loopback-only acceptance proxy did not become ready"
+                    )
+                time.sleep(1)
+            payload = self._candidate_control_payload(
+                controller, descriptor, "production_acceptance_probes.py"
+            )
+            controller.runner.run(
+                [
+                    "/usr/bin/python3",
+                    "-I",
+                    "-B",
+                    "-",
+                    "--base-url",
+                    "http://127.0.0.1:9000",
+                    "--operation-id",
+                    operation_id,
+                    "--source-sha",
+                    descriptor["repository"]["target_sha"],
+                    "--authority-file",
+                    str(authority_path),
+                    "--expected-dft-gpu-uuid",
+                    descriptor["monomer_dft"]["gpu"]["uuid"],
+                ],
+                cwd=controller.production_root,
+                env=controller.control_environment(),
+                text=False,
+                stdin=io.BytesIO(payload),
+                stdout=subprocess.PIPE,
+                timeout=30 * 60,
+            )
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            cleanup_error: BaseException | None = None
+            if proxy_id is None:
+                try:
+                    proxy_id = self._inspect_acceptance_proxy(
+                        controller,
+                        descriptor,
+                        name=name,
+                        expected_networks=backend_networks,
+                    )
+                except BaseException as exc:
+                    cleanup_error = exc
+            if proxy_id is not None:
+                try:
+                    self._remove_container_and_prove_absent(
+                        controller,
+                        name,
+                        container_id=proxy_id,
+                        label="acceptance proxy",
+                    )
+                except BaseException as exc:
+                    cleanup_error = cleanup_error or exc
+            if resume_attempted:
+                try:
+                    validate_persistent_drain_evidence(
+                        self._control_cli(
+                            controller,
+                            descriptor,
+                            "drain",
+                            "--actor",
+                            "pull-deploy-controller",
+                            "--release-sha",
+                            self._drain_authority_sha(descriptor),
+                            "--reason",
+                            f"post-acceptance drain {operation_id}",
+                        ),
+                        expected_enabled=True,
+                        authority_sha=self._drain_authority_sha(descriptor),
+                    )
+                    worker_instances: dict[str, str] = {}
+                    for worker_name, socket in self._required_worker_sockets(
+                        controller,
+                        require_md=True,
+                        require_dft=True,
+                    ):
+                        response = validate_worker_control_evidence(
+                            self._worker_request(
+                                controller,
+                                socket,
+                                method="POST",
+                                endpoint="/drain",
+                            ),
+                            action="drain",
+                            require_zero=False,
+                        )
+                        worker_instances[worker_name] = response[
+                            "worker_instance_id"
+                        ]
+                    self._wait_for_zero_work(
+                        controller,
+                        descriptor,
+                        worker_instances,
+                        backend_process,
+                    )
+                except BaseException as exc:
+                    cleanup_error = cleanup_error or exc
+            try:
+                regular_after = controller.runner.run(
+                    self._compose(controller, "ps", "--quiet", "nginx"),
+                    cwd=controller.production_root,
+                    env=environment,
+                )
+                if str(regular_after.stdout).strip():
+                    raise PullDeployError(
+                        "public Web ingress opened during acceptance probes"
+                    )
+            except BaseException as exc:
+                cleanup_error = cleanup_error or exc
+            if cleanup_error is not None:
+                if failure is not None:
+                    raise cleanup_error from failure
+                raise cleanup_error
 
     def postgres_runtime_identity(
         self,
@@ -9571,14 +10496,17 @@ class SystemLifecycle:
             not isinstance(active_jobs, int)
             or isinstance(active_jobs, bool)
             or active_jobs < 0
-            or active_jobs > 1
+            or active_jobs > expected_values["max_active_jobs"]
             or (not allow_active and active_jobs != 0)
         ):
             raise PullDeployError(
                 "monomer MD Worker active-job state differs from deployment"
             )
         if expected_accepting is None:
-            accepting = active_jobs == 0
+            # MD ``active_jobs`` is the admitted population: the one running
+            # calculation plus up to two queued calculations.  Execution
+            # concurrency is independently fixed at one by the Worker.
+            accepting = active_jobs < expected_values["max_active_jobs"]
             draining = False
         else:
             accepting = expected_accepting
@@ -11590,10 +12518,7 @@ class SystemLifecycle:
             cwd=controller.production_root,
             env=environment,
         )
-        values = validate_deploy_control_values(
-            parse_literal_env(controller.config_dir / "deploy.env"),
-            runtime_root=controller.runtime_root,
-        )
+        values = controller._validated_deploy_control_values()
         postgres_user = values.get("NEXPOLY_POSTGRES_USER")
         postgres_database = values.get("NEXPOLY_POSTGRES_DB")
         if not postgres_user or postgres_database != "nexpoly":
@@ -12300,22 +13225,49 @@ class PullDeployController:
         self.active_control_path = self.state_dir / "active-control.json"
         self._held_deploy_lock_fd: int | None = None
 
-    def _load_adopted_deployment(self) -> tuple[dict[str, Any], str] | None:
-        if not (
+    def _adoption_bootstrap_binding(self) -> tuple[dict[str, Any], str] | None:
+        """Fail closed on every partial or contradictory manual adoption."""
+
+        bootstrap_path = self.state_dir / "bootstrap-control.json"
+        adopted_present = (
             self.adopted_state_path.exists()
             or self.adopted_state_path.is_symlink()
-        ):
-            return None
-        adopted = validate_adopted_deployment(
-            load_private_json(self.adopted_state_path)
         )
-        digest = canonical_json_digest(adopted)
-        bootstrap = load_private_json(self.state_dir / "bootstrap-control.json")
+        if not (bootstrap_path.exists() or bootstrap_path.is_symlink()):
+            if adopted_present:
+                raise PullDeployError(
+                    "adopted deployment exists without bootstrap-control authority"
+                )
+            return None
+        bootstrap = load_private_json(bootstrap_path)
+        adoption_indicated = (
+            bootstrap.get("schema_version") == 3
+            or bootstrap.get("authority_kind") == "manual-runtime-adoption"
+        )
+        if not adoption_indicated:
+            if adopted_present:
+                raise PullDeployError(
+                    "adopted deployment exists under a non-adoption bootstrap"
+                )
+            return None
         if (
             bootstrap.get("schema_version") != 3
             or bootstrap.get("status") != "completed"
             or bootstrap.get("authority_kind") != "manual-runtime-adoption"
-            or bootstrap.get("adopted_deployment") != adopted
+        ):
+            raise PullDeployError(
+                "manual adoption bootstrap-control authority is incomplete"
+            )
+        if not adopted_present:
+            raise PullDeployError(
+                "manual adoption bootstrap-control requires adopted-deployment"
+            )
+        adopted = validate_adopted_deployment(
+            load_private_json(self.adopted_state_path)
+        )
+        digest = canonical_json_digest(adopted)
+        if (
+            bootstrap.get("adopted_deployment") != adopted
             or bootstrap.get("adopted_deployment_sha256") != digest
             or bootstrap.get("adoption_evidence_sha256")
             != adopted["adoption_evidence_sha256"]
@@ -12323,6 +13275,9 @@ class PullDeployController:
         ):
             raise PullDeployError("adopted deployment bootstrap authority differs")
         return adopted, digest
+
+    def _load_adopted_deployment(self) -> tuple[dict[str, Any], str] | None:
+        return self._adoption_bootstrap_binding()
 
     @staticmethod
     def _adopted_previous(descriptor: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -12650,11 +13605,25 @@ class PullDeployController:
     def control_environment(self) -> dict[str, str]:
         return clean_control_environment(self.runtime_root)
 
-    def production_deploy_values(self, *, check_free_space: bool) -> dict[str, str]:
-        values = validate_deploy_control_values(
-            parse_literal_env(self.config_dir / "deploy.env"),
+    def _validated_deploy_control_values(self) -> dict[str, str]:
+        raw = parse_literal_env(self.config_dir / "deploy.env")
+        legacy_keys = {"NEXPOLY_BACKEND_IMAGE", "NEXPOLY_WEB_IMAGE"}
+        adopted = None
+        if legacy_keys.intersection(raw):
+            authority = self._load_adopted_deployment()
+            if authority is None:
+                raise PullDeployError(
+                    "deploy.env legacy image variables require complete manual adoption"
+                )
+            adopted = authority[0]
+        return validate_deploy_control_values(
+            raw,
             runtime_root=self.runtime_root,
+            adopted_deployment=adopted,
         )
+
+    def production_deploy_values(self, *, check_free_space: bool) -> dict[str, str]:
+        values = self._validated_deploy_control_values()
         # app.env is application-owned but must still be outside Git and
         # owner-only before Compose is allowed to read it.  Control/database
         # values have exactly one authority: deploy.env.  A duplicate in the
@@ -12758,7 +13727,244 @@ class PullDeployController:
                     raise PullDeployError(f"insufficient deployment free space: {path}")
         return values
 
+    def _validate_adopted_prerequisite_provenance(
+        self,
+        production_config: Mapping[str, str],
+    ) -> dict[str, Any] | None:
+        """Bind adopted-only site prerequisites without changing config schema.
+
+        The already-installed A controller does not know this provenance file;
+        it continues to validate the same production-config evidence keys and
+        can hand preparation to this target controller.  The target then
+        requires the create-only authority only when an adopted deployment is
+        actually present, so ordinary/bootstrap histories remain compatible.
+        """
+
+        adoption_binding = self._adoption_bootstrap_binding()
+        if adoption_binding is None:
+            return None
+        adopted, _adopted_canonical_sha256 = adoption_binding
+        adopted_path = self.adopted_state_path
+        adopted_sha256 = sha256_file(adopted_path)
+        authority_path = self.runtime_root / ADOPTED_PREREQUISITES_RELATIVE_PATH
+        try:
+            metadata = authority_path.lstat()
+        except OSError as exc:
+            raise PullDeployError(
+                "adopted deployment prerequisite provenance is unavailable"
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or authority_path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise PullDeployError(
+                "adopted deployment prerequisite provenance is unsafe"
+            )
+        authority = load_private_json(authority_path)
+        if (
+            set(authority)
+            != {
+                "schema_version",
+                "status",
+                "authority_kind",
+                "operation_id",
+                "source_sha",
+                "source_tree",
+                "adopted_deployment_sha256",
+                "plan_sha256",
+                "plan",
+                "completed_at",
+            }
+            or authority.get("schema_version") != 1
+            or authority.get("status") != "completed"
+            or authority.get("authority_kind")
+            != "manual-runtime-adoption-prerequisites"
+            or re.fullmatch(
+                r"adopt-prereq-[a-z0-9][a-z0-9._-]{7,95}",
+                str(authority.get("operation_id", "")),
+            )
+            is None
+            or require_sha(authority.get("source_sha"), "prerequisite source SHA")
+            != authority.get("source_sha")
+            or require_sha(authority.get("source_tree"), "prerequisite source tree")
+            != authority.get("source_tree")
+            or authority.get("adopted_deployment_sha256") != adopted_sha256
+        ):
+            raise PullDeployError(
+                "adopted deployment prerequisite provenance is invalid"
+            )
+        require_utc_timestamp(
+            authority.get("completed_at"), "adopted prerequisite completion"
+        )
+        plan = authority.get("plan")
+        if (
+            not isinstance(plan, dict)
+            or set(plan)
+            != {
+                "schema_version",
+                "authority_kind",
+                "operation_id",
+                "source_sha",
+                "source_tree",
+                "source_readiness",
+                "source_readiness_sha256",
+                "delivery_gate",
+                "delivery_gate_sha256",
+                "adopted_deployment_sha256",
+                "files",
+                "preserved_pgpass",
+                "mutations",
+            }
+            or authority.get("plan_sha256") != canonical_json_digest(plan)
+            or plan.get("schema_version") != 1
+            or plan.get("authority_kind") != authority["authority_kind"]
+            or plan.get("operation_id") != authority["operation_id"]
+            or plan.get("source_sha") != authority["source_sha"]
+            or plan.get("source_tree") != authority["source_tree"]
+            or plan.get("adopted_deployment_sha256") != adopted_sha256
+            or plan.get("mutations")
+            != {
+                "services": False,
+                "source": False,
+                "database": False,
+                "credentials": False,
+            }
+        ):
+            raise PullDeployError("adopted prerequisite plan authority differs")
+        readiness = plan.get("source_readiness")
+        source_root = (
+            Path(str(readiness.get("source_root", "")))
+            if isinstance(readiness, dict)
+            else Path("")
+        )
+        if (
+            not isinstance(readiness, dict)
+            or set(readiness)
+            != ADOPTED_PREREQUISITE_SOURCE_READINESS_FIELDS
+            or readiness.get("schema_version") != 2
+            or readiness.get("ready") is not True
+            or not source_root.is_absolute()
+            or readiness.get("source_sha") != authority["source_sha"]
+            or readiness.get("source_tree") != authority["source_tree"]
+            or readiness.get("branch") != "main"
+            or readiness.get("origin") != REPOSITORY_SSH_URL
+            or readiness.get("remote_names") != ["origin"]
+            or readiness.get("origin_fetch_urls") != [REPOSITORY_SSH_URL]
+            or readiness.get("origin_push_urls") != [REPOSITORY_SSH_URL]
+            or readiness.get("origin_main_sha") != authority["source_sha"]
+            or readiness.get("standalone_object_database") is not True
+            or readiness.get("shallow") is not False
+            or readiness.get("dirty_entries") != 0
+            or readiness.get("ignored_entries") != 0
+            or readiness.get("unreachable_objects") != 0
+            or readiness.get("replace_refs") != 0
+            or readiness.get("special_index_entries") != 0
+            or readiness.get("sparse_index") is not False
+            or readiness.get("owner_private") is not True
+            or readiness.get("group_or_world_writable") is not False
+            or plan.get("source_readiness_sha256")
+            != canonical_json_digest(readiness)
+        ):
+            raise PullDeployError(
+                "adopted prerequisite source readiness differs"
+            )
+        delivery = plan.get("delivery_gate")
+        ci = delivery.get("ci") if isinstance(delivery, dict) else None
+        if (
+            not isinstance(delivery, dict)
+            or set(delivery) != {"remote_main", "ci"}
+            or delivery.get("remote_main") != authority["source_sha"]
+            or not isinstance(ci, dict)
+            or set(ci)
+            != {
+                "workflow_run_id",
+                "run_attempt",
+                "head_sha",
+                "head_branch",
+                "event",
+                "path",
+                "conclusion",
+                "required_jobs",
+            }
+            or not isinstance(ci.get("workflow_run_id"), int)
+            or isinstance(ci.get("workflow_run_id"), bool)
+            or not isinstance(ci.get("run_attempt"), int)
+            or isinstance(ci.get("run_attempt"), bool)
+            or ci.get("run_attempt", 0) <= 0
+            or ci.get("head_sha") != authority["source_sha"]
+            or ci.get("head_branch") != "main"
+            or ci.get("event") != "push"
+            or ci.get("path") != ".github/workflows/ci.yml"
+            or ci.get("conclusion") != "success"
+            or not isinstance(ci.get("required_jobs"), list)
+            or not ci["required_jobs"]
+            or len(ci["required_jobs"]) > 32
+            or any(
+                not isinstance(name, str) or not name
+                for name in ci["required_jobs"]
+            )
+            or plan.get("delivery_gate_sha256")
+            != canonical_json_digest(delivery)
+        ):
+            raise PullDeployError("adopted prerequisite delivery gate differs")
+        files = plan.get("files")
+        if not isinstance(files, list) or len(files) != len(
+            ADOPTED_PREREQUISITE_FILES
+        ):
+            raise PullDeployError("adopted prerequisite file inventory differs")
+        for record, expected in zip(
+            files, ADOPTED_PREREQUISITE_FILES, strict=True
+        ):
+            source_path, name, mode, classification, evidence_key = expected
+            target = self.config_dir / name
+            if (
+                not isinstance(record, dict)
+                or set(record)
+                != {
+                    "source_path",
+                    "destination",
+                    "name",
+                    "sha256",
+                    "mode",
+                    "classification",
+                    "disposition",
+                }
+                or record.get("source_path") != source_path
+                or record.get("destination") != str(target)
+                or record.get("name") != name
+                or record.get("mode") != mode
+                or record.get("classification") != classification
+                or record.get("disposition") not in {"create", "existing-exact"}
+                or record.get("sha256") != production_config.get(evidence_key)
+                or sha256_file(target) != record["sha256"]
+            ):
+                raise PullDeployError(
+                    f"adopted prerequisite provenance differs: {name}"
+                )
+        pgpass = plan.get("preserved_pgpass")
+        pgpass_path = self.config_dir / MUTABLE_DATA_PGPASS
+        if pgpass != {
+            "path": str(pgpass_path),
+            "sha256": production_config.get(
+                "mutable_data_audit_pgpass_sha256"
+            ),
+            "mode": "0600",
+        }:
+            raise PullDeployError("adopted prerequisite pgpass provenance differs")
+        # Opening the adopted document above is intentional: it also proves the
+        # prerequisite authority has not been detached from the exact adoption
+        # state even though no new field is added to production_config.
+        if adopted.get("status") != "adopted":  # pragma: no cover - validator owns
+            raise PullDeployError("adopted deployment authority is incomplete")
+        return authority
+
     def production_config_evidence(self, *, check_free_space: bool) -> dict[str, str]:
+        # This runs before credential/config hashing or any prepare-owned
+        # artifact can be created.  A v3 manual-adoption bootstrap can never
+        # silently degrade into the ordinary no-adoption path.
+        self._adoption_bootstrap_binding()
         self.production_deploy_values(check_free_space=check_free_space)
         self._clean_environment()
         self._github_token()
@@ -12823,7 +14029,9 @@ class PullDeployController:
             **hook_digests,
             **mutable_config_digests,
         }
-        return validate_production_config_evidence(evidence)
+        validated = validate_production_config_evidence(evidence)
+        self._validate_adopted_prerequisite_provenance(validated)
+        return validated
 
     def external_database_audit_evidence(
         self,
@@ -18727,10 +19935,31 @@ class PullDeployController:
         helpers = self.stable_helper_evidence()
         active_control = self.active_control_evidence()
         current_state: dict[str, Any] | None = None
+        adopted: dict[str, Any] | None = None
+        adopted_digest: str | None = None
+        adopted_prerequisites: dict[str, Any] | None = None
         if self.current_state_path.exists() or self.current_state_path.is_symlink():
             current_state = self._validate_steady_deployment_state(
                 load_private_json(self.current_state_path)
             )
+        else:
+            adopted_authority = self._load_adopted_deployment()
+            if adopted_authority is not None:
+                adopted, adopted_digest = adopted_authority
+                self._revalidate_adopted_runtime(adopted)
+                adopted_prerequisites = (
+                    self._validate_adopted_prerequisite_provenance(
+                        production_config
+                    )
+                )
+                if (
+                    adopted_prerequisites is None  # pragma: no cover - binding owns
+                    or adopted_prerequisites["source_sha"] != target_sha
+                ):
+                    raise PullDeployError(
+                        "first adopted deployment plan target differs from "
+                        "prerequisite source authority"
+                    )
         active = self._active_slot()
         if (
             current_state is not None
@@ -18739,7 +19968,14 @@ class PullDeployController:
             raise PullDeployError(
                 "active Worker slot differs from current deployment state"
             )
-        if current_state is None and active is not None:
+        if (
+            adopted is not None
+            and active != adopted["monomer_md"]["active_slot"]
+        ):
+            raise PullDeployError(
+                "active Worker slot differs from adopted deployment authority"
+            )
+        if current_state is None and adopted is None and active is not None:
             raise PullDeployError(
                 "active Worker slot exists without a current deployment state"
             )
@@ -18750,7 +19986,18 @@ class PullDeployController:
             raise PullDeployError(
                 "active control authority differs from current deployment state"
             )
+        if adopted is not None and active_control != adopted["active_control"]:
+            raise PullDeployError(
+                "active control authority differs from adopted deployment authority"
+            )
         current = self.repository_identity()
+        if adopted is not None and (
+            current["sha"] != adopted["source_sha"]
+            or current["tree"] != adopted["source_tree"]
+        ):
+            raise PullDeployError(
+                "production source identity differs from adopted deployment authority"
+            )
         remote = self.remote_main()
         if remote != target_sha:
             raise PullDeployError("requested target is not current remote main")
@@ -18769,6 +20016,19 @@ class PullDeployController:
             "production_config": production_config,
             "stable_helpers": helpers,
             "active_control": active_control,
+            "authority_kind": (
+                current_state.get("authority_kind")
+                if current_state is not None
+                else adopted["authority_kind"]
+                if adopted is not None
+                else "bootstrap"
+            ),
+            "adopted_deployment_sha256": adopted_digest,
+            "adopted_prerequisite_plan_sha256": (
+                adopted_prerequisites["plan_sha256"]
+                if adopted_prerequisites is not None
+                else None
+            ),
             "service_mutation": False,
             "ignored_runtime_entries": self.ignored_runtime_entries(),
         }
@@ -22791,6 +24051,7 @@ class PullDeployController:
                 previous_digest: str | None = None
                 adopted: dict[str, Any] | None = None
                 adopted_digest: str | None = None
+                adopted_prerequisites: dict[str, Any] | None = None
                 if (
                     self.current_state_path.exists()
                     or self.current_state_path.is_symlink()
@@ -22803,6 +24064,15 @@ class PullDeployController:
                     adopted_authority = self._load_adopted_deployment()
                     if adopted_authority is not None:
                         adopted, adopted_digest = adopted_authority
+                        adopted_prerequisites = (
+                            self._validate_adopted_prerequisite_provenance(
+                                production_config
+                            )
+                        )
+                        if adopted_prerequisites is None:  # pragma: no cover
+                            raise PullDeployError(
+                                "adopted prerequisite authority is unavailable"
+                            )
                 if bridge_relation is not None and previous is not None:
                     raise PullDeployError(
                         "historical bridge is restricted to first governed takeover"
@@ -22937,6 +24207,23 @@ class PullDeployController:
                         raise PullDeployError(
                             "target tree changed after target prepare handoff"
                         )
+                if adopted_prerequisites is not None and (
+                    adopted_prerequisites["source_sha"] != target_sha
+                    or adopted_prerequisites["source_tree"] != target_tree
+                ):
+                    raise PullDeployError(
+                        "first adopted deployment target differs from final "
+                        "prerequisite source authority"
+                    )
+                if adopted_prerequisites is not None:
+                    for record in adopted_prerequisites["plan"]["files"]:
+                        if sha256_bytes(
+                            self._git_show(target_sha, record["source_path"])
+                        ) != record["sha256"]:
+                            raise PullDeployError(
+                                "final prerequisite Git blob differs: "
+                                + str(record["name"])
+                            )
                 self.validate_installed_controls_against_target(target_sha)
                 executor_control = (
                     bridge_handoff["executor_control"]
@@ -23025,6 +24312,13 @@ class PullDeployController:
                     }
                     postgres_restore_image = (
                         self.postgres_restore_image_evidence()
+                    )
+                if adopted_prerequisites is not None and adopted_prerequisites[
+                    "plan"
+                ]["delivery_gate"] != {"remote_main": target_sha, "ci": ci}:
+                    raise PullDeployError(
+                        "first adopted deployment CI differs from final "
+                        "prerequisite delivery gate"
                     )
                 worker_controls = self.prepare_worker_controls(
                     operation_id=operation_id,
@@ -24556,6 +25850,61 @@ class PullDeployController:
             )
         return "committed"
 
+    def _restore_pre_acceptance_current_state(
+        self,
+        descriptor: dict[str, Any],
+        marker: dict[str, Any],
+    ) -> None:
+        """CAS the committed-but-unaccepted state back to its sealed predecessor."""
+
+        candidate = validate_current_deployment_state(
+            marker.get("candidate_state")
+        )
+        candidate_digest = require_digest(
+            marker.get("candidate_state_sha256"),
+            "rejected candidate-state digest",
+        )
+        previous = descriptor.get("previous_deployment")
+        previous_digest = descriptor.get("previous_deployment_sha256")
+        if isinstance(previous, dict):
+            previous = validate_current_deployment_state(previous)
+            require_digest(
+                previous_digest, "rejected deployment predecessor digest"
+            )
+            expected_previous_digest = sha256_bytes(
+                canonical_json_bytes(previous) + b"\n"
+            )
+            self._commit_current_state_cas(
+                previous,
+                candidate_sha256=expected_previous_digest,
+                expected_pre_state=candidate,
+                expected_pre_state_sha256=candidate_digest,
+            )
+            return
+        if previous is not None or previous_digest is not None:
+            raise PullDeployError(
+                "rejected deployment predecessor state is incomplete"
+            )
+        if not (self.marker_path.exists() or self.marker_path.is_symlink()):
+            raise PullDeployError("staged rejection lost its recovery marker")
+        if not (
+            self.current_state_path.exists()
+            or self.current_state_path.is_symlink()
+        ):
+            return
+        observed = load_private_json(self.current_state_path)
+        observed_digest = sha256_file(self.current_state_path)
+        if observed != candidate or observed_digest != candidate_digest:
+            raise PullDeployError(
+                "committed staged candidate changed before rejection"
+            )
+        self.current_state_path.unlink()
+        fsync_directory(self.current_state_path.parent)
+        if self.current_state_path.exists() or self.current_state_path.is_symlink():
+            raise PullDeployError(
+                "staged candidate current state remained after rejection"
+            )
+
     def _revalidate_pre_switch(self, descriptor: dict[str, Any]) -> None:
         if (
             descriptor.get("schema_version")
@@ -25257,6 +26606,12 @@ class PullDeployController:
                     "monomer_dft": self._current_dft_projection(
                         descriptor, marker
                     ),
+                    "postgres_rehearsal": validate_postgres_rehearsal_binding(
+                        marker.get("postgres_rehearsal"),
+                        operation_id=descriptor["operation_id"],
+                        target_sha=descriptor["repository"]["target_sha"],
+                        descriptor_sha256=descriptor_digest,
+                    ),
                 }
             )
         external_database_transition_chain = None
@@ -25576,6 +26931,10 @@ class PullDeployController:
             if effective_phase not in {
                 "state-commit-started",
                 "state-committed",
+                "awaiting-acceptance",
+                "acceptance-started",
+                "acceptance-resume-started",
+                "acceptance-rejected",
                 "admission-resumed",
             }:
                 raise PullDeployError(
@@ -25584,6 +26943,10 @@ class PullDeployController:
         elif effective_phase in {
             "state-commit-started",
             "state-committed",
+            "awaiting-acceptance",
+            "acceptance-started",
+            "acceptance-resume-started",
+            "acceptance-rejected",
             "admission-resumed",
         }:
             raise PullDeployError(
@@ -25719,6 +27082,9 @@ class PullDeployController:
         if current_is_precommit:
             if effective_phase in {
                 "state-committed",
+                "awaiting-acceptance",
+                "acceptance-started",
+                "acceptance-resume-started",
                 "admission-resumed",
             }:
                 raise PullDeployError(
@@ -27206,6 +28572,8 @@ class PullDeployController:
                 raise PullDeployError(
                     "failed bootstrap has no audited legacy rollback hook"
                 )
+            if marker.get("acceptance_rejected") is True:
+                self._restore_pre_acceptance_current_state(descriptor, marker)
             SystemLifecycle()._run_bootstrap_hook(
                 self,
                 "bootstrap-rollback",
@@ -27224,6 +28592,12 @@ class PullDeployController:
             self._validate_steady_deployment_state(previous)
         else:
             self._revalidate_adopted_runtime(adopted)
+        if marker.get("acceptance_rejected") is True:
+            self._restore_pre_acceptance_current_state(descriptor, marker)
+            marker.pop("verification", None)
+            marker.pop("runtime_start_intent", None)
+            marker["updated_at"] = utc_now()
+            self._write_marker(marker)
         previous_descriptor = self._previous_runtime_descriptor(descriptor)
         self._recover_runtime_and_resume(
             marker,
@@ -27289,6 +28663,12 @@ class PullDeployController:
                     != descriptor_sha256
                     or candidate.get("source_sha") != source_sha
                     or candidate.get("source_tree") != source_tree
+                    or (
+                        candidate.get("schema_version")
+                        == CURRENT_STATE_SCHEMA_VERSION
+                        and audit.get("postgres_rehearsal")
+                        != candidate.get("postgres_rehearsal")
+                    )
                     or (
                         expected_terminal_sha256 is not None
                         and audit_digest != expected_terminal_sha256
@@ -28732,10 +30112,38 @@ class PullDeployController:
             descriptor=descriptor,
             descriptor_digest=descriptor_digest,
         )
+        if (
+            descriptor.get("schema_version") == DESCRIPTOR_SCHEMA_VERSION
+            and marker.get("action") == "deploy"
+        ):
+            observed_rehearsal = self._load_postgres_rehearsal_report(
+                descriptor, descriptor_digest
+            )
+            if observed_rehearsal != marker.get("postgres_rehearsal"):
+                raise PullDeployError(
+                    "PostgreSQL rehearsal authority changed during recovery"
+                )
         if marker["action"] == "explicit-rollback":
             return self._recover_explicit_rollback(
                 descriptor, descriptor_digest, marker
             )
+        if marker.get("acceptance_rejected") is True:
+            if descriptor.get("schema_version") != DESCRIPTOR_SCHEMA_VERSION:
+                raise PullDeployError(
+                    "legacy deployment contains staged rejection intent"
+                )
+            self._rollback_failed_attempt(descriptor, marker)
+            self._restore_pre_acceptance_current_state(descriptor, marker)
+            marker["rollback"] = "success"
+            self._audit_attempt(marker, "rejected-before-acceptance")
+            self._record_operation_outcome(
+                operation_id=operation_id,
+                descriptor_sha256=descriptor_digest,
+                outcome="failed",
+            )
+            self.marker_path.unlink()
+            fsync_directory(self.marker_path.parent)
+            return None
         if self._is_first_bridge(descriptor):
             restored_takeover = (
                 self._probe_restored_legacy_takeover(descriptor)
@@ -28793,6 +30201,13 @@ class PullDeployController:
                 self._advance(marker, "state-committed")
                 effective_phase = "state-committed"
             if effective_phase == "state-committed":
+                if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION:
+                    self._stage_candidate_acceptance(
+                        marker,
+                        descriptor,
+                        descriptor_digest,
+                    )
+                    return current
                 self._recover_runtime_and_resume(
                     marker,
                     descriptor,
@@ -28800,6 +30215,21 @@ class PullDeployController:
                     bind_mutable_after=False,
                 )
                 self._advance(marker, "admission-resumed")
+            elif effective_phase in {
+                "awaiting-acceptance",
+                "acceptance-started",
+                "acceptance-resume-started",
+            }:
+                if descriptor["schema_version"] != DESCRIPTOR_SCHEMA_VERSION:
+                    raise PullDeployError(
+                        "legacy deployment entered staged acceptance"
+                    )
+                self._prepare_runtime_recovery(
+                    marker,
+                    descriptor,
+                    allow_unfenced=False,
+                )
+                return current
             elif effective_phase == "admission-resumed":
                 self.lifecycle.verify_open_runtime(
                     self,
@@ -28864,6 +30294,143 @@ class PullDeployController:
         fsync_directory(self.marker_path.parent)
         return None
 
+    def _postgres_rehearsal_module(
+        self,
+        descriptor: dict[str, Any],
+    ) -> Any:
+        """Load the validator from the exact manifest-sealed target controls."""
+
+        executor = descriptor["controller"]["executor_control"]
+        try:
+            _record, manifest, release_root = (
+                _control_runtime.load_candidate_control(
+                    self.runtime_root, executor
+                )
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "candidate rehearsal controls are unavailable"
+            ) from exc
+        name = "production_postgres_rehearsal.py"
+        file_record = manifest["files"].get(name)
+        path = release_root / name
+        if not isinstance(file_record, dict):
+            raise PullDeployError(
+                "candidate controls omit the rehearsal validator"
+            )
+        payload, digest = private_regular_file(
+            path,
+            mode=file_record["mode"],
+            maximum_bytes=8 * 1024 * 1024,
+        )
+        if (
+            digest != file_record.get("sha256")
+            or len(payload) != file_record.get("size")
+        ):
+            raise PullDeployError(
+                "candidate rehearsal validator differs from its manifest"
+            )
+        module_name = (
+            "nexpoly_production_postgres_rehearsal_"
+            + executor["release_id"]
+        )
+        spec = importlib.util.spec_from_loader(module_name, loader=None)
+        if spec is None:
+            raise PullDeployError("candidate rehearsal validator cannot be loaded")
+        module = importlib.util.module_from_spec(spec)
+        module.__file__ = str(path)
+        try:
+            exec(compile(payload, str(path), "exec"), module.__dict__)
+        except Exception as exc:
+            raise PullDeployError(
+                "candidate rehearsal validator failed to load"
+            ) from exc
+        return module
+
+    def _load_postgres_rehearsal_report(
+        self,
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+    ) -> dict[str, Any]:
+        """Consume the target control release's complete rehearsal contract."""
+
+        operation_id = descriptor["operation_id"]
+        report_path = (
+            self.audit_dir
+            / "deployment-rehearsals"
+            / operation_id
+            / "report.json"
+        )
+        payload, file_digest = private_regular_file(
+            report_path,
+            mode=0o600,
+            maximum_bytes=8 * 1024 * 1024,
+        )
+        try:
+            sealed = json.loads(payload.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise PullDeployError(
+                "PostgreSQL rehearsal report is invalid JSON"
+            ) from exc
+        if payload != canonical_json_bytes(sealed) + b"\n":
+            raise PullDeployError(
+                "PostgreSQL rehearsal report is not canonical JSON"
+            )
+        module = self._postgres_rehearsal_module(descriptor)
+        validator = getattr(module, "validate_rehearsal_report", None)
+        if not callable(validator):
+            raise PullDeployError(
+                "candidate controls omit the rehearsal report validator"
+            )
+        _operation, _descriptor_path, ready_path = self._operation_paths(
+            operation_id
+        )
+        try:
+            authority = validator(
+                sealed,
+                descriptor=descriptor,
+                descriptor_sha256=descriptor_digest,
+                ready_sha256=sha256_file(ready_path),
+                runtime_root=self.runtime_root,
+                verify_runtime=True,
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "PostgreSQL rehearsal report failed target validation"
+            ) from exc
+        if (
+            not isinstance(authority, dict)
+            or set(authority)
+            != {
+                "report_sha256",
+                "completed_at",
+                "dump_sha256",
+                "journal_head_sha256",
+            }
+        ):
+            raise PullDeployError(
+                "PostgreSQL rehearsal validator returned invalid authority"
+            )
+        for field in (
+            "report_sha256",
+            "dump_sha256",
+            "journal_head_sha256",
+        ):
+            require_digest(authority.get(field), f"PostgreSQL rehearsal {field}")
+        _external_database_audit_timestamp(
+            authority.get("completed_at"),
+            "PostgreSQL rehearsal completion",
+        )
+        return {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "target_sha": descriptor["repository"]["target_sha"],
+            "descriptor_sha256": descriptor_digest,
+            "path": str(report_path),
+            "file_sha256": file_digest,
+            **authority,
+        }
+
     def apply(
         self,
         *,
@@ -28914,6 +30481,17 @@ class PullDeployController:
                 operation_id, target_sha
             )
             self._revalidate_pre_switch(descriptor)
+            postgres_rehearsal = None
+            if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION:
+                postgres_rehearsal = self._load_postgres_rehearsal_report(
+                    descriptor, descriptor_digest
+                )
+                validate_postgres_rehearsal_binding(
+                    postgres_rehearsal,
+                    operation_id=operation_id,
+                    target_sha=target_sha,
+                    descriptor_sha256=descriptor_digest,
+                )
             marker = {
                 "schema_version": (
                     MARKER_SCHEMA_VERSION
@@ -28949,6 +30527,7 @@ class PullDeployController:
                         "dft_runtime_switched": False,
                         "dft_unit_switched": False,
                         "dft_guard_scheduling_stopped": False,
+                        "postgres_rehearsal": postgres_rehearsal,
                     }
                 )
             self._write_marker(marker)
@@ -29158,6 +30737,13 @@ class PullDeployController:
                         state_digest,
                     )
                 self._advance(marker, "state-committed")
+                if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION:
+                    self._stage_candidate_acceptance(
+                        marker,
+                        descriptor,
+                        descriptor_digest,
+                    )
+                    return state
                 self.lifecycle.resume(self, descriptor, verification)
                 self._advance(marker, "admission-resumed")
                 self._audit_attempt(marker, "success")
@@ -29194,6 +30780,13 @@ class PullDeployController:
                             self._advance(marker, "state-committed")
                             effective_phase = "state-committed"
                         if effective_phase == "state-committed":
+                            if descriptor["schema_version"] == DESCRIPTOR_SCHEMA_VERSION:
+                                self._stage_candidate_acceptance(
+                                    marker,
+                                    descriptor,
+                                    descriptor_digest,
+                                )
+                                return committed
                             self._recover_runtime_and_resume(
                                 marker,
                                 descriptor,
@@ -29203,6 +30796,17 @@ class PullDeployController:
                                 bind_mutable_after=False,
                             )
                             self._advance(marker, "admission-resumed")
+                        elif effective_phase in {
+                            "awaiting-acceptance",
+                            "acceptance-started",
+                            "acceptance-resume-started",
+                        }:
+                            self._prepare_runtime_recovery(
+                                marker,
+                                descriptor,
+                                allow_unfenced=False,
+                            )
+                            return committed
                         elif effective_phase == "admission-resumed":
                             self.lifecycle.verify_open_runtime(
                                 self,
@@ -29261,6 +30865,628 @@ class PullDeployController:
                 self.marker_path.unlink()
                 fsync_directory(self.marker_path.parent)
                 raise
+
+    def _stage_candidate_acceptance(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+    ) -> None:
+        # These timestamps belong to the immutable v1 probe authority.  They
+        # are not permission to reopen admission: the real maintenance hold is
+        # recorded only after a passing report, in acceptance_evidence.
+        acceptance_started = dt.datetime.now(dt.timezone.utc).replace(
+            microsecond=0
+        )
+        staged_at = acceptance_started.strftime("%Y-%m-%dT%H:%M:%SZ")
+        not_before = (
+            acceptance_started
+            + dt.timedelta(seconds=ACCEPTANCE_HOLD_SECONDS)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        operation, _descriptor_path, _ready_path = self._operation_paths(
+            descriptor["operation_id"]
+        )
+        authority_path = operation / "acceptance-authority.json"
+        authority_identity = {
+            "schema_version": 1,
+            "phase": "awaiting-acceptance",
+            "operation_id": descriptor["operation_id"],
+            "target_sha": descriptor["repository"]["target_sha"],
+            "target_tree": descriptor["repository"]["target_tree"],
+            "descriptor_sha256": descriptor_digest,
+            "staged_current_state_sha256": require_digest(
+                marker.get("candidate_state_sha256"),
+                "staged candidate current state",
+            ),
+            "control_release_id": descriptor["controller"][
+                "executor_control"
+            ]["release_id"],
+        }
+        if authority_path.exists() or authority_path.is_symlink():
+            authority = load_private_json(authority_path)
+            if (
+                not isinstance(authority, dict)
+                or {
+                    key: authority.get(key)
+                    for key in authority_identity
+                }
+                != authority_identity
+                or set(authority)
+                != set(authority_identity)
+                | {"staged_at", "acceptance_not_before"}
+            ):
+                raise PullDeployError(
+                    "staged acceptance authority changed across recovery"
+                )
+            staged_at = str(authority.get("staged_at"))
+            not_before = str(authority.get("acceptance_not_before"))
+            started = require_utc_timestamp(staged_at, "acceptance authority start")
+            if (
+                require_utc_timestamp(
+                    not_before, "acceptance authority not-before"
+                )
+                - started
+                < dt.timedelta(seconds=ACCEPTANCE_HOLD_SECONDS)
+            ):
+                raise PullDeployError(
+                    "staged acceptance authority interval is too short"
+                )
+        else:
+            authority = {
+                **authority_identity,
+                "staged_at": staged_at,
+                "acceptance_not_before": not_before,
+            }
+            atomic_json(authority_path, authority)
+        self._advance(
+            marker,
+            "awaiting-acceptance",
+            acceptance_started_at=staged_at,
+            acceptance_not_before=not_before,
+            acceptance_authority_path=str(authority_path),
+            acceptance_authority_sha256=sha256_file(authority_path),
+        )
+
+    def _load_acceptance_probe_report(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+    ) -> dict[str, Any]:
+        operation, _descriptor_path, _ready_path = self._operation_paths(
+            descriptor["operation_id"]
+        )
+        authority_path = operation / "acceptance-authority.json"
+        if marker.get("acceptance_authority_path") != str(authority_path):
+            raise PullDeployError("acceptance authority path differs from operation")
+        authority_payload, authority_file_digest = private_regular_file(
+            authority_path,
+            mode=0o600,
+            maximum_bytes=64 * 1024,
+        )
+        if authority_file_digest != marker.get("acceptance_authority_sha256"):
+            raise PullDeployError("acceptance authority file changed after staging")
+        try:
+            authority = json.loads(authority_payload.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise PullDeployError("acceptance authority is invalid JSON") from exc
+        expected_authority = {
+            "schema_version": 1,
+            "phase": "awaiting-acceptance",
+            "operation_id": descriptor["operation_id"],
+            "target_sha": descriptor["repository"]["target_sha"],
+            "target_tree": descriptor["repository"]["target_tree"],
+            "descriptor_sha256": descriptor_digest,
+            "staged_current_state_sha256": marker[
+                "candidate_state_sha256"
+            ],
+            "control_release_id": descriptor["controller"][
+                "executor_control"
+            ]["release_id"],
+            "staged_at": marker["acceptance_started_at"],
+            "acceptance_not_before": marker["acceptance_not_before"],
+        }
+        if authority != expected_authority:
+            raise PullDeployError("acceptance authority differs from staged marker")
+        report_path = operation / (
+            f"production-acceptance-{descriptor['operation_id']}.json"
+        )
+        report_payload, report_file_digest = private_regular_file(
+            report_path,
+            mode=0o600,
+            maximum_bytes=8 * 1024 * 1024,
+        )
+        try:
+            report = json.loads(report_payload.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise PullDeployError(
+                "production acceptance report is invalid JSON"
+            ) from exc
+        expected_fields = {
+            "schema_version",
+            "status",
+            "operation_id",
+            "source_sha",
+            "authority",
+            "authority_sha256",
+            "loopback_endpoint",
+            "started_at",
+            "finished_at",
+            "sections",
+            "error",
+            "report_sha256",
+        }
+        unsealed = dict(report) if isinstance(report, dict) else {}
+        report_sha256 = unsealed.pop("report_sha256", None)
+        sections = report.get("sections") if isinstance(report, dict) else None
+        if (
+            not isinstance(report, dict)
+            or set(report) != expected_fields
+            or report.get("schema_version") != 1
+            or report.get("status") != "passed"
+            or report.get("operation_id") != descriptor["operation_id"]
+            or report.get("source_sha") != descriptor["repository"]["target_sha"]
+            or report.get("authority") != expected_authority
+            or report.get("authority_sha256") != authority_file_digest
+            or report.get("loopback_endpoint") != "http://127.0.0.1:9000"
+            or report.get("error") is not None
+            or report_sha256 != canonical_json_digest(unsealed)
+            or not isinstance(sections, dict)
+            or set(sections) != {"dft", "md", "read_only_apis", "frontend"}
+            or any(
+                not isinstance(section, dict)
+                or section.get("status") != "passed"
+                for section in sections.values()
+            )
+        ):
+            raise PullDeployError(
+                "production acceptance report is not a sealed passing result"
+            )
+        staged_at = require_utc_timestamp(
+            marker["acceptance_started_at"], "acceptance start"
+        )
+        started_at = _external_database_audit_timestamp(
+            report.get("started_at"), "acceptance report start"
+        )
+        finished_at = _external_database_audit_timestamp(
+            report.get("finished_at"), "acceptance report finish"
+        )
+        if (
+            started_at < staged_at
+            or finished_at < started_at
+            or finished_at > dt.datetime.now(dt.timezone.utc)
+        ):
+            raise PullDeployError(
+                "production acceptance report is outside its sealed probe window"
+            )
+        return {
+            "path": str(report_path),
+            "file_sha256": report_file_digest,
+            "report_sha256": report_sha256,
+            "authority_sha256": authority_file_digest,
+            "finished_at": report["finished_at"],
+        }
+
+    def _retire_failed_acceptance_probe_report(
+        self,
+        marker: dict[str, Any],
+        descriptor: dict[str, Any],
+        descriptor_digest: str,
+    ) -> bool:
+        """Archive one sealed failed probe so explicit accept can retry it."""
+
+        operation, _descriptor_path, _ready_path = self._operation_paths(
+            descriptor["operation_id"]
+        )
+        report_path = operation / (
+            f"production-acceptance-{descriptor['operation_id']}.json"
+        )
+        if not (report_path.exists() or report_path.is_symlink()):
+            return False
+        payload, file_digest = private_regular_file(
+            report_path,
+            mode=0o600,
+            maximum_bytes=8 * 1024 * 1024,
+        )
+        try:
+            report = json.loads(payload.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise PullDeployError(
+                "failed acceptance report is invalid JSON"
+            ) from exc
+        if isinstance(report, dict) and report.get("status") != "failed":
+            return False
+        authority_path = Path(marker["acceptance_authority_path"])
+        authority_payload, authority_digest = private_regular_file(
+            authority_path,
+            mode=0o600,
+            maximum_bytes=64 * 1024,
+        )
+        try:
+            authority = json.loads(authority_payload.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise PullDeployError("acceptance authority is invalid JSON") from exc
+        unsealed = dict(report) if isinstance(report, dict) else {}
+        report_digest = unsealed.pop("report_sha256", None)
+        sections = report.get("sections") if isinstance(report, dict) else None
+        if (
+            not isinstance(report, dict)
+            or set(report)
+            != {
+                "schema_version",
+                "status",
+                "operation_id",
+                "source_sha",
+                "authority",
+                "authority_sha256",
+                "loopback_endpoint",
+                "started_at",
+                "finished_at",
+                "sections",
+                "error",
+                "report_sha256",
+            }
+            or report.get("schema_version") != 1
+            or report.get("status") != "failed"
+            or report.get("operation_id") != descriptor["operation_id"]
+            or report.get("source_sha")
+            != descriptor["repository"]["target_sha"]
+            or report.get("authority") != authority
+            or report.get("authority_sha256") != authority_digest
+            or authority_digest != marker["acceptance_authority_sha256"]
+            or authority.get("descriptor_sha256") != descriptor_digest
+            or report.get("loopback_endpoint") != "http://127.0.0.1:9000"
+            or not isinstance(report.get("error"), str)
+            or not report["error"]
+            or not isinstance(sections, dict)
+            or not set(sections).issubset(
+                {"dft", "md", "read_only_apis", "frontend"}
+            )
+            or report_digest != canonical_json_digest(unsealed)
+        ):
+            raise PullDeployError(
+                "existing acceptance report is neither passing nor a sealed retryable failure"
+            )
+        started_at = _external_database_audit_timestamp(
+            report.get("started_at"), "failed acceptance report start"
+        )
+        finished_at = _external_database_audit_timestamp(
+            report.get("finished_at"), "failed acceptance report finish"
+        )
+        if (
+            started_at
+            < require_utc_timestamp(
+                marker["acceptance_started_at"], "acceptance start"
+            )
+            or finished_at < started_at
+            or finished_at > dt.datetime.now(dt.timezone.utc)
+        ):
+            raise PullDeployError(
+                "failed acceptance report is outside its authorized window"
+            )
+        archive = operation / "failed-acceptance-probes"
+        ensure_private_directory(archive, create=True)
+        target = archive / (
+            "production-acceptance-"
+            + descriptor["operation_id"]
+            + "-"
+            + file_digest.removeprefix("sha256:")
+            + ".json"
+        )
+        quarantine_regular_file_noreplace(report_path, target)
+        return True
+
+    def accept(self, *, target_sha: str, operation_id: str) -> dict[str, Any]:
+        """Probe a V4 candidate, then open it only after a durable 15-minute hold."""
+
+        self.ensure_roots(mutating=True)
+        target_sha = require_sha(target_sha, "target SHA")
+        operation_id = require_operation_id(operation_id)
+        if not self.apply_enabled:
+            return {
+                "action": "accept",
+                "apply": False,
+                "operation_id": operation_id,
+                "target_sha": target_sha,
+            }
+        with self.deployment_lock():
+            self._require_no_contract_maintenance()
+            descriptor, descriptor_digest = self._load_prepared(
+                operation_id,
+                target_sha,
+                allow_deployment_database_recovery=True,
+            )
+            if descriptor["schema_version"] != DESCRIPTOR_SCHEMA_VERSION:
+                raise PullDeployError(
+                    "explicit acceptance is restricted to ordinary descriptor V4 deployments"
+                )
+            if not (self.marker_path.exists() or self.marker_path.is_symlink()):
+                operation_state = self._load_operation_state(operation_id)
+                current = self._validate_steady_deployment_state(
+                    load_private_json(self.current_state_path)
+                )
+                if (
+                    operation_state is None
+                    or operation_state.get("outcome") != "deployed"
+                    or current.get("operation_id") != operation_id
+                    or current.get("source_sha") != target_sha
+                ):
+                    raise PullDeployError(
+                        "deployment is not awaiting acceptance and is not terminal"
+                    )
+                return current
+            marker = validate_recovery_marker(
+                load_private_json(self.marker_path),
+                descriptor=descriptor,
+                descriptor_digest=descriptor_digest,
+            )
+            if self._load_postgres_rehearsal_report(
+                descriptor, descriptor_digest
+            ) != marker.get("postgres_rehearsal"):
+                raise PullDeployError(
+                    "PostgreSQL rehearsal authority changed before acceptance"
+                )
+            effective_phase = (
+                marker.get("failed_phase")
+                if marker.get("phase") == "failed"
+                else marker.get("phase")
+            )
+            if effective_phase == "admission-resumed":
+                current = self._candidate_current_state(
+                    descriptor, descriptor_digest, marker
+                )
+                if current is None:
+                    raise PullDeployError(
+                        "accepted deployment lost its candidate current state"
+                    )
+                self.lifecycle.verify_open_runtime(
+                    self,
+                    descriptor,
+                    self._marker_runtime_verification(marker),
+                )
+                self._audit_attempt(marker, "recovered-success")
+                self._record_operation_outcome(
+                    operation_id=operation_id,
+                    descriptor_sha256=descriptor_digest,
+                    outcome="deployed",
+                )
+                self._validate_steady_deployment_state(current)
+                self.marker_path.unlink()
+                fsync_directory(self.marker_path.parent)
+                return current
+            if effective_phase not in {
+                "awaiting-acceptance",
+                "acceptance-started",
+                "acceptance-resume-started",
+            }:
+                raise PullDeployError(
+                    "deployment is not at the staged acceptance boundary"
+                )
+            if marker.get("acceptance_rejected") is not None:
+                raise PullDeployError("rejected deployment cannot be accepted")
+            existing_acceptance = marker.get("acceptance_evidence")
+            if effective_phase != "awaiting-acceptance":
+                if not isinstance(existing_acceptance, dict):
+                    raise PullDeployError(
+                        "acceptance observation lost its durable evidence"
+                    )
+                observation_not_before = _external_database_audit_timestamp(
+                    existing_acceptance.get("observation_not_before"),
+                    "acceptance observation not-before",
+                )
+                if dt.datetime.now(dt.timezone.utc) < observation_not_before:
+                    raise PullDeployError(
+                        "deployment acceptance requires a complete 15-minute "
+                        "post-probe maintenance observation"
+                    )
+            current = self._candidate_current_state(
+                descriptor, descriptor_digest, marker
+            )
+            if current is None:
+                raise PullDeployError(
+                    "staged deployment lost its candidate current state"
+                )
+            try:
+                recovery = self._prepare_runtime_recovery(
+                    marker,
+                    descriptor,
+                    allow_unfenced=False,
+                )
+            except PullDeployError as exc:
+                if effective_phase != "awaiting-acceptance":
+                    marker["error"] = (
+                        "acceptance runtime fence changed during isolation; "
+                        "explicit rollback is required"
+                    )
+                    self._advance(
+                        marker,
+                        "acceptance-rejected",
+                        acceptance_rejected=True,
+                    )
+                    raise PullDeployError(
+                        "acceptance runtime/Worker stability changed; admission "
+                        "remains isolated and explicit rollback is required"
+                    ) from exc
+                raise
+            if recovery["runtime_state"] == "stopped":
+                self._persist_stopped_postgres_runtime_fence(marker, descriptor)
+                self._record_runtime_start_intent(marker, descriptor)
+                self._start_runtime(marker, descriptor)
+            self.lifecycle.cleanup_acceptance_probe_proxy(self, descriptor)
+            operation, _descriptor_path, _ready_path = self._operation_paths(
+                operation_id
+            )
+            probe_report_path = operation / (
+                f"production-acceptance-{operation_id}.json"
+            )
+            if effective_phase == "awaiting-acceptance":
+                self._retire_failed_acceptance_probe_report(
+                    marker,
+                    descriptor,
+                    descriptor_digest,
+                )
+                if not (
+                    probe_report_path.exists() or probe_report_path.is_symlink()
+                ):
+                    self.lifecycle.run_acceptance_probes(
+                        self,
+                        descriptor,
+                        Path(marker["acceptance_authority_path"]),
+                    )
+            probe_report = self._load_acceptance_probe_report(
+                marker,
+                descriptor,
+                descriptor_digest,
+            )
+            if effective_phase != "awaiting-acceptance" and (
+                existing_acceptance.get("probe_report_sha256")
+                != probe_report["report_sha256"]
+                or existing_acceptance.get("probe_report_file_sha256")
+                != probe_report["file_sha256"]
+                or existing_acceptance.get("probe_authority_sha256")
+                != probe_report["authority_sha256"]
+                or existing_acceptance.get("probes_completed_at")
+                != probe_report["finished_at"]
+            ):
+                raise PullDeployError(
+                    "sealed acceptance probe evidence changed during observation"
+                )
+            observed_verification = self._sealed_runtime_verification(
+                self.lifecycle.verify(self, descriptor)
+            )
+            self._revalidate_candidate_database_state(
+                descriptor,
+                current,
+                include_mutable=True,
+            )
+            current = self._candidate_current_state(
+                descriptor, descriptor_digest, marker
+            )
+            if current is None:
+                raise PullDeployError(
+                    "candidate state changed during acceptance verification"
+                )
+            recovery_fence = observed_verification.get("recovery_fence")
+            if not isinstance(recovery_fence, dict) or not recovery_fence:
+                raise PullDeployError(
+                    "acceptance runtime verification lacks a Worker recovery fence"
+                )
+            runtime_identity = acceptance_runtime_stability_identity(
+                observed_verification
+            )
+            database_identity = {
+                "migrations": current.get("migrations"),
+                "database_backup": current.get("database_backup"),
+                "mutable_data_audit": current.get("mutable_data_audit"),
+                "final_mutable_data_audit": current.get(
+                    "final_mutable_data_audit"
+                ),
+                "final_external_database_audit": current.get(
+                    "final_external_database_audit"
+                ),
+            }
+            stability = {
+                "candidate_state_sha256": marker["candidate_state_sha256"],
+                "runtime_identity_sha256": canonical_json_digest(
+                    runtime_identity
+                ),
+                "database_state_sha256": canonical_json_digest(
+                    database_identity
+                ),
+                "worker_fence_sha256": canonical_json_digest(
+                    recovery_fence
+                ),
+            }
+            if effective_phase == "awaiting-acceptance":
+                verified = dt.datetime.now(dt.timezone.utc)
+                verified_at = verified.isoformat().replace("+00:00", "Z")
+                observation_not_before = (
+                    verified
+                    + dt.timedelta(seconds=ACCEPTANCE_HOLD_SECONDS)
+                ).isoformat().replace("+00:00", "Z")
+                acceptance = {
+                    "schema_version": 1,
+                    "operation_id": operation_id,
+                    **stability,
+                    "probe_report_sha256": probe_report["report_sha256"],
+                    "probe_report_file_sha256": probe_report["file_sha256"],
+                    "probe_authority_sha256": probe_report[
+                        "authority_sha256"
+                    ],
+                    "probes_completed_at": probe_report["finished_at"],
+                    "observation_started_at": verified_at,
+                    "observation_not_before": observation_not_before,
+                    "verified_at": verified_at,
+                }
+                verification = self._persist_runtime_verification(
+                    marker, observed_verification
+                )
+                self._advance(
+                    marker,
+                    "acceptance-started",
+                    acceptance_evidence=acceptance,
+                )
+                return {
+                    "action": "accept",
+                    "apply": True,
+                    "status": "maintenance-observation",
+                    "phase": "acceptance-started",
+                    "terminal": False,
+                    "operation_id": operation_id,
+                    "target_sha": target_sha,
+                    "public_admission_open": False,
+                    "probe_report_sha256": acceptance[
+                        "probe_report_sha256"
+                    ],
+                    "observation_started_at": acceptance[
+                        "observation_started_at"
+                    ],
+                    "acceptance_not_before": acceptance[
+                        "observation_not_before"
+                    ],
+                    "next_action": "rerun accept after acceptance_not_before",
+                }
+            changed = [
+                name
+                for name, observed in stability.items()
+                if existing_acceptance.get(name) != observed
+            ]
+            if changed:
+                marker["error"] = (
+                    "acceptance stability changed ("
+                    + ", ".join(changed)
+                    + "); explicit rollback is required"
+                )[:500]
+                self._advance(
+                    marker,
+                    "acceptance-rejected",
+                    acceptance_rejected=True,
+                )
+                raise PullDeployError(
+                    "acceptance runtime/database/Worker stability changed; "
+                    "admission remains isolated and explicit rollback is required"
+                )
+            acceptance = existing_acceptance
+            verification = self._persist_runtime_verification(
+                marker, observed_verification
+            )
+            self._advance(
+                marker,
+                "acceptance-resume-started",
+                acceptance_evidence=acceptance,
+            )
+            self.lifecycle.resume(self, descriptor, verification)
+            self._advance(marker, "admission-resumed")
+            self._audit_attempt(marker, "success")
+            self._record_operation_outcome(
+                operation_id=operation_id,
+                descriptor_sha256=descriptor_digest,
+                outcome="deployed",
+            )
+            self._validate_steady_deployment_state(current)
+            self.marker_path.unlink()
+            fsync_directory(self.marker_path.parent)
+            return current
 
     def apply_bridge(
         self, *, authority_sha: str, operation_id: str
@@ -29400,6 +31626,66 @@ class PullDeployController:
             self._require_no_contract_maintenance()
             if self.marker_path.exists() or self.marker_path.is_symlink():
                 interrupted = load_private_json(self.marker_path)
+                if (
+                    interrupted.get("action") == "deploy"
+                    and interrupted.get("operation_id") == operation_id
+                ):
+                    descriptor, descriptor_digest = self._load_prepared(
+                        operation_id,
+                        allow_deployment_database_recovery=True,
+                    )
+                    marker = validate_recovery_marker(
+                        interrupted,
+                        descriptor=descriptor,
+                        descriptor_digest=descriptor_digest,
+                    )
+                    effective_phase = (
+                        marker.get("failed_phase")
+                        if marker.get("phase") == "failed"
+                        else marker.get("phase")
+                    )
+                    if (
+                        descriptor.get("schema_version")
+                        != DESCRIPTOR_SCHEMA_VERSION
+                        or effective_phase
+                        not in {
+                            "awaiting-acceptance",
+                            "acceptance-started",
+                            "acceptance-resume-started",
+                            "acceptance-rejected",
+                        }
+                    ):
+                        raise PullDeployError(
+                            "interrupted deployment is not at the staged rollback boundary"
+                    )
+                    if marker.get("acceptance_rejected") is not True:
+                        marker.pop("acceptance_evidence", None)
+                        self._advance(
+                            marker,
+                            "acceptance-rejected",
+                            acceptance_rejected=True,
+                        )
+                    self._rollback_failed_attempt(descriptor, marker)
+                    self._restore_pre_acceptance_current_state(
+                        descriptor, marker
+                    )
+                    marker["rollback"] = "success"
+                    self._audit_attempt(
+                        marker, "rejected-before-acceptance"
+                    )
+                    self._record_operation_outcome(
+                        operation_id=operation_id,
+                        descriptor_sha256=descriptor_digest,
+                        outcome="failed",
+                    )
+                    self.marker_path.unlink()
+                    fsync_directory(self.marker_path.parent)
+                    return {
+                        "action": "rollback",
+                        "status": "rejected-before-acceptance",
+                        "operation_id": operation_id,
+                        "source_sha": descriptor["repository"]["previous_sha"],
+                    }
                 if (
                     interrupted.get("action") != "explicit-rollback"
                     or interrupted.get("operation_id") != operation_id
@@ -29662,7 +31948,7 @@ class PullDeployController:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
-    for name in ("plan", "prepare", "apply"):
+    for name in ("plan", "prepare", "apply", "accept"):
         command = commands.add_parser(name)
         command.add_argument("--sha", required=True)
         command.add_argument("--operation-id", required=True)
@@ -29736,6 +32022,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "apply":
             document = controller.apply(
+                target_sha=args.sha, operation_id=args.operation_id
+            )
+        elif args.command == "accept":
+            document = controller.accept(
                 target_sha=args.sha, operation_id=args.operation_id
             )
         elif args.command == "prepare-abort":

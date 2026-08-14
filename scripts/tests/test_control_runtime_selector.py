@@ -778,6 +778,16 @@ class SelectorTests(unittest.TestCase):
             ["apply", "--operation-id", operation, "--sha", "3" * 40],
         )
         self.assertEqual(selected, second_root)
+        # ``accept`` was added after the stable selector was adopted.  A live
+        # deployment marker already routes every command through its sealed
+        # candidate release, so supporting staged acceptance must not require
+        # changing the immutable selector ABI.
+        _manifest, selected = SELECTOR._selected_release(
+            self.runtime,
+            "deploy",
+            ["accept", "--operation-id", operation, "--sha", "3" * 40],
+        )
+        self.assertEqual(selected, second_root)
         with self.assertRaisesRegex(SELECTOR.ControlRuntimeError, "differs"):
             SELECTOR._selected_release(
                 self.runtime,

@@ -42,6 +42,10 @@ CONTRACTS = load_module(
     "postgres_media_site_contract_test",
     ROOT / "scripts/site_helper_contracts.py",
 )
+MUTABLE_ROLE = load_module(
+    "mutable_role_provision_media_test",
+    ROOT / "scripts/provision_mutable_data_audit_role.py",
+)
 
 IMAGE = MEDIA.POSTGRES_AUDIT_IMAGES[16]
 IMAGE_ID = "sha256:" + IMAGE.rsplit("sha256:", 1)[1]
@@ -11855,11 +11859,11 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 label=label,
             )
 
-    def test_mutable_schema_v6_helper_runs_against_real_postgres(
+    def test_mutable_schema_v7_helper_runs_against_real_postgres(
         self,
     ) -> None:
         if self.postgres_major() != 16:
-            self.skipTest("mutable schema-v6 integration is fixed to PG16")
+            self.skipTest("mutable schema-v7 integration is fixed to PG16")
         if (
             os.environ.get("NEXPOLY_RUN_MUTABLE_HELPER_INTEGRATION")
             != "1"
@@ -11869,11 +11873,12 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
             )
         image = self.pinned_image()
         runner = MEDIA.CommandRunner()
-        volume = MEDIA._temp_name("integration-mutable-v6")
-        name = MEDIA._temp_name("integration-mutable-v6-pg")
-        label = "mutable-schema-v6-integration"
+        volume = MEDIA._temp_name("integration-mutable-v7")
+        name = MEDIA._temp_name("integration-mutable-v7-pg")
+        label = "mutable-schema-v7-integration"
         password = "mutable-v6-admin-secret"
         audit_password = "mutable-v6-audit-secret"
+        admin_user = MUTABLE_ROLE.ADMIN_USER
         production_host_port = 55432
         container_id: str | None = None
         try:
@@ -11913,7 +11918,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                     "--env",
                     f"POSTGRES_PASSWORD={password}",
                     "--env",
-                    "POSTGRES_USER=postgres",
+                    f"POSTGRES_USER={admin_user}",
                     "--env",
                     "POSTGRES_DB=nexpoly",
                     image,
@@ -11928,7 +11933,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 runner,
                 container_id,
                 database="nexpoly",
-                user="postgres",
+                user=admin_user,
             )
             container_record = json.loads(
                 runner.run(
@@ -11946,7 +11951,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 or len(container_record) != 1
             ):
                 self.fail(
-                    "mutable schema-v6 integration container is ambiguous"
+                    "mutable schema-v7 integration container is ambiguous"
                 )
             bindings = (
                 container_record[0]
@@ -11965,7 +11970,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 is None
             ):
                 self.fail(
-                    "mutable schema-v6 integration port is not isolated"
+                    "mutable schema-v7 integration port is not isolated"
                 )
             host_port = int(bindings[0]["HostPort"])
             if host_port == production_host_port:
@@ -11985,7 +11990,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                         "-v",
                         "ON_ERROR_STOP=1",
                         "-U",
-                        "postgres",
+                        admin_user,
                         "-d",
                         "nexpoly",
                     ],
@@ -12022,17 +12027,62 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                         f"'{record['checksum']}');"
                     ).encode("ascii")
                 )
+            # Role provisioning is authorized against the adopted production
+            # namespace inventory, which already includes the post-0013 DFT
+            # schema.  This test intentionally keeps the ledger at 0011 so it
+            # can exercise the 0012 archive exception; seed only the empty
+            # namespace, never the 0013 relation or ledger record.
             admin_sql(
+                b"CREATE SCHEMA monomer_dft AUTHORIZATION polyprop;"
+            )
+            before_role = MUTABLE_ROLE._admin_json(container_id)
+            desired_role = MUTABLE_ROLE._desired_state(
+                {
+                    "database": before_role,
+                    "pgpass_login_matches": False,
+                }
+            )["database"]
+            audit_secret = bytearray(audit_password.encode("utf-8"))
+            try:
+                verifier = MUTABLE_ROLE._scram_verifier(
+                    audit_secret,
+                    salt=bytes(range(MUTABLE_ROLE.SCRAM_SALT_BYTES)),
+                )
+            finally:
+                audit_secret[:] = b"\x00" * len(audit_secret)
+            transaction = MUTABLE_ROLE._transaction_sql(
                 (
                     ROOT
                     / "ops/config/mutable-data-audit-role.sql.example"
-                ).read_bytes()
+                ).read_bytes(),
+                verifier,
+                before_database=before_role,
+                desired_database=desired_role,
             )
-            admin_sql(
-                (
-                    "ALTER ROLE nexpoly_mutable_audit PASSWORD "
-                    f"'{audit_password}';"
-                ).encode("ascii")
+            for placeholder in (
+                b"__SCRAM_VERIFIER_LITERAL__",
+                b"__IN_TRANSACTION_SEALED_CAS__",
+                b"__IN_TRANSACTION_DESIRED_ASSERT__",
+            ):
+                self.assertNotIn(placeholder, transaction)
+            self.assertEqual(
+                transaction.count(
+                    b"sealed mutable-audit before/desired CAS differs"
+                ),
+                1,
+            )
+            self.assertEqual(
+                transaction.count(
+                    b"sealed mutable-audit desired state differs before commit"
+                ),
+                1,
+            )
+            MUTABLE_ROLE._apply_transaction(container_id, transaction)
+            self.assertTrue(transaction)
+            self.assertEqual(set(transaction), {0})
+            self.assertEqual(
+                MUTABLE_ROLE._admin_json(container_id),
+                desired_role,
             )
 
             system_identifier = runner.run(
@@ -12045,7 +12095,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                     "-A",
                     "-t",
                     "-U",
-                    "postgres",
+                    admin_user,
                     "-d",
                     "nexpoly",
                     "-c",
@@ -12100,7 +12150,7 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
             }
 
             with tempfile.TemporaryDirectory(
-                prefix="mutable-v6-real-"
+                prefix="mutable-v7-real-"
             ) as raw:
                 root = Path(raw)
                 os.chmod(root, 0o700)
@@ -12206,8 +12256,8 @@ class RealDockerPostgresIntegrationTests(unittest.TestCase):
                 )
                 after = capture("mutable-v6-post-0012")
 
-            self.assertEqual(before["schema_version"], 6)
-            self.assertEqual(after["schema_version"], 6)
+            self.assertEqual(before["schema_version"], 7)
+            self.assertEqual(after["schema_version"], 7)
             self.assertEqual(
                 before["business_tables"],
                 after["business_tables"],

@@ -77,7 +77,17 @@ MONOMER_MD_JOB_ROOT=/data/lzq/gith/nexpoly-runtime/state/monomer-md-worker-runs
 MONOMER_MD_WORKER_UDS=/data/lzq/gith/nexpoly-runtime/state/monomer-md-worker-socket/worker.sock
 MONOMER_MD_GPU_BROKER_SOCKET_PATH=/data/lzq/gith/nexpoly-runtime/state/gpu-resource/broker.sock
 MONOMER_MD_GPU_MPS_PIPE_ROOT=/data/lzq/gith/nexpoly-runtime/state/gpu-resource
+MONOMER_MD_MAX_ACTIVE_JOBS=3
+MONOMER_MD_MAX_CONCURRENT_JOBS=1
 ```
+
+These limits have different meanings. `MAX_ACTIVE_JOBS` is the total admitted
+non-terminal population (running plus queued), while `MAX_CONCURRENT_JOBS` is
+the execution cap. Production therefore permits exactly one running job and
+two queued jobs. The fourth active submission returns HTTP 429; setting
+`MAX_ACTIVE_JOBS=3` does not permit three jobs to execute simultaneously. The
+Backend admission query, Worker queue, deployment canary, and production
+acceptance probes all enforce this same one-plus-two contract.
 
 `MONOMER_MD_PYTHON` must not be configured or inherited in production. Both the
 controller and launcher reject it. The interpreter is selected only from the
@@ -159,10 +169,11 @@ The Worker listens only on its Unix socket. Internal endpoints provide:
 The public browser never connects to the Worker. Backend remains the only
 public interface and the only writer of platform orchestration state.
 
-Maximum production concurrency is one. Formal protocols use the reviewed
-300-step contract. The Worker tracks its process group and any governed GPU
-lease so cancellation, timeout and shutdown cannot leave child processes or GPU
-capacity behind.
+Maximum production execution concurrency is one, with two additional admitted
+queue positions as described above. Formal protocols use the reviewed 300-step
+contract. The Worker tracks its process group and any governed GPU lease so
+cancellation, timeout and shutdown cannot leave child processes or GPU capacity
+behind.
 
 ## Development
 

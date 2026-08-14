@@ -224,6 +224,13 @@ jobs:
         run: >-
           python3 -m unittest -v
           scripts.tests.test_postgres_media_evidence.RealDockerPostgresIntegrationTests
+      - name: Run mutable-audit role transactional CAS integration
+        if: matrix.major == '16'
+        env:
+          NEXPOLY_RUN_POSTGRES_ROLE_INTEGRATION: "1"
+        run: >-
+          python3 -m unittest -v
+          scripts.tests.test_provision_mutable_data_audit_role.MutableAuditRolePostgresIntegrationTests
 
   backend-tests:
     name: Backend tests (shard ${{ matrix.shard }})

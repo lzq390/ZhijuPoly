@@ -20,6 +20,7 @@ from scripts.tests.bridge_manifest_fixtures import (
     F_MANIFEST_RECORDS,
     F_MANIFEST_SHA256,
 )
+from scripts.tests.mutable_audit_role_fixtures import role_security_evidence
 from scripts.tests.test_postgres_media_evidence import (
     external_inventory_fixture as external_inventory_v3_fixture,
     role_security_fields as external_role_security_fields,
@@ -67,6 +68,26 @@ def v4_recovery_marker(marker: dict[str, object]) -> dict[str, object]:
         "dft_unit_switched", bool(upgraded.get("unit_switched"))
     )
     upgraded.setdefault("dft_guard_scheduling_stopped", False)
+    if upgraded.get("action") == "deploy":
+        operation_id = str(upgraded["operation_id"])
+        upgraded.setdefault(
+            "postgres_rehearsal",
+            {
+                "schema_version": 1,
+                "operation_id": operation_id,
+                "target_sha": upgraded["source_sha"],
+                "descriptor_sha256": upgraded["descriptor_sha256"],
+                "path": (
+                    "/var/lib/nexpoly-fixture/audit/deployment-rehearsals/"
+                    f"{operation_id}/report.json"
+                ),
+                "file_sha256": "sha256:" + "a" * 64,
+                "report_sha256": "sha256:" + "b" * 64,
+                "completed_at": "2026-01-01T00:00:00Z",
+                "dump_sha256": "sha256:" + "c" * 64,
+                "journal_head_sha256": "sha256:" + "d" * 64,
+            },
+        )
     return upgraded
 
 
@@ -277,36 +298,9 @@ def mutable_data_evidence(
             },
             "system_identifier": "7659245354718314530",
         },
-        "role_security": {
-            "role": "nexpoly_mutable_audit",
-            "can_login": True,
-            "superuser": False,
-            "create_db": False,
-            "create_role": False,
-            "inherit": True,
-            "replication": False,
-            "bypass_rls": False,
-            "role_settings": [
-                {
-                    "database": "*",
-                    "settings": ["default_transaction_read_only=on"],
-                }
-            ],
-            "direct_memberships": [
-                {
-                    "role": "pg_read_all_data",
-                    "admin_option": False,
-                    "inherit_option": True,
-                    "set_option": True,
-                }
-            ],
-            "effective_memberships": ["pg_read_all_data"],
-            "has_pg_read_all_data": True,
-            "has_pg_write_all_data": False,
-            "owned_objects": [],
-            "direct_write_grants": [],
-            "effective_write_privileges": [],
-        },
+        "role_security": role_security_evidence(
+            CONTROLLER._site_helper_contracts
+        ),
         "digest_algorithm": "sha256-postgres-jsonb-copy-v4",
         "migration_ledger": [
             {"version": version, "checksum": checksum}
@@ -392,7 +386,7 @@ def mutable_data_evidence(
         },
     }
     return {
-        "schema_version": 6,
+        "schema_version": 7,
         **identity,
         "transaction_isolation": "repeatable read",
         "transaction_read_only": True,
@@ -1376,6 +1370,21 @@ class FakeLifecycle:
         self._event("stop")
         self.runtime_state = "stopped"
 
+    def run_acceptance_probes(
+        self,
+        _controller: object,
+        _descriptor: object,
+        _authority_path: Path,
+    ) -> None:
+        self._event("acceptance-probes")
+
+    def cleanup_acceptance_probe_proxy(
+        self,
+        _controller: object,
+        _descriptor: object,
+    ) -> None:
+        return None
+
     @staticmethod
     def _guard_evidence(
         descriptor: dict[str, object], *, status: str
@@ -1755,6 +1764,73 @@ class FixtureController(CONTROLLER.PullDeployController):
             },
         )
         seed_completed_alias_gate(self.runtime_root, manifest, _root)
+
+    def apply_staged(self, **arguments):  # type: ignore[no-untyped-def]
+        return super().apply(**arguments)
+
+    def _load_postgres_rehearsal_report(
+        self,
+        _descriptor: dict[str, object],
+        _descriptor_digest: str,
+    ) -> dict[str, str]:
+        operation_id = str(_descriptor["operation_id"])
+        return {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "target_sha": str(_descriptor["repository"]["target_sha"]),
+            "descriptor_sha256": _descriptor_digest,
+            "path": (
+                "/var/lib/nexpoly-fixture/audit/deployment-rehearsals/"
+                f"{operation_id}/report.json"
+            ),
+            "file_sha256": "sha256:" + "a" * 64,
+            "report_sha256": "sha256:" + "b" * 64,
+            "completed_at": "2026-01-01T00:00:00Z",
+            "dump_sha256": "sha256:" + "c" * 64,
+            "journal_head_sha256": "sha256:" + "d" * 64,
+        }
+
+    def apply(self, **arguments):  # type: ignore[no-untyped-def]
+        """Preserve legacy one-call fixture semantics outside staged tests."""
+
+        state = self.apply_staged(**arguments)
+        if self.marker_path.exists():
+            marker = CONTROLLER.load_private_json(self.marker_path)
+            if marker.get("phase") == "awaiting-acceptance":
+                marker["acceptance_started_at"] = "2026-01-01T00:00:00Z"
+                marker["acceptance_not_before"] = "2026-01-01T00:15:00Z"
+                CONTROLLER.atomic_json(self.marker_path, marker)
+                with mock.patch.object(
+                    self,
+                    "_load_acceptance_probe_report",
+                    return_value={
+                        "report_sha256": "sha256:" + "1" * 64,
+                        "file_sha256": "sha256:" + "2" * 64,
+                        "authority_sha256": "sha256:" + "3" * 64,
+                        "finished_at": "2026-01-01T00:15:02Z",
+                    },
+                ), mock.patch.object(
+                    self.lifecycle,
+                    "run_acceptance_probes",
+                    return_value=None,
+                ):
+                    observing = super().accept(
+                        target_sha=arguments["target_sha"],
+                        operation_id=arguments["operation_id"],
+                    )
+                    if observing.get("status") != "maintenance-observation":
+                        raise AssertionError("fixture did not enter acceptance hold")
+                    marker = CONTROLLER.load_private_json(self.marker_path)
+                    evidence = marker["acceptance_evidence"]
+                    evidence["verified_at"] = "2026-01-01T00:15:03Z"
+                    evidence["observation_started_at"] = evidence["verified_at"]
+                    evidence["observation_not_before"] = "2026-01-01T00:30:03Z"
+                    CONTROLLER.atomic_json(self.marker_path, marker)
+                    return super().accept(
+                        target_sha=arguments["target_sha"],
+                        operation_id=arguments["operation_id"],
+                    )
+        return state
 
     def _git_show(self, _target_sha: str, relative: str) -> bytes:
         return (REPOSITORY_ROOT / relative).read_bytes()
@@ -3083,6 +3159,8 @@ class EphemeralContainerOwnershipTests(unittest.TestCase):
                 return SimpleNamespace(returncode=0, stdout=b"asset")
             if command[:3] == ["docker", "rm", "--force"]:
                 raise OSError("response lost after committed removal")
+            if command[:4] == ["docker", "container", "ls", "--all"]:
+                return SimpleNamespace(returncode=0, stdout="")
             raise AssertionError(command)
 
         controller = SimpleNamespace(
@@ -3098,7 +3176,7 @@ class EphemeralContainerOwnershipTests(unittest.TestCase):
             controller, descriptor
         )
         self.assertEqual(evidence["image"], descriptor["images"]["web"]["digest_ref"])
-        self.assertEqual(inspect_count, 3)
+        self.assertEqual(inspect_count, 2)
 
     def test_same_sha_different_operation_and_extra_resources_are_foreign(self) -> None:
         record = self.web_record("deploy-20260716-another-operation")
@@ -5185,6 +5263,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             "adoption_evidence_sha256",
             "adopted_deployment_sha256",
             "monomer_dft",
+            "postgres_rehearsal",
         ):
             state.pop(field)
         state["migrations"] = json.loads(
@@ -5446,6 +5525,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             operation_id=OPERATION_ID,
         )
         state["descriptor_sha256"] = descriptor_digest
+        state["postgres_rehearsal"]["descriptor_sha256"] = descriptor_digest
         state["migrations"] = json.loads(
             json.dumps(B_MANIFEST_RECORDS[:11])
         )
@@ -5702,6 +5782,116 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             "one property-filter catalog snapshot",
         ):
             CONTROLLER.build_mutable_data_pair(before, noncanonical)
+
+    def test_mutable_data_allows_exact_post_0013_to_0015_expansion(self) -> None:
+        before = mutable_data_evidence(ledger_length=13)
+        after = mutable_data_evidence(ledger_length=15)
+
+        pair = CONTROLLER.build_mutable_data_pair(before, after)
+
+        self.assertEqual(pair["transition"]["kind"], "expand-0014-0015")
+        self.assertIsNone(pair["transition"]["migration"])
+        self.assertEqual(
+            pair["transition"]["migrations"],
+            after["migration_ledger"][-2:],
+        )
+        self.assertEqual(
+            [record["version"] for record in pair["transition"]["migrations"]],
+            [
+                "0014_monomer_md_task_queue_cancel",
+                "0015_property_filter_performance",
+            ],
+        )
+
+        # A durable pair can be reopened after a lost controller response; the
+        # validator must derive the same exact composite authority from the two
+        # sealed snapshots rather than trusting the recorded transition.
+        recovered = json.loads(json.dumps(pair))
+        self.assertEqual(CONTROLLER.validate_mutable_data_pair(recovered), pair)
+
+    def test_mutable_data_rejects_nonpristine_post_0013_to_0015_expansion(
+        self,
+    ) -> None:
+        before = mutable_data_evidence(ledger_length=13)
+        pristine = mutable_data_evidence(ledger_length=15)
+
+        mutations = (
+            (
+                "md-rows",
+                "preserve the MD job table",
+                lambda evidence: (
+                    next(
+                        record
+                        for record in evidence["business_tables"]
+                        if (record["schema"], record["table"])
+                        == ("md", "monomer_md_jobs")
+                    ).update(row_count=1),
+                    evidence["bridge_projection"].update(row_count=1),
+                ),
+            ),
+            (
+                "queue-sequence",
+                "queue sequence is not pristine",
+                lambda evidence: next(
+                    record
+                    for record in evidence["sequences"]
+                    if (record["schema"], record["sequence"])
+                    == ("md", "monomer_md_queue_sequence_seq")
+                ).update(is_called=True),
+            ),
+            (
+                "property-snapshot",
+                "one property-filter catalog snapshot",
+                lambda evidence: next(
+                    record
+                    for record in evidence["static_tables"]
+                    if (record["schema"], record["table"])
+                    == ("governance", "property_filter_options_snapshots")
+                ).update(row_count=2),
+            ),
+            (
+                "property-record-count",
+                "static import tables changed",
+                lambda evidence: next(
+                    record
+                    for record in evidence["static_tables"]
+                    if (record["schema"], record["table"])
+                    == ("core", "polymer_property_filter_records")
+                ).update(row_count=615_160),
+            ),
+            (
+                "analytics-snapshot",
+                "analytics snapshots changed",
+                lambda evidence: evidence["governed_controls"][
+                    "database_analytics_snapshots"
+                ]["table"].update(content_sha256="sha256:" + "f" * 64),
+            ),
+        )
+        for label, message, mutate in mutations:
+            with self.subTest(label=label):
+                changed = json.loads(json.dumps(pristine))
+                mutate(changed)
+                reseal_mutable_data_evidence(changed)
+                with self.assertRaisesRegex(CONTROLLER.PullDeployError, message):
+                    CONTROLLER.build_mutable_data_pair(before, changed)
+
+    def test_mutable_data_composite_transition_rejects_partial_crash_snapshot(
+        self,
+    ) -> None:
+        before = mutable_data_evidence(ledger_length=13)
+        complete = mutable_data_evidence(ledger_length=15)
+        pair = CONTROLLER.build_mutable_data_pair(before, complete)
+
+        # If execution stopped after 0014, an already-recorded composite pair
+        # must not be reusable. Revalidation derives expand-0014 from the
+        # partial after-snapshot and rejects the stale two-step assertion.
+        partial = json.loads(json.dumps(pair))
+        partial["after"] = mutable_data_evidence(ledger_length=14)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "mutable-data transition evidence differs",
+        ):
+            CONTROLLER.validate_mutable_data_pair(partial)
 
     def test_mutable_data_rejects_static_control_and_analytics_drift(self) -> None:
         before = mutable_data_evidence()
@@ -6606,6 +6796,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             descriptor_sha256=descriptor_digest,
         )
         state["descriptor_sha256"] = descriptor_digest
+        state["postgres_rehearsal"]["descriptor_sha256"] = descriptor_digest
         state["external_database_audit"] = descriptor[
             "external_database_audit"
         ]
@@ -8757,6 +8948,42 @@ class StrictLifecycleEvidenceTests(unittest.TestCase):
                 worker,
             )
 
+            for active_jobs, accepting_jobs in ((1, True), (2, True), (3, False)):
+                with self.subTest(
+                    active_jobs=active_jobs,
+                    accepting_jobs=accepting_jobs,
+                ):
+                    active_worker = {
+                        **worker,
+                        "active_jobs": active_jobs,
+                        "accepting_jobs": accepting_jobs,
+                    }
+                    self.assertIs(
+                        lifecycle._validate_worker_runtime_identity(
+                            controller,
+                            descriptor,
+                            active_worker,
+                            expected_accepting=None,
+                            allow_active=True,
+                        ),
+                        active_worker,
+                    )
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "active-job state differs",
+            ):
+                lifecycle._validate_worker_runtime_identity(
+                    controller,
+                    descriptor,
+                    {
+                        **worker,
+                        "active_jobs": 4,
+                        "accepting_jobs": False,
+                    },
+                    expected_accepting=None,
+                    allow_active=True,
+                )
+
             invalid_protocols = (
                 None,
                 [],
@@ -9405,6 +9632,946 @@ class SystemDrainFencingTests(unittest.TestCase):
 
 
 class LifecycleStateMachineTests(PullDeployTestCase):
+    @staticmethod
+    def _probe_report_binding() -> dict[str, str]:
+        return {
+            "report_sha256": "sha256:" + "1" * 64,
+            "file_sha256": "sha256:" + "2" * 64,
+            "authority_sha256": "sha256:" + "3" * 64,
+        }
+
+    def _expire_acceptance_hold(self, controller: FixtureController) -> None:
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        evidence = marker.get("acceptance_evidence")
+        if isinstance(evidence, dict):
+            completed = CONTROLLER._external_database_audit_timestamp(
+                evidence["probes_completed_at"], "fixture probe completion"
+            )
+            verified = completed + CONTROLLER.dt.timedelta(seconds=1)
+            evidence["verified_at"] = verified.isoformat().replace("+00:00", "Z")
+            evidence["observation_started_at"] = evidence["verified_at"]
+            evidence["observation_not_before"] = (
+                verified
+                + CONTROLLER.dt.timedelta(
+                    seconds=CONTROLLER.ACCEPTANCE_HOLD_SECONDS
+                )
+            ).isoformat().replace("+00:00", "Z")
+            CONTROLLER.atomic_json(controller.marker_path, marker)
+            return
+        marker["acceptance_started_at"] = "2026-01-01T00:00:00Z"
+        marker["acceptance_not_before"] = "2026-01-01T00:15:00Z"
+        authority_path = Path(marker["acceptance_authority_path"])
+        authority = CONTROLLER.load_private_json(authority_path)
+        authority["staged_at"] = marker["acceptance_started_at"]
+        authority["acceptance_not_before"] = marker[
+            "acceptance_not_before"
+        ]
+        CONTROLLER.atomic_json(authority_path, authority)
+        marker["acceptance_authority_sha256"] = CONTROLLER.sha256_file(
+            authority_path
+        )
+        CONTROLLER.atomic_json(controller.marker_path, marker)
+
+    def _write_passing_probe_report(
+        self, controller: FixtureController
+    ) -> None:
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        authority = CONTROLLER.load_private_json(
+            Path(marker["acceptance_authority_path"])
+        )
+        probe_timestamp = authority["staged_at"]
+        report = {
+            "schema_version": 1,
+            "status": "passed",
+            "operation_id": marker["operation_id"],
+            "source_sha": marker["source_sha"],
+            "authority": authority,
+            "authority_sha256": marker["acceptance_authority_sha256"],
+            "loopback_endpoint": "http://127.0.0.1:9000",
+            "started_at": probe_timestamp,
+            "finished_at": probe_timestamp,
+            "sections": {
+                name: {"status": "passed"}
+                for name in ("dft", "md", "read_only_apis", "frontend")
+            },
+            "error": None,
+        }
+        report["report_sha256"] = CONTROLLER.canonical_json_digest(report)
+        operation, _descriptor, _ready = controller._operation_paths(
+            marker["operation_id"]
+        )
+        CONTROLLER.atomic_json(
+            operation / f"production-acceptance-{marker['operation_id']}.json",
+            report,
+        )
+
+    @staticmethod
+    def _acceptance_runner_descriptor() -> dict[str, object]:
+        return {
+            "operation_id": OPERATION_ID,
+            "repository": {"target_sha": TARGET_SHA},
+            "images": {
+                "web": {
+                    "digest_ref": f"ghcr.io/lzq2514/nexpoly-web@{DIGEST_A}",
+                    "image_id": "sha256:" + "b" * 64,
+                }
+            },
+            "monomer_dft": {"gpu": {"uuid": "GPU-" + "1" * 32}},
+        }
+
+    def test_acceptance_proxy_rejects_non_loopback_port_binding(self) -> None:
+        lifecycle = CONTROLLER.SystemLifecycle()
+        descriptor = self._acceptance_runner_descriptor()
+        record = {
+            "Id": "1" * 64,
+            "Name": f"/nexpoly-acceptance-{OPERATION_ID}",
+            "Image": descriptor["images"]["web"]["image_id"],
+            "Config": {
+                "Image": descriptor["images"]["web"]["digest_ref"],
+                "Labels": {
+                    "com.nexpoly.acceptance-operation": OPERATION_ID
+                },
+            },
+            "HostConfig": {
+                "PortBindings": {
+                    "80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "9000"}]
+                },
+                "NetworkMode": "nexpoly_default",
+                "Privileged": False,
+                "PublishAllPorts": False,
+                "AutoRemove": True,
+                "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0},
+            },
+            "NetworkSettings": {
+                "Ports": {
+                    "80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "9000"}]
+                },
+                "Networks": {
+                    "nexpoly_default": {
+                        "NetworkID": "2" * 64,
+                        "IPAddress": "172.20.0.9",
+                    }
+                }
+            },
+        }
+        runner = mock.Mock()
+        name = f"nexpoly-acceptance-{OPERATION_ID}"
+
+        def run(command, **_kwargs):  # type: ignore[no-untyped-def]
+            if command[:4] == ["docker", "container", "ls", "--all"]:
+                return subprocess.CompletedProcess(
+                    command, 0, f"{'1' * 64}\t{name}\n", ""
+                )
+            return subprocess.CompletedProcess(
+                command, 0, json.dumps([record]), ""
+            )
+
+        runner.run.side_effect = run
+        controller = SimpleNamespace(
+            runner=runner,
+            control_environment=lambda: {},
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "loopback-only candidate"
+        ):
+            lifecycle._inspect_acceptance_proxy(
+                controller,
+                descriptor,
+                name=name,
+                expected_networks={"nexpoly_default": "2" * 64},
+            )
+
+    def test_container_absence_requires_successful_exact_enumeration(self) -> None:
+        lifecycle = CONTROLLER.SystemLifecycle()
+        name = f"nexpoly-acceptance-{OPERATION_ID}"
+        descriptor = self._acceptance_runner_descriptor()
+
+        for stderr in ("permission denied", "daemon unavailable"):
+            runner = mock.Mock()
+            runner.run.return_value = subprocess.CompletedProcess(
+                ["docker"], 1, "", stderr
+            )
+            controller = SimpleNamespace(
+                runner=runner,
+                control_environment=lambda: {},
+            )
+            with self.subTest(stderr=stderr), self.assertRaisesRegex(
+                CONTROLLER.PullDeployError, "cannot enumerate"
+            ):
+                lifecycle._inspect_acceptance_proxy(
+                    controller,
+                    descriptor,
+                    name=name,
+                    expected_networks={},
+                )
+
+        runner = mock.Mock()
+        runner.run.return_value = subprocess.CompletedProcess(
+            ["docker"], 0, "", ""
+        )
+        controller = SimpleNamespace(
+            runner=runner,
+            control_environment=lambda: {},
+        )
+        self.assertIsNone(
+            lifecycle._inspect_acceptance_proxy(
+                controller,
+                descriptor,
+                name=name,
+                expected_networks={},
+            )
+        )
+
+    def test_container_cleanup_does_not_treat_inspect_style_rc1_as_absence(
+        self,
+    ) -> None:
+        lifecycle = CONTROLLER.SystemLifecycle()
+        runner = mock.Mock()
+        runner.run.side_effect = [
+            subprocess.CompletedProcess(["docker"], 0, "", ""),
+            subprocess.CompletedProcess(
+                ["docker"], 1, "", "permission denied"
+            ),
+        ]
+        controller = SimpleNamespace(
+            runner=runner,
+            control_environment=lambda: {},
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "cannot prove acceptance proxy container cleanup"
+        ):
+            lifecycle._remove_container_and_prove_absent(
+                controller,
+                f"nexpoly-acceptance-{OPERATION_ID}",
+                container_id="1" * 64,
+                label="acceptance proxy",
+            )
+
+    def _exercise_acceptance_proxy_start_failure(
+        self, *, committed_container: bool
+    ) -> tuple[CONTROLLER.SystemLifecycle, mock.Mock]:
+        lifecycle = CONTROLLER.SystemLifecycle()
+        descriptor = self._acceptance_runner_descriptor()
+        proxy_id = "1" * 64
+        inspect_results = [None, proxy_id if committed_container else None]
+        if not committed_container:
+            inspect_results.append(None)
+        runner = mock.Mock()
+
+        def run(command: list[str], **_kwargs: object):  # type: ignore[no-untyped-def]
+            if command[:3] == ["docker", "container", "inspect"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps(
+                        [
+                            {
+                                "NetworkSettings": {
+                                    "Networks": {
+                                        "nexpoly_default": {
+                                            "NetworkID": "2" * 64
+                                        }
+                                    }
+                                }
+                            }
+                        ]
+                    ),
+                    "",
+                )
+            if "run" in command:
+                return subprocess.CompletedProcess(command, 1, "", "busy")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner.run.side_effect = run
+        controller = SimpleNamespace(
+            runner=runner,
+            production_root=self.production,
+            runtime_root=self.runtime,
+            config_dir=self.runtime / "config",
+            control_environment=lambda: {},
+        )
+        with (
+            mock.patch.object(
+                lifecycle,
+                "_environment",
+                return_value={},
+            ),
+            mock.patch.object(
+                lifecycle,
+                "_backend_process_identity",
+                return_value={"container_id": "3" * 64},
+            ),
+            mock.patch.object(
+                lifecycle,
+                "_inspect_acceptance_proxy",
+                side_effect=inspect_results,
+            ),
+            mock.patch.object(lifecycle, "_control_cli", return_value={}),
+            mock.patch.object(
+                lifecycle,
+                "_required_worker_sockets",
+                return_value=[("monomer-md", Path("/md")), ("monomer-dft", Path("/dft"))],
+            ),
+            mock.patch.object(lifecycle, "_worker_request", return_value={}),
+            mock.patch.object(lifecycle, "_wait_for_zero_work"),
+            mock.patch.object(
+                lifecycle, "_remove_container_and_prove_absent"
+            ) as remove,
+            mock.patch.object(
+                CONTROLLER,
+                "validate_persistent_drain_evidence",
+                return_value={},
+            ),
+            mock.patch.object(
+                CONTROLLER,
+                "validate_worker_control_evidence",
+                return_value={"worker_instance_id": "worker-1"},
+            ),
+        ):
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                (
+                    "start response differs"
+                    if committed_container
+                    else "could not be started"
+                ),
+            ):
+                lifecycle.run_acceptance_probes(
+                    controller,
+                    descriptor,
+                    self.runtime / "state/prepared" / OPERATION_ID / "acceptance-authority.json",
+                )
+            if committed_container:
+                remove.assert_called_once_with(
+                    controller,
+                    f"nexpoly-acceptance-{OPERATION_ID}",
+                    container_id=proxy_id,
+                    label="acceptance proxy",
+                )
+            else:
+                remove.assert_not_called()
+        return lifecycle, runner
+
+    def test_acceptance_proxy_unknown_start_commit_is_cleaned(self) -> None:
+        self._exercise_acceptance_proxy_start_failure(
+            committed_container=True
+        )
+
+    def test_acceptance_proxy_occupied_port_redrains_without_cleanup(self) -> None:
+        self._exercise_acceptance_proxy_start_failure(
+            committed_container=False
+        )
+
+    def _write_rehearsal_stub(
+        self,
+        controller: FixtureController,
+    ) -> Path:
+        report_path = (
+            controller.audit_dir
+            / "deployment-rehearsals"
+            / OPERATION_ID
+            / "report.json"
+        )
+        report_path.parent.mkdir(parents=True, mode=0o700)
+        os.chmod(report_path.parent, 0o700)
+        CONTROLLER.atomic_json(
+            report_path,
+            {
+                "report": {"status": "passed"},
+                "report_sha256": "sha256:" + "1" * 64,
+            },
+        )
+        return report_path
+
+    def test_apply_uses_target_rehearsal_validator(self) -> None:
+        controller = self.controller()
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        descriptor, descriptor_digest = controller._load_prepared(
+            OPERATION_ID, TARGET_SHA
+        )
+        report_path = self._write_rehearsal_stub(controller)
+        authority = {
+            "report_sha256": "sha256:" + "2" * 64,
+            "completed_at": CONTROLLER.utc_now(),
+            "dump_sha256": "sha256:" + "3" * 64,
+            "journal_head_sha256": "sha256:" + "4" * 64,
+        }
+        validator = mock.Mock(return_value=authority)
+        module = SimpleNamespace(validate_rehearsal_report=validator)
+
+        with mock.patch.object(
+            controller,
+            "_postgres_rehearsal_module",
+            return_value=module,
+        ):
+            evidence = (
+                CONTROLLER.PullDeployController._load_postgres_rehearsal_report(
+                    controller, descriptor, descriptor_digest
+                )
+            )
+
+        self.assertEqual(evidence["path"], str(report_path))
+        self.assertEqual(evidence["report_sha256"], authority["report_sha256"])
+        self.assertEqual(evidence["operation_id"], OPERATION_ID)
+        self.assertEqual(evidence["target_sha"], TARGET_SHA)
+        self.assertEqual(evidence["descriptor_sha256"], descriptor_digest)
+        validator.assert_called_once_with(
+            CONTROLLER.load_private_json(report_path),
+            descriptor=descriptor,
+            descriptor_sha256=descriptor_digest,
+            ready_sha256=CONTROLLER.sha256_file(
+                controller._operation_paths(OPERATION_ID)[2]
+            ),
+            runtime_root=controller.runtime_root,
+            verify_runtime=True,
+        )
+
+    def test_rehearsal_validator_loads_from_candidate_control_release(self) -> None:
+        controller = self.controller()
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        descriptor, _descriptor_digest = controller._load_prepared(
+            OPERATION_ID, TARGET_SHA
+        )
+
+        module = controller._postgres_rehearsal_module(descriptor)
+
+        self.assertTrue(callable(module.validate_rehearsal_report))
+        self.assertEqual(
+            Path(module.__file__).name,
+            "production_postgres_rehearsal.py",
+        )
+
+    def test_apply_wraps_target_rehearsal_validation_failure(self) -> None:
+        controller = self.controller()
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        descriptor, descriptor_digest = controller._load_prepared(
+            OPERATION_ID, TARGET_SHA
+        )
+        self._write_rehearsal_stub(controller)
+        module = SimpleNamespace(
+            validate_rehearsal_report=mock.Mock(
+                side_effect=ValueError("property count drift")
+            )
+        )
+
+        with (
+            mock.patch.object(
+                controller,
+                "_postgres_rehearsal_module",
+                return_value=module,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "failed target validation",
+            ),
+        ):
+            CONTROLLER.PullDeployController._load_postgres_rehearsal_report(
+                controller, descriptor, descriptor_digest
+            )
+
+    def test_apply_consumes_rehearsal_before_marker_and_drain(self) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        sequence: list[str] = []
+        original_drain = lifecycle.drain
+
+        def gate(*_args: object) -> dict[str, str]:
+            self.assertFalse(controller.marker_path.exists())
+            sequence.append("rehearsal-gate")
+            return {
+                "schema_version": 1,
+                "operation_id": OPERATION_ID,
+                "target_sha": TARGET_SHA,
+                "descriptor_sha256": CONTROLLER.sha256_file(
+                    controller._operation_paths(OPERATION_ID)[1]
+                ),
+                "path": (
+                    "/var/lib/nexpoly-fixture/audit/deployment-rehearsals/"
+                    f"{OPERATION_ID}/report.json"
+                ),
+                "file_sha256": "sha256:" + "a" * 64,
+                "report_sha256": "sha256:" + "b" * 64,
+                "completed_at": "2026-01-01T00:00:00Z",
+                "dump_sha256": "sha256:" + "c" * 64,
+                "journal_head_sha256": "sha256:" + "d" * 64,
+            }
+
+        def drain(*args: object) -> dict[str, object]:
+            sequence.append("drain")
+            return original_drain(*args)
+
+        with (
+            mock.patch.object(
+                controller,
+                "_load_postgres_rehearsal_report",
+                side_effect=gate,
+            ),
+            mock.patch.object(lifecycle, "drain", side_effect=drain),
+        ):
+            controller.apply_staged(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        self.assertEqual(sequence[:2], ["rehearsal-gate", "drain"])
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(
+            marker["postgres_rehearsal"],
+            marker["candidate_state"]["postgres_rehearsal"],
+        )
+
+    def test_recovery_revalidates_exact_postgres_rehearsal_before_runtime(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        lifecycle.events.clear()
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        changed = dict(marker["postgres_rehearsal"])
+        changed["dump_sha256"] = "sha256:" + "e" * 64
+
+        with mock.patch.object(
+            controller,
+            "_load_postgres_rehearsal_report",
+            return_value=changed,
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "changed during recovery"
+        ):
+            controller.recover_interrupted()
+        self.assertNotIn("recovery-isolate", lifecycle.events)
+
+        with mock.patch.object(
+            controller,
+            "_load_postgres_rehearsal_report",
+            side_effect=CONTROLLER.PullDeployError("report missing"),
+        ), self.assertRaisesRegex(CONTROLLER.PullDeployError, "report missing"):
+            controller.recover_interrupted()
+        self.assertNotIn("recovery-isolate", lifecycle.events)
+
+        descriptor, digest = controller._load_prepared(
+            OPERATION_ID, TARGET_SHA, allow_deployment_database_recovery=True
+        )
+        tampered = json.loads(json.dumps(marker))
+        tampered["postgres_rehearsal"]["report_sha256"] = (
+            "sha256:" + "f" * 64
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "candidate state PostgreSQL rehearsal"
+        ):
+            CONTROLLER.validate_recovery_marker(
+                tampered,
+                descriptor=descriptor,
+                descriptor_digest=digest,
+            )
+
+    def test_terminal_success_audit_retains_postgres_rehearsal_binding(self) -> None:
+        controller = self.controller()
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        state = controller.apply(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        audit = CONTROLLER.load_private_json(
+            controller.audit_dir / OPERATION_ID / "success.json"
+        )
+        self.assertEqual(
+            audit["postgres_rehearsal"], state["postgres_rehearsal"]
+        )
+        self.assertEqual(
+            audit["candidate_state"]["postgres_rehearsal"],
+            state["postgres_rehearsal"],
+        )
+
+    def test_v4_apply_stays_drained_until_explicit_accept(self) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+
+        state = controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(marker["phase"], "awaiting-acceptance")
+        self.assertEqual(marker["candidate_state"], state)
+        self.assertNotIn("resume", lifecycle.events)
+        self.assertFalse(
+            (controller.audit_dir / OPERATION_ID / "operation-state.json").exists()
+        )
+        with mock.patch.object(
+            lifecycle,
+            "run_acceptance_probes",
+            side_effect=lambda *_args: self._write_passing_probe_report(
+                controller
+            ),
+        ) as probes:
+            observing = controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+        probes.assert_called_once()
+        self.assertEqual(observing["status"], "maintenance-observation")
+        self.assertFalse(observing["terminal"])
+        self.assertFalse(observing["public_admission_open"])
+        self.assertEqual(observing["next_action"], "rerun accept after acceptance_not_before")
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(marker["phase"], "acceptance-started")
+        self.assertFalse(
+            (controller.audit_dir / OPERATION_ID / "operation-state.json").exists()
+        )
+        evidence = marker["acceptance_evidence"]
+        started = CONTROLLER._external_database_audit_timestamp(
+            evidence["observation_started_at"], "test observation start"
+        )
+        not_before = CONTROLLER._external_database_audit_timestamp(
+            evidence["observation_not_before"], "test observation not-before"
+        )
+        self.assertEqual(
+            not_before - started,
+            CONTROLLER.dt.timedelta(seconds=CONTROLLER.ACCEPTANCE_HOLD_SECONDS),
+        )
+        verified = CONTROLLER._external_database_audit_timestamp(
+            evidence["verified_at"], "test acceptance verification"
+        )
+        probes_completed = CONTROLLER._external_database_audit_timestamp(
+            evidence["probes_completed_at"], "test probes completion"
+        )
+        self.assertEqual(evidence["observation_started_at"], evidence["verified_at"])
+        self.assertGreaterEqual(verified, probes_completed)
+        self.assertNotIn("resume", lifecycle.events)
+        with mock.patch.object(
+            lifecycle, "run_acceptance_probes"
+        ) as rerun, self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "post-probe maintenance observation"
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+        rerun.assert_not_called()
+
+    def test_accept_resume_unknown_commit_isolated_and_retryable(self) -> None:
+        lifecycle = LostResumeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        state = controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        observing = controller.accept(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self.assertEqual(observing["status"], "maintenance-observation")
+        self._expire_acceptance_hold(controller)
+        lifecycle.lose_next_resume = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lost response after admission commit",
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(marker["phase"], "acceptance-resume-started")
+        self.assertTrue(lifecycle.admission_open)
+
+        lifecycle.events.clear()
+        recovered = controller.accept(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self.assertEqual(recovered, state)
+        self.assertEqual(lifecycle.events[0], "recovery-isolate")
+        self.assertEqual(lifecycle.events[-1], "resume")
+        self.assertFalse(controller.marker_path.exists())
+
+    def test_final_accept_rejects_worker_fence_drift_and_requires_rollback(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        observing = controller.accept(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self.assertEqual(observing["status"], "maintenance-observation")
+        self._expire_acceptance_hold(controller)
+        first_marker = CONTROLLER.load_private_json(controller.marker_path)
+        first_evidence = json.loads(
+            json.dumps(first_marker["acceptance_evidence"])
+        )
+        lifecycle.recovery_fence["fixture_instance"] = "replacement-instance"
+
+        with mock.patch.object(
+            lifecycle, "run_acceptance_probes"
+        ) as probes, self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "stability changed"
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        probes.assert_not_called()
+        rejected = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(rejected["phase"], "acceptance-rejected")
+        self.assertTrue(rejected["acceptance_rejected"])
+        self.assertEqual(rejected["acceptance_evidence"], first_evidence)
+        self.assertFalse(lifecycle.admission_open)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "staged acceptance boundary"
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+    def test_accept_cleans_crash_left_proxy_before_consuming_report(self) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        observing = controller.accept(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self.assertEqual(observing["status"], "maintenance-observation")
+        self._expire_acceptance_hold(controller)
+        lifecycle.events.clear()
+
+        def cleanup(*_args: object) -> None:
+            lifecycle.events.append("cleanup-acceptance-proxy")
+
+        with mock.patch.object(
+            lifecycle,
+            "cleanup_acceptance_probe_proxy",
+            side_effect=cleanup,
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        self.assertLess(
+            lifecycle.events.index("recovery-isolate"),
+            lifecycle.events.index("cleanup-acceptance-proxy"),
+        )
+        self.assertLess(
+            lifecycle.events.index("cleanup-acceptance-proxy"),
+            lifecycle.events.index("verify"),
+        )
+
+    def test_failed_acceptance_probe_is_archived_before_retry(self) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        state = controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        authority = CONTROLLER.load_private_json(
+            Path(marker["acceptance_authority_path"])
+        )
+        probe_timestamp = authority["staged_at"]
+        failed = {
+            "schema_version": 1,
+            "status": "failed",
+            "operation_id": OPERATION_ID,
+            "source_sha": TARGET_SHA,
+            "authority": authority,
+            "authority_sha256": marker["acceptance_authority_sha256"],
+            "loopback_endpoint": "http://127.0.0.1:9000",
+            "started_at": probe_timestamp,
+            "finished_at": probe_timestamp,
+            "sections": {"dft": {"status": "failed"}},
+            "error": "synthetic probe failure",
+        }
+        failed["report_sha256"] = CONTROLLER.canonical_json_digest(failed)
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        failed_path = operation / f"production-acceptance-{OPERATION_ID}.json"
+        CONTROLLER.atomic_json(failed_path, failed)
+        failed_file_digest = CONTROLLER.sha256_file(failed_path)
+
+        with mock.patch.object(
+            lifecycle,
+            "run_acceptance_probes",
+            side_effect=lambda *_args: self._write_passing_probe_report(
+                controller
+            ),
+        ):
+            observing = controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+            self._expire_acceptance_hold(controller)
+            accepted = controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        self.assertEqual(observing["status"], "maintenance-observation")
+        self.assertEqual(accepted, state)
+        archived = (
+            operation
+            / "failed-acceptance-probes"
+            / (
+                f"production-acceptance-{OPERATION_ID}-"
+                f"{failed_file_digest.removeprefix('sha256:')}.json"
+            )
+        )
+        self.assertTrue(archived.exists())
+        self.assertEqual(
+            CONTROLLER.load_private_json(failed_path)["status"], "passed"
+        )
+
+    def test_passing_probe_report_survives_crash_before_observation_marker(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._write_passing_probe_report(controller)
+
+        with mock.patch.object(
+            lifecycle,
+            "run_acceptance_probes",
+        ) as probes:
+            observing = controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        probes.assert_not_called()
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(observing["status"], "maintenance-observation")
+        self.assertEqual(marker["phase"], "acceptance-started")
+        self.assertEqual(
+            marker["acceptance_evidence"]["probe_report_sha256"],
+            observing["probe_report_sha256"],
+        )
+        self.assertFalse(lifecycle.admission_open)
+
+    def test_final_accept_revalidates_sealed_probe_report_before_resume(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self._expire_acceptance_hold(controller)
+        self._write_passing_probe_report(controller)
+        observing = controller.accept(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+        self.assertEqual(observing["status"], "maintenance-observation")
+        self._expire_acceptance_hold(controller)
+
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        report_path = operation / f"production-acceptance-{OPERATION_ID}.json"
+        report = CONTROLLER.load_private_json(report_path)
+        report["sections"]["frontend"]["status"] = "failed"
+        report_without_seal = dict(report)
+        report_without_seal.pop("report_sha256")
+        report["report_sha256"] = CONTROLLER.canonical_json_digest(
+            report_without_seal
+        )
+        CONTROLLER.atomic_json(report_path, report)
+        lifecycle.events.clear()
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "sealed passing result"
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        self.assertEqual(
+            CONTROLLER.load_private_json(controller.marker_path)["phase"],
+            "acceptance-started",
+        )
+        self.assertFalse(lifecycle.admission_open)
+        self.assertNotIn("resume", lifecycle.events)
+
+    def test_acceptance_probe_failure_can_rollback_with_database_restore(
+        self,
+    ) -> None:
+        lifecycle = FakeLifecycle()
+        controller = self.controller(lifecycle=lifecycle)
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+
+        with mock.patch.object(
+            lifecycle,
+            "run_acceptance_probes",
+            side_effect=CONTROLLER.PullDeployError("synthetic probe failure"),
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "synthetic probe failure"
+        ):
+            controller.accept(
+                target_sha=TARGET_SHA, operation_id=OPERATION_ID
+            )
+
+        marker = CONTROLLER.load_private_json(controller.marker_path)
+        self.assertEqual(marker["phase"], "awaiting-acceptance")
+        self.assertFalse(lifecycle.admission_open)
+        with mock.patch.object(
+            controller,
+            "_rollback_failed_attempt",
+            side_effect=lambda descriptor, marker: (
+                CONTROLLER.PullDeployController._rollback_failed_attempt(
+                    controller, descriptor, marker
+                )
+            ),
+        ), mock.patch.object(
+            CONTROLLER.SystemLifecycle,
+            "_run_bootstrap_hook",
+            return_value=None,
+        ):
+            result = controller.rollback(operation_id=OPERATION_ID)
+        self.assertEqual(result["status"], "rejected-before-acceptance")
+        self.assertIn("restore_database", lifecycle.events)
+        self.assertFalse(controller.current_state_path.exists())
+        self.assertFalse(controller.marker_path.exists())
+
+    def test_staged_rollback_retires_candidate_before_acceptance(self) -> None:
+        controller = self.controller()
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        controller.apply_staged(
+            target_sha=TARGET_SHA, operation_id=OPERATION_ID
+        )
+
+        result = controller.rollback(operation_id=OPERATION_ID)
+
+        self.assertEqual(result["status"], "rejected-before-acceptance")
+        self.assertFalse(controller.current_state_path.exists())
+        self.assertFalse(controller.marker_path.exists())
+        operation_state = CONTROLLER.load_private_json(
+            controller.audit_dir / OPERATION_ID / "operation-state.json"
+        )
+        self.assertEqual(operation_state["outcome"], "failed")
+        self.assertTrue(
+            (
+                controller.audit_dir
+                / OPERATION_ID
+                / "rejected-before-acceptance.json"
+            ).exists()
+        )
+
     def test_pre_stop_rollback_validates_previous_before_resume(
         self,
     ) -> None:
@@ -9542,6 +10709,12 @@ class LifecycleStateMachineTests(PullDeployTestCase):
                 "backup",
                 "migrate",
                 "start",
+                "verify",
+                "recovery-isolate",
+                "recovery-redrain",
+                "verify",
+                "recovery-isolate",
+                "recovery-redrain",
                 "verify",
                 "resume",
             ],
@@ -9897,11 +11070,11 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         lifecycle.events.clear()
         recovered = controller.recover_interrupted()
         self.assertEqual(recovered, state)
+        self.assertEqual(lifecycle.events, [])
         self.assertEqual(
-            lifecycle.events,
-            ["recovery-isolate", "recovery-redrain", "verify", "resume"],
+            CONTROLLER.load_private_json(controller.marker_path)["phase"],
+            "awaiting-acceptance",
         )
-        self.assertFalse(controller.marker_path.exists())
 
     def test_open_admission_unknown_commit_keeps_marker_on_instance_drift(self) -> None:
         initial = FakeLifecycle()
@@ -9957,15 +11130,9 @@ class LifecycleStateMachineTests(PullDeployTestCase):
 
         restarted = RestartedOpenLifecycle(admission_open=True)
         controller.lifecycle = restarted
-        with self.assertRaisesRegex(
-            CONTROLLER.PullDeployError, "differs from committed verification"
-        ):
-            controller.recover_interrupted()
+        self.assertEqual(controller.recover_interrupted(), state)
         self.assertTrue(controller.marker_path.is_file())
-        self.assertEqual(
-            restarted.events,
-            ["recovery-isolate"],
-        )
+        self.assertEqual(restarted.events, [])
         self.assertNotIn("stop", restarted.events)
         self.assertNotIn("start", restarted.events)
 
@@ -10014,23 +11181,17 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         lifecycle.lose_next_resume = True
         lifecycle.events.clear()
 
-        with self.assertRaisesRegex(
-            CONTROLLER.PullDeployError, "lost response after admission commit"
-        ):
-            controller.recover_interrupted()
+        self.assertEqual(controller.recover_interrupted(), state)
         persisted = CONTROLLER.load_private_json(controller.marker_path)
-        self.assertEqual(persisted["verification"], lifecycle.verification())
-        self.assertTrue(lifecycle.admission_open)
+        self.assertEqual(persisted["phase"], "awaiting-acceptance")
+        self.assertFalse(lifecycle.admission_open)
 
         lifecycle.events.clear()
         recovered = controller.recover_interrupted()
         self.assertEqual(recovered, state)
-        self.assertEqual(
-            lifecycle.events,
-            ["recovery-isolate", "recovery-redrain", "verify", "resume"],
-        )
-        self.assertFalse(controller.marker_path.exists())
-        self.assertNotIn("stop", lifecycle.events)
+        self.assertEqual(lifecycle.events[0], "recovery-isolate")
+        self.assertNotIn("resume", lifecycle.events)
+        self.assertTrue(controller.marker_path.exists())
 
     def test_admission_resumed_recovery_only_verifies_open_runtime(self) -> None:
         lifecycle = FakeLifecycle()
@@ -10767,6 +11928,16 @@ class LifecycleStateMachineTests(PullDeployTestCase):
         self.assertFalse(hasattr(parsed, "production_root"))
         self.assertFalse(hasattr(parsed, "runtime_root"))
         self.assertFalse(hasattr(parsed, "apply"))
+        accepted = CONTROLLER.parser().parse_args(
+            [
+                "accept",
+                "--sha",
+                TARGET_SHA,
+                "--operation-id",
+                OPERATION_ID,
+            ]
+        )
+        self.assertEqual(accepted.command, "accept")
         with self.assertRaises(SystemExit):
             CONTROLLER.parser().parse_args(
                 [
@@ -11100,6 +12271,7 @@ class DescriptorV4TransactionTests(PullDeployTestCase):
             "adoption_evidence_sha256",
             "adopted_deployment_sha256",
             "monomer_dft",
+            "postgres_rehearsal",
         ):
             changed = json.loads(json.dumps(state))
             changed.pop(field)
@@ -12226,9 +13398,108 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             active_slot["slot_record_sha256"],
         )
         CONTROLLER.validate_adopted_deployment(adopted)
-        CONTROLLER.atomic_json(controller.adopted_state_path, adopted)
+        # The controller fixture models target Git blobs without a real Git
+        # object database.  Bind its prerequisite source paths to the exact
+        # already-installed fixture bytes, including the test-root pg_service
+        # path substitution.
+        prerequisite_blobs = {
+            source_path: (controller.config_dir / name).read_bytes()
+            for source_path, name, _mode, _classification, _evidence_key in (
+                CONTROLLER.ADOPTED_PREREQUISITE_FILES
+            )
+        }
+        original_git_show = controller._git_show
+        controller._git_show = (  # type: ignore[method-assign]
+            lambda target_sha, relative: (
+                prerequisite_blobs[relative]
+                if relative in prerequisite_blobs
+                else original_git_show(target_sha, relative)
+            )
+        )
+        # The active A controller can produce the unchanged legacy
+        # production-config schema before the adopted marker exists.  The
+        # target controller then binds those same hashes to create-only
+        # prerequisite provenance without adding a descriptor field.
+        production_config = controller.production_config_evidence(
+            check_free_space=False
+        )
         bootstrap = CONTROLLER.load_private_json(
             controller.state_dir / "bootstrap-control.json"
+        )
+        CONTROLLER.atomic_json(controller.adopted_state_path, adopted)
+        prerequisite_files = []
+        for (
+            source_path,
+            name,
+            mode,
+            classification,
+            evidence_key,
+        ) in CONTROLLER.ADOPTED_PREREQUISITE_FILES:
+            prerequisite_files.append(
+                {
+                    "source_path": source_path,
+                    "destination": str(controller.config_dir / name),
+                    "name": name,
+                    "sha256": production_config[evidence_key],
+                    "mode": mode,
+                    "classification": classification,
+                    "disposition": "existing-exact",
+                }
+            )
+        prerequisite_plan = {
+            "schema_version": 1,
+            "authority_kind": "manual-runtime-adoption-prerequisites",
+            "operation_id": "adopt-prereq-fixture-001",
+            "source_sha": TARGET_SHA,
+            "source_tree": TARGET_TREE,
+            "source_readiness": bootstrap["source_readiness"],
+            "source_readiness_sha256": CONTROLLER.canonical_json_digest(
+                bootstrap["source_readiness"]
+            ),
+            "delivery_gate": bootstrap["delivery_gate"],
+            "delivery_gate_sha256": CONTROLLER.canonical_json_digest(
+                bootstrap["delivery_gate"]
+            ),
+            "adopted_deployment_sha256": CONTROLLER.sha256_file(
+                controller.adopted_state_path
+            ),
+            "files": prerequisite_files,
+            "preserved_pgpass": {
+                "path": str(
+                    controller.config_dir / CONTROLLER.MUTABLE_DATA_PGPASS
+                ),
+                "sha256": production_config[
+                    "mutable_data_audit_pgpass_sha256"
+                ],
+                "mode": "0600",
+            },
+            "mutations": {
+                "services": False,
+                "source": False,
+                "database": False,
+                "credentials": False,
+            },
+        }
+        prerequisite_authority = {
+            "schema_version": 1,
+            "status": "completed",
+            "authority_kind": prerequisite_plan["authority_kind"],
+            "operation_id": prerequisite_plan["operation_id"],
+            "source_sha": prerequisite_plan["source_sha"],
+            "source_tree": prerequisite_plan["source_tree"],
+            "adopted_deployment_sha256": prerequisite_plan[
+                "adopted_deployment_sha256"
+            ],
+            "plan_sha256": CONTROLLER.canonical_json_digest(
+                prerequisite_plan
+            ),
+            "plan": prerequisite_plan,
+            "completed_at": CONTROLLER.utc_now(),
+        }
+        CONTROLLER.atomic_json(
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH,
+            prerequisite_authority,
         )
         bootstrap.update(
             {
@@ -12249,6 +13520,94 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             controller.state_dir / "bootstrap-control.json", bootstrap
         )
         return adopted
+
+    def test_adopted_legacy_image_values_are_exact_inert_and_stripped(self) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        deploy_env = controller.config_dir / "deploy.env"
+        original = deploy_env.read_text(encoding="utf-8")
+        legacy = {
+            "NEXPOLY_BACKEND_IMAGE": adopted["images"]["backend"][
+                "digest_ref"
+            ],
+            "NEXPOLY_WEB_IMAGE": adopted["images"]["web"]["digest_ref"],
+        }
+        write_private(
+            deploy_env,
+            original
+            + "".join(f"{key}={value}\n" for key, value in legacy.items()),
+        )
+
+        values = CONTROLLER.PullDeployController.production_deploy_values(
+            controller, check_free_space=False
+        )
+        self.assertNotIn("NEXPOLY_BACKEND_IMAGE", values)
+        self.assertNotIn("NEXPOLY_WEB_IMAGE", values)
+        target_descriptor = {
+            "images": {
+                "backend": image_record("backend", TARGET_SHA),
+                "web": image_record("web", TARGET_SHA),
+            }
+        }
+        with mock.patch.object(
+            controller,
+            "production_deploy_values",
+            side_effect=lambda **kwargs: (
+                CONTROLLER.PullDeployController.production_deploy_values(
+                    controller, **kwargs
+                )
+            ),
+        ):
+            environment = CONTROLLER.SystemLifecycle()._environment(
+                controller, target_descriptor
+            )
+        self.assertEqual(
+            environment["NEXPOLY_BACKEND_IMAGE"],
+            target_descriptor["images"]["backend"]["digest_ref"],
+        )
+        self.assertEqual(
+            environment["NEXPOLY_WEB_IMAGE"],
+            target_descriptor["images"]["web"]["digest_ref"],
+        )
+
+        for key in legacy:
+            lines = deploy_env.read_text(encoding="utf-8").splitlines()
+            changed = [
+                f"{key}=ghcr.io/example/drift@sha256:{'f' * 64}"
+                if line.startswith(f"{key}=")
+                else line
+                for line in lines
+            ]
+            write_private(deploy_env, "\n".join(changed) + "\n")
+            with self.subTest(key=key), self.assertRaisesRegex(
+                CONTROLLER.PullDeployError, "differ from manual adoption"
+            ):
+                CONTROLLER.PullDeployController.production_deploy_values(
+                    controller, check_free_space=False
+                )
+            write_private(
+                deploy_env,
+                original
+                + "".join(
+                    f"{name}={value}\n" for name, value in legacy.items()
+                ),
+            )
+
+    def test_legacy_image_values_without_adoption_remain_forbidden(self) -> None:
+        controller = self.controller()
+        deploy_env = controller.config_dir / "deploy.env"
+        write_private(
+            deploy_env,
+            deploy_env.read_text(encoding="utf-8")
+            + f"NEXPOLY_BACKEND_IMAGE=ghcr.io/example/backend@{DIGEST_A}\n"
+            + f"NEXPOLY_WEB_IMAGE=ghcr.io/example/web@{DIGEST_B}\n",
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "complete manual adoption"
+        ):
+            CONTROLLER.PullDeployController.production_deploy_values(
+                controller, check_free_space=False
+            )
 
     def test_first_governed_deploy_uses_adopted_runtime_as_previous_authority(
         self,
@@ -12288,6 +13647,145 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             state["adopted_deployment_sha256"],
             CONTROLLER.canonical_json_digest(adopted),
         )
+        self.assertEqual(
+            state["postgres_rehearsal"]["operation_id"], OPERATION_ID
+        )
+        self.assertEqual(
+            state["postgres_rehearsal"]["target_sha"], TARGET_SHA
+        )
+        CONTROLLER.validate_current_deployment_state(state)
+
+    def test_target_read_only_plan_accepts_raw_adopted_authority(self) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller.active_control_evidence = (  # type: ignore[method-assign]
+            lambda: CONTROLLER._control_runtime.validate_active_control_record(
+                CONTROLLER.load_private_json(controller.active_control_path)
+            )
+        )
+        adopted_runtime_checks: list[dict[str, object]] = []
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: adopted_runtime_checks.append(observed)
+        )
+
+        def inventory(root: Path) -> tuple[tuple[object, ...], ...]:
+            records: list[tuple[object, ...]] = []
+            for path in sorted(root.rglob("*"), key=lambda value: value.as_posix()):
+                metadata = path.lstat()
+                relative = path.relative_to(root).as_posix()
+                if path.is_symlink():
+                    payload = ("link", os.readlink(path))
+                elif path.is_dir():
+                    payload = ("directory", None)
+                else:
+                    payload = ("file", CONTROLLER.sha256_file(path))
+                records.append(
+                    (
+                        relative,
+                        metadata.st_mode,
+                        metadata.st_uid,
+                        metadata.st_gid,
+                        metadata.st_size,
+                        metadata.st_mtime_ns,
+                        metadata.st_ctime_ns,
+                        payload,
+                    )
+                )
+            return tuple(records)
+
+        production_before = inventory(controller.production_root)
+        runtime_before = inventory(controller.runtime_root)
+
+        plan = controller.plan(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+
+        self.assertEqual(inventory(controller.production_root), production_before)
+        self.assertEqual(inventory(controller.runtime_root), runtime_before)
+        self.assertFalse(plan["apply"])
+        self.assertFalse(plan["service_mutation"])
+        self.assertEqual(plan["authority_kind"], "manual-runtime-adoption")
+        self.assertEqual(
+            plan["adopted_deployment_sha256"],
+            CONTROLLER.canonical_json_digest(adopted),
+        )
+        self.assertEqual(
+            plan["active_control"], adopted["active_control"]
+        )
+        self.assertEqual(adopted_runtime_checks, [adopted])
+
+        mismatched_prerequisites = {
+            **CONTROLLER.load_private_json(
+                controller.runtime_root
+                / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+            ),
+            "source_sha": "5" * 40,
+        }
+        with mock.patch.object(
+            controller,
+            "_validate_adopted_prerequisite_provenance",
+            return_value=mismatched_prerequisites,
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "plan target differs from prerequisite source authority",
+        ):
+            controller.plan(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+
+        with mock.patch.object(
+            controller,
+            "_active_slot",
+            return_value={
+                **adopted["monomer_md"]["active_slot"],
+                "operation_id": "another-adopted-slot-operation",
+            },
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "slot differs from adopted deployment authority",
+        ):
+            controller.plan(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+
+        with mock.patch.object(
+            controller,
+            "active_control_evidence",
+            return_value={
+                **adopted["active_control"],
+                "generation": adopted["active_control"]["generation"] + 1,
+            },
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "control authority differs from adopted deployment authority",
+        ):
+            controller.plan(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+
+        with mock.patch.object(
+            controller,
+            "repository_identity",
+            return_value={
+                "sha": "6" * 40,
+                "tree": PREVIOUS_TREE,
+                "origin": CONTROLLER.REPOSITORY_SSH_URL,
+            },
+        ), self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "source identity differs from adopted deployment authority",
+        ):
+            controller.plan(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+
+        self.assertEqual(inventory(controller.production_root), production_before)
+        self.assertEqual(inventory(controller.runtime_root), runtime_before)
 
     def test_adopted_slot_separates_canonical_identity_from_raw_file_cas(
         self,
@@ -12457,6 +13955,147 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
                 descriptor=descriptor,
                 descriptor_digest=descriptor_digest,
             )
+
+    def test_adopted_prerequisites_keep_a_config_schema_and_are_target_verified(
+        self,
+    ) -> None:
+        controller = self.controller()
+        self._seed_adopted_authority(controller)
+
+        evidence = controller.production_config_evidence(check_free_space=False)
+        self.assertEqual(set(evidence), CONTROLLER.PRODUCTION_CONFIG_FIELDS)
+        self.assertNotIn("adopted_prerequisites_sha256", evidence)
+
+        authority_path = (
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        authority = CONTROLLER.load_private_json(authority_path)
+        unexpected = json.loads(json.dumps(authority))
+        unexpected["plan"]["unexpected"] = True
+        unexpected["plan_sha256"] = CONTROLLER.canonical_json_digest(
+            unexpected["plan"]
+        )
+        CONTROLLER.atomic_json(authority_path, unexpected)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError, "plan authority differs"
+        ):
+            controller._validate_adopted_prerequisite_provenance(evidence)
+        CONTROLLER.atomic_json(authority_path, authority)
+
+        helper = controller.config_dir / "deployment-mutable-data-audit"
+        helper.write_bytes(b"tampered\n")
+        os.chmod(helper, 0o700)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "provenance differs: deployment-mutable-data-audit",
+        ):
+            controller._validate_adopted_prerequisite_provenance(evidence)
+
+    def test_manual_bootstrap_missing_or_mismatched_adopted_state_fails_early(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller.adopted_state_path.unlink()
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "requires adopted-deployment",
+        ):
+            controller.production_config_evidence(check_free_space=False)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "requires adopted-deployment",
+        ):
+            controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor, ready = controller._operation_paths(OPERATION_ID)
+        self.assertFalse(descriptor.exists())
+        self.assertFalse(ready.exists())
+
+        CONTROLLER.atomic_json(controller.adopted_state_path, adopted)
+        mismatched = json.loads(json.dumps(adopted))
+        mismatched["adopted_at"] = "2026-07-31T00:00:00Z"
+        CONTROLLER.atomic_json(controller.adopted_state_path, mismatched)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "bootstrap authority differs",
+        ):
+            controller.production_config_evidence(check_free_space=False)
+
+    def test_first_adopted_prepare_binds_final_source_and_ci_delivery_gate(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller.active_control_evidence = (  # type: ignore[method-assign]
+            lambda: CONTROLLER._control_runtime.validate_active_control_record(
+                CONTROLLER.load_private_json(controller.active_control_path)
+            )
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        authority_path = (
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        authority = CONTROLLER.load_private_json(authority_path)
+        authority["plan"]["delivery_gate"]["ci"]["required_jobs"] = [
+            "different-successful-gate"
+        ]
+        authority["plan"]["delivery_gate_sha256"] = (
+            CONTROLLER.canonical_json_digest(
+                authority["plan"]["delivery_gate"]
+            )
+        )
+        authority["plan_sha256"] = CONTROLLER.canonical_json_digest(
+            authority["plan"]
+        )
+        CONTROLLER.atomic_json(authority_path, authority)
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "CI differs from final prerequisite delivery gate",
+        ):
+            controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+
+    def test_first_adopted_prepare_rejects_nonfinal_prerequisite_source(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller.active_control_evidence = (  # type: ignore[method-assign]
+            lambda: CONTROLLER._control_runtime.validate_active_control_record(
+                CONTROLLER.load_private_json(controller.active_control_path)
+            )
+        )
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        authority_path = (
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        authority = CONTROLLER.load_private_json(authority_path)
+        authority["source_tree"] = PREVIOUS_TREE
+        authority["plan"]["source_tree"] = PREVIOUS_TREE
+        authority["plan"]["source_readiness"]["source_tree"] = PREVIOUS_TREE
+        authority["plan"]["source_readiness_sha256"] = (
+            CONTROLLER.canonical_json_digest(
+                authority["plan"]["source_readiness"]
+            )
+        )
+        authority["plan_sha256"] = CONTROLLER.canonical_json_digest(
+            authority["plan"]
+        )
+        CONTROLLER.atomic_json(authority_path, authority)
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "target differs from final prerequisite source authority",
+        ):
+            controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
 
 
 class BootstrapQuiesceContractTests(unittest.TestCase):

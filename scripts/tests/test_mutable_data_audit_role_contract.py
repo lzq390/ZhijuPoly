@@ -18,7 +18,9 @@ class MutableDataAuditRoleContractTest(unittest.TestCase):
         )
         self.assertNotIn("\\prompt", payload)
         self.assertNotIn("\\getenv", payload)
-        self.assertIn("out of band", payload)
+        self.assertEqual(payload.count("__SCRAM_VERIFIER_LITERAL__"), 1)
+        self.assertIn("single verifier placeholder with a locally", payload)
+        self.assertIn("generated PostgreSQL SCRAM-SHA-256 verifier", payload)
 
     def test_template_provisions_exact_read_only_role(self) -> None:
         payload = TEMPLATE.read_text(encoding="utf-8")
@@ -31,16 +33,16 @@ class MutableDataAuditRoleContractTest(unittest.TestCase):
             "NOREPLICATION",
             "NOBYPASSRLS",
             "SET default_transaction_read_only = on",
-            "GRANT pg_read_all_data",
             "REVOKE %I FROM nexpoly_mutable_audit",
-            "'pg_write_all_data'",
+            "GRANT SELECT ON ALL TABLES IN SCHEMA",
+            "GRANT SELECT ON ALL SEQUENCES IN SCHEMA",
+            "ALTER DEFAULT PRIVILEGES FOR ROLE polyprop IN SCHEMA",
             "pg_catalog.lo_creat(integer)",
             "TO pg_database_owner",
-            "direct membership is not exact",
-            "inherited membership is unsafe",
-            "effective persistent write authority",
+            "membership is not empty",
+            "effective write path is unsafe",
             "role owns database objects",
-            "provisioned by the cluster administrator in nexpoly",
+            "requires the polyprop cluster administrator in nexpoly",
         )
         for fragment in required:
             with self.subTest(fragment=fragment):
@@ -48,7 +50,7 @@ class MutableDataAuditRoleContractTest(unittest.TestCase):
         self.assertNotRegex(
             payload,
             re.compile(
-                r"GRANT\s+pg_write_all_data\s+TO\s+"
+                r"GRANT\s+pg_read_all_data\s+TO\s+"
                 r"nexpoly_mutable_audit",
                 re.IGNORECASE,
             ),
@@ -72,6 +74,8 @@ class MutableDataAuditRoleContractTest(unittest.TestCase):
         self.assertIn("pg_largeobject_metadata", payload)
         self.assertIn("pg_shdepend", payload)
         self.assertIn("pg_tablespace", payload)
+        self.assertIn("pg_foreign_data_wrapper", payload)
+        self.assertIn("pg_extension", payload)
 
 
 if __name__ == "__main__":

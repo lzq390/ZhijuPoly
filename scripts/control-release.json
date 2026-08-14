@@ -142,6 +142,16 @@
       "mode": 448
     },
     {
+      "name": "production_acceptance_probes.py",
+      "source": "scripts/production_acceptance_probes.py",
+      "mode": 448
+    },
+    {
+      "name": "production_postgres_rehearsal.py",
+      "source": "scripts/production_postgres_rehearsal.py",
+      "mode": 448
+    },
+    {
       "name": "postgres_media_evidence.py",
       "source": "scripts/postgres_media_evidence.py",
       "mode": 448
