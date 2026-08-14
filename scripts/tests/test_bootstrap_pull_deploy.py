@@ -229,6 +229,7 @@ class BootstrapPullDeployTests(unittest.TestCase):
         dft_root = self.runtime / "worker-venvs/dft" / LIVE_SHA
         model_root = dft_root / "aimnet-cache"
         model_root.mkdir(parents=True, mode=0o700)
+        os.chmod(dft_root, 0o700)
         venv = dft_root / "venv"
         venv_bin = venv / "bin"
         venv_lib = venv / "lib/python3.12/site-packages"
@@ -812,7 +813,11 @@ class BootstrapPullDeployTests(unittest.TestCase):
             )
 
     def test_adopted_dft_inventory_prunes_warp_cache_before_scandir(self) -> None:
-        self.prepare_adoption_fixture()
+        previous_umask = os.umask(0o022)
+        try:
+            self.prepare_adoption_fixture()
+        finally:
+            os.umask(previous_umask)
         runtime = self.runtime / "worker-venvs/dft" / LIVE_SHA
         warp_cache = runtime / "warp-cache"
         original_scandir = os.scandir
