@@ -3225,12 +3225,13 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             source_sha=self.sha,
             operation_id=self.unit_operation_id,
         )
-        operation_backup = (
-            self.runtime
-            / ADOPTER.UNIT_PERMISSION_BACKUP_DIRECTORY
-            / self.unit_operation_id
+        backup_root = (
+            self.runtime / ADOPTER.UNIT_PERMISSION_BACKUP_DIRECTORY
         )
-        operation_backup.mkdir(mode=0o700, parents=True)
+        operation_backup = backup_root / self.unit_operation_id
+        backup_root.mkdir(mode=0o700)
+        backup_root.chmod(0o700)
+        operation_backup.mkdir(mode=0o700)
         operation_backup.chmod(0o700)
 
         with self.assertRaisesRegex(
@@ -3245,6 +3246,36 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
                 ],
             )
         self.assertEqual(stat.S_IMODE(self.md_unit.stat().st_mode), 0o664)
+
+    def test_unit_permission_rejects_unsafe_backup_root(self) -> None:
+        installer = self.unit_permission_installer()
+        planned = installer.plan(
+            source_sha=self.sha,
+            operation_id=self.unit_operation_id,
+        )
+        backup_root = (
+            self.runtime / ADOPTER.UNIT_PERMISSION_BACKUP_DIRECTORY
+        )
+        backup_root.mkdir(mode=0o700)
+        backup_root.chmod(0o755)
+        md_identity = self.unit_file_identity(self.md_unit)
+
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError, "required private directory is unsafe"
+        ):
+            installer.apply(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_unit_permission_impact_sha256=planned[
+                    "unit_permission_impact_sha256"
+                ],
+            )
+        self.assertIsNone(
+            installer._load_unit_transaction(self.unit_operation_id)
+        )
+        self.assertEqual(self.unit_file_identity(self.md_unit), md_identity)
+        self.assertEqual(self.unit_reload_calls, 0)
 
     def test_unit_permission_rejects_backup_mkdir_race_after_claim(self) -> None:
         installer = self.unit_permission_installer()
