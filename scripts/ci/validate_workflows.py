@@ -24,6 +24,9 @@ BACKEND_DOCKERFILE_PATH = REPOSITORY_ROOT / "Dockerfile"
 BACKEND_IMAGE_ASSERTION_PATH = (
     REPOSITORY_ROOT / "scripts" / "ci" / "assert_backend_image_identity.sh"
 )
+POSTGRES_CLIENT_BOOTSTRAP_PATH = (
+    REPOSITORY_ROOT / "scripts" / "ci" / "ensure_postgresql_16_client.sh"
+)
 
 PINNED_ACTION = re.compile(
     r"^\s*-?\s*uses:\s*[^\s@]+@([0-9a-f]{40})(?:\s*#.*)?$"
@@ -47,6 +50,9 @@ EXPECTED_PREDECESSOR_ASSET_DIGEST = (
 EXPECTED_POSTGRES_IMAGE = (
     "postgres:16-alpine@sha256:"
     "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+)
+EXPECTED_POSTGRES_CLIENT_BOOTSTRAP_SHA256 = (
+    "ba87105271808a188f43c18868a9ddbbb97a2d350ff0ca66f85ba3269e3183e6"
 )
 EXPECTED_POSTGRES_AUDIT_IMAGES = (
     "docker.io/library/postgres@sha256:"
@@ -1053,6 +1059,100 @@ def validate_exact_b_job(ci_text: str, failures: list[str]) -> None:
     )
 
 
+def validate_postgres_client_bootstrap(
+    ci_text: str,
+    bootstrap_payload: bytes,
+    failures: list[str],
+) -> None:
+    helper = "scripts/ci/ensure_postgresql_16_client.sh"
+    jobs = (
+        (
+            "production-alias-integration",
+            "Install PostgreSQL 16 client",
+            (
+                "      - name: Install PostgreSQL 16 client",
+                "        timeout-minutes: 9",
+                "        run: |",
+                f"          {helper}",
+                (
+                    '          "$NEXPOLY_ALIAS_TEST_PG_BIN/psql" --version '
+                    '| grep -F "PostgreSQL) 16."'
+                ),
+                (
+                    '          "$NEXPOLY_ALIAS_TEST_PG_BIN/pg_dump" --version '
+                    '| grep -F "PostgreSQL) 16."'
+                ),
+                (
+                    '          "$NEXPOLY_ALIAS_TEST_PG_BIN/pg_restore" --version '
+                    '| grep -F "PostgreSQL) 16."'
+                ),
+            ),
+        ),
+        (
+            "postgres-media-integration",
+            "Install PostgreSQL 16 client for mutable-data audit",
+            (
+                (
+                    "      - name: Install PostgreSQL 16 client for "
+                    "mutable-data audit"
+                ),
+                "        if: matrix.major == '16'",
+                "        timeout-minutes: 9",
+                "        run: |",
+                f"          {helper}",
+                (
+                    '          /usr/bin/psql --version | grep -F '
+                    '"PostgreSQL) 16."'
+                ),
+            ),
+        ),
+        (
+            "exact-b-bridge",
+            "Install PostgreSQL 16 client",
+            (
+                "      - name: Install PostgreSQL 16 client",
+                "        timeout-minutes: 9",
+                "        run: |",
+                f"          {helper}",
+                '          psql --version | grep -F "PostgreSQL) 16."',
+            ),
+        ),
+    )
+    for job_name, step_name, expected_lines in jobs:
+        body = workflow_job_body(ci_text, job_name, failures)
+        if body is None:
+            continue
+        matching_steps = [
+            step
+            for step in workflow_step_blocks(body)
+            if step.splitlines()
+            and step.splitlines()[0] == f"      - name: {step_name}"
+        ]
+        if len(matching_steps) != 1:
+            failures.append(
+                f"{job_name} must contain one governed PostgreSQL 16 "
+                "client bootstrap step"
+            )
+            continue
+        actual_lines = tuple(matching_steps[0].rstrip().splitlines())
+        if actual_lines != expected_lines:
+            failures.append(
+                f"{job_name} must retain the exact active PostgreSQL 16 "
+                "client bootstrap step"
+            )
+    if ci_text.count(helper) != len(jobs):
+        failures.append(
+            "ci.yml must invoke the governed PostgreSQL 16 client bootstrap "
+            "in exactly the three database integration jobs"
+        )
+    actual_bootstrap_sha256 = hashlib.sha256(bootstrap_payload).hexdigest()
+    if actual_bootstrap_sha256 != EXPECTED_POSTGRES_CLIENT_BOOTSTRAP_SHA256:
+        failures.append(
+            "PostgreSQL 16 client bootstrap must match the exact reviewed "
+            "fast-path and bounded-install implementation"
+        )
+
+
 def validate_release_input(failures: list[str]) -> None:
     try:
         document = json.loads(RELEASE_INPUT_PATH.read_text(encoding="utf-8"))
@@ -1330,6 +1430,23 @@ def main() -> int:
             failures.append(
                 "Backend image identity assertion script must use mode 0755"
             )
+    if (
+        POSTGRES_CLIENT_BOOTSTRAP_PATH.is_symlink()
+        or not POSTGRES_CLIENT_BOOTSTRAP_PATH.is_file()
+    ):
+        failures.append(
+            "PostgreSQL 16 client bootstrap script is missing or unsafe"
+        )
+        postgres_client_bootstrap = b""
+    else:
+        postgres_client_bootstrap = POSTGRES_CLIENT_BOOTSTRAP_PATH.read_bytes()
+        bootstrap_mode = stat.S_IMODE(
+            POSTGRES_CLIENT_BOOTSTRAP_PATH.stat().st_mode
+        )
+        if bootstrap_mode != 0o755:
+            failures.append(
+                "PostgreSQL 16 client bootstrap script must use mode 0755"
+            )
     if LEGACY_REMOTE_RELEASE_PATH.exists() or LEGACY_REMOTE_RELEASE_PATH.is_symlink():
         failures.append("the legacy CI-to-production remote release transport must stay removed")
 
@@ -1409,7 +1526,7 @@ def main() -> int:
             "NEXPOLY_TEST_POSTGRES_MAJOR: ${{ matrix.major }}",
             "NEXPOLY_TEST_POSTGRES_IMAGE: ${{ matrix.image }}",
             "Install PostgreSQL 16 client for mutable-data audit",
-            "sudo apt-get install --yes postgresql-client-16",
+            "scripts/ci/ensure_postgresql_16_client.sh",
             '/usr/bin/psql --version | grep -F "PostgreSQL) 16."',
             *EXPECTED_POSTGRES_AUDIT_IMAGES,
             "docker pull \"$POSTGRES_IMAGE\"",
@@ -1445,6 +1562,11 @@ def main() -> int:
     validate_complete_history_checkouts(ci_text, failures)
     validate_gpu_session_compose_policy(ci_text, failures)
     validate_exact_b_job(ci_text, failures)
+    validate_postgres_client_bootstrap(
+        ci_text,
+        postgres_client_bootstrap,
+        failures,
+    )
     validate_backend_image_identity_policy(ci_text, failures)
     validate_backend_dockerfile_identity_policy(
         backend_dockerfile_text,
@@ -1519,7 +1641,9 @@ def main() -> int:
         failures.append(
             "every checkout must use the exact resolved candidate SHA"
         )
-    if ci_text.count("runs-on:") != ci_text.count("timeout-minutes:"):
+    if ci_text.count("runs-on:") != len(
+        re.findall(r"(?m)^    timeout-minutes:", ci_text)
+    ):
         failures.append("every job must define a timeout")
     media_job_match = re.search(
         r"(?ms)^  postgres-media-integration:\n"
@@ -1530,7 +1654,9 @@ def main() -> int:
         failures.append("postgres-media-integration job is missing")
     else:
         media_job = media_job_match.group("body")
-        if media_job.count("timeout-minutes:") != 1:
+        if len(
+            re.findall(r"(?m)^    timeout-minutes:", media_job)
+        ) != 1:
             failures.append(
                 "postgres-media-integration must define one job timeout"
             )

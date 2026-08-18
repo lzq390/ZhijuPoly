@@ -18,6 +18,9 @@ BACKEND_IMAGE_ASSERTION = (
 BACKEND_IMAGE_ASSERTION_PATH = (
     ROOT / "scripts/ci/assert_backend_image_identity.sh"
 )
+POSTGRES_CLIENT_BOOTSTRAP = (
+    ROOT / "scripts/ci/ensure_postgresql_16_client.sh"
+).read_bytes()
 EXACT_B_TEXT = (ROOT / "scripts/ci/test_exact_b_bridge.sh").read_text(
     encoding="utf-8"
 )
@@ -154,6 +157,143 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
             any("missing or reorders" in failure for failure in failures),
             failures,
         )
+
+    def test_postgres_client_bootstrap_is_fast_and_bounded(self) -> None:
+        failures: list[str] = []
+        policy.validate_postgres_client_bootstrap(
+            CI_TEXT,
+            POSTGRES_CLIENT_BOOTSTRAP,
+            failures,
+        )
+        self.assertEqual(failures, [])
+
+        controls = (
+            '[[ -x "$POSTGRES_BIN/$tool" ]] || return 1',
+            "readonly MAX_INSTALL_ATTEMPTS=3",
+            "-o Acquire::Retries=2",
+            "-o Acquire::http::Timeout=15",
+            "-o Acquire::https::Timeout=15",
+            "-o DPkg::Lock::Timeout=30",
+            "/usr/bin/sudo --non-interactive",
+            "/usr/bin/timeout --signal=TERM --kill-after=10s 60s",
+            "/usr/bin/timeout --signal=TERM --kill-after=10s 90s",
+            "/usr/bin/env DEBIAN_FRONTEND=noninteractive",
+            '/usr/bin/sleep "$((attempt * 5))"',
+        )
+        for control in controls:
+            with self.subTest(control=control):
+                changed = POSTGRES_CLIENT_BOOTSTRAP.replace(
+                    control.encode(),
+                    b"removed-reviewed-control",
+                    1,
+                )
+                failures = []
+                policy.validate_postgres_client_bootstrap(
+                    CI_TEXT,
+                    changed,
+                    failures,
+                )
+                self.assertTrue(failures)
+
+    def test_postgres_client_bootstrap_cannot_be_moved_to_another_job(
+        self,
+    ) -> None:
+        helper_line = "          scripts/ci/ensure_postgresql_16_client.sh"
+        changed = CI_TEXT.replace(helper_line, "          true", 1)
+        insertion = (
+            "          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7"
+        )
+        changed = changed.replace(
+            insertion,
+            insertion + "\n" + helper_line,
+            1,
+        )
+        self.assertEqual(
+            changed.count(helper_line),
+            CI_TEXT.count(helper_line),
+        )
+
+        failures: list[str] = []
+        policy.validate_postgres_client_bootstrap(
+            changed,
+            POSTGRES_CLIENT_BOOTSTRAP,
+            failures,
+        )
+        self.assertTrue(
+            any("production-alias-integration" in failure for failure in failures),
+            failures,
+        )
+
+    def test_postgres_client_bootstrap_requires_each_step_timeout(self) -> None:
+        changed = CI_TEXT.replace("        timeout-minutes: 9\n", "", 1)
+        failures: list[str] = []
+        policy.validate_postgres_client_bootstrap(
+            changed,
+            POSTGRES_CLIENT_BOOTSTRAP,
+            failures,
+        )
+        self.assertTrue(
+            any("exact active" in failure for failure in failures),
+            failures,
+        )
+
+    def test_postgres_client_bootstrap_rejects_dead_code(self) -> None:
+        changed_bootstrap = POSTGRES_CLIENT_BOOTSTRAP.replace(
+            b"set -euo pipefail\n",
+            b"set -euo pipefail\nexit 0\n",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_postgres_client_bootstrap(
+            CI_TEXT,
+            changed_bootstrap,
+            failures,
+        )
+        self.assertTrue(failures)
+
+        helper_line = "          scripts/ci/ensure_postgresql_16_client.sh"
+        changed_workflow = CI_TEXT.replace(
+            helper_line,
+            "          exit 0\n" + helper_line,
+            1,
+        )
+        failures = []
+        policy.validate_postgres_client_bootstrap(
+            changed_workflow,
+            POSTGRES_CLIENT_BOOTSTRAP,
+            failures,
+        )
+        self.assertTrue(failures)
+
+    def test_postgres_client_bootstrap_rejects_alternate_duplicate(self) -> None:
+        helper_line = "          scripts/ci/ensure_postgresql_16_client.sh"
+        changed = CI_TEXT.replace(
+            helper_line,
+            helper_line
+            + "\n          bash scripts/ci/ensure_postgresql_16_client.sh",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_postgres_client_bootstrap(
+            changed,
+            POSTGRES_CLIENT_BOOTSTRAP,
+            failures,
+        )
+        self.assertTrue(failures)
+
+    def test_postgres_client_bootstrap_rejects_commented_timeout(self) -> None:
+        changed = CI_TEXT.replace(
+            "        timeout-minutes: 9\n",
+            "        # timeout-minutes: 9\n",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_postgres_client_bootstrap(
+            changed,
+            POSTGRES_CLIENT_BOOTSTRAP,
+            failures,
+        )
+        self.assertTrue(failures)
 
     def test_gpu_session_compose_render_is_governed(self) -> None:
         failures: list[str] = []
