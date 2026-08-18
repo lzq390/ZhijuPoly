@@ -324,15 +324,89 @@ hardened-permission digests. It is immutable. The schema-v1 hardened marker at
 compatible handoff that the already installed controller can verify. The
 permission transaction does not invoke that old controller as a probe. The new
 target controller independently requires the wrapper and marker to bind each
-other, seals their compact permission-authority digest projection in its
-schema-v2 adopted-prerequisite target binding, and separately revalidates the
-raw marker at plan, prepare, resume, and apply pre-switch validation.
+other, seals the compact permission projection together with the
+unit-permission authority in its schema-v3 adopted-prerequisite target
+binding, and separately revalidates
+both authorities at plan, prepare, resume, and apply pre-switch validation.
+Schema-v2 remains read compatibility for historical descriptor provenance
+only; a new raw-adoption descriptor cannot omit the unit authority.
 
 Do not call `git_source_trust.takeover_repository_permissions` directly, run
 `install_legacy_takeover_prerequisites.py`, start the historical takeover, use
 manual `chmod`, or synthesize the legacy marker. Those raw paths do not publish
 the adopted permission authority or its double-confirmed CAS and cannot
 authorize the current production checkout.
+
+### One-time adopted Worker unit permission hardening
+
+Before the first formal Pull plan, run one final independent transaction to
+replace only the legacy mode-`0664` MD user-unit inode with an owner-private
+mode-`0600` inode. DFT is already mode `0600` and is a strict no-op CAS. Run
+the plan from the reviewed successor SHA; the completed Git-permission source
+may be its ancestor only when every fixed control/prerequisite blob is
+byte-identical:
+
+```bash
+unit_permission_operation_id=adopt-unit-permission-<utc-timestamp>
+
+./scripts/adopt_runtime_prerequisites.py unit-permission-plan \
+  --sha <full-main-sha> \
+  --operation-id "$unit_permission_operation_id"
+
+./scripts/adopt_runtime_prerequisites.py unit-permission-apply \
+  --sha <full-main-sha> \
+  --operation-id "$unit_permission_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-unit-permission-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+The plan is logically zero-write and seals each unit and its parent by path,
+type, device/inode, owner, mode, link count, size, and content digest, plus the
+live systemd state, MainPID, and InvocationID. During apply the shared parent
+directory's identity, ownership, mode, and link count remain exact; only its
+reported size may grow as a filesystem allocation side effect of the
+transaction's own temporary entry. It also binds the raw adoption,
+bootstrap, prerequisite, and Git-permission authorities. Apply holds
+`state/deploy.lock`, writes an operation-owned private backup, creates a new
+`0600` inode, and uses atomic name exchange; it never calls `chmod` on the live
+MD inode. It runs `systemctl --user daemon-reload` but neither stops nor
+restarts either Worker, and requires both process identities to remain exact
+and `NeedDaemonReload=no` before publication.
+
+The plan and impact also seal an `authority_publication` ownership record for
+the exact runtime `state` directory and three operation-bound names:
+`adopted-unit-permissions.json`, its deterministic
+`.adopted-unit-permissions.json.create-<operation-id>` staging name, and the
+matching `.quarantine` name, each with `initially_absent=true`. Apply proves
+that namespace durably absent through the pinned state-directory descriptor
+before first intent and again immediately before the MD inode exchange. Only
+durable `authority-commit-intent` may recover an expected-payload staging,
+quarantine, or linked-final residue; `completed` requires the exact
+single-link final authority and no residue. A same-operation weak authority,
+unowned hard link, preplant, or pathname/inode swap fails closed before any
+new MD replacement or daemon reload.
+
+The journal at
+`state/adopted-unit-permission-transactions/<operation-id>.json` is replayed
+forward across every replacement/publication crash window. Abort is permitted
+only before durable `replacement-intent`:
+
+```bash
+./scripts/adopt_runtime_prerequisites.py unit-permission-abort \
+  --sha <full-main-sha> \
+  --operation-id "$unit_permission_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-unit-permission-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+After replacement intent, rerun only the same apply with the same SHA,
+operation ID, and confirmations. The immutable result is
+`state/adopted-unit-permissions.json`; it embeds the complete original and
+hardened unit records and private-backup evidence with independently
+recomputable digests. A narrowly validated prepare-abort residue at
+`operation-archive-intent` is allowed only when no descriptor or `ready.json`
+exists, its handoff/ref evidence is archived, and the live prepared ref and
+handoff are absent. Any other prepared state blocks this transaction.
 
 Next provision the dedicated mutable-data audit login. This step is mandatory
 before formal Pull `plan` or `prepare`. The source-pinned provisioner reads the

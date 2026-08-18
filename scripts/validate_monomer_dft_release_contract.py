@@ -22,6 +22,12 @@ MIGRATION_CHECKSUM = (
 CATALOG_FINGERPRINT = (
     "6dc2e6ca7e1bb052836afec2bbdd46c6aa0928e97efdbbc6669b9b220f9bf6f8"
 )
+GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT = (
+    "8972b5de85d2beb43f0e0023c7a842c602e237be8a7902831f32a9ce7eb401e2"
+)
+EXPLICIT_EMPTY_CATALOG_ACL_SENTINEL = (
+    "<explicit-empty-catalog-acl-array>"
+)
 CHECKOUT_SHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 EXPECTED_RUNNER = "ubuntu-24.04"
 EXPECTED_AIMNET_COMMIT = "9a6c56440349bccbb7ac0630a0622f9c584f894e"
@@ -786,6 +792,9 @@ def validate_database_schema_state_contract(
     )
     for marker in (
         CATALOG_FINGERPRINT,
+        GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT,
+        "exact_0013_with_governed_mutable_audit_acl",
+        "ready_reason = _READY_CATALOG_REASONS.get(catalog_sha256)",
         'ABSENT = "absent"',
         'READY = "ready"',
         'INVALID = "invalid"',
@@ -800,6 +809,36 @@ def validate_database_schema_state_contract(
             failures.append(
                 f"exact PG16 monomer DFT schema probe is missing: {marker}"
             )
+    if "_normalize_catalog_access_control" in schema_probe:
+        failures.append(
+            "monomer DFT schema probe must fingerprint raw ACLs without normalization"
+        )
+    acl_projections = (
+        "n.nspacl",
+        "c.relacl",
+        "a.attacl",
+        "t.typacl",
+        "p.proacl",
+    )
+    for acl_projection in acl_projections:
+        escaped_projection = re.escape(acl_projection)
+        exact_projection = re.compile(
+            rf"CASE\s+WHEN {escaped_projection} IS NULL THEN ''\s+"
+            rf"WHEN pg_catalog\.cardinality\({escaped_projection}\) = 0\s+"
+            rf"THEN '{re.escape(EXPLICIT_EMPTY_CATALOG_ACL_SENTINEL)}'\s+"
+            rf"ELSE pg_catalog\.array_to_string\({escaped_projection}, ','\)\s+"
+            r"END AS access_control"
+        )
+        if exact_projection.search(schema_probe) is None:
+            failures.append(
+                "monomer DFT schema probe does not distinguish NULL from "
+                f"explicit empty ACL arrays for {acl_projection}"
+            )
+    if "COALESCE(pg_catalog.array_to_string" in schema_probe:
+        failures.append(
+            "monomer DFT schema probe must not collapse NULL and explicit empty "
+            "ACL arrays with COALESCE"
+        )
 
     deployment_control = _read_text(
         root,
@@ -1079,6 +1118,9 @@ def main(argv: list[str] | None = None) -> int:
                 "migration_version": MIGRATION_VERSION,
                 "migration_checksum": MIGRATION_CHECKSUM,
                 "catalog_fingerprint": CATALOG_FINGERPRINT,
+                "governed_mutable_audit_catalog_fingerprint": (
+                    GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT
+                ),
                 "checkout_sha": CHECKOUT_SHA,
                 "runner": EXPECTED_RUNNER,
             },

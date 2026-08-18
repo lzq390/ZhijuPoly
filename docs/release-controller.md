@@ -129,12 +129,69 @@ Instead it deliberately produces the unchanged schema-v1 hardened marker at
 `state/legacy-git-permission-takeover.json`, which is compatible with that
 controller's generic verifier. The new target controller independently
 requires that marker and the adopted wrapper authority to bind each other and
-seals the compact permission authority in the schema-v2 prerequisite target
-binding. It repeats the full check during formal plan, prepare/resume, and apply
-pre-switch. Do not invoke
+seals the compact permission projection together with the unit-permission
+authority in the schema-v3
+prerequisite target binding. Schema-v2 remains read compatibility for
+historical descriptor provenance only; a new raw-adoption descriptor cannot
+omit the unit authority. The controller repeats the full check during formal
+plan, prepare/resume, and apply pre-switch. Do not invoke
 `git_source_trust.takeover_repository_permissions` directly, run
 `install_legacy_takeover_prerequisites.py`, synthesize the marker, or use
 manual `chmod`; none of those paths creates this authority.
+
+The last one-time predecessor transaction hardens the adopted Worker unit:
+
+```bash
+unit_permission_operation_id=adopt-unit-permission-<utc-timestamp>
+
+./scripts/adopt_runtime_prerequisites.py unit-permission-plan \
+  --sha <full-main-sha> \
+  --operation-id "$unit_permission_operation_id"
+
+./scripts/adopt_runtime_prerequisites.py unit-permission-apply \
+  --sha <full-main-sha> \
+  --operation-id "$unit_permission_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-unit-permission-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+Its logically zero-write plan seals full MD/DFT unit, parent-directory,
+systemd, PID, and InvocationID evidence plus the raw predecessor-authority
+digests. It reports `atime_zero_write=true` only when every source, runtime,
+production, and unit-parent mount is read-only or suppresses atime; otherwise
+the read-only inventory may update atime and is not a physically zero-write
+observation. The parent
+directory's identity, ownership, mode, and link count remain exact; only its
+reported size may grow as a filesystem allocation side effect of this
+transaction's own temporary entry. A completed
+Git-permission source may be an ancestor of this target only under a fixed-blob
+byte-identity proof. Apply atomically exchanges a newly created `0600` MD unit
+inode for the legacy `0664` inode, keeps a private operation-owned backup, and
+treats the already-`0600` DFT unit as an exact no-op CAS. It invokes only a
+user-manager daemon reload: neither Worker is stopped or restarted, and both
+running identities plus `NeedDaemonReload=no` must remain exact.
+
+The plan and impact also seal an `authority_publication` ownership record for
+the exact runtime `state` directory and three operation-bound names:
+`adopted-unit-permissions.json`, its deterministic
+`.adopted-unit-permissions.json.create-<operation-id>` staging name, and the
+matching `.quarantine` name, each with `initially_absent=true`. Apply proves
+that namespace durably absent through the pinned state-directory descriptor
+before first intent and again immediately before the MD inode exchange. Only
+durable `authority-commit-intent` may recover an expected-payload staging,
+quarantine, or linked-final residue; `completed` requires the exact
+single-link final authority and no residue. A same-operation weak authority,
+unowned hard link, preplant, or pathname/inode swap fails closed before any
+new MD replacement or daemon reload.
+
+Abort is allowed only before durable `replacement-intent`, using
+`unit-permission-abort` and both confirmations. Every later crash is
+forward-only replay of the same apply. The immutable
+`state/adopted-unit-permissions.json` embeds complete original, hardened, and
+backup evidence and their recomputable digests. The only tolerated prepared
+residue is an exactly validated `operation-archive-intent` prepare-abort with
+no descriptor/ready authority and no live ref or handoff; every other prepared
+state remains fail-closed.
 
 The same exact source then runs
 `provision_mutable_data_audit_role.py --plan/--apply`. Formal Pull `plan` and
@@ -194,9 +251,11 @@ byte-identical, and equal to its sealed authority digest. The direct plan proves
 this from the exact private target clone and emits a deterministic
 `adopted_prerequisite_target_binding` containing the mode, authority and target
 SHA/tree, blob-inventory digest, sealed authority readiness digest, and target
-source-trust/readiness projection digest. For raw adoption this becomes a
-schema-v2 binding containing the immutable permission-wrapper digest and the
-exact raw hardened marker/evidence/inventory/original/hardened digests. A
+source-trust/readiness projection digest. For a new raw adoption this becomes
+a schema-v3 binding containing both immutable Git- and unit-permission
+authorities and their exact raw evidence digests. Schema-v2 is accepted only
+when revalidating historical descriptor provenance; it is not emitted for a
+new raw-adoption deployment. A
 descriptor-v4 record
 that contains `adopted_deployment` must contain this binding; a descriptor
 without adopted deployment must not contain it.
@@ -417,8 +476,13 @@ state/current-deployment.json
 state/adopted-deployment.json
 state/adopted-prerequisites.json
 state/adopted-git-permissions.json
+state/adopted-unit-permissions.json
 state/legacy-git-permission-takeover.json
 state/adopted-git-permission-transactions/<operation-id>.json
+state/adopted-unit-permission-transactions/<operation-id>.json
+state/adopted-unit-permission-backups/.<operation-id>.owner.json
+state/adopted-unit-permission-backups/<operation-id>/.owner.json
+state/adopted-unit-permission-backups/<operation-id>/nexpoly-monomer-md-worker.service
 state/prepared/<operation-id>/descriptor.json
 state/prepared/<operation-id>/ready.json
 state/prepared/<operation-id>/acceptance-authority.json

@@ -168,9 +168,9 @@ jobs:
       - name: Assert immutable checkout
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
       - name: Install PostgreSQL 16 client
+        timeout-minutes: 9
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes postgresql-client-16
+          scripts/ci/ensure_postgresql_16_client.sh
           "$NEXPOLY_ALIAS_TEST_PG_BIN/psql" --version | grep -F "PostgreSQL) 16."
           "$NEXPOLY_ALIAS_TEST_PG_BIN/pg_dump" --version | grep -F "PostgreSQL) 16."
           "$NEXPOLY_ALIAS_TEST_PG_BIN/pg_restore" --version | grep -F "PostgreSQL) 16."
@@ -214,9 +214,9 @@ jobs:
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
       - name: Install PostgreSQL 16 client for mutable-data audit
         if: matrix.major == '16'
+        timeout-minutes: 9
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes postgresql-client-16
+          scripts/ci/ensure_postgresql_16_client.sh
           /usr/bin/psql --version | grep -F "PostgreSQL) 16."
       - name: Pull the exact matching-major audit image
         run: docker pull "$NEXPOLY_TEST_POSTGRES_IMAGE"
@@ -563,9 +563,9 @@ jobs:
       - name: Assert immutable checkout
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
       - name: Install PostgreSQL 16 client
+        timeout-minutes: 9
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes postgresql-client-16
+          scripts/ci/ensure_postgresql_16_client.sh
           psql --version | grep -F "PostgreSQL) 16."
       - name: Log in for the exact private B images
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3

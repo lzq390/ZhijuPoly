@@ -146,6 +146,8 @@ ADOPTION_PHASES = (
 ADOPTED_DEPLOYMENT_SCHEMA_VERSION = 1
 ADOPTION_AUTHORITY_KIND = "manual-runtime-adoption"
 ADOPTION_DEPLOY_LOCK_DISPOSITION = "permanent-control-layout"
+ADOPTION_JOURNAL_TEMP_MAX_BYTES = 16 * 1024 * 1024
+ADOPTION_JOURNAL_TEMP_LIMIT = 32
 ADOPTED_DFT_GPU_UUID = "GPU-89c7c52c-e252-0135-c157-24eee1a1ccbe"
 ADOPTED_DFT_RUNTIME_SYMLINKS = {
     "venv/bin/python": "/usr/bin/python3.12",
@@ -576,9 +578,79 @@ def _safe_source(path: Path) -> bytes:
 
 
 def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
     try:
         os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _inode_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_uid,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _durability_barrier(
+    path: Path, *, payload: bytes | None, mode: int, directory: bool = False
+) -> bytes:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    if directory:
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        before = os.fstat(descriptor)
+        if (
+            before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) != mode
+            or (directory and not stat.S_ISDIR(before.st_mode))
+            or (not directory and not stat.S_ISREG(before.st_mode))
+        ):
+            raise BootstrapError(f"durability barrier identity is unsafe: {path}")
+        observed = b""
+        if not directory:
+            if before.st_size > 64 * 1024 * 1024:
+                raise BootstrapError(f"durability barrier file is too large: {path}")
+            chunks = bytearray()
+            while len(chunks) < before.st_size:
+                chunk = os.read(descriptor, before.st_size - len(chunks))
+                if not chunk:
+                    break
+                chunks.extend(chunk)
+            observed = bytes(chunks)
+            if len(observed) != before.st_size or (
+                payload is not None and observed != payload
+            ):
+                raise BootstrapError(f"durability barrier payload differs: {path}")
+        os.fsync(descriptor)
+        after = os.fstat(descriptor)
+        if (
+            _inode_identity(before) != _inode_identity(after)
+            or _inode_identity(path.lstat()) != _inode_identity(after)
+        ):
+            raise BootstrapError(f"durability barrier path changed: {path}")
+        _fsync_directory(path.parent)
+        if _inode_identity(path.lstat()) != _inode_identity(after):
+            raise BootstrapError(f"durability barrier path changed: {path}")
+        return observed
     finally:
         os.close(descriptor)
 
@@ -975,7 +1047,51 @@ def _adoption_transactions(
     ):
         raise BootstrapError("adoption transaction directory is unsafe")
     transactions: dict[str, dict[str, object]] = {}
+    safe_temporary_count = 0
+    quarantines: list[tuple[str, Path]] = []
     for path in entries:
+        name = path.name
+        quarantine_match = re.fullmatch(
+            r"\.(adopt-[a-z0-9][a-z0-9._-]{7,119})\.abort-quarantine",
+            name,
+        )
+        if quarantine_match is not None:
+            quarantines.append((quarantine_match.group(1), path))
+            continue
+        temporary_operation: str | None = None
+        if name.startswith(".") and name.endswith(".tmp"):
+            journal_and_token = name[1:-4]
+            journal_name, separator, token = journal_and_token.rpartition(".")
+            if (
+                separator
+                and journal_name.endswith(".json")
+                and re.fullmatch(r"[0-9a-f]{24}", token) is not None
+            ):
+                candidate = journal_name.removesuffix(".json")
+                if ADOPTION_OPERATION_RE.fullmatch(candidate) is not None:
+                    temporary_operation = candidate
+        if temporary_operation is not None:
+            try:
+                temporary = path.lstat()
+            except OSError as exc:
+                raise BootstrapError(
+                    "adoption transaction staging is unavailable"
+                ) from exc
+            safe_temporary_count += 1
+            if (
+                safe_temporary_count > ADOPTION_JOURNAL_TEMP_LIMIT
+                or not stat.S_ISREG(temporary.st_mode)
+                or path.is_symlink()
+                or temporary.st_uid != os.geteuid()
+                or stat.S_IMODE(temporary.st_mode) != 0o600
+                or temporary.st_nlink != 1
+                or temporary.st_dev != metadata.st_dev
+                or temporary.st_size > ADOPTION_JOURNAL_TEMP_MAX_BYTES
+            ):
+                raise BootstrapError("adoption transaction staging is unsafe")
+            # Random atomic staging contains no authority.  Retain it while
+            # ignoring only this strict private shape.
+            continue
         if path.suffix != ".json":
             raise BootstrapError("adoption transaction inventory contains an unknown entry")
         operation_id = path.stem
@@ -986,6 +1102,20 @@ def _adoption_transactions(
         if transaction["operation_id"] != operation_id:
             raise BootstrapError("adoption transaction filename differs from its identity")
         transactions[operation_id] = transaction
+    for operation_id, path in quarantines:
+        transaction = transactions.get(operation_id)
+        evidence = transaction.get("step_evidence") if transaction else None
+        plan = evidence.get("abort_quarantine") if isinstance(evidence, dict) else None
+        observed = path.lstat()
+        if (
+            not isinstance(plan, dict)
+            or plan.get("root") != str(path)
+            or not stat.S_ISDIR(observed.st_mode)
+            or path.is_symlink()
+            or observed.st_uid != os.geteuid()
+            or stat.S_IMODE(observed.st_mode) != 0o700
+        ):
+            raise BootstrapError("adoption quarantine lacks durable authority")
     return transactions
 
 
@@ -2297,7 +2427,12 @@ def _collect_adoption_evidence(
     }
 
 
-def _adoption_tree_identity(path: Path) -> dict[str, object]:
+def _adoption_tree_identity(
+    path: Path,
+    *,
+    excluded_paths: set[Path] | None = None,
+    linked_destinations: set[Path] | None = None,
+) -> dict[str, object]:
     try:
         metadata = path.lstat()
     except OSError as exc:
@@ -2311,6 +2446,8 @@ def _adoption_tree_identity(path: Path) -> dict[str, object]:
         raise BootstrapError(f"adoption-owned tree is unsafe: {path}")
     records: list[dict[str, object]] = []
     for entry in sorted(path.rglob("*")):
+        if excluded_paths is not None and entry in excluded_paths:
+            continue
         relative = entry.relative_to(path).as_posix()
         entry_metadata = entry.lstat()
         if entry.is_symlink() or entry_metadata.st_uid != os.geteuid():
@@ -2319,6 +2456,14 @@ def _adoption_tree_identity(path: Path) -> dict[str, object]:
             kind = "directory"
             sha256 = None
         elif stat.S_ISREG(entry_metadata.st_mode):
+            if entry_metadata.st_nlink != 1 and not (
+                linked_destinations is not None
+                and entry in linked_destinations
+                and entry_metadata.st_nlink == 2
+            ):
+                raise BootstrapError(
+                    f"adoption-owned tree contains an unsafe hard link: {path}"
+                )
             kind = "file"
             sha256 = digest(entry.read_bytes())
         else:
@@ -2366,6 +2511,36 @@ def _adoption_file_plan(
     }
 
 
+def _adoption_install_staging_plan(
+    path: Path,
+    destination: Path,
+    payload: bytes,
+    mode: int,
+    *,
+    operation_id: str,
+    purpose: str = "install",
+) -> dict[str, object]:
+    suffix = "complete.tmp" if purpose == "cas" else "tmp"
+    expected = destination.parent / f".{destination.name}.{operation_id}.{suffix}"
+    if (
+        _require_adoption_operation_id(operation_id) != operation_id
+        or purpose not in {"install", "cas"}
+        or path != expected
+        or mode not in {0o600, 0o700}
+    ):
+        raise BootstrapError("adoption install staging plan is invalid")
+    return {
+        "path": str(path),
+        "kind": "install-staging",
+        "destination": str(destination),
+        "sha256": digest(payload),
+        "mode": format(mode, "04o"),
+        "operation_id": operation_id,
+        "purpose": purpose,
+        "initially_absent": True,
+    }
+
+
 def _adoption_install_temporary_path(
     path: Path, *, operation_id: str
 ) -> Path:
@@ -2379,7 +2554,7 @@ def _validate_adoption_ownership(
     if (
         not isinstance(value, dict)
         or value.get("kind")
-        not in {"file", "tree", "directory", "staging-tree"}
+        not in {"file", "tree", "directory", "staging-tree", "install-staging"}
         or not isinstance(value.get("path"), str)
         or not Path(value["path"]).is_absolute()
     ):
@@ -2393,6 +2568,31 @@ def _validate_adoption_ownership(
             or value.get("mode") not in {"0600", "0700"}
         ):
             raise BootstrapError(f"{label} file ownership is invalid")
+    elif kind == "install-staging":
+        destination = value.get("destination")
+        operation_id = value.get("operation_id")
+        purpose = value.get("purpose")
+        suffix = "complete.tmp" if purpose == "cas" else "tmp"
+        if (
+            set(value)
+            != {
+                "path", "kind", "destination", "sha256", "mode",
+                "operation_id", "purpose", "initially_absent",
+            }
+            or not isinstance(destination, str)
+            or not Path(destination).is_absolute()
+            or not isinstance(operation_id, str)
+            or _require_adoption_operation_id(operation_id) != operation_id
+            or purpose not in {"install", "cas"}
+            or value.get("initially_absent") is not True
+            or value.get("mode") not in {"0600", "0700"}
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", str(value.get("sha256")))
+            is None
+            or Path(str(value["path"]))
+            != Path(destination).parent
+            / f".{Path(destination).name}.{operation_id}.{suffix}"
+        ):
+            raise BootstrapError(f"{label} install staging ownership is invalid")
     elif kind == "tree":
         if (
             set(value) != {"path", "kind", "identity_sha256"}
@@ -2426,11 +2626,13 @@ def _validate_adoption_ownership(
                 not isinstance(name, str)
                 or re.fullmatch(r"[A-Za-z0-9._-]+", name) is None
                 or not isinstance(record, dict)
-                or set(record) != {"sha256", "mode"}
+                or set(record) != {"sha256", "mode", "size"}
                 or not isinstance(record.get("sha256"), str)
                 or re.fullmatch(r"sha256:[0-9a-f]{64}", record["sha256"])
                 is None
                 or record.get("mode") not in {"0600", "0700"}
+                or not isinstance(record.get("size"), int)
+                or not 0 < record["size"] <= 64 * 1024 * 1024
             ):
                 raise BootstrapError(
                     f"{label} staging-tree file authority is invalid"
@@ -2439,7 +2641,11 @@ def _validate_adoption_ownership(
 
 
 def _validate_adoption_staging_tree(
-    path: Path, ownership: dict[str, object]
+    path: Path,
+    ownership: dict[str, object],
+    *,
+    allow_missing_entries: bool = False,
+    allow_partial_entries: bool = False,
 ) -> dict[str, object]:
     expected = _validate_adoption_ownership(
         ownership, label="adoption staging-tree"
@@ -2462,22 +2668,37 @@ def _validate_adoption_staging_tree(
     ).encode("utf-8") + b"\n"
     entries = {entry.name: entry for entry in path.iterdir()}
     owner_present = ".owner.json" in entries
-    owner_temps = {
-        name
-        for name in entries
-        if re.fullmatch(r"\.\.owner\.json\.[0-9a-f]+\.tmp", name)
-    }
-    if owner_present:
-        owner_record, observed_owner_payload = _regular_file_record(
-            path / ".owner.json",
-            label="adoption staging-tree owner",
-            maximum=1024 * 1024,
-            allowed_modes={0o600},
+
+    def safe_partial(entry: Path, *, mode: int, maximum: int) -> bool:
+        metadata = entry.lstat()
+        return (
+            stat.S_ISREG(metadata.st_mode)
+            and not entry.is_symlink()
+            and metadata.st_uid == os.geteuid()
+            and metadata.st_nlink == 1
+            and stat.S_IMODE(metadata.st_mode) == mode
+            and metadata.st_size <= maximum
         )
-        if (
-            owner_record["sha256"] != digest(owner_payload)
-            or observed_owner_payload != owner_payload
-            or _load_private_json(path / ".owner.json") != owner
+
+    if owner_present:
+        owner_path = path / ".owner.json"
+        try:
+            owner_record, observed_owner_payload = _regular_file_record(
+                owner_path,
+                label="adoption staging-tree owner",
+                maximum=1024 * 1024,
+                allowed_modes={0o600},
+            )
+            owner_exact = (
+                owner_record["sha256"] == digest(owner_payload)
+                and observed_owner_payload == owner_payload
+                and _load_private_json(owner_path) == owner
+            )
+        except BootstrapError:
+            owner_exact = False
+        if not owner_exact and not (
+            allow_partial_entries
+            and safe_partial(owner_path, mode=0o600, maximum=len(owner_payload))
         ):
             raise BootstrapError(
                 "adoption staging-tree owner changed before abort"
@@ -2486,36 +2707,35 @@ def _validate_adoption_staging_tree(
         if name == ".owner.json":
             continue
         expected_record: object | None = files.get(name)
-        expected_payload: bytes | None = None
-        if name in owner_temps:
-            expected_record = {"sha256": digest(owner_payload), "mode": "0600"}
-            expected_payload = owner_payload
-        if expected_record is None:
-            for file_name, record in files.items():
-                if re.fullmatch(
-                    rf"\.{re.escape(str(file_name))}\.[0-9a-f]+\.tmp", name
-                ):
-                    expected_record = record
-                    break
         if not isinstance(expected_record, dict):
             raise BootstrapError(
                 "adoption staging-tree contains an unplanned entry"
             )
-        record, payload = _regular_file_record(
-            entry,
-            label="adoption staging-tree file",
-            maximum=64 * 1024 * 1024,
-            allowed_modes={int(str(expected_record["mode"]), 8)},
-        )
-        if record["sha256"] != expected_record["sha256"] or (
-            expected_payload is not None and payload != expected_payload
+        expected_mode = int(str(expected_record["mode"]), 8)
+        try:
+            record, _payload = _regular_file_record(
+                entry,
+                label="adoption staging-tree file",
+                maximum=64 * 1024 * 1024,
+                allowed_modes={expected_mode},
+            )
+            file_exact = record["sha256"] == expected_record["sha256"]
+        except BootstrapError:
+            file_exact = False
+        if not file_exact and not (
+            allow_partial_entries
+            and safe_partial(
+                entry,
+                mode=expected_mode,
+                maximum=int(expected_record["size"]),
+            )
         ):
             raise BootstrapError(
                 "adoption staging-tree file changed before abort"
             )
     final_names = set(files)
     actual_final_names = set(entries) & final_names
-    if not owner_present and not owner_temps and entries:
+    if not owner_present and entries and not allow_missing_entries:
         if set(entries) != final_names or actual_final_names != final_names:
             raise BootstrapError(
                 "ownerless adoption staging-tree is not complete"
@@ -2564,7 +2784,7 @@ def _validate_adoption_transaction(
         or not isinstance(planned, list)
         or not isinstance(created, list)
         or not isinstance(step_plans, dict)
-        or not set(step_plans).issubset({"layout", "controls", "baseline"})
+        or not set(step_plans).issubset({"layout", "controls", "baseline", "authority"})
         or not isinstance(document.get("step_evidence"), dict)
         or not isinstance(document.get("created_at"), str)
         or not isinstance(document.get("updated_at"), str)
@@ -2626,6 +2846,18 @@ def _write_adoption_transaction(
     return _validate_adoption_transaction(_load_private_json(path), path=path)
 
 
+def _reseal_adoption_transaction(
+    path: Path, transaction: dict[str, object]
+) -> dict[str, object]:
+    """Durably republish an already visible adoption journal unchanged."""
+
+    _atomic_json(path, transaction)
+    sealed = _validate_adoption_transaction(_load_private_json(path), path=path)
+    if sealed != transaction:
+        raise BootstrapError("resealed adoption transaction differs")
+    return sealed
+
+
 def _record_adoption_plan(
     path: Path,
     transaction: dict[str, object],
@@ -2634,7 +2866,7 @@ def _record_adoption_plan(
     evidence: object,
     planned_paths: list[dict[str, object]],
 ) -> dict[str, object]:
-    if name not in {"layout", "controls", "baseline"}:
+    if name not in {"layout", "controls", "baseline", "authority"}:
         raise BootstrapError("adoption plan name is invalid")
     normalized = [
         _validate_adoption_ownership(value, label=f"adoption {name} plan")
@@ -2744,6 +2976,7 @@ def _ensure_adoption_lock(runtime_root: Path) -> tuple[Path, bool]:
             os.close(descriptor)
         _fsync_directory(lock.parent)
         created = True
+    _durability_barrier(lock, payload=b"", mode=0o600)
     return lock, created
 
 
@@ -2772,6 +3005,12 @@ def _ensure_adoption_layout(
             or metadata.st_mode & 0o022
         ):
             raise BootstrapError(f"adoption runtime directory is unsafe: {path}")
+        _durability_barrier(
+            path,
+            payload=None,
+            mode=stat.S_IMODE(metadata.st_mode),
+            directory=True,
+        )
         evidence[relative] = {
             "path": str(path),
             "mode": format(stat.S_IMODE(metadata.st_mode), "04o"),
@@ -2795,6 +3034,8 @@ def _new_adoption_transaction(
         or stat.S_IMODE(metadata.st_mode) != 0o700
     ):
         raise BootstrapError("adoption transaction directory is unsafe")
+    _fsync_directory(directory.parent)
+    _fsync_directory(directory)
     path = _adoption_transaction_path(runtime_root, operation_id=operation_id)
     if path.exists() or path.is_symlink():
         transaction = _validate_adoption_transaction(
@@ -3020,10 +3261,12 @@ def _apply_manual_runtime_adoption(
         transaction_path = _adoption_transaction_path(
             runtime_root, operation_id=operation_id
         )
+        recovered_transaction = False
         if transaction_path.exists() or transaction_path.is_symlink():
             transaction = _validate_adoption_transaction(
                 _load_private_json(transaction_path), path=transaction_path
             )
+            recovered_transaction = True
             stored_identity = transaction.get("identity")
             if not isinstance(stored_identity, dict):
                 raise BootstrapError("adoption transaction identity is invalid")
@@ -3088,6 +3331,10 @@ def _apply_manual_runtime_adoption(
             dft_unit_sha256=args.confirm_dft_unit_sha256,
             allow_test=allow_test,
         )
+        if recovered_transaction:
+            transaction = _reseal_adoption_transaction(
+                transaction_path, transaction
+            )
         layout_planned: list[dict[str, object]] = []
         for relative, mode in DIRECTORIES.items():
             path = runtime_root / relative
@@ -3151,6 +3398,17 @@ def _apply_manual_runtime_adoption(
             raise BootstrapError("planned adoption controls are invalid")
         control_planned: list[dict[str, object]] = []
         bin_temporary_paths: dict[str, Path] = {}
+        bin_temporary_authorities: dict[str, dict[str, object]] = {}
+        controls_planned = "controls" in transaction["step_plans"]
+        staging_path = control_plan.get("staging_path")
+        if (
+            not controls_planned
+            and isinstance(staging_path, Path)
+            and (staging_path.exists() or staging_path.is_symlink())
+        ):
+            raise BootstrapError(
+                "control staging existed before durable intent"
+            )
         immutable_digests: dict[str, str] = {}
         for name, (payload, mode) in immutable_payloads.items():
             path = runtime_root / "bin" / name
@@ -3160,10 +3418,24 @@ def _apply_manual_runtime_adoption(
                     path, operation_id=operation_id
                 )
                 bin_temporary_paths[name] = temporary
+                temporary_authority = _adoption_install_staging_plan(
+                    temporary,
+                    path,
+                    payload,
+                    mode,
+                    operation_id=operation_id,
+                )
+                if not controls_planned and (
+                    temporary.exists() or temporary.is_symlink()
+                ):
+                    raise BootstrapError(
+                        "immutable staging existed before durable intent"
+                    )
+                bin_temporary_authorities[name] = temporary_authority
                 control_planned.extend(
                     (
                         _adoption_file_plan(path, payload, mode),
-                        _adoption_file_plan(temporary, payload, mode),
+                        temporary_authority,
                     )
                 )
         if release_id not in initial_releases:
@@ -3196,6 +3468,7 @@ def _apply_manual_runtime_adoption(
                 payload,
                 mode,
                 temporary_path=bin_temporary_paths.get(name),
+                temporary_authority=bin_temporary_authorities.get(name),
                 reject_unowned_staging=True,
             )
             if initial_paths.get(str(path)) is False:
@@ -3211,6 +3484,7 @@ def _apply_manual_runtime_adoption(
             allow_test=allow_test,
             prepared_at=str(transaction["created_at"]),
             plan=control_plan,
+            staging_authorized=True,
         )
         release_path = runtime_root / "control-releases" / str(candidate["release_id"])
         if str(candidate["release_id"]) not in initial_releases:
@@ -3258,14 +3532,28 @@ def _apply_manual_runtime_adoption(
         ).encode("utf-8") + b"\n"
         baseline_planned: list[dict[str, object]] = []
         adopted_temporary: Path | None = None
+        adopted_temporary_authority: dict[str, object] | None = None
         if initial_paths.get(str(adopted_path)) is False:
             adopted_temporary = _adoption_install_temporary_path(
                 adopted_path, operation_id=operation_id
             )
+            adopted_temporary_authority = _adoption_install_staging_plan(
+                adopted_temporary,
+                adopted_path,
+                adopted_payload,
+                0o600,
+                operation_id=operation_id,
+            )
+            if "baseline" not in transaction["step_plans"] and (
+                adopted_temporary.exists() or adopted_temporary.is_symlink()
+            ):
+                raise BootstrapError(
+                    "immutable staging existed before durable intent"
+                )
             baseline_planned.extend(
                 (
                     _adoption_file_plan(adopted_path, adopted_payload, 0o600),
-                    _adoption_file_plan(adopted_temporary, adopted_payload, 0o600),
+                    adopted_temporary_authority,
                 )
             )
         baseline_evidence = {
@@ -3284,6 +3572,7 @@ def _apply_manual_runtime_adoption(
             adopted_payload,
             0o600,
             temporary_path=adopted_temporary,
+            temporary_authority=adopted_temporary_authority,
             reject_unowned_staging=True,
         )
         if _load_private_json(adopted_path) != adopted_state:
@@ -3333,6 +3622,33 @@ def _apply_manual_runtime_adoption(
         }
         prepared_bootstrap = {**bootstrap_base, "status": "prepared"}
         completed_bootstrap = {**bootstrap_base, "status": "completed"}
+        json_payload = lambda value: json.dumps(  # noqa: E731
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8") + b"\n"
+        bootstrap_payload = json_payload(prepared_bootstrap)
+        completed_payload = json_payload(completed_bootstrap)
+        active_payload = json_payload(active)
+        bootstrap_temporary = _adoption_install_temporary_path(
+            bootstrap_path, operation_id=operation_id
+        )
+        active_temporary = _adoption_install_temporary_path(
+            active_path, operation_id=operation_id
+        )
+        cas_temporary = bootstrap_path.parent / (
+            f".{bootstrap_path.name}.{operation_id}.complete.tmp"
+        )
+        bootstrap_staging = _adoption_install_staging_plan(
+            bootstrap_temporary, bootstrap_path, bootstrap_payload, 0o600,
+            operation_id=operation_id,
+        )
+        active_staging = _adoption_install_staging_plan(
+            active_temporary, active_path, active_payload, 0o600,
+            operation_id=operation_id,
+        )
+        cas_staging = _adoption_install_staging_plan(
+            cas_temporary, bootstrap_path, completed_payload, 0o600,
+            operation_id=operation_id, purpose="cas",
+        )
         authority_intent = {
             "bootstrap_schema_version": 3,
             "active_control": active,
@@ -3340,18 +3656,17 @@ def _apply_manual_runtime_adoption(
         }
         if transaction["phase"] == "baseline-ready":
             for path in (bootstrap_path, active_path):
-                temporary = _adoption_install_temporary_path(
-                    path, operation_id=operation_id
-                )
-                if (
-                    path.exists()
-                    or path.is_symlink()
-                    or temporary.exists()
-                    or temporary.is_symlink()
-                ):
+                if path.exists() or path.is_symlink():
                     raise BootstrapError(
                         "adoption authority destination appeared before commit intent"
                     )
+            if "authority" not in transaction["step_plans"] and any(
+                path.exists() or path.is_symlink()
+                for path in (bootstrap_temporary, active_temporary, cas_temporary)
+            ):
+                raise BootstrapError(
+                    "adoption authority staging appeared before durable intent"
+                )
         else:
             if bootstrap_path.exists() or bootstrap_path.is_symlink():
                 current_bootstrap = _load_private_json(bootstrap_path)
@@ -3367,6 +3682,13 @@ def _apply_manual_runtime_adoption(
                     raise BootstrapError(
                         "existing adoption active control differs"
                     )
+        transaction = _record_adoption_plan(
+            transaction_path,
+            transaction,
+            name="authority",
+            evidence=authority_intent,
+            planned_paths=[bootstrap_staging, active_staging, cas_staging],
+        )
         transaction = _advance_adoption_transaction(
             transaction_path,
             transaction,
@@ -3374,12 +3696,6 @@ def _apply_manual_runtime_adoption(
             evidence_name="authority_intent",
             evidence=authority_intent,
         )
-        bootstrap_payload = json.dumps(
-            prepared_bootstrap,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        ).encode("utf-8") + b"\n"
         if bootstrap_path.exists() or bootstrap_path.is_symlink():
             current_bootstrap = _load_private_json(bootstrap_path)
             if current_bootstrap not in (prepared_bootstrap, completed_bootstrap):
@@ -3389,9 +3705,9 @@ def _apply_manual_runtime_adoption(
                     bootstrap_path,
                     bootstrap_payload,
                     0o600,
-                    temporary_path=_adoption_install_temporary_path(
-                        bootstrap_path, operation_id=operation_id
-                    ),
+                    temporary_path=bootstrap_temporary,
+                    temporary_authority=bootstrap_staging,
+                    authorized_staging_siblings=((cas_temporary, cas_staging),),
                     reject_unowned_staging=True,
                 )
         else:
@@ -3399,41 +3715,29 @@ def _apply_manual_runtime_adoption(
                 bootstrap_path,
                 bootstrap_payload,
                 0o600,
-                temporary_path=_adoption_install_temporary_path(
-                    bootstrap_path, operation_id=operation_id
-                ),
+                temporary_path=bootstrap_temporary,
+                temporary_authority=bootstrap_staging,
                 reject_unowned_staging=True,
             )
-        active_payload = json.dumps(
-            active,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        ).encode("utf-8") + b"\n"
         _install_exact(
             active_path,
             active_payload,
             0o600,
-            temporary_path=_adoption_install_temporary_path(
-                active_path, operation_id=operation_id
-            ),
+            temporary_path=active_temporary,
+            temporary_authority=active_staging,
             reject_unowned_staging=True,
         )
-        if _load_private_json(bootstrap_path) != completed_bootstrap:
-            completed_payload = json.dumps(
-                completed_bootstrap,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=True,
-            ).encode("utf-8") + b"\n"
-            _cas_replace_exact_file(
-                bootstrap_path,
-                expected_payload=bootstrap_payload,
-                replacement_payload=completed_payload,
-                mode=0o600,
-                temporary_path=bootstrap_path.parent
-                / f".{bootstrap_path.name}.{operation_id}.complete.tmp",
-            )
+        # Reconcile unconditionally.  An exchange response can be lost after
+        # the final already became completed, leaving the old prepared inode
+        # under the exact journal-authorized CAS staging name.
+        _cas_replace_exact_file(
+            bootstrap_path,
+            expected_payload=bootstrap_payload,
+            replacement_payload=completed_payload,
+            mode=0o600,
+            temporary_path=cas_temporary,
+            temporary_authority=cas_staging,
+        )
         loaded_active, _manifest, _release = control.load_active_control(runtime_root)
         if loaded_active != active:
             raise BootstrapError("adoption active control did not commit")
@@ -3458,6 +3762,542 @@ def _apply_manual_runtime_adoption(
     }
 
 
+def _planned_install_link_residues(
+    ownership_by_path: dict[str, dict[str, object]],
+) -> list[dict[str, object]]:
+    residues: list[dict[str, object]] = []
+    for temporary_authority in ownership_by_path.values():
+        if (
+            temporary_authority.get("kind") != "install-staging"
+            or temporary_authority.get("purpose") != "install"
+        ):
+            continue
+        temporary = Path(str(temporary_authority["path"]))
+        destination = Path(str(temporary_authority["destination"]))
+        if not (temporary.exists() or temporary.is_symlink()) or not (
+            destination.exists() or destination.is_symlink()
+        ):
+            continue
+        destination_ownership = ownership_by_path.get(str(destination))
+        if (
+            not isinstance(destination_ownership, dict)
+            or destination_ownership.get("kind") != "file"
+            or destination_ownership.get("sha256")
+            != temporary_authority.get("sha256")
+            or destination_ownership.get("mode")
+            != temporary_authority.get("mode")
+        ):
+            raise BootstrapError(
+                "linked install destination lacks exact durable ownership"
+            )
+        record, payload = _regular_file_record(
+            destination,
+            label="linked adoption install destination",
+            maximum=64 * 1024 * 1024,
+            allowed_modes={int(str(destination_ownership["mode"]), 8)},
+        )
+        if (
+            record["sha256"] != destination_ownership["sha256"]
+            or record["mode"] != destination_ownership["mode"]
+        ):
+            raise BootstrapError("linked adoption install payload changed")
+        identity = _authorized_install_link_identity(
+            destination,
+            temporary,
+            payload=payload,
+            mode=int(str(destination_ownership["mode"]), 8),
+            temporary_authority=temporary_authority,
+            remove_temporary=False,
+        )
+        residues.append(
+            {
+                "destination": str(destination),
+                "temporary": str(temporary),
+                "destination_after_quarantine": None,
+                "destination_ownership": destination_ownership,
+                "temporary_authority": temporary_authority,
+                "identity": identity,
+            }
+        )
+    return residues
+
+
+def _quarantine_identity(
+    path: Path,
+    *,
+    excluded_paths: set[Path] | None = None,
+    linked_destinations: set[Path] | None = None,
+) -> dict[str, object]:
+    metadata = path.lstat()
+    if path.is_symlink() or metadata.st_uid != os.geteuid():
+        raise BootstrapError("adoption quarantine source is unsafe")
+    if stat.S_ISDIR(metadata.st_mode):
+        tree = _adoption_tree_identity(
+            path,
+            excluded_paths=excluded_paths,
+            linked_destinations=linked_destinations,
+        )
+        return {
+            "kind": "tree",
+            "device": metadata.st_dev,
+            "inode": metadata.st_ino,
+            "identity_sha256": tree["identity_sha256"],
+        }
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise BootstrapError("adoption quarantine source is unsafe")
+    mode = stat.S_IMODE(metadata.st_mode)
+    payload = _durability_barrier(path, payload=None, mode=mode)
+    rebound = path.lstat()
+    if (
+        _inode_identity(metadata) != _inode_identity(rebound)
+        or rebound.st_nlink != 1
+    ):
+        raise BootstrapError("adoption quarantine source changed")
+    return {
+        "kind": "file",
+        "device": metadata.st_dev,
+        "inode": metadata.st_ino,
+        "sha256": digest(payload),
+        "mode": format(mode, "04o"),
+        "size": len(payload),
+    }
+
+
+def _rename_noreplace_between(
+    source: Path,
+    destination: Path,
+    *,
+    expected_identity: object,
+) -> None:
+    if (
+        not isinstance(expected_identity, dict)
+        or not isinstance(expected_identity.get("device"), int)
+        or not isinstance(expected_identity.get("inode"), int)
+    ):
+        raise BootstrapError("adoption quarantine inode authority is invalid")
+    parent_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    source_parent = os.open(source.parent, parent_flags)
+    target_parent = os.open(destination.parent, parent_flags)
+    source_descriptor = -1
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        os.close(source_parent)
+        os.close(target_parent)
+        raise BootstrapError("renameat2 is required for adoption quarantine")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    try:
+        def object_identity(value: os.stat_result) -> tuple[int, ...]:
+            return (
+                value.st_dev,
+                value.st_ino,
+                value.st_mode,
+                value.st_uid,
+                value.st_nlink,
+                value.st_size,
+                value.st_mtime_ns,
+            )
+
+        for descriptor, path in (
+            (source_parent, source.parent),
+            (target_parent, destination.parent),
+        ):
+            pinned_parent = os.fstat(descriptor)
+            bound_parent = path.lstat()
+            if (
+                not stat.S_ISDIR(pinned_parent.st_mode)
+                or pinned_parent.st_uid != os.geteuid()
+                or (pinned_parent.st_dev, pinned_parent.st_ino)
+                != (bound_parent.st_dev, bound_parent.st_ino)
+            ):
+                raise BootstrapError("adoption quarantine parent changed")
+        source_descriptor = os.open(
+            source.name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=source_parent,
+        )
+        held = os.fstat(source_descriptor)
+        bound = os.stat(source.name, dir_fd=source_parent, follow_symlinks=False)
+        if (
+            (held.st_dev, held.st_ino)
+            != (expected_identity["device"], expected_identity["inode"])
+            or _inode_identity(bound) != _inode_identity(held)
+        ):
+            raise BootstrapError("adoption quarantine source binding changed")
+        result = renameat2(
+            source_parent,
+            os.fsencode(source.name),
+            target_parent,
+            os.fsencode(destination.name),
+            1,
+        )
+        if result != 0:
+            error = ctypes.get_errno()
+            raise BootstrapError(
+                f"adoption quarantine publication failed: {os.strerror(error)}"
+            )
+        moved = os.stat(
+            destination.name, dir_fd=target_parent, follow_symlinks=False
+        )
+        held_after = os.fstat(source_descriptor)
+        if (
+            object_identity(held_after) != object_identity(held)
+            or _inode_identity(moved) != _inode_identity(held_after)
+        ):
+            still_moved = os.stat(
+                destination.name,
+                dir_fd=target_parent,
+                follow_symlinks=False,
+            )
+            if _inode_identity(still_moved) == _inode_identity(moved):
+                restored = renameat2(
+                    target_parent,
+                    os.fsencode(destination.name),
+                    source_parent,
+                    os.fsencode(source.name),
+                    1,
+                )
+                if restored == 0:
+                    os.fsync(source_parent)
+                    os.fsync(target_parent)
+                    restored_source = os.stat(
+                        source.name,
+                        dir_fd=source_parent,
+                        follow_symlinks=False,
+                    )
+                    if object_identity(restored_source) != object_identity(moved):
+                        raise BootstrapError(
+                            "adoption quarantine restore binding changed"
+                        )
+            raise BootstrapError("adoption quarantine target binding changed")
+        try:
+            os.stat(source.name, dir_fd=source_parent, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise BootstrapError("adoption quarantine source remained published")
+        os.fsync(source_parent)
+        if target_parent != source_parent:
+            os.fsync(target_parent)
+        rebound = os.stat(
+            destination.name, dir_fd=target_parent, follow_symlinks=False
+        )
+        if _inode_identity(rebound) != _inode_identity(held_after):
+            raise BootstrapError("adoption quarantine target changed after fsync")
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        os.close(source_parent)
+        os.close(target_parent)
+
+
+def _adoption_quarantine_plan(
+    ownership_by_path: dict[str, dict[str, object]],
+    *,
+    transaction_path: Path,
+    linked_install_residues: list[dict[str, object]],
+) -> dict[str, object]:
+    operation_id = transaction_path.stem
+    quarantine = transaction_path.parent / f".{operation_id}.abort-quarantine"
+    if quarantine.exists() or quarantine.is_symlink():
+        raise BootstrapError("adoption quarantine existed before durable intent")
+    linked_temporaries = {
+        Path(str(value["temporary"])) for value in linked_install_residues
+    }
+    linked_destinations = {
+        Path(str(value["destination"])) for value in linked_install_residues
+    }
+    present = [
+        (Path(path), ownership)
+        for path, ownership in ownership_by_path.items()
+        if Path(path) not in linked_temporaries
+        and (Path(path).exists() or Path(path).is_symlink())
+    ]
+    roots = [
+        (path, ownership)
+        for path, ownership in present
+        if not any(path != parent and path.is_relative_to(parent) for parent, _ in present)
+    ]
+    entries: list[dict[str, object]] = []
+    root_targets: dict[Path, Path] = {}
+    identity_by_destination = {
+        Path(str(value["destination"])): value["identity"]
+        for value in linked_install_residues
+    }
+    for index, (path, _ownership) in enumerate(roots):
+        target = quarantine / f"{index:04d}"
+        root_targets[path] = target
+        if path in identity_by_destination:
+            linked_identity = identity_by_destination[path]
+            if not isinstance(linked_identity, dict):
+                raise BootstrapError("linked install quarantine identity is invalid")
+            identity = {"kind": "file", **linked_identity}
+        else:
+            excluded = {
+                temporary
+                for temporary in linked_temporaries
+                if temporary.is_relative_to(path)
+            }
+            linked = {
+                destination
+                for destination in linked_destinations
+                if destination.is_relative_to(path)
+            }
+            identity = _quarantine_identity(
+                path,
+                excluded_paths=excluded or None,
+                linked_destinations=linked or None,
+            )
+        entries.append(
+            {
+                "source": str(path),
+                "target": str(target),
+                "identity": identity,
+            }
+        )
+    planned_residues: list[dict[str, object]] = []
+    for residue in linked_install_residues:
+        destination = Path(str(residue["destination"]))
+        containing = [
+            root for root in root_targets if destination.is_relative_to(root)
+        ]
+        if len(containing) != 1:
+            raise BootstrapError("linked install quarantine root is ambiguous")
+        root = containing[0]
+        target = root_targets[root]
+        after = target if destination == root else target / destination.relative_to(root)
+        planned_residues.append(
+            {**residue, "destination_after_quarantine": str(after)}
+        )
+    return {
+        "schema_version": 2,
+        "root": str(quarantine),
+        "entries": entries,
+        "linked_install_residues": planned_residues,
+    }
+
+
+def _resume_linked_install_residue(raw: object) -> None:
+    if (
+        not isinstance(raw, dict)
+        or set(raw)
+        != {
+            "destination",
+            "temporary",
+            "destination_after_quarantine",
+            "destination_ownership",
+            "temporary_authority",
+            "identity",
+        }
+    ):
+        raise BootstrapError("linked install quarantine journal is invalid")
+    destination = Path(str(raw["destination"]))
+    temporary = Path(str(raw["temporary"]))
+    after = Path(str(raw["destination_after_quarantine"]))
+    destination_ownership = _validate_adoption_ownership(
+        raw["destination_ownership"], label="linked install destination"
+    )
+    temporary_authority = _validate_adoption_ownership(
+        raw["temporary_authority"], label="linked install temporary"
+    )
+    identity = raw["identity"]
+    if (
+        destination_ownership.get("kind") != "file"
+        or destination_ownership.get("path") != str(destination)
+        or temporary_authority.get("kind") != "install-staging"
+        or temporary_authority.get("purpose") != "install"
+        or temporary_authority.get("path") != str(temporary)
+        or temporary_authority.get("destination") != str(destination)
+        or temporary_authority.get("sha256")
+        != destination_ownership.get("sha256")
+        or temporary_authority.get("mode") != destination_ownership.get("mode")
+        or not isinstance(identity, dict)
+        or set(identity) != {"device", "inode", "sha256", "mode", "size"}
+        or not isinstance(identity.get("device"), int)
+        or not isinstance(identity.get("inode"), int)
+        or identity.get("sha256") != destination_ownership.get("sha256")
+        or identity.get("mode") != destination_ownership.get("mode")
+        or not isinstance(identity.get("size"), int)
+    ):
+        raise BootstrapError("linked install quarantine authority differs")
+    mode = int(str(destination_ownership["mode"]), 8)
+    temporary_present = temporary.exists() or temporary.is_symlink()
+    destination_present = destination.exists() or destination.is_symlink()
+    after_present = after.exists() or after.is_symlink()
+    if destination_present and after_present:
+        raise BootstrapError("linked install destination has two live bindings")
+    if temporary_present:
+        if not destination_present or after_present:
+            raise BootstrapError("linked install pair changed before collapse")
+        record, payload = _regular_file_record(
+            destination,
+            label="linked install destination",
+            maximum=64 * 1024 * 1024,
+            allowed_modes={mode},
+        )
+        if (
+            record["sha256"] != destination_ownership["sha256"]
+            or len(payload) != identity["size"]
+        ):
+            raise BootstrapError("linked install destination payload changed")
+        observed = _authorized_install_link_identity(
+            destination,
+            temporary,
+            payload=payload,
+            mode=mode,
+            temporary_authority=temporary_authority,
+            remove_temporary=True,
+        )
+        if observed != identity:
+            raise BootstrapError("linked install inode identity changed")
+        return
+    candidates = [
+        value
+        for value, present in (
+            (destination, destination_present),
+            (after, after_present),
+        )
+        if present
+    ]
+    if len(candidates) != 1:
+        raise BootstrapError("collapsed linked install destination disappeared")
+    current = candidates[0]
+    metadata = current.lstat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or current.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+        or metadata.st_dev != identity["device"]
+        or metadata.st_ino != identity["inode"]
+    ):
+        raise BootstrapError("collapsed linked install inode changed")
+    payload = _durability_barrier(current, payload=None, mode=mode)
+    rebound = current.lstat()
+    if (
+        digest(payload) != identity["sha256"]
+        or len(payload) != identity["size"]
+        or rebound.st_nlink != 1
+        or (rebound.st_dev, rebound.st_ino)
+        != (identity["device"], identity["inode"])
+    ):
+        raise BootstrapError("collapsed linked install payload changed")
+
+
+def _resume_adoption_quarantine(plan: object, *, transaction_path: Path) -> None:
+    if (
+        not isinstance(plan, dict)
+        or set(plan)
+        != {"schema_version", "root", "entries", "linked_install_residues"}
+        or plan.get("schema_version") != 2
+        or not isinstance(plan.get("entries"), list)
+        or not isinstance(plan.get("linked_install_residues"), list)
+    ):
+        raise BootstrapError("adoption quarantine journal is invalid")
+    root = Path(str(plan["root"]))
+    if root != transaction_path.parent / f".{transaction_path.stem}.abort-quarantine":
+        raise BootstrapError("adoption quarantine root differs")
+    if not (root.exists() or root.is_symlink()):
+        root.mkdir(mode=0o700)
+        _fsync_directory(root.parent)
+    _durability_barrier(root, payload=None, mode=0o700, directory=True)
+    runtime_root = transaction_path.parents[2]
+    entry_bindings: list[tuple[Path, Path]] = []
+    for index, raw_entry in enumerate(plan["entries"]):
+        if not isinstance(raw_entry, dict):
+            raise BootstrapError("adoption quarantine entry is invalid")
+        entry_bindings.append(
+            (Path(str(raw_entry.get("source"))), root / f"{index:04d}")
+        )
+    seen_linked_paths: set[Path] = set()
+    for raw_residue in plan["linked_install_residues"]:
+        if not isinstance(raw_residue, dict):
+            raise BootstrapError("linked install quarantine journal is invalid")
+        destination = Path(str(raw_residue.get("destination")))
+        temporary = Path(str(raw_residue.get("temporary")))
+        after = Path(str(raw_residue.get("destination_after_quarantine")))
+        containing = [
+            (source, target)
+            for source, target in entry_bindings
+            if destination.is_relative_to(source)
+        ]
+        if (
+            len(containing) != 1
+            or destination in seen_linked_paths
+            or temporary in seen_linked_paths
+            or not destination.is_relative_to(runtime_root)
+            or not temporary.is_relative_to(runtime_root)
+        ):
+            raise BootstrapError("linked install quarantine path escapes authority")
+        source_root, target_root = containing[0]
+        expected_after = (
+            target_root
+            if destination == source_root
+            else target_root / destination.relative_to(source_root)
+        )
+        if after != expected_after:
+            raise BootstrapError("linked install quarantine target differs")
+        seen_linked_paths.update((destination, temporary))
+        _resume_linked_install_residue(raw_residue)
+    seen_sources: set[Path] = set()
+    seen_targets: set[Path] = set()
+    for index, raw in enumerate(plan["entries"]):
+        if (
+            not isinstance(raw, dict)
+            or set(raw) != {"source", "target", "identity"}
+        ):
+            raise BootstrapError("adoption quarantine entry is invalid")
+        source = Path(str(raw["source"]))
+        target = Path(str(raw["target"]))
+        if (
+            target != root / f"{index:04d}"
+            or not source.is_absolute()
+            or not source.is_relative_to(runtime_root)
+            or source in seen_sources
+            or target in seen_targets
+        ):
+            raise BootstrapError("adoption quarantine entry escapes authority")
+        seen_sources.add(source)
+        seen_targets.add(target)
+        source_present = source.exists() or source.is_symlink()
+        target_present = target.exists() or target.is_symlink()
+        if source_present and target_present:
+            raise BootstrapError("adoption quarantine has two live bindings")
+        if source_present:
+            if _quarantine_identity(source) != raw["identity"]:
+                raise BootstrapError("adoption quarantine source changed")
+            _rename_noreplace_between(
+                source, target, expected_identity=raw["identity"]
+            )
+        elif not target_present:
+            raise BootstrapError("adoption quarantine entry disappeared")
+        if _quarantine_identity(target) != raw["identity"]:
+            raise BootstrapError("adoption quarantine target changed")
+        for parent in (source.parent, root):
+            parent_metadata = parent.lstat()
+            _durability_barrier(
+                parent,
+                payload=None,
+                mode=stat.S_IMODE(parent_metadata.st_mode),
+                directory=True,
+            )
+
+
 def _abort_manual_runtime_adoption(
     args: argparse.Namespace,
     *,
@@ -3470,12 +4310,6 @@ def _abort_manual_runtime_adoption(
     transaction = _validate_adoption_transaction(
         _load_private_json(transaction_path), path=transaction_path
     )
-    if transaction["status"] == "aborted":
-        return {"status": "already-aborted", "operation_id": operation_id}
-    if transaction["phase"] in {"authority-commit-intent", "completed"}:
-        raise BootstrapError(
-            "adoption abort is forbidden after authority commit intent"
-        )
     identity = transaction.get("identity")
     if (
         not isinstance(identity, dict)
@@ -3502,6 +4336,20 @@ def _abort_manual_runtime_adoption(
         transaction = current_transaction
         if transaction.get("identity") != identity:
             raise BootstrapError("adoption transaction changed before abort")
+        if transaction["status"] == "aborted":
+            transaction = _reseal_adoption_transaction(
+                transaction_path, transaction
+            )
+            evidence = transaction.get("step_evidence")
+            quarantine = (
+                evidence.get("abort_quarantine")
+                if isinstance(evidence, dict)
+                else None
+            )
+            _resume_adoption_quarantine(
+                quarantine, transaction_path=transaction_path
+            )
+            return {"status": "already-aborted", "operation_id": operation_id}
         if transaction["phase"] in {"authority-commit-intent", "completed"}:
             raise BootstrapError(
                 "adoption abort is forbidden after authority commit intent"
@@ -3532,6 +4380,15 @@ def _abort_manual_runtime_adoption(
             ownership_by_path[path_value] = ownership
         ordered_ownership = reversed(list(ownership_by_path.values()))
         owned_paths = {Path(value) for value in ownership_by_path}
+        linked_install_residues = _planned_install_link_residues(
+            ownership_by_path
+        )
+        linked_destinations = {
+            Path(str(value["destination"])) for value in linked_install_residues
+        }
+        linked_temporaries = {
+            Path(str(value["temporary"])) for value in linked_install_residues
+        }
         # Validate the entire cleanup set before deleting its first byte.  This
         # makes an existing drift a zero-delete failure rather than a partial
         # teardown discovered halfway through the reverse traversal.
@@ -3542,9 +4399,23 @@ def _abort_manual_runtime_adoption(
             if ownership["kind"] == "file":
                 if not (path.exists() or path.is_symlink()):
                     continue
+                if path in linked_destinations:
+                    continue
                 current = _adoption_file_ownership(path)
                 if current != ownership:
                     raise BootstrapError("adoption-owned file changed before abort")
+            elif ownership["kind"] == "install-staging":
+                if not (path.exists() or path.is_symlink()):
+                    continue
+                if path in linked_temporaries:
+                    continue
+                identity_record = _quarantine_identity(path)
+                if (
+                    identity_record.get("kind") != "file"
+                    or identity_record.get("mode") != ownership["mode"]
+                    or int(identity_record.get("size", -1)) > 64 * 1024 * 1024
+                ):
+                    raise BootstrapError("adoption staging changed before abort")
             elif ownership["kind"] == "tree":
                 if not (path.exists() or path.is_symlink()):
                     continue
@@ -3554,7 +4425,12 @@ def _abort_manual_runtime_adoption(
             elif ownership["kind"] == "staging-tree":
                 if not (path.exists() or path.is_symlink()):
                     continue
-                _validate_adoption_staging_tree(path, ownership)
+                _validate_adoption_staging_tree(
+                    path,
+                    ownership,
+                    allow_missing_entries=True,
+                    allow_partial_entries=True,
+                )
             else:
                 if not (path.exists() or path.is_symlink()):
                     continue
@@ -3571,40 +4447,27 @@ def _abort_manual_runtime_adoption(
                     raise BootstrapError(
                         f"adoption-owned directory is not empty during abort: {path}"
                     )
-        for ownership in reversed(list(ownership_by_path.values())):
-            path = Path(str(ownership["path"]))
-            if not (path.exists() or path.is_symlink()):
-                continue
-            if ownership["kind"] == "file":
-                if _adoption_file_ownership(path) != ownership:
-                    raise BootstrapError("adoption-owned file changed during abort")
-                path.unlink()
-            elif ownership["kind"] == "tree":
-                if _adoption_tree_identity(path) != ownership:
-                    raise BootstrapError("adoption-owned tree changed during abort")
-                shutil.rmtree(path)
-            elif ownership["kind"] == "staging-tree":
-                _validate_adoption_staging_tree(path, ownership)
-                shutil.rmtree(path)
-            else:
-                metadata = path.lstat()
-                if (
-                    not stat.S_ISDIR(metadata.st_mode)
-                    or path.is_symlink()
-                    or metadata.st_uid != os.geteuid()
-                    or format(stat.S_IMODE(metadata.st_mode), "04o")
-                    != ownership["mode"]
-                ):
-                    raise BootstrapError(
-                        "adoption-owned directory changed during abort"
-                    )
-                try:
-                    path.rmdir()
-                except OSError as exc:
-                    raise BootstrapError(
-                        f"adoption-owned directory changed during abort: {path}"
-                    ) from exc
-            _fsync_directory(path.parent)
+        evidence = transaction["step_evidence"]
+        if not isinstance(evidence, dict):
+            raise BootstrapError("adoption transaction evidence is invalid")
+        quarantine = evidence.get("abort_quarantine")
+        if quarantine is None:
+            quarantine = _adoption_quarantine_plan(
+                ownership_by_path,
+                transaction_path=transaction_path,
+                linked_install_residues=linked_install_residues,
+            )
+            transaction = _write_adoption_transaction(
+                transaction_path,
+                {
+                    **transaction,
+                    "step_evidence": {**evidence, "abort_quarantine": quarantine},
+                },
+            )
+        transaction = _reseal_adoption_transaction(transaction_path, transaction)
+        _resume_adoption_quarantine(
+            quarantine, transaction_path=transaction_path
+        )
         lock_metadata = lock_path.lstat()
         if (
             identity.get("deploy_lock_disposition")
@@ -3651,18 +4514,16 @@ def _bootstrap_transaction_path(
 def _ensure_bootstrap_transaction_directory(runtime_root: Path) -> Path:
     """Create only the journal path that legacy control restore never removes."""
 
-    current = runtime_root
     for relative in (
         Path("state"),
         Path("state/legacy-takeover"),
         BOOTSTRAP_TRANSACTION_RELATIVE_DIRECTORY,
     ):
         path = runtime_root / relative
-        if path != current:
-            try:
-                path.mkdir(mode=0o700)
-            except FileExistsError:
-                pass
+        try:
+            path.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
         try:
             metadata = path.lstat()
         except OSError as exc:
@@ -3678,8 +4539,38 @@ def _ensure_bootstrap_transaction_directory(runtime_root: Path) -> Path:
             raise BootstrapError(
                 f"bootstrap transaction directory is unsafe: {path}"
             )
-        current = path
+        # A mkdir is not durable merely because its child can be opened.  Seal
+        # every component and the directory entry in its parent, including on
+        # replay after a parent-fsync response was lost.
+        _durability_barrier(
+            path,
+            payload=None,
+            mode=0o700,
+            directory=True,
+        )
     return runtime_root / BOOTSTRAP_TRANSACTION_RELATIVE_DIRECTORY
+
+
+def _reseal_bootstrap_transaction(path: Path) -> dict[str, object]:
+    """Durably bind an existing journal before trusting its mutation intent."""
+
+    payload = _durability_barrier(path, payload=None, mode=0o600)
+    try:
+        document = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise BootstrapError("bootstrap child transaction is invalid JSON") from exc
+    if not isinstance(document, dict):
+        raise BootstrapError("bootstrap child transaction is not a JSON object")
+    transaction = _validate_bootstrap_transaction(document, path=path)
+    canonical = json.dumps(
+        transaction,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8") + b"\n"
+    if payload != canonical:
+        raise BootstrapError("bootstrap child transaction is not canonical")
+    return transaction
 
 
 def _validate_bootstrap_transaction(
@@ -3783,17 +4674,17 @@ def _load_or_create_bootstrap_transaction(
     source_tree: str,
     identity: dict[str, object],
 ) -> tuple[Path, dict[str, object]]:
-    directory = _ensure_bootstrap_transaction_directory(runtime_root)
     path = _bootstrap_transaction_path(
         runtime_root,
         operation_id=operation_id,
         source_sha=source_sha,
     )
     if path.exists() or path.is_symlink():
-        transaction = _validate_bootstrap_transaction(
-            _load_private_json(path),
-            path=path,
-        )
+        # Reseal the already-visible intent before any resumable build or
+        # publication is allowed to mutate operation-owned staging.
+        transaction = _reseal_bootstrap_transaction(path)
+        _ensure_bootstrap_transaction_directory(runtime_root)
+        transaction = _reseal_bootstrap_transaction(path)
         if (
             transaction["operation_id"] != operation_id
             or transaction["source_sha"] != source_sha
@@ -3810,6 +4701,7 @@ def _load_or_create_bootstrap_transaction(
                 "aborted bootstrap transaction cannot be resumed"
             )
         return path, transaction
+    directory = _ensure_bootstrap_transaction_directory(runtime_root)
     prepared_at = dt.datetime.now(dt.timezone.utc).isoformat()
     transaction = {
         "schema_version": BOOTSTRAP_TRANSACTION_SCHEMA_VERSION,
@@ -3827,10 +4719,7 @@ def _load_or_create_bootstrap_transaction(
     }
     _atomic_json(path, transaction)
     _fsync_directory(directory)
-    return path, _validate_bootstrap_transaction(
-        _load_private_json(path),
-        path=path,
-    )
+    return path, _reseal_bootstrap_transaction(path)
 
 
 def _begin_bootstrap_step(
@@ -3840,10 +4729,7 @@ def _begin_bootstrap_step(
     previous_phase: str,
     intent_phase: str,
 ) -> dict[str, object]:
-    transaction = _validate_bootstrap_transaction(
-        _load_private_json(path),
-        path=path,
-    )
+    transaction = _reseal_bootstrap_transaction(path)
     if transaction["status"] == "completed":
         return transaction
     if transaction["status"] != "in-progress":
@@ -3858,10 +4744,7 @@ def _begin_bootstrap_step(
     transaction["phase"] = intent_phase
     transaction["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     _atomic_json(path, transaction)
-    return _validate_bootstrap_transaction(
-        _load_private_json(path),
-        path=path,
-    )
+    return _reseal_bootstrap_transaction(path)
 
 
 def _complete_bootstrap_step(
@@ -3873,10 +4756,7 @@ def _complete_bootstrap_step(
     evidence_name: str,
     evidence: object,
 ) -> dict[str, object]:
-    transaction = _validate_bootstrap_transaction(
-        _load_private_json(path),
-        path=path,
-    )
+    transaction = _reseal_bootstrap_transaction(path)
     step_evidence = dict(transaction["step_evidence"])
     if transaction["status"] == "completed" or (
         transaction["phase"] in BOOTSTRAP_PHASES
@@ -3898,10 +4778,7 @@ def _complete_bootstrap_step(
     transaction["phase"] = ready_phase
     transaction["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     _atomic_json(path, transaction)
-    return _validate_bootstrap_transaction(
-        _load_private_json(path),
-        path=path,
-    )
+    return _reseal_bootstrap_transaction(path)
 
 
 def _complete_bootstrap_transaction(
@@ -3909,10 +4786,7 @@ def _complete_bootstrap_transaction(
     *,
     evidence: object,
 ) -> dict[str, object]:
-    transaction = _validate_bootstrap_transaction(
-        _load_private_json(path),
-        path=path,
-    )
+    transaction = _reseal_bootstrap_transaction(path)
     step_evidence = dict(transaction["step_evidence"])
     if transaction["status"] == "completed":
         if step_evidence.get("authority_commit") != evidence:
@@ -3931,10 +4805,7 @@ def _complete_bootstrap_transaction(
     transaction["status"] = "completed"
     transaction["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     _atomic_json(path, transaction)
-    return _validate_bootstrap_transaction(
-        _load_private_json(path),
-        path=path,
-    )
+    return _reseal_bootstrap_transaction(path)
 
 
 def _sealed_bootstrap_delivery_gate(
@@ -3956,97 +4827,425 @@ def _sealed_bootstrap_delivery_gate(
     return dict(gate)
 
 
+def _write_authorized_staging(path: Path, payload: bytes, mode: int) -> None:
+    exists = path.exists() or path.is_symlink()
+    flags = (
+        os.O_WRONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    flags |= 0 if exists else os.O_CREAT | os.O_EXCL
+    descriptor = os.open(path, flags, mode)
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) != mode
+            or before.st_nlink != 1
+            or before.st_size > len(payload)
+            or _inode_identity(path.lstat()) != _inode_identity(before)
+        ):
+            raise BootstrapError("authorized staging inode is unsafe")
+        os.ftruncate(descriptor, 0)
+        written = 0
+        while written < len(payload):
+            count = os.write(descriptor, payload[written:])
+            if count <= 0:
+                raise BootstrapError("authorized staging write failed")
+            written += count
+        os.fchmod(descriptor, mode)
+        os.fsync(descriptor)
+        after = os.fstat(descriptor)
+        if (
+            after.st_size != len(payload)
+            or _inode_identity(path.lstat()) != _inode_identity(after)
+        ):
+            raise BootstrapError("authorized staging inode changed")
+    finally:
+        os.close(descriptor)
+    _fsync_directory(path.parent)
+
+
+def _read_held_file(descriptor: int, size: int) -> bytes:
+    if size > 64 * 1024 * 1024:
+        raise BootstrapError("authorized install inode is too large")
+    payload = bytearray()
+    while len(payload) < size:
+        chunk = os.pread(
+            descriptor,
+            min(1024 * 1024, size - len(payload)),
+            len(payload),
+        )
+        if not chunk:
+            raise BootstrapError("authorized install inode changed while reading")
+        payload.extend(chunk)
+    return bytes(payload)
+
+
+def _authorized_install_link_identity(
+    destination: Path,
+    temporary: Path,
+    *,
+    payload: bytes,
+    mode: int,
+    temporary_authority: dict[str, object],
+    remove_temporary: bool,
+) -> dict[str, object]:
+    """Validate and optionally collapse the exact journal-owned link pair."""
+
+    authority = _validate_adoption_ownership(
+        temporary_authority, label="linked install staging"
+    )
+    if (
+        destination.parent != temporary.parent
+        or authority.get("kind") != "install-staging"
+        or authority.get("purpose") != "install"
+        or authority.get("path") != str(temporary)
+        or authority.get("destination") != str(destination)
+        or authority.get("sha256") != digest(payload)
+        or authority.get("mode") != format(mode, "04o")
+    ):
+        raise BootstrapError("linked install staging authority differs")
+    parent_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    file_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    parent_descriptor = os.open(destination.parent, parent_flags)
+    destination_descriptor = -1
+    temporary_descriptor = -1
+    try:
+        held_parent = os.fstat(parent_descriptor)
+        bound_parent = destination.parent.lstat()
+        if (
+            not stat.S_ISDIR(held_parent.st_mode)
+            or held_parent.st_uid != os.geteuid()
+            or (held_parent.st_dev, held_parent.st_ino)
+            != (bound_parent.st_dev, bound_parent.st_ino)
+        ):
+            raise BootstrapError("linked install parent changed")
+        destination_descriptor = os.open(
+            destination.name, file_flags, dir_fd=parent_descriptor
+        )
+        temporary_descriptor = os.open(
+            temporary.name, file_flags, dir_fd=parent_descriptor
+        )
+        held_destination = os.fstat(destination_descriptor)
+        held_temporary = os.fstat(temporary_descriptor)
+        bound_destination = os.stat(
+            destination.name, dir_fd=parent_descriptor, follow_symlinks=False
+        )
+        bound_temporary = os.stat(
+            temporary.name, dir_fd=parent_descriptor, follow_symlinks=False
+        )
+        if (
+            not stat.S_ISREG(held_destination.st_mode)
+            or held_destination.st_uid != os.geteuid()
+            or stat.S_IMODE(held_destination.st_mode) != mode
+            or held_destination.st_nlink != 2
+            or (held_destination.st_dev, held_destination.st_ino)
+            != (held_temporary.st_dev, held_temporary.st_ino)
+            or _inode_identity(bound_destination)
+            != _inode_identity(held_destination)
+            or _inode_identity(bound_temporary) != _inode_identity(held_temporary)
+            or _read_held_file(destination_descriptor, held_destination.st_size)
+            != payload
+        ):
+            raise BootstrapError("linked install inode differs from durable authority")
+        os.fsync(destination_descriptor)
+        os.fsync(parent_descriptor)
+        sealed_destination = os.fstat(destination_descriptor)
+        sealed_temporary = os.fstat(temporary_descriptor)
+        if (
+            _inode_identity(sealed_destination)
+            != _inode_identity(held_destination)
+            or _inode_identity(sealed_temporary) != _inode_identity(held_temporary)
+            or _inode_identity(
+                os.stat(
+                    destination.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            )
+            != _inode_identity(sealed_destination)
+            or _inode_identity(
+                os.stat(
+                    temporary.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            )
+            != _inode_identity(sealed_temporary)
+        ):
+            raise BootstrapError("linked install bindings changed before collapse")
+        identity = {
+            "device": sealed_destination.st_dev,
+            "inode": sealed_destination.st_ino,
+            "sha256": digest(payload),
+            "mode": format(mode, "04o"),
+            "size": len(payload),
+        }
+        if remove_temporary:
+            os.unlink(temporary.name, dir_fd=parent_descriptor)
+            collapsed = os.fstat(destination_descriptor)
+            rebound = os.stat(
+                destination.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                collapsed.st_nlink != 1
+                or (collapsed.st_dev, collapsed.st_ino)
+                != (identity["device"], identity["inode"])
+                or _inode_identity(rebound) != _inode_identity(collapsed)
+            ):
+                raise BootstrapError("linked install collapse changed destination")
+            try:
+                os.stat(
+                    temporary.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                raise BootstrapError("linked install temporary remained published")
+            os.fsync(destination_descriptor)
+            os.fsync(parent_descriptor)
+            final = os.fstat(destination_descriptor)
+            if (
+                final.st_nlink != 1
+                or _read_held_file(destination_descriptor, final.st_size)
+                != payload
+                or _inode_identity(
+                    os.stat(
+                        destination.name,
+                        dir_fd=parent_descriptor,
+                        follow_symlinks=False,
+                    )
+                )
+                != _inode_identity(final)
+            ):
+                raise BootstrapError("linked install collapse is not durable")
+        return identity
+    finally:
+        if temporary_descriptor >= 0:
+            os.close(temporary_descriptor)
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
+        os.close(parent_descriptor)
+
+
+def _remove_exact_single_link(
+    path: Path, *, payload: bytes, mode: int, label: str
+) -> None:
+    parent_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    file_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    parent_descriptor = os.open(path.parent, parent_flags)
+    descriptor = -1
+    try:
+        parent = os.fstat(parent_descriptor)
+        bound_parent = path.parent.lstat()
+        if (
+            not stat.S_ISDIR(parent.st_mode)
+            or parent.st_uid != os.geteuid()
+            or (parent.st_dev, parent.st_ino)
+            != (bound_parent.st_dev, bound_parent.st_ino)
+        ):
+            raise BootstrapError(f"{label} parent changed")
+        descriptor = os.open(path.name, file_flags, dir_fd=parent_descriptor)
+        held = os.fstat(descriptor)
+        bound = os.stat(
+            path.name, dir_fd=parent_descriptor, follow_symlinks=False
+        )
+        if (
+            not stat.S_ISREG(held.st_mode)
+            or held.st_uid != os.geteuid()
+            or stat.S_IMODE(held.st_mode) != mode
+            or held.st_nlink != 1
+            or _inode_identity(bound) != _inode_identity(held)
+            or _read_held_file(descriptor, held.st_size) != payload
+        ):
+            raise BootstrapError(f"{label} differs")
+        os.fsync(descriptor)
+        os.fsync(parent_descriptor)
+        sealed = os.fstat(descriptor)
+        if (
+            _inode_identity(sealed) != _inode_identity(held)
+            or _inode_identity(
+                os.stat(
+                    path.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            )
+            != _inode_identity(sealed)
+        ):
+            raise BootstrapError(f"{label} binding changed")
+        os.unlink(path.name, dir_fd=parent_descriptor)
+        os.fsync(descriptor)
+        os.fsync(parent_descriptor)
+        try:
+            os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise BootstrapError(f"{label} remained published")
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_descriptor)
+
+
 def _install_exact(
     path: Path,
     payload: bytes,
     mode: int,
     *,
     temporary_path: Path | None = None,
+    temporary_authority: dict[str, object] | None = None,
+    authorized_staging_siblings: tuple[
+        tuple[Path, dict[str, object]], ...
+    ] = (),
     reject_unowned_staging: bool = False,
 ) -> str:
     # A prior crash can leave only a private staging name, or both a complete
     # hard-linked destination and its staging name.  It must never leave a
     # truncated final path.  The parent is deploy-user-owned mode 0700.
     staging = list(path.parent.glob(f".{path.name}.*.tmp"))
+    authorized_siblings: set[Path] = set()
+    for sibling, raw_authority in authorized_staging_siblings:
+        sibling_authority = _validate_adoption_ownership(
+            raw_authority, label="immutable install sibling staging"
+        )
+        if (
+            sibling.parent != path.parent
+            or sibling_authority.get("kind") != "install-staging"
+            or sibling_authority.get("purpose") != "cas"
+            or sibling_authority.get("path") != str(sibling)
+            or sibling_authority.get("destination") != str(path)
+        ):
+            raise BootstrapError("immutable install sibling authority differs")
+        authorized_siblings.add(sibling)
     if temporary_path is None:
-        if reject_unowned_staging and staging:
+        if any(value not in authorized_siblings for value in staging):
             raise BootstrapError("immutable install has unowned staging files")
-        for temporary in staging:
-            metadata = temporary.lstat()
-            if (
-                temporary.is_symlink()
-                or not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_uid != os.geteuid()
-            ):
-                raise BootstrapError(
-                    f"immutable install staging file is unsafe: {temporary}"
-                )
-            temporary.unlink()
-        _fsync_directory(path.parent)
     else:
+        authority = _validate_adoption_ownership(
+            temporary_authority, label="immutable install staging"
+        )
         if (
             temporary_path.parent != path.parent
             or not temporary_path.name.startswith(f".{path.name}.")
             or not temporary_path.name.endswith(".tmp")
-            or any(value != temporary_path for value in staging)
+            or any(
+                value != temporary_path and value not in authorized_siblings
+                for value in staging
+            )
+            or authority.get("kind") != "install-staging"
+            or authority.get("purpose") != "install"
+            or authority.get("path") != str(temporary_path)
+            or authority.get("destination") != str(path)
+            or authority.get("sha256") != digest(payload)
+            or authority.get("mode") != format(mode, "04o")
         ):
             raise BootstrapError("immutable install has foreign staging files")
-        if temporary_path.exists() or temporary_path.is_symlink():
-            staged = _adoption_file_ownership(temporary_path)
-            if staged != _adoption_file_plan(temporary_path, payload, mode):
-                raise BootstrapError("immutable install staging file differs")
     if path.exists() or path.is_symlink():
         try:
-            metadata = path.lstat()
-            existing = path.read_bytes()
-        except OSError as exc:
-            raise BootstrapError(f"installed immutable file is unsafe: {path}") from exc
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or path.is_symlink()
-            or metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(metadata.st_mode) != mode
-            or existing != payload
-        ):
+            existing = _durability_barrier(path, payload=payload, mode=mode)
+        except (OSError, BootstrapError) as exc:
             raise BootstrapError(
                 f"refusing to overwrite a different immutable file: {path}"
-            )
+            ) from exc
         if temporary_path is not None and (
             temporary_path.exists() or temporary_path.is_symlink()
         ):
-            temporary_path.unlink()
-            _fsync_directory(path.parent)
+            assert temporary_authority is not None
+            _authorized_install_link_identity(
+                path,
+                temporary_path,
+                payload=payload,
+                mode=mode,
+                temporary_authority=temporary_authority,
+                remove_temporary=True,
+            )
+            _durability_barrier(path, payload=payload, mode=mode)
         return digest(existing)
     temporary = temporary_path or (
         path.parent / f".{path.name}.{os.urandom(12).hex()}.tmp"
     )
-    if not (temporary.exists() or temporary.is_symlink()):
+    random_inode: tuple[int, int] | None = None
+
+    def cleanup_random_inode() -> None:
+        if random_inode is None:
+            return
+        try:
+            current = temporary.lstat()
+            if (current.st_dev, current.st_ino) == random_inode:
+                temporary.unlink()
+                _fsync_directory(path.parent)
+        except OSError:
+            pass
+
+    if temporary_path is not None:
+        _write_authorized_staging(temporary, payload, mode)
+    elif not (temporary.exists() or temporary.is_symlink()):
         descriptor = os.open(
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
             mode,
         )
         try:
+            created = os.fstat(descriptor)
+            random_inode = (created.st_dev, created.st_ino)
             with os.fdopen(descriptor, "wb") as stream:
                 stream.write(payload)
                 stream.flush()
                 os.fchmod(stream.fileno(), mode)
                 os.fsync(stream.fileno())
         except BaseException:
-            if temporary_path is None:
-                with contextlib.suppress(OSError):
-                    temporary.unlink()
+            cleanup_random_inode()
             raise
     try:
         # link(2) is an atomic no-replace publication.  A concurrent or stale
         # destination cannot be overwritten as os.replace() would do.
         os.link(temporary, path, follow_symlinks=False)
-        temporary.unlink()
-        _fsync_directory(path.parent)
+        if temporary_path is not None:
+            assert temporary_authority is not None
+            _authorized_install_link_identity(
+                path,
+                temporary,
+                payload=payload,
+                mode=mode,
+                temporary_authority=temporary_authority,
+                remove_temporary=True,
+            )
+        else:
+            _durability_barrier(path, payload=payload, mode=mode)
+            temporary.unlink()
+            _fsync_directory(path.parent)
+        _durability_barrier(path, payload=payload, mode=mode)
     except BaseException:
-        if temporary_path is None:
-            with contextlib.suppress(OSError):
-                temporary.unlink()
+        cleanup_random_inode()
         raise
     return digest(payload)
 
@@ -4058,6 +5257,7 @@ def _cas_replace_exact_file(
     replacement_payload: bytes,
     mode: int,
     temporary_path: Path,
+    temporary_authority: dict[str, object],
 ) -> None:
     """Exchange exact expected bytes without overwriting a raced destination."""
 
@@ -4066,43 +5266,37 @@ def _cas_replace_exact_file(
     temporary_expected = _adoption_file_plan(
         temporary_path, expected_payload, mode
     )
-    temporary_replacement = _adoption_file_plan(
-        temporary_path, replacement_payload, mode
+    authority = _validate_adoption_ownership(
+        temporary_authority, label="authority CAS staging"
     )
+    if (
+        authority.get("kind") != "install-staging"
+        or authority.get("purpose") != "cas"
+        or authority.get("path") != str(temporary_path)
+        or authority.get("destination") != str(path)
+        or authority.get("sha256") != digest(replacement_payload)
+        or authority.get("mode") != format(mode, "04o")
+        or any(
+            value != temporary_path
+            for value in path.parent.glob(f".{path.name}.*.tmp")
+        )
+    ):
+        raise BootstrapError("authority CAS staging authority differs")
     current = _adoption_file_ownership(path)
     if current == replacement:
+        _durability_barrier(path, payload=replacement_payload, mode=mode)
         if temporary_path.exists() or temporary_path.is_symlink():
-            if _adoption_file_ownership(temporary_path) != temporary_expected:
-                raise BootstrapError("authority CAS residue differs")
-            temporary_path.unlink()
-            _fsync_directory(path.parent)
+            _remove_exact_single_link(
+                temporary_path,
+                payload=expected_payload,
+                mode=mode,
+                label="authority CAS residue",
+            )
+            _durability_barrier(path, payload=replacement_payload, mode=mode)
         return
     if current != expected:
         raise BootstrapError("authority CAS precondition differs")
-    if temporary_path.exists() or temporary_path.is_symlink():
-        if _adoption_file_ownership(temporary_path) != temporary_replacement:
-            raise BootstrapError("authority CAS staging differs")
-    else:
-        descriptor = os.open(
-            temporary_path,
-            os.O_WRONLY
-            | os.O_CREAT
-            | os.O_EXCL
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
-            mode,
-        )
-        try:
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(replacement_payload)
-                stream.flush()
-                os.fchmod(stream.fileno(), mode)
-                os.fsync(stream.fileno())
-        except BaseException:
-            with contextlib.suppress(OSError):
-                temporary_path.unlink()
-            raise
-        _fsync_directory(path.parent)
+    _write_authorized_staging(temporary_path, replacement_payload, mode)
     pinned = os.open(
         path,
         os.O_RDONLY
@@ -4149,8 +5343,13 @@ def _cas_replace_exact_file(
     if _adoption_file_ownership(temporary_path) != temporary_expected:
         _rename_exchange(path, temporary_path)
         raise BootstrapError("authority CAS exchanged unexpected bytes")
-    temporary_path.unlink()
-    _fsync_directory(path.parent)
+    _remove_exact_single_link(
+        temporary_path,
+        payload=expected_payload,
+        mode=mode,
+        label="authority CAS exchanged residue",
+    )
+    _durability_barrier(path, payload=replacement_payload, mode=mode)
 
 
 def _git_layout(root: Path) -> tuple[Path, Path]:
@@ -4775,12 +5974,17 @@ def _plan_control_release(
     control.validate_active_control_record(active)
     expected_files = {
         **{
-            name: {"sha256": digest(payload), "mode": "0700"}
+            name: {
+                "sha256": digest(payload),
+                "mode": "0700",
+                "size": len(payload),
+            }
             for name, payload in payloads.items()
         },
         control.CONTROL_MANIFEST_NAME: {
             "sha256": digest(manifest_payload),
             "mode": "0600",
+            "size": len(manifest_payload),
         },
     }
     tree_records = [
@@ -4827,6 +6031,7 @@ def _build_control_release(
     allow_test: bool,
     prepared_at: str | None = None,
     plan: dict[str, object] | None = None,
+    staging_authorized: bool = False,
 ) -> tuple[dict[str, object], dict[str, object]]:
     if prepared_at is None:
         prepared_at = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -4870,18 +6075,51 @@ def _build_control_release(
     release_parent = release.parent
 
     def inspect_staging() -> str:
-        _validate_adoption_staging_tree(staging, staging_ownership)
+        _validate_adoption_staging_tree(
+            staging,
+            staging_ownership,
+            allow_missing_entries=staging_authorized,
+            allow_partial_entries=staging_authorized,
+        )
         entries = {entry.name: entry for entry in staging.iterdir()}
         if ".owner.json" in entries:
             return "owned"
-        if any(
-            re.fullmatch(r"\.\.owner\.json\.[0-9a-f]+\.tmp", name)
-            for name in entries
-        ):
-            return "owned"
         if not entries:
             return "empty"
+        if set(entries) != set(staging_ownership["files"]):
+            if staging_authorized:
+                return "owned"
+            raise BootstrapError("control-release staging is incomplete")
+        for name, entry in entries.items():
+            expected_record = staging_ownership["files"][name]
+            try:
+                observed = _adoption_file_ownership(entry)
+                exact = (
+                    observed["sha256"] == expected_record["sha256"]
+                    and observed["mode"] == expected_record["mode"]
+                )
+            except BootstrapError:
+                exact = False
+            if not exact:
+                if staging_authorized:
+                    return "owned"
+                raise BootstrapError("control-release staging file is incomplete")
         return "complete"
+
+    def cleanup_staging() -> None:
+        if not staging_authorized:
+            raise BootstrapError("control staging lacks durable cleanup authority")
+        _validate_adoption_staging_tree(
+            staging,
+            staging_ownership,
+            allow_missing_entries=True,
+            allow_partial_entries=True,
+        )
+        for entry in sorted(staging.iterdir()):
+            entry.unlink()
+            _fsync_directory(staging)
+        staging.rmdir()
+        _fsync_directory(release_parent)
 
     foreign_staging = [
         path
@@ -4904,42 +6142,48 @@ def _build_control_release(
             raise BootstrapError("existing initial control release is invalid") from exc
         if existing != manifest or root != release:
             raise BootstrapError("existing initial control release differs")
+        _durability_barrier(release, payload=None, mode=0o700, directory=True)
         if staging_state is not None:
             if staging_state not in {"owned", "empty", "complete"}:
                 raise BootstrapError(
                     "bootstrap control-release residue is invalid"
                 )
-            shutil.rmtree(staging)
-            _fsync_directory(release_parent)
+            cleanup_staging()
     else:
         if staging_state == "complete":
             _rename_noreplace(staging, release)
             control.load_control_release(runtime_root, release_id)
             staging_state = None
-        elif staging_state is not None:
-            shutil.rmtree(staging)
-            _fsync_directory(release_parent)
-            staging_state = None
         if not release.exists() and not release.is_symlink():
-            staging.mkdir(mode=0o700)
-            _atomic_json(staging / ".owner.json", staging_owner)
-            try:
-                for name, payload in payloads.items():
-                    _atomic_file(staging / name, payload, 0o700)
-                _atomic_file(
-                    staging / control.CONTROL_MANIFEST_NAME,
-                    manifest_payload,
-                    0o600,
+            if not staging_authorized:
+                raise BootstrapError(
+                    "control staging lacks durable write authority"
                 )
-                (staging / ".owner.json").unlink()
-                _fsync_directory(staging)
-                _rename_noreplace(staging, release)
-            except BaseException:
-                if staging.exists() and not staging.is_symlink():
-                    inspect_staging()
-                    shutil.rmtree(staging)
-                raise
+            if not (staging.exists() or staging.is_symlink()):
+                _fsync_directory(release_parent)
+                staging.mkdir(mode=0o700)
+                _fsync_directory(release_parent)
+            owner_payload = json.dumps(
+                staging_owner,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8") + b"\n"
+            _write_authorized_staging(
+                staging / ".owner.json", owner_payload, 0o600
+            )
+            for name, payload in payloads.items():
+                _write_authorized_staging(staging / name, payload, 0o700)
+            _write_authorized_staging(
+                staging / control.CONTROL_MANIFEST_NAME,
+                manifest_payload,
+                0o600,
+            )
+            (staging / ".owner.json").unlink()
+            _fsync_directory(staging)
+            _rename_noreplace(staging, release)
         control.load_control_release(runtime_root, release_id)
+        _durability_barrier(release, payload=None, mode=0o700, directory=True)
     return candidate, active
 
 
@@ -5625,10 +6869,7 @@ def _abort_bootstrap_transaction(
         operation_id=args.legacy_takeover_operation_id,
         source_sha=args.sha,
     )
-    transaction = _validate_bootstrap_transaction(
-        _load_private_json(path),
-        path=path,
-    )
+    transaction = _reseal_bootstrap_transaction(path)
     if (
         transaction["source_tree"] != args.confirm_source_tree
         or transaction["operation_id"] != args.legacy_takeover_operation_id
@@ -5640,10 +6881,7 @@ def _abort_bootstrap_transaction(
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise BootstrapError("another deployment holds deploy.lock") from exc
-        locked = _validate_bootstrap_transaction(
-            _load_private_json(path),
-            path=path,
-        )
+        locked = _reseal_bootstrap_transaction(path)
         if locked != transaction:
             raise BootstrapError(
                 "bootstrap child transaction changed while acquiring deploy.lock"
@@ -5752,10 +6990,7 @@ def _abort_bootstrap_transaction(
             transaction["abort_authority"] = abort_authority
             transaction["updated_at"] = started_at
             _atomic_json(path, transaction)
-            transaction = _validate_bootstrap_transaction(
-                _load_private_json(path),
-                path=path,
-            )
+            transaction = _reseal_bootstrap_transaction(path)
         abort_authority = transaction["abort_authority"]
         assert isinstance(abort_authority, dict)
         launcher = (
@@ -5823,10 +7058,7 @@ def _abort_bootstrap_transaction(
         transaction["aborted_at"] = finished_at
         transaction["updated_at"] = finished_at
         _atomic_json(path, transaction)
-        transaction = _validate_bootstrap_transaction(
-            _load_private_json(path),
-            path=path,
-        )
+        transaction = _reseal_bootstrap_transaction(path)
         return {
             "action": "abort-bootstrap",
             "status": "aborted",
@@ -6593,6 +7825,23 @@ def main(argv: list[str] | None = None) -> int:
                 evidence_name="immutable_controls",
                 evidence=installed,
             )
+            control_plan = _plan_control_release(
+                runtime_root,
+                control=control,
+                source_sha=source_sha,
+                source_tree=source_tree,
+                allow_test=allow_test,
+                prepared_at=str(transaction["prepared_at"]),
+            )
+            legacy_staging = control_plan["staging_path"]
+            if (
+                transaction["phase"] == "immutable-controls-ready"
+                and isinstance(legacy_staging, Path)
+                and (legacy_staging.exists() or legacy_staging.is_symlink())
+            ):
+                raise BootstrapError(
+                    "control staging existed before durable legacy intent"
+                )
             transaction = _begin_bootstrap_step(
                 transaction_path,
                 transaction,
@@ -6606,6 +7855,8 @@ def main(argv: list[str] | None = None) -> int:
                 source_tree=source_tree,
                 allow_test=allow_test,
                 prepared_at=str(transaction["prepared_at"]),
+                plan=control_plan,
+                staging_authorized=True,
             )
             transaction = _complete_bootstrap_step(
                 transaction_path,

@@ -18,28 +18,30 @@ POSTGRES_MAJOR_VERSION = 16
 # checksum-exact 0013 migration.  The canonical document contains every
 # user-visible object in the schema, every column/default/identity property,
 # every constraint and index definition, the identity sequence ownership,
-# normalized owner/ACL/storage identity, and the empty
+# normalized owner/storage identity, the exact raw ACL projection, and the empty
 # trigger/policy/routine/rule/security-label inventories.  Changing this value
 # requires regenerating the document from the unchanged canonical migration and
 # reviewing the resulting catalog diff.
+# ACL NULL keeps the pristine empty-string representation, while an explicit
+# empty ACL array uses a sentinel because it can revoke the owner's ordinary
+# privileges.  Every non-empty ACL remains in its original array order.
 MONOMER_DFT_CATALOG_FINGERPRINT_SHA256 = (
     "6dc2e6ca7e1bb052836afec2bbdd46c6aa0928e97efdbbc6669b9b220f9bf6f8"
 )
-
-_INVALID_CATALOG_ACL_PROJECTION = "<invalid-catalog-acl-projection>"
-_SCHEMA_OWNER_PRIVILEGES = frozenset({"CREATE", "USAGE"})
-_TABLE_OWNER_PRIVILEGES = frozenset(
-    {
-        "DELETE",
-        "INSERT",
-        "REFERENCES",
-        "SELECT",
-        "TRIGGER",
-        "TRUNCATE",
-        "UPDATE",
-    }
+# The only second READY state is the production owner ACL materialized by
+# provision_mutable_data_audit_role.py: schema USAGE, table SELECT, and
+# sequence SELECT for nexpoly_mutable_audit.  Raw ACL array order is part of
+# this identity; never derive readiness by deleting or reordering ACL entries.
+MONOMER_DFT_GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT_SHA256 = (
+    "8972b5de85d2beb43f0e0023c7a842c602e237be8a7902831f32a9ce7eb401e2"
 )
-_SEQUENCE_OWNER_PRIVILEGES = frozenset({"SELECT", "UPDATE", "USAGE"})
+
+_READY_CATALOG_REASONS = {
+    MONOMER_DFT_CATALOG_FINGERPRINT_SHA256: "exact_0013",
+    MONOMER_DFT_GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT_SHA256: (
+        "exact_0013_with_governed_mutable_audit_acl"
+    ),
+}
 
 
 class MonomerDftSchemaState(str, Enum):
@@ -64,89 +66,6 @@ def _canonical_rows(
     fields: tuple[str, ...],
 ) -> list[dict[str, object]]:
     return [{field: row[field] for field in fields} for row in rows]
-
-
-def _normalize_catalog_access_control(
-    raw_access_control: object,
-    entries: object,
-    *,
-    owner_oid: object,
-    mutable_audit_role_oid: object,
-    owner_matches_contract: object,
-    owner_privileges: frozenset[str],
-    mutable_audit_privilege: str,
-) -> str:
-    """Remove only the exact managed mutable-audit read-only ACL.
-
-    PostgreSQL materializes an object's otherwise implicit owner ACL when the
-    first explicit grant is added.  Therefore the approved representation is
-    the complete default owner ACL plus one non-grantable privilege granted by
-    that same owner to the exact mutable-audit role.  Returning the raw ACL for
-    every other non-empty projection keeps unknown grantees, grantors, grant
-    options, or privileges inside the immutable catalog fingerprint.
-    """
-
-    if not isinstance(raw_access_control, str):
-        return _INVALID_CATALOG_ACL_PROJECTION
-    if raw_access_control == "":
-        return "" if entries == [] else _INVALID_CATALOG_ACL_PROJECTION
-
-    if (
-        owner_matches_contract is not True
-        or not isinstance(owner_oid, str)
-        or not owner_oid.isdigit()
-        or int(owner_oid) <= 0
-        or not isinstance(mutable_audit_role_oid, str)
-        or not mutable_audit_role_oid.isdigit()
-        or int(mutable_audit_role_oid) <= 0
-        or mutable_audit_role_oid == owner_oid
-        or not isinstance(entries, list)
-    ):
-        return raw_access_control
-
-    normalized_entries: list[tuple[str, str, str, bool]] = []
-    expected_fields = {"grantee", "grantor", "privilege", "grantable"}
-    for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != expected_fields:
-            return raw_access_control
-        grantee = entry.get("grantee")
-        grantor = entry.get("grantor")
-        privilege = entry.get("privilege")
-        grantable = entry.get("grantable")
-        if (
-            not isinstance(grantee, str)
-            or not grantee.isdigit()
-            or int(grantee) <= 0
-            or not isinstance(grantor, str)
-            or not grantor.isdigit()
-            or int(grantor) <= 0
-            or not isinstance(privilege, str)
-            or not privilege
-            or not isinstance(grantable, bool)
-        ):
-            return raw_access_control
-        normalized_entries.append(
-            (grantee, grantor, privilege, grantable)
-        )
-
-    expected_entries = {
-        (owner_oid, owner_oid, privilege, False)
-        for privilege in owner_privileges
-    }
-    expected_entries.add(
-        (
-            mutable_audit_role_oid,
-            owner_oid,
-            mutable_audit_privilege,
-            False,
-        )
-    )
-    if (
-        len(normalized_entries) == len(expected_entries)
-        and set(normalized_entries) == expected_entries
-    ):
-        return ""
-    return raw_access_control
 
 
 @contextmanager
@@ -197,33 +116,12 @@ def monomer_dft_catalog_document(connection: Any) -> dict[str, object]:
                 FROM pg_catalog.pg_roles AS r
                 WHERE r.rolname = current_user
               ) AS owner_is_current_role,
-              COALESCE(pg_catalog.array_to_string(n.nspacl, ','), '')
-                AS access_control,
-              n.nspowner::text AS acl_owner_oid,
-              (
-                SELECT r.oid::text
-                FROM pg_catalog.pg_roles AS r
-                WHERE r.rolname = 'nexpoly_mutable_audit'
-              ) AS mutable_audit_role_oid,
-              COALESCE(
-                (
-                  SELECT pg_catalog.jsonb_agg(
-                    pg_catalog.jsonb_build_object(
-                      'grantee', acl.grantee::text,
-                      'grantor', acl.grantor::text,
-                      'privilege', acl.privilege_type,
-                      'grantable', acl.is_grantable
-                    )
-                    ORDER BY
-                      acl.grantee,
-                      acl.grantor,
-                      acl.privilege_type,
-                      acl.is_grantable
-                  )
-                  FROM pg_catalog.aclexplode(n.nspacl) AS acl
-                ),
-                '[]'::pg_catalog.jsonb
-              ) AS access_control_entries
+              CASE
+                WHEN n.nspacl IS NULL THEN ''
+                WHEN pg_catalog.cardinality(n.nspacl) = 0
+                  THEN '<explicit-empty-catalog-acl-array>'
+                ELSE pg_catalog.array_to_string(n.nspacl, ',')
+              END AS access_control
             FROM pg_catalog.pg_namespace AS n
             WHERE n.nspname = 'monomer_dft'
             """
@@ -236,16 +134,6 @@ def monomer_dft_catalog_document(connection: Any) -> dict[str, object]:
                 "access_control",
             ),
         )
-        for canonical, row in zip(namespace, namespace_rows, strict=True):
-            canonical["access_control"] = _normalize_catalog_access_control(
-                row["access_control"],
-                row["access_control_entries"],
-                owner_oid=row["acl_owner_oid"],
-                mutable_audit_role_oid=row["mutable_audit_role_oid"],
-                owner_matches_contract=row["owner_is_current_role"],
-                owner_privileges=_SCHEMA_OWNER_PRIVILEGES,
-                mutable_audit_privilege="USAGE",
-            )
 
         relation_rows = connection.execute(
             """
@@ -259,39 +147,12 @@ def monomer_dft_catalog_document(connection: Any) -> dict[str, object]:
               c.relispartition AS is_partition,
               COALESCE(am.amname, '') AS access_method,
               c.relowner = n.nspowner AS owner_matches_schema,
-              COALESCE(pg_catalog.array_to_string(c.relacl, ','), '')
-                AS access_control,
-              c.relowner::text AS acl_owner_oid,
-              (
-                SELECT r.oid::text
-                FROM pg_catalog.pg_roles AS r
-                WHERE r.rolname = 'nexpoly_mutable_audit'
-              ) AS mutable_audit_role_oid,
-              c.relowner = n.nspowner
-                AND n.nspowner = (
-                  SELECT r.oid
-                  FROM pg_catalog.pg_roles AS r
-                  WHERE r.rolname = current_user
-                ) AS acl_owner_matches_contract,
-              COALESCE(
-                (
-                  SELECT pg_catalog.jsonb_agg(
-                    pg_catalog.jsonb_build_object(
-                      'grantee', acl.grantee::text,
-                      'grantor', acl.grantor::text,
-                      'privilege', acl.privilege_type,
-                      'grantable', acl.is_grantable
-                    )
-                    ORDER BY
-                      acl.grantee,
-                      acl.grantor,
-                      acl.privilege_type,
-                      acl.is_grantable
-                  )
-                  FROM pg_catalog.aclexplode(c.relacl) AS acl
-                ),
-                '[]'::pg_catalog.jsonb
-              ) AS access_control_entries,
+              CASE
+                WHEN c.relacl IS NULL THEN ''
+                WHEN pg_catalog.cardinality(c.relacl) = 0
+                  THEN '<explicit-empty-catalog-acl-array>'
+                ELSE pg_catalog.array_to_string(c.relacl, ',')
+              END AS access_control,
               COALESCE(
                 (
                   SELECT pg_catalog.string_agg(option_value, ',' ORDER BY option_value)
@@ -325,24 +186,6 @@ def monomer_dft_catalog_document(connection: Any) -> dict[str, object]:
                 "tablespace",
             ),
         )
-        relation_acl_contracts = {
-            "r": (_TABLE_OWNER_PRIVILEGES, "SELECT"),
-            "S": (_SEQUENCE_OWNER_PRIVILEGES, "SELECT"),
-        }
-        for canonical, row in zip(relations, relation_rows, strict=True):
-            contract = relation_acl_contracts.get(str(row["relation_kind"]))
-            if contract is None:
-                continue
-            owner_privileges, mutable_audit_privilege = contract
-            canonical["access_control"] = _normalize_catalog_access_control(
-                row["access_control"],
-                row["access_control_entries"],
-                owner_oid=row["acl_owner_oid"],
-                mutable_audit_role_oid=row["mutable_audit_role_oid"],
-                owner_matches_contract=row["acl_owner_matches_contract"],
-                owner_privileges=owner_privileges,
-                mutable_audit_privilege=mutable_audit_privilege,
-            )
         columns = _canonical_rows(
             connection.execute(
                 """
@@ -357,8 +200,12 @@ def monomer_dft_catalog_document(connection: Any) -> dict[str, object]:
                   a.attstorage::text AS storage_kind,
                   a.attislocal AS is_local,
                   a.attinhcount AS inheritance_count,
-                  COALESCE(pg_catalog.array_to_string(a.attacl, ','), '')
-                    AS access_control,
+                  CASE
+                    WHEN a.attacl IS NULL THEN ''
+                    WHEN pg_catalog.cardinality(a.attacl) = 0
+                      THEN '<explicit-empty-catalog-acl-array>'
+                    ELSE pg_catalog.array_to_string(a.attacl, ',')
+                  END AS access_control,
                   CASE
                     WHEN coll.oid IS NULL THEN ''
                     ELSE pg_catalog.format('%I.%I', coll_ns.nspname, coll.collname)
@@ -548,8 +395,12 @@ def monomer_dft_catalog_document(connection: Any) -> dict[str, object]:
                   END AS array_type,
                   COALESCE(c.relname, '') AS relation_name,
                   t.typowner = n.nspowner AS owner_matches_schema,
-                  COALESCE(pg_catalog.array_to_string(t.typacl, ','), '')
-                    AS access_control,
+                  CASE
+                    WHEN t.typacl IS NULL THEN ''
+                    WHEN pg_catalog.cardinality(t.typacl) = 0
+                      THEN '<explicit-empty-catalog-acl-array>'
+                    ELSE pg_catalog.array_to_string(t.typacl, ',')
+                  END AS access_control,
                   CASE
                     WHEN coll.oid IS NULL THEN ''
                     ELSE pg_catalog.format('%I.%I', coll_ns.nspname, coll.collname)
@@ -645,8 +496,12 @@ def monomer_dft_catalog_document(connection: Any) -> dict[str, object]:
                   p.proleakproof AS leakproof,
                   p.proparallel::text AS parallel_mode,
                   p.proowner = n.nspowner AS owner_matches_schema,
-                  COALESCE(pg_catalog.array_to_string(p.proacl, ','), '')
-                    AS access_control
+                  CASE
+                    WHEN p.proacl IS NULL THEN ''
+                    WHEN pg_catalog.cardinality(p.proacl) = 0
+                      THEN '<explicit-empty-catalog-acl-array>'
+                    ELSE pg_catalog.array_to_string(p.proacl, ',')
+                  END AS access_control
                 FROM pg_catalog.pg_proc AS p
                 JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
                 WHERE n.nspname = 'monomer_dft'
@@ -824,8 +679,10 @@ def probe_monomer_dft_schema(connection: Any) -> MonomerDftSchemaProbe:
 
     ``ABSENT`` is deliberately narrow: PostgreSQL 16, a visible migration
     ledger, no 0013 ledger row, and no ``monomer_dft`` namespace.  Every
-    partial, checksum-mismatched, or catalog-mismatched state is ``INVALID`` so
-    deployment drain logic cannot silently fall back to the V1 job inventory.
+    partial, checksum-mismatched, or catalog-mismatched state is ``INVALID``.
+    ``READY`` accepts only the pristine 0013 catalog or the second complete
+    fingerprint produced by the governed mutable-audit ACL; the raw ACL stays
+    in the observed digest, so no other grant can be normalized away.
     """
 
     state_row = connection.execute(
@@ -892,7 +749,8 @@ def probe_monomer_dft_schema(connection: Any) -> MonomerDftSchemaProbe:
         )
 
     catalog_sha256 = monomer_dft_catalog_sha256(connection)
-    if catalog_sha256 != MONOMER_DFT_CATALOG_FINGERPRINT_SHA256:
+    ready_reason = _READY_CATALOG_REASONS.get(catalog_sha256)
+    if ready_reason is None:
         return MonomerDftSchemaProbe(
             MonomerDftSchemaState.INVALID,
             "catalog_fingerprint_mismatch",
@@ -900,6 +758,6 @@ def probe_monomer_dft_schema(connection: Any) -> MonomerDftSchemaProbe:
         )
     return MonomerDftSchemaProbe(
         MonomerDftSchemaState.READY,
-        "exact_0013",
+        ready_reason,
         catalog_sha256,
     )

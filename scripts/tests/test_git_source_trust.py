@@ -187,6 +187,11 @@ HELD_SOURCE_SWAP_WINDOWS = (
     "marker-to-previous",
 )
 
+REBUILD_DURABILITY_FAULTS = (
+    "write",
+    "file-fsync",
+)
+
 
 def test_permission_takeover_resumes_every_marker_and_action_phase(
     tmp_path: Path,
@@ -1259,6 +1264,183 @@ def test_permission_marker_replays_after_retired_and_rebuild_source_swaps(
     ] == [1, 2, 3, 4, 5, 6]
 
 
+def test_permission_rebuild_existing_lost_response_replays_after_power_loss(
+    tmp_path: Path,
+    fault_point: str,
+) -> None:
+    root, _source_sha, _source_tree = repository(tmp_path)
+    make_git_authority_group_writable(root)
+    _runtime, marker = permission_marker(tmp_path)
+    previous = marker.with_name(f".{marker.name}.previous")
+    hardened = trust.takeover_repository_permissions(root, marker)
+    assert hardened["phase"] == "hardened"
+
+    # Leave M(g7), no P, and retired g1..g5. Reconciliation must rebuild the
+    # uniquely derivable g6 predecessor into P.
+    marker.unlink()
+    previous.replace(marker)
+    retired = permission_retired_paths(marker)
+    latest = retired[-1]
+    rebuild_document = trust._read_permission_marker(latest)
+    assert rebuild_document["generation"] == 6
+    latest.unlink()
+    assert trust._read_permission_marker(marker)["generation"] == 7
+    assert not previous.exists()
+
+    rebuild_payload = trust.canonical_json_bytes(rebuild_document) + b"\n"
+    rebuild_name = trust._permission_rebuild_name(
+        marker,
+        rebuild_document,
+        rebuild_payload,
+    )
+    rebuild = marker.with_name(rebuild_name)
+    durable_write = trust.os.write
+    durable_fsync = trust.os.fsync
+    first_faulted = False
+
+    def write_lost_response(
+        descriptor: int,
+        payload: bytes,
+    ) -> int:
+        nonlocal first_faulted
+        written = durable_write(descriptor, payload)
+        if fault_point == "write" and not first_faulted and rebuild.exists():
+            opened = os.fstat(descriptor)
+            observed = rebuild.stat(follow_symlinks=False)
+            if (
+                (opened.st_dev, opened.st_ino)
+                == (observed.st_dev, observed.st_ino)
+                and rebuild.read_bytes() == rebuild_payload
+            ):
+                first_faulted = True
+                raise RuntimeError("rebuild write response lost")
+        return written
+
+    def file_fsync_lost_response(descriptor: int) -> None:
+        nonlocal first_faulted
+        durable_fsync(descriptor)
+        if fault_point != "file-fsync" or first_faulted or not rebuild.exists():
+            return
+        opened = os.fstat(descriptor)
+        observed = rebuild.stat(follow_symlinks=False)
+        if (opened.st_dev, opened.st_ino) == (observed.st_dev, observed.st_ino):
+            first_faulted = True
+            raise RuntimeError("rebuild file fsync response lost")
+
+    if fault_point == "write":
+        trust.os.write = write_lost_response
+    else:
+        trust.os.fsync = file_fsync_lost_response
+    try:
+        with raises(RuntimeError, match="rebuild .* response lost"):
+            trust.takeover_repository_permissions(root, marker)
+    finally:
+        trust.os.write = durable_write
+        trust.os.fsync = durable_fsync
+
+    assert first_faulted
+    assert rebuild.read_bytes() == rebuild_payload
+    assert (rebuild.stat().st_mode & 0o777) == 0o600
+    assert not previous.exists()
+
+    rebuild_identity = (
+        rebuild.stat().st_dev,
+        rebuild.stat().st_ino,
+    )
+    marker_parent_identity = (
+        marker.parent.stat().st_dev,
+        marker.parent.stat().st_ino,
+    )
+    durable_rename = trust._permission_rename_noreplace
+    rebuild_resealed = False
+    published = False
+
+    def track_rebuild_fsync(descriptor: int) -> None:
+        nonlocal rebuild_resealed
+        metadata = os.fstat(descriptor)
+        if published and (
+            metadata.st_dev,
+            metadata.st_ino,
+        ) == marker_parent_identity:
+            raise RuntimeError("second power loss after rebuild publish")
+        durable_fsync(descriptor)
+        if (metadata.st_dev, metadata.st_ino) == rebuild_identity:
+            rebuild_resealed = True
+
+    def publish_then_crash(
+        directory_fd: int,
+        source_name: str,
+        target_name: str,
+    ) -> None:
+        nonlocal published
+        if source_name == rebuild.name and target_name == previous.name:
+            assert rebuild_resealed
+            durable_rename(directory_fd, source_name, target_name)
+            published = True
+            raise RuntimeError("second power loss after rebuild publish")
+        durable_rename(directory_fd, source_name, target_name)
+
+    trust.os.fsync = track_rebuild_fsync
+    trust._permission_rename_noreplace = publish_then_crash
+    try:
+        with raises(RuntimeError, match="second power loss"):
+            trust.takeover_repository_permissions(root, marker)
+    finally:
+        trust.os.fsync = durable_fsync
+        trust._permission_rename_noreplace = durable_rename
+
+    assert rebuild_resealed
+    assert published
+    assert not rebuild.exists()
+    assert previous.read_bytes() == rebuild_payload
+
+    # Model the second power loss selecting the pre-rename namespace. The
+    # next retry must re-seal the same deterministic inode and publish safely.
+    previous.replace(rebuild)
+    recovered = trust.takeover_repository_permissions(root, marker)
+    assert recovered["phase"] == "hardened"
+    assert recovered["generation"] == 8
+    assert not rebuild.exists()
+    assert trust.verify_repository_permission_takeover(root, marker) == recovered
+
+
+def test_permission_rebuild_partial_preplant_fails_closed_without_mutation(
+    tmp_path: Path,
+) -> None:
+    root, _source_sha, _source_tree = repository(tmp_path)
+    make_git_authority_group_writable(root)
+    _runtime, marker = permission_marker(tmp_path)
+    previous = marker.with_name(f".{marker.name}.previous")
+    hardened = trust.takeover_repository_permissions(root, marker)
+    assert hardened["phase"] == "hardened"
+
+    marker.unlink()
+    previous.replace(marker)
+    latest = permission_retired_paths(marker)[-1]
+    rebuild_document = trust._read_permission_marker(latest)
+    assert rebuild_document["generation"] == 6
+    latest.unlink()
+    payload = trust.canonical_json_bytes(rebuild_document) + b"\n"
+    rebuild = marker.with_name(
+        trust._permission_rebuild_name(marker, rebuild_document, payload)
+    )
+    partial = payload[: max(1, len(payload) // 3)]
+    rebuild.write_bytes(partial)
+    rebuild.chmod(0o600)
+    identity = (rebuild.lstat().st_dev, rebuild.lstat().st_ino)
+
+    with raises(
+        trust.GitPermissionTakeoverError,
+        match="rebuild staging differs",
+    ):
+        trust.takeover_repository_permissions(root, marker)
+
+    assert (rebuild.lstat().st_dev, rebuild.lstat().st_ino) == identity
+    assert rebuild.read_bytes() == partial
+    assert trust._read_permission_marker(marker)["generation"] == 7
+    assert not previous.exists()
+
+
 def test_permission_marker_quarantine_replays_rename_crash(
     tmp_path: Path,
 ) -> None:
@@ -1304,6 +1486,235 @@ def test_permission_marker_quarantine_replays_rename_crash(
     assert marker.exists()
     assert not staging.exists()
     assert not quarantine.exists()
+
+
+def test_permission_stable_chmod_reseals_inode_and_parent(
+    tmp_path: Path,
+) -> None:
+    root, _source_sha, _source_tree = repository(tmp_path)
+    make_git_authority_group_writable(root)
+    _runtime, marker = permission_marker(tmp_path)
+    planned = trust.plan_repository_permission_takeover(root, marker)
+    record = next(
+        value for value in planned["records"] if value["path"] == "."
+    )
+    expected = {
+        (root.lstat().st_dev, root.lstat().st_ino),
+        (root.parent.lstat().st_dev, root.parent.lstat().st_ino),
+    }
+    observed: set[tuple[int, int]] = set()
+    original_fsync = trust.os.fsync
+
+    def record_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        observed.add((metadata.st_dev, metadata.st_ino))
+        original_fsync(descriptor)
+
+    trust.os.fsync = record_fsync
+    try:
+        changed = trust._chmod_permission_record(
+            root,
+            record,
+            desired=record["mode"],
+            alternate=record["target_mode"],
+            allow_mutable_changes=False,
+            require_original_config=False,
+        )
+    finally:
+        trust.os.fsync = original_fsync
+
+    assert changed is False
+    assert expected.issubset(observed)
+
+
+def test_permission_stable_staging_and_absence_reseal_namespace(
+    tmp_path: Path,
+) -> None:
+    _runtime, marker = permission_marker(tmp_path)
+    staging_name = f".{marker.name}.staging"
+    quarantine_name = f"{staging_name}.quarantine"
+    payload = b"stable marker staging\n"
+    staging = marker.parent / staging_name
+    staging.write_bytes(payload)
+    staging.chmod(0o600)
+    directory_fd = os.open(
+        marker.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    expected = {
+        (staging.lstat().st_dev, staging.lstat().st_ino),
+        (marker.parent.lstat().st_dev, marker.parent.lstat().st_ino),
+    }
+    observed: set[tuple[int, int]] = set()
+    original_fsync = trust.os.fsync
+
+    def record_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        observed.add((metadata.st_dev, metadata.st_ino))
+        original_fsync(descriptor)
+
+    trust.os.fsync = record_fsync
+    try:
+        trust._prepare_permission_staging_at(
+            directory_fd,
+            staging_name,
+            quarantine_name,
+            payload,
+        )
+        staging.unlink()
+        trust._remove_permission_staging_at(
+            directory_fd,
+            staging_name,
+            quarantine_name,
+        )
+    finally:
+        trust.os.fsync = original_fsync
+        os.close(directory_fd)
+
+    assert expected.issubset(observed)
+
+
+def test_permission_stable_staging_rejects_path_swap_after_file_fsync(
+    tmp_path: Path,
+) -> None:
+    _runtime, marker = permission_marker(tmp_path)
+    staging_name = f".{marker.name}.staging"
+    quarantine_name = f"{staging_name}.quarantine"
+    staging = marker.parent / staging_name
+    rogue = marker.parent / ".staging-rogue"
+    payload = b"stable marker staging\n"
+    rogue_payload = b"rogue marker staging\n"
+    staging.write_bytes(payload)
+    staging.chmod(0o600)
+    rogue.write_bytes(rogue_payload)
+    rogue.chmod(0o600)
+    staging_identity = (staging.lstat().st_dev, staging.lstat().st_ino)
+    directory_fd = os.open(
+        marker.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    original_fsync = trust.os.fsync
+    swapped = False
+
+    def swap_after_file_fsync(descriptor: int) -> None:
+        nonlocal swapped
+        metadata = os.fstat(descriptor)
+        original_fsync(descriptor)
+        if (
+            (metadata.st_dev, metadata.st_ino) == staging_identity
+            and not swapped
+        ):
+            os.replace(
+                rogue.name,
+                staging_name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
+            swapped = True
+
+    trust.os.fsync = swap_after_file_fsync
+    try:
+        with raises(
+            trust.GitPermissionTakeoverError,
+            match="staging changed before fsync",
+        ):
+            trust._prepare_permission_staging_at(
+                directory_fd,
+                staging_name,
+                quarantine_name,
+                payload,
+            )
+    finally:
+        trust.os.fsync = original_fsync
+        os.close(directory_fd)
+
+    assert swapped
+    assert staging.read_bytes() == rogue_payload
+
+
+def test_permission_stable_chmod_rejects_path_swap_after_inode_fsync(
+    tmp_path: Path,
+) -> None:
+    root, _source_sha, _source_tree = repository(tmp_path)
+    make_git_authority_group_writable(root)
+    _runtime, marker = permission_marker(tmp_path)
+    planned = trust.plan_repository_permission_takeover(root, marker)
+    record = next(
+        value
+        for value in planned["records"]
+        if value["path"] == ".git/config"
+    )
+    path = root / record["path"]
+    displaced = tmp_path / "held-config-original"
+    rogue = tmp_path / "held-config-rogue"
+    rogue_payload = b"[foreign]\n\tvalue = true\n"
+    rogue.write_bytes(rogue_payload)
+    rogue.chmod(int(record["target_mode"], 8))
+    held_identity = (path.lstat().st_dev, path.lstat().st_ino)
+    original_fsync = trust.os.fsync
+    swapped = False
+
+    def swap_after_inode_fsync(descriptor: int) -> None:
+        nonlocal swapped
+        metadata = os.fstat(descriptor)
+        original_fsync(descriptor)
+        if (
+            (metadata.st_dev, metadata.st_ino) == held_identity
+            and not swapped
+        ):
+            os.rename(path, displaced)
+            os.rename(rogue, path)
+            swapped = True
+
+    trust.os.fsync = swap_after_inode_fsync
+    try:
+        with raises(
+            trust.GitPermissionTakeoverError,
+            match="permission path changed while chmod was flushed",
+        ):
+            trust._chmod_permission_record(
+                root,
+                record,
+                desired=record["target_mode"],
+                alternate=record["mode"],
+                allow_mutable_changes=False,
+                require_original_config=False,
+            )
+    finally:
+        trust.os.fsync = original_fsync
+
+    assert swapped
+    assert path.read_bytes() == rogue_payload
+    assert (displaced.lstat().st_dev, displaced.lstat().st_ino) == held_identity
+
+
+def test_permission_stable_marker_replay_reseals_directory(
+    tmp_path: Path,
+) -> None:
+    root, _source_sha, _source_tree = repository(tmp_path)
+    make_git_authority_group_writable(root)
+    _runtime, marker = permission_marker(tmp_path)
+    hardened = trust.takeover_repository_permissions(root, marker)
+    expected_directory = (
+        marker.parent.lstat().st_dev,
+        marker.parent.lstat().st_ino,
+    )
+    observed: set[tuple[int, int]] = set()
+    original_fsync = trust.os.fsync
+
+    def record_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        observed.add((metadata.st_dev, metadata.st_ino))
+        original_fsync(descriptor)
+
+    trust.os.fsync = record_fsync
+    try:
+        replay = trust.takeover_repository_permissions(root, marker)
+    finally:
+        trust.os.fsync = original_fsync
+
+    assert replay == hardened
+    assert expected_directory in observed
 
 
 def test_permission_plan_rejects_oversized_marker_before_write(
@@ -1973,6 +2384,15 @@ def load_tests(
                 swap_window,
             )
         )
+    for fault_point in REBUILD_DURABILITY_FAULTS:
+        suite.addTest(
+            _temporary_path_case(
+                "permission_rebuild_existing_"
+                f"{fault_point.replace('-', '_')}_lost_response",
+                test_permission_rebuild_existing_lost_response_replays_after_power_loss,
+                fault_point,
+            )
+        )
     suite.addTest(
         _temporary_path_case(
             "permission_rejects_immutable_object_drift",
@@ -2080,6 +2500,30 @@ def load_tests(
         (
             "permission_marker_quarantine_replays_rename_crash",
             test_permission_marker_quarantine_replays_rename_crash,
+        ),
+        (
+            "permission_rebuild_partial_preplant_fails_closed",
+            test_permission_rebuild_partial_preplant_fails_closed_without_mutation,
+        ),
+        (
+            "permission_stable_chmod_reseals_inode_and_parent",
+            test_permission_stable_chmod_reseals_inode_and_parent,
+        ),
+        (
+            "permission_stable_staging_and_absence_reseal_namespace",
+            test_permission_stable_staging_and_absence_reseal_namespace,
+        ),
+        (
+            "permission_stable_staging_rejects_path_swap",
+            test_permission_stable_staging_rejects_path_swap_after_file_fsync,
+        ),
+        (
+            "permission_stable_chmod_rejects_path_swap",
+            test_permission_stable_chmod_rejects_path_swap_after_inode_fsync,
+        ),
+        (
+            "permission_stable_marker_replay_reseals_directory",
+            test_permission_stable_marker_replay_reseals_directory,
         ),
         (
             "permission_plan_rejects_oversized_marker_before_write",

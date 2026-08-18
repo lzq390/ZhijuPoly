@@ -249,6 +249,92 @@ def adopted_git_permission_takeover_fixture(
     return CONTROLLER.validate_adopted_git_permission_takeover(combined)
 
 
+def adopted_unit_permission_binding_fixture(
+    git_permission_takeover: dict[str, object],
+    *,
+    source_sha: str = TARGET_SHA,
+    source_tree: str = TARGET_TREE,
+    adopted_deployment_sha256: str = "sha256:" + "2" * 64,
+    repository_root: Path = REPOSITORY_ROOT,
+    file_digests: dict[str, str] | None = None,
+) -> dict[str, object]:
+    git_authority = git_permission_takeover["authority"]
+    predecessor_sha = str(git_authority["source_sha"])
+    predecessor_tree = str(git_authority["source_tree"])
+    files = [
+        {
+            "path": path,
+            "sha256": (
+                file_digests[path]
+                if file_digests is not None
+                else CONTROLLER.sha256_file(repository_root / path)
+            ),
+        }
+        for path in CONTROLLER.ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+    ]
+    successor: dict[str, object] = {
+        "schema_version": 1,
+        "policy": CONTROLLER.ADOPTED_UNIT_PERMISSION_SUCCESSOR_POLICY,
+        "mode": (
+            "exact-source"
+            if predecessor_sha == source_sha
+            and predecessor_tree == source_tree
+            else "ancestor-byte-identical"
+        ),
+        "authority": {
+            "source_sha": predecessor_sha,
+            "source_tree": predecessor_tree,
+            "raw_sha256": git_permission_takeover[
+                "authority_file_sha256"
+            ],
+        },
+        "target": {
+            "source_sha": source_sha,
+            "source_tree": source_tree,
+        },
+        "files": files,
+        "files_sha256": CONTROLLER.canonical_json_digest(files),
+    }
+    successor["identity_sha256"] = CONTROLLER.canonical_json_digest(
+        successor
+    )
+    binding: dict[str, object] = {
+        "authority_kind": (
+            CONTROLLER.ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND
+        ),
+        "operation_id": "adopt-unit-permission-fixture-001",
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "production_source_sha": git_authority["production_source_sha"],
+        "production_source_tree": git_authority[
+            "production_source_tree"
+        ],
+        "adopted_deployment_sha256": adopted_deployment_sha256,
+        "bootstrap_control_sha256": git_authority[
+            "bootstrap_control_sha256"
+        ],
+        "adopted_prerequisites_sha256": git_authority[
+            "adopted_prerequisites_sha256"
+        ],
+        "adopted_git_permissions_sha256": git_permission_takeover[
+            "authority_file_sha256"
+        ],
+        "adopted_git_permission_source_sha": predecessor_sha,
+        "adopted_git_permission_source_tree": predecessor_tree,
+        "plan_sha256": "sha256:" + "9" * 64,
+        "unit_permission_impact_sha256": "sha256:" + "a" * 64,
+        "original_units_sha256": "sha256:" + "b" * 64,
+        "hardened_units_sha256": "sha256:" + "c" * 64,
+        "backup_sha256": "sha256:" + "d" * 64,
+        "backup_content_sha256": "sha256:" + "f" * 64,
+        "completed_at": "2026-08-14T00:00:00Z",
+        "authority_file_sha256": "sha256:" + "e" * 64,
+        "git_permission_successor": successor,
+    }
+    binding["identity_sha256"] = CONTROLLER.canonical_json_digest(binding)
+    return CONTROLLER.validate_adopted_unit_permission_binding(binding)
+
+
 def mutable_data_evidence(
     *,
     ledger_length: int = 11,
@@ -1326,6 +1412,16 @@ class AdoptedPrerequisitePrivateSourceTests(unittest.TestCase):
                 "# exact target controller fixture\n", encoding="utf-8"
             )
             os.chmod(controller_path, 0o700)
+            for relative in (
+                "scripts/bootstrap_pull_deploy.py",
+                "scripts/git_source_trust.py",
+            ):
+                path = source / relative
+                path.write_text(
+                    f"# exact successor fixture: {relative}\n",
+                    encoding="utf-8",
+                )
+                os.chmod(path, 0o700)
             sealed: dict[str, str] = {}
             for index, (
                 source_path,
@@ -1403,17 +1499,29 @@ class AdoptedPrerequisitePrivateSourceTests(unittest.TestCase):
             }
             controller = object.__new__(CONTROLLER.PullDeployController)
             controller.runtime_root = root / "runtime"
+            git_permission = adopted_git_permission_takeover_fixture(
+                source,
+                controller.runtime_root,
+                source_sha=target_sha,
+                source_tree=target_tree,
+                production_source_sha=authority_sha,
+                production_source_tree=authority_tree,
+                adopted_deployment_sha256=str(
+                    authority["adopted_deployment_sha256"]
+                ),
+            )
             controller._git_permission_takeover = (  # type: ignore[method-assign]
-                lambda: adopted_git_permission_takeover_fixture(
-                    source,
-                    controller.runtime_root,
+                lambda: git_permission
+            )
+            controller._unit_permission_takeover = (  # type: ignore[method-assign]
+                lambda **_kwargs: adopted_unit_permission_binding_fixture(
+                    git_permission,
                     source_sha=target_sha,
                     source_tree=target_tree,
-                    production_source_sha=authority_sha,
-                    production_source_tree=authority_tree,
                     adopted_deployment_sha256=str(
                         authority["adopted_deployment_sha256"]
                     ),
+                    repository_root=source,
                 )
             )
             with mock.patch.object(
@@ -1482,6 +1590,34 @@ class GitRunner:
         else:
             raise AssertionError(arguments)
         return subprocess.CompletedProcess(command, returncode, output, "")
+
+    def request_json(self, _url: str, _token: str) -> dict[str, object]:
+        raise AssertionError("unexpected network request")
+
+
+class AdoptedUnitRunner:
+    def __init__(self, units: list[dict[str, object]]) -> None:
+        self.units = {str(record["name"]): record for record in units}
+
+    def run(
+        self, command: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if command[:3] != ["systemctl", "--user", "show"]:
+            raise AssertionError(command)
+        record = self.units[command[3]]
+        state = dict(record["systemd_state"])
+        process = dict(record["process_identity"])
+        values = {
+            **state,
+            "MainPID": str(process["main_pid"]),
+            "InvocationID": str(process["invocation_id"]),
+        }
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "".join(f"{key}={value}\n" for key, value in values.items()),
+            "",
+        )
 
     def request_json(self, _url: str, _token: str) -> dict[str, object]:
         raise AssertionError("unexpected network request")
@@ -2182,6 +2318,33 @@ class FixtureController(CONTROLLER.PullDeployController):
             return json.loads(json.dumps(fixture))
         return super()._git_permission_takeover()
 
+    def _unit_permission_takeover(self, **_kwargs):  # type: ignore[no-untyped-def]
+        fixture = getattr(self, "_fixture_unit_permission_takeover", None)
+        if fixture is not None:
+            git_permission = _kwargs.get("git_permission_takeover")
+            if (
+                isinstance(git_permission, dict)
+                and fixture["adopted_git_permissions_sha256"]
+                != git_permission["authority_file_sha256"]
+            ):
+                fixture = adopted_unit_permission_binding_fixture(
+                    git_permission,
+                    source_sha=fixture["source_sha"],
+                    source_tree=fixture["source_tree"],
+                    adopted_deployment_sha256=fixture[
+                        "adopted_deployment_sha256"
+                    ],
+                    file_digests={
+                        path: CONTROLLER.sha256_bytes(
+                            self._git_show(fixture["source_sha"], path)
+                        )
+                        for path in CONTROLLER.ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+                    },
+                )
+                self._fixture_unit_permission_takeover = fixture
+            return json.loads(json.dumps(fixture))
+        return super()._unit_permission_takeover(**_kwargs)
+
     def repository_identity(
         self, *, require_ssh_origin: bool = False
     ) -> dict[str, str]:
@@ -2227,6 +2390,31 @@ class FixtureController(CONTROLLER.PullDeployController):
                 CONTROLLER.ADOPTED_PREREQUISITE_FILES
             )
         }
+        git_permission = self._git_permission_takeover()
+        unit_permission = self._unit_permission_takeover(
+            git_permission_takeover=git_permission,
+            verify_live=True,
+        )
+        unit_authority_digests = None
+        unit_target_digests = None
+        unit_is_ancestor = None
+        if unit_permission is not None:
+            unit_source = unit_permission["git_permission_successor"][
+                "authority"
+            ]["source_sha"]
+            unit_authority_digests = {
+                path: CONTROLLER.sha256_bytes(
+                    self._git_show(unit_source, path)
+                )
+                for path in CONTROLLER.ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+            }
+            unit_target_digests = {
+                path: CONTROLLER.sha256_bytes(
+                    self._git_show(target_sha, path)
+                )
+                for path in CONTROLLER.ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+            }
+            unit_is_ancestor = self.prerequisite_is_ancestor
         return self._build_adopted_prerequisite_target_binding(
             authority,
             target_sha=target_sha,
@@ -2234,7 +2422,13 @@ class FixtureController(CONTROLLER.PullDeployController):
             is_ancestor=self.prerequisite_is_ancestor,
             authority_file_digests=authority_digests,
             target_file_digests=target_digests,
-            git_permission_takeover=self._git_permission_takeover(),
+            git_permission_takeover=git_permission,
+            unit_permission_takeover=unit_permission,
+            unit_permission_is_ancestor=unit_is_ancestor,
+            unit_permission_authority_file_digests=(
+                unit_authority_digests
+            ),
+            unit_permission_target_file_digests=unit_target_digests,
         )
 
     def _plan_adopted_prerequisite_target_binding(
@@ -6166,6 +6360,32 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         ):
             CONTROLLER.build_mutable_data_pair(before, changed_rows)
 
+    def test_current_state_uses_ordered_ledger_for_0014_queue_audit(self) -> None:
+        controller = self.controller()
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        state = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        state["migrations"] = json.loads(json.dumps(F_MANIFEST_RECORDS[:14]))
+        state["queue_mutable_data_audit"] = CONTROLLER.build_mutable_data_pair(
+            mutable_data_evidence(ledger_length=13),
+            mutable_data_evidence(ledger_length=14),
+        )
+
+        # This deliberately omits the separate post-0011 compatibility and
+        # external-database authorities.  The validator must first consume the
+        # ordered 0014 ledger prefix and then reject that later omission with a
+        # domain error, rather than crashing by calling ``index`` on a set.
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "post-0011 migration history lacks compatibility",
+        ):
+            CONTROLLER.validate_current_deployment_state(state)
+
     def test_mutable_data_allows_only_pristine_0015_expansion(self) -> None:
         before = mutable_data_evidence(ledger_length=14)
         after = mutable_data_evidence(ledger_length=15)
@@ -7943,19 +8163,31 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             lock_payload=b"response-loss-lock\n",
         )
         os.chmod(controller.venv_root / f"md-{record['slot']}", 0o700)
-        original_quarantine = CONTROLLER.quarantine_directory_noreplace
+        original_quarantine = (
+            CONTROLLER._prepare_abort_renameat2_noreplace
+        )
         lost_archive_response = False
 
-        def lose_archive_response(source: Path, target: Path) -> None:
+        def lose_archive_response(
+            source_parent_descriptor: int,
+            source_name: str,
+            target_parent_descriptor: int,
+            target_name: str,
+        ) -> None:
             nonlocal lost_archive_response
-            original_quarantine(source, target)
+            original_quarantine(
+                source_parent_descriptor,
+                source_name,
+                target_parent_descriptor,
+                target_name,
+            )
             if not lost_archive_response:
                 lost_archive_response = True
                 raise OSError("injected lost archive response")
 
         with mock.patch.object(
             CONTROLLER,
-            "quarantine_directory_noreplace",
+            "_prepare_abort_renameat2_noreplace",
             side_effect=lose_archive_response,
         ):
             result = controller.abort_prepare(operation_id=OPERATION_ID)
@@ -7968,6 +8200,777 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 controller.prepare_aborts_dir / f"{OPERATION_ID}.json"
             )["phase"],
             "completed",
+        )
+
+    def test_prepare_abort_reseals_visible_archive_intent_before_replay(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+
+        original_advance = controller._advance_prepare_abort
+
+        def stop_before_archive_intent(
+            journal: dict[str, object],
+            phase: str,
+            **updates: object,
+        ) -> dict[str, object]:
+            if phase == "operation-archive-intent":
+                raise OSError("stop with durable slots-cleaned")
+            return original_advance(journal, phase, **updates)
+
+        with mock.patch.object(
+            controller,
+            "_advance_prepare_abort",
+            side_effect=stop_before_archive_intent,
+        ), self.assertRaisesRegex(OSError, "durable slots-cleaned"):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+
+        journal_path = (
+            controller.prepare_aborts_dir / f"{OPERATION_ID}.json"
+        )
+        durable = CONTROLLER.load_private_json(journal_path)
+        self.assertEqual(durable["phase"], "slots-cleaned")
+        visible = controller._validate_prepare_abort_journal(
+            {**durable, "phase": "operation-archive-intent"},
+            OPERATION_ID,
+        )
+
+        original_load = controller._load_prepare_abort_journal
+        returned_visible = False
+
+        def visible_parent_fsync_lost(
+            operation_id: str,
+        ) -> dict[str, object] | None:
+            nonlocal returned_visible
+            if not returned_visible:
+                returned_visible = True
+                return json.loads(json.dumps(visible))
+            return original_load(operation_id)
+
+        def second_power_loss(
+            journal: dict[str, object],
+            phase: str,
+            **updates: object,
+        ) -> dict[str, object]:
+            if phase == "completed":
+                raise OSError("second power loss before completed journal")
+            return original_advance(journal, phase, **updates)
+
+        with (
+            mock.patch.object(
+                controller,
+                "_load_prepare_abort_journal",
+                side_effect=visible_parent_fsync_lost,
+            ),
+            mock.patch.object(
+                controller,
+                "_advance_prepare_abort",
+                side_effect=second_power_loss,
+            ),
+            self.assertRaisesRegex(OSError, "second power loss"),
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+
+        self.assertTrue(returned_visible)
+        self.assertFalse(operation.exists())
+        self.assertEqual(
+            CONTROLLER.load_private_json(journal_path)["phase"],
+            "operation-archive-intent",
+        )
+        recovered = controller.abort_prepare(operation_id=OPERATION_ID)
+        self.assertEqual(recovered["status"], "aborted")
+        self.assertEqual(
+            CONTROLLER.load_private_json(journal_path)["phase"],
+            "completed",
+        )
+
+    def test_prepare_abort_reseals_visible_completed_terminal(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+        controller.abort_prepare(operation_id=OPERATION_ID)
+        journal_path = (
+            controller.prepare_aborts_dir / f"{OPERATION_ID}.json"
+        )
+        completed = CONTROLLER.load_private_json(journal_path)
+        durable_old = controller._validate_prepare_abort_journal(
+            {
+                **completed,
+                "status": "aborting",
+                "phase": "operation-archive-intent",
+                "archive_inventory_sha256": None,
+                "completed_at": None,
+            },
+            OPERATION_ID,
+        )
+        CONTROLLER.atomic_json(journal_path, durable_old)
+
+        original_load = controller._load_prepare_abort_journal
+        returned_visible = False
+
+        def visible_completed(
+            operation_id: str,
+        ) -> dict[str, object] | None:
+            nonlocal returned_visible
+            if not returned_visible:
+                returned_visible = True
+                return json.loads(json.dumps(completed))
+            return original_load(operation_id)
+
+        original_reseal = controller._reseal_prepare_abort_journal
+        second_loss = False
+
+        def reseal_completed_then_lose_parent_response(
+            journal: dict[str, object],
+        ) -> dict[str, object]:
+            nonlocal second_loss
+            resealed = original_reseal(journal)
+            if not second_loss:
+                second_loss = True
+                # Model the power-loss outcome in which the completed rename
+                # was visible to this process but the older parent namespace
+                # remains durable.
+                CONTROLLER.atomic_json(journal_path, durable_old)
+                raise OSError("second power loss inside completed reseal")
+            return resealed
+
+        with (
+            mock.patch.object(
+                controller,
+                "_load_prepare_abort_journal",
+                side_effect=visible_completed,
+            ),
+            mock.patch.object(
+                controller,
+                "_reseal_prepare_abort_journal",
+                side_effect=reseal_completed_then_lose_parent_response,
+            ),
+            self.assertRaisesRegex(OSError, "second power loss"),
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+
+        self.assertTrue(returned_visible)
+        self.assertTrue(second_loss)
+        self.assertEqual(
+            CONTROLLER.load_private_json(journal_path),
+            durable_old,
+        )
+
+        replay = controller.abort_prepare(operation_id=OPERATION_ID)
+        self.assertEqual(replay["status"], "aborted")
+        resealed = CONTROLLER.load_private_json(journal_path)
+        self.assertEqual(resealed, completed)
+        self.assertEqual(resealed["phase"], "completed")
+
+    def test_prepare_abort_target_only_archive_reseals_move_namespaces(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+        with mock.patch.object(
+            controller,
+            "_reconcile_prepare_abort_archive",
+            side_effect=OSError("stop before archive move"),
+        ), self.assertRaisesRegex(OSError, "before archive move"):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+
+        journal = controller._load_prepare_abort_journal(OPERATION_ID)
+        self.assertEqual(journal["phase"], "operation-archive-intent")
+        archive = controller._ensure_prepare_abort_archive(journal)
+        archived_operation = archive / "operation"
+        os.rename(operation, archived_operation)
+
+        original_fsync = CONTROLLER.os.fsync
+        fsynced: set[tuple[int, int]] = set()
+        expected_source_parent = (
+            operation.parent.lstat().st_dev,
+            operation.parent.lstat().st_ino,
+        )
+        expected_target_parent = (
+            archive.lstat().st_dev,
+            archive.lstat().st_ino,
+        )
+        original_inventory = CONTROLLER.directory_inventory_digest
+        sealed_inventories: list[Path] = []
+
+        def record_fsync(descriptor: int) -> None:
+            metadata = os.fstat(descriptor)
+            fsynced.add((metadata.st_dev, metadata.st_ino))
+            original_fsync(descriptor)
+
+        def record_inventory(
+            path: Path,
+            *,
+            fsync_root: bool = False,
+            **kwargs: object,
+        ) -> str:
+            if fsync_root:
+                sealed_inventories.append(path)
+            return original_inventory(
+                path,
+                fsync_root=fsync_root,
+                **kwargs,
+            )
+
+        original_advance = controller._advance_prepare_abort
+
+        def lose_completed_journal(
+            current: dict[str, object],
+            phase: str,
+            **updates: object,
+        ) -> dict[str, object]:
+            if phase == "completed":
+                self.assertIn(expected_source_parent, fsynced)
+                self.assertIn(expected_target_parent, fsynced)
+                self.assertIn(archived_operation, sealed_inventories)
+                raise OSError("second loss before completed journal")
+            return original_advance(current, phase, **updates)
+
+        with (
+            mock.patch.object(
+                CONTROLLER.os,
+                "fsync",
+                side_effect=record_fsync,
+            ),
+            mock.patch.object(
+                CONTROLLER,
+                "directory_inventory_digest",
+                side_effect=record_inventory,
+            ),
+            mock.patch.object(
+                controller,
+                "_advance_prepare_abort",
+                side_effect=lose_completed_journal,
+            ),
+            self.assertRaisesRegex(OSError, "second loss"),
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+
+        self.assertFalse(operation.exists())
+        self.assertTrue(archived_operation.is_dir())
+        self.assertEqual(
+            controller._load_prepare_abort_journal(OPERATION_ID)["phase"],
+            "operation-archive-intent",
+        )
+        self.assertEqual(
+            controller.abort_prepare(operation_id=OPERATION_ID)["status"],
+            "aborted",
+        )
+
+    def test_prepare_abort_reseals_pruned_dft_cache_ancestor_on_replay(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+        owner = {
+            "schema_version": 1,
+            "operation_id": OPERATION_ID,
+            "release_sha": TARGET_SHA,
+            "source_tree": TARGET_TREE,
+        }
+        dft_root = controller.venv_root / "dft"
+        cache = (
+            dft_root
+            / ".build-cache"
+            / TARGET_SHA
+            / OPERATION_ID
+        )
+        cache.mkdir(parents=True, mode=0o700)
+        for parent in (
+            dft_root,
+            dft_root / ".build-cache",
+            cache.parent,
+            cache,
+        ):
+            os.chmod(parent, 0o700)
+        CONTROLLER.atomic_json(
+            cache / "owner.json",
+            {
+                **owner,
+                "requirements_lock_sha256": "sha256:" + "1" * 64,
+            },
+        )
+        write_private(cache / "partial-wheel", "partial\n")
+
+        original_advance = controller._advance_prepare_abort
+
+        def prune_then_lose_phase(
+            journal: dict[str, object],
+            phase: str,
+            **updates: object,
+        ) -> dict[str, object]:
+            if phase == "slots-cleaned":
+                cache.parent.rmdir()
+                cache.parent.parent.rmdir()
+                raise OSError("loss after cache parent pruning")
+            return original_advance(journal, phase, **updates)
+
+        with (
+            mock.patch.object(
+                controller,
+                "_advance_prepare_abort",
+                side_effect=prune_then_lose_phase,
+            ),
+            self.assertRaisesRegex(OSError, "cache parent pruning"),
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+        self.assertFalse(cache.parent.exists())
+        self.assertEqual(
+            controller._load_prepare_abort_journal(OPERATION_ID)["phase"],
+            "slot-cleanup-intent",
+        )
+
+        fsynced: set[tuple[int, int]] = set()
+        expected_existing_ancestor = (
+            dft_root.lstat().st_dev,
+            dft_root.lstat().st_ino,
+        )
+        original_fsync = CONTROLLER.os.fsync
+
+        def record_fsync(descriptor: int) -> None:
+            metadata = os.fstat(descriptor)
+            fsynced.add((metadata.st_dev, metadata.st_ino))
+            original_fsync(descriptor)
+
+        def lose_replayed_phase(
+            journal: dict[str, object],
+            phase: str,
+            **updates: object,
+        ) -> dict[str, object]:
+            if phase == "slots-cleaned":
+                self.assertIn(expected_existing_ancestor, fsynced)
+                raise OSError("second loss before slots-cleaned journal")
+            return original_advance(journal, phase, **updates)
+
+        with (
+            mock.patch.object(
+                CONTROLLER.os,
+                "fsync",
+                side_effect=record_fsync,
+            ),
+            mock.patch.object(
+                controller,
+                "_advance_prepare_abort",
+                side_effect=lose_replayed_phase,
+            ),
+            self.assertRaisesRegex(OSError, "second loss"),
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+
+        self.assertEqual(
+            controller._load_prepare_abort_journal(OPERATION_ID)["phase"],
+            "slot-cleanup-intent",
+        )
+        self.assertEqual(
+            controller.abort_prepare(operation_id=OPERATION_ID)["status"],
+            "aborted",
+        )
+
+    def test_prepare_abort_archive_file_replay_rejects_fsync_path_swap(
+        self,
+    ) -> None:
+        controller = self.controller()
+        with controller.deployment_lock():
+            controller._ensure_prepare_abort_roots()
+        archive = controller.prepare_abort_archives_dir / "swap-fixture"
+        archive.mkdir(mode=0o700)
+        target = archive / "record.json"
+        replacement = archive / ".replacement"
+        write_private(target, "sealed payload\n")
+        write_private(replacement, "replacement payload\n")
+        expected = CONTROLLER.sha256_file(target)
+        source = controller.control_handoffs_dir / "missing.json"
+        real_fsync = os.fsync
+        swapped = False
+
+        def swap_before_fsync(descriptor: int) -> None:
+            nonlocal swapped
+            if not swapped:
+                os.replace(replacement, target)
+                swapped = True
+            real_fsync(descriptor)
+
+        with (
+            mock.patch.object(
+                CONTROLLER.os,
+                "fsync",
+                side_effect=swap_before_fsync,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "changed while flushing",
+            ),
+        ):
+            with controller.deployment_lock():
+                controller._archive_prepare_abort_file(
+                    source=source,
+                    target=target,
+                    expected_sha256=expected,
+                    label="swap fixture",
+                )
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            target.read_text(encoding="utf-8"),
+            "replacement payload\n",
+        )
+
+    def test_prepare_abort_directory_source_swap_fails_before_move(
+        self,
+    ) -> None:
+        controller = self.controller()
+        with controller.deployment_lock():
+            controller._ensure_prepare_abort_roots()
+        archive = controller.prepare_abort_archives_dir / "dir-swap-fixture"
+        archive.mkdir(mode=0o700)
+        source = controller.prepared_root / "held-directory"
+        displaced = controller.prepared_root / ".held-directory-original"
+        rogue = controller.prepared_root / ".held-directory-rogue"
+        source.mkdir(mode=0o700)
+        rogue.mkdir(mode=0o700)
+        write_private(source / "payload", "sealed directory\n")
+        write_private(rogue / "payload", "rogue directory\n")
+        target = archive / "directory"
+        expected = CONTROLLER.directory_inventory_digest(source)
+        original_inventory = CONTROLLER.directory_inventory_digest
+        swapped = False
+
+        def inventory_then_swap(path: Path, **kwargs: object) -> str:
+            nonlocal swapped
+            digest = original_inventory(path, **kwargs)
+            if (
+                path == source
+                and kwargs.get("root_descriptor") is not None
+                and not swapped
+            ):
+                os.rename(source, displaced)
+                os.rename(rogue, source)
+                swapped = True
+            return digest
+
+        with (
+            controller.deployment_lock(),
+            mock.patch.object(
+                CONTROLLER,
+                "directory_inventory_digest",
+                side_effect=inventory_then_swap,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "changed before archive move",
+            ),
+        ):
+            controller._archive_prepare_abort_directory(
+                source=source,
+                target=target,
+                expected_inventory_sha256=expected,
+                label="held directory",
+            )
+
+        self.assertTrue(swapped)
+        self.assertFalse(target.exists())
+        self.assertEqual(
+            CONTROLLER.directory_inventory_digest(displaced),
+            expected,
+        )
+        self.assertEqual(
+            (source / "payload").read_text(encoding="utf-8"),
+            "rogue directory\n",
+        )
+
+    def test_prepare_abort_file_source_swap_fails_before_move(
+        self,
+    ) -> None:
+        controller = self.controller()
+        with controller.deployment_lock():
+            controller._ensure_prepare_abort_roots()
+        archive = controller.prepare_abort_archives_dir / "file-swap-fixture"
+        archive.mkdir(mode=0o700)
+        source = controller.control_handoffs_dir / "held-file.json"
+        displaced = source.with_name(".held-file-original")
+        rogue = source.with_name(".held-file-rogue")
+        write_private(source, "sealed file\n")
+        write_private(rogue, "rogue file\n")
+        target = archive / "record.json"
+        expected = CONTROLLER.sha256_file(source)
+        original_validate = controller._validate_prepare_abort_held_file
+        swapped = False
+
+        def validate_then_swap(
+            parent_descriptor: int,
+            name: str,
+            descriptor: int,
+            expected_sha256: str,
+            *,
+            label: str,
+        ) -> os.stat_result:
+            nonlocal swapped
+            sealed = original_validate(
+                parent_descriptor,
+                name,
+                descriptor,
+                expected_sha256,
+                label=label,
+            )
+            if name == source.name and not swapped:
+                os.rename(
+                    source.name,
+                    displaced.name,
+                    src_dir_fd=parent_descriptor,
+                    dst_dir_fd=parent_descriptor,
+                )
+                os.rename(
+                    rogue.name,
+                    source.name,
+                    src_dir_fd=parent_descriptor,
+                    dst_dir_fd=parent_descriptor,
+                )
+                swapped = True
+            return sealed
+
+        with (
+            controller.deployment_lock(),
+            mock.patch.object(
+                controller,
+                "_validate_prepare_abort_held_file",
+                side_effect=validate_then_swap,
+            ),
+            self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "changed before archive move",
+            ),
+        ):
+            controller._archive_prepare_abort_file(
+                source=source,
+                target=target,
+                expected_sha256=expected,
+                label="held file",
+            )
+
+        self.assertTrue(swapped)
+        self.assertFalse(target.exists())
+        self.assertEqual(CONTROLLER.sha256_file(displaced), expected)
+        self.assertEqual(source.read_text(encoding="utf-8"), "rogue file\n")
+
+    def test_prepare_abort_archive_parent_fsync_uses_pinned_inode(
+        self,
+    ) -> None:
+        controller = self.controller()
+        with controller.deployment_lock():
+            controller._ensure_prepare_abort_roots()
+        parent = controller.prepare_abort_archives_dir / "pinned-parent"
+        moved = controller.prepare_abort_archives_dir / "pinned-parent-held"
+        parent.mkdir(mode=0o700)
+        expected = (parent.lstat().st_dev, parent.lstat().st_ino)
+        original_fsync = CONTROLLER.os.fsync
+        swapped = False
+        fsynced: list[tuple[int, int]] = []
+
+        def swap_path_then_fsync(descriptor: int) -> None:
+            nonlocal swapped
+            metadata = os.fstat(descriptor)
+            identity = (metadata.st_dev, metadata.st_ino)
+            if identity == expected and not swapped:
+                os.rename(parent, moved)
+                parent.mkdir(mode=0o700)
+                swapped = True
+            fsynced.append(identity)
+            original_fsync(descriptor)
+
+        with (
+            controller.deployment_lock(),
+            mock.patch.object(
+                CONTROLLER.os,
+                "fsync",
+                side_effect=swap_path_then_fsync,
+            ),
+        ):
+            controller._fsync_prepare_abort_archive_namespace(parent)
+
+        self.assertTrue(swapped)
+        self.assertIn(expected, fsynced)
+        self.assertEqual((moved.lstat().st_dev, moved.lstat().st_ino), expected)
+        self.assertNotEqual(
+            (parent.lstat().st_dev, parent.lstat().st_ino),
+            expected,
+        )
+
+    def test_prepare_abort_retains_safe_journal_residue_for_successor(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+            controller._ensure_prepare_abort_roots()
+
+        residues = (
+            ("create", b"", False),
+            ("write", b'{"partial":', False),
+            ("file-fsync", b'{"partial":"complete"}\n', True),
+            ("replace-before", b'{"phase":"intent"}\n', True),
+        )
+        residue_paths: list[Path] = []
+        for index, (
+            _fault,
+            payload,
+            durable_file,
+        ) in enumerate(residues, 1):
+            path = controller.prepare_aborts_dir / (
+                f".{OPERATION_ID}.json.{index:032x}.tmp"
+            )
+            descriptor = os.open(
+                path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            try:
+                if payload:
+                    self.assertEqual(os.write(descriptor, payload), len(payload))
+                if durable_file:
+                    os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            residue_paths.append(path)
+
+        aborted = controller.abort_prepare(operation_id=OPERATION_ID)
+        self.assertEqual(aborted["status"], "aborted")
+        self.assertTrue(all(path.is_file() for path in residue_paths))
+
+        successor = "deploy-20260716-journal-residue-successor"
+        prepared = controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=successor,
+        )
+        self.assertEqual(prepared["status"], "ready")
+        self.assertTrue(all(path.is_file() for path in residue_paths))
+
+    def test_prepare_abort_bounds_safe_atomic_journal_residues(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+            controller._ensure_prepare_abort_roots()
+        for index in range(
+            CONTROLLER.PREPARE_ABORT_JOURNAL_STAGING_MAX_FILES + 1
+        ):
+            residue = controller.prepare_aborts_dir / (
+                f".{OPERATION_ID}.json.{index:032x}.tmp"
+            )
+            write_private(residue, "residue\n")
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "too many prepare-abort journal staging residues",
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+
+        self.assertTrue(operation.is_dir())
+
+    def test_prepare_abort_rejects_unsafe_atomic_journal_residue(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+            controller._ensure_prepare_abort_roots()
+        residue = controller.prepare_aborts_dir / (
+            f".{OPERATION_ID}.json.{'a' * 32}.tmp"
+        )
+        residue.symlink_to(operation / "prepare-owner.json")
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "journal staging is unavailable",
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+
+        self.assertTrue(residue.is_symlink())
+        self.assertFalse(
+            (controller.prepare_aborts_dir / f"{OPERATION_ID}.json").exists()
+        )
+
+    def test_prepare_abort_rejects_unknown_journal_directory_entry(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+            controller._ensure_prepare_abort_roots()
+        unknown = controller.prepare_aborts_dir / ".foreign.tmp"
+        write_private(unknown, "foreign\n")
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "journal directory contains an unknown entry",
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+
+        self.assertTrue(unknown.is_file())
+        self.assertFalse(
+            (controller.prepare_aborts_dir / f"{OPERATION_ID}.json").exists()
         )
 
     def test_prepare_abort_rejects_operation_bound_bridge_token_without_mutation(
@@ -8968,6 +9971,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 arguments,
                 (
                     "update-ref",
+                    "--no-deref",
                     "-d",
                     f"refs/nexpoly/prepared/{OPERATION_ID}",
                     TARGET_SHA,
@@ -8976,6 +9980,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             ref_state["sha"] = None
             return subprocess.CompletedProcess(arguments, 0, "", "")
 
+        sealed: list[str] = []
         with (
             mock.patch.object(
                 controller,
@@ -8983,9 +9988,18 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 side_effect=observe,
             ),
             mock.patch.object(controller, "_git", side_effect=git),
+            mock.patch.object(
+                controller,
+                "_fsync_prepare_abort_prepared_ref_backend",
+                side_effect=lambda ref: sealed.append(ref),
+            ),
         ):
             result = controller.abort_prepare(operation_id=OPERATION_ID)
         self.assertIsNone(ref_state["sha"])
+        self.assertEqual(
+            sealed,
+            [f"refs/nexpoly/prepared/{OPERATION_ID}"],
+        )
         self.assertEqual(
             CONTROLLER.load_private_json(
                 Path(result["archive_path"]) / "prepared-ref.json"
@@ -8997,6 +10011,450 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 "target_sha": TARGET_SHA,
             },
         )
+
+    def test_prepare_abort_reseals_already_absent_ref_before_completion(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+        ref_state: dict[str, str | None] = {"sha": TARGET_SHA}
+
+        def observe(_ref: str) -> str | None:
+            return ref_state["sha"]
+
+        def delete_ref(*_arguments: str, **_kwargs: object):
+            ref_state["sha"] = None
+            return subprocess.CompletedProcess([], 0, "", "")
+
+        with (
+            mock.patch.object(
+                controller,
+                "_observe_prepare_abort_prepared_ref",
+                side_effect=observe,
+            ),
+            mock.patch.object(controller, "_git", side_effect=delete_ref),
+            mock.patch.object(
+                controller,
+                "_fsync_prepare_abort_prepared_ref_backend",
+                side_effect=OSError("first loss during ref fsync"),
+            ),
+            self.assertRaisesRegex(OSError, "first loss"),
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+
+        self.assertIsNone(ref_state["sha"])
+        self.assertEqual(
+            controller._load_prepare_abort_journal(OPERATION_ID)["phase"],
+            "operation-archive-intent",
+        )
+        sealed: list[str] = []
+        original_advance = controller._advance_prepare_abort
+
+        def lose_completed_journal(
+            journal: dict[str, object],
+            phase: str,
+            **updates: object,
+        ) -> dict[str, object]:
+            if phase == "completed":
+                self.assertEqual(
+                    sealed,
+                    [f"refs/nexpoly/prepared/{OPERATION_ID}"],
+                )
+                raise OSError("second loss before completed journal")
+            return original_advance(journal, phase, **updates)
+
+        with (
+            mock.patch.object(
+                controller,
+                "_observe_prepare_abort_prepared_ref",
+                side_effect=observe,
+            ),
+            mock.patch.object(controller, "_git") as unexpected_git,
+            mock.patch.object(
+                controller,
+                "_fsync_prepare_abort_prepared_ref_backend",
+                side_effect=lambda ref: sealed.append(ref),
+            ),
+            mock.patch.object(
+                controller,
+                "_advance_prepare_abort",
+                side_effect=lose_completed_journal,
+            ),
+            self.assertRaisesRegex(OSError, "second loss"),
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+        unexpected_git.assert_not_called()
+        self.assertEqual(
+            controller._load_prepare_abort_journal(OPERATION_ID)["phase"],
+            "operation-archive-intent",
+        )
+
+        with mock.patch.object(
+            controller,
+            "_observe_prepare_abort_prepared_ref",
+            side_effect=observe,
+        ):
+            recovered = controller.abort_prepare(operation_id=OPERATION_ID)
+        self.assertEqual(recovered["status"], "aborted")
+
+    def test_prepare_abort_initially_absent_ref_reseals_before_completion(
+        self,
+    ) -> None:
+        controller = self.controller()
+        operation, _descriptor, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=OPERATION_ID,
+                target_sha=TARGET_SHA,
+            )
+        ref = f"refs/nexpoly/prepared/{OPERATION_ID}"
+
+        with (
+            mock.patch.object(
+                controller,
+                "_observe_prepare_abort_prepared_ref",
+                return_value=None,
+            ),
+            mock.patch.object(controller, "_git") as unexpected_git,
+            mock.patch.object(
+                controller,
+                "_fsync_prepare_abort_prepared_ref_backend",
+                side_effect=OSError("first loss during absent ref fsync"),
+            ),
+            self.assertRaisesRegex(OSError, "first loss"),
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+        unexpected_git.assert_not_called()
+        journal = controller._load_prepare_abort_journal(OPERATION_ID)
+        self.assertIsNone(journal["prepared_ref"]["target_sha"])
+        self.assertEqual(journal["phase"], "operation-archive-intent")
+
+        sealed: list[str] = []
+        original_advance = controller._advance_prepare_abort
+
+        def lose_completed_journal(
+            current: dict[str, object],
+            phase: str,
+            **updates: object,
+        ) -> dict[str, object]:
+            if phase == "completed":
+                self.assertEqual(sealed, [ref])
+                raise OSError("second loss before absent-ref completion")
+            return original_advance(current, phase, **updates)
+
+        with (
+            mock.patch.object(
+                controller,
+                "_observe_prepare_abort_prepared_ref",
+                return_value=None,
+            ),
+            mock.patch.object(controller, "_git") as unexpected_git,
+            mock.patch.object(
+                controller,
+                "_fsync_prepare_abort_prepared_ref_backend",
+                side_effect=lambda name: sealed.append(name),
+            ),
+            mock.patch.object(
+                controller,
+                "_advance_prepare_abort",
+                side_effect=lose_completed_journal,
+            ),
+            self.assertRaisesRegex(OSError, "second loss"),
+        ):
+            controller.abort_prepare(operation_id=OPERATION_ID)
+        unexpected_git.assert_not_called()
+        self.assertEqual(
+            controller._load_prepare_abort_journal(OPERATION_ID)["phase"],
+            "operation-archive-intent",
+        )
+
+        with (
+            mock.patch.object(
+                controller,
+                "_observe_prepare_abort_prepared_ref",
+                return_value=None,
+            ),
+            mock.patch.object(
+                controller,
+                "_fsync_prepare_abort_prepared_ref_backend",
+            ) as final_fsync,
+        ):
+            recovered = controller.abort_prepare(operation_id=OPERATION_ID)
+        self.assertEqual(recovered["status"], "aborted")
+        final_fsync.assert_called_once_with(ref)
+
+    def test_prepare_abort_missing_ref_handles_real_git_243_rc128(
+        self,
+    ) -> None:
+        repository = self.root / "prepare-abort-real-git"
+        repository.mkdir(mode=0o700)
+        git_environment = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(self.root),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+        }
+
+        def git(*arguments: str, check: bool = True):
+            return subprocess.run(
+                ["/usr/bin/git", *arguments],
+                cwd=repository,
+                env=git_environment,
+                check=check,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+        git("init", "--initial-branch=main")
+        git("config", "user.name", "Prepare Abort Test")
+        git("config", "user.email", "prepare-abort@example.invalid")
+        tracked = repository / "tracked"
+        tracked.write_text("prepared ref fixture\n", encoding="utf-8")
+        git("add", "tracked")
+        git("commit", "-m", "prepared ref fixture")
+        commit_sha = git("rev-parse", "HEAD").stdout.strip()
+        ref = f"refs/nexpoly/prepared/{OPERATION_ID}"
+        controller = CONTROLLER.PullDeployController(
+            repository,
+            self.runtime,
+            runner=CONTROLLER.SystemRunner(),
+            lifecycle=FakeLifecycle(),
+            apply=True,
+        )
+        with mock.patch.object(
+            controller, "_git_trust_preflight", return_value=None
+        ), mock.patch.object(
+            controller, "_clean_environment", return_value=git_environment
+        ):
+            legacy = controller._git(
+                "show-ref", "--verify", "--hash", ref, check=False
+            )
+            version = git("--version").stdout.strip()
+            if version.startswith("git version 2.43."):
+                self.assertEqual(legacy.returncode, 128)
+            else:
+                self.assertNotEqual(legacy.returncode, 0)
+            self.assertIsNone(
+                controller._observe_prepare_abort_prepared_ref(ref)
+            )
+            git("update-ref", ref, commit_sha)
+            self.assertEqual(
+                controller._observe_prepare_abort_prepared_ref(ref),
+                commit_sha,
+            )
+            blob_sha = git("hash-object", "-w", "tracked").stdout.strip()
+            git("update-ref", ref, blob_sha)
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "does not name a commit",
+            ):
+                controller._observe_prepare_abort_prepared_ref(ref)
+            main_before = git("rev-parse", "refs/heads/main").stdout.strip()
+            git("symbolic-ref", ref, "refs/heads/main")
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "must not be symbolic",
+            ):
+                controller._observe_prepare_abort_prepared_ref(ref)
+            self.assertEqual(
+                git("rev-parse", "refs/heads/main").stdout.strip(),
+                main_before,
+            )
+            git("update-ref", "--no-deref", "-d", ref)
+            git_dir = repository / ".git"
+            flushed: list[Path] = []
+            original_flush = controller._fsync_prepare_abort_git_path
+
+            def record_flush(path: Path, *, directory: bool) -> None:
+                flushed.append(path)
+                original_flush(path, directory=directory)
+
+            with (
+                mock.patch.object(
+                    controller,
+                    "_git_trust_preflight",
+                    return_value={},
+                ),
+                mock.patch.object(
+                    controller,
+                    "_fsync_prepare_abort_git_path",
+                    side_effect=record_flush,
+                ),
+            ):
+                controller._fsync_prepare_abort_prepared_ref_backend(ref)
+            self.assertIn(git_dir / "refs", flushed)
+            self.assertIn(git_dir, flushed)
+
+    def test_target_prepare_forward_resumes_predecessor_abort_journal(
+        self,
+    ) -> None:
+        controller = self.controller()
+        prior_operation = "deploy-20260716-abort-recovery"
+        operation, _descriptor, _ready = controller._operation_paths(
+            prior_operation
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=prior_operation,
+                target_sha=TARGET_SHA,
+            )
+        with mock.patch.object(
+            controller,
+            "_reconcile_prepare_abort_archive",
+            side_effect=OSError("injected predecessor interruption"),
+        ), self.assertRaisesRegex(OSError, "predecessor interruption"):
+            controller.abort_prepare(operation_id=prior_operation)
+        journal = controller._load_prepare_abort_journal(prior_operation)
+        self.assertEqual(journal["phase"], "operation-archive-intent")
+
+        recovered_prepare = controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+
+        self.assertEqual(
+            recovered_prepare["status"],
+            "predecessor-abort-recovered",
+        )
+        recovered = controller._load_prepare_abort_journal(prior_operation)
+        self.assertEqual(recovered["phase"], "completed")
+        self.assertFalse(operation.exists())
+        new_operation, _new_descriptor, _new_ready = (
+            controller._operation_paths(OPERATION_ID)
+        )
+        self.assertFalse(new_operation.exists())
+        prepared = controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        self.assertEqual(prepared["status"], "ready")
+
+    def test_target_prepare_rejects_abort_drift_before_new_operation(
+        self,
+    ) -> None:
+        controller = self.controller()
+        prior_operation = "deploy-20260716-abort-drift"
+        operation, _descriptor, _ready = controller._operation_paths(
+            prior_operation
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=prior_operation,
+                target_sha=TARGET_SHA,
+            )
+        with mock.patch.object(
+            controller,
+            "_reconcile_prepare_abort_archive",
+            side_effect=OSError("injected predecessor interruption"),
+        ), self.assertRaisesRegex(OSError, "predecessor interruption"):
+            controller.abort_prepare(operation_id=prior_operation)
+        tamper = operation / "foreign"
+        write_private(tamper, "unsealed drift\n")
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "prepare operation changed",
+        ):
+            controller.prepare(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+        new_operation, _new_descriptor, _new_ready = (
+            controller._operation_paths(OPERATION_ID)
+        )
+        self.assertFalse(new_operation.exists())
+
+    def test_target_prepare_rejects_unrelated_predecessor_before_abort_mutation(
+        self,
+    ) -> None:
+        controller = self.controller()
+        prior_operation = "deploy-20260716-unrelated-predecessor"
+        operation, _descriptor, _ready = controller._operation_paths(
+            prior_operation
+        )
+        with controller.deployment_lock():
+            controller._open_prepare_operation(
+                operation,
+                operation_id=prior_operation,
+                target_sha=TARGET_SHA,
+            )
+        with mock.patch.object(
+            controller,
+            "_reconcile_prepare_abort_archive",
+            side_effect=OSError("injected predecessor interruption"),
+        ), self.assertRaisesRegex(OSError, "predecessor interruption"):
+            controller.abort_prepare(operation_id=prior_operation)
+        journal_path = (
+            controller.prepare_aborts_dir / f"{prior_operation}.json"
+        )
+        journal_before = journal_path.read_bytes()
+        operation_before = CONTROLLER.directory_inventory_digest(operation)
+        git_permission = adopted_git_permission_takeover_fixture(
+            controller.production_root,
+            controller.runtime_root,
+            source_sha=PREVIOUS_SHA,
+            source_tree=PREVIOUS_TREE,
+        )
+        unit_permission = adopted_unit_permission_binding_fixture(
+            git_permission,
+            source_sha=TARGET_SHA,
+            source_tree=TARGET_TREE,
+        )
+        controller._fixture_unit_permission_takeover = unit_permission  # type: ignore[attr-defined]
+        ci = controller.ci_evidence(TARGET_SHA)
+        raw_unit = {
+            "source_tree": TARGET_TREE,
+            "plan": {
+                "delivery_gate": {
+                    "remote_main": TARGET_SHA,
+                    "ci": ci,
+                }
+            },
+        }
+
+        with mock.patch.object(
+            controller,
+            "_private_json_with_digest",
+            return_value=(
+                raw_unit,
+                unit_permission["authority_file_sha256"],
+            ),
+        ), mock.patch.object(
+            controller,
+            "_abort_prepare_locked",
+        ) as abort_locked, self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "predecessor prepare-abort identity differs",
+        ):
+            controller.prepare(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+
+        abort_locked.assert_not_called()
+        self.assertEqual(journal_path.read_bytes(), journal_before)
+        self.assertEqual(
+            CONTROLLER.directory_inventory_digest(operation),
+            operation_before,
+        )
+        new_operation, _new_descriptor, _new_ready = (
+            controller._operation_paths(OPERATION_ID)
+        )
+        self.assertFalse(new_operation.exists())
 
     def test_prepare_abort_rejects_prepared_ref_cas_drift_on_resume(
         self,
@@ -15460,6 +16918,26 @@ class DualWorkerStopTests(unittest.TestCase):
 
 
 class AdoptedFirstDeploymentTests(PullDeployTestCase):
+    def _grow_directory_size(self, path: Path, *, label: str) -> tuple[int, int]:
+        before = path.stat().st_size
+        created: list[Path] = []
+        expanded = before
+        for index in range(4096):
+            entry = path / (
+                f".nexpoly-{label}-growth-{index:05d}-" + "x" * 64
+            )
+            write_private(entry, "growth\n")
+            created.append(entry)
+            expanded = path.stat().st_size
+            if expanded > before:
+                break
+        self.assertGreater(expanded, before)
+        for entry in created:
+            entry.unlink()
+        after_cleanup = path.stat().st_size
+        self.assertGreater(after_cleanup, before)
+        return before, after_cleanup
+
     def _seed_adopted_authority(
         self, controller: FixtureController
     ) -> dict[str, object]:
@@ -15783,6 +17261,20 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
                 ),
             )
         )
+        controller._fixture_unit_permission_takeover = (  # type: ignore[attr-defined]
+            adopted_unit_permission_binding_fixture(
+                controller._fixture_git_permission_takeover,  # type: ignore[attr-defined]
+                adopted_deployment_sha256=CONTROLLER.sha256_file(
+                    controller.adopted_state_path
+                ),
+                file_digests={
+                    path: CONTROLLER.sha256_bytes(
+                        controller._git_show(TARGET_SHA, path)
+                    )
+                    for path in CONTROLLER.ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+                },
+            )
+        )
         return adopted
 
     @staticmethod
@@ -15948,6 +17440,572 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             controller.adopted_git_permissions_path, authority
         )
         return hardened, authority
+
+    def _seed_unit_permission_wrapper(
+        self,
+        controller: FixtureController,
+        adopted: dict[str, object],
+        marker: dict[str, object],
+    ) -> tuple[dict[str, object], list[dict[str, object]]]:
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+        git_combined = (
+            CONTROLLER.PullDeployController._validate_adopted_git_permission_authority(
+                controller,
+                adopted=adopted,
+                marker=marker,
+                marker_digest=marker_digest,
+            )
+        )
+        md_path = Path(
+            adopted["monomer_md"]["systemd_unit"]["target_path"]
+        )
+        dft_path = Path(
+            adopted["monomer_dft"]["systemd_unit"]["target_path"]
+        )
+        parent_metadata = md_path.parent.lstat()
+        parent = {
+            "path": str(md_path.parent),
+            "type": "directory",
+            "device": parent_metadata.st_dev,
+            "inode": parent_metadata.st_ino,
+            "uid": parent_metadata.st_uid,
+            "gid": parent_metadata.st_gid,
+            "mode": f"{CONTROLLER.stat.S_IMODE(parent_metadata.st_mode):04o}",
+            "nlink": parent_metadata.st_nlink,
+            "size": parent_metadata.st_size,
+        }
+
+        def unit_record(
+            role: str,
+            name: str,
+            path: Path,
+            *,
+            mode: str,
+            inode: int | None = None,
+        ) -> dict[str, object]:
+            metadata = path.lstat()
+            return {
+                "role": role,
+                "name": name,
+                "path": str(path),
+                "parent": dict(parent),
+                "type": "file",
+                "device": metadata.st_dev,
+                "inode": metadata.st_ino if inode is None else inode,
+                "uid": metadata.st_uid,
+                "gid": metadata.st_gid,
+                "mode": mode,
+                "target_mode": "0600",
+                "nlink": 1,
+                "size": metadata.st_size,
+                "content_sha256": CONTROLLER.sha256_file(path),
+                "action": (
+                    "atomic-inode-replace"
+                    if role == "monomer-md"
+                    else "no-op-cas"
+                ),
+                "systemd_state": {
+                    "LoadState": "loaded",
+                    "FragmentPath": str(path),
+                    "DropInPaths": "",
+                    "NeedDaemonReload": "no",
+                    "UnitFileState": "enabled",
+                    "ActiveState": "active",
+                    "SubState": "running",
+                },
+                "process_identity": {
+                    "main_pid": 401 if role == "monomer-md" else 402,
+                    "invocation_id": (
+                        "1" * 32 if role == "monomer-md" else "2" * 32
+                    ),
+                },
+            }
+
+        md_metadata = md_path.lstat()
+        original_units = [
+            unit_record(
+                "monomer-md",
+                CONTROLLER.MONOMER_MD_UNIT_NAME,
+                md_path,
+                mode="0664",
+                inode=md_metadata.st_ino + 1000000,
+            ),
+            unit_record(
+                "monomer-dft",
+                CONTROLLER.MONOMER_DFT_UNIT_NAME,
+                dft_path,
+                mode="0600",
+            ),
+        ]
+        hardened_units = json.loads(json.dumps(original_units))
+        hardened_units[0].update(
+            {
+                "inode": md_metadata.st_ino,
+                "mode": "0600",
+            }
+        )
+        bootstrap_path = controller.state_dir / "bootstrap-control.json"
+        prerequisite_path = (
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        bootstrap = CONTROLLER.load_private_json(bootstrap_path)
+        prerequisite = CONTROLLER.load_private_json(prerequisite_path)
+        compact = adopted_unit_permission_binding_fixture(
+            git_combined,
+            adopted_deployment_sha256=CONTROLLER.sha256_file(
+                controller.adopted_state_path
+            ),
+            file_digests={
+                path: CONTROLLER.sha256_bytes(
+                    controller._git_show(TARGET_SHA, path)
+                )
+                for path in CONTROLLER.ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+            },
+        )
+        operation_id = "adopt-unit-permission-fixture-001"
+        final_name = CONTROLLER.ADOPTED_UNIT_PERMISSIONS_RELATIVE_PATH.name
+        staging_name = f".{final_name}.create-{operation_id}"
+        quarantine_name = f"{staging_name}.quarantine"
+        authority_publication = {
+            "schema_version": 1,
+            "policy": (
+                CONTROLLER.ADOPTED_UNIT_PERMISSION_AUTHORITY_PUBLICATION_POLICY
+            ),
+            "directory": str(controller.state_dir),
+            "entries": [
+                {
+                    "role": "final",
+                    "name": final_name,
+                    "path": str(controller.state_dir / final_name),
+                    "initially_absent": True,
+                },
+                {
+                    "role": "staging",
+                    "name": staging_name,
+                    "path": str(controller.state_dir / staging_name),
+                    "initially_absent": True,
+                },
+                {
+                    "role": "staging-quarantine",
+                    "name": quarantine_name,
+                    "path": str(controller.state_dir / quarantine_name),
+                    "initially_absent": True,
+                },
+            ],
+        }
+        impact = {
+            "schema_version": 1,
+            "policy": "nexpoly-adopted-unit-permission-hardening-v1",
+            "units": original_units,
+            "authority_publication": authority_publication,
+        }
+        plan = {
+            "schema_version": 1,
+            "authority_kind": (
+                CONTROLLER.ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND
+            ),
+            "operation_id": operation_id,
+            "source_sha": TARGET_SHA,
+            "source_tree": TARGET_TREE,
+            "source_readiness": bootstrap["source_readiness"],
+            "source_readiness_sha256": CONTROLLER.canonical_json_digest(
+                bootstrap["source_readiness"]
+            ),
+            "delivery_gate": bootstrap["delivery_gate"],
+            "delivery_gate_sha256": CONTROLLER.canonical_json_digest(
+                bootstrap["delivery_gate"]
+            ),
+            "adopted_deployment_sha256": CONTROLLER.sha256_file(
+                controller.adopted_state_path
+            ),
+            "bootstrap_control_sha256": CONTROLLER.sha256_file(
+                bootstrap_path
+            ),
+            "adopted_prerequisites_sha256": CONTROLLER.sha256_file(
+                prerequisite_path
+            ),
+            "adopted_prerequisites_plan_sha256": prerequisite[
+                "plan_sha256"
+            ],
+            "production_source": {
+                "source_sha": adopted["source_sha"],
+                "source_tree": adopted["source_tree"],
+            },
+            "adopted_git_permissions_sha256": git_combined[
+                "authority_file_sha256"
+            ],
+            "git_permission_successor": compact[
+                "git_permission_successor"
+            ],
+            "units": original_units,
+            "authority_publication": authority_publication,
+            "unit_permission_impact_sha256": (
+                CONTROLLER.canonical_json_digest(impact)
+            ),
+            "mutations": {
+                "services_restarted": False,
+                "source": False,
+                "database": False,
+                "credentials": False,
+                "md_unit_inode": True,
+                "dft_unit": False,
+                "runtime_authority": True,
+                "systemd_daemon_reload": True,
+            },
+        }
+        plan_digest = CONTROLLER.canonical_json_digest(plan)
+        owner = {
+            "schema_version": 1,
+            "authority_kind": (
+                CONTROLLER.ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND
+            ),
+            "operation_id": operation_id,
+            "plan_sha256": plan_digest,
+            "md_original_sha256": CONTROLLER.canonical_json_digest(
+                original_units[0]
+            ),
+            "content_sha256": original_units[0]["content_sha256"],
+        }
+        backup_root = (
+            controller.state_dir / "adopted-unit-permission-backups"
+        )
+        backup_root.mkdir(mode=0o700)
+        operation_root = backup_root / operation_id
+        operation_root.mkdir(mode=0o700)
+        write_private(
+            backup_root / f".{operation_id}.owner.json",
+            json.dumps(owner, sort_keys=True) + "\n",
+        )
+        write_private(
+            operation_root / ".owner.json",
+            json.dumps(owner, sort_keys=True) + "\n",
+        )
+        backup_path = operation_root / CONTROLLER.MONOMER_MD_UNIT_NAME
+        write_private(backup_path, md_path.read_text(encoding="utf-8"))
+        backup_metadata = backup_path.lstat()
+        backup_unit = {
+            "path": str(backup_path),
+            "type": "file",
+            "device": backup_metadata.st_dev,
+            "inode": backup_metadata.st_ino,
+            "uid": backup_metadata.st_uid,
+            "gid": backup_metadata.st_gid,
+            "mode": "0600",
+            "nlink": backup_metadata.st_nlink,
+            "size": backup_metadata.st_size,
+            "content_sha256": CONTROLLER.sha256_file(backup_path),
+        }
+        backup = {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "owner": owner,
+            "owner_sha256": CONTROLLER.canonical_json_digest(owner),
+            "claim_path": str(
+                backup_root / f".{operation_id}.owner.json"
+            ),
+            "claim_sha256": CONTROLLER.canonical_json_digest(owner),
+            "unit": backup_unit,
+            "unit_sha256": CONTROLLER.canonical_json_digest(backup_unit),
+            "inventory_sha256": CONTROLLER.private_tree_inventory_digest(
+                operation_root
+            ),
+        }
+        authority = {
+            "schema_version": 1,
+            "status": "completed",
+            "authority_kind": plan["authority_kind"],
+            "operation_id": operation_id,
+            "source_sha": TARGET_SHA,
+            "source_tree": TARGET_TREE,
+            "production_source_sha": adopted["source_sha"],
+            "production_source_tree": adopted["source_tree"],
+            "adopted_deployment_sha256": plan[
+                "adopted_deployment_sha256"
+            ],
+            "bootstrap_control_sha256": plan[
+                "bootstrap_control_sha256"
+            ],
+            "adopted_prerequisites_sha256": plan[
+                "adopted_prerequisites_sha256"
+            ],
+            "adopted_git_permissions_sha256": plan[
+                "adopted_git_permissions_sha256"
+            ],
+            "adopted_git_permission_source_sha": compact[
+                "adopted_git_permission_source_sha"
+            ],
+            "adopted_git_permission_source_tree": compact[
+                "adopted_git_permission_source_tree"
+            ],
+            "plan_sha256": plan_digest,
+            "unit_permission_impact_sha256": plan[
+                "unit_permission_impact_sha256"
+            ],
+            "original_units": original_units,
+            "original_units_sha256": CONTROLLER.canonical_json_digest(
+                original_units
+            ),
+            "hardened_units": hardened_units,
+            "hardened_units_sha256": CONTROLLER.canonical_json_digest(
+                hardened_units
+            ),
+            "backup": backup,
+            "backup_sha256": CONTROLLER.canonical_json_digest(backup),
+            "backup_content_sha256": backup_unit["content_sha256"],
+            "plan": plan,
+            "completed_at": "2026-08-14T00:00:00Z",
+        }
+        CONTROLLER.atomic_json(
+            controller.adopted_unit_permissions_path,
+            authority,
+        )
+        return git_combined, hardened_units
+
+    def test_adopted_unit_authority_publication_contract_tamper_is_rejected(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, _git_authority = self._seed_git_permission_wrapper(
+            controller,
+            adopted,
+        )
+        git_combined, _hardened_units = self._seed_unit_permission_wrapper(
+            controller,
+            adopted,
+            marker,
+        )
+        original = CONTROLLER.load_private_json(
+            controller.adopted_unit_permissions_path
+        )
+        original_entries = original["plan"]["authority_publication"][
+            "entries"
+        ]
+        cases = (
+            ("schema-type", ("schema_version",), True),
+            ("policy", ("policy",), "foreign-publication-policy"),
+            ("directory", ("directory",), str(controller.runtime_root)),
+            ("final-role", ("entries", 0, "role"), "staging"),
+            ("final-name", ("entries", 0, "name"), "foreign.json"),
+            (
+                "staging-operation",
+                ("entries", 1, "name"),
+                ".adopted-unit-permissions.json.create-adopt-unit-permission-foreign-001",
+            ),
+            (
+                "quarantine-path",
+                ("entries", 2, "path"),
+                str(controller.state_dir / ".foreign.quarantine"),
+            ),
+            ("absence-type", ("entries", 0, "initially_absent"), 1),
+            (
+                "entry-order",
+                ("entries",),
+                list(reversed(original_entries)),
+            ),
+        )
+
+        for label, path, value in cases:
+            with self.subTest(label=label):
+                authority = json.loads(json.dumps(original))
+                target = authority["plan"]["authority_publication"]
+                for component in path[:-1]:
+                    target = target[component]
+                target[path[-1]] = value
+                authority["plan_sha256"] = (
+                    CONTROLLER.canonical_json_digest(authority["plan"])
+                )
+                CONTROLLER.atomic_json(
+                    controller.adopted_unit_permissions_path,
+                    authority,
+                )
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    "authority publication differs",
+                ):
+                    CONTROLLER.PullDeployController._validate_adopted_unit_permission_authority(
+                        controller,
+                        adopted=adopted,
+                        git_permission_takeover=git_combined,
+                        verify_live=False,
+                    )
+
+        CONTROLLER.atomic_json(
+            controller.adopted_unit_permissions_path,
+            original,
+        )
+        observed = (
+            CONTROLLER.PullDeployController._validate_adopted_unit_permission_authority(
+                controller,
+                adopted=adopted,
+                git_permission_takeover=git_combined,
+                verify_live=False,
+            )
+        )
+        self.assertEqual(observed["operation_id"], original["operation_id"])
+
+    def test_adopted_unit_permission_impact_must_bind_publication(self) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, _git_authority = self._seed_git_permission_wrapper(
+            controller,
+            adopted,
+        )
+        git_combined, _hardened_units = self._seed_unit_permission_wrapper(
+            controller,
+            adopted,
+            marker,
+        )
+        authority = CONTROLLER.load_private_json(
+            controller.adopted_unit_permissions_path
+        )
+        legacy_impact = {
+            "schema_version": 1,
+            "policy": "nexpoly-adopted-unit-permission-hardening-v1",
+            "units": authority["plan"]["units"],
+        }
+        legacy_digest = CONTROLLER.canonical_json_digest(legacy_impact)
+        authority["unit_permission_impact_sha256"] = legacy_digest
+        authority["plan"]["unit_permission_impact_sha256"] = legacy_digest
+        authority["plan_sha256"] = CONTROLLER.canonical_json_digest(
+            authority["plan"]
+        )
+        CONTROLLER.atomic_json(
+            controller.adopted_unit_permissions_path,
+            authority,
+        )
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "evidence differs from predecessors",
+        ):
+            CONTROLLER.PullDeployController._validate_adopted_unit_permission_authority(
+                controller,
+                adopted=adopted,
+                git_permission_takeover=git_combined,
+                verify_live=False,
+            )
+
+    def test_adopted_unit_permission_backup_inventory_drift_is_rejected(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, _git_authority = self._seed_git_permission_wrapper(
+            controller, adopted
+        )
+        git_combined, _hardened_units = (
+            self._seed_unit_permission_wrapper(
+                controller,
+                adopted,
+                marker,
+            )
+        )
+        observed = (
+            CONTROLLER.PullDeployController._validate_adopted_unit_permission_authority(
+                controller,
+                adopted=adopted,
+                git_permission_takeover=git_combined,
+                verify_live=False,
+            )
+        )
+        self.assertEqual(
+            observed["backup_sha256"],
+            CONTROLLER.load_private_json(
+                controller.adopted_unit_permissions_path
+            )["backup_sha256"],
+        )
+        authority = CONTROLLER.load_private_json(
+            controller.adopted_unit_permissions_path
+        )
+        authority["backup"]["inventory_sha256"] = "sha256:" + "7" * 64
+        authority["backup_sha256"] = CONTROLLER.canonical_json_digest(
+            authority["backup"]
+        )
+        CONTROLLER.atomic_json(
+            controller.adopted_unit_permissions_path,
+            authority,
+        )
+
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "backup inventory differs",
+        ):
+            CONTROLLER.PullDeployController._validate_adopted_unit_permission_authority(
+                controller,
+                adopted=adopted,
+                git_permission_takeover=git_combined,
+                verify_live=False,
+            )
+
+    def test_adopted_unit_parent_growth_is_transition_only_and_live_sealed(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, _git_authority = self._seed_git_permission_wrapper(
+            controller, adopted
+        )
+        git_combined, hardened_units = self._seed_unit_permission_wrapper(
+            controller,
+            adopted,
+            marker,
+        )
+        parent = Path(hardened_units[0]["path"]).parent
+        before, after = self._grow_directory_size(
+            parent,
+            label="unit-authority",
+        )
+        authority = CONTROLLER.load_private_json(
+            controller.adopted_unit_permissions_path
+        )
+        self.assertEqual(
+            authority["original_units"][1]["parent"]["size"],
+            before,
+        )
+        for record in authority["hardened_units"]:
+            record["parent"]["size"] = after
+        authority["hardened_units_sha256"] = (
+            CONTROLLER.canonical_json_digest(authority["hardened_units"])
+        )
+        CONTROLLER.atomic_json(
+            controller.adopted_unit_permissions_path,
+            authority,
+        )
+        controller.runner = AdoptedUnitRunner(authority["hardened_units"])
+
+        observed = (
+            CONTROLLER.PullDeployController._validate_adopted_unit_permission_authority(
+                controller,
+                adopted=adopted,
+                git_permission_takeover=git_combined,
+                verify_live=True,
+            )
+        )
+        self.assertEqual(
+            observed["hardened_units_sha256"],
+            authority["hardened_units_sha256"],
+        )
+
+        sealed_size, drifted_size = self._grow_directory_size(
+            parent,
+            label="unit-live-drift",
+        )
+        self.assertEqual(sealed_size, after)
+        self.assertGreater(drifted_size, sealed_size)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "unit parent differs",
+        ):
+            CONTROLLER.PullDeployController._validate_adopted_unit_permission_authority(
+                controller,
+                adopted=adopted,
+                git_permission_takeover=git_combined,
+                verify_live=True,
+            )
 
     def test_production_git_permission_takeover_rejects_missing_marker(
         self,
@@ -16210,9 +18268,15 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             target_sha=TARGET_SHA, operation_id=OPERATION_ID
         )
         binding = plan["adopted_prerequisite_target_binding"]
-        self.assertEqual(binding["schema_version"], 2)
+        self.assertEqual(binding["schema_version"], 3)
         self.assertEqual(
             binding["git_permission_authority"]["authority_file_sha256"],
+            combined["authority_file_sha256"],
+        )
+        self.assertEqual(
+            binding["unit_permission_authority"][
+                "adopted_git_permissions_sha256"
+            ],
             combined["authority_file_sha256"],
         )
 
@@ -17040,6 +19104,548 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             "without adoption has a prerequisite target binding|differs from repository",
         ):
             CONTROLLER.validate_descriptor(unexpected)
+
+    def test_adopted_binding_v3_rejects_mixed_unit_provenance_and_blobs(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+        binding = descriptor["adopted_prerequisite_target_binding"]
+
+        def reseal(document: dict[str, object]) -> None:
+            document["identity_sha256"] = CONTROLLER.canonical_json_digest(
+                {
+                    key: value
+                    for key, value in document.items()
+                    if key != "identity_sha256"
+                }
+            )
+
+        for field, replacement in (
+            ("production_source_sha", "f" * 40),
+            ("production_source_tree", "e" * 40),
+            ("bootstrap_control_sha256", "sha256:" + "d" * 64),
+            ("adopted_prerequisites_sha256", "sha256:" + "c" * 64),
+        ):
+            with self.subTest(field=field):
+                changed = json.loads(json.dumps(binding))
+                unit = changed["unit_permission_authority"]
+                unit[field] = replacement
+                reseal(unit)
+                reseal(changed)
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    "unit permission authority differs",
+                ):
+                    CONTROLLER.validate_adopted_prerequisite_target_binding(
+                        changed
+                    )
+
+        changed = json.loads(json.dumps(binding))
+        unit = changed["unit_permission_authority"]
+        successor = unit["git_permission_successor"]
+        successor["files"][0]["sha256"] = "sha256:" + "b" * 64
+        successor["files_sha256"] = CONTROLLER.canonical_json_digest(
+            successor["files"]
+        )
+        reseal(successor)
+        reseal(unit)
+        reseal(changed)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "unit permission authority differs",
+        ):
+            CONTROLLER.validate_adopted_prerequisite_target_binding(changed)
+
+    def test_adopted_descriptor_binds_nested_authorities_to_adopted_bytes(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+
+        def reseal(document: dict[str, object]) -> None:
+            document["identity_sha256"] = CONTROLLER.canonical_json_digest(
+                {
+                    key: value
+                    for key, value in document.items()
+                    if key != "identity_sha256"
+                }
+            )
+
+        for field, replacement in (
+            ("production_source_sha", "f" * 40),
+            ("production_source_tree", "e" * 40),
+        ):
+            with self.subTest(field=field):
+                changed = json.loads(json.dumps(descriptor))
+                binding = changed["adopted_prerequisite_target_binding"]
+                permission = binding["git_permission_authority"]
+                unit = binding["unit_permission_authority"]
+                permission[field] = replacement
+                unit[field] = replacement
+                reseal(permission)
+                reseal(unit)
+                reseal(binding)
+                CONTROLLER.validate_adopted_prerequisite_target_binding(
+                    binding
+                )
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    "prerequisite target binding differs from repository",
+                ):
+                    CONTROLLER.validate_descriptor(changed)
+
+        changed = json.loads(json.dumps(descriptor))
+        binding = changed["adopted_prerequisite_target_binding"]
+        replacement_digest = "sha256:" + "9" * 64
+        binding["authority"]["adopted_deployment_sha256"] = (
+            replacement_digest
+        )
+        permission = binding["git_permission_authority"]
+        unit = binding["unit_permission_authority"]
+        permission["adopted_deployment_sha256"] = replacement_digest
+        unit["adopted_deployment_sha256"] = replacement_digest
+        reseal(permission)
+        reseal(unit)
+        reseal(binding)
+        CONTROLLER.validate_adopted_prerequisite_target_binding(binding)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "prerequisite target binding differs from repository",
+        ):
+            CONTROLLER.validate_descriptor(changed)
+
+    def test_adopted_descriptor_schema_discriminators_are_exact_integers(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        _operation, descriptor_path, _ready = controller._operation_paths(
+            OPERATION_ID
+        )
+        descriptor = CONTROLLER.load_private_json(descriptor_path)
+
+        def reseal(document: dict[str, object]) -> None:
+            document["identity_sha256"] = CONTROLLER.canonical_json_digest(
+                {
+                    key: value
+                    for key, value in document.items()
+                    if key != "identity_sha256"
+                }
+            )
+
+        for invalid_schema in (True, 1.0):
+            with self.subTest(authority_schema=invalid_schema):
+                changed_adopted = json.loads(json.dumps(adopted))
+                changed_adopted["schema_version"] = invalid_schema
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    "adopted deployment authority has an invalid shape",
+                ):
+                    CONTROLLER.validate_adopted_deployment(changed_adopted)
+
+        changed_descriptor = json.loads(json.dumps(descriptor))
+        changed_descriptor["schema_version"] = 4.0
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "descriptor has an invalid shape",
+        ):
+            CONTROLLER.validate_descriptor(changed_descriptor)
+
+        changed_controller = json.loads(json.dumps(descriptor))
+        changed_controller["controller"]["schema_version"] = True
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "controller schema is unsupported",
+        ):
+            CONTROLLER.validate_descriptor(changed_controller)
+
+        binding = descriptor["adopted_prerequisite_target_binding"]
+        for invalid_schema in (3.0, [], {}):
+            with self.subTest(binding_schema=invalid_schema):
+                changed_binding = json.loads(json.dumps(binding))
+                changed_binding["schema_version"] = invalid_schema
+                reseal(changed_binding)
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError,
+                    "target binding has an invalid shape",
+                ):
+                    CONTROLLER.validate_adopted_prerequisite_target_binding(
+                        changed_binding
+                    )
+
+        changed_trust = json.loads(json.dumps(binding))
+        changed_trust["target_source_trust"]["schema_version"] = True
+        changed_trust["target_source_trust_sha256"] = (
+            CONTROLLER.canonical_json_digest(
+                changed_trust["target_source_trust"]
+            )
+        )
+        reseal(changed_trust)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "target source trust differs",
+        ):
+            CONTROLLER.validate_adopted_prerequisite_target_binding(
+                changed_trust
+            )
+
+        changed_successor = json.loads(json.dumps(binding))
+        unit = changed_successor["unit_permission_authority"]
+        successor = unit["git_permission_successor"]
+        successor["schema_version"] = True
+        reseal(successor)
+        reseal(unit)
+        reseal(changed_successor)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "successor has an invalid shape",
+        ):
+            CONTROLLER.validate_adopted_prerequisite_target_binding(
+                changed_successor
+            )
+
+        git_takeover = adopted_git_permission_takeover_fixture(
+            controller.production_root,
+            controller.runtime_root,
+        )
+        changed_takeover = json.loads(json.dumps(git_takeover))
+        changed_takeover["schema_version"] = True
+        reseal(changed_takeover)
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "takeover evidence has an invalid shape",
+        ):
+            CONTROLLER.validate_adopted_git_permission_takeover(
+                changed_takeover
+            )
+
+        historical = json.loads(json.dumps(descriptor))
+        historical_binding = historical[
+            "adopted_prerequisite_target_binding"
+        ]
+        historical_binding["schema_version"] = 2
+        historical_binding.pop("unit_permission_authority")
+        reseal(historical_binding)
+        CONTROLLER.validate_descriptor(historical)
+
+    def test_raw_adoption_chain_schema_discriminators_are_exact_integers(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        marker, _git_authority = self._seed_git_permission_wrapper(
+            controller, adopted
+        )
+        git_combined, _hardened_units = (
+            self._seed_unit_permission_wrapper(
+                controller,
+                adopted,
+                marker,
+            )
+        )
+        production_config = controller.production_config_evidence(
+            check_free_space=False
+        )
+        bootstrap_path = controller.state_dir / "bootstrap-control.json"
+        prerequisite_path = (
+            controller.runtime_root
+            / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        git_authority_path = controller.adopted_git_permissions_path
+        unit_authority_path = controller.adopted_unit_permissions_path
+        marker_digest = CONTROLLER.sha256_file(
+            controller.git_permission_marker_path
+        )
+        backup_root = (
+            controller.state_dir / "adopted-unit-permission-backups"
+        )
+        backup_operation = backup_root / "adopt-unit-permission-fixture-001"
+        backup_claims = (
+            backup_root / ".adopt-unit-permission-fixture-001.owner.json",
+            backup_operation / ".owner.json",
+        )
+
+        def set_schema(
+            document: dict[str, object],
+            path: tuple[str, ...],
+            value: object,
+        ) -> None:
+            target: object = document
+            for field in path:
+                self.assertIsInstance(target, dict)
+                target = target[field]  # type: ignore[index]
+            self.assertIsInstance(target, dict)
+            target["schema_version"] = value  # type: ignore[index]
+
+        def assert_rejected(
+            *,
+            path: Path,
+            schema_path: tuple[str, ...],
+            value: object,
+            validate: object,
+            message: str,
+            reseal: object | None = None,
+            auxiliary_paths: tuple[Path, ...] = (),
+        ) -> None:
+            snapshots = {
+                candidate: candidate.read_bytes()
+                for candidate in (path, *auxiliary_paths)
+            }
+            document = CONTROLLER.load_private_json(path)
+            set_schema(document, schema_path, value)
+            if reseal is not None:
+                reseal(document)  # type: ignore[operator]
+            CONTROLLER.atomic_json(path, document)
+            try:
+                with self.assertRaisesRegex(
+                    CONTROLLER.PullDeployError, message
+                ):
+                    validate()  # type: ignore[operator]
+            finally:
+                for candidate, payload in snapshots.items():
+                    CONTROLLER.atomic_bytes(candidate, payload)
+
+        validate_prerequisite = lambda: (
+            controller._validate_adopted_prerequisite_provenance(
+                production_config
+            )
+        )
+        validate_git = lambda: (
+            CONTROLLER.PullDeployController._validate_adopted_git_permission_authority(
+                controller,
+                adopted=adopted,
+                marker=marker,
+                marker_digest=marker_digest,
+            )
+        )
+        validate_unit = lambda: (
+            CONTROLLER.PullDeployController._validate_adopted_unit_permission_authority(
+                controller,
+                adopted=adopted,
+                git_permission_takeover=git_combined,
+                verify_live=False,
+            )
+        )
+
+        def reseal_plan(document: dict[str, object]) -> None:
+            plan = document["plan"]
+            self.assertIsInstance(plan, dict)
+            readiness = plan["source_readiness"]
+            self.assertIsInstance(readiness, dict)
+            plan["source_readiness_sha256"] = (
+                CONTROLLER.canonical_json_digest(readiness)
+            )
+            document["plan_sha256"] = CONTROLLER.canonical_json_digest(
+                plan
+            )
+
+        def reseal_unit_plan(document: dict[str, object]) -> None:
+            reseal_plan(document)
+            plan_digest = document["plan_sha256"]
+            backup = document["backup"]
+            self.assertIsInstance(backup, dict)
+            owner = backup["owner"]
+            self.assertIsInstance(owner, dict)
+            owner["plan_sha256"] = plan_digest
+            owner_digest = CONTROLLER.canonical_json_digest(owner)
+            backup["owner_sha256"] = owner_digest
+            backup["claim_sha256"] = owner_digest
+            for claim in backup_claims:
+                CONTROLLER.atomic_json(claim, owner)
+            backup["inventory_sha256"] = (
+                CONTROLLER.private_tree_inventory_digest(backup_operation)
+            )
+            document["backup_sha256"] = (
+                CONTROLLER.canonical_json_digest(backup)
+            )
+
+        def reseal_backup(document: dict[str, object]) -> None:
+            document["backup_sha256"] = CONTROLLER.canonical_json_digest(
+                document["backup"]
+            )
+
+        cases = (
+            (
+                "bootstrap",
+                bootstrap_path,
+                (),
+                3.0,
+                controller._adoption_bootstrap_binding,
+                "bootstrap-control authority is incomplete",
+                None,
+                (),
+            ),
+            (
+                "prerequisite-authority",
+                prerequisite_path,
+                (),
+                True,
+                validate_prerequisite,
+                "prerequisite provenance is invalid",
+                None,
+                (),
+            ),
+            (
+                "prerequisite-plan",
+                prerequisite_path,
+                ("plan",),
+                1.0,
+                validate_prerequisite,
+                "prerequisite plan authority differs",
+                reseal_plan,
+                (),
+            ),
+            (
+                "prerequisite-readiness",
+                prerequisite_path,
+                ("plan", "source_readiness"),
+                2.0,
+                validate_prerequisite,
+                "prerequisite source readiness differs",
+                reseal_plan,
+                (),
+            ),
+            (
+                "git-authority",
+                git_authority_path,
+                (),
+                True,
+                validate_git,
+                "Git permission authority has an invalid shape",
+                None,
+                (),
+            ),
+            (
+                "git-plan",
+                git_authority_path,
+                ("plan",),
+                1.0,
+                validate_git,
+                "Git permission plan authority differs",
+                reseal_plan,
+                (),
+            ),
+            (
+                "git-readiness",
+                git_authority_path,
+                ("plan", "source_readiness"),
+                2.0,
+                validate_git,
+                "Git permission source readiness differs",
+                reseal_plan,
+                (),
+            ),
+            (
+                "unit-authority",
+                unit_authority_path,
+                (),
+                True,
+                validate_unit,
+                "unit permission authority has an invalid shape",
+                None,
+                (),
+            ),
+            (
+                "unit-plan",
+                unit_authority_path,
+                ("plan",),
+                1.0,
+                validate_unit,
+                "unit permission plan authority differs",
+                reseal_unit_plan,
+                backup_claims,
+            ),
+            (
+                "unit-readiness",
+                unit_authority_path,
+                ("plan", "source_readiness"),
+                2.0,
+                validate_unit,
+                "unit permission source readiness differs",
+                reseal_unit_plan,
+                backup_claims,
+            ),
+            (
+                "unit-backup",
+                unit_authority_path,
+                ("backup",),
+                True,
+                validate_unit,
+                "unit permission backup authority differs",
+                reseal_backup,
+                (),
+            ),
+            (
+                "unit-backup-owner",
+                unit_authority_path,
+                ("backup", "owner"),
+                True,
+                validate_unit,
+                "unit permission backup authority differs",
+                reseal_backup,
+                (),
+            ),
+        )
+        for (
+            label,
+            path,
+            schema_path,
+            value,
+            validate,
+            message,
+            reseal,
+            auxiliary_paths,
+        ) in cases:
+            with self.subTest(label=label, value=value):
+                assert_rejected(
+                    path=path,
+                    schema_path=schema_path,
+                    value=value,
+                    validate=validate,
+                    message=message,
+                    reseal=reseal,
+                    auxiliary_paths=auxiliary_paths,
+                )
+
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        state = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        changed_state = json.loads(json.dumps(state))
+        changed_state["schema_version"] = 3.0
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "current deployment state has an invalid shape",
+        ):
+            CONTROLLER.validate_current_deployment_state(changed_state)
 
     def test_already_ready_replay_rejects_prerequisite_blob_drift_without_mutation(
         self,

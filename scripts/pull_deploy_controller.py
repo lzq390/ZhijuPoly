@@ -542,6 +542,19 @@ ADOPTED_GIT_PERMISSION_BINDING_FIELDS = {
     "authority_file_sha256",
     "identity_sha256",
 }
+ADOPTED_UNIT_PERMISSIONS_RELATIVE_PATH = Path(
+    "state/adopted-unit-permissions.json"
+)
+ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND = (
+    "manual-runtime-adoption-unit-permission-hardening"
+)
+ADOPTED_UNIT_PERMISSION_MAX_BYTES = 16 * 1024 * 1024
+ADOPTED_UNIT_PERMISSION_SUCCESSOR_POLICY = (
+    "nexpoly-adopted-git-permission-successor-v1"
+)
+ADOPTED_UNIT_PERMISSION_AUTHORITY_PUBLICATION_POLICY = (
+    "nexpoly-adopted-unit-authority-publication-v1"
+)
 ADOPTED_PREREQUISITE_FILES = (
     (
         "ops/config/bootstrap-quiesce.example",
@@ -614,6 +627,85 @@ ADOPTED_PREREQUISITE_FILES = (
         "mutable_data_audit_pg_service_sha256",
     ),
 )
+ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES = tuple(
+    record[0] for record in ADOPTED_PREREQUISITE_FILES
+) + (
+    "scripts/bootstrap_pull_deploy.py",
+    "scripts/git_source_trust.py",
+)
+ADOPTED_UNIT_PERMISSION_PLAN_FIELDS = {
+    "schema_version",
+    "authority_kind",
+    "operation_id",
+    "source_sha",
+    "source_tree",
+    "source_readiness",
+    "source_readiness_sha256",
+    "delivery_gate",
+    "delivery_gate_sha256",
+    "adopted_deployment_sha256",
+    "bootstrap_control_sha256",
+    "adopted_prerequisites_sha256",
+    "adopted_prerequisites_plan_sha256",
+    "production_source",
+    "adopted_git_permissions_sha256",
+    "git_permission_successor",
+    "units",
+    "authority_publication",
+    "unit_permission_impact_sha256",
+    "mutations",
+}
+ADOPTED_UNIT_PERMISSION_AUTHORITY_FIELDS = {
+    "schema_version",
+    "status",
+    "authority_kind",
+    "operation_id",
+    "source_sha",
+    "source_tree",
+    "production_source_sha",
+    "production_source_tree",
+    "adopted_deployment_sha256",
+    "bootstrap_control_sha256",
+    "adopted_prerequisites_sha256",
+    "adopted_git_permissions_sha256",
+    "adopted_git_permission_source_sha",
+    "adopted_git_permission_source_tree",
+    "plan_sha256",
+    "unit_permission_impact_sha256",
+    "original_units",
+    "original_units_sha256",
+    "hardened_units",
+    "hardened_units_sha256",
+    "backup",
+    "backup_sha256",
+    "backup_content_sha256",
+    "plan",
+    "completed_at",
+}
+ADOPTED_UNIT_PERMISSION_BINDING_FIELDS = {
+    "authority_kind",
+    "operation_id",
+    "source_sha",
+    "source_tree",
+    "production_source_sha",
+    "production_source_tree",
+    "adopted_deployment_sha256",
+    "bootstrap_control_sha256",
+    "adopted_prerequisites_sha256",
+    "adopted_git_permissions_sha256",
+    "adopted_git_permission_source_sha",
+    "adopted_git_permission_source_tree",
+    "plan_sha256",
+    "unit_permission_impact_sha256",
+    "original_units_sha256",
+    "hardened_units_sha256",
+    "backup_sha256",
+    "backup_content_sha256",
+    "completed_at",
+    "authority_file_sha256",
+    "git_permission_successor",
+    "identity_sha256",
+}
 ADOPTED_PREREQUISITE_SOURCE_READINESS_FIELDS = {
     "schema_version",
     "ready",
@@ -895,6 +987,11 @@ PREPARE_ABORT_PHASES = {
     "operation-archive-intent",
     "completed",
 }
+PREPARE_ABORT_JOURNAL_STAGING_RE = re.compile(
+    r"^\.(?P<operation_id>[a-z0-9][a-z0-9._-]{7,127})"
+    r"\.json\.(?P<nonce>[0-9a-f]{32})\.tmp$"
+)
+PREPARE_ABORT_JOURNAL_STAGING_MAX_FILES = 64
 SLOT_FIELDS = {
     "schema_version",
     "component",
@@ -4654,6 +4751,43 @@ def rename_directory_noreplace(source: Path, target: Path) -> None:
     )
 
 
+def _prepare_abort_renameat2_noreplace(
+    source_parent_descriptor: int,
+    source_name: str,
+    target_parent_descriptor: int,
+    target_name: str,
+) -> None:
+    """Move one entry by names relative to already-pinned private parents."""
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise PullDeployError("no-clobber prepare-abort archive is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        source_parent_descriptor,
+        os.fsencode(source_name),
+        target_parent_descriptor,
+        os.fsencode(target_name),
+        1,  # RENAME_NOREPLACE
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        raise FileExistsError(error, os.strerror(error), target_name)
+    raise PullDeployError(
+        f"no-clobber prepare-abort archive failed: {os.strerror(error)}"
+    )
+
+
 def quarantine_directory_noreplace(source: Path, target: Path) -> None:
     """Atomically quarantine a private directory across two private parents."""
 
@@ -4907,28 +5041,393 @@ def atomic_symlink(path: Path, target: str) -> None:
     fsync_directory(path.parent)
 
 
-def directory_inventory_digest(root: Path) -> str:
-    """Hash a private tree without following links or accepting special files."""
+def _inventory_stat_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
 
-    if not root.is_dir() or root.is_symlink():
-        raise PullDeployError(f"inventory root is not a safe directory: {root}")
+
+def directory_inventory_digest(
+    root: Path,
+    *,
+    fsync_root: bool = False,
+    root_descriptor: int | None = None,
+    root_parent_descriptor: int | None = None,
+    root_name: str | None = None,
+) -> str:
+    """Hash one path-bound tree through stable dirfds and file descriptors."""
+
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    file_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    if root_descriptor is None:
+        if root_parent_descriptor is not None or root_name is not None:
+            raise PullDeployError("inventory root descriptor contract is invalid")
+        try:
+            root_fd = os.open(root, directory_flags)
+        except OSError as exc:
+            raise PullDeployError(
+                f"inventory root is not a safe directory: {root}"
+            ) from exc
+    else:
+        if root_parent_descriptor is None or not root_name:
+            raise PullDeployError("inventory root descriptor contract is invalid")
+        try:
+            root_fd = os.dup(root_descriptor)
+        except OSError as exc:
+            raise PullDeployError(
+                f"inventory root descriptor is unavailable: {root}"
+            ) from exc
+    directories: list[
+        tuple[int, os.stat_result, int | None, str | None]
+    ] = []
+    entries: list[
+        tuple[str, int, str, os.stat_result, int | None]
+    ] = []
+    try:
+        root_before = os.fstat(root_fd)
+        directories.append((root_fd, root_before, None, None))
+        try:
+            if root_parent_descriptor is None:
+                root_observed = root.lstat()
+            else:
+                assert root_name is not None
+                root_observed = os.stat(
+                    root_name,
+                    dir_fd=root_parent_descriptor,
+                    follow_symlinks=False,
+                )
+        except OSError as exc:
+            raise PullDeployError(
+                f"inventory root is unavailable: {root}"
+            ) from exc
+        if (
+            not stat.S_ISDIR(root_before.st_mode)
+            or _inventory_stat_identity(root_observed)
+            != _inventory_stat_identity(root_before)
+        ):
+            raise PullDeployError(
+                f"inventory root is not a safe directory: {root}"
+            )
+
+        def collect(directory_fd: int, prefix: str) -> None:
+            try:
+                with os.scandir(directory_fd) as iterator:
+                    names = sorted(entry.name for entry in iterator)
+            except OSError as exc:
+                raise PullDeployError(
+                    f"inventory directory is unavailable: {root}"
+                ) from exc
+            for name in names:
+                if (
+                    not name
+                    or name in {".", ".."}
+                    or "/" in name
+                    or "\0" in name
+                ):
+                    raise PullDeployError(
+                        "inventory contains an unsafe entry name"
+                    )
+                relative = f"{prefix}/{name}" if prefix else name
+                try:
+                    metadata = os.stat(
+                        name,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                except OSError as exc:
+                    raise PullDeployError(
+                        f"inventory entry is unavailable: {relative}"
+                    ) from exc
+                child_fd: int | None = None
+                if stat.S_ISDIR(metadata.st_mode):
+                    try:
+                        child_fd = os.open(
+                            name,
+                            directory_flags,
+                            dir_fd=directory_fd,
+                        )
+                    except OSError as exc:
+                        raise PullDeployError(
+                            f"inventory directory changed: {relative}"
+                        ) from exc
+                    held = os.fstat(child_fd)
+                    if (
+                        not stat.S_ISDIR(held.st_mode)
+                        or _inventory_stat_identity(held)
+                        != _inventory_stat_identity(metadata)
+                    ):
+                        os.close(child_fd)
+                        raise PullDeployError(
+                            f"inventory directory changed: {relative}"
+                        )
+                    directories.append(
+                        (child_fd, metadata, directory_fd, name)
+                    )
+                    collect(child_fd, relative)
+                elif not (
+                    stat.S_ISREG(metadata.st_mode)
+                    or stat.S_ISLNK(metadata.st_mode)
+                ):
+                    raise PullDeployError(
+                        f"inventory contains a special file: {relative}"
+                    )
+                entries.append(
+                    (relative, directory_fd, name, metadata, child_fd)
+                )
+
+        collect(root_fd, "")
+        digest = hashlib.sha256()
+        for relative, parent_fd, name, metadata, child_fd in sorted(
+            entries,
+            key=lambda item: item[0],
+        ):
+            try:
+                observed = os.stat(
+                    name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                raise PullDeployError(
+                    f"inventory entry disappeared: {relative}"
+                ) from exc
+            expected_identity = _inventory_stat_identity(metadata)
+            if _inventory_stat_identity(observed) != expected_identity:
+                raise PullDeployError(
+                    f"inventory entry changed: {relative}"
+                )
+            encoded_relative = relative.encode("utf-8")
+            if stat.S_ISLNK(metadata.st_mode):
+                try:
+                    target = os.readlink(
+                        name,
+                        dir_fd=parent_fd,
+                    ).encode("utf-8")
+                    final = os.stat(
+                        name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                except OSError as exc:
+                    raise PullDeployError(
+                        f"inventory symlink changed: {relative}"
+                    ) from exc
+                if _inventory_stat_identity(final) != expected_identity:
+                    raise PullDeployError(
+                        f"inventory symlink changed: {relative}"
+                    )
+                digest.update(
+                    b"L\0" + encoded_relative + b"\0" + target + b"\0"
+                )
+            elif stat.S_ISDIR(metadata.st_mode):
+                assert child_fd is not None
+                if (
+                    _inventory_stat_identity(os.fstat(child_fd))
+                    != expected_identity
+                ):
+                    raise PullDeployError(
+                        f"inventory directory changed: {relative}"
+                    )
+                digest.update(b"D\0" + encoded_relative + b"\0")
+            else:
+                try:
+                    descriptor = os.open(
+                        name,
+                        file_flags,
+                        dir_fd=parent_fd,
+                    )
+                except OSError as exc:
+                    raise PullDeployError(
+                        f"inventory file changed: {relative}"
+                    ) from exc
+                try:
+                    before = os.fstat(descriptor)
+                    if (
+                        not stat.S_ISREG(before.st_mode)
+                        or _inventory_stat_identity(before)
+                        != expected_identity
+                    ):
+                        raise PullDeployError(
+                            f"inventory file changed: {relative}"
+                        )
+                    digest.update(b"F\0" + encoded_relative + b"\0")
+                    observed_bytes = 0
+                    maximum = before.st_size + 1
+                    while observed_bytes < maximum:
+                        block = os.read(
+                            descriptor,
+                            min(1024 * 1024, maximum - observed_bytes),
+                        )
+                        if not block:
+                            break
+                        observed_bytes += len(block)
+                        digest.update(block)
+                    after = os.fstat(descriptor)
+                    final = os.stat(
+                        name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        observed_bytes != before.st_size
+                        or _inventory_stat_identity(after)
+                        != expected_identity
+                        or _inventory_stat_identity(final)
+                        != expected_identity
+                    ):
+                        raise PullDeployError(
+                            f"inventory file changed: {relative}"
+                        )
+                    digest.update(b"\0")
+                finally:
+                    os.close(descriptor)
+
+        if fsync_root:
+            os.fsync(root_fd)
+        for descriptor, before, parent_fd, name in reversed(directories):
+            after = os.fstat(descriptor)
+            if _inventory_stat_identity(after) != _inventory_stat_identity(
+                before
+            ):
+                raise PullDeployError("inventory directory changed")
+            if parent_fd is None:
+                if root_parent_descriptor is None:
+                    final = root.lstat()
+                else:
+                    assert root_name is not None
+                    final = os.stat(
+                        root_name,
+                        dir_fd=root_parent_descriptor,
+                        follow_symlinks=False,
+                    )
+            else:
+                assert name is not None
+                final = os.stat(
+                    name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            if _inventory_stat_identity(final) != _inventory_stat_identity(
+                before
+            ):
+                raise PullDeployError("inventory directory path changed")
+        return "sha256:" + digest.hexdigest()
+    except OSError as exc:
+        raise PullDeployError(f"inventory changed while reading: {root}") from exc
+    finally:
+        for descriptor, _before, _parent, _name in reversed(directories):
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+
+
+def private_tree_inventory_digest(root: Path) -> str:
+    """Match the adoption prerequisite installer's private-tree inventory."""
+
+    metadata = root.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or root.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o022
+    ):
+        raise PullDeployError(f"private inventory root is unsafe: {root}")
     digest = hashlib.sha256()
     for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
         relative = path.relative_to(root).as_posix().encode("utf-8")
-        metadata = path.lstat()
-        if stat.S_ISLNK(metadata.st_mode):
-            target = os.readlink(path).encode("utf-8")
-            digest.update(b"L\0" + relative + b"\0" + target + b"\0")
-        elif stat.S_ISDIR(metadata.st_mode):
+        observed = path.lstat()
+        if observed.st_uid != os.geteuid():
+            raise PullDeployError(
+                f"private inventory entry has another owner: {path}"
+            )
+        if stat.S_ISLNK(observed.st_mode):
+            digest.update(
+                b"L\0"
+                + relative
+                + b"\0"
+                + os.fsencode(os.readlink(path))
+                + b"\0"
+            )
+        elif stat.S_ISDIR(observed.st_mode):
+            if observed.st_mode & 0o022:
+                raise PullDeployError(
+                    f"private inventory directory is writable: {path}"
+                )
             digest.update(b"D\0" + relative + b"\0")
-        elif stat.S_ISREG(metadata.st_mode):
+        elif stat.S_ISREG(observed.st_mode):
+            if observed.st_nlink != 1:
+                raise PullDeployError(
+                    f"private inventory file has another link: {path}"
+                )
             digest.update(b"F\0" + relative + b"\0")
-            with path.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            noatime = getattr(os, "O_NOATIME", 0)
+            try:
+                descriptor = os.open(path, flags | noatime)
+            except OSError as exc:
+                if (
+                    not noatime
+                    or exc.errno
+                    not in {errno.EPERM, errno.EINVAL, errno.ENOTSUP}
+                ):
+                    raise
+                descriptor = os.open(path, flags)
+            try:
+                before = os.fstat(descriptor)
+                while True:
+                    block = os.read(descriptor, 1024 * 1024)
+                    if not block:
+                        break
+                    digest.update(block)
+                after = os.fstat(descriptor)
+                stable_fields = (
+                    "st_dev",
+                    "st_ino",
+                    "st_mode",
+                    "st_uid",
+                    "st_gid",
+                    "st_nlink",
+                    "st_size",
+                    "st_mtime_ns",
+                    "st_ctime_ns",
+                )
+                if tuple(getattr(before, field) for field in stable_fields) != tuple(
+                    getattr(after, field) for field in stable_fields
+                ):
+                    raise PullDeployError(
+                        f"private inventory file changed: {path}"
+                    )
+            finally:
+                os.close(descriptor)
             digest.update(b"\0")
         else:
-            raise PullDeployError(f"inventory contains a special file: {path}")
+            raise PullDeployError(
+                f"private inventory contains a special file: {path}"
+            )
     return "sha256:" + digest.hexdigest()
 
 
@@ -6003,6 +6502,11 @@ def validate_worker_control_evidence(
 def validate_slot_record(
     document: dict[str, Any], slot: str | None = None
 ) -> dict[str, Any]:
+    if (
+        not isinstance(document, dict)
+        or type(document.get("schema_version")) is not int
+    ):
+        raise PullDeployError("monomer MD slot record schema is invalid")
     try:
         prefix = Path(str(document.get("venv_prefix", "")))
         runtime_root = prefix.parents[2]
@@ -6017,6 +6521,11 @@ def validate_slot_record(
 
 
 def validate_active_slot_record(document: dict[str, Any]) -> dict[str, Any]:
+    if (
+        not isinstance(document, dict)
+        or type(document.get("schema_version")) is not int
+    ):
+        raise PullDeployError("active monomer MD slot record schema is invalid")
     try:
         shared_validate_active_record(document)
     except WorkerSlotError as exc:
@@ -6746,6 +7255,7 @@ def _validate_dft_gpu_identity(document: object) -> dict[str, Any]:
         or document.get("uuid") != MONOMER_DFT_GPU_UUID
         or document.get("guard_mode") not in {"enforce", "observe"}
         or document.get("guard_state_path") != str(MONOMER_DFT_GUARD_STATE)
+        or type(document.get("guard_schema_version")) is not int
         or document.get("guard_schema_version") != 1
     ):
         raise PullDeployError("monomer DFT GPU identity is invalid")
@@ -7151,6 +7661,7 @@ def validate_adopted_deployment(document: object) -> dict[str, Any]:
     if (
         not isinstance(document, dict)
         or set(document) != ADOPTED_DEPLOYMENT_FIELDS
+        or type(document.get("schema_version")) is not int
         or document.get("schema_version") != 1
         or document.get("status") != "adopted"
         or document.get("authority_kind") != "manual-runtime-adoption"
@@ -7268,6 +7779,7 @@ def validate_adopted_deployment(document: object) -> dict[str, Any]:
     slot_record = monomer_md["slot_record"]
     if (
         not isinstance(slot_record, dict)
+        or type(slot_record.get("schema_version")) is not int
         or slot_record.get("schema_version") != SLOT_RECORD_SCHEMA_VERSION
         or slot_record.get("status") != "ready"
         or slot_record.get("component") != "monomer-md"
@@ -7419,6 +7931,7 @@ def validate_adopted_git_permission_takeover(
     if (
         not isinstance(document, dict)
         or set(document) != fields
+        or type(document.get("schema_version")) is not int
         or document.get("schema_version") != 1
         or document.get("authority_kind")
         != ADOPTED_GIT_PERMISSION_AUTHORITY_KIND
@@ -7460,9 +7973,17 @@ def validate_adopted_git_permission_takeover(
         document.get("authority_file_sha256"),
         "adopted Git permission authority file",
     )
+    hardened_marker = document.get("hardened_marker")
+    if (
+        not isinstance(hardened_marker, dict)
+        or type(hardened_marker.get("schema_version")) is not int
+    ):
+        raise PullDeployError(
+            "adopted Git permission hardened marker is invalid"
+        )
     try:
         marker = _git_source_trust.validate_permission_takeover_evidence(
-            document.get("hardened_marker"),
+            hardened_marker,
             allowed_phases={"hardened"},
         )
     except Exception as exc:
@@ -7491,6 +8012,353 @@ def validate_adopted_git_permission_takeover(
     return dict(document)
 
 
+def validate_adopted_git_permission_successor(
+    document: object,
+) -> dict[str, Any]:
+    """Validate the byte-identical bridge from Git authority A to target T2."""
+
+    fields = {
+        "schema_version",
+        "policy",
+        "mode",
+        "authority",
+        "target",
+        "files",
+        "files_sha256",
+        "identity_sha256",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != 1
+        or document.get("policy")
+        != ADOPTED_UNIT_PERMISSION_SUCCESSOR_POLICY
+        or document.get("mode")
+        not in ADOPTED_PREREQUISITE_TARGET_RELATIONS
+    ):
+        raise PullDeployError(
+            "adopted unit permission successor has an invalid shape"
+        )
+    authority = document.get("authority")
+    target = document.get("target")
+    if (
+        not isinstance(authority, dict)
+        or set(authority) != {"source_sha", "source_tree", "raw_sha256"}
+        or not isinstance(target, dict)
+        or set(target) != {"source_sha", "source_tree"}
+    ):
+        raise PullDeployError(
+            "adopted unit permission successor identities are invalid"
+        )
+    for record, label in ((authority, "authority"), (target, "target")):
+        require_sha(
+            record.get("source_sha"),
+            f"adopted unit permission successor {label} SHA",
+        )
+        require_sha(
+            record.get("source_tree"),
+            f"adopted unit permission successor {label} tree",
+        )
+    require_digest(
+        authority.get("raw_sha256"),
+        "adopted unit permission predecessor authority",
+    )
+    exact = (
+        authority["source_sha"] == target["source_sha"]
+        and authority["source_tree"] == target["source_tree"]
+    )
+    if exact != (document["mode"] == "exact-source") or (
+        document["mode"] == "ancestor-byte-identical"
+        and authority["source_sha"] == target["source_sha"]
+    ):
+        raise PullDeployError(
+            "adopted unit permission successor relation is inconsistent"
+        )
+    files = document.get("files")
+    if not isinstance(files, list) or len(files) != len(
+        ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+    ):
+        raise PullDeployError(
+            "adopted unit permission successor inventory is invalid"
+        )
+    for record, path in zip(
+        files, ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES, strict=True
+    ):
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"path", "sha256"}
+            or record.get("path") != path
+        ):
+            raise PullDeployError(
+                "adopted unit permission successor inventory differs"
+            )
+        require_digest(
+            record.get("sha256"),
+            f"adopted unit permission successor blob {path}",
+        )
+    if document.get("files_sha256") != canonical_json_digest(files):
+        raise PullDeployError(
+            "adopted unit permission successor inventory digest differs"
+        )
+    identity = {
+        key: value for key, value in document.items() if key != "identity_sha256"
+    }
+    if document.get("identity_sha256") != canonical_json_digest(identity):
+        raise PullDeployError(
+            "adopted unit permission successor digest differs"
+        )
+    return dict(document)
+
+
+def validate_adopted_unit_permission_records(
+    value: object,
+    *,
+    final: bool,
+) -> list[dict[str, Any]]:
+    """Validate the private MD/DFT filesystem and live-process identities."""
+
+    if not isinstance(value, list) or len(value) != 2:
+        raise PullDeployError("adopted unit permission inventory is invalid")
+    fields = {
+        "role",
+        "name",
+        "path",
+        "parent",
+        "type",
+        "device",
+        "inode",
+        "uid",
+        "gid",
+        "mode",
+        "target_mode",
+        "nlink",
+        "size",
+        "content_sha256",
+        "action",
+        "systemd_state",
+        "process_identity",
+    }
+    parent_fields = {
+        "path",
+        "type",
+        "device",
+        "inode",
+        "uid",
+        "gid",
+        "mode",
+        "nlink",
+        "size",
+    }
+    state_fields = {
+        "LoadState",
+        "FragmentPath",
+        "DropInPaths",
+        "NeedDaemonReload",
+        "UnitFileState",
+        "ActiveState",
+        "SubState",
+    }
+    expected = (
+        (
+            "monomer-md",
+            MONOMER_MD_UNIT_NAME,
+            "0600" if final else "0664",
+            "atomic-inode-replace",
+        ),
+        (
+            "monomer-dft",
+            MONOMER_DFT_UNIT_NAME,
+            "0600",
+            "no-op-cas",
+        ),
+    )
+    result: list[dict[str, Any]] = []
+    for record, (role, name, mode, action) in zip(
+        value, expected, strict=True
+    ):
+        path = (
+            Path(str(record.get("path", "")))
+            if isinstance(record, dict)
+            else Path("")
+        )
+        if (
+            not isinstance(record, dict)
+            or set(record) != fields
+            or record.get("role") != role
+            or record.get("name") != name
+            or not path.is_absolute()
+            or path.name != name
+            or record.get("type") != "file"
+            or record.get("mode") != mode
+            or record.get("target_mode") != "0600"
+            or record.get("nlink") != 1
+            or record.get("action") != action
+            or not isinstance(record.get("size"), int)
+            or isinstance(record.get("size"), bool)
+            or not 1 <= record["size"] <= 1024 * 1024
+        ):
+            raise PullDeployError(
+                "adopted unit permission record is invalid"
+            )
+        require_digest(
+            record.get("content_sha256"),
+            f"adopted {role} unit content",
+        )
+        for field in ("device", "inode", "uid", "gid"):
+            item = record.get(field)
+            if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+                raise PullDeployError(
+                    "adopted unit permission file identity is invalid"
+                )
+        parent = record.get("parent")
+        if (
+            not isinstance(parent, dict)
+            or set(parent) != parent_fields
+            or parent.get("path") != str(path.parent)
+            or parent.get("type") != "directory"
+            or not isinstance(parent.get("mode"), str)
+            or re.fullmatch(r"[0-7]{4}", parent["mode"]) is None
+            or int(parent["mode"], 8) & 0o022
+        ):
+            raise PullDeployError(
+                "adopted unit permission parent identity is invalid"
+            )
+        for field in ("device", "inode", "uid", "gid", "nlink", "size"):
+            item = parent.get(field)
+            if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+                raise PullDeployError(
+                    "adopted unit permission parent identity is invalid"
+                )
+        systemd_state = record.get("systemd_state")
+        process = record.get("process_identity")
+        if (
+            not isinstance(systemd_state, dict)
+            or set(systemd_state) != state_fields
+            or systemd_state.get("LoadState") != "loaded"
+            or systemd_state.get("FragmentPath") != str(path)
+            or systemd_state.get("DropInPaths") != ""
+            or systemd_state.get("NeedDaemonReload") != "no"
+            or systemd_state.get("UnitFileState") != "enabled"
+            or systemd_state.get("ActiveState") != "active"
+            or systemd_state.get("SubState") != "running"
+            or not isinstance(process, dict)
+            or set(process) != {"main_pid", "invocation_id"}
+            or not isinstance(process.get("main_pid"), int)
+            or isinstance(process.get("main_pid"), bool)
+            or process["main_pid"] <= 0
+            or re.fullmatch(
+                r"[0-9a-f]{32}", str(process.get("invocation_id", ""))
+            )
+            is None
+        ):
+            raise PullDeployError(
+                "adopted unit permission systemd identity is invalid"
+            )
+        result.append(dict(record))
+    if result[0]["parent"] != result[1]["parent"]:
+        raise PullDeployError(
+            "adopted Worker units do not share one parent identity"
+        )
+    return result
+
+
+def adopted_unit_transition_projection(
+    record: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep every unit invariant except filesystem-managed parent size.
+
+    The operation-owned temporary replacement pathname can permanently grow
+    an ext4 directory even after it is removed.  Both observed sizes remain
+    sealed as evidence; only the before/after transition comparison excludes
+    that allocation detail.
+    """
+
+    projected = dict(record)
+    parent = record.get("parent")
+    if not isinstance(parent, Mapping):
+        raise PullDeployError(
+            "adopted unit permission parent identity is invalid"
+        )
+    projected["parent"] = {
+        key: value for key, value in parent.items() if key != "size"
+    }
+    return projected
+
+
+def validate_adopted_unit_permission_binding(
+    document: object,
+) -> dict[str, Any]:
+    """Validate the path-independent compact unit hardening authority."""
+
+    if (
+        not isinstance(document, dict)
+        or set(document) != ADOPTED_UNIT_PERMISSION_BINDING_FIELDS
+        or document.get("authority_kind")
+        != ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND
+        or re.fullmatch(
+            r"adopt-unit-permission-[a-z0-9][a-z0-9._-]{7,95}",
+            str(document.get("operation_id", "")),
+        )
+        is None
+    ):
+        raise PullDeployError(
+            "adopted unit permission authority binding has an invalid shape"
+        )
+    for field in (
+        "source_sha",
+        "source_tree",
+        "production_source_sha",
+        "production_source_tree",
+        "adopted_git_permission_source_sha",
+        "adopted_git_permission_source_tree",
+    ):
+        require_sha(document.get(field), f"adopted unit permission {field}")
+    for field in (
+        "adopted_deployment_sha256",
+        "bootstrap_control_sha256",
+        "adopted_prerequisites_sha256",
+        "adopted_git_permissions_sha256",
+        "plan_sha256",
+        "unit_permission_impact_sha256",
+        "original_units_sha256",
+        "hardened_units_sha256",
+        "backup_sha256",
+        "backup_content_sha256",
+        "authority_file_sha256",
+    ):
+        require_digest(
+            document.get(field), f"adopted unit permission {field}"
+        )
+    successor = validate_adopted_git_permission_successor(
+        document.get("git_permission_successor")
+    )
+    if (
+        successor["authority"]["source_sha"]
+        != document["adopted_git_permission_source_sha"]
+        or successor["authority"]["source_tree"]
+        != document["adopted_git_permission_source_tree"]
+        or successor["authority"]["raw_sha256"]
+        != document["adopted_git_permissions_sha256"]
+        or successor["target"]["source_sha"] != document["source_sha"]
+        or successor["target"]["source_tree"] != document["source_tree"]
+    ):
+        raise PullDeployError(
+            "adopted unit permission successor differs from its authority"
+        )
+    require_utc_timestamp(
+        document.get("completed_at"), "adopted unit permission completion"
+    )
+    identity = {
+        key: value for key, value in document.items() if key != "identity_sha256"
+    }
+    if document.get("identity_sha256") != canonical_json_digest(identity):
+        raise PullDeployError(
+            "adopted unit permission authority binding digest differs"
+        )
+    return dict(document)
+
+
 def validate_adopted_prerequisite_target_binding(
     document: object,
 ) -> dict[str, Any]:
@@ -7513,12 +8381,16 @@ def validate_adopted_prerequisite_target_binding(
         if isinstance(document, dict)
         else None
     )
-    if schema_version == 2:
+    exact_schema = type(schema_version) is int
+    if exact_schema and schema_version in {2, 3}:
         fields.add("git_permission_authority")
+    if exact_schema and schema_version == 3:
+        fields.add("unit_permission_authority")
     if (
         not isinstance(document, dict)
         or set(document) != fields
-        or schema_version not in {1, 2}
+        or not exact_schema
+        or schema_version not in {1, 2, 3}
         or document.get("policy") != ADOPTED_PREREQUISITE_TARGET_POLICY
         or document.get("mode")
         not in ADOPTED_PREREQUISITE_TARGET_RELATIONS
@@ -7570,6 +8442,13 @@ def validate_adopted_prerequisite_target_binding(
             "adopted prerequisite target relation is inconsistent"
         )
     trust = document.get("target_source_trust")
+    if (
+        not isinstance(trust, dict)
+        or type(trust.get("schema_version")) is not int
+    ):
+        raise PullDeployError(
+            "adopted prerequisite target source trust differs"
+        )
     if trust != {
         "schema_version": 1,
         "policy": "nexpoly-trusted-standalone-complete-target-v1",
@@ -7612,18 +8491,61 @@ def validate_adopted_prerequisite_target_binding(
         raise PullDeployError(
             "adopted prerequisite target file inventory digest differs"
         )
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         permission = validate_adopted_git_permission_binding(
             document.get("git_permission_authority")
         )
-        if (
+        if permission["adopted_deployment_sha256"] != authority[
+            "adopted_deployment_sha256"
+        ]:
+            raise PullDeployError(
+                "adopted Git permission authority differs from target binding"
+            )
+        if schema_version == 2 and (
             permission["source_sha"] != target["source_sha"]
             or permission["source_tree"] != target["source_tree"]
-            or permission["adopted_deployment_sha256"]
-            != authority["adopted_deployment_sha256"]
         ):
             raise PullDeployError(
                 "adopted Git permission authority differs from target binding"
+            )
+    if schema_version == 3:
+        unit = validate_adopted_unit_permission_binding(
+            document.get("unit_permission_authority")
+        )
+        shared_provenance_fields = (
+            "production_source_sha",
+            "production_source_tree",
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+        )
+        unit_target_files = {
+            record["path"]: record["sha256"]
+            for record in unit["git_permission_successor"]["files"]
+        }
+        if (
+            unit["source_sha"] != target["source_sha"]
+            or unit["source_tree"] != target["source_tree"]
+            or unit["adopted_deployment_sha256"]
+            != authority["adopted_deployment_sha256"]
+            or unit["adopted_git_permissions_sha256"]
+            != permission["authority_file_sha256"]
+            or unit["adopted_git_permission_source_sha"]
+            != permission["source_sha"]
+            or unit["adopted_git_permission_source_tree"]
+            != permission["source_tree"]
+            or any(
+                unit[field] != permission[field]
+                for field in shared_provenance_fields
+            )
+            or any(
+                unit_target_files.get(record["source_path"])
+                != record["sha256"]
+                for record in files
+            )
+        ):
+            raise PullDeployError(
+                "adopted unit permission authority differs from target binding"
             )
     identity = {
         key: value for key, value in document.items() if key != "identity_sha256"
@@ -7648,6 +8570,7 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
     )
     if (
         not isinstance(document, dict)
+        or type(schema_version) is not int
         or required_fields is None
         or not required_fields.issubset(document)
         or not set(document).issubset(
@@ -7693,9 +8616,8 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
         }
         for record in history
     ]
-    history_versions = {
-        record["version"] for record in history_ledger
-    }
+    history_version_list = [record["version"] for record in history_ledger]
+    history_versions = set(history_version_list)
     migration_compatibility = validate_migration_compatibility_state(
         document.get("migration_compatibility"),
         migrations=history,
@@ -7843,7 +8765,7 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
                 "current 0014 mutable-data evidence lacks migration history"
             )
         queue_history = history_ledger[:
-            history_versions.index("0014_monomer_md_task_queue_cancel") + 1
+            history_version_list.index("0014_monomer_md_task_queue_cancel") + 1
         ]
         if (
             queue_mutable_pair["transition"]["kind"] != "expand-0014"
@@ -8144,7 +9066,11 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
 
 
 def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
-    schema_version = document.get("schema_version")
+    schema_version = (
+        document.get("schema_version")
+        if isinstance(document, dict)
+        else None
+    )
     expected_fields = (
         LEGACY_DESCRIPTOR_FIELDS
         if schema_version == LEGACY_DESCRIPTOR_SCHEMA_VERSION
@@ -8158,7 +9084,8 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
     )
     descriptor_fields = set(document) if isinstance(document, dict) else set()
     valid_shape = (
-        expected_fields is not None
+        type(schema_version) is int
+        and expected_fields is not None
         and (
             descriptor_fields == expected_fields
             if schema_version != DESCRIPTOR_SCHEMA_VERSION
@@ -8198,7 +9125,10 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
         "previous_active_control_sha256",
     }:
         raise PullDeployError("descriptor controller evidence has an invalid shape")
-    if controller.get("schema_version") != CONTROLLER_SCHEMA_VERSION:
+    if (
+        type(controller.get("schema_version")) is not int
+        or controller.get("schema_version") != CONTROLLER_SCHEMA_VERSION
+    ):
         raise PullDeployError("descriptor controller schema is unsupported")
     require_digest(controller.get("sha256"), "controller digest")
     helpers = controller.get("helpers")
@@ -8458,12 +9388,39 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             )
             if (
                 adopted is None
-                or prerequisite_binding["schema_version"] != 2
+                or prerequisite_binding["schema_version"] not in {2, 3}
                 or prerequisite_binding["target"]
                 != {
                     "source_sha": repository["target_sha"],
                     "source_tree": repository["target_tree"],
                 }
+                or prerequisite_binding["authority"][
+                    "adopted_deployment_sha256"
+                ]
+                # The nested prerequisite authority seals the exact
+                # adopted-deployment.json bytes.  Adoption writes canonical
+                # JSON with one trailing newline; the descriptor-level digest
+                # above intentionally seals the canonical object instead.
+                != sha256_bytes(canonical_json_bytes(adopted) + b"\n")
+                or prerequisite_binding["git_permission_authority"][
+                    "production_source_sha"
+                ]
+                != adopted["source_sha"]
+                or prerequisite_binding["git_permission_authority"][
+                    "production_source_tree"
+                ]
+                != adopted["source_tree"]
+                or prerequisite_binding["schema_version"] == 3
+                and (
+                    prerequisite_binding["unit_permission_authority"][
+                        "production_source_sha"
+                    ]
+                    != adopted["source_sha"]
+                    or prerequisite_binding["unit_permission_authority"][
+                        "production_source_tree"
+                    ]
+                    != adopted["source_tree"]
+                )
             ):
                 raise PullDeployError(
                     "descriptor prerequisite target binding differs from repository"
@@ -14408,6 +15365,9 @@ class PullDeployController:
         self.adopted_git_permissions_path = (
             self.runtime_root / ADOPTED_GIT_PERMISSIONS_RELATIVE_PATH
         )
+        self.adopted_unit_permissions_path = (
+            self.runtime_root / ADOPTED_UNIT_PERMISSIONS_RELATIVE_PATH
+        )
         self.current_state_path = self.state_dir / "current-deployment.json"
         self.adopted_state_path = self.state_dir / "adopted-deployment.json"
         self.active_slot_path = self.state_dir / "monomer-md-active-slot.json"
@@ -14440,7 +15400,8 @@ class PullDeployController:
                 )
             return None
         if (
-            bootstrap.get("schema_version") != 3
+            type(bootstrap.get("schema_version")) is not int
+            or bootstrap.get("schema_version") != 3
             or bootstrap.get("status") != "completed"
             or bootstrap.get("authority_kind") != "manual-runtime-adoption"
         ):
@@ -14755,7 +15716,10 @@ class PullDeployController:
     def _git_trust_preflight(self) -> dict[str, Any] | None:
         if self.test_root_mode and not self._has_complete_test_git_layout():
             return None
-        self._git_permission_takeover()
+        git_permission = self._git_permission_takeover()
+        self._unit_permission_takeover(
+            git_permission_takeover=git_permission,
+        )
         environment = self._clean_environment()
         try:
             return _git_source_trust.repository_preflight_evidence(
@@ -14856,11 +15820,14 @@ class PullDeployController:
             or bootstrap.get("adopted_deployment") != adopted_document
             or bootstrap.get("adopted_deployment_sha256")
             != canonical_json_digest(adopted_document)
+            or type(prerequisites.get("schema_version")) is not int
             or prerequisites.get("schema_version") != 1
             or prerequisites.get("status") != "completed"
             or prerequisites.get("authority_kind")
             != "manual-runtime-adoption-prerequisites"
             or not isinstance(prerequisite_plan, dict)
+            or type(prerequisite_plan.get("schema_version")) is not int
+            or prerequisite_plan.get("schema_version") != 1
             or prerequisites.get("plan_sha256")
             != canonical_json_digest(prerequisite_plan)
             or prerequisites.get("adopted_deployment_sha256")
@@ -14871,6 +15838,7 @@ class PullDeployController:
             )
         if (
             set(authority) != ADOPTED_GIT_PERMISSION_AUTHORITY_FIELDS
+            or type(authority.get("schema_version")) is not int
             or authority.get("schema_version") != 1
             or authority.get("status") != "completed"
             or authority.get("authority_kind")
@@ -14915,6 +15883,7 @@ class PullDeployController:
             not isinstance(plan, dict)
             or set(plan) != ADOPTED_GIT_PERMISSION_PLAN_FIELDS
             or authority.get("plan_sha256") != canonical_json_digest(plan)
+            or type(plan.get("schema_version")) is not int
             or plan.get("schema_version") != 1
             or plan.get("authority_kind") != authority["authority_kind"]
             or plan.get("operation_id") != authority["operation_id"]
@@ -14953,6 +15922,7 @@ class PullDeployController:
             not isinstance(readiness, dict)
             or set(readiness)
             != ADOPTED_PREREQUISITE_SOURCE_READINESS_FIELDS
+            or type(readiness.get("schema_version")) is not int
             or readiness.get("schema_version") != 2
             or readiness.get("ready") is not True
             or not source_root.is_absolute()
@@ -15023,9 +15993,17 @@ class PullDeployController:
             raise PullDeployError(
                 "adopted Git permission delivery gate differs"
             )
+        permission_takeover = plan.get("permission_takeover")
+        if (
+            not isinstance(permission_takeover, dict)
+            or type(permission_takeover.get("schema_version")) is not int
+        ):
+            raise PullDeployError(
+                "adopted Git permission captured inventory is invalid"
+            )
         try:
             captured = _git_source_trust.validate_permission_takeover_evidence(
-                plan.get("permission_takeover"),
+                permission_takeover,
                 repository=self.production_root,
                 marker_path=self.git_permission_marker_path,
                 allowed_phases={"captured"},
@@ -15188,6 +16166,753 @@ class PullDeployController:
                 "adopted Git permission authority changed while validating"
             )
         return combined
+
+    @staticmethod
+    def _validate_unit_permission_source_authority(
+        plan: Mapping[str, Any],
+        *,
+        source_sha: str,
+        source_tree: str,
+    ) -> None:
+        readiness = plan.get("source_readiness")
+        source_root = (
+            Path(str(readiness.get("source_root", "")))
+            if isinstance(readiness, dict)
+            else Path("")
+        )
+        if (
+            not isinstance(readiness, dict)
+            or set(readiness)
+            != ADOPTED_PREREQUISITE_SOURCE_READINESS_FIELDS
+            or type(readiness.get("schema_version")) is not int
+            or readiness.get("schema_version") != 2
+            or readiness.get("ready") is not True
+            or not source_root.is_absolute()
+            or readiness.get("source_sha") != source_sha
+            or readiness.get("source_tree") != source_tree
+            or readiness.get("branch") != "main"
+            or readiness.get("origin") != REPOSITORY_SSH_URL
+            or readiness.get("remote_names") != ["origin"]
+            or readiness.get("origin_fetch_urls") != [REPOSITORY_SSH_URL]
+            or readiness.get("origin_push_urls") != [REPOSITORY_SSH_URL]
+            or readiness.get("origin_main_sha") != source_sha
+            or readiness.get("standalone_object_database") is not True
+            or readiness.get("shallow") is not False
+            or readiness.get("dirty_entries") != 0
+            or readiness.get("ignored_entries") != 0
+            or readiness.get("unreachable_objects") != 0
+            or readiness.get("replace_refs") != 0
+            or readiness.get("special_index_entries") != 0
+            or readiness.get("sparse_index") is not False
+            or readiness.get("owner_private") is not True
+            or readiness.get("group_or_world_writable") is not False
+            or plan.get("source_readiness_sha256")
+            != canonical_json_digest(readiness)
+        ):
+            raise PullDeployError(
+                "adopted unit permission source readiness differs"
+            )
+        delivery = plan.get("delivery_gate")
+        ci = delivery.get("ci") if isinstance(delivery, dict) else None
+        if (
+            not isinstance(delivery, dict)
+            or set(delivery) != {"remote_main", "ci"}
+            or delivery.get("remote_main") != source_sha
+            or not isinstance(ci, dict)
+            or set(ci)
+            != {
+                "workflow_run_id",
+                "run_attempt",
+                "head_sha",
+                "head_branch",
+                "event",
+                "path",
+                "conclusion",
+                "required_jobs",
+            }
+            or not isinstance(ci.get("workflow_run_id"), int)
+            or isinstance(ci.get("workflow_run_id"), bool)
+            or ci.get("workflow_run_id", 0) <= 0
+            or not isinstance(ci.get("run_attempt"), int)
+            or isinstance(ci.get("run_attempt"), bool)
+            or ci.get("run_attempt", 0) <= 0
+            or ci.get("head_sha") != source_sha
+            or ci.get("head_branch") != "main"
+            or ci.get("event") != "push"
+            or ci.get("path") != ".github/workflows/ci.yml"
+            or ci.get("conclusion") != "success"
+            or not isinstance(ci.get("required_jobs"), list)
+            or not ci["required_jobs"]
+            or len(ci["required_jobs"]) > 32
+            or ci["required_jobs"] != sorted(set(ci["required_jobs"]))
+            or any(
+                not isinstance(name, str) or not name
+                for name in ci["required_jobs"]
+            )
+            or plan.get("delivery_gate_sha256")
+            != canonical_json_digest(delivery)
+        ):
+            raise PullDeployError(
+                "adopted unit permission delivery gate differs"
+            )
+
+    def _verify_live_hardened_adopted_units(
+        self,
+        original_units: list[dict[str, Any]],
+        hardened_units: list[dict[str, Any]],
+    ) -> None:
+        for index, (original, record) in enumerate(
+            zip(original_units, hardened_units, strict=True)
+        ):
+            path = Path(record["path"])
+            try:
+                metadata = path.lstat()
+                parent = path.parent.lstat()
+            except OSError as exc:
+                raise PullDeployError(
+                    "hardened adopted Worker unit is unavailable"
+                ) from exc
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or path.is_symlink()
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_nlink != 1
+                or metadata.st_size != record["size"]
+                or metadata.st_dev != record["device"]
+                or metadata.st_ino != record["inode"]
+                or metadata.st_uid != record["uid"]
+                or metadata.st_gid != record["gid"]
+                or sha256_file(path) != record["content_sha256"]
+                or not stat.S_ISDIR(parent.st_mode)
+                or path.parent.is_symlink()
+                or parent.st_uid != os.geteuid()
+                or parent.st_mode & 0o022
+            ):
+                raise PullDeployError(
+                    "hardened adopted Worker unit identity differs"
+                )
+            sealed_parent = record["parent"]
+            if any(
+                observed != sealed_parent[field]
+                for field, observed in (
+                    ("device", parent.st_dev),
+                    ("inode", parent.st_ino),
+                    ("uid", parent.st_uid),
+                    ("gid", parent.st_gid),
+                    ("mode", f"{stat.S_IMODE(parent.st_mode):04o}"),
+                    ("nlink", parent.st_nlink),
+                    ("size", parent.st_size),
+                )
+            ):
+                raise PullDeployError(
+                    "hardened adopted Worker unit parent differs"
+                )
+            if index == 0:
+                if (
+                    record["device"] != original["device"]
+                    or record["inode"] == original["inode"]
+                ):
+                    raise PullDeployError(
+                        "hardened adopted MD unit replacement differs"
+                    )
+            elif adopted_unit_transition_projection(
+                record
+            ) != adopted_unit_transition_projection(original):
+                raise PullDeployError(
+                    "hardened adopted DFT unit no-op identity differs"
+                )
+            shown = self.runner.run(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    record["name"],
+                    "--property=LoadState",
+                    "--property=FragmentPath",
+                    "--property=DropInPaths",
+                    "--property=NeedDaemonReload",
+                    "--property=UnitFileState",
+                    "--property=ActiveState",
+                    "--property=SubState",
+                    "--property=MainPID",
+                    "--property=InvocationID",
+                ],
+                env=self.control_environment(),
+            )
+            fields = dict(
+                line.split("=", 1)
+                for line in str(shown.stdout).splitlines()
+                if "=" in line
+            )
+            state_fields = {
+                "LoadState",
+                "FragmentPath",
+                "DropInPaths",
+                "NeedDaemonReload",
+                "UnitFileState",
+                "ActiveState",
+                "SubState",
+            }
+            try:
+                process = {
+                    "main_pid": int(fields["MainPID"]),
+                    "invocation_id": fields["InvocationID"],
+                }
+            except (KeyError, TypeError, ValueError) as exc:
+                raise PullDeployError(
+                    "hardened adopted Worker process identity is malformed"
+                ) from exc
+            if (
+                set(fields) != state_fields | {"MainPID", "InvocationID"}
+                or {key: fields[key] for key in state_fields}
+                != record["systemd_state"]
+                or process != record["process_identity"]
+                or record["process_identity"]
+                != original["process_identity"]
+                or record["systemd_state"] != original["systemd_state"]
+            ):
+                raise PullDeployError(
+                    "hardened adopted Worker runtime identity differs"
+                )
+
+    def _verify_adopted_unit_permission_backup(
+        self,
+        backup: Mapping[str, Any],
+        *,
+        operation_id: str,
+        plan_sha256: str,
+        original_md: Mapping[str, Any],
+    ) -> None:
+        root = self.state_dir / "adopted-unit-permission-backups"
+        operation = root / operation_id
+        claim = root / f".{operation_id}.owner.json"
+        unit_path = operation / MONOMER_MD_UNIT_NAME
+        owner = backup.get("owner")
+        unit = backup.get("unit")
+        expected_owner = {
+            "schema_version": 1,
+            "authority_kind": ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND,
+            "operation_id": operation_id,
+            "plan_sha256": plan_sha256,
+            "md_original_sha256": canonical_json_digest(original_md),
+            "content_sha256": original_md["content_sha256"],
+        }
+        if (
+            set(backup)
+            != {
+                "schema_version",
+                "operation_id",
+                "owner",
+                "owner_sha256",
+                "claim_path",
+                "claim_sha256",
+                "unit",
+                "unit_sha256",
+                "inventory_sha256",
+            }
+            or type(backup.get("schema_version")) is not int
+            or backup.get("schema_version") != 1
+            or backup.get("operation_id") != operation_id
+            or not isinstance(owner, dict)
+            or type(owner.get("schema_version")) is not int
+            or owner != expected_owner
+            or backup.get("owner_sha256")
+            != canonical_json_digest(expected_owner)
+            or backup.get("claim_path") != str(claim)
+            or backup.get("claim_sha256") != backup.get("owner_sha256")
+            or not isinstance(unit, dict)
+            or set(unit)
+            != {
+                "path",
+                "type",
+                "device",
+                "inode",
+                "uid",
+                "gid",
+                "mode",
+                "nlink",
+                "size",
+                "content_sha256",
+            }
+            or unit.get("path") != str(unit_path)
+            or unit.get("type") != "file"
+            or unit.get("mode") != "0600"
+            or unit.get("nlink") != 1
+            or unit.get("size") != original_md["size"]
+            or unit.get("content_sha256")
+            != original_md["content_sha256"]
+            or backup.get("unit_sha256") != canonical_json_digest(unit)
+        ):
+            raise PullDeployError(
+                "adopted unit permission backup authority differs"
+            )
+        require_digest(
+            backup.get("inventory_sha256"),
+            "adopted unit permission backup inventory",
+        )
+        for field in ("device", "inode", "uid", "gid"):
+            item = unit.get(field)
+            if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+                raise PullDeployError(
+                    "adopted unit permission backup identity is invalid"
+                )
+        ensure_private_directory(root)
+        ensure_private_directory(operation)
+        if (
+            {path.name for path in operation.iterdir()}
+            != {".owner.json", MONOMER_MD_UNIT_NAME}
+            or private_tree_inventory_digest(operation)
+            != backup["inventory_sha256"]
+        ):
+            raise PullDeployError(
+                "adopted unit permission backup inventory differs"
+            )
+        if (
+            load_private_json(claim) != expected_owner
+            or load_private_json(operation / ".owner.json")
+            != expected_owner
+        ):
+            raise PullDeployError(
+                "adopted unit permission backup owner differs"
+            )
+        payload, payload_digest = private_regular_file(
+            unit_path,
+            mode=0o600,
+            maximum_bytes=1024 * 1024,
+        )
+        metadata = unit_path.lstat()
+        if (
+            payload_digest != unit["content_sha256"]
+            or len(payload) != unit["size"]
+            or any(
+                observed != unit[field]
+                for field, observed in (
+                    ("device", metadata.st_dev),
+                    ("inode", metadata.st_ino),
+                    ("uid", metadata.st_uid),
+                    ("gid", metadata.st_gid),
+                    ("nlink", metadata.st_nlink),
+                    ("size", metadata.st_size),
+                )
+            )
+        ):
+            raise PullDeployError(
+                "adopted unit permission backup file differs"
+            )
+
+    def _validate_adopted_unit_authority_publication(
+        self,
+        value: object,
+        *,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Require the exact three-name namespace adopted before mutation."""
+
+        final_name = ADOPTED_UNIT_PERMISSIONS_RELATIVE_PATH.name
+        staging_name = f".{final_name}.create-{operation_id}"
+        quarantine_name = f"{staging_name}.quarantine"
+        expected: dict[str, Any] = {
+            "schema_version": 1,
+            "policy": (
+                ADOPTED_UNIT_PERMISSION_AUTHORITY_PUBLICATION_POLICY
+            ),
+            "directory": str(self.state_dir),
+            "entries": [
+                {
+                    "role": "final",
+                    "name": final_name,
+                    "path": str(self.state_dir / final_name),
+                    "initially_absent": True,
+                },
+                {
+                    "role": "staging",
+                    "name": staging_name,
+                    "path": str(self.state_dir / staging_name),
+                    "initially_absent": True,
+                },
+                {
+                    "role": "staging-quarantine",
+                    "name": quarantine_name,
+                    "path": str(self.state_dir / quarantine_name),
+                    "initially_absent": True,
+                },
+            ],
+        }
+        if not isinstance(value, dict):
+            raise PullDeployError(
+                "adopted unit permission authority publication differs"
+            )
+        entries = value.get("entries")
+        if (
+            type(value.get("schema_version")) is not int
+            or not isinstance(entries, list)
+            or any(
+                not isinstance(entry, dict)
+                or type(entry.get("initially_absent")) is not bool
+                for entry in entries
+            )
+            or value != expected
+        ):
+            raise PullDeployError(
+                "adopted unit permission authority publication differs"
+            )
+        return expected
+
+    def _validate_adopted_unit_permission_authority(
+        self,
+        *,
+        adopted: Mapping[str, Any],
+        git_permission_takeover: Mapping[str, Any],
+        verify_live: bool,
+    ) -> dict[str, Any]:
+        """Bind unit hardening to every raw adoption predecessor byte."""
+
+        adopted_document, adopted_digest = self._private_json_with_digest(
+            self.adopted_state_path,
+            label="adopted deployment authority",
+        )
+        bootstrap_path = self.state_dir / "bootstrap-control.json"
+        bootstrap, bootstrap_digest = self._private_json_with_digest(
+            bootstrap_path,
+            label="manual adoption bootstrap authority",
+        )
+        prerequisites_path = (
+            self.runtime_root / ADOPTED_PREREQUISITES_RELATIVE_PATH
+        )
+        prerequisites, prerequisites_digest = self._private_json_with_digest(
+            prerequisites_path,
+            label="adopted prerequisite authority",
+        )
+        git_authority, git_authority_digest = self._private_json_with_digest(
+            self.adopted_git_permissions_path,
+            label="adopted Git permission authority",
+            maximum_bytes=ADOPTED_GIT_PERMISSION_MAX_BYTES,
+        )
+        authority, authority_file_digest = self._private_json_with_digest(
+            self.adopted_unit_permissions_path,
+            label="adopted unit permission authority",
+            maximum_bytes=ADOPTED_UNIT_PERMISSION_MAX_BYTES,
+        )
+        prerequisite_plan = prerequisites.get("plan")
+        git_combined = validate_adopted_git_permission_takeover(
+            dict(git_permission_takeover)
+        )
+        if (
+            adopted_document != adopted
+            or bootstrap.get("adopted_deployment") != adopted_document
+            or bootstrap.get("adopted_deployment_sha256")
+            != canonical_json_digest(adopted_document)
+            or type(prerequisites.get("schema_version")) is not int
+            or prerequisites.get("schema_version") != 1
+            or prerequisites.get("status") != "completed"
+            or prerequisites.get("authority_kind")
+            != "manual-runtime-adoption-prerequisites"
+            or not isinstance(prerequisite_plan, dict)
+            or type(prerequisite_plan.get("schema_version")) is not int
+            or prerequisite_plan.get("schema_version") != 1
+            or prerequisites.get("plan_sha256")
+            != canonical_json_digest(prerequisite_plan)
+            or prerequisites.get("adopted_deployment_sha256")
+            != adopted_digest
+            or git_authority_digest
+            != git_combined["authority_file_sha256"]
+            or git_authority.get("plan_sha256")
+            != git_combined["authority"]["plan_sha256"]
+        ):
+            raise PullDeployError(
+                "adopted unit permission base authority differs"
+            )
+        if (
+            set(authority) != ADOPTED_UNIT_PERMISSION_AUTHORITY_FIELDS
+            or type(authority.get("schema_version")) is not int
+            or authority.get("schema_version") != 1
+            or authority.get("status") != "completed"
+            or authority.get("authority_kind")
+            != ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND
+            or re.fullmatch(
+                r"adopt-unit-permission-[a-z0-9][a-z0-9._-]{7,95}",
+                str(authority.get("operation_id", "")),
+            )
+            is None
+        ):
+            raise PullDeployError(
+                "adopted unit permission authority has an invalid shape"
+            )
+        for field in (
+            "source_sha",
+            "source_tree",
+            "production_source_sha",
+            "production_source_tree",
+            "adopted_git_permission_source_sha",
+            "adopted_git_permission_source_tree",
+        ):
+            require_sha(authority.get(field), f"adopted unit permission {field}")
+        for field in (
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+            "adopted_git_permissions_sha256",
+            "plan_sha256",
+            "unit_permission_impact_sha256",
+            "original_units_sha256",
+            "hardened_units_sha256",
+            "backup_sha256",
+            "backup_content_sha256",
+        ):
+            require_digest(
+                authority.get(field), f"adopted unit permission {field}"
+            )
+        require_utc_timestamp(
+            authority.get("completed_at"),
+            "adopted unit permission completion",
+        )
+        plan = authority.get("plan")
+        if (
+            not isinstance(plan, dict)
+            or set(plan) != ADOPTED_UNIT_PERMISSION_PLAN_FIELDS
+            or authority["plan_sha256"] != canonical_json_digest(plan)
+            or type(plan.get("schema_version")) is not int
+            or plan.get("schema_version") != 1
+            or plan.get("authority_kind") != authority["authority_kind"]
+            or plan.get("operation_id") != authority["operation_id"]
+            or plan.get("source_sha") != authority["source_sha"]
+            or plan.get("source_tree") != authority["source_tree"]
+            or plan.get("adopted_deployment_sha256") != adopted_digest
+            or plan.get("bootstrap_control_sha256") != bootstrap_digest
+            or plan.get("adopted_prerequisites_sha256")
+            != prerequisites_digest
+            or plan.get("adopted_prerequisites_plan_sha256")
+            != prerequisites["plan_sha256"]
+            or plan.get("adopted_git_permissions_sha256")
+            != git_authority_digest
+            or plan.get("production_source")
+            != {
+                "source_sha": adopted["source_sha"],
+                "source_tree": adopted["source_tree"],
+            }
+            or plan.get("mutations")
+            != {
+                "services_restarted": False,
+                "source": False,
+                "database": False,
+                "credentials": False,
+                "md_unit_inode": True,
+                "dft_unit": False,
+                "runtime_authority": True,
+                "systemd_daemon_reload": True,
+            }
+        ):
+            raise PullDeployError(
+                "adopted unit permission plan authority differs"
+            )
+        authority_publication = (
+            self._validate_adopted_unit_authority_publication(
+                plan.get("authority_publication"),
+                operation_id=authority["operation_id"],
+            )
+        )
+        self._validate_unit_permission_source_authority(
+            plan,
+            source_sha=authority["source_sha"],
+            source_tree=authority["source_tree"],
+        )
+        successor = validate_adopted_git_permission_successor(
+            plan.get("git_permission_successor")
+        )
+        units = validate_adopted_unit_permission_records(
+            plan.get("units"), final=False
+        )
+        original_units = validate_adopted_unit_permission_records(
+            authority.get("original_units"), final=False
+        )
+        hardened_units = validate_adopted_unit_permission_records(
+            authority.get("hardened_units"), final=True
+        )
+        backup = authority.get("backup")
+        if not isinstance(backup, dict):
+            raise PullDeployError(
+                "adopted unit permission backup authority is invalid"
+            )
+        impact = {
+            "schema_version": 1,
+            "policy": "nexpoly-adopted-unit-permission-hardening-v1",
+            "units": units,
+            "authority_publication": authority_publication,
+        }
+        adopted_md = adopted.get("monomer_md", {}).get("systemd_unit", {})
+        adopted_dft = adopted.get("monomer_dft", {}).get("systemd_unit", {})
+        permission = git_combined["authority"]
+        if (
+            successor["authority"]["source_sha"]
+            != permission["source_sha"]
+            or successor["authority"]["source_tree"]
+            != permission["source_tree"]
+            or successor["authority"]["raw_sha256"]
+            != git_authority_digest
+            or successor["target"]
+            != {
+                "source_sha": authority["source_sha"],
+                "source_tree": authority["source_tree"],
+            }
+            or authority["adopted_deployment_sha256"] != adopted_digest
+            or authority["bootstrap_control_sha256"] != bootstrap_digest
+            or authority["adopted_prerequisites_sha256"]
+            != prerequisites_digest
+            or authority["adopted_git_permissions_sha256"]
+            != git_authority_digest
+            or authority["adopted_git_permission_source_sha"]
+            != permission["source_sha"]
+            or authority["adopted_git_permission_source_tree"]
+            != permission["source_tree"]
+            or authority["production_source_sha"] != adopted["source_sha"]
+            or authority["production_source_tree"] != adopted["source_tree"]
+            or authority["unit_permission_impact_sha256"]
+            != canonical_json_digest(impact)
+            or plan["unit_permission_impact_sha256"]
+            != authority["unit_permission_impact_sha256"]
+            or authority["original_units_sha256"]
+            != canonical_json_digest(original_units)
+            or original_units != units
+            or authority["hardened_units_sha256"]
+            != canonical_json_digest(hardened_units)
+            or authority["backup_sha256"]
+            != canonical_json_digest(backup)
+            or authority["backup_content_sha256"]
+            != units[0]["content_sha256"]
+            or adopted_md.get("target_path") != units[0]["path"]
+            or adopted_md.get("sha256") != units[0]["content_sha256"]
+            or adopted_dft.get("target_path") != units[1]["path"]
+            or adopted_dft.get("sha256") != units[1]["content_sha256"]
+        ):
+            raise PullDeployError(
+                "adopted unit permission evidence differs from predecessors"
+            )
+        stable_md_fields = {
+            "role",
+            "name",
+            "path",
+            "type",
+            "uid",
+            "gid",
+            "target_mode",
+            "size",
+            "content_sha256",
+            "action",
+            "systemd_state",
+            "process_identity",
+        }
+        if (
+            any(
+                hardened_units[0][field] != units[0][field]
+                for field in stable_md_fields
+            )
+            or hardened_units[0]["device"] != units[0]["device"]
+            or hardened_units[0]["inode"] == units[0]["inode"]
+            or any(
+                hardened_units[0]["parent"][field]
+                != units[0]["parent"][field]
+                for field in ("device", "inode", "uid", "gid", "mode", "nlink")
+            )
+            or adopted_unit_transition_projection(hardened_units[1])
+            != adopted_unit_transition_projection(units[1])
+        ):
+            raise PullDeployError(
+                "adopted unit permission transition identity differs"
+            )
+        self._verify_adopted_unit_permission_backup(
+            backup,
+            operation_id=authority["operation_id"],
+            plan_sha256=authority["plan_sha256"],
+            original_md=units[0],
+        )
+        if verify_live:
+            self._verify_live_hardened_adopted_units(
+                units,
+                hardened_units,
+            )
+        projection = {
+            field: authority[field]
+            for field in (
+                ADOPTED_UNIT_PERMISSION_BINDING_FIELDS
+                - {
+                    "authority_file_sha256",
+                    "git_permission_successor",
+                    "identity_sha256",
+                }
+            )
+        }
+        binding: dict[str, Any] = {
+            **projection,
+            "authority_file_sha256": authority_file_digest,
+            "git_permission_successor": successor,
+        }
+        binding["identity_sha256"] = canonical_json_digest(binding)
+        return validate_adopted_unit_permission_binding(binding)
+
+    def _unit_permission_takeover(
+        self,
+        *,
+        git_permission_takeover: Mapping[str, Any] | None = None,
+        verify_live: bool | None = None,
+    ) -> dict[str, Any] | None:
+        adoption_binding = self._adoption_bootstrap_binding()
+        authority_present = (
+            self.adopted_unit_permissions_path.exists()
+            or self.adopted_unit_permissions_path.is_symlink()
+        )
+        manual_current = False
+        if self.current_state_path.exists() or self.current_state_path.is_symlink():
+            current = validate_current_deployment_state(
+                load_private_json(self.current_state_path)
+            )
+            manual_current = (
+                current.get("schema_version") == CURRENT_STATE_SCHEMA_VERSION
+                and current.get("authority_kind") == "manual-runtime-adoption"
+            )
+        if authority_present and adoption_binding is None:
+            raise PullDeployError(
+                "adopted unit permission authority lost its adoption binding"
+            )
+        if (adoption_binding is not None or manual_current) and not authority_present:
+            raise PullDeployError(
+                "manual adoption lineage requires the adopted unit permission authority"
+            )
+        if adoption_binding is None:
+            return None
+        if git_permission_takeover is None:
+            git_permission_takeover = self._git_permission_takeover()
+        if git_permission_takeover is None:
+            raise PullDeployError(
+                "adopted unit permission authority lacks Git predecessor"
+            )
+        adopted = adoption_binding[0]
+        should_verify_live = (
+            verify_live
+            if verify_live is not None
+            else not manual_current
+            and not (self.marker_path.exists() or self.marker_path.is_symlink())
+        )
+        before = self._validate_adopted_unit_permission_authority(
+            adopted=adopted,
+            git_permission_takeover=git_permission_takeover,
+            verify_live=should_verify_live,
+        )
+        adoption_after = self._adoption_bootstrap_binding()
+        if adoption_after is None or adoption_after != adoption_binding:
+            raise PullDeployError(
+                "adopted unit permission base authority changed while validating"
+            )
+        after = self._validate_adopted_unit_permission_authority(
+            adopted=adoption_after[0],
+            git_permission_takeover=git_permission_takeover,
+            verify_live=should_verify_live,
+        )
+        if after != before:
+            raise PullDeployError(
+                "adopted unit permission authority changed while validating"
+            )
+        return before
 
     def control_environment(self) -> dict[str, str]:
         return clean_control_environment(self.runtime_root)
@@ -15364,6 +17089,7 @@ class PullDeployController:
                 "plan",
                 "completed_at",
             }
+            or type(authority.get("schema_version")) is not int
             or authority.get("schema_version") != 1
             or authority.get("status") != "completed"
             or authority.get("authority_kind")
@@ -15405,6 +17131,7 @@ class PullDeployController:
                 "mutations",
             }
             or authority.get("plan_sha256") != canonical_json_digest(plan)
+            or type(plan.get("schema_version")) is not int
             or plan.get("schema_version") != 1
             or plan.get("authority_kind") != authority["authority_kind"]
             or plan.get("operation_id") != authority["operation_id"]
@@ -15430,6 +17157,7 @@ class PullDeployController:
             not isinstance(readiness, dict)
             or set(readiness)
             != ADOPTED_PREREQUISITE_SOURCE_READINESS_FIELDS
+            or type(readiness.get("schema_version")) is not int
             or readiness.get("schema_version") != 2
             or readiness.get("ready") is not True
             or not source_root.is_absolute()
@@ -15557,6 +17285,11 @@ class PullDeployController:
         authority_file_digests: Mapping[str, str],
         target_file_digests: Mapping[str, str],
         git_permission_takeover: Mapping[str, Any] | None = None,
+        unit_permission_takeover: Mapping[str, Any] | None = None,
+        unit_permission_is_ancestor: bool | None = None,
+        unit_permission_authority_file_digests: Mapping[str, str]
+        | None = None,
+        unit_permission_target_file_digests: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """Project independently verified Git facts into stable audit evidence."""
 
@@ -15632,7 +17365,11 @@ class PullDeployController:
         }
         body: dict[str, Any] = {
             "schema_version": (
-                2 if git_permission_takeover is not None else 1
+                3
+                if unit_permission_takeover is not None
+                else 2
+                if git_permission_takeover is not None
+                else 1
             ),
             "policy": ADOPTED_PREREQUISITE_TARGET_POLICY,
             "mode": "exact-source" if exact else "ancestor-byte-identical",
@@ -15680,6 +17417,53 @@ class PullDeployController:
                     permission_binding
                 )
             )
+        if unit_permission_takeover is not None:
+            if git_permission_takeover is None:
+                raise PullDeployError(
+                    "adopted unit permission target lacks its Git predecessor"
+                )
+            unit_binding = validate_adopted_unit_permission_binding(
+                dict(unit_permission_takeover)
+            )
+            successor = unit_binding["git_permission_successor"]
+            expected_paths = set(ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES)
+            if (
+                unit_permission_authority_file_digests is None
+                or unit_permission_target_file_digests is None
+                or set(unit_permission_authority_file_digests)
+                != expected_paths
+                or set(unit_permission_target_file_digests)
+                != expected_paths
+                or successor["target"]
+                != {"source_sha": target_sha, "source_tree": target_tree}
+                or unit_binding["source_sha"] != target_sha
+                or unit_binding["source_tree"] != target_tree
+                or (
+                    successor["mode"] == "ancestor-byte-identical"
+                    and unit_permission_is_ancestor is not True
+                )
+            ):
+                raise PullDeployError(
+                    "adopted unit permission successor proof is unavailable"
+                )
+            for sealed in successor["files"]:
+                path = sealed["path"]
+                authority_digest = require_digest(
+                    unit_permission_authority_file_digests.get(path),
+                    f"unit permission predecessor Git blob {path}",
+                )
+                target_digest = require_digest(
+                    unit_permission_target_file_digests.get(path),
+                    f"unit permission target Git blob {path}",
+                )
+                if (
+                    authority_digest != target_digest
+                    or target_digest != sealed["sha256"]
+                ):
+                    raise PullDeployError(
+                        f"unit permission successor Git blob differs: {path}"
+                    )
+            body["unit_permission_authority"] = unit_binding
         body["identity_sha256"] = canonical_json_digest(body)
         return validate_adopted_prerequisite_target_binding(body)
 
@@ -15752,6 +17536,24 @@ class PullDeployController:
         source_tree = require_sha(
             authority.get("source_tree"), "prerequisite authority tree"
         )
+        permission_takeover = self._git_permission_takeover()
+        if permission_takeover is None:
+            raise PullDeployError(
+                "adopted target lacks Git permission authority"
+            )
+        unit_permission_takeover = self._unit_permission_takeover(
+            git_permission_takeover=permission_takeover,
+            verify_live=True,
+        )
+        if unit_permission_takeover is None:
+            raise PullDeployError(
+                "adopted target lacks unit permission authority"
+            )
+        unit_successor = unit_permission_takeover[
+            "git_permission_successor"
+        ]
+        unit_source_sha = unit_successor["authority"]["source_sha"]
+        unit_source_tree = unit_successor["authority"]["source_tree"]
         try:
             if (
                 str(
@@ -15813,6 +17615,62 @@ class PullDeployController:
                     ADOPTED_PREREQUISITE_FILES
                 )
             }
+            if (
+                str(
+                    self._private_source_git(
+                        source_root, "cat-file", "-t", unit_source_sha
+                    ).stdout
+                ).strip()
+                != "commit"
+                or require_sha(
+                    str(
+                        self._private_source_git(
+                            source_root,
+                            "rev-parse",
+                            f"{unit_source_sha}^{{tree}}",
+                        ).stdout
+                    ).strip(),
+                    "private unit permission predecessor tree",
+                )
+                != unit_source_tree
+            ):
+                raise PullDeployError(
+                    "private target clone lacks the unit permission predecessor"
+                )
+            unit_ancestor = self._private_source_git(
+                source_root,
+                "merge-base",
+                "--is-ancestor",
+                unit_source_sha,
+                target_sha,
+                check=False,
+            )
+            unit_authority_digests = {
+                path: sha256_bytes(
+                    bytes(
+                        self._private_source_git(
+                            source_root,
+                            "show",
+                            f"{unit_source_sha}:{path}",
+                            text=False,
+                        ).stdout
+                    )
+                )
+                for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+            }
+            unit_target_digests = {
+                path: sha256_bytes(
+                    bytes(
+                        self._private_source_git(
+                            source_root,
+                            "show",
+                            f"{target_sha}:{path}",
+                            text=False,
+                        ).stdout
+                    )
+                )
+                for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+            }
         except PullDeployError:
             raise
         except Exception as exc:
@@ -15831,11 +17689,6 @@ class PullDeployController:
             raise PullDeployError(
                 "private target source changed during compatibility proof"
             )
-        permission_takeover = self._git_permission_takeover()
-        if permission_takeover is None:
-            raise PullDeployError(
-                "adopted target lacks Git permission authority"
-            )
         return self._build_adopted_prerequisite_target_binding(
             authority,
             target_sha=target_sha,
@@ -15844,6 +17697,12 @@ class PullDeployController:
             authority_file_digests=authority_digests,
             target_file_digests=target_digests,
             git_permission_takeover=permission_takeover,
+            unit_permission_takeover=unit_permission_takeover,
+            unit_permission_is_ancestor=unit_ancestor.returncode == 0,
+            unit_permission_authority_file_digests=(
+                unit_authority_digests
+            ),
+            unit_permission_target_file_digests=unit_target_digests,
         )
 
     def _prepared_adopted_prerequisite_target_binding(
@@ -15873,6 +17732,24 @@ class PullDeployController:
         source_tree = require_sha(
             authority.get("source_tree"), "prerequisite authority tree"
         )
+        permission_takeover = self._git_permission_takeover()
+        if permission_takeover is None:
+            raise PullDeployError(
+                "adopted target lacks Git permission authority"
+            )
+        unit_permission_takeover = self._unit_permission_takeover(
+            git_permission_takeover=permission_takeover,
+            verify_live=True,
+        )
+        if unit_permission_takeover is None:
+            raise PullDeployError(
+                "adopted target lacks unit permission authority"
+            )
+        unit_successor = unit_permission_takeover[
+            "git_permission_successor"
+        ]
+        unit_source_sha = unit_successor["authority"]["source_sha"]
+        unit_source_tree = unit_successor["authority"]["source_tree"]
         if (
             str(self._git("cat-file", "-t", source_sha).stdout).strip()
             != "commit"
@@ -15917,6 +17794,37 @@ class PullDeployController:
                 ADOPTED_PREREQUISITE_FILES
             )
         }
+        if (
+            str(self._git("cat-file", "-t", unit_source_sha).stdout).strip()
+            != "commit"
+            or require_sha(
+                str(
+                    self._git(
+                        "rev-parse", f"{unit_source_sha}^{{tree}}"
+                    ).stdout
+                ).strip(),
+                "fetched unit permission predecessor tree",
+            )
+            != unit_source_tree
+        ):
+            raise PullDeployError(
+                "fetched target lacks the unit permission predecessor"
+            )
+        unit_ancestor = self._git(
+            "merge-base",
+            "--is-ancestor",
+            unit_source_sha,
+            target_sha,
+            check=False,
+        )
+        unit_authority_digests = {
+            path: sha256_bytes(self._git_show(unit_source_sha, path))
+            for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+        }
+        unit_target_digests = {
+            path: sha256_bytes(self._git_show(target_sha, path))
+            for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+        }
         after = self._git_trust_preflight()
         if before != after:
             raise PullDeployError(
@@ -15926,11 +17834,6 @@ class PullDeployController:
             raise PullDeployError(
                 "prerequisite compatibility target changed during proof"
             )
-        permission_takeover = self._git_permission_takeover()
-        if permission_takeover is None:
-            raise PullDeployError(
-                "adopted target lacks Git permission authority"
-            )
         return self._build_adopted_prerequisite_target_binding(
             authority,
             target_sha=target_sha,
@@ -15939,6 +17842,12 @@ class PullDeployController:
             authority_file_digests=authority_digests,
             target_file_digests=target_digests,
             git_permission_takeover=permission_takeover,
+            unit_permission_takeover=unit_permission_takeover,
+            unit_permission_is_ancestor=unit_ancestor.returncode == 0,
+            unit_permission_authority_file_digests=(
+                unit_authority_digests
+            ),
+            unit_permission_target_file_digests=unit_target_digests,
         )
 
     def _revalidate_adopted_prerequisite_target_binding(
@@ -18112,11 +20021,22 @@ class PullDeployController:
             raise PullDeployError(
                 "target main is not a fast-forward of production HEAD"
             )
-        self._git(
-            "update-ref",
-            f"refs/nexpoly/prepared/{operation_id}",
-            target_sha,
+        prepared_ref = f"refs/nexpoly/prepared/{operation_id}"
+        existing_prepared = self._observe_prepare_abort_prepared_ref(
+            prepared_ref
         )
+        if existing_prepared is None:
+            self._git(
+                "update-ref",
+                "--no-deref",
+                prepared_ref,
+                target_sha,
+                "0" * 40,
+            )
+        elif existing_prepared != target_sha:
+            raise PullDeployError(
+                "prepared Git ref is already bound to another target"
+            )
         return target_tree
 
     def bridge_policy_relation(
@@ -19276,7 +21196,8 @@ class PullDeployController:
                 not stat.S_ISREG(metadata.st_mode)
                 or target.is_symlink()
                 or metadata.st_uid != os.geteuid()
-                or metadata.st_mode & 0o022
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_nlink != 1
             ):
                 raise PullDeployError("installed production Worker unit is unsafe")
             previous_payload = target.read_bytes()
@@ -20377,7 +22298,8 @@ class PullDeployController:
                 not stat.S_ISREG(metadata.st_mode)
                 or unit_target.is_symlink()
                 or metadata.st_uid != os.geteuid()
-                or metadata.st_mode & 0o022
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_nlink != 1
             ):
                 raise PullDeployError("installed monomer DFT unit is unsafe")
             unit_previous_sha = sha256_file(unit_target)
@@ -22910,10 +24832,118 @@ class PullDeployController:
             self.prepare_aborts_dir,
             self.prepare_abort_archives_dir,
         ):
-            existed = path.exists() or path.is_symlink()
             ensure_private_directory(path, create=True)
-            if not existed:
-                fsync_directory(path.parent)
+            # A replay may observe a mkdir whose parent-fsync response was
+            # lost.  Seal both the directory and its owning namespace before
+            # a journal inside it can authorize cleanup.
+            fsync_directory(path)
+            fsync_directory(path.parent)
+
+    @staticmethod
+    def _prepare_abort_staging_identity(
+        metadata: os.stat_result,
+    ) -> tuple[int, int, int, int, int, int, int, int, int]:
+        return (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_uid,
+            metadata.st_gid,
+            metadata.st_nlink,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+
+    def _validate_prepare_abort_journal_staging(self) -> set[str]:
+        """Return safe atomic-write residues that discovery may ignore.
+
+        The random nonce is not an ownership capability: another same-UID
+        process can pre-create a matching name.  Recovery therefore never
+        adopts, renames, or removes one of these files.  It only validates a
+        small, bounded set with an inode identity check and leaves every byte
+        in place for later forensic inspection.
+        """
+
+        if self._held_deploy_lock_fd is None:
+            raise PullDeployError(
+                "prepare-abort journal staging validation lacks deploy.lock"
+            )
+        ensure_private_directory(self.prepare_aborts_dir)
+        entries = sorted(
+            self.prepare_aborts_dir.iterdir(), key=lambda path: path.name
+        )
+        ignored: set[str] = set()
+        for entry in entries:
+            if entry.name == self.prepare_abort_archives_dir.name:
+                continue
+            if entry.name.endswith(".json"):
+                continue
+            match = PREPARE_ABORT_JOURNAL_STAGING_RE.fullmatch(entry.name)
+            if match is None:
+                raise PullDeployError(
+                    "prepare-abort journal directory contains an unknown entry"
+                )
+            require_operation_id(match.group("operation_id"))
+            if len(ignored) >= PREPARE_ABORT_JOURNAL_STAGING_MAX_FILES:
+                raise PullDeployError(
+                    "too many prepare-abort journal staging residues"
+                )
+            try:
+                descriptor = os.open(
+                    entry,
+                    os.O_RDONLY
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NONBLOCK", 0)
+                    | getattr(os, "O_NOFOLLOW", 0),
+                )
+            except OSError as exc:
+                raise PullDeployError(
+                    "prepare-abort journal staging is unavailable"
+                ) from exc
+            try:
+                before = os.fstat(descriptor)
+                parent = self.prepare_aborts_dir.lstat()
+                if (
+                    not stat.S_ISREG(before.st_mode)
+                    or before.st_uid != os.geteuid()
+                    or stat.S_IMODE(before.st_mode) != 0o600
+                    or before.st_nlink != 1
+                    or before.st_dev != parent.st_dev
+                    or before.st_size > MAX_GITHUB_RESPONSE_BYTES
+                ):
+                    raise PullDeployError(
+                        "prepare-abort journal staging is unsafe"
+                    )
+                maximum = before.st_size + 1
+                observed_bytes = 0
+                while observed_bytes < maximum:
+                    block = os.read(
+                        descriptor,
+                        min(1024 * 1024, maximum - observed_bytes),
+                    )
+                    if not block:
+                        break
+                    observed_bytes += len(block)
+                after = os.fstat(descriptor)
+                observed = entry.lstat()
+                expected_identity = self._prepare_abort_staging_identity(
+                    before
+                )
+                if (
+                    observed_bytes != before.st_size
+                    or self._prepare_abort_staging_identity(after)
+                    != expected_identity
+                    or self._prepare_abort_staging_identity(observed)
+                    != expected_identity
+                ):
+                    raise PullDeployError(
+                        "prepare-abort journal staging changed while reading"
+                    )
+            finally:
+                os.close(descriptor)
+            ignored.add(entry.name)
+        return ignored
 
     def _optional_private_json_sha256(self, path: Path) -> str | None:
         if not (path.exists() or path.is_symlink()):
@@ -23565,29 +25595,193 @@ class PullDeployController:
         )
 
     def _observe_prepare_abort_prepared_ref(self, ref: str) -> str | None:
-        observed: str | None = None
-        if not (self.test_root_mode and not self._has_complete_test_git_layout()):
-            result = self._git(
-                "show-ref",
-                "--verify",
-                "--hash",
-                ref,
-                check=False,
+        if self.test_root_mode and not self._has_complete_test_git_layout():
+            return None
+        symbolic = self._git(
+            "symbolic-ref",
+            "--quiet",
+            ref,
+            check=False,
+        )
+        if symbolic.returncode == 0:
+            raise PullDeployError("prepared Git ref must not be symbolic")
+        if symbolic.returncode != 1:
+            raise PullDeployError("prepared Git ref cannot be inspected")
+        result = self._git(
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            ref,
+            check=False,
+        )
+        if result.returncode == 1:
+            # Git 2.43 reports a missing full ref from `show-ref --verify`
+            # as rc=128.  `rev-parse --verify --quiet` has a documented,
+            # stable rc=1 missing result and does not print a fatal diagnostic.
+            return None
+        if result.returncode != 0:
+            raise PullDeployError("prepared Git ref cannot be inspected")
+        lines = [
+            line.strip()
+            for line in str(result.stdout).splitlines()
+            if line.strip()
+        ]
+        if len(lines) != 1:
+            raise PullDeployError(
+                "prepared Git ref returned malformed evidence"
             )
-            if result.returncode == 0:
-                lines = [
-                    line.strip()
-                    for line in str(result.stdout).splitlines()
-                    if line.strip()
-                ]
-                if len(lines) != 1:
-                    raise PullDeployError(
-                        "prepared Git ref returned malformed evidence"
-                    )
-                observed = require_sha(lines[0], "prepared Git ref")
-            elif result.returncode != 1:
-                raise PullDeployError("prepared Git ref cannot be inspected")
+        observed = require_sha(lines[0], "prepared Git ref")
+        commit = self._git(
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            f"{ref}^{{commit}}",
+            check=False,
+        )
+        if commit.returncode != 0:
+            raise PullDeployError("prepared Git ref does not name a commit")
+        commit_lines = [
+            line.strip()
+            for line in str(commit.stdout).splitlines()
+            if line.strip()
+        ]
+        if (
+            len(commit_lines) != 1
+            or require_sha(commit_lines[0], "prepared Git commit") != observed
+        ):
+            # Annotated tags and other peelable objects are not valid prepared
+            # refs: update-ref CAS must fence the exact commit object itself.
+            raise PullDeployError("prepared Git ref is not a direct commit")
         return observed
+
+    @staticmethod
+    def _fsync_prepare_abort_git_path(
+        path: Path,
+        *,
+        directory: bool,
+    ) -> None:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NONBLOCK", 0)
+        if directory:
+            flags |= getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as exc:
+            raise PullDeployError(
+                "prepared Git ref durability path is unavailable"
+            ) from exc
+        try:
+            before = os.fstat(descriptor)
+            try:
+                observed = path.lstat()
+            except OSError as exc:
+                raise PullDeployError(
+                    "prepared Git ref durability path disappeared"
+                ) from exc
+            expected_kind = (
+                stat.S_ISDIR(before.st_mode)
+                if directory
+                else stat.S_ISREG(before.st_mode)
+            )
+            expected_identity = (
+                PullDeployController._prepare_abort_staging_identity(before)
+            )
+            if (
+                not expected_kind
+                or before.st_uid != os.geteuid()
+                or before.st_mode & 0o022
+                or (not directory and before.st_nlink != 1)
+                or PullDeployController._prepare_abort_staging_identity(
+                    observed
+                )
+                != expected_identity
+            ):
+                raise PullDeployError(
+                    "prepared Git ref durability path is unsafe"
+                )
+            os.fsync(descriptor)
+            after = os.fstat(descriptor)
+            try:
+                final = path.lstat()
+            except OSError as exc:
+                raise PullDeployError(
+                    "prepared Git ref durability path disappeared"
+                ) from exc
+            if (
+                PullDeployController._prepare_abort_staging_identity(after)
+                != expected_identity
+                or PullDeployController._prepare_abort_staging_identity(final)
+                != expected_identity
+            ):
+                raise PullDeployError(
+                    "prepared Git ref durability path changed while flushing"
+                )
+        finally:
+            os.close(descriptor)
+
+    def _fsync_prepare_abort_prepared_ref_backend(self, ref: str) -> None:
+        """Seal files-backend ref deletion before completing the journal."""
+
+        prefix = "refs/nexpoly/prepared/"
+        if not ref.startswith(prefix):
+            raise PullDeployError("prepared Git ref has an unsafe namespace")
+        operation_id = require_operation_id(ref.removeprefix(prefix))
+        if ref != prefix + operation_id:
+            raise PullDeployError("prepared Git ref has an unsafe namespace")
+        if self.test_root_mode and not self._has_complete_test_git_layout():
+            # Filesystem-free fixture runners model the CAS separately.
+            return
+        try:
+            preflight = self._git_trust_preflight()
+        except Exception as exc:
+            raise PullDeployError(
+                "prepared Git ref backend trust changed"
+            ) from exc
+        if preflight is None:  # pragma: no cover - production always has Git
+            raise PullDeployError("prepared Git ref backend is unavailable")
+
+        git_dir = self.production_root / ".git"
+        loose_ref = git_dir / Path(ref)
+        reflog = git_dir / "logs" / Path(ref)
+        for lock_path in (
+            loose_ref.with_name(loose_ref.name + ".lock"),
+            reflog.with_name(reflog.name + ".lock"),
+            git_dir / "packed-refs.lock",
+        ):
+            if lock_path.exists() or lock_path.is_symlink():
+                raise PullDeployError(
+                    "prepared Git ref backend retains a lock file"
+                )
+
+        for regular in (loose_ref, reflog, git_dir / "packed-refs"):
+            if regular.exists() or regular.is_symlink():
+                self._fsync_prepare_abort_git_path(
+                    regular,
+                    directory=False,
+                )
+        directories = (
+            loose_ref.parent,
+            loose_ref.parent.parent,
+            git_dir / "refs",
+            reflog.parent,
+            reflog.parent.parent,
+            git_dir / "logs" / "refs",
+            git_dir / "logs",
+            git_dir,
+        )
+        seen: set[Path] = set()
+        for directory in directories:
+            if directory in seen:
+                continue
+            seen.add(directory)
+            if directory.exists() or directory.is_symlink():
+                self._fsync_prepare_abort_git_path(
+                    directory,
+                    directory=True,
+                )
 
     def _capture_prepare_abort_prepared_ref(
         self,
@@ -24099,6 +26293,32 @@ class PullDeployController:
         journal.update(candidate)
         return journal
 
+    def _reseal_prepare_abort_journal(
+        self,
+        journal: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Durably reaffirm an observed journal before replay side effects.
+
+        An atomic rename can become visible before its parent-directory fsync
+        has completed.  A retry must not use that visible phase to authorize
+        an irreversible archive move until the exact journal has been written
+        and synced again; otherwise a later power loss can expose the older
+        phase behind already-archived paths.
+        """
+
+        operation_id = require_operation_id(journal.get("operation_id"))
+        candidate = self._validate_prepare_abort_journal(
+            journal,
+            operation_id,
+        )
+        atomic_json(
+            self._prepare_abort_journal_path(operation_id),
+            candidate,
+        )
+        journal.clear()
+        journal.update(candidate)
+        return journal
+
     def _ensure_prepare_abort_archive(
         self,
         journal: Mapping[str, Any],
@@ -24110,7 +26330,8 @@ class PullDeployController:
             ensure_private_directory(archive)
         else:
             archive.mkdir(mode=0o700)
-            fsync_directory(archive.parent)
+        fsync_directory(archive)
+        fsync_directory(archive.parent)
         owner_path = archive / "ARCHIVE-OWNER.json"
         expected_owner = {
             "schema_version": 1,
@@ -24123,6 +26344,17 @@ class PullDeployController:
                 raise PullDeployError(
                     "prepare-abort archive has different ownership"
                 )
+            descriptor = os.open(
+                owner_path,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            fsync_directory(archive)
         else:
             if any(archive.iterdir()):
                 raise PullDeployError(
@@ -24148,10 +26380,9 @@ class PullDeployController:
                     "prepare-abort archive component is unsafe"
                 )
             target = current / component
-            existed = target.exists() or target.is_symlink()
             ensure_private_directory(target, create=True)
-            if not existed:
-                fsync_directory(current)
+            fsync_directory(target)
+            fsync_directory(current)
             current = target
         return current
 
@@ -24160,22 +26391,502 @@ class PullDeployController:
         path: Path,
         expected_sha256: str,
     ) -> None:
+        require_digest(expected_sha256, "prepare-abort archive file")
+        ensure_private_directory(path.parent)
         try:
-            metadata = path.lstat()
+            descriptor = os.open(
+                path,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
         except OSError as exc:
             raise PullDeployError(
                 f"prepare-abort archive file is unavailable: {path}"
             ) from exc
+        try:
+            before = os.fstat(descriptor)
+            parent = path.parent.lstat()
+            observed = path.lstat()
+            expected_identity = _inventory_stat_identity(before)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.geteuid()
+                or stat.S_IMODE(before.st_mode) != 0o600
+                or before.st_nlink != 1
+                or before.st_dev != parent.st_dev
+                or before.st_size > MAX_GITHUB_RESPONSE_BYTES
+                or _inventory_stat_identity(observed) != expected_identity
+            ):
+                raise PullDeployError(
+                    "prepare-abort archive file differs from sealed evidence"
+                )
+            digest = hashlib.sha256()
+            observed_bytes = 0
+            maximum = before.st_size + 1
+            while observed_bytes < maximum:
+                block = os.read(
+                    descriptor,
+                    min(1024 * 1024, maximum - observed_bytes),
+                )
+                if not block:
+                    break
+                observed_bytes += len(block)
+                digest.update(block)
+            after_read = os.fstat(descriptor)
+            observed_after_read = path.lstat()
+            if (
+                observed_bytes != before.st_size
+                or _inventory_stat_identity(after_read) != expected_identity
+                or _inventory_stat_identity(observed_after_read)
+                != expected_identity
+                or "sha256:" + digest.hexdigest() != expected_sha256
+            ):
+                raise PullDeployError(
+                    "prepare-abort archive file differs from sealed evidence"
+                )
+            os.fsync(descriptor)
+            after_fsync = os.fstat(descriptor)
+            observed_after_fsync = path.lstat()
+            if (
+                _inventory_stat_identity(after_fsync) != expected_identity
+                or _inventory_stat_identity(observed_after_fsync)
+                != expected_identity
+            ):
+                raise PullDeployError(
+                    "prepare-abort archive file changed while flushing"
+                )
+        except OSError as exc:
+            raise PullDeployError(
+                "prepare-abort archive file changed while validating"
+            ) from exc
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _open_private_existing_ancestor(
+        path: Path,
+        authority: Path,
+        *,
+        label: str,
+    ) -> tuple[int, Path]:
+        """Return the nearest existing descendant through one openat walk."""
+
+        try:
+            relative = path.relative_to(authority)
+        except ValueError as exc:
+            raise PullDeployError(f"{label} escapes its authority") from exc
         if (
-            not stat.S_ISREG(metadata.st_mode)
-            or path.is_symlink()
-            or metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o600
-            or sha256_file(path) != expected_sha256
+            not path.is_absolute()
+            or not authority.is_absolute()
+            or any(component in {".", ".."} for component in relative.parts)
+        ):
+            raise PullDeployError(f"{label} escapes its authority")
+        directory_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            authority_metadata = authority.lstat()
+            descriptor = os.open(authority, directory_flags)
+        except OSError as exc:
+            raise PullDeployError(f"{label} authority is unavailable") from exc
+        try:
+            held = os.fstat(descriptor)
+            if (
+                not stat.S_ISDIR(held.st_mode)
+                or held.st_uid != os.geteuid()
+                or stat.S_IMODE(held.st_mode) != 0o700
+                or _inventory_stat_identity(held)
+                != _inventory_stat_identity(authority_metadata)
+            ):
+                raise PullDeployError(f"{label} authority is unsafe")
+            current = authority
+            for component in relative.parts:
+                if (
+                    not component
+                    or component in {".", ".."}
+                    or "/" in component
+                    or "\0" in component
+                ):
+                    raise PullDeployError(f"{label} escapes its authority")
+                try:
+                    observed = os.stat(
+                        component,
+                        dir_fd=descriptor,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    break
+                except OSError as exc:
+                    raise PullDeployError(
+                        f"{label} traversal is unavailable"
+                    ) from exc
+                try:
+                    child_descriptor = os.open(
+                        component,
+                        directory_flags,
+                        dir_fd=descriptor,
+                    )
+                except OSError as exc:
+                    raise PullDeployError(
+                        f"{label} traversal is unsafe"
+                    ) from exc
+                try:
+                    child = os.fstat(child_descriptor)
+                    final = os.stat(
+                        component,
+                        dir_fd=descriptor,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        not stat.S_ISDIR(child.st_mode)
+                        or child.st_uid != os.geteuid()
+                        or stat.S_IMODE(child.st_mode) != 0o700
+                        or _inventory_stat_identity(child)
+                        != _inventory_stat_identity(observed)
+                        or _inventory_stat_identity(final)
+                        != _inventory_stat_identity(child)
+                    ):
+                        raise PullDeployError(
+                            f"{label} traversal changed"
+                        )
+                except BaseException:
+                    os.close(child_descriptor)
+                    raise
+                os.close(descriptor)
+                descriptor = child_descriptor
+                current /= component
+            return descriptor, current
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def _open_prepare_abort_source_parent(
+        self,
+        parent: Path,
+    ) -> tuple[int, Path]:
+        authorities = sorted(
+            (
+                self.prepared_root,
+                self.wheel_cache_dir,
+                self.venv_root,
+                self.control_handoffs_dir,
+                self.slots_state_dir,
+            ),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        )
+        for authority in authorities:
+            try:
+                parent.relative_to(authority)
+            except ValueError:
+                continue
+            return self._open_private_existing_ancestor(
+                parent,
+                authority,
+                label="prepare-abort source namespace",
+            )
+        raise PullDeployError(
+            "prepare-abort source namespace escapes its authority"
+        )
+
+    def _open_prepare_abort_archive_parent(
+        self,
+        parent: Path,
+    ) -> int:
+        descriptor, existing = self._open_private_existing_ancestor(
+            parent,
+            self.prepare_abort_archives_dir,
+            label="prepare-abort target namespace",
+        )
+        if existing != parent:
+            os.close(descriptor)
+            raise PullDeployError(
+                "prepare-abort target namespace is unavailable"
+            )
+        return descriptor
+
+    @staticmethod
+    def _prepare_abort_entry_metadata_at(
+        parent_descriptor: int,
+        name: str,
+        *,
+        label: str,
+    ) -> os.stat_result | None:
+        if (
+            not name
+            or name in {".", ".."}
+            or "/" in name
+            or "\0" in name
+        ):
+            raise PullDeployError(f"{label} name is unsafe")
+        try:
+            return os.stat(
+                name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise PullDeployError(f"{label} is unavailable") from exc
+
+    @classmethod
+    def _open_prepare_abort_entry_at(
+        cls,
+        parent_descriptor: int,
+        name: str,
+        *,
+        kind: str,
+        label: str,
+    ) -> tuple[int, os.stat_result]:
+        observed = cls._prepare_abort_entry_metadata_at(
+            parent_descriptor,
+            name,
+            label=label,
+        )
+        if observed is None:
+            raise PullDeployError(f"{label} is unavailable")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        if kind == "directory":
+            flags |= getattr(os, "O_DIRECTORY", 0)
+        try:
+            descriptor = os.open(
+                name,
+                flags,
+                dir_fd=parent_descriptor,
+            )
+        except OSError as exc:
+            raise PullDeployError(f"{label} changed while opening") from exc
+        try:
+            held = os.fstat(descriptor)
+            safe_kind = (
+                stat.S_ISDIR(held.st_mode)
+                if kind == "directory"
+                else stat.S_ISREG(held.st_mode)
+            )
+            if (
+                not safe_kind
+                or held.st_uid != os.geteuid()
+                or stat.S_IMODE(held.st_mode)
+                != (0o700 if kind == "directory" else 0o600)
+                or (kind == "file" and held.st_nlink != 1)
+                or (
+                    kind == "file"
+                    and held.st_size > MAX_GITHUB_RESPONSE_BYTES
+                )
+                or held.st_dev != os.fstat(parent_descriptor).st_dev
+                or _inventory_stat_identity(held)
+                != _inventory_stat_identity(observed)
+            ):
+                raise PullDeployError(f"{label} is unsafe")
+            return descriptor, held
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    @classmethod
+    def _validate_prepare_abort_held_file(
+        cls,
+        parent_descriptor: int,
+        name: str,
+        descriptor: int,
+        expected_sha256: str,
+        *,
+        label: str,
+    ) -> os.stat_result:
+        require_digest(expected_sha256, f"prepare-abort {label}")
+        before = os.fstat(descriptor)
+        observed = cls._prepare_abort_entry_metadata_at(
+            parent_descriptor,
+            name,
+            label=label,
+        )
+        expected_identity = _inventory_stat_identity(before)
+        if (
+            observed is None
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_nlink != 1
+            or before.st_size > MAX_GITHUB_RESPONSE_BYTES
+            or _inventory_stat_identity(observed) != expected_identity
         ):
             raise PullDeployError(
-                "prepare-abort archive file differs from sealed evidence"
+                f"{label} differs from sealed evidence"
             )
+        try:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            digest = hashlib.sha256()
+            observed_bytes = 0
+            maximum = before.st_size + 1
+            while observed_bytes < maximum:
+                block = os.read(
+                    descriptor,
+                    min(1024 * 1024, maximum - observed_bytes),
+                )
+                if not block:
+                    break
+                observed_bytes += len(block)
+                digest.update(block)
+            after_read = os.fstat(descriptor)
+            path_after_read = cls._prepare_abort_entry_metadata_at(
+                parent_descriptor,
+                name,
+                label=label,
+            )
+            if (
+                observed_bytes != before.st_size
+                or _inventory_stat_identity(after_read) != expected_identity
+                or path_after_read is None
+                or _inventory_stat_identity(path_after_read)
+                != expected_identity
+                or "sha256:" + digest.hexdigest() != expected_sha256
+            ):
+                raise PullDeployError(
+                    f"{label} differs from sealed evidence"
+                )
+            os.fsync(descriptor)
+            sealed = os.fstat(descriptor)
+            path_after_fsync = cls._prepare_abort_entry_metadata_at(
+                parent_descriptor,
+                name,
+                label=label,
+            )
+            if (
+                _inventory_stat_identity(sealed) != expected_identity
+                or path_after_fsync is None
+                or _inventory_stat_identity(path_after_fsync)
+                != expected_identity
+            ):
+                raise PullDeployError(f"{label} changed while flushing")
+            return sealed
+        except OSError as exc:
+            raise PullDeployError(
+                f"{label} changed while validating"
+            ) from exc
+
+    @classmethod
+    def _rename_prepare_abort_held_noreplace(
+        cls,
+        source_parent_descriptor: int,
+        source_name: str,
+        target_parent_descriptor: int,
+        target_name: str,
+        held_descriptor: int,
+        *,
+        label: str,
+    ) -> None:
+        """Move a held entry across pinned parents and seal both namespaces.
+
+        ``deploy.lock`` is the cooperative exclusion boundary for the deploy
+        UID.  Stable dirfds and the checks below close path-reopen races, but
+        Linux rename-by-name cannot exclude a malicious same-UID writer that
+        deliberately ignores that lock in the final syscall window.
+        """
+
+        source = cls._prepare_abort_entry_metadata_at(
+            source_parent_descriptor,
+            source_name,
+            label=label,
+        )
+        held = os.fstat(held_descriptor)
+        if (
+            source is None
+            or _inventory_stat_identity(source)
+            != _inventory_stat_identity(held)
+        ):
+            raise PullDeployError(f"{label} changed before archive move")
+        if cls._prepare_abort_entry_metadata_at(
+            target_parent_descriptor,
+            target_name,
+            label=f"{label} archive",
+        ) is not None:
+            raise PullDeployError(f"{label} archive already exists")
+        if (
+            os.fstat(source_parent_descriptor).st_dev
+            != os.fstat(target_parent_descriptor).st_dev
+        ):
+            raise PullDeployError(f"{label} archive crosses filesystems")
+
+        rename_error: BaseException | None = None
+        try:
+            _prepare_abort_renameat2_noreplace(
+                source_parent_descriptor,
+                source_name,
+                target_parent_descriptor,
+                target_name,
+            )
+        except BaseException as exc:
+            # A successful rename may be visible even if its response was
+            # lost. Reconcile only when the target still names this held inode.
+            rename_error = exc
+        source_after = cls._prepare_abort_entry_metadata_at(
+            source_parent_descriptor,
+            source_name,
+            label=label,
+        )
+        target_after = cls._prepare_abort_entry_metadata_at(
+            target_parent_descriptor,
+            target_name,
+            label=f"{label} archive",
+        )
+        held_after = os.fstat(held_descriptor)
+        if (
+            source_after is not None
+            or target_after is None
+            or _inventory_stat_identity(target_after)
+            != _inventory_stat_identity(held_after)
+        ):
+            if rename_error is not None:
+                raise rename_error
+            raise PullDeployError(f"{label} archive move raced")
+        os.fsync(source_parent_descriptor)
+        os.fsync(target_parent_descriptor)
+        durable_target = cls._prepare_abort_entry_metadata_at(
+            target_parent_descriptor,
+            target_name,
+            label=f"{label} archive",
+        )
+        if (
+            cls._prepare_abort_entry_metadata_at(
+                source_parent_descriptor,
+                source_name,
+                label=label,
+            )
+            is not None
+            or durable_target is None
+            or _inventory_stat_identity(durable_target)
+            != _inventory_stat_identity(os.fstat(held_descriptor))
+        ):
+            raise PullDeployError(f"{label} archive move did not persist")
+
+    def _fsync_prepare_abort_source_namespace(self, parent: Path) -> None:
+        """Seal a source removal at its nearest surviving trusted parent."""
+
+        self._require_deploy_lock_for_staging()
+        descriptor, _existing = self._open_prepare_abort_source_parent(parent)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _fsync_prepare_abort_archive_namespace(self, parent: Path) -> None:
+        self._require_deploy_lock_for_staging()
+        descriptor = self._open_prepare_abort_archive_parent(parent)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     def _archive_prepare_abort_directory(
         self,
@@ -24185,47 +26896,103 @@ class PullDeployController:
         expected_inventory_sha256: str | None,
         label: str,
     ) -> None:
-        source_present = source.exists() or source.is_symlink()
-        target_present = target.exists() or target.is_symlink()
-        if expected_inventory_sha256 is None:
-            if source_present or target_present:
-                raise PullDeployError(f"unrecorded {label} appeared")
-            return
-        require_digest(
-            expected_inventory_sha256,
-            f"prepare-abort {label} inventory",
+        self._require_deploy_lock_for_staging()
+        source_parent_descriptor, source_existing_parent = (
+            self._open_prepare_abort_source_parent(source.parent)
         )
-        if source_present and target_present:
-            raise PullDeployError(
-                f"{label} and its abort archive both exist"
+        target_parent_descriptor: int | None = None
+        held_descriptor: int | None = None
+        try:
+            target_parent_descriptor = (
+                self._open_prepare_abort_archive_parent(target.parent)
             )
-        if source_present:
-            ensure_private_directory(source)
-            if directory_inventory_digest(source) != expected_inventory_sha256:
-                raise PullDeployError(
-                    f"{label} changed after prepare-abort intent"
+            source_metadata = (
+                self._prepare_abort_entry_metadata_at(
+                    source_parent_descriptor,
+                    source.name,
+                    label=label,
                 )
-            try:
-                quarantine_directory_noreplace(source, target)
-            except BaseException:
-                if (
-                    not (source.exists() or source.is_symlink())
-                    and (target.exists() or target.is_symlink())
-                ):
-                    ensure_private_directory(target)
-                    if (
-                        directory_inventory_digest(target)
-                        == expected_inventory_sha256
-                    ):
-                        return
-                raise
-        if not (target.exists() or target.is_symlink()):
-            raise PullDeployError(f"{label} abort archive is unavailable")
-        ensure_private_directory(target)
-        if directory_inventory_digest(target) != expected_inventory_sha256:
-            raise PullDeployError(
-                f"{label} abort archive differs from sealed evidence"
+                if source_existing_parent == source.parent
+                else None
             )
+            target_metadata = self._prepare_abort_entry_metadata_at(
+                target_parent_descriptor,
+                target.name,
+                label=f"{label} archive",
+            )
+            if expected_inventory_sha256 is None:
+                if source_metadata is not None or target_metadata is not None:
+                    raise PullDeployError(f"unrecorded {label} appeared")
+                os.fsync(source_parent_descriptor)
+                os.fsync(target_parent_descriptor)
+                return
+            require_digest(
+                expected_inventory_sha256,
+                f"prepare-abort {label} inventory",
+            )
+            if source_metadata is not None and target_metadata is not None:
+                raise PullDeployError(
+                    f"{label} and its abort archive both exist"
+                )
+            if source_metadata is not None:
+                held_descriptor, _held = self._open_prepare_abort_entry_at(
+                    source_parent_descriptor,
+                    source.name,
+                    kind="directory",
+                    label=label,
+                )
+                if (
+                    directory_inventory_digest(
+                        source,
+                        fsync_root=True,
+                        root_descriptor=held_descriptor,
+                        root_parent_descriptor=source_parent_descriptor,
+                        root_name=source.name,
+                    )
+                    != expected_inventory_sha256
+                ):
+                    raise PullDeployError(
+                        f"{label} changed after prepare-abort intent"
+                    )
+                self._rename_prepare_abort_held_noreplace(
+                    source_parent_descriptor,
+                    source.name,
+                    target_parent_descriptor,
+                    target.name,
+                    held_descriptor,
+                    label=label,
+                )
+            elif target_metadata is not None:
+                held_descriptor, _held = self._open_prepare_abort_entry_at(
+                    target_parent_descriptor,
+                    target.name,
+                    kind="directory",
+                    label=f"{label} archive",
+                )
+            else:
+                raise PullDeployError(f"{label} abort archive is unavailable")
+            assert held_descriptor is not None
+            if (
+                directory_inventory_digest(
+                    target,
+                    fsync_root=True,
+                    root_descriptor=held_descriptor,
+                    root_parent_descriptor=target_parent_descriptor,
+                    root_name=target.name,
+                )
+                != expected_inventory_sha256
+            ):
+                raise PullDeployError(
+                    f"{label} abort archive differs from sealed evidence"
+                )
+            os.fsync(source_parent_descriptor)
+            os.fsync(target_parent_descriptor)
+        finally:
+            if held_descriptor is not None:
+                os.close(held_descriptor)
+            if target_parent_descriptor is not None:
+                os.close(target_parent_descriptor)
+            os.close(source_parent_descriptor)
 
     def _archive_prepare_abort_file(
         self,
@@ -24235,38 +27002,88 @@ class PullDeployController:
         expected_sha256: str | None,
         label: str,
     ) -> None:
-        source_present = source.exists() or source.is_symlink()
-        target_present = target.exists() or target.is_symlink()
-        if expected_sha256 is None:
-            if source_present or target_present:
-                raise PullDeployError(f"unrecorded {label} appeared")
-            return
-        require_digest(expected_sha256, f"prepare-abort {label}")
-        if source_present and target_present:
-            raise PullDeployError(
-                f"{label} and its abort archive both exist"
+        self._require_deploy_lock_for_staging()
+        source_parent_descriptor, source_existing_parent = (
+            self._open_prepare_abort_source_parent(source.parent)
+        )
+        target_parent_descriptor: int | None = None
+        held_descriptor: int | None = None
+        try:
+            target_parent_descriptor = (
+                self._open_prepare_abort_archive_parent(target.parent)
             )
-        if source_present:
-            self._validate_prepare_abort_archive_file(
-                source,
+            source_metadata = (
+                self._prepare_abort_entry_metadata_at(
+                    source_parent_descriptor,
+                    source.name,
+                    label=label,
+                )
+                if source_existing_parent == source.parent
+                else None
+            )
+            target_metadata = self._prepare_abort_entry_metadata_at(
+                target_parent_descriptor,
+                target.name,
+                label=f"{label} archive",
+            )
+            if expected_sha256 is None:
+                if source_metadata is not None or target_metadata is not None:
+                    raise PullDeployError(f"unrecorded {label} appeared")
+                os.fsync(source_parent_descriptor)
+                os.fsync(target_parent_descriptor)
+                return
+            require_digest(expected_sha256, f"prepare-abort {label}")
+            if source_metadata is not None and target_metadata is not None:
+                raise PullDeployError(
+                    f"{label} and its abort archive both exist"
+                )
+            if source_metadata is not None:
+                held_descriptor, _held = self._open_prepare_abort_entry_at(
+                    source_parent_descriptor,
+                    source.name,
+                    kind="file",
+                    label=label,
+                )
+                self._validate_prepare_abort_held_file(
+                    source_parent_descriptor,
+                    source.name,
+                    held_descriptor,
+                    expected_sha256,
+                    label=label,
+                )
+                self._rename_prepare_abort_held_noreplace(
+                    source_parent_descriptor,
+                    source.name,
+                    target_parent_descriptor,
+                    target.name,
+                    held_descriptor,
+                    label=label,
+                )
+            elif target_metadata is not None:
+                held_descriptor, _held = self._open_prepare_abort_entry_at(
+                    target_parent_descriptor,
+                    target.name,
+                    kind="file",
+                    label=f"{label} archive",
+                )
+            else:
+                raise PullDeployError(f"{label} abort archive is unavailable")
+            assert held_descriptor is not None
+            self._validate_prepare_abort_held_file(
+                target_parent_descriptor,
+                target.name,
+                held_descriptor,
                 expected_sha256,
+                label=f"{label} archive",
             )
-            try:
-                quarantine_regular_file_noreplace(source, target)
-            except BaseException:
-                if (
-                    not (source.exists() or source.is_symlink())
-                    and (target.exists() or target.is_symlink())
-                ):
-                    self._validate_prepare_abort_archive_file(
-                        target,
-                        expected_sha256,
-                    )
-                    return
-                raise
-        if not (target.exists() or target.is_symlink()):
-            raise PullDeployError(f"{label} abort archive is unavailable")
-        self._validate_prepare_abort_archive_file(target, expected_sha256)
+            os.fsync(source_parent_descriptor)
+            os.fsync(target_parent_descriptor)
+        finally:
+            if held_descriptor is not None:
+                os.close(held_descriptor)
+            if target_parent_descriptor is not None:
+                os.close(target_parent_descriptor)
+            os.close(source_parent_descriptor)
 
     def _reconcile_prepare_abort_staging(
         self,
@@ -24414,11 +27231,9 @@ class PullDeployController:
                 label="monomer DFT READY owner",
             )
 
-        # Only prune the deterministic operation leaf's empty parents.  These
-        # rmdir calls cannot remove another operation's cache contents.
-        for parent in (cache.parent, cache.parent.parent):
-            with contextlib.suppress(OSError):
-                parent.rmdir()
+        # Keep empty deterministic cache parents until a separate garbage
+        # collection pass.  Pruning them inside this transaction would add
+        # another namespace mutation before the phase journal is durable.
 
     def _assert_prepare_abort_dft_terminal(
         self,
@@ -24624,6 +27439,7 @@ class PullDeployController:
                 try:
                     self._git(
                         "update-ref",
+                        "--no-deref",
                         "-d",
                         ref_name,
                         expected_ref,
@@ -24640,10 +27456,15 @@ class PullDeployController:
                 raise PullDeployError(
                     "prepared Git ref changed before CAS deletion"
                 )
-            if self._observe_prepare_abort_prepared_ref(ref_name) is not None:
-                raise PullDeployError(
-                    "prepared Git ref remains after CAS deletion"
-                )
+        # Git 2.43 can return from update-ref without issuing any fsync.
+        # Replays must seal both loose/packed ref storage and each owning
+        # namespace even when the intent recorded that this ref was initially
+        # absent. Only the post-barrier absence may authorize completion.
+        self._fsync_prepare_abort_prepared_ref_backend(ref_name)
+        if self._observe_prepare_abort_prepared_ref(ref_name) is not None:
+            raise PullDeployError(
+                "prepared Git ref remains after CAS deletion"
+            )
 
         if ready_path.exists() or ready_path.is_symlink():
             raise PullDeployError(
@@ -24657,7 +27478,7 @@ class PullDeployController:
             ],
             label="prepare operation",
         )
-        return directory_inventory_digest(archive)
+        return directory_inventory_digest(archive, fsync_root=True)
 
     def _assert_no_deployment_terminal_records(
         self,
@@ -24682,14 +27503,202 @@ class PullDeployController:
                     "operation has terminal audit evidence without a valid state record"
                 )
 
-    def abort_prepare(self, *, operation_id: str) -> dict[str, Any]:
+    def _prepare_abort_lock(
+        self,
+        *,
+        already_held: bool,
+    ) -> contextlib.AbstractContextManager[int]:
+        if not already_held:
+            return self.deployment_lock()
+        if self._held_deploy_lock_fd is None:
+            raise PullDeployError(
+                "prepare-abort forward recovery lacks deploy.lock ownership"
+            )
+        return contextlib.nullcontext(self._held_deploy_lock_fd)
+
+    def _abort_prepare_locked(
+        self,
+        *,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Resume one prepare-abort while the caller holds deploy.lock."""
+
+        if self._held_deploy_lock_fd is None:
+            raise PullDeployError(
+                "prepare-abort forward recovery lacks deploy.lock ownership"
+            )
+        return self.abort_prepare(
+            operation_id=operation_id,
+            _lock_already_held=True,
+        )
+
+    def _resume_incomplete_prepare_aborts_locked(
+        self,
+        *,
+        new_operation_id: str,
+        target_sha: str,
+        handoff_record: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Finish one late predecessor abort as a standalone target action."""
+
+        if self._held_deploy_lock_fd is None:
+            raise PullDeployError(
+                "prepare-abort discovery lacks deploy.lock ownership"
+            )
+        if not (
+            self.prepare_aborts_dir.exists()
+            or self.prepare_aborts_dir.is_symlink()
+        ):
+            return None
+        ensure_private_directory(self.prepare_aborts_dir)
+        ignored_staging = self._validate_prepare_abort_journal_staging()
+        incomplete: list[tuple[str, dict[str, Any]]] = []
+        for entry in sorted(
+            self.prepare_aborts_dir.iterdir(), key=lambda path: path.name
+        ):
+            if entry.name == self.prepare_abort_archives_dir.name:
+                ensure_private_directory(entry)
+                continue
+            if entry.name in ignored_staging:
+                continue
+            if not entry.name.endswith(".json"):
+                raise PullDeployError(
+                    "prepare-abort journal directory contains an unknown entry"
+                )
+            operation_id = require_operation_id(entry.name[:-5])
+            journal = self._load_prepare_abort_journal(operation_id)
+            if journal is None:  # pragma: no cover - directory entry was pinned
+                raise PullDeployError("prepare-abort journal disappeared")
+            if journal["phase"] != "completed":
+                incomplete.append((operation_id, journal))
+        if not incomplete:
+            return None
+        if len(incomplete) != 1:
+            raise PullDeployError(
+                "target prepare requires exactly one predecessor prepare-abort journal"
+            )
+        operation_id, journal = incomplete[0]
+        if operation_id == new_operation_id:
+            raise PullDeployError(
+                "target prepare cannot recover its own operation ID"
+            )
+        if journal["phase"] != "operation-archive-intent":
+            raise PullDeployError(
+                "predecessor prepare-abort is outside the target recovery phase"
+            )
+        _operation, _descriptor, ready = self._operation_paths(operation_id)
+        if ready.exists() or ready.is_symlink():
+            raise PullDeployError(
+                "READY appeared during predecessor prepare-abort recovery"
+            )
+        if handoff_record is None and not self.test_root_mode:
+            raise PullDeployError(
+                "predecessor prepare-abort recovery lacks the target handoff"
+            )
+        if handoff_record is not None and (
+            handoff_record.get("operation_id") != new_operation_id
+            or handoff_record.get("target_sha") != target_sha
+        ):
+            raise PullDeployError(
+                "predecessor prepare-abort recovery handoff differs"
+            )
+        self._assert_prepare_abort_fences(journal)
+        unit_permission = self._unit_permission_takeover(verify_live=True)
+        if self.remote_main() != target_sha:
+            raise PullDeployError(
+                "predecessor prepare-abort recovery target is no longer remote main"
+            )
+        ci = self.ci_evidence(target_sha)
+        if (
+            ci.get("head_sha") != target_sha
+            or ci.get("head_branch") != "main"
+            or ci.get("event") != "push"
+            or ci.get("path") != ".github/workflows/ci.yml"
+            or ci.get("conclusion") != "success"
+        ):
+            raise PullDeployError(
+                "predecessor prepare-abort recovery CI authority differs"
+            )
+        if unit_permission is not None:
+            raw_unit, raw_unit_digest = self._private_json_with_digest(
+                self.adopted_unit_permissions_path,
+                label="adopted unit permission recovery authority",
+                maximum_bytes=ADOPTED_UNIT_PERMISSION_MAX_BYTES,
+            )
+            plan = raw_unit.get("plan")
+            successor = validate_adopted_git_permission_successor(
+                unit_permission["git_permission_successor"]
+            )
+            predecessor = successor["authority"]
+            if (
+                raw_unit_digest
+                != unit_permission["authority_file_sha256"]
+                or not isinstance(plan, dict)
+                or plan.get("delivery_gate")
+                != {"remote_main": target_sha, "ci": ci}
+                or successor["target"]
+                != {
+                    "source_sha": target_sha,
+                    "source_tree": raw_unit.get("source_tree"),
+                }
+            ):
+                raise PullDeployError(
+                    "predecessor recovery differs from unit permission authority"
+                )
+            if (
+                journal["target_sha"] != predecessor["source_sha"]
+                or journal["target_tree"] != predecessor["source_tree"]
+            ):
+                raise PullDeployError(
+                    "predecessor prepare-abort identity differs from unit "
+                    "permission authority"
+                )
+            expected_handoff = journal["control_handoff_sha256"]
+            if expected_handoff is not None:
+                handoff_path = (
+                    self.control_handoffs_dir / f"{operation_id}.json"
+                )
+                archived_handoff_path = (
+                    Path(journal["archive_path"]) / "control-handoff.json"
+                )
+                observed_handoff_path = (
+                    handoff_path
+                    if handoff_path.exists() or handoff_path.is_symlink()
+                    else archived_handoff_path
+                )
+                predecessor_handoff = load_private_json(
+                    observed_handoff_path
+                )
+                if (
+                    predecessor_handoff.get("target_sha")
+                    != predecessor["source_sha"]
+                    or predecessor_handoff.get("target_tree")
+                    != predecessor["source_tree"]
+                ):
+                    raise PullDeployError(
+                        "predecessor prepare-abort handoff differs from unit "
+                        "permission authority"
+                    )
+        result = self._abort_prepare_locked(operation_id=operation_id)
+        return {
+            **result,
+            "recovery_target_sha": target_sha,
+            "recovery_ci": ci,
+        }
+
+    def abort_prepare(
+        self,
+        *,
+        operation_id: str,
+        _lock_already_held: bool = False,
+    ) -> dict[str, Any]:
         """Crash-safely retire one unsealed, token-free prepare operation."""
 
         self.ensure_roots(mutating=True)
         operation_id = require_operation_id(operation_id)
         if not self.apply_enabled:
             raise PullDeployError("prepare-abort requires mutation mode")
-        with self.deployment_lock():
+        with self._prepare_abort_lock(already_held=_lock_already_held):
             self._require_no_contract_maintenance(
                 require_alias_completed=False
             )
@@ -24700,7 +27709,14 @@ class PullDeployController:
             operation, descriptor_path, ready_path = self._operation_paths(
                 operation_id
             )
+            if (
+                self.prepare_aborts_dir.exists()
+                or self.prepare_aborts_dir.is_symlink()
+            ):
+                ensure_private_directory(self.prepare_aborts_dir)
+                self._validate_prepare_abort_journal_staging()
             journal = self._load_prepare_abort_journal(operation_id)
+            recovered_journal = journal is not None
             if journal is not None and journal["phase"] == "completed":
                 archive = Path(journal["archive_path"])
                 if operation.exists() or operation.is_symlink():
@@ -24709,7 +27725,7 @@ class PullDeployController:
                     )
                 if (
                     not (archive.exists() or archive.is_symlink())
-                    or directory_inventory_digest(archive)
+                    or directory_inventory_digest(archive, fsync_root=True)
                     != journal["archive_inventory_sha256"]
                 ):
                     raise PullDeployError(
@@ -24768,13 +27784,17 @@ class PullDeployController:
                 archived_operation = archive / "operation"
                 ensure_private_directory(archived_operation)
                 if (
-                    directory_inventory_digest(archived_operation)
+                    directory_inventory_digest(
+                        archived_operation,
+                        fsync_root=True,
+                    )
                     != journal["operation_inventory_sha256"]
                 ):
                     raise PullDeployError(
                         "completed prepare-abort operation provenance changed"
                     )
                 self._assert_prepare_abort_dft_terminal(journal)
+                self._reseal_prepare_abort_journal(journal)
                 return {
                     "action": "prepare-abort",
                     "status": "already-aborted",
@@ -24933,6 +27953,12 @@ class PullDeployController:
                         "READY appeared during prepare-abort"
                     )
             self._assert_prepare_abort_fences(journal)
+            if recovered_journal:
+                # Fresh intent has already returned from atomic_json above.
+                # Existing journals, including a visible rename whose parent
+                # fsync response was lost, must be durably re-affirmed before
+                # any phase-authorized cleanup or archive mutation.
+                self._reseal_prepare_abort_journal(journal)
             if journal["phase"] == "intent":
                 self._advance_prepare_abort(
                     journal,
@@ -24955,7 +27981,7 @@ class PullDeployController:
                     )
                 ensure_private_directory(operation)
                 if (
-                    directory_inventory_digest(operation)
+                    directory_inventory_digest(operation, fsync_root=True)
                     != journal["operation_inventory_sha256"]
                 ):
                     raise PullDeployError(
@@ -25760,7 +28786,7 @@ class PullDeployController:
         ):
             raise PullDeployError("candidate prepare handoff identity is invalid")
         try:
-            candidate, _manifest, release_root = (
+            candidate, manifest, release_root = (
                 _control_runtime.load_candidate_control(
                     self.runtime_root, record["executor_control"]
                 )
@@ -25775,6 +28801,10 @@ class PullDeployController:
             or candidate["source_tree"] != record["target_tree"]
             or Path(__file__).resolve().parent != release_root.resolve()
             or self.active_control_evidence() != record["previous_active_control"]
+            or 1
+            not in manifest["compatibility"][
+                "prepare_abort_abi_versions"
+            ]
         ):
             raise PullDeployError(
                 "candidate prepare is not executing the sealed handoff"
@@ -25935,6 +28965,26 @@ class PullDeployController:
                 raise PullDeployError(
                     "an interrupted deployment must be recovered before prepare"
                 )
+            if not bridge_requested:
+                # The exact target controller is also the recovery authority
+                # for one late journal written by its predecessor. Recovery is
+                # its own invocation so an operator can inspect the archive
+                # before retrying this operation to create prepare-owned state.
+                predecessor_recovery = (
+                    self._resume_incomplete_prepare_aborts_locked(
+                        new_operation_id=operation_id,
+                        target_sha=target_sha,
+                        handoff_record=handoff_record,
+                    )
+                )
+                if predecessor_recovery is not None:
+                    return {
+                        "action": "prepare",
+                        "status": "predecessor-abort-recovered",
+                        "operation_id": operation_id,
+                        "source_sha": target_sha,
+                        "predecessor_prepare_abort": predecessor_recovery,
+                    }
             self._assert_operation_not_terminal(operation_id, action="prepare")
             if ready_path.exists() or ready_path.is_symlink():
                 raw_descriptor = load_private_json(descriptor_path)
