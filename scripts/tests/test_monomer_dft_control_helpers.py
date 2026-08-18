@@ -455,6 +455,8 @@ class DftPrepareAbortTests(unittest.TestCase):
         private_directory(controller.venv_root / "dft")
         private_directory(controller.prepare_aborts_dir)
         private_directory(controller.prepare_abort_archives_dir)
+        controller.lock_path.write_text("", encoding="utf-8")
+        controller.lock_path.chmod(0o600)
         return controller
 
     @staticmethod
@@ -478,6 +480,40 @@ class DftPrepareAbortTests(unittest.TestCase):
             ),
             "dft_staging": evidence,
         }
+
+    @staticmethod
+    def reconcile_twice(controller, journal: dict[str, object]) -> None:
+        for _attempt in range(2):
+            with controller.deployment_lock():
+                controller._reconcile_prepare_abort_dft_staging(journal)
+        controller._assert_prepare_abort_dft_terminal(journal)
+
+    def test_dft_archive_mutation_requires_deployment_lock(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="dft-abort-") as raw:
+            controller = self.controller(Path(raw))
+            source = private_directory(
+                controller.venv_root / "dft" / ".lock-required"
+            )
+            target = (
+                controller.prepare_abort_archives_dir
+                / OPERATION
+                / "monomer-dft-runtime"
+                / "staging"
+            )
+            with self.assertRaisesRegex(
+                controller_module.PullDeployError,
+                "lacks deploy.lock ownership",
+            ):
+                controller._archive_prepare_abort_directory(
+                    source=source,
+                    target=target,
+                    expected_inventory_sha256=(
+                        controller_module.directory_inventory_digest(source)
+                    ),
+                    label="monomer DFT runtime staging",
+                )
+            self.assertTrue(source.is_dir())
+            self.assertFalse(target.exists())
 
     def test_archives_ownerless_mkdir_cache_and_incomplete_release_idempotently(self) -> None:
         with tempfile.TemporaryDirectory(prefix="dft-abort-") as raw:
@@ -513,9 +549,7 @@ class DftPrepareAbortTests(unittest.TestCase):
                 evidence["incomplete_release_inventory_sha256"]
             )
             journal = self.journal(controller, evidence)
-            controller._reconcile_prepare_abort_dft_staging(journal)
-            controller._reconcile_prepare_abort_dft_staging(journal)
-            controller._assert_prepare_abort_dft_terminal(journal)
+            self.reconcile_twice(controller, journal)
             self.assertFalse(staging.exists())
             self.assertFalse(cache.exists())
             self.assertFalse(release.exists())
@@ -559,9 +593,7 @@ class DftPrepareAbortTests(unittest.TestCase):
                     )
                 )
                 journal = self.journal(controller, evidence)
-                controller._reconcile_prepare_abort_dft_staging(journal)
-                controller._reconcile_prepare_abort_dft_staging(journal)
-                controller._assert_prepare_abort_dft_terminal(journal)
+                self.reconcile_twice(controller, journal)
             self.assertTrue((release / "READY.json").is_file())
             self.assertFalse(owner_path.exists())
             self.assertTrue(

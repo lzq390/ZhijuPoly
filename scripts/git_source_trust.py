@@ -647,6 +647,10 @@ def _remove_permission_staging_at(
             "permission marker staging and quarantine both exist"
         )
     if not staging_exists and not quarantine_exists:
+        # A prior unlink may be visible even though its directory fsync
+        # response was lost.  Re-observing absence is a recovery action, not
+        # a reason to skip the namespace durability barrier.
+        os.fsync(directory_fd)
         return
     current_name = quarantine_name if quarantine_exists else staging_name
     descriptor, metadata = _open_permission_staging_at(
@@ -720,6 +724,63 @@ def _prepare_permission_staging_at(
             )
             staging_exists = False
     if staging_exists:
+        descriptor, before = _open_permission_staging_at(
+            directory_fd, staging_name
+        )
+        try:
+            staged, after = _permission_staging_bytes_from_descriptor(
+                descriptor, before
+            )
+            if staged != payload:
+                raise GitPermissionTakeoverError(
+                    "permission takeover marker staging payload differs"
+                )
+            # The file may be visible after a write whose fsync response was
+            # lost. Re-establish content and directory-entry durability before
+            # the caller can rotate marker generations from this staging.
+            os.fsync(descriptor)
+            sealed = os.fstat(descriptor)
+            try:
+                observed = os.stat(
+                    staging_name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                raise GitPermissionTakeoverError(
+                    "permission takeover marker staging changed before fsync"
+                ) from exc
+            if (
+                _permission_staging_version(after)
+                != _permission_staging_version(sealed)
+                or _permission_staging_version(observed)
+                != _permission_staging_version(sealed)
+            ):
+                raise GitPermissionTakeoverError(
+                    "permission takeover marker staging changed before fsync"
+                )
+            os.fsync(directory_fd)
+            try:
+                durable = os.stat(
+                    staging_name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                raise GitPermissionTakeoverError(
+                    "permission takeover marker staging changed after fsync"
+                ) from exc
+            if (
+                _permission_staging_version(os.fstat(descriptor))
+                != _permission_staging_version(sealed)
+                or _permission_staging_version(durable)
+                != _permission_staging_version(sealed)
+            ):
+                raise GitPermissionTakeoverError(
+                    "permission takeover marker staging changed after fsync"
+                )
+        finally:
+            os.close(descriptor)
         return
     descriptor: int | None = None
     try:
@@ -892,15 +953,10 @@ def _rebuild_permission_generation_at(
         raise GitPermissionTakeoverError(
             "permission marker rebuild quarantine is occupied"
         )
-    if _permission_entry_exists_at(directory_fd, rebuild_name):
-        existing, _identity = _permission_staging_bytes_at(
-            directory_fd, rebuild_name
-        )
-        if existing != payload:
-            raise GitPermissionTakeoverError(
-                "permission marker rebuild staging is occupied"
-            )
-    else:
+    rebuild_exists = _permission_entry_exists_at(
+        directory_fd, rebuild_name
+    )
+    if not rebuild_exists:
         descriptor: int | None = None
         try:
             descriptor = os.open(
@@ -925,6 +981,36 @@ def _rebuild_permission_generation_at(
         directory_fd, rebuild_name
     )
     try:
+        if rebuild_exists:
+            # A deterministic rebuild may be visible after its write or file
+            # fsync response was lost. Re-seal that exact inode before its
+            # pathname is allowed to authorize a generation publication.
+            os.fsync(descriptor)
+            sealed = os.fstat(descriptor)
+            try:
+                observed_path = os.stat(
+                    rebuild_name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                raise GitPermissionTakeoverError(
+                    "permission marker rebuild staging changed before fsync"
+                ) from exc
+            if (
+                _permission_staging_identity(sealed)
+                != _permission_staging_identity(before)
+                or _permission_staging_version(sealed)
+                != _permission_staging_version(before)
+                or _permission_staging_identity(observed_path)
+                != _permission_staging_identity(sealed)
+                or _permission_staging_version(observed_path)
+                != _permission_staging_version(sealed)
+            ):
+                raise GitPermissionTakeoverError(
+                    "permission marker rebuild staging changed before fsync"
+                )
+            before = sealed
         observed, _after = _permission_staging_bytes_from_descriptor(
             descriptor, before
         )
@@ -1765,7 +1851,18 @@ def _permission_reconcile_marker_transaction(
             "cannot reconcile permission marker generation"
         ) from exc
     finally:
-        os.close(directory_fd)
+        try:
+            # Every stable replay return must reaffirm the marker namespace.
+            # Otherwise a visible rename/unlink from a prior process can be
+            # trusted long enough to persist a later phase, then disappear on
+            # the next power loss.
+            os.fsync(directory_fd)
+        except OSError as exc:
+            raise GitPermissionTakeoverError(
+                "cannot fsync permission marker replay directory"
+            ) from exc
+        finally:
+            os.close(directory_fd)
 
 
 def _permission_pending_captured_projection(
@@ -2923,14 +3020,6 @@ def _chmod_permission_record(
         require_original_config=require_original_config,
     )
     path = _permission_path(root, record["path"])
-    try:
-        metadata = path.lstat()
-    except OSError as exc:
-        raise GitPermissionTakeoverError(
-            "permission takeover path disappeared before chmod"
-        ) from exc
-    if f"{stat.S_IMODE(metadata.st_mode):04o}" == desired:
-        return False
     flags = (
         os.O_RDONLY
         | getattr(os, "O_CLOEXEC", 0)
@@ -2938,20 +3027,52 @@ def _chmod_permission_record(
     )
     if record["type"] == "directory":
         flags |= getattr(os, "O_DIRECTORY", 0)
+    parent_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    parent_descriptor: int | None = None
+    descriptor: int | None = None
     try:
-        descriptor = os.open(path, flags)
+        parent_before = path.parent.lstat()
+        parent_descriptor = os.open(path.parent, parent_flags)
+        held_parent = os.fstat(parent_descriptor)
+        if (
+            not stat.S_ISDIR(held_parent.st_mode)
+            or _permission_staging_version(parent_before)
+            != _permission_staging_version(held_parent)
+        ):
+            raise GitPermissionTakeoverError(
+                "permission path parent changed before chmod"
+            )
+        metadata = os.stat(
+            path.name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        already_desired = (
+            f"{stat.S_IMODE(metadata.st_mode):04o}" == desired
+        )
+        descriptor = os.open(
+            path.name,
+            flags,
+            dir_fd=parent_descriptor,
+        )
         try:
             before = os.fstat(descriptor)
             if (
-                before.st_dev != metadata.st_dev
-                or before.st_ino != metadata.st_ino
+                _permission_staging_version(before)
+                != _permission_staging_version(metadata)
                 or before.st_uid != record["uid"]
                 or before.st_gid != record["gid"]
             ):
                 raise GitPermissionTakeoverError(
                     "permission path changed before chmod"
                 )
-            os.fchmod(descriptor, int(desired, 8))
+            if not already_desired:
+                os.fchmod(descriptor, int(desired, 8))
             os.fsync(descriptor)
             after = os.fstat(descriptor)
             if (
@@ -2964,14 +3085,43 @@ def _chmod_permission_record(
                 raise GitPermissionTakeoverError(
                     "permission chmod did not persist exactly"
                 )
+            observed = os.stat(
+                path.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            if _permission_staging_version(observed) != (
+                _permission_staging_version(after)
+            ):
+                raise GitPermissionTakeoverError(
+                    "permission path changed while chmod was flushed"
+                )
+            os.fsync(parent_descriptor)
+            durable = os.stat(
+                path.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                _permission_staging_version(os.fstat(descriptor))
+                != _permission_staging_version(after)
+                or _permission_staging_version(durable)
+                != _permission_staging_version(after)
+            ):
+                raise GitPermissionTakeoverError(
+                    "permission path changed while parent was flushed"
+                )
         finally:
-            os.close(descriptor)
-        _fsync_permission_directory(path.parent)
+            if descriptor is not None:
+                os.close(descriptor)
     except OSError as exc:
         raise GitPermissionTakeoverError(
             f"cannot change Git permission path: {record['path']}"
         ) from exc
-    return True
+    finally:
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
+    return not already_desired
 
 
 def _permission_transition(

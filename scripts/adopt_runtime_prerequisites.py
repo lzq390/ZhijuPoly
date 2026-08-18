@@ -1,11 +1,12 @@
 #!/usr/bin/python3 -I
-"""Adopt production prerequisites and one permission-hardening successor.
+"""Adopt production prerequisites and narrow permission successors.
 
 This tool runs from an exact private Git checkout.  It installs only tracked
 configuration helpers for the original plan/apply transaction.  Its separate
 permission-* transaction can owner-harden the adopted checkout and publish a
-content-bound successor authority.  Neither transaction contacts PostgreSQL
-or controls a service.
+content-bound successor authority.  Its unit-permission-* transaction replaces
+only the legacy MD user-unit inode while proving that MD and DFT keep running.
+No transaction contacts PostgreSQL or restarts a service.
 """
 
 from __future__ import annotations
@@ -64,6 +65,37 @@ PERMISSION_TRANSACTION_PHASES = frozenset(
 # and adoption evidence, so its journal/authority ceiling must exceed the
 # marker engine's independent 128 MiB ceiling.
 PERMISSION_JSON_MAX_BYTES = 256 * 1024 * 1024
+UNIT_PERMISSION_TRANSACTION_DIRECTORY = Path(
+    "state/adopted-unit-permission-transactions"
+)
+UNIT_PERMISSION_BACKUP_DIRECTORY = Path(
+    "state/adopted-unit-permission-backups"
+)
+UNIT_PERMISSION_AUTHORITY_PATH = Path(
+    "state/adopted-unit-permissions.json"
+)
+UNIT_PERMISSION_AUTHORITY_KIND = (
+    "manual-runtime-adoption-unit-permission-hardening"
+)
+UNIT_PERMISSION_OPERATION_RE = re.compile(
+    r"adopt-unit-permission-[a-z0-9][a-z0-9._-]{7,95}\Z"
+)
+UNIT_PERMISSION_TRANSACTION_PHASES = frozenset(
+    {
+        "intent",
+        "replacement-intent",
+        "unit-ready",
+        "source-verified",
+        "authority-commit-intent",
+        "completed",
+        "aborted",
+    }
+)
+UNIT_PERMISSION_JSON_MAX_BYTES = 16 * 1024 * 1024
+MD_UNIT_NAME = "nexpoly-monomer-md-worker.service"
+DFT_UNIT_NAME = "nexpoly-monomer-dft-worker.service"
+MD_UNIT_PATH = Path("/home/devuser/.config/systemd/user") / MD_UNIT_NAME
+DFT_UNIT_PATH = Path("/home/devuser/.config/systemd/user") / DFT_UNIT_NAME
 ADOPTED_DEPLOYMENT_PATH = Path("state/adopted-deployment.json")
 BOOTSTRAP_CONTROL_PATH = Path("state/bootstrap-control.json")
 ADOPTION_AUTHORITY_KIND = "manual-runtime-adoption"
@@ -91,6 +123,7 @@ SOURCE_READINESS_FIELDS = {
     "group_or_world_writable",
 }
 RENAME_NOREPLACE = 1
+RENAME_EXCHANGE = 2
 
 TRACKED_INSTALLS = (
     (
@@ -153,6 +186,12 @@ TRACKED_INSTALLS = (
         0o600,
         "generic-mutable-audit-service",
     ),
+)
+UNIT_PERMISSION_SUCCESSOR_BLOBS = tuple(
+    record[0] for record in TRACKED_INSTALLS
+) + (
+    "scripts/bootstrap_pull_deploy.py",
+    "scripts/git_source_trust.py",
 )
 PGPASS_NAME = "mutable-data-audit.pgpass"
 
@@ -372,6 +411,80 @@ def _canonical_digest(document: object) -> str:
     return _digest(_canonical_bytes(document))
 
 
+def _has_exact_schema_version(document: object, expected: int) -> bool:
+    """Reject JSON booleans/floats that compare equal to an integer version."""
+
+    return (
+        isinstance(document, dict)
+        and type(document.get("schema_version")) is int
+        and document["schema_version"] == expected
+    )
+
+
+def _private_tree_inventory_digest(root: Path) -> str:
+    """Match the controller's content inventory for one private operation tree."""
+
+    metadata = root.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or root.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o022
+    ):
+        raise PrerequisiteError(f"private inventory root is unsafe: {root}")
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        observed = path.lstat()
+        if observed.st_uid != os.geteuid():
+            raise PrerequisiteError(
+                f"private inventory entry has another owner: {path}"
+            )
+        if stat.S_ISLNK(observed.st_mode):
+            digest.update(
+                b"L\0"
+                + relative
+                + b"\0"
+                + os.fsencode(os.readlink(path))
+                + b"\0"
+            )
+        elif stat.S_ISDIR(observed.st_mode):
+            if observed.st_mode & 0o022:
+                raise PrerequisiteError(
+                    f"private inventory directory is writable: {path}"
+                )
+            digest.update(b"D\0" + relative + b"\0")
+        elif stat.S_ISREG(observed.st_mode):
+            if observed.st_nlink != 1:
+                raise PrerequisiteError(
+                    f"private inventory file has another link: {path}"
+                )
+            digest.update(b"F\0" + relative + b"\0")
+            descriptor, _noatime = _open_readonly_noatime(path)
+            try:
+                before = os.fstat(descriptor)
+                while True:
+                    block = os.read(descriptor, 1024 * 1024)
+                    if not block:
+                        break
+                    digest.update(block)
+                after = os.fstat(descriptor)
+                if _stable_regular_identity(before) != _stable_regular_identity(
+                    after
+                ):
+                    raise PrerequisiteError(
+                        f"private inventory file changed: {path}"
+                    )
+            finally:
+                os.close(descriptor)
+            digest.update(b"\0")
+        else:
+            raise PrerequisiteError(
+                f"private inventory contains a special file: {path}"
+            )
+    return "sha256:" + digest.hexdigest()
+
+
 def _utc_now() -> str:
     return (
         dt.datetime.now(dt.timezone.utc)
@@ -397,6 +510,17 @@ def _require_operation_id(value: str) -> str:
 def _require_permission_operation_id(value: str) -> str:
     if not isinstance(value, str) or PERMISSION_OPERATION_RE.fullmatch(value) is None:
         raise PrerequisiteError("permission hardening operation ID is invalid")
+    return value
+
+
+def _require_unit_permission_operation_id(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or UNIT_PERMISSION_OPERATION_RE.fullmatch(value) is None
+    ):
+        raise PrerequisiteError(
+            "unit permission hardening operation ID is invalid"
+        )
     return value
 
 
@@ -1043,7 +1167,7 @@ def _validate_source_readiness(
     if (
         not isinstance(document, dict)
         or set(document) != SOURCE_READINESS_FIELDS
-        or document.get("schema_version") != 2
+        or not _has_exact_schema_version(document, 2)
         or document.get("ready") is not True
         or document.get("source_root") != str(source_root.absolute())
         or document.get("source_sha") != source_sha
@@ -1151,7 +1275,7 @@ def _validate_adopted_deployment(
             os.close(descriptor)
     if (
         not isinstance(document, dict)
-        or document.get("schema_version") != 1
+        or not _has_exact_schema_version(document, 1)
         or document.get("status") != "adopted"
     ):
         raise PrerequisiteError("adopted deployment authority is incomplete")
@@ -1162,7 +1286,10 @@ def _validate_adopted_deployment(
         else _load_json_at(state_fd, BOOTSTRAP_CONTROL_PATH.name)
     )
     if (
-        bootstrap.get("schema_version") != 3
+        not _has_exact_schema_version(bootstrap, 3)
+        or not _has_exact_schema_version(
+            bootstrap.get("adopted_deployment"), 1
+        )
         or bootstrap.get("status") != "completed"
         or bootstrap.get("authority_kind") != ADOPTION_AUTHORITY_KIND
         or bootstrap.get("adopted_deployment") != document
@@ -1367,6 +1494,40 @@ def _rename_noreplace(
         raise OSError(error, os.strerror(error), source_name)
 
 
+def _rename_exchange(
+    first_directory: int,
+    first_name: str,
+    second_directory: int,
+    second_name: str,
+) -> None:
+    """Atomically exchange two existing names without a replacement window."""
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise PrerequisiteError("renameat2 exchange is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    if (
+        renameat2(
+            first_directory,
+            os.fsencode(first_name),
+            second_directory,
+            os.fsencode(second_name),
+            RENAME_EXCHANGE,
+        )
+        != 0
+    ):
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), first_name)
+
+
 def _quarantine_owned_link_at(
     directory: int,
     name: str,
@@ -1569,6 +1730,10 @@ def _quarantine_private_link_at(
         )
     current_name = quarantine_name if quarantine_exists else name
     if not source_exists and not quarantine_exists:
+        # Absence can be the visible result of an unlink whose parent-fsync
+        # response was lost. Seal that namespace before a later journal can
+        # treat cleanup as complete.
+        os.fsync(directory_fd)
         return
     descriptor = _open_private_regular_at(
         directory_fd,
@@ -1687,6 +1852,94 @@ def _atomic_owned_json(path: Path, document: object) -> None:
         os.close(directory_fd)
 
 
+def _stable_owned_payload_at(
+    directory_fd: int,
+    name: str,
+    descriptor: int,
+    *,
+    maximum_bytes: int,
+    label: str,
+) -> tuple[bytes, os.stat_result]:
+    """Read one held private inode and prove its path/version stayed exact."""
+
+    before = os.fstat(descriptor)
+    payload = _descriptor_bytes(descriptor, maximum_bytes=maximum_bytes)
+    after = os.fstat(descriptor)
+    try:
+        observed = os.stat(
+            name,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise PrerequisiteError(f"{label} path changed") from exc
+    if (
+        _stable_regular_identity(before) != _stable_regular_identity(after)
+        or _stable_regular_identity(observed)
+        != _stable_regular_identity(after)
+    ):
+        raise PrerequisiteError(f"{label} changed while reading")
+    return payload, after
+
+
+def _reseal_exact_owned_payload_at(
+    directory_fd: int,
+    name: str,
+    descriptor: int,
+    *,
+    expected_payload: bytes,
+    maximum_bytes: int,
+    label: str,
+    mismatch_message: str,
+) -> os.stat_result:
+    """Re-fsync and revalidate one visible exact inode before publication."""
+
+    observed_payload, before = _stable_owned_payload_at(
+        directory_fd,
+        name,
+        descriptor,
+        maximum_bytes=maximum_bytes,
+        label=label,
+    )
+    if observed_payload != expected_payload:
+        raise PrerequisiteError(mismatch_message)
+    # The visible file may be the result of a write or file-fsync response that
+    # was lost. Re-seal that exact held inode before its pathname can authorize
+    # a link publication or a completed transaction.
+    os.fsync(descriptor)
+    sealed = os.fstat(descriptor)
+    try:
+        observed = os.stat(
+            name,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise PrerequisiteError(f"{label} changed before fsync") from exc
+    if (
+        _stable_regular_identity(sealed)
+        != _stable_regular_identity(before)
+        or _stable_regular_identity(observed)
+        != _stable_regular_identity(sealed)
+    ):
+        raise PrerequisiteError(f"{label} changed before fsync")
+    verified_payload, verified = _stable_owned_payload_at(
+        directory_fd,
+        name,
+        descriptor,
+        maximum_bytes=maximum_bytes,
+        label=label,
+    )
+    if (
+        verified_payload != expected_payload
+        or _stable_regular_identity(verified)
+        != _stable_regular_identity(sealed)
+    ):
+        raise PrerequisiteError(f"{label} changed after fsync")
+    os.fsync(directory_fd)
+    return verified
+
+
 def _create_owned_json_once_at(
     directory_fd: int,
     name: str,
@@ -1718,9 +1971,15 @@ def _create_owned_json_once_at(
             allowed_nlinks=frozenset({1, 2}),
         )
         try:
-            authority_metadata = os.fstat(authority_fd)
-            if _descriptor_bytes(authority_fd, maximum_bytes=maximum_bytes) != payload:
-                raise PrerequisiteError("prerequisite authority path is occupied")
+            authority_metadata = _reseal_exact_owned_payload_at(
+                directory_fd,
+                name,
+                authority_fd,
+                expected_payload=payload,
+                maximum_bytes=maximum_bytes,
+                label="prerequisite authority",
+                mismatch_message="prerequisite authority path is occupied",
+            )
             if authority_metadata.st_nlink == 2:
                 companion_name = (
                     temporary_name
@@ -1738,8 +1997,19 @@ def _create_owned_json_once_at(
                     allowed_nlinks=frozenset({2}),
                 )
                 try:
-                    if _stat_identity(os.fstat(temporary_fd)) != _stat_identity(
-                        authority_metadata
+                    temporary_metadata = _reseal_exact_owned_payload_at(
+                        directory_fd,
+                        companion_name,
+                        temporary_fd,
+                        expected_payload=payload,
+                        maximum_bytes=maximum_bytes,
+                        label="prerequisite authority staging",
+                        mismatch_message=(
+                            "prerequisite authority staging differs"
+                        ),
+                    )
+                    if _stable_regular_identity(temporary_metadata) != (
+                        _stable_regular_identity(authority_metadata)
                     ):
                         raise PrerequisiteError(
                             "prerequisite authority staging identity differs"
@@ -1772,9 +2042,14 @@ def _create_owned_json_once_at(
                 mode=0o600,
             )
             try:
-                temporary_payload = _descriptor_bytes(
-                    temporary_fd,
-                    maximum_bytes=maximum_bytes,
+                temporary_payload, _temporary_metadata = (
+                    _stable_owned_payload_at(
+                        directory_fd,
+                        temporary_name,
+                        temporary_fd,
+                        maximum_bytes=maximum_bytes,
+                        label="prerequisite authority staging",
+                    )
                 )
             finally:
                 os.close(temporary_fd)
@@ -1812,56 +2087,97 @@ def _create_owned_json_once_at(
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
-        try:
-            os.link(
-                temporary_name,
-                name,
-                src_dir_fd=directory_fd,
-                dst_dir_fd=directory_fd,
-                follow_symlinks=False,
-            )
-        except OSError as exc:
-            if exc.errno != errno.EEXIST:
-                raise
-        os.fsync(directory_fd)
-        checkpoint("authority-linked")
-        authority_fd = _open_private_regular_at(
-            directory_fd,
-            name,
-            mode=0o600,
-            allowed_nlinks=frozenset({2}),
-        )
         temporary_fd = _open_private_regular_at(
             directory_fd,
             temporary_name,
             mode=0o600,
-            allowed_nlinks=frozenset({2}),
         )
         try:
-            if (
-                _stat_identity(os.fstat(authority_fd))
-                != _stat_identity(os.fstat(temporary_fd))
-                or _descriptor_bytes(authority_fd, maximum_bytes=maximum_bytes)
-                != payload
-            ):
-                raise PrerequisiteError(
-                    "published prerequisite authority identity differs"
+            _reseal_exact_owned_payload_at(
+                directory_fd,
+                temporary_name,
+                temporary_fd,
+                expected_payload=payload,
+                maximum_bytes=maximum_bytes,
+                label="prerequisite authority staging",
+                mismatch_message="prerequisite authority staging differs",
+            )
+            try:
+                os.link(
+                    temporary_name,
+                    name,
+                    src_dir_fd=directory_fd,
+                    dst_dir_fd=directory_fd,
+                    follow_symlinks=False,
                 )
+            except OSError as exc:
+                if exc.errno != errno.EEXIST:
+                    raise
+            os.fsync(directory_fd)
+            checkpoint("authority-linked")
+            authority_fd = _open_private_regular_at(
+                directory_fd,
+                name,
+                mode=0o600,
+                allowed_nlinks=frozenset({2}),
+            )
+            try:
+                authority_metadata = _reseal_exact_owned_payload_at(
+                    directory_fd,
+                    name,
+                    authority_fd,
+                    expected_payload=payload,
+                    maximum_bytes=maximum_bytes,
+                    label="published prerequisite authority",
+                    mismatch_message=(
+                        "published prerequisite authority differs"
+                    ),
+                )
+                temporary_payload, temporary_metadata = (
+                    _stable_owned_payload_at(
+                        directory_fd,
+                        temporary_name,
+                        temporary_fd,
+                        maximum_bytes=maximum_bytes,
+                        label="published prerequisite authority staging",
+                    )
+                )
+                if (
+                    temporary_payload != payload
+                    or _stable_regular_identity(authority_metadata)
+                    != _stable_regular_identity(temporary_metadata)
+                ):
+                    raise PrerequisiteError(
+                        "published prerequisite authority identity differs"
+                    )
+            finally:
+                os.close(authority_fd)
+            os.unlink(temporary_name, dir_fd=directory_fd)
+            os.fsync(directory_fd)
         finally:
-            os.close(authority_fd)
             os.close(temporary_fd)
-        os.unlink(temporary_name, dir_fd=directory_fd)
-        os.fsync(directory_fd)
     final_fd = _open_private_regular_at(
         directory_fd,
         name,
         mode=0o600,
     )
     try:
-        if _descriptor_bytes(final_fd, maximum_bytes=maximum_bytes) != payload:
-            raise PrerequisiteError("published prerequisite authority differs")
+        _reseal_exact_owned_payload_at(
+            directory_fd,
+            name,
+            final_fd,
+            expected_payload=payload,
+            maximum_bytes=maximum_bytes,
+            label="published prerequisite authority",
+            mismatch_message="published prerequisite authority differs",
+        )
     finally:
         os.close(final_fd)
+    # Re-observing the exact final authority is also a recovery action: the
+    # prior unlink of its temporary hard link may be visible even though the
+    # state-directory fsync response was lost.  Seal that namespace before a
+    # caller persists its completed transaction.
+    os.fsync(directory_fd)
 
 
 class PrerequisiteInstaller:
@@ -1996,18 +2312,27 @@ class PrerequisiteInstaller:
 
     def _ensure_transaction_directory_fd(self) -> int:
         if self._transaction_directory_fd is not None:
+            if "state" not in self._pinned_directories:
+                raise PrerequisiteError(
+                    "prerequisite state directory is not pinned"
+                )
+            os.fsync(self._pinned_directories["state"][0])
             return self._transaction_directory_fd
         if "state" not in self._pinned_directories:
             raise PrerequisiteError("prerequisite state directory is not pinned")
         state_fd = self._pinned_directories["state"][0]
         try:
             os.mkdir(TRANSACTION_DIRECTORY.name, mode=0o700, dir_fd=state_fd)
-            os.fsync(state_fd)
         except FileExistsError:
             pass
         transaction_fd = _open_private_directory(
             Path(TRANSACTION_DIRECTORY.name), parent_fd=state_fd
         )
+        try:
+            os.fsync(state_fd)
+        except Exception:
+            os.close(transaction_fd)
+            raise
         self._transaction_directory_fd = transaction_fd
         return transaction_fd
 
@@ -2243,7 +2568,7 @@ class PrerequisiteInstaller:
                 return None
             document = _load_json(path)
         if (
-            document.get("schema_version") != 1
+            not _has_exact_schema_version(document, 1)
             or document.get("operation_id") != operation_id
             or document.get("status") not in {"applying", "completed", "aborted"}
             or not isinstance(document.get("plan"), dict)
@@ -2423,6 +2748,20 @@ class PrerequisiteInstaller:
         else:
             _atomic_owned_json(path, document)
 
+    def _reseal_transaction(self, document: dict[str, object]) -> None:
+        """Durably re-publish an exact recovered prerequisite journal."""
+
+        if document.get("status") not in {
+            "applying",
+            "completed",
+            "aborted",
+        }:
+            raise PrerequisiteError(
+                "prerequisite journal cannot be resealed"
+            )
+        self._write_transaction(document)
+        self.checkpoint("prerequisite-journal-resealed")
+
     def _validate_plan_context(
         self,
         plan: dict[str, object],
@@ -2448,7 +2787,7 @@ class PrerequisiteInstaller:
                 "preserved_pgpass",
                 "mutations",
             }
-            or plan.get("schema_version") != 1
+            or not _has_exact_schema_version(plan, 1)
             or plan.get("authority_kind") != AUTHORITY_KIND
             or plan.get("operation_id") != operation_id
             or plan.get("source_sha") != source_sha
@@ -2667,6 +3006,10 @@ class PrerequisiteInstaller:
             raise PrerequisiteError(
                 f"prerequisite target inode differs from operation staging: {name}"
             )
+        # The target/staging hard-link pair may have been observed after a
+        # link whose parent-fsync response was lost.  Re-seal the namespace
+        # before its ownership identity is written to the journal.
+        os.fsync(config_fd)
         # Keep the operation-specific staging hard link until this identity is
         # durable in the journal.  It is the lost-response ownership proof.
         return target_identity
@@ -2684,11 +3027,6 @@ class PrerequisiteInstaller:
         quarantine_name = (
             f".adopt-prereq-{operation_id}-{record['name']}.staging-quarantine"
         )
-        if not (
-            _entry_exists_at(config_fd, temporary_name)
-            or _entry_exists_at(config_fd, quarantine_name)
-        ):
-            return
         _quarantine_owned_link_at(
             config_fd,
             temporary_name,
@@ -2768,9 +3106,19 @@ class PrerequisiteInstaller:
 
     def _load_authority(self) -> dict[str, object]:
         state_fd = self._pinned_directory_fd(self.runtime_root / "state")
-        if state_fd is not None:
-            return _load_json_at(state_fd, self.authority_path.name)
-        return _load_json(self.authority_path)
+        authority = (
+            _load_json_at(state_fd, self.authority_path.name)
+            if state_fd is not None
+            else _load_json(self.authority_path)
+        )
+        if (
+            not _has_exact_schema_version(authority, 1)
+            or not _has_exact_schema_version(authority.get("plan"), 1)
+        ):
+            raise PrerequisiteError(
+                "prerequisite authority schema is invalid"
+            )
+        return authority
 
     def _publish_authority(
         self,
@@ -2803,6 +3151,7 @@ class PrerequisiteInstaller:
             self._assert_pinned_runtime()
             self._assert_exclusive_authority(operation_id)
             transaction = self._load_transaction(operation_id)
+            recovered_transaction = transaction is not None
             if transaction is None:
                 locked_plan = self._source_plan(source_sha, operation_id)
                 locked_result = self._plan_result(locked_plan)
@@ -2842,6 +3191,7 @@ class PrerequisiteInstaller:
                 authority = self._load_authority()
                 if authority != self._authority(transaction):
                     raise PrerequisiteError("completed prerequisite authority differs")
+                self._reseal_transaction(transaction)
                 return authority
             if transaction["phase"] == "authority-commit-intent":
                 for record in plan["files"]:
@@ -2869,12 +3219,16 @@ class PrerequisiteInstaller:
                             digest=str(record["sha256"]),
                             mode=int(str(record["mode"]), 8),
                         )
+                if recovered_transaction:
+                    self._reseal_transaction(transaction)
                 authority = self._authority(transaction)
                 self._publish_authority(authority, operation_id)
                 transaction["phase"] = "completed"
                 transaction["status"] = "completed"
                 self._write_transaction(transaction)
                 return authority
+            if recovered_transaction:
+                self._reseal_transaction(transaction)
             files = list(plan["files"])
             installed = list(transaction["installed"])
             owned_targets = dict(transaction["owned_targets"])
@@ -2967,17 +3321,20 @@ class PrerequisiteInstaller:
                 raise PrerequisiteError("prerequisite adoption transaction is unavailable")
             if transaction["plan_sha256"] != confirm_plan_sha256:
                 raise PrerequisiteError("prerequisite abort confirmation differs")
+            plan = dict(transaction["plan"])
+            self._validate_plan_context(
+                plan, source_sha, operation_id, durable=True
+            )
+            self._validate_plan_targets(plan)
             if transaction["status"] == "aborted":
+                self._reseal_transaction(transaction)
                 return transaction
             if transaction["status"] == "completed" or transaction["phase"] in {
                 "authority-commit-intent",
                 "completed",
             }:
                 raise PrerequisiteError("prerequisite authority commit cannot be aborted")
-            plan = dict(transaction["plan"])
-            self._validate_plan_context(
-                plan, source_sha, operation_id, durable=True
-            )
+            self._reseal_transaction(transaction)
             records = {
                 str(record["name"]): dict(record)
                 for record in plan["files"]
@@ -3356,7 +3713,7 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
             return _open_private_directory(self.permission_transaction_root)
         state_fd = self._pinned_directories["state"][0]
         try:
-            return _open_private_directory(
+            directory_fd = _open_private_directory(
                 Path(PERMISSION_TRANSACTION_DIRECTORY.name),
                 parent_fd=state_fd,
             )
@@ -3372,19 +3729,25 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
                     return None
             else:
                 raise
-        try:
-            os.mkdir(
-                PERMISSION_TRANSACTION_DIRECTORY.name,
-                mode=0o700,
-                dir_fd=state_fd,
+            try:
+                os.mkdir(
+                    PERMISSION_TRANSACTION_DIRECTORY.name,
+                    mode=0o700,
+                    dir_fd=state_fd,
+                )
+            except FileExistsError:
+                pass
+            directory_fd = _open_private_directory(
+                Path(PERMISSION_TRANSACTION_DIRECTORY.name),
+                parent_fd=state_fd,
             )
-            os.fsync(state_fd)
-        except FileExistsError:
-            pass
-        return _open_private_directory(
-            Path(PERMISSION_TRANSACTION_DIRECTORY.name),
-            parent_fd=state_fd,
-        )
+        if create:
+            try:
+                os.fsync(state_fd)
+            except Exception:
+                os.close(directory_fd)
+                raise
+        return directory_fd
 
     def _load_permission_transaction(
         self,
@@ -3423,7 +3786,7 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
         }
         if (
             set(document) != fields
-            or document.get("schema_version") != 1
+            or not _has_exact_schema_version(document, 1)
             or document.get("operation_id") != operation_id
             or document.get("status") not in {"applying", "completed", "aborted"}
             or document.get("phase") not in PERMISSION_TRANSACTION_PHASES
@@ -3496,6 +3859,23 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
         finally:
             os.close(directory_fd)
 
+    def _reseal_permission_transaction(
+        self,
+        document: dict[str, object],
+    ) -> None:
+        """Durably re-publish an exact recovered permission journal."""
+
+        if document.get("status") not in {
+            "applying",
+            "completed",
+            "aborted",
+        }:
+            raise PrerequisiteError(
+                "permission hardening journal cannot be resealed"
+            )
+        self._write_permission_transaction(document)
+        self.checkpoint("permission-journal-resealed")
+
     def _permission_authority_exists(self) -> bool:
         state_fd = self._pinned_directory_fd(self.runtime_root / "state")
         if state_fd is not None:
@@ -3513,18 +3893,28 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
         require_single_link: bool = True,
     ) -> dict[str, object]:
         state_fd = self._pinned_directory_fd(self.runtime_root / "state")
-        if state_fd is not None:
-            return _load_json_at(
+        authority = (
+            _load_json_at(
                 state_fd,
                 PERMISSION_AUTHORITY_PATH.name,
                 require_single_link=require_single_link,
                 maximum_bytes=PERMISSION_JSON_MAX_BYTES,
             )
-        return _load_json(
-            self.permission_authority_path,
-            require_single_link=require_single_link,
-            maximum_bytes=PERMISSION_JSON_MAX_BYTES,
+            if state_fd is not None
+            else _load_json(
+                self.permission_authority_path,
+                require_single_link=require_single_link,
+                maximum_bytes=PERMISSION_JSON_MAX_BYTES,
+            )
         )
+        if (
+            not _has_exact_schema_version(authority, 1)
+            or not _has_exact_schema_version(authority.get("plan"), 1)
+        ):
+            raise PrerequisiteError(
+                "permission authority schema is invalid"
+            )
+        return authority
 
     def _publish_permission_authority(
         self,
@@ -3645,7 +4035,7 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
                     maximum_bytes=PERMISSION_JSON_MAX_BYTES,
                 )
                 if (
-                    document.get("schema_version") != 1
+                    not _has_exact_schema_version(document, 1)
                     or document.get("operation_id") != other
                     or document.get("status")
                     not in {"applying", "completed", "aborted"}
@@ -3696,7 +4086,11 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
             "base": base,
         }
 
-    def _adoption_permission_context(self) -> dict[str, object]:
+    def _adoption_permission_context(
+        self,
+        *,
+        permit_prepared_abort: bool = False,
+    ) -> dict[str, object]:
         for relative in (
             Path("state/current-deployment.json"),
             Path("state/deploy-in-progress.json"),
@@ -3707,7 +4101,10 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
                     "permission hardening is restricted to raw manual adoption"
                 )
         prepared_root = self.runtime_root / "state/prepared"
-        if prepared_root.exists() or prepared_root.is_symlink():
+        if (
+            not permit_prepared_abort
+            and (prepared_root.exists() or prepared_root.is_symlink())
+        ):
             _private_metadata(
                 prepared_root,
                 mode=0o700,
@@ -3741,14 +4138,17 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
         production_sha = adopted.get("source_sha")
         production_tree = adopted.get("source_tree")
         if (
-            adopted.get("schema_version") != 1
+            not _has_exact_schema_version(adopted, 1)
             or adopted.get("status") != "adopted"
             or adopted.get("authority_kind") != ADOPTION_AUTHORITY_KIND
             or not isinstance(production_sha, str)
             or SHA_RE.fullmatch(production_sha) is None
             or not isinstance(production_tree, str)
             or SHA_RE.fullmatch(production_tree) is None
-            or bootstrap.get("schema_version") != 3
+            or not _has_exact_schema_version(bootstrap, 3)
+            or not _has_exact_schema_version(
+                bootstrap.get("adopted_deployment"), 1
+            )
             or bootstrap.get("status") != "completed"
             or bootstrap.get("authority_kind") != ADOPTION_AUTHORITY_KIND
             or bootstrap.get("adopted_deployment") != adopted
@@ -3776,13 +4176,14 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
         base_source_tree = str(base.get("source_tree", ""))
         if (
             set(base) != base_fields
-            or base.get("schema_version") != 1
+            or not _has_exact_schema_version(base, 1)
             or base.get("status") != "completed"
             or base.get("authority_kind") != AUTHORITY_KIND
             or OPERATION_RE.fullmatch(base_operation) is None
             or SHA_RE.fullmatch(base_source_sha) is None
             or SHA_RE.fullmatch(base_source_tree) is None
             or not isinstance(base_plan, dict)
+            or not _has_exact_schema_version(base_plan, 1)
             or base.get("plan_sha256") != _canonical_digest(base_plan)
             or base.get("adopted_deployment_sha256") != adopted_digest
             or base_plan.get("adopted_deployment_sha256") != adopted_digest
@@ -3908,7 +4309,7 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
         context = self._adoption_permission_context()
         if (
             set(plan) != expected_fields
-            or plan.get("schema_version") != 1
+            or not _has_exact_schema_version(plan, 1)
             or plan.get("authority_kind") != PERMISSION_AUTHORITY_KIND
             or plan.get("operation_id") != operation_id
             or plan.get("source_sha") != source_sha
@@ -4225,6 +4626,7 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
             self._assert_permission_paths_pinned()
             self._assert_permission_exclusive(operation_id)
             transaction = self._load_permission_transaction(operation_id)
+            recovered_transaction = transaction is not None
             if transaction is None:
                 locked_plan = self._permission_source_plan(
                     source_sha, operation_id
@@ -4284,12 +4686,15 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
                     transaction,
                     plan,
                 )
+                self._reseal_permission_transaction(transaction)
                 return authority
             if transaction["phase"] == "authority-commit-intent":
                 self._revalidate_permission_commit_evidence(
                     transaction,
                     plan,
                 )
+                if recovered_transaction:
+                    self._reseal_permission_transaction(transaction)
                 authority = self._authority(transaction)
                 self._publish_permission_authority(authority, operation_id)
                 self._assert_permission_paths_pinned()
@@ -4297,6 +4702,8 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
                 transaction["status"] = "completed"
                 self._write_permission_transaction(transaction)
                 return authority
+            if recovered_transaction:
+                self._reseal_permission_transaction(transaction)
             if transaction["phase"] == "intent":
                 if self._permission_marker_exists():
                     raise PrerequisiteError(
@@ -4448,16 +4855,17 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
                 raise PrerequisiteError(
                     "permission abort confirmation differs"
                 )
-            if transaction["status"] == "aborted":
-                return transaction
-            if transaction["phase"] != "intent":
-                raise PrerequisiteError(
-                    "permission change intent is forward-only and cannot be aborted"
-                )
             plan = dict(transaction["plan"])
             self._validate_permission_plan_context(
                 plan, source_sha, operation_id, durable=True
             )
+            if (
+                transaction["status"] != "aborted"
+                and transaction["phase"] != "intent"
+            ):
+                raise PrerequisiteError(
+                    "permission change intent is forward-only and cannot be aborted"
+                )
             if self._permission_marker_exists():
                 raise PrerequisiteError(
                     "permission marker exists before abortable boundary"
@@ -4467,10 +4875,3986 @@ class PermissionHardeningInstaller(PrerequisiteInstaller):
                 raise PrerequisiteError(
                     "permission inventory changed before abort"
                 )
+            self._reseal_permission_transaction(transaction)
+            if transaction["status"] == "aborted":
+                return transaction
             transaction["status"] = "aborted"
             transaction["phase"] = "aborted"
             transaction["aborted_at"] = _utc_now()
             self._write_permission_transaction(transaction)
+            return transaction
+
+
+class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
+    """Adopt the legacy MD unit mode without changing either running Worker."""
+
+    def __init__(
+        self,
+        source_root: Path,
+        runtime_root: Path,
+        *,
+        production_root: Path = PRODUCTION_ROOT,
+        md_unit_path: Path = MD_UNIT_PATH,
+        dft_unit_path: Path = DFT_UNIT_PATH,
+        checkpoint: Callable[[str], None] | None = None,
+        source_readiness_probe: Callable[[Path, str], dict[str, object]]
+        | None = None,
+        delivery_gate_probe: Callable[
+            [Path, Path, str, dict[str, object] | None], dict[str, object]
+        ]
+        | None = None,
+        systemd_probe: Callable[[str, Path], dict[str, str]] | None = None,
+        daemon_reload: Callable[[], None] | None = None,
+    ) -> None:
+        super().__init__(
+            source_root,
+            runtime_root,
+            production_root=production_root,
+            checkpoint=checkpoint,
+            source_readiness_probe=source_readiness_probe,
+            delivery_gate_probe=delivery_gate_probe,
+        )
+        self.md_unit_path = md_unit_path.absolute()
+        self.dft_unit_path = dft_unit_path.absolute()
+        if self.md_unit_path.parent != self.dft_unit_path.parent:
+            raise PrerequisiteError(
+                "adopted Worker units must share one private systemd directory"
+            )
+        self.unit_parent = self.md_unit_path.parent
+        self.unit_transaction_root = (
+            self.runtime_root / UNIT_PERMISSION_TRANSACTION_DIRECTORY
+        )
+        self.unit_backup_root = (
+            self.runtime_root / UNIT_PERMISSION_BACKUP_DIRECTORY
+        )
+        self.unit_authority_path = (
+            self.runtime_root / UNIT_PERMISSION_AUTHORITY_PATH
+        )
+        self.systemd_probe = systemd_probe or self._live_systemd_probe
+        self.daemon_reload = daemon_reload or self._live_daemon_reload
+        self._pinned_unit_parent: tuple[
+            int, tuple[int, int, int, int, int, int]
+        ] | None = None
+
+    @staticmethod
+    def _unit_parent_identity(
+        metadata: os.stat_result,
+    ) -> tuple[int, int, int, int, int, int]:
+        return (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_uid,
+            metadata.st_gid,
+            metadata.st_nlink,
+        )
+
+    @contextlib.contextmanager
+    def _deployment_lock(self) -> Any:
+        with super()._deployment_lock():
+            if self._pinned_unit_parent is not None:
+                raise PrerequisiteError("Worker unit directory is already pinned")
+            descriptor, _identity_value = _open_owned_directory_for_cas(
+                self.unit_parent
+            )
+            try:
+                metadata = os.fstat(descriptor)
+                if metadata.st_mode & 0o022:
+                    raise PrerequisiteError(
+                        "deploy-user systemd unit directory is unsafe"
+                    )
+                self._pinned_unit_parent = (
+                    descriptor,
+                    self._unit_parent_identity(metadata),
+                )
+                self._assert_unit_paths_pinned()
+                yield
+                self._assert_unit_paths_pinned()
+            finally:
+                self._pinned_unit_parent = None
+                with contextlib.suppress(OSError):
+                    os.close(descriptor)
+
+    def _assert_unit_parent_pinned(self) -> None:
+        if self._pinned_unit_parent is None:
+            raise PrerequisiteError("Worker unit directory is not pinned")
+        descriptor, expected = self._pinned_unit_parent
+        try:
+            observed_descriptor = os.fstat(descriptor)
+            observed_path = self.unit_parent.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise PrerequisiteError("Worker unit directory changed") from exc
+        if (
+            not stat.S_ISDIR(observed_descriptor.st_mode)
+            or not stat.S_ISDIR(observed_path.st_mode)
+            or self.unit_parent.is_symlink()
+            or self._unit_parent_identity(observed_descriptor) != expected
+            or self._unit_parent_identity(observed_path) != expected
+            or observed_descriptor.st_mode & 0o022
+        ):
+            raise PrerequisiteError("Worker unit directory changed")
+
+    def _assert_unit_paths_pinned(self) -> None:
+        self._assert_permission_paths_pinned()
+        self._assert_unit_parent_pinned()
+
+    def _unit_parent_fd(self) -> int | None:
+        return (
+            self._pinned_unit_parent[0]
+            if self._pinned_unit_parent is not None
+            else None
+        )
+
+    @staticmethod
+    def _systemd_environment() -> dict[str, str]:
+        uid = os.geteuid()
+        return {
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/home/devuser",
+            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+        }
+
+    def _live_systemd_probe(self, name: str, _path: Path) -> dict[str, str]:
+        result = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                name,
+                "--property=LoadState",
+                "--property=FragmentPath",
+                "--property=DropInPaths",
+                "--property=NeedDaemonReload",
+                "--property=UnitFileState",
+                "--property=ActiveState",
+                "--property=SubState",
+                "--property=MainPID",
+                "--property=InvocationID",
+            ],
+            env=self._systemd_environment(),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return {
+            key: value
+            for key, value in (
+                line.split("=", 1)
+                for line in result.stdout.splitlines()
+                if "=" in line
+            )
+        }
+
+    def _live_daemon_reload(self) -> None:
+        subprocess.run(
+            ["systemctl", "--user", "daemon-reload"],
+            env=self._systemd_environment(),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def _normalized_systemd_identity(
+        self,
+        *,
+        name: str,
+        path: Path,
+        allow_reload_pending: bool = False,
+    ) -> tuple[dict[str, str], dict[str, object]]:
+        raw = self.systemd_probe(name, path)
+        fields = {
+            "LoadState",
+            "FragmentPath",
+            "DropInPaths",
+            "NeedDaemonReload",
+            "UnitFileState",
+            "ActiveState",
+            "SubState",
+            "MainPID",
+            "InvocationID",
+        }
+        try:
+            main_pid = int(raw.get("MainPID", ""))
+        except (TypeError, ValueError) as exc:
+            raise PrerequisiteError(
+                f"{name} process identity is malformed"
+            ) from exc
+        invocation_id = raw.get("InvocationID")
+        if (
+            set(raw) != fields
+            or raw.get("LoadState") != "loaded"
+            or raw.get("FragmentPath") != str(path)
+            or raw.get("DropInPaths") != ""
+            or raw.get("NeedDaemonReload")
+            not in ({"no", "yes"} if allow_reload_pending else {"no"})
+            or raw.get("UnitFileState") != "enabled"
+            or raw.get("ActiveState") != "active"
+            or raw.get("SubState") != "running"
+            or main_pid <= 0
+            or not isinstance(invocation_id, str)
+            or re.fullmatch(r"[0-9a-f]{32}", invocation_id) is None
+        ):
+            raise PrerequisiteError(
+                f"{name} is not the unchanged active systemd instance"
+            )
+        return (
+            {
+                key: str(raw[key])
+                for key in (
+                    "LoadState",
+                    "FragmentPath",
+                    "DropInPaths",
+                    "NeedDaemonReload",
+                    "UnitFileState",
+                    "ActiveState",
+                    "SubState",
+                )
+            },
+            {"main_pid": main_pid, "invocation_id": invocation_id},
+        )
+
+    def _parent_record(self, descriptor: int) -> dict[str, object]:
+        metadata = os.fstat(descriptor)
+        observed = self.unit_parent.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or self.unit_parent.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o022
+            or self._unit_parent_identity(metadata)
+            != self._unit_parent_identity(observed)
+        ):
+            raise PrerequisiteError(
+                "deploy-user systemd unit directory is unsafe"
+            )
+        return {
+            "path": str(self.unit_parent),
+            "type": "directory",
+            "device": metadata.st_dev,
+            "inode": metadata.st_ino,
+            "uid": metadata.st_uid,
+            "gid": metadata.st_gid,
+            "mode": f"{stat.S_IMODE(metadata.st_mode):04o}",
+            "nlink": metadata.st_nlink,
+            "size": metadata.st_size,
+        }
+
+    def _read_unit_file(
+        self,
+        *,
+        parent_fd: int,
+        path: Path,
+        mode: int,
+        allowed_nlinks: frozenset[int] = frozenset({1}),
+    ) -> tuple[dict[str, object], bytes]:
+        try:
+            descriptor = os.open(
+                path.name,
+                os.O_RDONLY
+                | os.O_CLOEXEC
+                | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_fd,
+            )
+        except OSError as exc:
+            raise PrerequisiteError(
+                f"adopted Worker unit is unavailable: {path}"
+            ) from exc
+        try:
+            before = os.fstat(descriptor)
+            payload = _descriptor_bytes(
+                descriptor,
+                maximum_bytes=1024 * 1024,
+            )
+            after = os.fstat(descriptor)
+            observed = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.geteuid()
+                or stat.S_IMODE(before.st_mode) != mode
+                or before.st_nlink not in allowed_nlinks
+                or not 1 <= before.st_size <= 1024 * 1024
+                or _stable_regular_identity(before)
+                != _stable_regular_identity(after)
+                or _stable_regular_identity(before)
+                != _stable_regular_identity(observed)
+            ):
+                raise PrerequisiteError(
+                    f"adopted Worker unit identity is unsafe: {path}"
+                )
+            return (
+                {
+                    "type": "file",
+                    "device": before.st_dev,
+                    "inode": before.st_ino,
+                    "uid": before.st_uid,
+                    "gid": before.st_gid,
+                    "mode": f"{mode:04o}",
+                    "nlink": before.st_nlink,
+                    "size": before.st_size,
+                    "content_sha256": _digest(payload),
+                },
+                payload,
+            )
+        finally:
+            os.close(descriptor)
+
+    def _adopted_unit_bindings(
+        self,
+        *,
+        expected_adopted_digest: str,
+    ) -> dict[str, dict[str, object]]:
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        adopted, adopted_digest = (
+            _load_json_with_digest(
+                self.runtime_root / ADOPTED_DEPLOYMENT_PATH
+            )
+            if state_fd is None
+            else _load_json_with_digest_at(
+                state_fd,
+                ADOPTED_DEPLOYMENT_PATH.name,
+            )
+        )
+        if adopted_digest != expected_adopted_digest:
+            raise PrerequisiteError("adopted unit authority changed")
+        bindings: dict[str, dict[str, object]] = {}
+        for role, key, path in (
+            ("monomer-md", "monomer_md", self.md_unit_path),
+            ("monomer-dft", "monomer_dft", self.dft_unit_path),
+        ):
+            component = adopted.get(key)
+            unit = (
+                component.get("systemd_unit")
+                if isinstance(component, dict)
+                else None
+            )
+            if (
+                not isinstance(unit, dict)
+                or unit.get("target_path") != str(path)
+                or not isinstance(unit.get("sha256"), str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", unit["sha256"])
+                is None
+                or not isinstance(unit.get("systemd_state"), dict)
+                or not isinstance(unit.get("process_identity"), dict)
+            ):
+                raise PrerequisiteError(
+                    f"adopted {role} unit authority is invalid"
+                )
+            bindings[role] = {
+                "target_path": str(path),
+                "sha256": str(unit["sha256"]),
+                "systemd_state": dict(unit["systemd_state"]),
+                "process_identity": dict(unit["process_identity"]),
+            }
+        return bindings
+
+    def _capture_units(
+        self,
+        *,
+        md_mode: int,
+        adopted_digest: str,
+        allow_reload_pending: bool = False,
+    ) -> tuple[list[dict[str, object]], dict[str, bytes]]:
+        owned_fd = self._unit_parent_fd()
+        close_parent = owned_fd is None
+        parent_fd = (
+            _open_private_directory(self.unit_parent)
+            if owned_fd is None
+            else owned_fd
+        )
+        try:
+            parent = self._parent_record(parent_fd)
+            bindings = self._adopted_unit_bindings(
+                expected_adopted_digest=adopted_digest
+            )
+            records: list[dict[str, object]] = []
+            payloads: dict[str, bytes] = {}
+            for role, name, path, mode, action in (
+                (
+                    "monomer-md",
+                    MD_UNIT_NAME,
+                    self.md_unit_path,
+                    md_mode,
+                    "atomic-inode-replace",
+                ),
+                (
+                    "monomer-dft",
+                    DFT_UNIT_NAME,
+                    self.dft_unit_path,
+                    0o600,
+                    "no-op-cas",
+                ),
+            ):
+                before_systemd = self._normalized_systemd_identity(
+                    name=name,
+                    path=path,
+                    allow_reload_pending=allow_reload_pending,
+                )
+                file_record, payload = self._read_unit_file(
+                    parent_fd=parent_fd,
+                    path=path,
+                    mode=mode,
+                )
+                after_systemd = self._normalized_systemd_identity(
+                    name=name,
+                    path=path,
+                    allow_reload_pending=allow_reload_pending,
+                )
+                if before_systemd != after_systemd:
+                    raise PrerequisiteError(
+                        f"{role} systemd identity changed while reading"
+                    )
+                systemd_state, process_identity = before_systemd
+                adopted_systemd = bindings[role]["systemd_state"]
+                systemd_matches = adopted_systemd == systemd_state
+                if (
+                    allow_reload_pending
+                    and isinstance(adopted_systemd, dict)
+                    and adopted_systemd.get("NeedDaemonReload") == "no"
+                ):
+                    systemd_matches = {
+                        key: value
+                        for key, value in adopted_systemd.items()
+                        if key != "NeedDaemonReload"
+                    } == {
+                        key: value
+                        for key, value in systemd_state.items()
+                        if key != "NeedDaemonReload"
+                    }
+                if (
+                    bindings[role]["target_path"] != str(path)
+                    or bindings[role]["sha256"]
+                    != file_record["content_sha256"]
+                    or not systemd_matches
+                    or bindings[role]["process_identity"]
+                    != process_identity
+                ):
+                    raise PrerequisiteError(
+                        f"{role} unit differs from manual adoption"
+                    )
+                records.append(
+                    {
+                        "role": role,
+                        "name": name,
+                        "path": str(path),
+                        "parent": dict(parent),
+                        **file_record,
+                        "target_mode": "0600",
+                        "action": action,
+                        "systemd_state": systemd_state,
+                        "process_identity": process_identity,
+                    }
+                )
+                payloads[role] = payload
+            return records, payloads
+        finally:
+            if close_parent:
+                os.close(parent_fd)
+
+    def _read_git_permission_authority(
+        self,
+    ) -> tuple[dict[str, object], str]:
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        return (
+            _load_json_with_digest(self.permission_authority_path)
+            if state_fd is None
+            else _load_json_with_digest_at(
+                state_fd,
+                PERMISSION_AUTHORITY_PATH.name,
+                maximum_bytes=PERMISSION_JSON_MAX_BYTES,
+            )
+        )
+
+    def _git_permission_successor(
+        self,
+        authority: dict[str, object],
+        authority_digest: str,
+        *,
+        target_sha: str,
+        target_tree: str,
+    ) -> dict[str, object]:
+        plan = authority.get("plan")
+        authority_sha = authority.get("source_sha")
+        authority_tree = authority.get("source_tree")
+        if (
+            not _has_exact_schema_version(authority, 1)
+            or authority.get("status") != "completed"
+            or authority.get("authority_kind") != PERMISSION_AUTHORITY_KIND
+            or not isinstance(plan, dict)
+            or authority.get("plan_sha256") != _canonical_digest(plan)
+            or not isinstance(authority_sha, str)
+            or SHA_RE.fullmatch(authority_sha) is None
+            or not isinstance(authority_tree, str)
+            or SHA_RE.fullmatch(authority_tree) is None
+        ):
+            raise PrerequisiteError(
+                "adopted Git permission authority is invalid"
+            )
+        observed_tree = _run_git(
+            self.source_root,
+            "rev-parse",
+            "--verify",
+            f"{authority_sha}^{{tree}}",
+        ).decode().strip()
+        if observed_tree != authority_tree:
+            raise PrerequisiteError(
+                "adopted Git permission source tree differs"
+            )
+        exact = authority_sha == target_sha and authority_tree == target_tree
+        if authority_sha == target_sha and not exact:
+            raise PrerequisiteError(
+                "adopted Git permission commit has another tree"
+            )
+        if not exact:
+            try:
+                _run_git(
+                    self.source_root,
+                    "merge-base",
+                    "--is-ancestor",
+                    authority_sha,
+                    target_sha,
+                )
+            except PrerequisiteError as exc:
+                raise PrerequisiteError(
+                    "adopted Git permission source is not a target ancestor"
+                ) from exc
+        files: list[dict[str, str]] = []
+        for relative in UNIT_PERMISSION_SUCCESSOR_BLOBS:
+            authority_payload = _run_git(
+                self.source_root,
+                "show",
+                f"{authority_sha}:{relative}",
+            )
+            target_payload = _git_blob(
+                self.source_root,
+                target_sha,
+                relative,
+            )
+            if authority_payload != target_payload:
+                raise PrerequisiteError(
+                    f"unit permission successor blob differs: {relative}"
+                )
+            files.append(
+                {"path": relative, "sha256": _digest(target_payload)}
+            )
+        body: dict[str, object] = {
+            "schema_version": 1,
+            "policy": "nexpoly-adopted-git-permission-successor-v1",
+            "mode": "exact-source" if exact else "ancestor-byte-identical",
+            "authority": {
+                "source_sha": authority_sha,
+                "source_tree": authority_tree,
+                "raw_sha256": authority_digest,
+            },
+            "target": {
+                "source_sha": target_sha,
+                "source_tree": target_tree,
+            },
+            "files": files,
+            "files_sha256": _canonical_digest(files),
+        }
+        body["identity_sha256"] = _canonical_digest(body)
+        return body
+
+    def _unit_adoption_context(
+        self,
+        *,
+        source_sha: str,
+        source_tree: str,
+    ) -> dict[str, object]:
+        self._validate_prepare_abort_gate()
+        context = self._adoption_permission_context(
+            permit_prepared_abort=True
+        )
+        first = self._read_git_permission_authority()
+        second = self._read_git_permission_authority()
+        if first != second:
+            raise PrerequisiteError(
+                "adopted Git permission authority changed while reading"
+            )
+        authority, authority_digest = first
+        if (
+            authority.get("adopted_deployment_sha256")
+            != context["adopted_deployment_sha256"]
+            or authority.get("bootstrap_control_sha256")
+            != context["bootstrap_control_sha256"]
+            or authority.get("adopted_prerequisites_sha256")
+            != context["adopted_prerequisites_sha256"]
+            or authority.get("production_source_sha")
+            != context["production_source"]["source_sha"]
+            or authority.get("production_source_tree")
+            != context["production_source"]["source_tree"]
+        ):
+            raise PrerequisiteError(
+                "adopted Git permission authority differs from adoption"
+            )
+        try:
+            marker = GIT_SOURCE_TRUST.verify_repository_permission_takeover(
+                self.production_root,
+                self.permission_marker_path,
+            )
+        except Exception as exc:
+            raise PrerequisiteError(
+                "adopted Git permission marker is invalid"
+            ) from exc
+        if (
+            authority.get("permission_marker_sha256")
+            != _file_digest(self.permission_marker_path, mode=0o600)
+            or authority.get("permission_evidence_sha256")
+            != marker.get("evidence_sha256")
+            or authority.get("permission_inventory_sha256")
+            != marker.get("inventory_sha256")
+        ):
+            raise PrerequisiteError(
+                "adopted Git permission evidence differs"
+            )
+        return {
+            **context,
+            "adopted_git_permissions_sha256": authority_digest,
+            "git_permission_successor": self._git_permission_successor(
+                authority,
+                authority_digest,
+                target_sha=source_sha,
+                target_tree=source_tree,
+            ),
+        }
+
+    @staticmethod
+    def _prepare_abort_digest(value: object, label: str) -> str:
+        if (
+            not isinstance(value, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
+        ):
+            raise PrerequisiteError(f"{label} is invalid")
+        return value
+
+    @staticmethod
+    def _prepare_abort_operation_id(value: object) -> str:
+        if (
+            not isinstance(value, str)
+            or re.fullmatch(r"[a-z0-9][a-z0-9._-]{7,127}", value) is None
+        ):
+            raise PrerequisiteError("prepare-abort operation ID is invalid")
+        return value
+
+    def _validate_prepare_abort_journal_record(
+        self,
+        document: object,
+        operation_id: str,
+    ) -> dict[str, object]:
+        """Validate the exact late prepare-abort schema accepted for takeover."""
+
+        fields = {
+            "schema_version",
+            "operation_id",
+            "status",
+            "phase",
+            "prepare_owner",
+            "prepare_owner_sha256",
+            "target_sha",
+            "target_tree",
+            "control_handoff_sha256",
+            "control_handoff_schema_version",
+            "executor_control_sha256",
+            "operation_inventory_sha256",
+            "descriptor_sha256",
+            "prepare_staging",
+            "wheel_staging",
+            "dft_staging",
+            "owned_slots",
+            "prepared_ref",
+            "current_state_sha256",
+            "active_control_sha256",
+            "active_slot_sha256",
+            "active_slot",
+            "bridge_token_sha256",
+            "bridge_token_operation_id",
+            "bridge_token_status",
+            "archive_path",
+            "archive_inventory_sha256",
+            "created_at",
+            "completed_at",
+        }
+        if (
+            not isinstance(document, dict)
+            or set(document) != fields
+            or not _has_exact_schema_version(document, 1)
+            or document.get("operation_id") != operation_id
+        ):
+            raise PrerequisiteError("prepare-abort journal has an invalid shape")
+        owner = document.get("prepare_owner")
+        owner_fields = {
+            "schema_version",
+            "operation_id",
+            "target_sha",
+            "controller_sha256",
+            "created_at",
+        }
+        if (
+            not isinstance(owner, dict)
+            or set(owner) != owner_fields
+            or not _has_exact_schema_version(owner, 1)
+            or owner.get("operation_id") != operation_id
+            or owner.get("target_sha") != document.get("target_sha")
+            or not isinstance(owner.get("created_at"), str)
+            or not owner["created_at"]
+            or document.get("prepare_owner_sha256")
+            != _canonical_digest(owner)
+        ):
+            raise PrerequisiteError("prepare-abort owner identity is invalid")
+        target_sha = document.get("target_sha")
+        if not isinstance(target_sha, str) or SHA_RE.fullmatch(target_sha) is None:
+            raise PrerequisiteError("prepare-abort target SHA is invalid")
+        self._prepare_abort_digest(
+            owner.get("controller_sha256"),
+            "prepare-abort owner controller digest",
+        )
+        self._prepare_abort_digest(
+            document.get("operation_inventory_sha256"),
+            "prepare-abort operation inventory",
+        )
+        self._prepare_abort_digest(
+            document.get("active_control_sha256"),
+            "prepare-abort active control",
+        )
+        # The one-time takeover intentionally supports only the sealed late
+        # residue seen in production.  Descriptor-bearing or staged prepares
+        # remain outside this narrow authority and fail closed.
+        if (
+            document.get("descriptor_sha256") is not None
+            or document.get("prepare_staging")
+            != {
+                "live_inventory_sha256": None,
+                "tombstone_inventory_sha256": None,
+            }
+            or document.get("wheel_staging") != []
+            or document.get("dft_staging")
+            != {
+                "staging_inventory_sha256": None,
+                "cache_inventory_sha256": None,
+                "incomplete_release_inventory_sha256": None,
+                "ready_sha256": None,
+                "ready_runtime_inventory_sha256": None,
+                "ready_owner_sha256": None,
+            }
+            or document.get("owned_slots") != []
+            or any(
+                document.get(field) is not None
+                for field in (
+                    "bridge_token_sha256",
+                    "bridge_token_operation_id",
+                    "bridge_token_status",
+                )
+            )
+        ):
+            raise PrerequisiteError(
+                "prepare-abort journal is outside the sealed late-residue policy"
+            )
+        current_state = document.get("current_state_sha256")
+        if current_state is not None:
+            self._prepare_abort_digest(
+                current_state,
+                "prepare-abort current state",
+            )
+        target_tree = document.get("target_tree")
+        if target_tree is not None and (
+            not isinstance(target_tree, str) or SHA_RE.fullmatch(target_tree) is None
+        ):
+            raise PrerequisiteError("prepare-abort target tree is invalid")
+        handoff_digest = document.get("control_handoff_sha256")
+        handoff_schema = document.get("control_handoff_schema_version")
+        executor_digest = document.get("executor_control_sha256")
+        if handoff_digest is None:
+            if handoff_schema is not None or executor_digest is not None:
+                raise PrerequisiteError(
+                    "prepare-abort handoff evidence is incomplete"
+                )
+        else:
+            self._prepare_abort_digest(
+                handoff_digest,
+                "prepare-abort handoff",
+            )
+            self._prepare_abort_digest(
+                executor_digest,
+                "prepare-abort executor control",
+            )
+            if (
+                type(handoff_schema) is not int
+                or handoff_schema not in {1, 2}
+                or target_tree is None
+            ):
+                raise PrerequisiteError(
+                    "prepare-abort handoff schema is invalid"
+                )
+        prepared_ref = document.get("prepared_ref")
+        if (
+            not isinstance(prepared_ref, dict)
+            or set(prepared_ref) != {"name", "target_sha"}
+            or prepared_ref.get("name")
+            != f"refs/nexpoly/prepared/{operation_id}"
+        ):
+            raise PrerequisiteError("prepare-abort prepared ref is invalid")
+        ref_target = prepared_ref.get("target_sha")
+        if ref_target is not None and ref_target != target_sha:
+            raise PrerequisiteError("prepare-abort prepared ref target differs")
+        active_slot = document.get("active_slot")
+        active_slot_digest = document.get("active_slot_sha256")
+        if active_slot is None:
+            if active_slot_digest is not None:
+                raise PrerequisiteError(
+                    "prepare-abort active slot digest lacks a record"
+                )
+        else:
+            active_fields = {
+                "schema_version",
+                "component",
+                "slot",
+                "source_sha",
+                "source_tree",
+                "worker_lock_sha256",
+                "slot_record_sha256",
+                "operation_id",
+                "activated_at",
+            }
+            if (
+                not isinstance(active_slot, dict)
+                or set(active_slot) != active_fields
+                or not _has_exact_schema_version(active_slot, 1)
+                or active_slot.get("component") != "monomer-md"
+                or active_slot.get("slot") not in {"a", "b"}
+                or not isinstance(active_slot.get("activated_at"), str)
+                or not active_slot["activated_at"]
+            ):
+                raise PrerequisiteError("prepare-abort active slot is invalid")
+            for field in ("source_sha", "source_tree"):
+                value = active_slot.get(field)
+                if not isinstance(value, str) or SHA_RE.fullmatch(value) is None:
+                    raise PrerequisiteError(
+                        "prepare-abort active slot source is invalid"
+                    )
+            self._prepare_abort_operation_id(active_slot.get("operation_id"))
+            for field in (
+                "worker_lock_sha256",
+                "slot_record_sha256",
+            ):
+                self._prepare_abort_digest(
+                    active_slot.get(field),
+                    f"prepare-abort active slot {field}",
+                )
+            self._prepare_abort_digest(
+                active_slot_digest,
+                "prepare-abort active slot record",
+            )
+        archive = (
+            self.runtime_root
+            / "state/prepare-aborts/archives"
+            / operation_id
+        )
+        if document.get("archive_path") != str(archive):
+            raise PrerequisiteError("prepare-abort archive path differs")
+        phase = document.get("phase")
+        if phase == "completed":
+            if (
+                document.get("status") != "aborted"
+                or not isinstance(document.get("completed_at"), str)
+                or not document["completed_at"]
+            ):
+                raise PrerequisiteError(
+                    "completed prepare-abort journal is invalid"
+                )
+            self._prepare_abort_digest(
+                document.get("archive_inventory_sha256"),
+                "completed prepare-abort archive inventory",
+            )
+        elif (
+            phase != "operation-archive-intent"
+            or document.get("status") != "aborting"
+            or document.get("archive_inventory_sha256") is not None
+            or document.get("completed_at") is not None
+        ):
+            raise PrerequisiteError(
+                "incomplete prepare-abort is outside operation-archive-intent"
+            )
+        if (
+            not isinstance(document.get("created_at"), str)
+            or not document["created_at"]
+        ):
+            raise PrerequisiteError("prepare-abort timestamp is invalid")
+        return dict(document)
+
+    @staticmethod
+    def _prepare_abort_directory_names(path: Path) -> set[str]:
+        if not (path.exists() or path.is_symlink()):
+            return set()
+        _private_metadata(path, mode=0o700, regular=False)
+        return {entry.name for entry in path.iterdir()}
+
+    def _assert_no_prepared_refs(self) -> None:
+        observed = GIT_SOURCE_TRUST.run_git(
+            self.production_root,
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/nexpoly/prepared/",
+            ambient={},
+            check=False,
+        )
+        if observed.returncode != 0:
+            raise PrerequisiteError("prepared Git ref inventory cannot be read")
+        if not isinstance(observed.stdout, str):
+            raise PrerequisiteError("prepared Git ref inventory is malformed")
+        references = [
+            line
+            for line in observed.stdout.splitlines()
+            if line
+        ]
+        if references:
+            raise PrerequisiteError(
+                "prepared Git ref remains during unit permission adoption"
+            )
+
+    def _validate_prepare_abort_archive(
+        self,
+        journal: dict[str, object],
+        *,
+        live_operation: bool,
+    ) -> None:
+        operation_id = str(journal["operation_id"])
+        archive = Path(str(journal["archive_path"]))
+        _private_metadata(archive, mode=0o700, regular=False)
+        owner = {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "prepare_owner_sha256": journal["prepare_owner_sha256"],
+            "created_at": journal["created_at"],
+        }
+        observed_owner = _load_json(archive / "ARCHIVE-OWNER.json")
+        if (
+            not _has_exact_schema_version(observed_owner, 1)
+            or observed_owner != owner
+        ):
+            raise PrerequisiteError("prepare-abort archive owner differs")
+        expected_names = {
+            "ARCHIVE-OWNER.json",
+            "wheel-staging",
+            "wheel-staging-tombstones",
+            "monomer-dft-runtime",
+        }
+        for empty_directory in (
+            "wheel-staging",
+            "wheel-staging-tombstones",
+            "monomer-dft-runtime",
+        ):
+            path = archive / empty_directory
+            _private_metadata(path, mode=0o700, regular=False)
+            if any(path.iterdir()):
+                raise PrerequisiteError(
+                    "prepare-abort late-residue archive is not empty"
+                )
+        handoff_digest = journal["control_handoff_sha256"]
+        if handoff_digest is not None:
+            expected_names.add("control-handoff.json")
+            if (
+                _file_digest(archive / "control-handoff.json", mode=0o600)
+                != handoff_digest
+            ):
+                raise PrerequisiteError("prepare-abort handoff archive differs")
+        elif (
+            (archive / "control-handoff.json").exists()
+            or (archive / "control-handoff.json").is_symlink()
+        ):
+            raise PrerequisiteError("unrecorded prepare handoff archive exists")
+        prepared_ref = journal["prepared_ref"]
+        if not isinstance(prepared_ref, dict):  # pragma: no cover - validated
+            raise PrerequisiteError("prepare-abort prepared ref is invalid")
+        ref_target = prepared_ref["target_sha"]
+        if ref_target is not None:
+            expected_names.add("prepared-ref.json")
+            expected_ref = {
+                "schema_version": 1,
+                "operation_id": operation_id,
+                "ref": prepared_ref["name"],
+                "target_sha": ref_target,
+            }
+            observed_ref = _load_json(archive / "prepared-ref.json")
+            if (
+                not _has_exact_schema_version(observed_ref, 1)
+                or observed_ref != expected_ref
+            ):
+                raise PrerequisiteError("prepare-abort ref archive differs")
+        elif (
+            (archive / "prepared-ref.json").exists()
+            or (archive / "prepared-ref.json").is_symlink()
+        ):
+            raise PrerequisiteError("unrecorded prepared ref archive exists")
+        if not live_operation:
+            expected_names.add("operation")
+        if self._prepare_abort_directory_names(archive) != expected_names:
+            raise PrerequisiteError(
+                "prepare-abort archive contains an unknown or missing entry"
+            )
+        operation = (
+            self.runtime_root / "state/prepared" / operation_id
+            if live_operation
+            else archive / "operation"
+        )
+        _private_metadata(operation, mode=0o700, regular=False)
+        if (
+            _private_tree_inventory_digest(operation)
+            != journal["operation_inventory_sha256"]
+        ):
+            raise PrerequisiteError(
+                "prepare operation differs from its abort journal"
+            )
+        for forbidden in ("descriptor.json", "ready.json", "READY"):
+            path = operation / forbidden
+            if path.exists() or path.is_symlink():
+                raise PrerequisiteError(
+                    "prepared descriptor/READY blocks unit permission adoption"
+                )
+        if journal["phase"] == "completed" and (
+            _private_tree_inventory_digest(archive)
+            != journal["archive_inventory_sha256"]
+        ):
+            raise PrerequisiteError("completed prepare-abort archive changed")
+
+    def _validate_prepare_abort_gate(self) -> None:
+        """Validate the complete prepare-abort namespace without writing it."""
+
+        self._assert_no_prepared_refs()
+        state = self.runtime_root / "state"
+        prepared_root = state / "prepared"
+        abort_root = state / "prepare-aborts"
+        archives_root = abort_root / "archives"
+        handoffs_root = state / "control-handoffs"
+        journals: dict[str, dict[str, object]] = {}
+        if abort_root.exists() or abort_root.is_symlink():
+            _private_metadata(abort_root, mode=0o700, regular=False)
+            entries = sorted(abort_root.iterdir(), key=lambda path: path.name)
+            archive_entries = [entry for entry in entries if entry.name == "archives"]
+            if len(archive_entries) != 1:
+                raise PrerequisiteError(
+                    "prepare-abort journal root lacks its exact archives directory"
+                )
+            _private_metadata(archives_root, mode=0o700, regular=False)
+            for entry in entries:
+                if entry.name == "archives":
+                    continue
+                if not entry.name.endswith(".json"):
+                    raise PrerequisiteError(
+                        "prepare-abort journal root contains an unknown entry"
+                    )
+                operation_id = self._prepare_abort_operation_id(entry.name[:-5])
+                document = _load_json(entry)
+                journals[operation_id] = (
+                    self._validate_prepare_abort_journal_record(
+                        document,
+                        operation_id,
+                    )
+                )
+            archive_names = self._prepare_abort_directory_names(archives_root)
+            if archive_names != set(journals):
+                raise PrerequisiteError(
+                    "prepare-abort archive inventory has an orphan or omission"
+                )
+        incomplete = [
+            operation_id
+            for operation_id, journal in journals.items()
+            if journal["phase"] != "completed"
+        ]
+        if len(incomplete) > 1:
+            raise PrerequisiteError(
+                "unit permission adoption requires at most one incomplete prepare-abort"
+            )
+        prepared_names = self._prepare_abort_directory_names(prepared_root)
+        live_expected: set[str] = set()
+        for operation_id, journal in journals.items():
+            archive_operation = Path(str(journal["archive_path"])) / "operation"
+            live_present = operation_id in prepared_names
+            archived_present = (
+                archive_operation.exists() or archive_operation.is_symlink()
+            )
+            if journal["phase"] == "completed":
+                if live_present or not archived_present:
+                    raise PrerequisiteError(
+                        "completed prepare-abort operation position is invalid"
+                    )
+            elif live_present == archived_present:
+                raise PrerequisiteError(
+                    "incomplete prepare-abort operation must be live or archived exactly once"
+                )
+            if live_present:
+                live_expected.add(operation_id)
+            self._validate_prepare_abort_archive(
+                journal,
+                live_operation=live_present,
+            )
+            live_handoff = handoffs_root / f"{operation_id}.json"
+            if live_handoff.exists() or live_handoff.is_symlink():
+                raise PrerequisiteError(
+                    "prepare-abort handoff remains live at the sealed late boundary"
+                )
+            prepared_ref = journal["prepared_ref"]
+            if not isinstance(prepared_ref, dict):  # pragma: no cover - validated
+                raise PrerequisiteError("prepare-abort prepared ref is invalid")
+            self._assert_prepared_ref_absent(str(prepared_ref["name"]))
+        if prepared_names != live_expected:
+            raise PrerequisiteError(
+                "prepared operation inventory contains an orphan or omission"
+            )
+        if self._prepare_abort_directory_names(handoffs_root):
+            raise PrerequisiteError(
+                "control handoff inventory contains an orphan entry"
+            )
+        self._assert_no_prepared_refs()
+
+    def _assert_prepared_ref_absent(self, reference: str) -> None:
+        """Observe one full ref as absent across Git 2.43 return semantics."""
+
+        if re.fullmatch(r"refs/nexpoly/prepared/[a-z0-9._-]+", reference) is None:
+            raise PrerequisiteError("prepared Git ref name is invalid")
+        symbolic = GIT_SOURCE_TRUST.run_git(
+            self.production_root,
+            "symbolic-ref",
+            "--quiet",
+            reference,
+            ambient={},
+            check=False,
+        )
+        if symbolic.returncode == 0:
+            raise PrerequisiteError(
+                "prepared Git ref remains as a symbolic ref"
+            )
+        if symbolic.returncode != 1:
+            raise PrerequisiteError(
+                "prepared Git symbolic-ref absence cannot be proved"
+            )
+        # `show-ref --verify --quiet` reports a missing full ref as 128 on the
+        # production Git 2.43 build.  `rev-parse --verify --quiet` has the
+        # documented observer-friendly rc=1.  Observe the raw ref on both
+        # sides of the commit peel so direct, annotated, non-commit, and
+        # between-query ref drift all fail closed.
+        for expression in (reference, f"{reference}^{{commit}}", reference):
+            observed = GIT_SOURCE_TRUST.run_git(
+                self.production_root,
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                expression,
+                ambient={},
+                check=False,
+            )
+            if observed.returncode == 0:
+                raise PrerequisiteError(
+                    "prepared Git ref remains during unit permission adoption"
+                )
+            if observed.returncode != 1:
+                raise PrerequisiteError(
+                    "prepared Git ref absence cannot be proved"
+                )
+
+    def _unit_authority_publication_plan(
+        self,
+        operation_id: str,
+    ) -> dict[str, object]:
+        """Bind every create-once authority name before transaction intent."""
+
+        operation_id = _require_unit_permission_operation_id(operation_id)
+        final_name = UNIT_PERMISSION_AUTHORITY_PATH.name
+        staging_name = f".{final_name}.create-{operation_id}"
+        quarantine_name = f"{staging_name}.quarantine"
+        state = self.runtime_root / "state"
+        return {
+            "schema_version": 1,
+            "policy": "nexpoly-adopted-unit-authority-publication-v1",
+            "directory": str(state),
+            "entries": [
+                {
+                    "role": "final",
+                    "name": final_name,
+                    "path": str(state / final_name),
+                    "initially_absent": True,
+                },
+                {
+                    "role": "staging",
+                    "name": staging_name,
+                    "path": str(state / staging_name),
+                    "initially_absent": True,
+                },
+                {
+                    "role": "staging-quarantine",
+                    "name": quarantine_name,
+                    "path": str(state / quarantine_name),
+                    "initially_absent": True,
+                },
+            ],
+        }
+
+    def _validate_unit_authority_publication_plan(
+        self,
+        value: object,
+        operation_id: str,
+    ) -> dict[str, object]:
+        expected = self._unit_authority_publication_plan(operation_id)
+        if value != expected:
+            raise PrerequisiteError(
+                "unit authority publication ownership plan changed"
+            )
+        return expected
+
+    @staticmethod
+    def _unit_permission_impact(
+        units: list[dict[str, object]],
+        authority_publication: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "policy": "nexpoly-adopted-unit-permission-hardening-v1",
+            "units": units,
+            "authority_publication": authority_publication,
+        }
+
+    def _unit_source_plan(
+        self,
+        source_sha: str,
+        operation_id: str,
+    ) -> dict[str, object]:
+        source_sha = _require_sha(source_sha)
+        operation_id = _require_unit_permission_operation_id(operation_id)
+        source_tree, readiness, delivery = self._source_authority(source_sha)
+        context = self._unit_adoption_context(
+            source_sha=source_sha,
+            source_tree=source_tree,
+        )
+        authority_publication = self._unit_authority_publication_plan(
+            operation_id
+        )
+        self._assert_unit_authority_namespace_absent(
+            authority_publication,
+            operation_id,
+            durable=False,
+        )
+        units, _payloads = self._capture_units(
+            md_mode=0o664,
+            adopted_digest=str(context["adopted_deployment_sha256"]),
+        )
+        context_after = self._unit_adoption_context(
+            source_sha=source_sha,
+            source_tree=source_tree,
+        )
+        if context_after != context:
+            raise PrerequisiteError(
+                "unit permission authorities changed while planning"
+            )
+        self._assert_unit_authority_namespace_absent(
+            authority_publication,
+            operation_id,
+            durable=False,
+        )
+        impact = self._unit_permission_impact(
+            units,
+            authority_publication,
+        )
+        return {
+            "schema_version": 1,
+            "authority_kind": UNIT_PERMISSION_AUTHORITY_KIND,
+            "operation_id": operation_id,
+            "source_sha": source_sha,
+            "source_tree": source_tree,
+            "source_readiness": readiness,
+            "source_readiness_sha256": _canonical_digest(readiness),
+            "delivery_gate": delivery,
+            "delivery_gate_sha256": _canonical_digest(delivery),
+            **context,
+            "units": units,
+            "authority_publication": authority_publication,
+            "unit_permission_impact_sha256": _canonical_digest(impact),
+            "mutations": {
+                "services_restarted": False,
+                "source": False,
+                "database": False,
+                "credentials": False,
+                "md_unit_inode": True,
+                "dft_unit": False,
+                "runtime_authority": True,
+                "systemd_daemon_reload": True,
+            },
+        }
+
+    def _unit_plan_result(
+        self,
+        plan: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "action": "adopt-unit-permission-plan",
+            "apply": False,
+            "logical_zero_write": True,
+            "atime_zero_write": (
+                _mount_suppresses_atime(self.source_root)
+                and _mount_suppresses_atime(self.runtime_root)
+                and _mount_suppresses_atime(self.production_root)
+                and _mount_suppresses_atime(self.unit_parent)
+            ),
+            "plan": plan,
+            "plan_sha256": _canonical_digest(plan),
+            "unit_permission_impact_sha256": plan[
+                "unit_permission_impact_sha256"
+            ],
+        }
+
+    def _unit_authority_state_fd(self, *, durable: bool) -> tuple[int, bool]:
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        if durable and state_fd is None:
+            raise PrerequisiteError(
+                "unit authority namespace requires pinned state"
+            )
+        if state_fd is not None:
+            return state_fd, False
+        return _open_private_directory(self.runtime_root / "state"), True
+
+    def _unit_authority_names(
+        self,
+        publication: object,
+        operation_id: str,
+    ) -> tuple[str, str, str]:
+        validated = self._validate_unit_authority_publication_plan(
+            publication,
+            operation_id,
+        )
+        entries = validated["entries"]
+        if not isinstance(entries, list):  # pragma: no cover - exact validator
+            raise PrerequisiteError(
+                "unit authority publication ownership plan is invalid"
+            )
+        return tuple(str(entry["name"]) for entry in entries)  # type: ignore[return-value]
+
+    def _assert_unit_authority_namespace_absent(
+        self,
+        publication: object,
+        operation_id: str,
+        *,
+        durable: bool,
+    ) -> None:
+        operation_id = _require_unit_permission_operation_id(operation_id)
+        names = self._unit_authority_names(publication, operation_id)
+        state_fd, close_state = self._unit_authority_state_fd(
+            durable=durable
+        )
+        try:
+            for _pass in range(2 if durable else 1):
+                if any(_entry_exists_at(state_fd, name) for name in names):
+                    raise PrerequisiteError(
+                        "unit authority publication namespace predates commit intent"
+                    )
+                if durable and _pass == 0:
+                    os.fsync(state_fd)
+                    self._assert_pinned_runtime()
+        finally:
+            if close_state:
+                os.close(state_fd)
+
+    def _read_unit_authority_residue_at(
+        self,
+        state_fd: int,
+        name: str,
+        *,
+        expected_payload: bytes,
+        exact: bool,
+        allowed_nlinks: frozenset[int],
+        durable: bool,
+    ) -> tuple[bytes, os.stat_result]:
+        descriptor = _open_private_regular_at(
+            state_fd,
+            name,
+            mode=0o600,
+            allowed_nlinks=allowed_nlinks,
+        )
+        try:
+            observed_payload, observed = _stable_owned_payload_at(
+                state_fd,
+                name,
+                descriptor,
+                maximum_bytes=len(expected_payload),
+                label="unit authority publication residue",
+            )
+            if (
+                exact
+                and observed_payload != expected_payload
+                or not exact
+                and not expected_payload.startswith(observed_payload)
+            ):
+                raise PrerequisiteError(
+                    "unit authority publication residue payload differs"
+                )
+            if durable:
+                os.fsync(descriptor)
+                sealed_payload, sealed = _stable_owned_payload_at(
+                    state_fd,
+                    name,
+                    descriptor,
+                    maximum_bytes=len(expected_payload),
+                    label="unit authority publication residue",
+                )
+                if (
+                    sealed_payload != observed_payload
+                    or _stable_regular_identity(sealed)
+                    != _stable_regular_identity(observed)
+                ):
+                    raise PrerequisiteError(
+                        "unit authority publication residue changed before fsync"
+                    )
+                os.fsync(state_fd)
+                verified_payload, verified = _stable_owned_payload_at(
+                    state_fd,
+                    name,
+                    descriptor,
+                    maximum_bytes=len(expected_payload),
+                    label="unit authority publication residue",
+                )
+                if (
+                    verified_payload != observed_payload
+                    or _stable_regular_identity(verified)
+                    != _stable_regular_identity(sealed)
+                ):
+                    raise PrerequisiteError(
+                        "unit authority publication residue changed after fsync"
+                    )
+                observed = verified
+            return observed_payload, observed
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _assert_unit_authority_namespace_snapshot(
+        state_fd: int,
+        snapshot: dict[str, os.stat_result | None],
+    ) -> None:
+        for name, expected in snapshot.items():
+            try:
+                observed = os.stat(
+                    name,
+                    dir_fd=state_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                if expected is not None:
+                    raise PrerequisiteError(
+                        "unit authority publication residue disappeared"
+                    )
+                continue
+            if expected is None or _stable_regular_identity(
+                observed
+            ) != _stable_regular_identity(expected):
+                raise PrerequisiteError(
+                    "unit authority publication namespace changed"
+                )
+
+    def _validate_unit_authority_commit_namespace(
+        self,
+        transaction: dict[str, object],
+        *,
+        durable: bool,
+        require_final: bool,
+    ) -> None:
+        operation_id = str(transaction["operation_id"])
+        plan = transaction.get("plan")
+        if not isinstance(plan, dict):
+            raise PrerequisiteError(
+                "unit authority publication lacks a durable plan"
+            )
+        names = self._unit_authority_names(
+            plan.get("authority_publication"),
+            operation_id,
+        )
+        final_name, staging_name, quarantine_name = names
+        expected_payload = _canonical_bytes(
+            self._unit_authority(transaction)
+        ) + b"\n"
+        state_fd, close_state = self._unit_authority_state_fd(
+            durable=durable
+        )
+        try:
+            final_exists = _entry_exists_at(state_fd, final_name)
+            staging_exists = _entry_exists_at(state_fd, staging_name)
+            quarantine_exists = _entry_exists_at(state_fd, quarantine_name)
+            if staging_exists and quarantine_exists:
+                raise PrerequisiteError(
+                    "unit authority staging and quarantine both exist"
+                )
+            snapshot: dict[str, os.stat_result | None] = {
+                name: None for name in names
+            }
+            if final_exists:
+                _final_payload, final_metadata = (
+                    self._read_unit_authority_residue_at(
+                        state_fd,
+                        final_name,
+                        expected_payload=expected_payload,
+                        exact=True,
+                        allowed_nlinks=frozenset({1, 2}),
+                        durable=durable,
+                    )
+                )
+                snapshot[final_name] = final_metadata
+                companion_name = (
+                    staging_name
+                    if staging_exists
+                    else quarantine_name if quarantine_exists else None
+                )
+                if final_metadata.st_nlink == 1:
+                    if companion_name is not None:
+                        raise PrerequisiteError(
+                            "unit authority has an unowned publication residue"
+                        )
+                elif companion_name is None:
+                    raise PrerequisiteError(
+                        "unit authority has an unowned hard link"
+                    )
+                else:
+                    _companion_payload, companion_metadata = (
+                        self._read_unit_authority_residue_at(
+                            state_fd,
+                            companion_name,
+                            expected_payload=expected_payload,
+                            exact=True,
+                            allowed_nlinks=frozenset({2}),
+                            durable=durable,
+                        )
+                    )
+                    if _stable_regular_identity(
+                        companion_metadata
+                    ) != _stable_regular_identity(final_metadata):
+                        raise PrerequisiteError(
+                            "unit authority publication hard links differ"
+                        )
+                    snapshot[companion_name] = companion_metadata
+                if require_final and final_metadata.st_nlink != 1:
+                    raise PrerequisiteError(
+                        "completed unit authority publication is incomplete"
+                    )
+            else:
+                if require_final:
+                    raise PrerequisiteError(
+                        "completed unit authority is unavailable"
+                    )
+                companion_name = (
+                    staging_name
+                    if staging_exists
+                    else quarantine_name if quarantine_exists else None
+                )
+                if companion_name is not None:
+                    _residue_payload, residue_metadata = (
+                        self._read_unit_authority_residue_at(
+                            state_fd,
+                            companion_name,
+                            expected_payload=expected_payload,
+                            exact=False,
+                            allowed_nlinks=frozenset({1}),
+                            durable=durable,
+                        )
+                    )
+                    snapshot[companion_name] = residue_metadata
+            if durable:
+                os.fsync(state_fd)
+                self._assert_pinned_runtime()
+            self._assert_unit_authority_namespace_snapshot(
+                state_fd,
+                snapshot,
+            )
+        finally:
+            if close_state:
+                os.close(state_fd)
+
+    def _validate_unit_authority_transaction_namespace(
+        self,
+        transaction: dict[str, object],
+        *,
+        durable: bool,
+    ) -> None:
+        phase = transaction.get("phase")
+        plan = transaction.get("plan")
+        if not isinstance(plan, dict):
+            raise PrerequisiteError(
+                "unit authority publication lacks a durable plan"
+            )
+        if phase in {
+            "intent",
+            "replacement-intent",
+            "unit-ready",
+            "source-verified",
+            "aborted",
+        }:
+            self._assert_unit_authority_namespace_absent(
+                plan.get("authority_publication"),
+                str(transaction["operation_id"]),
+                durable=durable,
+            )
+            return
+        if phase == "authority-commit-intent":
+            self._validate_unit_authority_commit_namespace(
+                transaction,
+                durable=durable,
+                require_final=False,
+            )
+            return
+        if phase == "completed":
+            self._validate_unit_authority_commit_namespace(
+                transaction,
+                durable=durable,
+                require_final=True,
+            )
+            return
+        raise PrerequisiteError(
+            "unit authority publication has an unknown transaction phase"
+        )
+
+    def _unit_transaction_path(self, operation_id: str) -> Path:
+        return self.unit_transaction_root / (
+            f"{_require_unit_permission_operation_id(operation_id)}.json"
+        )
+
+    def _unit_transaction_directory_fd(self, *, create: bool) -> int | None:
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        if state_fd is None:
+            if not (
+                self.unit_transaction_root.exists()
+                or self.unit_transaction_root.is_symlink()
+            ):
+                return None
+            return _open_private_directory(self.unit_transaction_root)
+        name = UNIT_PERMISSION_TRANSACTION_DIRECTORY.name
+        try:
+            directory_fd = _open_private_directory(
+                Path(name), parent_fd=state_fd
+            )
+        except PrerequisiteError:
+            try:
+                os.stat(name, dir_fd=state_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                if not create:
+                    return None
+            else:
+                raise
+            os.mkdir(name, mode=0o700, dir_fd=state_fd)
+            directory_fd = _open_private_directory(
+                Path(name), parent_fd=state_fd
+            )
+        if create:
+            try:
+                os.fsync(state_fd)
+            except Exception:
+                os.close(directory_fd)
+                raise
+        return directory_fd
+
+    def _load_unit_transaction(
+        self,
+        operation_id: str,
+    ) -> dict[str, object] | None:
+        operation_id = _require_unit_permission_operation_id(operation_id)
+        directory_fd = self._unit_transaction_directory_fd(create=False)
+        if directory_fd is None:
+            return None
+        try:
+            name = f"{operation_id}.json"
+            if not _entry_exists_at(directory_fd, name):
+                return None
+            document = _load_json_at(
+                directory_fd,
+                name,
+                maximum_bytes=UNIT_PERMISSION_JSON_MAX_BYTES,
+            )
+        finally:
+            os.close(directory_fd)
+        fields = {
+            "schema_version",
+            "status",
+            "phase",
+            "operation_id",
+            "plan",
+            "plan_sha256",
+            "unit_permission_impact_sha256",
+            "replacement_checkpoint",
+            "backup",
+            "staging",
+            "replacement",
+            "unit_evidence",
+            "source_trust_sha256",
+            "created_at",
+            "completed_at",
+            "aborted_at",
+        }
+        if (
+            set(document) != fields
+            or not _has_exact_schema_version(document, 1)
+            or document.get("operation_id") != operation_id
+            or document.get("status")
+            not in {"applying", "completed", "aborted"}
+            or document.get("phase") not in UNIT_PERMISSION_TRANSACTION_PHASES
+            or not isinstance(document.get("plan"), dict)
+            or document.get("plan_sha256")
+            != _canonical_digest(document["plan"])
+            or document.get("unit_permission_impact_sha256")
+            != document["plan"].get("unit_permission_impact_sha256")
+            or (
+                document["status"] == "completed"
+                and document["phase"] != "completed"
+            )
+            or (
+                document["status"] == "aborted"
+                and document["phase"] != "aborted"
+            )
+            or (
+                document["status"] == "applying"
+                and document["phase"] in {"completed", "aborted"}
+            )
+        ):
+            raise PrerequisiteError(
+                "unit permission hardening transaction is invalid"
+            )
+        checkpoint = document.get("replacement_checkpoint")
+        if checkpoint is not None and checkpoint not in {
+            "backup-create-intent",
+            "backup-ready",
+            "staging-create-intent",
+            "staged",
+            "exchanged",
+            "retired-unlinked",
+            "hardened",
+        }:
+            raise PrerequisiteError(
+                "unit permission replacement checkpoint is invalid"
+            )
+        for field in ("backup", "staging", "replacement"):
+            value = document.get(field)
+            if value is not None and not isinstance(value, dict):
+                raise PrerequisiteError(
+                    "unit permission journal identity is invalid"
+                )
+        evidence = document.get("unit_evidence")
+        if evidence is not None and not isinstance(evidence, list):
+            raise PrerequisiteError(
+                "unit permission journal evidence is invalid"
+            )
+        source_trust = document.get("source_trust_sha256")
+        if source_trust is not None and (
+            not isinstance(source_trust, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", source_trust) is None
+        ):
+            raise PrerequisiteError(
+                "unit permission source trust digest is invalid"
+            )
+        return document
+
+    def _write_unit_transaction(self, document: dict[str, object]) -> None:
+        if not self._pinned_directories:
+            raise PrerequisiteError(
+                "unit permission journal requires the deploy lock"
+            )
+        directory_fd = self._unit_transaction_directory_fd(create=True)
+        if directory_fd is None:  # pragma: no cover - create owns
+            raise PrerequisiteError(
+                "unit permission transaction directory is unavailable"
+            )
+        try:
+            _atomic_owned_json_at(
+                directory_fd,
+                self._unit_transaction_path(
+                    str(document["operation_id"])
+                ).name,
+                document,
+            )
+        finally:
+            os.close(directory_fd)
+
+    def _reseal_unit_transaction(
+        self,
+        document: dict[str, object],
+    ) -> None:
+        """Durably re-publish an exact recovered unit permission journal."""
+
+        if document.get("status") not in {
+            "applying",
+            "completed",
+            "aborted",
+        }:
+            raise PrerequisiteError(
+                "unit permission journal cannot be resealed"
+            )
+        self._write_unit_transaction(document)
+        self.checkpoint("unit-permission-journal-resealed")
+
+    def _unit_authority_exists(self) -> bool:
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        return (
+            _entry_exists_at(state_fd, UNIT_PERMISSION_AUTHORITY_PATH.name)
+            if state_fd is not None
+            else self.unit_authority_path.exists()
+            or self.unit_authority_path.is_symlink()
+        )
+
+    def _load_unit_authority(
+        self,
+        *,
+        require_single_link: bool = True,
+    ) -> dict[str, object]:
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        authority = (
+            _load_json_at(
+                state_fd,
+                UNIT_PERMISSION_AUTHORITY_PATH.name,
+                require_single_link=require_single_link,
+                maximum_bytes=UNIT_PERMISSION_JSON_MAX_BYTES,
+            )
+            if state_fd is not None
+            else _load_json(
+                self.unit_authority_path,
+                require_single_link=require_single_link,
+                maximum_bytes=UNIT_PERMISSION_JSON_MAX_BYTES,
+            )
+        )
+        backup = authority.get("backup")
+        if (
+            not _has_exact_schema_version(authority, 1)
+            or not _has_exact_schema_version(backup, 1)
+            or not _has_exact_schema_version(
+                backup.get("owner") if isinstance(backup, dict) else None,
+                1,
+            )
+        ):
+            raise PrerequisiteError(
+                "unit permission authority schema is invalid"
+            )
+        return authority
+
+    def _publish_unit_authority(
+        self,
+        transaction: dict[str, object],
+        authority: dict[str, object],
+        operation_id: str,
+    ) -> None:
+        if (
+            transaction.get("status") != "applying"
+            or transaction.get("phase") != "authority-commit-intent"
+            or transaction.get("operation_id") != operation_id
+            or authority != self._unit_authority(transaction)
+        ):
+            raise PrerequisiteError(
+                "unit authority publication lacks commit intent"
+            )
+        self._validate_unit_authority_commit_namespace(
+            transaction,
+            durable=True,
+            require_final=False,
+        )
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        if state_fd is None:
+            raise PrerequisiteError(
+                "unit permission authority requires pinned state"
+            )
+        _create_owned_json_once_at(
+            state_fd,
+            UNIT_PERMISSION_AUTHORITY_PATH.name,
+            authority,
+            operation_id=operation_id,
+            checkpoint=self.checkpoint,
+            maximum_bytes=UNIT_PERMISSION_JSON_MAX_BYTES,
+        )
+
+    def _assert_unit_exclusive(self, operation_id: str) -> None:
+        operation_id = _require_unit_permission_operation_id(operation_id)
+        if self._unit_authority_exists():
+            authority = self._load_unit_authority(require_single_link=False)
+            if authority.get("operation_id") != operation_id:
+                raise PrerequisiteError(
+                    "adopted unit permissions already have another authority"
+                )
+        directory_fd = self._unit_transaction_directory_fd(create=False)
+        if directory_fd is None:
+            return
+        try:
+            for name in sorted(os.listdir(directory_fd)):
+                if name.startswith("."):
+                    continue
+                if not name.endswith(".json"):
+                    raise PrerequisiteError(
+                        "unit permission transaction inventory has an unknown entry"
+                    )
+                other = name.removesuffix(".json")
+                _require_unit_permission_operation_id(other)
+                document = _load_json_at(
+                    directory_fd,
+                    name,
+                    maximum_bytes=UNIT_PERMISSION_JSON_MAX_BYTES,
+                )
+                if not _has_exact_schema_version(document, 1):
+                    raise PrerequisiteError(
+                        "unit permission transaction inventory is invalid"
+                    )
+                if (
+                    other != operation_id
+                    and document.get("status") == "applying"
+                ):
+                    raise PrerequisiteError(
+                        "another unit permission transaction is active"
+                    )
+        finally:
+            os.close(directory_fd)
+
+    @staticmethod
+    def _unit_record_fields() -> set[str]:
+        return {
+            "role",
+            "name",
+            "path",
+            "parent",
+            "type",
+            "device",
+            "inode",
+            "uid",
+            "gid",
+            "mode",
+            "target_mode",
+            "nlink",
+            "size",
+            "content_sha256",
+            "action",
+            "systemd_state",
+            "process_identity",
+        }
+
+    def _validate_sealed_unit_records(
+        self,
+        value: object,
+    ) -> list[dict[str, object]]:
+        if not isinstance(value, list) or len(value) != 2:
+            raise PrerequisiteError(
+                "sealed unit permission inventory is invalid"
+            )
+        result: list[dict[str, object]] = []
+        expected = (
+            (
+                "monomer-md",
+                MD_UNIT_NAME,
+                self.md_unit_path,
+                "0664",
+                "atomic-inode-replace",
+            ),
+            (
+                "monomer-dft",
+                DFT_UNIT_NAME,
+                self.dft_unit_path,
+                "0600",
+                "no-op-cas",
+            ),
+        )
+        parent_fields = {
+            "path",
+            "type",
+            "device",
+            "inode",
+            "uid",
+            "gid",
+            "mode",
+            "nlink",
+            "size",
+        }
+        systemd_fields = {
+            "LoadState",
+            "FragmentPath",
+            "DropInPaths",
+            "NeedDaemonReload",
+            "UnitFileState",
+            "ActiveState",
+            "SubState",
+        }
+        for record, (role, name, path, mode, action) in zip(
+            value, expected, strict=True
+        ):
+            if (
+                not isinstance(record, dict)
+                or set(record) != self._unit_record_fields()
+                or record.get("role") != role
+                or record.get("name") != name
+                or record.get("path") != str(path)
+                or record.get("type") != "file"
+                or record.get("mode") != mode
+                or record.get("target_mode") != "0600"
+                or record.get("action") != action
+                or record.get("nlink") != 1
+                or not isinstance(record.get("size"), int)
+                or not 1 <= record["size"] <= 1024 * 1024
+                or not isinstance(record.get("content_sha256"), str)
+                or re.fullmatch(
+                    r"sha256:[0-9a-f]{64}", record["content_sha256"]
+                )
+                is None
+            ):
+                raise PrerequisiteError(
+                    "sealed unit permission record is invalid"
+                )
+            for field in ("device", "inode", "uid", "gid"):
+                field_value = record.get(field)
+                if (
+                    isinstance(field_value, bool)
+                    or not isinstance(field_value, int)
+                    or field_value < 0
+                ):
+                    raise PrerequisiteError(
+                        "sealed unit permission identity is invalid"
+                    )
+            parent = record.get("parent")
+            if (
+                not isinstance(parent, dict)
+                or set(parent) != parent_fields
+                or parent.get("path") != str(self.unit_parent)
+                or parent.get("type") != "directory"
+                or not isinstance(parent.get("mode"), str)
+                or re.fullmatch(r"[0-7]{4}", parent["mode"]) is None
+                or int(parent["mode"], 8) & 0o022
+            ):
+                raise PrerequisiteError(
+                    "sealed Worker unit parent is invalid"
+                )
+            for field in ("device", "inode", "uid", "gid", "nlink", "size"):
+                field_value = parent.get(field)
+                if (
+                    isinstance(field_value, bool)
+                    or not isinstance(field_value, int)
+                    or field_value < 0
+                ):
+                    raise PrerequisiteError(
+                        "sealed Worker unit parent identity is invalid"
+                    )
+            systemd_state = record.get("systemd_state")
+            process = record.get("process_identity")
+            if (
+                not isinstance(systemd_state, dict)
+                or set(systemd_state) != systemd_fields
+                or systemd_state.get("LoadState") != "loaded"
+                or systemd_state.get("FragmentPath") != str(path)
+                or systemd_state.get("DropInPaths") != ""
+                or systemd_state.get("NeedDaemonReload") != "no"
+                or systemd_state.get("UnitFileState") != "enabled"
+                or systemd_state.get("ActiveState") != "active"
+                or systemd_state.get("SubState") != "running"
+                or not isinstance(process, dict)
+                or set(process) != {"main_pid", "invocation_id"}
+                or isinstance(process.get("main_pid"), bool)
+                or not isinstance(process.get("main_pid"), int)
+                or process["main_pid"] <= 0
+                or not isinstance(process.get("invocation_id"), str)
+                or re.fullmatch(
+                    r"[0-9a-f]{32}", process["invocation_id"]
+                )
+                is None
+            ):
+                raise PrerequisiteError(
+                    "sealed Worker systemd identity is invalid"
+                )
+            result.append(dict(record))
+        if result[0]["parent"] != result[1]["parent"]:
+            raise PrerequisiteError(
+                "sealed Worker units have different parent identities"
+            )
+        return result
+
+    def _validate_unit_plan_context(
+        self,
+        plan: dict[str, object],
+        source_sha: str,
+        operation_id: str,
+        *,
+        durable: bool,
+    ) -> list[dict[str, object]]:
+        expected_fields = {
+            "schema_version",
+            "authority_kind",
+            "operation_id",
+            "source_sha",
+            "source_tree",
+            "source_readiness",
+            "source_readiness_sha256",
+            "delivery_gate",
+            "delivery_gate_sha256",
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+            "adopted_prerequisites_plan_sha256",
+            "production_source",
+            "adopted_git_permissions_sha256",
+            "git_permission_successor",
+            "units",
+            "authority_publication",
+            "unit_permission_impact_sha256",
+            "mutations",
+        }
+        if (
+            set(plan) != expected_fields
+            or not _has_exact_schema_version(plan, 1)
+            or plan.get("authority_kind") != UNIT_PERMISSION_AUTHORITY_KIND
+            or plan.get("operation_id") != operation_id
+            or plan.get("source_sha") != source_sha
+            or plan.get("mutations")
+            != {
+                "services_restarted": False,
+                "source": False,
+                "database": False,
+                "credentials": False,
+                "md_unit_inode": True,
+                "dft_unit": False,
+                "runtime_authority": True,
+                "systemd_daemon_reload": True,
+            }
+        ):
+            raise PrerequisiteError(
+                "unit permission hardening plan context changed"
+            )
+        sealed_delivery = plan.get("delivery_gate")
+        if not isinstance(sealed_delivery, dict):
+            raise PrerequisiteError(
+                "unit permission delivery authority is invalid"
+            )
+        if durable:
+            source_tree, readiness, delivery = self._sealed_source_authority(
+                source_sha,
+                sealed_readiness=plan.get("source_readiness"),
+                sealed_delivery_gate=sealed_delivery,
+            )
+        else:
+            source_tree, readiness, delivery = self._source_authority(
+                source_sha,
+                sealed_delivery_gate=dict(sealed_delivery),
+            )
+        context = self._unit_adoption_context(
+            source_sha=source_sha,
+            source_tree=source_tree,
+        )
+        successor = plan.get("git_permission_successor")
+        if (
+            plan.get("source_tree") != source_tree
+            or plan.get("source_readiness") != readiness
+            or plan.get("source_readiness_sha256")
+            != _canonical_digest(readiness)
+            or plan.get("delivery_gate") != delivery
+            or plan.get("delivery_gate_sha256")
+            != _canonical_digest(delivery)
+            or not _has_exact_schema_version(successor, 1)
+            or any(plan.get(field) != value for field, value in context.items())
+        ):
+            raise PrerequisiteError(
+                "unit permission source or predecessor authority changed"
+            )
+        units = self._validate_sealed_unit_records(plan.get("units"))
+        authority_publication = (
+            self._validate_unit_authority_publication_plan(
+                plan.get("authority_publication"),
+                operation_id,
+            )
+        )
+        if plan.get("unit_permission_impact_sha256") != _canonical_digest(
+            self._unit_permission_impact(units, authority_publication)
+        ):
+            raise PrerequisiteError(
+                "unit permission impact digest changed"
+            )
+        return units
+
+    @staticmethod
+    def _unit_parent_transition_projection(
+        parent: dict[str, object],
+    ) -> dict[str, object]:
+        """Exclude only filesystem-managed directory allocation size.
+
+        Creating and removing the operation-owned replacement pathname may
+        permanently grow an ext4 directory.  Every security-relevant parent
+        identity remains stable; ``st_size`` is retained in the before/after
+        evidence but is not a valid cross-transition CAS field.
+        """
+
+        return {
+            key: value
+            for key, value in parent.items()
+            if key != "size"
+        }
+
+    @classmethod
+    def _unit_filesystem_projection(
+        cls,
+        record: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "path": record["path"],
+            "parent": cls._unit_parent_transition_projection(
+                dict(record["parent"])
+            ),
+            "type": record["type"],
+            "device": record["device"],
+            "inode": record["inode"],
+            "uid": record["uid"],
+            "gid": record["gid"],
+            "mode": record["mode"],
+            "nlink": record["nlink"],
+            "size": record["size"],
+            "content_sha256": record["content_sha256"],
+        }
+
+    @classmethod
+    def _unit_transition_projection(
+        cls,
+        record: dict[str, object],
+    ) -> dict[str, object]:
+        """Compare a complete unit record while tolerating parent growth."""
+
+        projected = dict(record)
+        projected["parent"] = cls._unit_parent_transition_projection(
+            dict(record["parent"])
+        )
+        return projected
+
+    def _validate_live_owned_staging(
+        self,
+        transaction: dict[str, object],
+        original_md: dict[str, object],
+    ) -> bool | None:
+        """Prove that pre-exchange parent growth has an owned staging inode.
+
+        A create intent is published only after proving both the deterministic
+        source and quarantine names absent.  It therefore owns an absent name,
+        a safe payload prefix, or a full exact file after a write/fsync fault.
+        Merely reaching backup-ready never claims a preplanted staging inode.
+        """
+
+        durable_staging = transaction.get("staging")
+        staged = (
+            transaction.get("replacement_checkpoint") == "staged"
+            and isinstance(durable_staging, dict)
+        )
+        create_intent = (
+            transaction.get("replacement_checkpoint")
+            == "staging-create-intent"
+            and durable_staging is None
+        )
+        before_create_intent = (
+            transaction.get("replacement_checkpoint") == "backup-ready"
+            and durable_staging is None
+        )
+        if (
+            transaction.get("phase") != "replacement-intent"
+            or transaction.get("replacement") is not None
+            or not isinstance(transaction.get("backup"), dict)
+            or not (staged or create_intent or before_create_intent)
+        ):
+            return None
+        # The backup and its create-only owner bind this staging window to the
+        # exact transaction before parent-size drift is tolerated.
+        backup_payload = self._load_backup_payload(transaction)
+        owned_fd = self._unit_parent_fd()
+        close_parent = owned_fd is None
+        parent_fd = (
+            _open_private_directory(self.unit_parent)
+            if owned_fd is None
+            else owned_fd
+        )
+        staging_name, _retired_name = self._replacement_names(
+            str(transaction["operation_id"])
+        )
+        quarantine_name = self._partial_quarantine_name(
+            str(transaction["operation_id"]),
+            "unit-staging",
+        )
+        try:
+            try:
+                status, record = self._owned_prefix_status_at(
+                    parent_fd,
+                    staging_name,
+                    quarantine_name=quarantine_name,
+                    expected_payload=backup_payload,
+                    mode=0o600,
+                )
+            except PrerequisiteError:
+                return False
+        finally:
+            if close_parent:
+                os.close(parent_fd)
+        if (
+            len(backup_payload) != original_md["size"]
+            or _digest(backup_payload) != original_md["content_sha256"]
+        ):
+            return False
+        if before_create_intent:
+            return None if status == "absent" else False
+        if create_intent:
+            return bool(
+                status in {"absent", "partial", "exact"}
+                and (
+                    record is None
+                    or record["device"] == original_md["device"]
+                )
+            )
+        if status != "exact" or not isinstance(record, dict):
+            return False
+        observed = {
+            "path": str(self.unit_parent / staging_name),
+            **record,
+        }
+        return bool(
+            observed["device"] == original_md["device"]
+            and observed == durable_staging
+        )
+
+    def _validate_original_units(
+        self,
+        plan: dict[str, object],
+    ) -> tuple[list[dict[str, object]], dict[str, bytes]]:
+        observed, payloads = self._capture_units(
+            md_mode=0o664,
+            adopted_digest=str(plan["adopted_deployment_sha256"]),
+        )
+        if observed != plan["units"]:
+            raise PrerequisiteError(
+                "adopted Worker unit inventory changed before replacement"
+            )
+        return observed, payloads
+
+    def _validate_final_units(
+        self,
+        plan: dict[str, object],
+        transaction: dict[str, object],
+    ) -> list[dict[str, object]]:
+        originals = self._validate_sealed_unit_records(plan["units"])
+        observed, _payloads = self._capture_units(
+            md_mode=0o600,
+            adopted_digest=str(plan["adopted_deployment_sha256"]),
+        )
+        replacement = transaction.get("replacement")
+        if not isinstance(replacement, dict):
+            raise PrerequisiteError(
+                "unit replacement identity is unavailable"
+            )
+        md_original, dft_original = originals
+        md_observed, dft_observed = observed
+        stable_md_fields = {
+            "role",
+            "name",
+            "path",
+            "type",
+            "uid",
+            "gid",
+            "target_mode",
+            "size",
+            "content_sha256",
+            "action",
+            "systemd_state",
+            "process_identity",
+        }
+        if (
+            any(
+                md_observed[field] != md_original[field]
+                for field in stable_md_fields
+            )
+            or md_observed["mode"] != "0600"
+            or md_observed["nlink"] != 1
+            or md_observed["inode"] == md_original["inode"]
+            or md_observed["device"] != md_original["device"]
+            or replacement.get("device") != md_observed["device"]
+            or replacement.get("inode") != md_observed["inode"]
+            or replacement.get("content_sha256")
+            != md_observed["content_sha256"]
+            or replacement.get("mode") != "0600"
+            or self._unit_filesystem_projection(dft_observed)
+            != self._unit_filesystem_projection(dft_original)
+            or dft_observed["systemd_state"]
+            != dft_original["systemd_state"]
+            or dft_observed["process_identity"]
+            != dft_original["process_identity"]
+        ):
+            raise PrerequisiteError(
+                "final Worker unit evidence differs from the sealed transition"
+            )
+        for field in ("device", "inode", "uid", "gid", "mode", "nlink"):
+            if md_observed["parent"][field] != md_original["parent"][field]:
+                raise PrerequisiteError(
+                    "Worker unit parent changed during replacement"
+                )
+        return observed
+
+    def _replacement_names(self, operation_id: str) -> tuple[str, str]:
+        operation_id = _require_unit_permission_operation_id(operation_id)
+        return (
+            f".{MD_UNIT_NAME}.{operation_id}.replacement",
+            f".{MD_UNIT_NAME}.{operation_id}.retired",
+        )
+
+    def _assert_staging_operation_absent(self, operation_id: str) -> None:
+        """CAS the complete deterministic staging namespace before intent."""
+
+        parent_fd = self._unit_parent_fd()
+        close_parent = parent_fd is None
+        if parent_fd is None:
+            parent_fd = _open_private_directory(self.unit_parent)
+        staging_name, _retired_name = self._replacement_names(operation_id)
+        quarantine_name = self._partial_quarantine_name(
+            operation_id,
+            "unit-staging",
+        )
+        try:
+            if _entry_exists_at(parent_fd, staging_name) or _entry_exists_at(
+                parent_fd, quarantine_name
+            ):
+                raise PrerequisiteError(
+                    "unit staging namespace predates operation intent"
+                )
+            # Absence is the ownership CAS for the deterministic staging name.
+            # Seal this namespace before a journal in another directory can
+            # make that observation authorize forward replay.
+            os.fsync(parent_fd)
+        finally:
+            if close_parent:
+                os.close(parent_fd)
+
+    def _validate_replacement_progress(
+        self,
+        plan: dict[str, object],
+        transaction: dict[str, object],
+    ) -> None:
+        originals = self._validate_sealed_unit_records(plan["units"])
+        live_staging = self._validate_live_owned_staging(
+            transaction,
+            originals[0],
+        )
+        try:
+            _original_observed, original_payloads = (
+                self._validate_original_units(plan)
+            )
+        except PrerequisiteError:
+            pass
+        else:
+            self._validate_backup_creation_progress(
+                operation_id=str(transaction["operation_id"]),
+                payload=original_payloads["monomer-md"],
+                transaction=transaction,
+            )
+            if live_staging is False:
+                raise PrerequisiteError(
+                    "unit replacement staging is not operation-owned"
+                )
+            return
+        try:
+            original_observed, original_payloads = self._capture_units(
+                md_mode=0o664,
+                adopted_digest=str(plan["adopted_deployment_sha256"]),
+            )
+        except PrerequisiteError:
+            original_observed = None
+            original_payloads = {}
+        if original_observed is not None:
+            self._validate_backup_creation_progress(
+                operation_id=str(transaction["operation_id"]),
+                payload=original_payloads["monomer-md"],
+                transaction=transaction,
+            )
+        if (
+            original_observed is not None
+            and all(
+                self._unit_transition_projection(observed)
+                == self._unit_transition_projection(original)
+                for observed, original in zip(
+                    original_observed,
+                    originals,
+                    strict=True,
+                )
+            )
+            and live_staging is True
+        ):
+            return
+        observed, _payloads = self._capture_units(
+            md_mode=0o600,
+            adopted_digest=str(plan["adopted_deployment_sha256"]),
+            allow_reload_pending=True,
+        )
+        md, dft = observed
+        replacement = transaction.get("staging") or transaction.get(
+            "replacement"
+        )
+        if (
+            not isinstance(replacement, dict)
+            or md["device"] != replacement.get("device")
+            or md["inode"] != replacement.get("inode")
+            or md["content_sha256"] != originals[0]["content_sha256"]
+            or md["process_identity"] != originals[0]["process_identity"]
+            or {
+                key: value
+                for key, value in md["systemd_state"].items()
+                if key != "NeedDaemonReload"
+            }
+            != {
+                key: value
+                for key, value in originals[0]["systemd_state"].items()
+                if key != "NeedDaemonReload"
+            }
+            or self._unit_filesystem_projection(dft)
+            != self._unit_filesystem_projection(originals[1])
+            or dft["process_identity"] != originals[1]["process_identity"]
+        ):
+            raise PrerequisiteError(
+                "unit replacement progress is not operation-owned"
+            )
+
+    def plan(
+        self,
+        *,
+        source_sha: str,
+        operation_id: str,
+    ) -> dict[str, object]:
+        source_sha = _require_sha(source_sha)
+        operation_id = _require_unit_permission_operation_id(operation_id)
+        self._assert_unit_exclusive(operation_id)
+        transaction = self._load_unit_transaction(operation_id)
+        if transaction is None:
+            if self._unit_authority_exists():
+                raise PrerequisiteError(
+                    "unit permission authority exists without its transaction"
+                )
+            return self._unit_plan_result(
+                self._unit_source_plan(source_sha, operation_id)
+            )
+        if transaction["status"] == "aborted":
+            raise PrerequisiteError(
+                "unit permission hardening operation was aborted"
+            )
+        plan = dict(transaction["plan"])
+        self._validate_unit_plan_context(
+            plan,
+            source_sha,
+            operation_id,
+            durable=True,
+        )
+        self._validate_unit_authority_transaction_namespace(
+            transaction,
+            durable=False,
+        )
+        if transaction["phase"] == "intent":
+            self._validate_original_units(plan)
+        elif transaction["phase"] == "replacement-intent":
+            self._validate_replacement_progress(plan, transaction)
+        else:
+            evidence = self._validate_final_units(plan, transaction)
+            if transaction.get("unit_evidence") != evidence:
+                raise PrerequisiteError(
+                    "durable unit evidence differs from live units"
+                )
+        if transaction["status"] == "completed":
+            if self._load_unit_authority() != self._unit_authority(transaction):
+                raise PrerequisiteError(
+                    "completed unit permission authority differs"
+                )
+        return self._unit_plan_result(plan)
+
+    @staticmethod
+    def _write_exact_file_at(
+        directory_fd: int,
+        name: str,
+        payload: bytes,
+        *,
+        mode: int,
+    ) -> None:
+        descriptor = os.open(
+            name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+            mode,
+            dir_fd=directory_fd,
+        )
+        try:
+            written = 0
+            while written < len(payload):
+                written += os.write(descriptor, payload[written:])
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.fsync(directory_fd)
+
+    @staticmethod
+    def _partial_quarantine_name(operation_id: str, label: str) -> str:
+        operation_id = _require_unit_permission_operation_id(operation_id)
+        if re.fullmatch(r"[a-z0-9-]+", label) is None:
+            raise PrerequisiteError("unit partial-residue label is invalid")
+        return f".{operation_id}.{label}.partial-quarantine"
+
+    @staticmethod
+    def _read_owned_prefix_at(
+        directory_fd: int,
+        name: str,
+        *,
+        expected_payload: bytes,
+        mode: int,
+    ) -> tuple[dict[str, object], bytes]:
+        """Read one intent-owned absent/full/partial file without mutation."""
+
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY
+                | os.O_CLOEXEC
+                | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=directory_fd,
+            )
+        except OSError as exc:
+            raise PrerequisiteError(
+                f"operation-owned partial file is unavailable: {name}"
+            ) from exc
+        try:
+            before = os.fstat(descriptor)
+            payload = _descriptor_bytes(
+                descriptor,
+                maximum_bytes=max(1, len(expected_payload)),
+            )
+            after = os.fstat(descriptor)
+            observed = os.stat(
+                name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            parent = os.fstat(directory_fd)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.geteuid()
+                or stat.S_IMODE(before.st_mode) != mode
+                or before.st_nlink != 1
+                or before.st_dev != parent.st_dev
+                or before.st_size > len(expected_payload)
+                or payload != expected_payload[: len(payload)]
+                or _stable_regular_identity(before)
+                != _stable_regular_identity(after)
+                or _stable_regular_identity(before)
+                != _stable_regular_identity(observed)
+            ):
+                raise PrerequisiteError(
+                    f"operation-owned partial file is unsafe: {name}"
+                )
+            return (
+                {
+                    "type": "file",
+                    "device": before.st_dev,
+                    "inode": before.st_ino,
+                    "uid": before.st_uid,
+                    "gid": before.st_gid,
+                    "mode": f"{mode:04o}",
+                    "nlink": before.st_nlink,
+                    "size": before.st_size,
+                    "content_sha256": _digest(payload),
+                },
+                payload,
+            )
+        finally:
+            os.close(descriptor)
+
+    @classmethod
+    def _owned_prefix_status_at(
+        cls,
+        directory_fd: int,
+        name: str,
+        *,
+        quarantine_name: str,
+        expected_payload: bytes,
+        mode: int,
+    ) -> tuple[str, dict[str, object] | None]:
+        source_exists = _entry_exists_at(directory_fd, name)
+        quarantine_exists = _entry_exists_at(directory_fd, quarantine_name)
+        if source_exists and quarantine_exists:
+            raise PrerequisiteError(
+                f"operation-owned source and quarantine both exist: {name}"
+            )
+        if not source_exists and not quarantine_exists:
+            return "absent", None
+        current_name = quarantine_name if quarantine_exists else name
+        record, payload = cls._read_owned_prefix_at(
+            directory_fd,
+            current_name,
+            expected_payload=expected_payload,
+            mode=mode,
+        )
+        if quarantine_exists or payload != expected_payload:
+            return "partial", record
+        return "exact", record
+
+    def _repair_or_create_exact_file_at(
+        self,
+        directory_fd: int,
+        name: str,
+        payload: bytes,
+        *,
+        mode: int,
+        quarantine_name: str,
+        allow_residue: bool,
+    ) -> dict[str, object]:
+        """Forward-converge one file after a durable create intent."""
+
+        status, record = self._owned_prefix_status_at(
+            directory_fd,
+            name,
+            quarantine_name=quarantine_name,
+            expected_payload=payload,
+            mode=mode,
+        )
+        if not allow_residue and status != "absent":
+            raise PrerequisiteError(
+                f"operation-owned file appeared after absence CAS: {name}"
+            )
+        if status == "partial":
+            if not isinstance(record, dict):  # pragma: no cover - validated
+                raise PrerequisiteError("partial file identity is unavailable")
+            _quarantine_owned_link_at(
+                directory_fd,
+                name,
+                digest=str(record["content_sha256"]),
+                mode=mode,
+                expected_identity={
+                    "device": int(record["device"]),
+                    "inode": int(record["inode"]),
+                    "mode": mode,
+                    "size": int(record["size"]),
+                },
+                quarantine_name=quarantine_name,
+            )
+            status = "absent"
+        if status == "absent":
+            self._write_exact_file_at(
+                directory_fd,
+                name,
+                payload,
+                mode=mode,
+            )
+            record, observed_payload = self._read_owned_prefix_at(
+                directory_fd,
+                name,
+                expected_payload=payload,
+                mode=mode,
+            )
+            if observed_payload != payload:
+                raise PrerequisiteError(
+                    f"operation-owned file remained partial: {name}"
+                )
+        if not isinstance(record, dict):  # pragma: no cover - exact owns
+            raise PrerequisiteError("operation-owned file identity is unavailable")
+        descriptor, _identity_value = _open_exact_at(
+            directory_fd,
+            name,
+            digest=_digest(payload),
+            mode=mode,
+            expected_identity={
+                "device": int(record["device"]),
+                "inode": int(record["inode"]),
+                "mode": mode,
+                "size": len(payload),
+            },
+        )
+        try:
+            # Existing exact residue may have survived only in page cache.
+            # Re-establish both file and directory durability before sealing it.
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.fsync(directory_fd)
+        return record
+
+    @staticmethod
+    def _open_or_create_private_directory_at(
+        parent_fd: int,
+        name: str,
+    ) -> tuple[int, bool]:
+        try:
+            descriptor = _open_private_directory(
+                Path(name), parent_fd=parent_fd
+            )
+            os.fsync(descriptor)
+            os.fsync(parent_fd)
+            return descriptor, False
+        except PrerequisiteError:
+            try:
+                os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+            else:
+                raise
+        descriptor = _open_private_directory(Path(name), parent_fd=parent_fd)
+        os.fsync(descriptor)
+        os.fsync(parent_fd)
+        return descriptor, True
+
+    def _backup_owner_document(
+        self,
+        transaction: dict[str, object],
+        payload: bytes,
+    ) -> dict[str, object]:
+        plan = transaction.get("plan")
+        if not isinstance(plan, dict):
+            raise PrerequisiteError("unit backup lacks a durable plan")
+        units = self._validate_sealed_unit_records(plan.get("units"))
+        return {
+            "schema_version": 1,
+            "authority_kind": UNIT_PERMISSION_AUTHORITY_KIND,
+            "operation_id": transaction["operation_id"],
+            "plan_sha256": transaction["plan_sha256"],
+            "md_original_sha256": _canonical_digest(units[0]),
+            "content_sha256": _digest(payload),
+        }
+
+    def _assert_backup_operation_absent(self, operation_id: str) -> None:
+        """Prove the deterministic backup pathname was free before intent."""
+
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        if state_fd is None:
+            raise PrerequisiteError("unit backup requires pinned state")
+        root_name = UNIT_PERMISSION_BACKUP_DIRECTORY.name
+        if not _entry_exists_at(state_fd, root_name):
+            # When the backup root is absent, its parent is the authority
+            # namespace whose absence must precede create intent durably.
+            os.fsync(state_fd)
+            return
+        root_fd = _open_private_directory(Path(root_name), parent_fd=state_fd)
+        try:
+            claim_name = f".{operation_id}.owner.json"
+            claim_quarantine = self._partial_quarantine_name(
+                operation_id,
+                "backup-claim",
+            )
+            if (
+                _entry_exists_at(root_fd, operation_id)
+                or _entry_exists_at(root_fd, claim_name)
+                or _entry_exists_at(root_fd, claim_quarantine)
+            ):
+                raise PrerequisiteError(
+                    "unit backup operation path was not created by this transaction"
+                )
+            # An existing shared backup root owns operation-specific names.
+            # Persist both their absence and the root's own parent entry before
+            # a journal in another directory can claim them.
+            os.fsync(root_fd)
+            os.fsync(state_fd)
+        finally:
+            os.close(root_fd)
+
+    def _validate_backup_creation_progress(
+        self,
+        *,
+        operation_id: str,
+        payload: bytes,
+        transaction: dict[str, object],
+    ) -> None:
+        """Read-only proof of every namespace owned by backup-create-intent."""
+
+        if transaction.get("replacement_checkpoint") != "backup-create-intent":
+            return
+        if any(
+            transaction.get(field) is not None
+            for field in ("backup", "staging", "replacement")
+        ):
+            raise PrerequisiteError("unit backup create intent has later evidence")
+        owner = self._backup_owner_document(transaction, payload)
+        owner_payload = _canonical_bytes(owner) + b"\n"
+        root = self.unit_backup_root
+        if not (root.exists() or root.is_symlink()):
+            return
+        root_fd = _open_private_directory(root)
+        try:
+            claim_name = f".{operation_id}.owner.json"
+            claim_status, _claim = self._owned_prefix_status_at(
+                root_fd,
+                claim_name,
+                quarantine_name=self._partial_quarantine_name(
+                    operation_id,
+                    "backup-claim",
+                ),
+                expected_payload=owner_payload,
+                mode=0o600,
+            )
+            operation_exists = _entry_exists_at(root_fd, operation_id)
+            if not operation_exists:
+                return
+            if claim_status != "exact":
+                raise PrerequisiteError(
+                    "unit backup directory lacks a durable exact claim"
+                )
+            operation_fd = _open_private_directory(
+                Path(operation_id), parent_fd=root_fd
+            )
+            try:
+                owner_name = ".owner.json"
+                owner_quarantine = self._partial_quarantine_name(
+                    operation_id,
+                    "backup-owner",
+                )
+                unit_quarantine = self._partial_quarantine_name(
+                    operation_id,
+                    "backup-unit",
+                )
+                allowed = {
+                    owner_name,
+                    owner_quarantine,
+                    MD_UNIT_NAME,
+                    unit_quarantine,
+                }
+                if set(os.listdir(operation_fd)) - allowed:
+                    raise PrerequisiteError(
+                        "unit backup create intent has an unknown entry"
+                    )
+                owner_status, _owner = self._owned_prefix_status_at(
+                    operation_fd,
+                    owner_name,
+                    quarantine_name=owner_quarantine,
+                    expected_payload=owner_payload,
+                    mode=0o600,
+                )
+                unit_status, _unit = self._owned_prefix_status_at(
+                    operation_fd,
+                    MD_UNIT_NAME,
+                    quarantine_name=unit_quarantine,
+                    expected_payload=payload,
+                    mode=0o600,
+                )
+                if unit_status != "absent" and owner_status != "exact":
+                    raise PrerequisiteError(
+                        "unit backup file lacks a durable exact owner"
+                    )
+            finally:
+                os.close(operation_fd)
+        finally:
+            os.close(root_fd)
+
+    def _ensure_unit_backup(
+        self,
+        *,
+        operation_id: str,
+        payload: bytes,
+        transaction: dict[str, object],
+        allow_residue: bool,
+    ) -> dict[str, object]:
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        if state_fd is None:
+            raise PrerequisiteError("unit backup requires pinned state")
+        if (
+            transaction.get("phase") != "replacement-intent"
+            or transaction.get("replacement_checkpoint")
+            != "backup-create-intent"
+            or transaction.get("backup") is not None
+            or transaction.get("staging") is not None
+            or transaction.get("replacement") is not None
+        ):
+            raise PrerequisiteError("unit backup lacks its durable create intent")
+        owner = self._backup_owner_document(transaction, payload)
+        owner_payload = _canonical_bytes(owner) + b"\n"
+        owner_sha256 = _canonical_digest(owner)
+        backup_root_fd, _backup_root_created = (
+            self._open_or_create_private_directory_at(
+                state_fd,
+                UNIT_PERMISSION_BACKUP_DIRECTORY.name,
+            )
+        )
+        try:
+            claim_name = f".{operation_id}.owner.json"
+            claim_quarantine = self._partial_quarantine_name(
+                operation_id,
+                "backup-claim",
+            )
+            claim_pre_status, _claim_pre_record = (
+                self._owned_prefix_status_at(
+                    backup_root_fd,
+                    claim_name,
+                    quarantine_name=claim_quarantine,
+                    expected_payload=owner_payload,
+                    mode=0o600,
+                )
+            )
+            self._repair_or_create_exact_file_at(
+                backup_root_fd,
+                claim_name,
+                owner_payload,
+                mode=0o600,
+                quarantine_name=claim_quarantine,
+                allow_residue=allow_residue,
+            )
+            operation_fd, _operation_created = (
+                self._open_or_create_private_directory_at(
+                    backup_root_fd, operation_id
+                )
+            )
+            if not _operation_created and (
+                not allow_residue or claim_pre_status != "exact"
+            ):
+                os.close(operation_fd)
+                raise PrerequisiteError(
+                    "unit backup directory appeared before operation ownership"
+                )
+        finally:
+            os.close(backup_root_fd)
+        try:
+            owner_name = ".owner.json"
+            owner_quarantine = self._partial_quarantine_name(
+                operation_id,
+                "backup-owner",
+            )
+            unit_quarantine = self._partial_quarantine_name(
+                operation_id,
+                "backup-unit",
+            )
+            if set(os.listdir(operation_fd)) - {
+                owner_name,
+                owner_quarantine,
+                MD_UNIT_NAME,
+                unit_quarantine,
+            }:
+                raise PrerequisiteError(
+                    "unit backup directory has an unknown entry"
+                )
+            owner_pre_status, _owner_pre_record = (
+                self._owned_prefix_status_at(
+                    operation_fd,
+                    owner_name,
+                    quarantine_name=owner_quarantine,
+                    expected_payload=owner_payload,
+                    mode=0o600,
+                )
+            )
+            unit_pre_status, _unit_pre_record = (
+                self._owned_prefix_status_at(
+                    operation_fd,
+                    MD_UNIT_NAME,
+                    quarantine_name=unit_quarantine,
+                    expected_payload=payload,
+                    mode=0o600,
+                )
+            )
+            if (
+                unit_pre_status != "absent"
+                and owner_pre_status != "exact"
+            ):
+                raise PrerequisiteError(
+                    "unit backup file appeared before exact owner"
+                )
+            self._repair_or_create_exact_file_at(
+                operation_fd,
+                owner_name,
+                owner_payload,
+                mode=0o600,
+                quarantine_name=owner_quarantine,
+                allow_residue=allow_residue,
+            )
+            name = MD_UNIT_NAME
+            unit_record = self._repair_or_create_exact_file_at(
+                operation_fd,
+                name,
+                payload,
+                mode=0o600,
+                quarantine_name=unit_quarantine,
+                allow_residue=allow_residue,
+            )
+            unit_record = {
+                "path": str(
+                    self.unit_backup_root / operation_id / MD_UNIT_NAME
+                ),
+                **unit_record,
+            }
+            os.fsync(operation_fd)
+        finally:
+            os.close(operation_fd)
+        os.fsync(state_fd)
+        operation_path = self.unit_backup_root / operation_id
+        if set(path.name for path in operation_path.iterdir()) != {
+            ".owner.json",
+            MD_UNIT_NAME,
+        }:
+            raise PrerequisiteError("unit backup inventory differs")
+        record: dict[str, object] = {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "owner": owner,
+            "owner_sha256": owner_sha256,
+            "claim_path": str(
+                self.unit_backup_root / f".{operation_id}.owner.json"
+            ),
+            "claim_sha256": owner_sha256,
+            "unit": unit_record,
+            "unit_sha256": _canonical_digest(unit_record),
+            "inventory_sha256": _private_tree_inventory_digest(operation_path),
+        }
+        transaction["backup"] = record
+        transaction["replacement_checkpoint"] = "backup-ready"
+        self._write_unit_transaction(transaction)
+        self.checkpoint("unit-backup-ready")
+        return record
+
+    @staticmethod
+    def _file_record_matches(
+        observed: dict[str, object],
+        expected: dict[str, object],
+        *,
+        include_mode: bool = True,
+    ) -> bool:
+        fields = {
+            "type",
+            "device",
+            "inode",
+            "uid",
+            "gid",
+            "nlink",
+            "size",
+            "content_sha256",
+        }
+        if include_mode:
+            fields.add("mode")
+        return all(observed.get(field) == expected.get(field) for field in fields)
+
+    def _create_or_validate_staging(
+        self,
+        *,
+        operation_id: str,
+        payload: bytes,
+        transaction: dict[str, object],
+    ) -> dict[str, object]:
+        parent_fd = self._unit_parent_fd()
+        if parent_fd is None:
+            raise PrerequisiteError("Worker unit directory is not pinned")
+        staging_name, _retired_name = self._replacement_names(operation_id)
+        quarantine_name = self._partial_quarantine_name(
+            operation_id,
+            "unit-staging",
+        )
+        durable = transaction.get("staging")
+        if durable is None:
+            checkpoint = transaction.get("replacement_checkpoint")
+            staging_intent_replay = checkpoint == "staging-create-intent"
+            if checkpoint == "backup-ready":
+                self._assert_staging_operation_absent(operation_id)
+                transaction["replacement_checkpoint"] = (
+                    "staging-create-intent"
+                )
+                self._write_unit_transaction(transaction)
+                self.checkpoint("unit-staging-create-intent")
+            elif checkpoint != "staging-create-intent":
+                raise PrerequisiteError(
+                    "unit staging lacks its durable create intent"
+                )
+            record = self._repair_or_create_exact_file_at(
+                parent_fd,
+                staging_name,
+                payload,
+                mode=0o600,
+                quarantine_name=quarantine_name,
+                allow_residue=staging_intent_replay,
+            )
+        else:
+            if transaction.get("replacement_checkpoint") != "staged":
+                raise PrerequisiteError(
+                    "durable staging has an invalid checkpoint"
+                )
+            record, observed_payload = self._read_unit_file(
+                parent_fd=parent_fd,
+                path=self.unit_parent / staging_name,
+                mode=0o600,
+            )
+            if observed_payload != payload:
+                raise PrerequisiteError("unit replacement staging differs")
+            descriptor, _identity_value = _open_exact_at(
+                parent_fd,
+                staging_name,
+                digest=_digest(payload),
+                mode=0o600,
+                expected_identity={
+                    "device": int(record["device"]),
+                    "inode": int(record["inode"]),
+                    "mode": 0o600,
+                    "size": len(payload),
+                },
+            )
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.fsync(parent_fd)
+        staging = {
+            "path": str(self.unit_parent / staging_name),
+            **record,
+        }
+        if durable is not None and durable != staging:
+            raise PrerequisiteError("durable unit replacement staging differs")
+        if durable is None:
+            transaction["staging"] = staging
+            transaction["replacement_checkpoint"] = "staged"
+            self._write_unit_transaction(transaction)
+            self.checkpoint("unit-replacement-staged")
+        return staging
+
+    def _restore_original_from_retired(
+        self,
+        *,
+        parent_fd: int,
+        staging_name: str,
+        original: dict[str, object],
+        payload: bytes,
+    ) -> bool:
+        """Restore only an exact sealed original; never swap an unknown inode."""
+
+        if not _entry_exists_at(parent_fd, staging_name):
+            return False
+        try:
+            retired, retired_payload = self._read_unit_file(
+                parent_fd=parent_fd,
+                path=self.unit_parent / staging_name,
+                mode=0o664,
+            )
+        except PrerequisiteError:
+            return False
+        if (
+            retired_payload != payload
+            or not self._file_record_matches(retired, original)
+        ):
+            return False
+        retired_fd, _retired_identity = _open_exact_at(
+            parent_fd,
+            staging_name,
+            digest=str(original["content_sha256"]),
+            mode=0o664,
+            expected_identity={
+                "device": int(original["device"]),
+                "inode": int(original["inode"]),
+                "mode": 0o664,
+                "size": int(original["size"]),
+            },
+        )
+        try:
+            _rename_exchange(
+                parent_fd,
+                staging_name,
+                parent_fd,
+                MD_UNIT_NAME,
+            )
+            os.fsync(parent_fd)
+            restored, restored_payload = self._read_unit_file(
+                parent_fd=parent_fd,
+                path=self.md_unit_path,
+                mode=0o664,
+            )
+            if (
+                restored_payload != payload
+                or not self._file_record_matches(restored, original)
+                or _stable_regular_identity(os.fstat(retired_fd))
+                != _stable_regular_identity(
+                    os.stat(
+                        MD_UNIT_NAME,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                )
+            ):
+                raise PrerequisiteError(
+                    "atomic unit recovery lost its original-inode CAS"
+                )
+        finally:
+            os.close(retired_fd)
+        return True
+
+    def _exchange_md_unit(
+        self,
+        *,
+        operation_id: str,
+        plan: dict[str, object],
+        payload: bytes,
+        transaction: dict[str, object],
+    ) -> dict[str, object]:
+        parent_fd = self._unit_parent_fd()
+        if parent_fd is None:
+            raise PrerequisiteError("Worker unit directory is not pinned")
+        original = self._validate_sealed_unit_records(plan["units"])[0]
+        staging_name, _retired_name = self._replacement_names(operation_id)
+        replacement = transaction.get("replacement")
+        exchange_cas_lost = False
+        target_metadata = os.stat(
+            MD_UNIT_NAME,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        target_mode = stat.S_IMODE(target_metadata.st_mode)
+        staging_exists = _entry_exists_at(parent_fd, staging_name)
+        if target_mode == 0o664:
+            if replacement is not None:
+                raise PrerequisiteError(
+                    "unit replacement regressed after durable exchange"
+                )
+            current, current_payload = self._read_unit_file(
+                parent_fd=parent_fd,
+                path=self.md_unit_path,
+                mode=0o664,
+            )
+            if (
+                current_payload != payload
+                or not self._file_record_matches(current, original)
+            ):
+                raise PrerequisiteError(
+                    "MD unit changed before atomic exchange"
+                )
+            staging = self._create_or_validate_staging(
+                operation_id=operation_id,
+                payload=payload,
+                transaction=transaction,
+            )
+            original_identity = {
+                "device": int(original["device"]),
+                "inode": int(original["inode"]),
+                "mode": 0o664,
+                "size": int(original["size"]),
+            }
+            staging_identity = {
+                "device": int(staging["device"]),
+                "inode": int(staging["inode"]),
+                "mode": 0o600,
+                "size": int(staging["size"]),
+            }
+            original_fd, _observed_original = _open_exact_at(
+                parent_fd,
+                MD_UNIT_NAME,
+                digest=str(original["content_sha256"]),
+                mode=0o664,
+                expected_identity=original_identity,
+            )
+            try:
+                staging_fd, _observed_staging = _open_exact_at(
+                    parent_fd,
+                    staging_name,
+                    digest=str(staging["content_sha256"]),
+                    mode=0o600,
+                    expected_identity=staging_identity,
+                )
+                try:
+                    _rename_exchange(
+                        parent_fd,
+                        staging_name,
+                        parent_fd,
+                        MD_UNIT_NAME,
+                    )
+                    os.fsync(parent_fd)
+                    canonical_after = os.stat(
+                        MD_UNIT_NAME,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                    retired_after = os.stat(
+                        staging_name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                    exchange_cas_lost = (
+                        _stable_regular_identity(canonical_after)
+                        != _stable_regular_identity(os.fstat(staging_fd))
+                        or _stable_regular_identity(retired_after)
+                        != _stable_regular_identity(os.fstat(original_fd))
+                    )
+                finally:
+                    os.close(staging_fd)
+            finally:
+                os.close(original_fd)
+            target_mode = 0o600
+            staging_exists = True
+        elif target_mode != 0o600:
+            raise PrerequisiteError("MD unit has an unknown replacement mode")
+
+        try:
+            target, target_payload = self._read_unit_file(
+                parent_fd=parent_fd,
+                path=self.md_unit_path,
+                mode=0o600,
+            )
+        except PrerequisiteError as exc:
+            self._restore_original_from_retired(
+                parent_fd=parent_fd,
+                staging_name=staging_name,
+                original=original,
+                payload=payload,
+            )
+            raise PrerequisiteError(
+                "atomic unit exchange published an unsafe target"
+            ) from exc
+        durable_staging = transaction.get("staging")
+        if (
+            not isinstance(durable_staging, dict)
+            or target_payload != payload
+            or not self._file_record_matches(target, durable_staging)
+        ):
+            if staging_exists:
+                # Restore only when the other side is still the exact sealed
+                # original.  Blindly exchanging an unknown staging name would
+                # publish a foreign inode at the canonical unit path.
+                self._restore_original_from_retired(
+                    parent_fd=parent_fd,
+                    staging_name=staging_name,
+                    original=original,
+                    payload=payload,
+                )
+            raise PrerequisiteError(
+                "atomic unit exchange published a foreign target"
+            )
+        if exchange_cas_lost:
+            # The canonical side is nevertheless the exact replacement.  Keep
+            # it in place and fail closed; the retired side is checked below
+            # and is never exchanged back over a correct canonical path.
+            raise PrerequisiteError(
+                "atomic unit exchange lost its pinned-inode CAS"
+            )
+        if staging_exists:
+            retired, retired_payload = self._read_unit_file(
+                parent_fd=parent_fd,
+                path=self.unit_parent / staging_name,
+                mode=0o664,
+            )
+            if (
+                retired_payload != payload
+                or not self._file_record_matches(retired, original)
+            ):
+                # Canonical is already the exact replacement.  Keep it safe;
+                # never publish an unrecognized retired pathname over it.
+                raise PrerequisiteError(
+                    "atomic unit exchange lost its original-inode CAS"
+                )
+        replacement_record: dict[str, object] = {
+            "path": str(self.md_unit_path),
+            **target,
+        }
+        if replacement is not None and replacement != replacement_record:
+            raise PrerequisiteError("durable MD unit replacement differs")
+        if replacement is None:
+            # A replay may observe the exchange before its journal write.
+            # Re-establish directory-entry durability before advancing it.
+            os.fsync(parent_fd)
+            transaction["replacement"] = replacement_record
+            transaction["replacement_checkpoint"] = "exchanged"
+            self._write_unit_transaction(transaction)
+            self.checkpoint("unit-replacement-exchanged")
+        if staging_exists:
+            os.unlink(staging_name, dir_fd=parent_fd)
+        # The retired name may already be absent after a lost journal write;
+        # fsync again in both paths before sealing retired-unlinked.
+        os.fsync(parent_fd)
+        transaction["replacement_checkpoint"] = "retired-unlinked"
+        self._write_unit_transaction(transaction)
+        self.checkpoint("unit-retired-unlinked")
+        return replacement_record
+
+    def _load_backup_payload(
+        self,
+        transaction: dict[str, object],
+    ) -> bytes:
+        backup = transaction.get("backup")
+        if (
+            not isinstance(backup, dict)
+            or set(backup)
+            != {
+                "schema_version",
+                "operation_id",
+                "owner",
+                "owner_sha256",
+                "claim_path",
+                "claim_sha256",
+                "unit",
+                "unit_sha256",
+                "inventory_sha256",
+            }
+            or not _has_exact_schema_version(backup, 1)
+            or backup.get("operation_id") != transaction.get("operation_id")
+            or not isinstance(backup.get("owner"), dict)
+            or not _has_exact_schema_version(backup.get("owner"), 1)
+            or not isinstance(backup.get("unit"), dict)
+            or backup.get("owner_sha256")
+            != _canonical_digest(backup.get("owner"))
+            or backup.get("claim_sha256") != backup.get("owner_sha256")
+            or backup.get("unit_sha256")
+            != _canonical_digest(backup.get("unit"))
+        ):
+            raise PrerequisiteError("unit backup authority is unavailable")
+        # The expected owner is recomputed below once the actual backup bytes
+        # have been read.  This preliminary shape check intentionally does not
+        # trust the owner-provided content digest.
+        unit = dict(backup["unit"])
+        expected_path = (
+            self.unit_backup_root
+            / str(transaction["operation_id"])
+            / MD_UNIT_NAME
+        )
+        if unit.get("path") != str(expected_path):
+            raise PrerequisiteError("unit backup path differs")
+        operation_path = expected_path.parent
+        expected_claim = (
+            self.unit_backup_root
+            / f".{transaction['operation_id']}.owner.json"
+        )
+        observed_claim = _load_json(expected_claim)
+        if (
+            backup.get("claim_path") != str(expected_claim)
+            or not _has_exact_schema_version(observed_claim, 1)
+            or observed_claim != backup["owner"]
+            or
+            set(path.name for path in operation_path.iterdir())
+            != {".owner.json", MD_UNIT_NAME}
+            or backup.get("inventory_sha256")
+            != _private_tree_inventory_digest(operation_path)
+        ):
+            raise PrerequisiteError("unit backup inventory changed")
+        owner = _load_json(operation_path / ".owner.json")
+        if (
+            not _has_exact_schema_version(owner, 1)
+            or owner != backup["owner"]
+        ):
+            raise PrerequisiteError("unit backup owner authority changed")
+        descriptor, _noatime = _open_readonly_noatime(expected_path)
+        try:
+            before = os.fstat(descriptor)
+            payload = _descriptor_bytes(
+                descriptor,
+                maximum_bytes=1024 * 1024,
+            )
+            after = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+        observed = {
+            "path": str(expected_path),
+            "type": "file" if stat.S_ISREG(before.st_mode) else "other",
+            "device": before.st_dev,
+            "inode": before.st_ino,
+            "uid": before.st_uid,
+            "gid": before.st_gid,
+            "mode": f"{stat.S_IMODE(before.st_mode):04o}",
+            "nlink": before.st_nlink,
+            "size": before.st_size,
+            "content_sha256": _digest(payload),
+        }
+        if (
+            _stable_regular_identity(before) != _stable_regular_identity(after)
+            or observed != unit
+        ):
+            raise PrerequisiteError("private Worker unit backup changed")
+        expected_owner = self._backup_owner_document(transaction, payload)
+        if (
+            owner != expected_owner
+            or backup["owner_sha256"] != _canonical_digest(expected_owner)
+            or backup["unit_sha256"] != _canonical_digest(observed)
+        ):
+            raise PrerequisiteError("unit backup evidence changed")
+        return payload
+
+    def _unit_authority(
+        self,
+        transaction: dict[str, object],
+    ) -> dict[str, object]:
+        plan = transaction["plan"]
+        production = plan["production_source"]
+        successor = plan["git_permission_successor"]
+        backup = transaction["backup"]
+        original_units = plan["units"]
+        hardened_units = transaction["unit_evidence"]
+        if (
+            not isinstance(original_units, list)
+            or not isinstance(hardened_units, list)
+            or not isinstance(backup, dict)
+        ):
+            raise PrerequisiteError(
+                "unit permission authority evidence is incomplete"
+            )
+        return {
+            "schema_version": 1,
+            "status": "completed",
+            "authority_kind": UNIT_PERMISSION_AUTHORITY_KIND,
+            "operation_id": transaction["operation_id"],
+            "source_sha": plan["source_sha"],
+            "source_tree": plan["source_tree"],
+            "production_source_sha": production["source_sha"],
+            "production_source_tree": production["source_tree"],
+            "adopted_deployment_sha256": plan[
+                "adopted_deployment_sha256"
+            ],
+            "bootstrap_control_sha256": plan[
+                "bootstrap_control_sha256"
+            ],
+            "adopted_prerequisites_sha256": plan[
+                "adopted_prerequisites_sha256"
+            ],
+            "adopted_git_permissions_sha256": plan[
+                "adopted_git_permissions_sha256"
+            ],
+            "adopted_git_permission_source_sha": successor["authority"][
+                "source_sha"
+            ],
+            "adopted_git_permission_source_tree": successor["authority"][
+                "source_tree"
+            ],
+            "plan_sha256": transaction["plan_sha256"],
+            "unit_permission_impact_sha256": transaction[
+                "unit_permission_impact_sha256"
+            ],
+            "original_units": original_units,
+            "original_units_sha256": _canonical_digest(original_units),
+            "hardened_units": hardened_units,
+            "hardened_units_sha256": _canonical_digest(hardened_units),
+            "backup": backup,
+            "backup_sha256": _canonical_digest(backup),
+            "backup_content_sha256": backup["unit"]["content_sha256"],
+            "plan": plan,
+            "completed_at": transaction["completed_at"],
+        }
+
+    def _revalidate_unit_commit_evidence(
+        self,
+        transaction: dict[str, object],
+        plan: dict[str, object],
+    ) -> None:
+        self._assert_unit_paths_pinned()
+        self._validate_unit_plan_context(
+            plan,
+            str(plan["source_sha"]),
+            str(plan["operation_id"]),
+            durable=True,
+        )
+        evidence = self._validate_final_units(plan, transaction)
+        if (
+            evidence != transaction.get("unit_evidence")
+            or self._production_source_trust(plan)
+            != transaction.get("source_trust_sha256")
+        ):
+            raise PrerequisiteError(
+                "unit permission commit evidence changed"
+            )
+        self._load_backup_payload(transaction)
+        self._assert_unit_paths_pinned()
+
+    def apply(
+        self,
+        *,
+        source_sha: str,
+        operation_id: str,
+        confirm_plan_sha256: str,
+        confirm_unit_permission_impact_sha256: str,
+    ) -> dict[str, object]:
+        planned = self.plan(
+            source_sha=source_sha,
+            operation_id=operation_id,
+        )
+        if planned["plan_sha256"] != confirm_plan_sha256:
+            raise PrerequisiteError(
+                "unit permission hardening plan confirmation differs"
+            )
+        if (
+            planned["unit_permission_impact_sha256"]
+            != confirm_unit_permission_impact_sha256
+        ):
+            raise PrerequisiteError(
+                "unit permission hardening impact confirmation differs"
+            )
+        with self._deployment_lock():
+            self.checkpoint("unit-permission-apply-lock-acquired")
+            self._assert_unit_paths_pinned()
+            self._assert_unit_exclusive(operation_id)
+            transaction = self._load_unit_transaction(operation_id)
+            recovered_applying = (
+                transaction is not None
+                and transaction.get("status") == "applying"
+            )
+            if transaction is None:
+                locked_plan = self._unit_source_plan(
+                    source_sha,
+                    operation_id,
+                )
+                if (
+                    locked_plan != planned["plan"]
+                    or _canonical_digest(locked_plan)
+                    != confirm_plan_sha256
+                    or locked_plan["unit_permission_impact_sha256"]
+                    != confirm_unit_permission_impact_sha256
+                ):
+                    raise PrerequisiteError(
+                        "unit permission plan changed before locked apply"
+                    )
+                # Preserve the only abortable boundary: a preplanted backup
+                # or staging name must fail before this operation owns any
+                # durable transaction record.
+                self._assert_unit_authority_namespace_absent(
+                    locked_plan["authority_publication"],
+                    operation_id,
+                    durable=True,
+                )
+                self._assert_backup_operation_absent(operation_id)
+                self._assert_staging_operation_absent(operation_id)
+                transaction = {
+                    "schema_version": 1,
+                    "status": "applying",
+                    "phase": "intent",
+                    "operation_id": operation_id,
+                    "plan": locked_plan,
+                    "plan_sha256": confirm_plan_sha256,
+                    "unit_permission_impact_sha256": (
+                        confirm_unit_permission_impact_sha256
+                    ),
+                    "replacement_checkpoint": None,
+                    "backup": None,
+                    "staging": None,
+                    "replacement": None,
+                    "unit_evidence": None,
+                    "source_trust_sha256": None,
+                    "created_at": _utc_now(),
+                    "completed_at": None,
+                    "aborted_at": None,
+                }
+                self._write_unit_transaction(transaction)
+                self.checkpoint("unit-permission-intent")
+            if transaction["status"] == "aborted":
+                raise PrerequisiteError(
+                    "unit permission hardening operation was aborted"
+                )
+            if (
+                transaction["plan_sha256"] != confirm_plan_sha256
+                or transaction["unit_permission_impact_sha256"]
+                != confirm_unit_permission_impact_sha256
+            ):
+                raise PrerequisiteError(
+                    "durable unit permission plan differs"
+                )
+            plan = dict(transaction["plan"])
+            self._validate_unit_plan_context(
+                plan,
+                source_sha,
+                operation_id,
+                durable=True,
+            )
+            self._validate_unit_authority_transaction_namespace(
+                transaction,
+                durable=True,
+            )
+            if transaction["status"] == "completed":
+                authority = self._load_unit_authority()
+                if authority != self._unit_authority(transaction):
+                    raise PrerequisiteError(
+                        "completed unit permission authority differs"
+                    )
+                self._revalidate_unit_commit_evidence(transaction, plan)
+                self._reseal_unit_transaction(transaction)
+                return authority
+            if transaction["phase"] == "authority-commit-intent":
+                self._revalidate_unit_commit_evidence(transaction, plan)
+                if recovered_applying:
+                    self._reseal_unit_transaction(transaction)
+                authority = self._unit_authority(transaction)
+                self._publish_unit_authority(
+                    transaction,
+                    authority,
+                    operation_id,
+                )
+                self._validate_unit_authority_commit_namespace(
+                    transaction,
+                    durable=True,
+                    require_final=True,
+                )
+                transaction["phase"] = "completed"
+                transaction["status"] = "completed"
+                self._write_unit_transaction(transaction)
+                return authority
+            if recovered_applying:
+                # A journal rename may have been visible when its parent
+                # fsync response was lost. Re-publish the exact recovered
+                # document before its phase/checkpoint authorizes any replay
+                # side effect, so another power loss cannot expose an older
+                # namespace entry behind newer filesystem mutations.
+                self._reseal_unit_transaction(transaction)
+            if transaction["phase"] == "intent":
+                self._validate_original_units(plan)
+                self._assert_unit_authority_namespace_absent(
+                    plan["authority_publication"],
+                    operation_id,
+                    durable=True,
+                )
+                self._assert_backup_operation_absent(operation_id)
+                self._assert_staging_operation_absent(operation_id)
+                transaction["phase"] = "replacement-intent"
+                self._write_unit_transaction(transaction)
+                self.checkpoint("unit-replacement-intent")
+            if transaction["phase"] == "replacement-intent":
+                if transaction.get("backup") is None:
+                    backup_intent_replay = (
+                        transaction.get("replacement_checkpoint")
+                        == "backup-create-intent"
+                    )
+                    if transaction.get("replacement_checkpoint") is None:
+                        # This is the last CAS before any deterministic backup
+                        # pathname may be created or repaired.
+                        self._assert_backup_operation_absent(operation_id)
+                        transaction["replacement_checkpoint"] = (
+                            "backup-create-intent"
+                        )
+                        self._write_unit_transaction(transaction)
+                        self.checkpoint("unit-backup-create-intent")
+                    elif (
+                        transaction.get("replacement_checkpoint")
+                        != "backup-create-intent"
+                    ):
+                        raise PrerequisiteError(
+                            "unit backup journal lacks create intent"
+                        )
+                    _originals, payloads = self._validate_original_units(plan)
+                    payload = payloads["monomer-md"]
+                    self._ensure_unit_backup(
+                        operation_id=operation_id,
+                        payload=payload,
+                        transaction=transaction,
+                        allow_residue=backup_intent_replay,
+                    )
+                else:
+                    payload = self._load_backup_payload(transaction)
+                if _digest(payload) != plan["units"][0]["content_sha256"]:
+                    raise PrerequisiteError(
+                        "unit backup differs from the sealed MD unit"
+                    )
+                self._assert_unit_authority_namespace_absent(
+                    plan["authority_publication"],
+                    operation_id,
+                    durable=True,
+                )
+                self._exchange_md_unit(
+                    operation_id=operation_id,
+                    plan=plan,
+                    payload=payload,
+                    transaction=transaction,
+                )
+                self.daemon_reload()
+                self.checkpoint("unit-daemon-reloaded")
+                evidence = self._validate_final_units(plan, transaction)
+                transaction["unit_evidence"] = evidence
+                transaction["replacement_checkpoint"] = "hardened"
+                transaction["phase"] = "unit-ready"
+                self._write_unit_transaction(transaction)
+                self.checkpoint("unit-permission-ready")
+            if transaction["phase"] == "unit-ready":
+                evidence = self._validate_final_units(plan, transaction)
+                if evidence != transaction.get("unit_evidence"):
+                    raise PrerequisiteError(
+                        "unit permission evidence changed before source verification"
+                    )
+                transaction["source_trust_sha256"] = (
+                    self._production_source_trust(plan)
+                )
+                transaction["phase"] = "source-verified"
+                self._write_unit_transaction(transaction)
+                self.checkpoint("unit-permission-source-verified")
+            if transaction["phase"] == "source-verified":
+                evidence = self._validate_final_units(plan, transaction)
+                if (
+                    evidence != transaction.get("unit_evidence")
+                    or self._production_source_trust(plan)
+                    != transaction.get("source_trust_sha256")
+                ):
+                    raise PrerequisiteError(
+                        "unit permission evidence changed before commit"
+                    )
+                self._assert_unit_authority_namespace_absent(
+                    plan["authority_publication"],
+                    operation_id,
+                    durable=True,
+                )
+                transaction["phase"] = "authority-commit-intent"
+                transaction["completed_at"] = _utc_now()
+                self._write_unit_transaction(transaction)
+                self.checkpoint("unit-permission-authority-commit-intent")
+                self._revalidate_unit_commit_evidence(transaction, plan)
+                authority = self._unit_authority(transaction)
+                self._publish_unit_authority(
+                    transaction,
+                    authority,
+                    operation_id,
+                )
+                self._validate_unit_authority_commit_namespace(
+                    transaction,
+                    durable=True,
+                    require_final=True,
+                )
+                transaction["phase"] = "completed"
+                transaction["status"] = "completed"
+                self._write_unit_transaction(transaction)
+                return authority
+            raise PrerequisiteError(
+                "unit permission transaction is in an unknown phase"
+            )
+
+    def abort(
+        self,
+        *,
+        source_sha: str,
+        operation_id: str,
+        confirm_plan_sha256: str,
+        confirm_unit_permission_impact_sha256: str,
+    ) -> dict[str, object]:
+        _require_sha(source_sha)
+        _require_unit_permission_operation_id(operation_id)
+        with self._deployment_lock():
+            self.checkpoint("unit-permission-abort-lock-acquired")
+            self._assert_unit_paths_pinned()
+            self._assert_unit_exclusive(operation_id)
+            transaction = self._load_unit_transaction(operation_id)
+            if transaction is None:
+                raise PrerequisiteError(
+                    "unit permission transaction is unavailable"
+                )
+            if (
+                transaction["plan_sha256"] != confirm_plan_sha256
+                or transaction["unit_permission_impact_sha256"]
+                != confirm_unit_permission_impact_sha256
+            ):
+                raise PrerequisiteError(
+                    "unit permission abort confirmation differs"
+                )
+            plan = dict(transaction["plan"])
+            self._validate_unit_plan_context(
+                plan,
+                source_sha,
+                operation_id,
+                durable=True,
+            )
+            self._validate_unit_authority_transaction_namespace(
+                transaction,
+                durable=True,
+            )
+            if (
+                transaction["status"] != "aborted"
+                and transaction["phase"] != "intent"
+            ):
+                raise PrerequisiteError(
+                    "unit replacement intent is forward-only and cannot be aborted"
+                )
+            self._validate_original_units(plan)
+            self._assert_backup_operation_absent(operation_id)
+            self._assert_staging_operation_absent(operation_id)
+            if (
+                transaction.get("backup") is not None
+                or transaction.get("staging") is not None
+                or transaction.get("replacement") is not None
+                or transaction.get("replacement_checkpoint") is not None
+            ):
+                raise PrerequisiteError(
+                    "unit permission intent has unexpected mutation residue"
+                )
+            self._reseal_unit_transaction(transaction)
+            if transaction["status"] == "aborted":
+                return transaction
+            transaction["status"] = "aborted"
+            transaction["phase"] = "aborted"
+            transaction["aborted_at"] = _utc_now()
+            self._write_unit_transaction(transaction)
             return transaction
 
 
@@ -4497,6 +8881,20 @@ def _parser() -> argparse.ArgumentParser:
                 "--confirm-permission-impact-sha256",
                 required=True,
             )
+    for name in (
+        "unit-permission-plan",
+        "unit-permission-apply",
+        "unit-permission-abort",
+    ):
+        command = commands.add_parser(name)
+        command.add_argument("--sha", required=True)
+        command.add_argument("--operation-id", required=True)
+        if name in {"unit-permission-apply", "unit-permission-abort"}:
+            command.add_argument("--confirm-plan-sha256", required=True)
+            command.add_argument(
+                "--confirm-unit-permission-impact-sha256",
+                required=True,
+            )
     return result
 
 
@@ -4504,7 +8902,35 @@ def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     args = _parser().parse_args(argv)
     try:
-        if args.command.startswith("permission-"):
+        if args.command.startswith("unit-permission-"):
+            unit_installer = UnitPermissionHardeningInstaller(
+                REPOSITORY_ROOT,
+                RUNTIME_ROOT,
+            )
+            if args.command == "unit-permission-plan":
+                result = unit_installer.plan(
+                    source_sha=args.sha,
+                    operation_id=args.operation_id,
+                )
+            elif args.command == "unit-permission-apply":
+                result = unit_installer.apply(
+                    source_sha=args.sha,
+                    operation_id=args.operation_id,
+                    confirm_plan_sha256=args.confirm_plan_sha256,
+                    confirm_unit_permission_impact_sha256=(
+                        args.confirm_unit_permission_impact_sha256
+                    ),
+                )
+            else:
+                result = unit_installer.abort(
+                    source_sha=args.sha,
+                    operation_id=args.operation_id,
+                    confirm_plan_sha256=args.confirm_plan_sha256,
+                    confirm_unit_permission_impact_sha256=(
+                        args.confirm_unit_permission_impact_sha256
+                    ),
+                )
+        elif args.command.startswith("permission-"):
             permission_installer = PermissionHardeningInstaller(
                 REPOSITORY_ROOT,
                 RUNTIME_ROOT,

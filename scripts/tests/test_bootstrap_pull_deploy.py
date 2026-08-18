@@ -383,6 +383,120 @@ class BootstrapPullDeployTests(unittest.TestCase):
         )
         return arguments, transaction
 
+    def crash_adoption_after_baseline_link(
+        self,
+    ) -> tuple[list[str], dict[str, object], Path, Path]:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        arguments = self.adoption_apply_arguments(
+            json.loads(output), md_sha256, dft_sha256
+        )
+        destination = self.runtime / "state/adopted-deployment.json"
+        original = BOOTSTRAP._authorized_install_link_identity
+        crashed = False
+
+        def crash_link_pair(
+            linked_destination: Path,
+            temporary: Path,
+            **keywords: object,
+        ) -> dict[str, object]:
+            nonlocal crashed
+            if (
+                not crashed
+                and linked_destination == destination
+                and keywords.get("remove_temporary") is True
+            ):
+                crashed = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected crash after hard-link publication"
+                )
+            return original(linked_destination, temporary, **keywords)
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_authorized_install_link_identity",
+            side_effect=crash_link_pair,
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("hard-link publication", error)
+        self.assertTrue(crashed)
+        transaction = BOOTSTRAP._load_private_json(
+            BOOTSTRAP._adoption_transaction_path(
+                self.runtime, operation_id=ADOPTION_OPERATION_ID
+            )
+        )
+        temporary = next(
+            Path(str(value["path"]))
+            for value in transaction["planned_paths"]
+            if isinstance(value, dict)
+            and value.get("kind") == "install-staging"
+            and value.get("destination") == str(destination)
+        )
+        destination_metadata = destination.lstat()
+        temporary_metadata = temporary.lstat()
+        self.assertEqual(destination_metadata.st_nlink, 2)
+        self.assertEqual(
+            (destination_metadata.st_dev, destination_metadata.st_ino),
+            (temporary_metadata.st_dev, temporary_metadata.st_ino),
+        )
+        return arguments, transaction, destination, temporary
+
+    def crash_adoption_with_partial_baseline_staging(
+        self,
+    ) -> tuple[list[str], dict[str, object], Path, bytes]:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        arguments = self.adoption_apply_arguments(
+            json.loads(output), md_sha256, dft_sha256
+        )
+        destination = self.runtime / "state/adopted-deployment.json"
+        original = BOOTSTRAP._write_authorized_staging
+        partial = b'{"part'
+        temporary: Path | None = None
+
+        def crash_partial(path: Path, payload: bytes, mode: int) -> None:
+            nonlocal temporary
+            if (
+                temporary is None
+                and path.parent == destination.parent
+                and path.name.startswith(f".{destination.name}.")
+                and path.name.endswith(".tmp")
+            ):
+                temporary = path
+                path.write_bytes(partial)
+                os.chmod(path, mode)
+                raise BOOTSTRAP.BootstrapError(
+                    "injected partial install staging crash"
+                )
+            original(path, payload, mode)
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_write_authorized_staging",
+            side_effect=crash_partial,
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("partial install staging crash", error)
+        self.assertIsNotNone(temporary)
+        assert temporary is not None
+        transaction = BOOTSTRAP._load_private_json(
+            BOOTSTRAP._adoption_transaction_path(
+                self.runtime, operation_id=ADOPTION_OPERATION_ID
+            )
+        )
+        self.assertTrue(temporary.is_file())
+        self.assertEqual(temporary.read_bytes(), partial)
+        self.assertEqual(temporary.stat().st_nlink, 1)
+        return arguments, transaction, temporary, partial
+
     def assert_adoption_planned_paths_absent(
         self, transaction: dict[str, object]
     ) -> None:
@@ -592,6 +706,41 @@ class BootstrapPullDeployTests(unittest.TestCase):
         )
         self.assertEqual(second, 0, error)
 
+    def test_adoption_seals_existing_and_published_control_bindings(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        observed: list[tuple[Path, bool]] = []
+        original = BOOTSTRAP._durability_barrier
+
+        def record(path: Path, **keywords):  # type: ignore[no-untyped-def]
+            observed.append((path, bool(keywords.get("directory"))))
+            return original(path, **keywords)
+
+        with mock.patch.object(
+            BOOTSTRAP, "_durability_barrier", side_effect=record
+        ):
+            result, output, error = self.run_main(
+                *self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+            )
+        self.assertEqual(result, 0, error)
+        applied = json.loads(output)
+        paths = {path for path, _directory in observed}
+        self.assertIn(self.runtime / "state/deploy.lock", paths)
+        for relative in BOOTSTRAP.DIRECTORIES:
+            self.assertIn(self.runtime / relative, paths)
+        for name in BOOTSTRAP.IMMUTABLE_FILES:
+            self.assertIn(self.runtime / "bin" / name, paths)
+        release = (
+            self.runtime
+            / "control-releases"
+            / applied["active_control"]["release_id"]
+        )
+        self.assertIn((release, True), observed)
+
     def test_adoption_preflight_rejects_existing_current_state(self) -> None:
         self.prepare_adoption_fixture()
         current = self.runtime / "state/current-deployment.json"
@@ -701,6 +850,30 @@ class BootstrapPullDeployTests(unittest.TestCase):
                 BOOTSTRAP._assert_adopted_dft_unit_semantics(
                     unit.read_bytes(), main_pid=1234, allow_test=False
                 )
+
+    def test_adoption_preplant_before_durable_staging_intent_is_retained(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        bin_root = self.runtime / "bin"
+        bin_root.mkdir(mode=0o700)
+        target = bin_root / "control_runtime_selector.py"
+        preplant = BOOTSTRAP._adoption_install_temporary_path(
+            target, operation_id=ADOPTION_OPERATION_ID
+        )
+        preplant.write_bytes(b"same uid preplant\n")
+        os.chmod(preplant, 0o700)
+        before = (preplant.stat().st_ino, preplant.read_bytes())
+
+        result, _output, error = self.run_main(
+            *self.adoption_apply_arguments(plan, md_sha256, dft_sha256)
+        )
+        self.assertEqual(result, 2, error)
+        self.assertIn("pre-existing runtime controls", error)
+        self.assertEqual((preplant.stat().st_ino, preplant.read_bytes()), before)
 
     def test_adoption_fresh_preflight_rejects_foreign_control_destinations(self) -> None:
         self.prepare_adoption_fixture()
@@ -926,6 +1099,388 @@ class BootstrapPullDeployTests(unittest.TestCase):
         self.assertEqual(result, 0, error)
         self.assertEqual(json.loads(output)["status"], "adopted")
 
+    def test_adoption_reseals_visible_layout_plan_before_mutation(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        arguments = self.adoption_apply_arguments(
+            json.loads(output), md_sha256, dft_sha256
+        )
+        transaction_path = BOOTSTRAP._adoption_transaction_path(
+            self.runtime, operation_id=ADOPTION_OPERATION_ID
+        )
+        original_atomic = BOOTSTRAP._atomic_json
+        lost_parent_fsync_response = False
+
+        def expose_layout_plan(
+            path: Path, document: dict[str, object]
+        ) -> None:
+            nonlocal lost_parent_fsync_response
+            original_atomic(path, document)
+            if (
+                not lost_parent_fsync_response
+                and path == transaction_path
+                and document.get("phase") == "intent"
+                and "layout" in document.get("step_plans", {})
+            ):
+                lost_parent_fsync_response = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected visible layout-plan journal"
+                )
+
+        with mock.patch.object(
+            BOOTSTRAP, "_atomic_json", side_effect=expose_layout_plan
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("visible layout-plan journal", error)
+        self.assertTrue(lost_parent_fsync_response)
+
+        original_reseal = BOOTSTRAP._reseal_adoption_transaction
+        original_layout = BOOTSTRAP._ensure_adoption_layout
+        resealed = False
+        second_crash = False
+
+        def record_reseal(
+            path: Path, transaction: dict[str, object]
+        ) -> dict[str, object]:
+            nonlocal resealed
+            sealed = original_reseal(path, transaction)
+            resealed = True
+            return sealed
+
+        def crash_after_layout(runtime_root: Path):  # type: ignore[no-untyped-def]
+            nonlocal second_crash
+            self.assertTrue(
+                resealed,
+                "layout mutation ran before the recovered journal was durable",
+            )
+            value = original_layout(runtime_root)
+            if not second_crash:
+                second_crash = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected second crash after layout mutation"
+                )
+            return value
+
+        with (
+            mock.patch.object(
+                BOOTSTRAP,
+                "_reseal_adoption_transaction",
+                side_effect=record_reseal,
+            ),
+            mock.patch.object(
+                BOOTSTRAP,
+                "_ensure_adoption_layout",
+                side_effect=crash_after_layout,
+            ),
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("second crash after layout mutation", error)
+        self.assertTrue(resealed)
+        self.assertEqual(
+            BOOTSTRAP._load_private_json(transaction_path)["phase"],
+            "intent",
+        )
+
+        result, output, error = self.run_main(*arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+
+    def test_adoption_reseals_visible_authority_intent_before_publish(
+        self,
+    ) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        arguments = self.adoption_apply_arguments(
+            json.loads(output), md_sha256, dft_sha256
+        )
+        transaction_path = BOOTSTRAP._adoption_transaction_path(
+            self.runtime, operation_id=ADOPTION_OPERATION_ID
+        )
+        original_atomic = BOOTSTRAP._atomic_json
+        lost_parent_fsync_response = False
+
+        def expose_authority_intent(
+            path: Path, document: dict[str, object]
+        ) -> None:
+            nonlocal lost_parent_fsync_response
+            original_atomic(path, document)
+            if (
+                not lost_parent_fsync_response
+                and path == transaction_path
+                and document.get("phase") == "authority-commit-intent"
+            ):
+                lost_parent_fsync_response = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected visible authority-intent journal"
+                )
+
+        with mock.patch.object(
+            BOOTSTRAP, "_atomic_json", side_effect=expose_authority_intent
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("visible authority-intent journal", error)
+        self.assertFalse(
+            (self.runtime / "state/bootstrap-control.json").exists()
+        )
+
+        original_reseal = BOOTSTRAP._reseal_adoption_transaction
+        original_install = BOOTSTRAP._install_exact
+        resealed = False
+        second_crash = False
+
+        def record_reseal(
+            path: Path, transaction: dict[str, object]
+        ) -> dict[str, object]:
+            nonlocal resealed
+            sealed = original_reseal(path, transaction)
+            resealed = True
+            return sealed
+
+        def crash_after_bootstrap_publish(
+            path: Path,
+            payload: bytes,
+            mode: int,
+            **keywords,
+        ):  # type: ignore[no-untyped-def]
+            nonlocal second_crash
+            if path == self.runtime / "state/bootstrap-control.json":
+                self.assertTrue(
+                    resealed,
+                    "authority publish ran before journal reseal",
+                )
+            value = original_install(path, payload, mode, **keywords)
+            if (
+                path == self.runtime / "state/bootstrap-control.json"
+                and not second_crash
+            ):
+                second_crash = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected second crash after bootstrap publish"
+                )
+            return value
+
+        with (
+            mock.patch.object(
+                BOOTSTRAP,
+                "_reseal_adoption_transaction",
+                side_effect=record_reseal,
+            ),
+            mock.patch.object(
+                BOOTSTRAP,
+                "_install_exact",
+                side_effect=crash_after_bootstrap_publish,
+            ),
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("second crash after bootstrap publish", error)
+        self.assertTrue(resealed)
+        self.assertEqual(
+            BOOTSTRAP._load_private_json(transaction_path)["phase"],
+            "authority-commit-intent",
+        )
+
+        result, output, error = self.run_main(*arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+        self.assertEqual(
+            BOOTSTRAP._load_private_json(transaction_path)["phase"],
+            "completed",
+        )
+
+    def test_adoption_abort_reseals_visible_terminal_before_return(self) -> None:
+        arguments, transaction = self.crash_adoption_before_phase_journal(
+            "layout-ready"
+        )
+        abort_arguments = self.adoption_abort_arguments(arguments)
+        transaction_path = BOOTSTRAP._adoption_transaction_path(
+            self.runtime, operation_id=ADOPTION_OPERATION_ID
+        )
+        original_atomic = BOOTSTRAP._atomic_json
+        lost_parent_fsync_response = False
+
+        def expose_aborted_terminal(
+            path: Path, document: dict[str, object]
+        ) -> None:
+            nonlocal lost_parent_fsync_response
+            original_atomic(path, document)
+            if (
+                not lost_parent_fsync_response
+                and path == transaction_path
+                and document.get("status") == "aborted"
+            ):
+                lost_parent_fsync_response = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected visible aborted journal"
+                )
+
+        with mock.patch.object(
+            BOOTSTRAP, "_atomic_json", side_effect=expose_aborted_terminal
+        ):
+            result, _output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("visible aborted journal", error)
+        self.assertEqual(
+            BOOTSTRAP._load_private_json(transaction_path)["status"],
+            "aborted",
+        )
+        self.assert_adoption_planned_paths_absent(transaction)
+
+        original_reseal = BOOTSTRAP._reseal_adoption_transaction
+        second_fault = False
+
+        def lose_reseal_response(
+            path: Path, value: dict[str, object]
+        ) -> dict[str, object]:
+            nonlocal second_fault
+            sealed = original_reseal(path, value)
+            if not second_fault:
+                second_fault = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected second terminal reseal fault"
+                )
+            return sealed
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_reseal_adoption_transaction",
+            side_effect=lose_reseal_response,
+        ):
+            result, _output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("second terminal reseal fault", error)
+        self.assertTrue(second_fault)
+        self.assertEqual(
+            BOOTSTRAP._load_private_json(transaction_path)["status"],
+            "aborted",
+        )
+
+        resealed = False
+
+        def record_reseal(
+            path: Path, value: dict[str, object]
+        ) -> dict[str, object]:
+            nonlocal resealed
+            result = original_reseal(path, value)
+            resealed = True
+            return result
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_reseal_adoption_transaction",
+            side_effect=record_reseal,
+        ):
+            result, output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "already-aborted")
+        self.assertTrue(resealed)
+
+    def test_adoption_ignores_private_random_journal_staging_after_sigkill(
+        self,
+    ) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        plan = json.loads(output)
+        arguments = self.adoption_apply_arguments(
+            plan, md_sha256, dft_sha256
+        )
+        transaction_path = BOOTSTRAP._adoption_transaction_path(
+            self.runtime, operation_id=ADOPTION_OPERATION_ID
+        )
+        original_replace = BOOTSTRAP.os.replace
+        staged: dict[str, object] = {}
+
+        def crash_before_journal_replace(
+            source: os.PathLike[str] | str,
+            destination: os.PathLike[str] | str,
+        ) -> None:
+            source_path = Path(source)
+            destination_path = Path(destination)
+            if not staged and destination_path == transaction_path:
+                staged.update(
+                    path=source_path,
+                    payload=source_path.read_bytes(),
+                )
+                raise BOOTSTRAP.BootstrapError(
+                    "injected SIGKILL before adoption journal replace"
+                )
+            original_replace(source, destination)
+
+        with mock.patch.object(
+            BOOTSTRAP.os,
+            "replace",
+            side_effect=crash_before_journal_replace,
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("before adoption journal replace", error)
+        self.assertFalse(transaction_path.exists())
+        staging_path = Path(str(staged["path"]))
+        payload = bytes(staged["payload"])
+        self.assertRegex(
+            staging_path.name,
+            rf"^\.{ADOPTION_OPERATION_ID}\.json\.[0-9a-f]{{24}}\.tmp$",
+        )
+        staging_path.write_bytes(payload)
+        os.chmod(staging_path, 0o600)
+        with staging_path.open("rb") as stream:
+            os.fsync(stream.fileno())
+        BOOTSTRAP._fsync_directory(staging_path.parent)
+
+        before = (
+            staging_path.lstat().st_ino,
+            staging_path.read_bytes(),
+        )
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["evidence_sha256"], plan["evidence_sha256"])
+        self.assertEqual(
+            (staging_path.lstat().st_ino, staging_path.read_bytes()),
+            before,
+        )
+
+        result, output, error = self.run_main(*arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+        self.assertTrue(staging_path.is_file())
+        self.assertIn(
+            ADOPTION_OPERATION_ID,
+            BOOTSTRAP._adoption_transactions(self.runtime),
+        )
+
+    def test_adoption_rejects_unsafe_random_journal_staging(self) -> None:
+        self.prepare_adoption_fixture()
+        directory = (
+            self.runtime / BOOTSTRAP.ADOPTION_TRANSACTION_RELATIVE_DIRECTORY
+        )
+        directory.mkdir(parents=True, mode=0o700)
+        os.chmod(directory, 0o700)
+        staging = directory / (
+            f".{ADOPTION_OPERATION_ID}.json.{'a' * 24}.tmp"
+        )
+        staging.write_bytes(b"unsafe\n")
+        os.chmod(staging, 0o640)
+
+        result, _output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 2)
+        self.assertIn("transaction staging is unsafe", error)
+
     def test_foreign_adoption_operation_cannot_reuse_completed_controls(self) -> None:
         md_sha256, dft_sha256 = self.prepare_adoption_fixture()
         result, output, error = self.run_main(
@@ -1019,6 +1574,44 @@ class BootstrapPullDeployTests(unittest.TestCase):
         self.assertEqual(result, 0, error)
         self.assertEqual(json.loads(output)["status"], "adopted")
 
+    def test_control_release_publish_response_loss_recovers(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        arguments = self.adoption_apply_arguments(
+            json.loads(output), md_sha256, dft_sha256
+        )
+        original = BOOTSTRAP._rename_noreplace
+        lost = False
+        published: Path | None = None
+
+        def lose_response(source: Path, destination: Path) -> None:
+            nonlocal lost, published
+            original(source, destination)
+            if not lost:
+                lost = True
+                published = destination
+                raise BOOTSTRAP.BootstrapError(
+                    "injected control publication response loss"
+                )
+
+        with mock.patch.object(
+            BOOTSTRAP, "_rename_noreplace", side_effect=lose_response
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("publication response loss", error)
+        self.assertIsNotNone(published)
+        assert published is not None
+        self.assertTrue(published.is_dir())
+
+        result, output, error = self.run_main(*arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+        self.assertTrue(published.is_dir())
+
     def test_authority_completion_exchange_preserves_a_raced_destination(
         self,
     ) -> None:
@@ -1026,10 +1619,21 @@ class BootstrapPullDeployTests(unittest.TestCase):
         state.mkdir(parents=True, mode=0o700)
         os.chmod(self.runtime, 0o700)
         path = state / "bootstrap-control.json"
-        temporary = state / ".bootstrap-control.complete.tmp"
+        operation_id = "adopt-authority-cas-test"
+        temporary = state / (
+            f".{path.name}.{operation_id}.complete.tmp"
+        )
         expected = b'{"status":"prepared"}\n'
         replacement = b'{"status":"completed"}\n'
         foreign = b'{"status":"foreign"}\n'
+        authority = BOOTSTRAP._adoption_install_staging_plan(
+            temporary,
+            path,
+            replacement,
+            0o600,
+            operation_id=operation_id,
+            purpose="cas",
+        )
         path.write_bytes(expected)
         os.chmod(path, 0o600)
         original = BOOTSTRAP._rename_exchange
@@ -1053,6 +1657,7 @@ class BootstrapPullDeployTests(unittest.TestCase):
                     replacement_payload=replacement,
                     mode=0o600,
                     temporary_path=temporary,
+                    temporary_authority=authority,
                 )
         self.assertEqual(path.read_bytes(), foreign)
         self.assertEqual(temporary.read_bytes(), replacement)
@@ -1065,9 +1670,358 @@ class BootstrapPullDeployTests(unittest.TestCase):
             replacement_payload=replacement,
             mode=0o600,
             temporary_path=temporary,
+            temporary_authority=authority,
         )
         self.assertEqual(path.read_bytes(), replacement)
         self.assertFalse(temporary.exists())
+
+    def test_authority_cas_recovers_partial_authorized_staging(self) -> None:
+        state = self.runtime / "state"
+        state.mkdir(parents=True, mode=0o700)
+        os.chmod(self.runtime, 0o700)
+        path = state / "bootstrap-control.json"
+        operation_id = "adopt-partial-cas-test"
+        temporary = state / f".{path.name}.{operation_id}.complete.tmp"
+        expected = b'{"status":"prepared"}\n'
+        replacement = b'{"status":"completed"}\n'
+        path.write_bytes(expected)
+        temporary.write_bytes(replacement[:5])
+        os.chmod(path, 0o600)
+        os.chmod(temporary, 0o600)
+        authority = BOOTSTRAP._adoption_install_staging_plan(
+            temporary,
+            path,
+            replacement,
+            0o600,
+            operation_id=operation_id,
+            purpose="cas",
+        )
+
+        BOOTSTRAP._cas_replace_exact_file(
+            path,
+            expected_payload=expected,
+            replacement_payload=replacement,
+            mode=0o600,
+            temporary_path=temporary,
+            temporary_authority=authority,
+        )
+
+        self.assertEqual(path.read_bytes(), replacement)
+        self.assertFalse(temporary.exists())
+
+    def test_completed_cas_reseals_inode_and_parent_after_response_loss(self) -> None:
+        state = self.runtime / "state"
+        state.mkdir(parents=True, mode=0o700)
+        os.chmod(self.runtime, 0o700)
+        path = state / "bootstrap-control.json"
+        operation_id = "adopt-complete-cas-test"
+        temporary = state / f".{path.name}.{operation_id}.complete.tmp"
+        expected = b'{"status":"prepared"}\n'
+        replacement = b'{"status":"completed"}\n'
+        path.write_bytes(replacement)
+        temporary.write_bytes(expected)
+        os.chmod(path, 0o600)
+        os.chmod(temporary, 0o600)
+        authority = BOOTSTRAP._adoption_install_staging_plan(
+            temporary,
+            path,
+            replacement,
+            0o600,
+            operation_id=operation_id,
+            purpose="cas",
+        )
+        original = BOOTSTRAP._fsync_directory
+        lost = False
+
+        def lose_parent_response(parent: Path) -> None:
+            nonlocal lost
+            original(parent)
+            if parent == state and not lost:
+                lost = True
+                raise OSError("injected CAS parent-fsync response loss")
+
+        with mock.patch.object(
+            BOOTSTRAP, "_fsync_directory", side_effect=lose_parent_response
+        ):
+            with self.assertRaisesRegex(OSError, "parent-fsync response loss"):
+                BOOTSTRAP._cas_replace_exact_file(
+                    path,
+                    expected_payload=expected,
+                    replacement_payload=replacement,
+                    mode=0o600,
+                    temporary_path=temporary,
+                    temporary_authority=authority,
+                )
+        self.assertTrue(lost)
+        self.assertTrue(temporary.exists())
+
+        BOOTSTRAP._cas_replace_exact_file(
+            path,
+            expected_payload=expected,
+            replacement_payload=replacement,
+            mode=0o600,
+            temporary_path=temporary,
+            temporary_authority=authority,
+        )
+        self.assertEqual(path.read_bytes(), replacement)
+        self.assertFalse(temporary.exists())
+
+    def test_adoption_cas_crash_before_exchange_resumes(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        arguments = self.adoption_apply_arguments(
+            json.loads(output), md_sha256, dft_sha256
+        )
+        crashed = False
+
+        def crash_before_exchange(first: Path, second: Path) -> None:
+            nonlocal crashed
+            if not crashed:
+                crashed = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected crash before authority exchange"
+                )
+            BOOTSTRAP._rename_exchange(first, second)
+
+        with mock.patch.object(
+            BOOTSTRAP, "_rename_exchange", side_effect=crash_before_exchange
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("before authority exchange", error)
+        bootstrap_path = self.runtime / "state/bootstrap-control.json"
+        temporary = self.runtime / "state" / (
+            f".{bootstrap_path.name}.{ADOPTION_OPERATION_ID}.complete.tmp"
+        )
+        self.assertEqual(
+            BOOTSTRAP._load_private_json(bootstrap_path)["status"], "prepared"
+        )
+        self.assertEqual(
+            BOOTSTRAP._load_private_json(temporary)["status"], "completed"
+        )
+
+        result, output, error = self.run_main(*arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+        self.assertEqual(
+            BOOTSTRAP._load_private_json(bootstrap_path)["status"], "completed"
+        )
+        self.assertFalse(temporary.exists())
+
+    def test_adoption_cas_crash_after_exchange_resumes_and_cleans(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        arguments = self.adoption_apply_arguments(
+            json.loads(output), md_sha256, dft_sha256
+        )
+        original_exchange = BOOTSTRAP._rename_exchange
+        crashed = False
+
+        def crash_after_exchange(first: Path, second: Path) -> None:
+            nonlocal crashed
+            original_exchange(first, second)
+            if not crashed:
+                crashed = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected authority exchange response loss"
+                )
+
+        with mock.patch.object(
+            BOOTSTRAP, "_rename_exchange", side_effect=crash_after_exchange
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("exchange response loss", error)
+        bootstrap_path = self.runtime / "state/bootstrap-control.json"
+        temporary = self.runtime / "state" / (
+            f".{bootstrap_path.name}.{ADOPTION_OPERATION_ID}.complete.tmp"
+        )
+        self.assertEqual(
+            BOOTSTRAP._load_private_json(bootstrap_path)["status"], "completed"
+        )
+        self.assertEqual(
+            BOOTSTRAP._load_private_json(temporary)["status"], "prepared"
+        )
+
+        result, output, error = self.run_main(*arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+        self.assertFalse(temporary.exists())
+
+    def test_adoption_cas_resume_rejects_foreign_sibling(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        arguments = self.adoption_apply_arguments(
+            json.loads(output), md_sha256, dft_sha256
+        )
+        crashed = False
+
+        def crash_before_exchange(_first: Path, _second: Path) -> None:
+            nonlocal crashed
+            crashed = True
+            raise BOOTSTRAP.BootstrapError("injected CAS staging crash")
+
+        with mock.patch.object(
+            BOOTSTRAP, "_rename_exchange", side_effect=crash_before_exchange
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertTrue(crashed)
+        foreign = self.runtime / "state/.bootstrap-control.json.foreign.tmp"
+        foreign.write_bytes(b"foreign\n")
+        os.chmod(foreign, 0o600)
+
+        result, _output, error = self.run_main(*arguments)
+
+        self.assertEqual(result, 2)
+        self.assertIn("foreign staging files", error)
+        self.assertEqual(foreign.read_bytes(), b"foreign\n")
+
+    def test_completed_adoption_cas_rejects_drifted_residue(self) -> None:
+        state = self.runtime / "state"
+        state.mkdir(parents=True, mode=0o700)
+        os.chmod(self.runtime, 0o700)
+        path = state / "bootstrap-control.json"
+        operation_id = "adopt-drifted-cas-residue"
+        temporary = state / f".{path.name}.{operation_id}.complete.tmp"
+        expected = b'{"status":"prepared"}\n'
+        replacement = b'{"status":"completed"}\n'
+        path.write_bytes(replacement)
+        temporary.write_bytes(b'{"status":"drifted"}\n')
+        os.chmod(path, 0o600)
+        os.chmod(temporary, 0o600)
+        authority = BOOTSTRAP._adoption_install_staging_plan(
+            temporary,
+            path,
+            replacement,
+            0o600,
+            operation_id=operation_id,
+            purpose="cas",
+        )
+
+        with self.assertRaisesRegex(BOOTSTRAP.BootstrapError, "CAS residue"):
+            BOOTSTRAP._cas_replace_exact_file(
+                path,
+                expected_payload=expected,
+                replacement_payload=replacement,
+                mode=0o600,
+                temporary_path=temporary,
+                temporary_authority=authority,
+            )
+        self.assertEqual(path.read_bytes(), replacement)
+        self.assertTrue(temporary.exists())
+
+    def test_quarantine_dirfd_cas_restores_a_swapped_source(self) -> None:
+        source_parent = self.root / "quarantine-source"
+        target_parent = self.root / "quarantine-target"
+        source_parent.mkdir(mode=0o700)
+        target_parent.mkdir(mode=0o700)
+        source = source_parent / "owned"
+        target = target_parent / "0000"
+        saved = source_parent / "saved-owned"
+        foreign = source_parent / "foreign"
+        source.write_bytes(b"operation-owned\n")
+        foreign.write_bytes(b"foreign\n")
+        os.chmod(source, 0o600)
+        os.chmod(foreign, 0o600)
+        identity = BOOTSTRAP._quarantine_identity(source)
+        original_stat = BOOTSTRAP.os.stat
+        swapped = False
+
+        def swap_after_bound_stat(path, *values, **keywords):  # type: ignore[no-untyped-def]
+            nonlocal swapped
+            result = original_stat(path, *values, **keywords)
+            if (
+                not swapped
+                and path == source.name
+                and keywords.get("dir_fd") is not None
+            ):
+                swapped = True
+                source.rename(saved)
+                foreign.rename(source)
+            return result
+
+        with mock.patch.object(
+            BOOTSTRAP.os, "stat", side_effect=swap_after_bound_stat
+        ):
+            with self.assertRaisesRegex(
+                BOOTSTRAP.BootstrapError, "target binding changed"
+            ):
+                BOOTSTRAP._rename_noreplace_between(
+                    source,
+                    target,
+                    expected_identity=identity,
+                )
+
+        self.assertTrue(swapped)
+        self.assertFalse(target.exists())
+        self.assertEqual(source.read_bytes(), b"foreign\n")
+        self.assertEqual(saved.read_bytes(), b"operation-owned\n")
+
+    def test_quarantine_failed_restore_retains_forensic_bindings(self) -> None:
+        source_parent = self.root / "restore-failure-source"
+        target_parent = self.root / "restore-failure-target"
+        source_parent.mkdir(mode=0o700)
+        target_parent.mkdir(mode=0o700)
+        source = source_parent / "owned"
+        target = target_parent / "0000"
+        saved = source_parent / "saved-owned"
+        foreign = source_parent / "foreign"
+        source.write_bytes(b"operation-owned\n")
+        foreign.write_bytes(b"foreign\n")
+        os.chmod(source, 0o600)
+        os.chmod(foreign, 0o600)
+        identity = BOOTSTRAP._quarantine_identity(source)
+        original_stat = BOOTSTRAP.os.stat
+        swapped = False
+        blocked_restore = False
+
+        def race_restore(path, *values, **keywords):  # type: ignore[no-untyped-def]
+            nonlocal swapped, blocked_restore
+            result = original_stat(path, *values, **keywords)
+            if (
+                not swapped
+                and path == source.name
+                and keywords.get("dir_fd") is not None
+            ):
+                swapped = True
+                source.rename(saved)
+                foreign.rename(source)
+            elif (
+                swapped
+                and not blocked_restore
+                and path == target.name
+                and keywords.get("dir_fd") is not None
+            ):
+                blocked_restore = True
+                source.write_bytes(b"restore blocker\n")
+                os.chmod(source, 0o600)
+            return result
+
+        with mock.patch.object(BOOTSTRAP.os, "stat", side_effect=race_restore):
+            with self.assertRaisesRegex(
+                BOOTSTRAP.BootstrapError, "target binding changed"
+            ):
+                BOOTSTRAP._rename_noreplace_between(
+                    source,
+                    target,
+                    expected_identity=identity,
+                )
+
+        self.assertTrue(swapped)
+        self.assertTrue(blocked_restore)
+        self.assertEqual(saved.read_bytes(), b"operation-owned\n")
+        self.assertEqual(source.read_bytes(), b"restore blocker\n")
+        self.assertEqual(target.read_bytes(), b"foreign\n")
 
     def test_adoption_abort_preserves_foreign_authority_and_owned_controls(self) -> None:
         arguments, _transaction = self.crash_adoption_before_phase_journal(
@@ -1295,6 +2249,77 @@ class BootstrapPullDeployTests(unittest.TestCase):
         self.assertEqual(json.loads(output)["status"], "aborted")
         self.assert_adoption_planned_paths_absent(transaction)
 
+    def test_adoption_abort_quarantine_recovers_two_faults(self) -> None:
+        arguments, transaction = self.crash_adoption_before_phase_journal(
+            "controls-ready"
+        )
+        abort_arguments = self.adoption_abort_arguments(arguments)
+        original_rename = BOOTSTRAP._rename_noreplace_between
+        first_fault = False
+
+        def lose_rename_response(
+            source: Path, target: Path, **keywords: object
+        ) -> None:
+            nonlocal first_fault
+            original_rename(source, target, **keywords)
+            if not first_fault:
+                first_fault = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected quarantine rename response loss"
+                )
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_rename_noreplace_between",
+            side_effect=lose_rename_response,
+        ):
+            result, _output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("quarantine rename response loss", error)
+        self.assertTrue(first_fault)
+
+        transaction_path = BOOTSTRAP._adoption_transaction_path(
+            self.runtime, operation_id=ADOPTION_OPERATION_ID
+        )
+        partial = BOOTSTRAP._load_private_json(transaction_path)
+        quarantine_plan = partial["step_evidence"]["abort_quarantine"]
+        quarantine_root = Path(str(quarantine_plan["root"]))
+        self.assertTrue(quarantine_root.is_dir())
+        self.assertTrue(any(quarantine_root.iterdir()))
+
+        original_resume = BOOTSTRAP._resume_adoption_quarantine
+        second_fault = False
+
+        def crash_after_resume(*values, **keywords):  # type: ignore[no-untyped-def]
+            nonlocal second_fault
+            original_resume(*values, **keywords)
+            if not second_fault:
+                second_fault = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected second quarantine fault"
+                )
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_resume_adoption_quarantine",
+            side_effect=crash_after_resume,
+        ):
+            result, _output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("second quarantine fault", error)
+        self.assertTrue(second_fault)
+        self.assert_adoption_planned_paths_absent(transaction)
+
+        result, output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "aborted")
+        self.assertTrue(quarantine_root.is_dir())
+        terminal = BOOTSTRAP._load_private_json(transaction_path)
+        self.assertEqual(terminal["status"], "aborted")
+        self.assertEqual(
+            terminal["step_evidence"]["abort_quarantine"], quarantine_plan
+        )
+
     def test_adoption_abort_refuses_tampered_prejournal_control(self) -> None:
         arguments, transaction = self.crash_adoption_before_phase_journal(
             "controls-ready"
@@ -1377,7 +2402,7 @@ class BootstrapPullDeployTests(unittest.TestCase):
             Path(str(value["path"]))
             for value in transaction["planned_paths"]
             if isinstance(value, dict)
-            and value.get("kind") == "file"
+            and value.get("kind") == "install-staging"
             and str(value.get("path", "")).endswith(
                 f".{ADOPTION_OPERATION_ID}.tmp"
             )
@@ -1389,6 +2414,304 @@ class BootstrapPullDeployTests(unittest.TestCase):
         self.assertEqual(result, 0, error)
         self.assertEqual(json.loads(output)["status"], "aborted")
         self.assert_adoption_planned_paths_absent(transaction)
+
+    @staticmethod
+    def quarantine_target_for_source(
+        transaction: dict[str, object], source: Path
+    ) -> Path:
+        evidence = transaction["step_evidence"]
+        assert isinstance(evidence, dict)
+        quarantine = evidence["abort_quarantine"]
+        assert isinstance(quarantine, dict)
+        entries = quarantine["entries"]
+        assert isinstance(entries, list)
+        return next(
+            Path(str(entry["target"]))
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("source") == str(source)
+        )
+
+    def test_partial_install_staging_abort_retains_payload_in_quarantine(
+        self,
+    ) -> None:
+        arguments, transaction, temporary, partial = (
+            self.crash_adoption_with_partial_baseline_staging()
+        )
+
+        result, output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "aborted")
+        terminal = BOOTSTRAP._load_private_json(
+            BOOTSTRAP._adoption_transaction_path(
+                self.runtime, operation_id=ADOPTION_OPERATION_ID
+            )
+        )
+        quarantined = self.quarantine_target_for_source(terminal, temporary)
+        self.assertEqual(quarantined.read_bytes(), partial)
+        self.assertFalse(temporary.exists())
+        self.assert_adoption_planned_paths_absent(transaction)
+
+    def test_partial_install_staging_abort_recovers_move_response_loss(
+        self,
+    ) -> None:
+        arguments, transaction, temporary, partial = (
+            self.crash_adoption_with_partial_baseline_staging()
+        )
+        abort_arguments = self.adoption_abort_arguments(arguments)
+        original = BOOTSTRAP._rename_noreplace_between
+        lost = False
+
+        def lose_response(
+            source: Path, target: Path, **keywords: object
+        ) -> None:
+            nonlocal lost
+            original(source, target, **keywords)
+            if source == temporary and not lost:
+                lost = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected partial staging quarantine response loss"
+                )
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_rename_noreplace_between",
+            side_effect=lose_response,
+        ):
+            result, _output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("quarantine response loss", error)
+        self.assertTrue(lost)
+
+        result, output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "aborted")
+        terminal = BOOTSTRAP._load_private_json(
+            BOOTSTRAP._adoption_transaction_path(
+                self.runtime, operation_id=ADOPTION_OPERATION_ID
+            )
+        )
+        quarantined = self.quarantine_target_for_source(terminal, temporary)
+        self.assertEqual(quarantined.read_bytes(), partial)
+        self.assert_adoption_planned_paths_absent(transaction)
+
+    def test_single_install_staging_nonprefix_is_quarantined_not_adopted(
+        self,
+    ) -> None:
+        arguments, _transaction, temporary, partial = (
+            self.crash_adoption_with_partial_baseline_staging()
+        )
+        foreign = b"X" * len(partial)
+        temporary.write_bytes(foreign)
+
+        result, output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "aborted")
+        terminal = BOOTSTRAP._load_private_json(
+            BOOTSTRAP._adoption_transaction_path(
+                self.runtime, operation_id=ADOPTION_OPERATION_ID
+            )
+        )
+        quarantined = self.quarantine_target_for_source(terminal, temporary)
+        self.assertEqual(quarantined.read_bytes(), foreign)
+        self.assertFalse(temporary.exists())
+
+    def test_single_install_staging_abort_rejects_symlink(self) -> None:
+        arguments, _transaction, temporary, _partial = (
+            self.crash_adoption_with_partial_baseline_staging()
+        )
+        outside = self.root / "foreign-staging-target"
+        outside.write_bytes(b"foreign\n")
+        os.chmod(outside, 0o600)
+        temporary.unlink()
+        temporary.symlink_to(outside)
+
+        result, _output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+
+        self.assertEqual(result, 2)
+        self.assertIn("quarantine source is unsafe", error)
+        self.assertEqual(outside.read_bytes(), b"foreign\n")
+        self.assertTrue(temporary.is_symlink())
+
+    def test_single_install_staging_abort_rejects_mode_drift(self) -> None:
+        arguments, _transaction, temporary, partial = (
+            self.crash_adoption_with_partial_baseline_staging()
+        )
+        os.chmod(temporary, 0o644)
+
+        result, _output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+
+        self.assertEqual(result, 2)
+        self.assertIn("adoption staging changed before abort", error)
+        self.assertEqual(temporary.read_bytes(), partial)
+        self.assertEqual(stat.S_IMODE(temporary.stat().st_mode), 0o644)
+
+    def test_single_install_staging_abort_rejects_an_extra_link(self) -> None:
+        arguments, _transaction, temporary, partial = (
+            self.crash_adoption_with_partial_baseline_staging()
+        )
+        alias = self.root / "foreign-staging-link"
+        os.link(temporary, alias)
+
+        result, _output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+
+        self.assertEqual(result, 2)
+        self.assertIn("quarantine source is unsafe", error)
+        self.assertEqual(temporary.read_bytes(), partial)
+        self.assertEqual(alias.read_bytes(), partial)
+        self.assertEqual(temporary.stat().st_nlink, 2)
+
+    def test_single_install_staging_abort_rejects_oversize_payload(self) -> None:
+        arguments, _transaction, temporary, _partial = (
+            self.crash_adoption_with_partial_baseline_staging()
+        )
+        oversized = 64 * 1024 * 1024 + 1
+        with temporary.open("r+b") as stream:
+            stream.truncate(oversized)
+
+        result, _output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+
+        self.assertEqual(result, 2)
+        self.assertIn("durability barrier file is too large", error)
+        self.assertEqual(temporary.stat().st_size, oversized)
+
+    def test_linked_install_publication_resumes_forward(self) -> None:
+        arguments, _transaction, destination, temporary = (
+            self.crash_adoption_after_baseline_link()
+        )
+
+        result, output, error = self.run_main(*arguments)
+
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+        self.assertTrue(destination.is_file())
+        self.assertEqual(destination.stat().st_nlink, 1)
+        self.assertFalse(temporary.exists())
+
+    def test_linked_install_abort_recovers_two_more_power_losses(self) -> None:
+        arguments, transaction, destination, temporary = (
+            self.crash_adoption_after_baseline_link()
+        )
+        abort_arguments = self.adoption_abort_arguments(arguments)
+        original_residue = BOOTSTRAP._resume_linked_install_residue
+        collapsed = False
+
+        def lose_collapse_response(raw: object) -> None:
+            nonlocal collapsed
+            original_residue(raw)
+            if not collapsed:
+                collapsed = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected linked-collapse response loss"
+                )
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_resume_linked_install_residue",
+            side_effect=lose_collapse_response,
+        ):
+            result, _output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("linked-collapse response loss", error)
+        self.assertTrue(collapsed)
+        self.assertTrue(destination.is_file())
+        self.assertEqual(destination.stat().st_nlink, 1)
+        self.assertFalse(temporary.exists())
+
+        original_rename = BOOTSTRAP._rename_noreplace_between
+        moved = False
+
+        def lose_move_response(
+            source: Path, target: Path, **keywords: object
+        ) -> None:
+            nonlocal moved
+            original_rename(source, target, **keywords)
+            if not moved:
+                moved = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected linked-quarantine response loss"
+                )
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_rename_noreplace_between",
+            side_effect=lose_move_response,
+        ):
+            result, _output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("linked-quarantine response loss", error)
+        self.assertTrue(moved)
+
+        result, output, error = self.run_main(*abort_arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "aborted")
+        self.assert_adoption_planned_paths_absent(transaction)
+
+    def test_linked_install_abort_rejects_a_third_link(self) -> None:
+        arguments, _transaction, destination, temporary = (
+            self.crash_adoption_after_baseline_link()
+        )
+        third = self.root / "third-adoption-link"
+        os.link(destination, third)
+        before = destination.read_bytes()
+
+        result, _output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+
+        self.assertEqual(result, 2)
+        self.assertIn("linked install inode differs", error)
+        self.assertEqual(destination.read_bytes(), before)
+        self.assertTrue(temporary.is_file())
+        self.assertTrue(third.is_file())
+        self.assertEqual(destination.stat().st_nlink, 3)
+
+    def test_linked_install_abort_rejects_a_different_temporary_inode(self) -> None:
+        arguments, _transaction, destination, temporary = (
+            self.crash_adoption_after_baseline_link()
+        )
+        payload = temporary.read_bytes()
+        temporary.unlink()
+        temporary.write_bytes(payload)
+        os.chmod(temporary, 0o600)
+
+        result, _output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+
+        self.assertEqual(result, 2)
+        self.assertIn("linked install inode differs", error)
+        self.assertTrue(destination.is_file())
+        self.assertTrue(temporary.is_file())
+        self.assertNotEqual(destination.stat().st_ino, temporary.stat().st_ino)
+
+    def test_linked_install_abort_rejects_payload_drift(self) -> None:
+        arguments, _transaction, destination, temporary = (
+            self.crash_adoption_after_baseline_link()
+        )
+        destination.write_bytes(b"drifted through both hard-link names\n")
+
+        result, _output, error = self.run_main(
+            *self.adoption_abort_arguments(arguments)
+        )
+
+        self.assertEqual(result, 2)
+        self.assertIn("payload changed", error)
+        self.assertEqual(destination.read_bytes(), temporary.read_bytes())
+        self.assertEqual(destination.stat().st_nlink, 2)
 
     def test_adoption_abort_removes_owned_control_staging_tree(self) -> None:
         md_sha256, dft_sha256 = self.prepare_adoption_fixture()
@@ -1454,6 +2777,168 @@ class BootstrapPullDeployTests(unittest.TestCase):
         self.assertEqual(result, 0, error)
         self.assertEqual(json.loads(output)["status"], "aborted")
         self.assert_adoption_planned_paths_absent(transaction)
+
+    def test_control_staging_cleanup_recovers_two_faults(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        arguments = self.adoption_apply_arguments(
+            json.loads(output), md_sha256, dft_sha256
+        )
+        staging_holder: dict[str, Path] = {}
+
+        def leave_owned_staging(*values, **keywords):  # type: ignore[no-untyped-def]
+            control_plan = keywords["plan"]
+            staging = control_plan["staging_path"]
+            owner = control_plan["staging_owner"]
+            payloads = control_plan["payloads"]
+            self.assertIsInstance(staging, Path)
+            staging.mkdir(mode=0o700)
+            BOOTSTRAP._atomic_json(staging / ".owner.json", owner)
+            for name, payload in list(payloads.items())[:2]:
+                BOOTSTRAP._atomic_file(staging / name, payload, 0o700)
+            staging_holder["path"] = staging
+            raise BOOTSTRAP.BootstrapError("injected owned staging residue")
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_build_control_release",
+            side_effect=leave_owned_staging,
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("owned staging residue", error)
+        staging = staging_holder["path"]
+        self.assertGreaterEqual(len(list(staging.iterdir())), 3)
+
+        original_fsync = BOOTSTRAP._fsync_directory
+        for fault_number in (1, 2):
+            faulted = False
+
+            def fail_cleanup(path: Path) -> None:
+                nonlocal faulted
+                original_fsync(path)
+                if path == staging and not faulted:
+                    faulted = True
+                    raise BOOTSTRAP.BootstrapError(
+                        f"injected staging cleanup fault {fault_number}"
+                    )
+
+            with mock.patch.object(
+                BOOTSTRAP, "_fsync_directory", side_effect=fail_cleanup
+            ):
+                result, _output, error = self.run_main(*arguments)
+            self.assertEqual(result, 2, error)
+            self.assertIn(f"cleanup fault {fault_number}", error)
+            self.assertTrue(faulted)
+
+        result, output, error = self.run_main(*arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+        self.assertFalse(staging.exists())
+
+    def test_control_staging_recovers_partial_owner_then_file_fsync_loss(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        arguments = self.adoption_apply_arguments(
+            json.loads(output), md_sha256, dft_sha256
+        )
+        original_write = BOOTSTRAP._write_authorized_staging
+        partial_owner: Path | None = None
+
+        def crash_partial_owner(path: Path, payload: bytes, mode: int) -> None:
+            nonlocal partial_owner
+            if partial_owner is None and path.name == ".owner.json":
+                partial_owner = path
+                path.write_bytes(payload[:7])
+                os.chmod(path, mode)
+                raise BOOTSTRAP.BootstrapError(
+                    "injected partial staging owner"
+                )
+            original_write(path, payload, mode)
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_write_authorized_staging",
+            side_effect=crash_partial_owner,
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("partial staging owner", error)
+        self.assertIsNotNone(partial_owner)
+        assert partial_owner is not None
+        self.assertEqual(partial_owner.stat().st_size, 7)
+
+        original_fsync = BOOTSTRAP.os.fsync
+        lost_file_fsync = False
+
+        def lose_payload_fsync(descriptor: int) -> None:
+            nonlocal lost_file_fsync
+            original_fsync(descriptor)
+            link = Path(f"/proc/self/fd/{descriptor}")
+            if not link.exists() or lost_file_fsync:
+                return
+            opened = Path(os.readlink(link))
+            if opened.parent == partial_owner.parent and opened.name != ".owner.json":
+                lost_file_fsync = True
+                raise OSError("injected staging file-fsync response loss")
+
+        with mock.patch.object(
+            BOOTSTRAP.os, "fsync", side_effect=lose_payload_fsync
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("file-fsync response loss", error)
+        self.assertTrue(lost_file_fsync)
+
+        result, output, error = self.run_main(*arguments)
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "adopted")
+        self.assertFalse(partial_owner.parent.exists())
+
+    def test_random_control_staging_temp_is_retained_and_fails_closed(self) -> None:
+        md_sha256, dft_sha256 = self.prepare_adoption_fixture()
+        result, output, error = self.run_main(
+            *self.adoption_base_arguments(), "--adopt-plan"
+        )
+        self.assertEqual(result, 0, error)
+        arguments = self.adoption_apply_arguments(
+            json.loads(output), md_sha256, dft_sha256
+        )
+        residue: dict[str, Path] = {}
+
+        def leave_random_temp(*values, **keywords):  # type: ignore[no-untyped-def]
+            control_plan = keywords["plan"]
+            staging = control_plan["staging_path"]
+            owner = control_plan["staging_owner"]
+            self.assertIsInstance(staging, Path)
+            staging.mkdir(mode=0o700)
+            BOOTSTRAP._atomic_json(staging / ".owner.json", owner)
+            temporary = staging / ".pull_deploy_controller.py.deadbeef.tmp"
+            temporary.write_bytes(b"same uid preplant\n")
+            os.chmod(temporary, 0o700)
+            residue["path"] = temporary
+            raise BOOTSTRAP.BootstrapError("injected random staging temp")
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_build_control_release",
+            side_effect=leave_random_temp,
+        ):
+            result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        temporary = residue["path"]
+        before = (temporary.stat().st_ino, temporary.read_bytes())
+
+        result, _output, error = self.run_main(*arguments)
+        self.assertEqual(result, 2, error)
+        self.assertIn("unplanned entry", error)
+        self.assertEqual((temporary.stat().st_ino, temporary.read_bytes()), before)
 
     def test_adoption_abort_rejects_post_authority_intent(self) -> None:
         md_sha256, dft_sha256 = self.prepare_adoption_fixture()
@@ -1925,6 +3410,101 @@ class BootstrapPullDeployTests(unittest.TestCase):
             BOOTSTRAP.digest(b"reviewed payload\n"),
         )
         self.assertEqual(target.read_bytes(), b"reviewed payload\n")
+
+    def test_unowned_same_uid_install_staging_is_retained(self) -> None:
+        directory = self.root / "unowned-install"
+        directory.mkdir(mode=0o700)
+        target = directory / "router"
+        preplant = directory / ".router.same-uid-preplant.tmp"
+        preplant.write_bytes(b"attacker-controlled\n")
+        os.chmod(preplant, 0o700)
+        before = (preplant.stat().st_ino, preplant.read_bytes())
+
+        with self.assertRaisesRegex(
+            BOOTSTRAP.BootstrapError, "unowned staging"
+        ):
+            BOOTSTRAP._install_exact(target, b"reviewed\n", 0o700)
+
+        self.assertFalse(target.exists())
+        self.assertEqual((preplant.stat().st_ino, preplant.read_bytes()), before)
+
+    def test_authorized_partial_install_staging_recovers_forward(self) -> None:
+        directory = self.root / "authorized-install"
+        directory.mkdir(mode=0o700)
+        target = directory / "router"
+        operation_id = "adopt-partial-install-test"
+        temporary = directory / f".router.{operation_id}.tmp"
+        payload = b"reviewed complete payload\n"
+        authority = BOOTSTRAP._adoption_install_staging_plan(
+            temporary,
+            target,
+            payload,
+            0o700,
+            operation_id=operation_id,
+        )
+        temporary.write_bytes(payload[:7])
+        os.chmod(temporary, 0o700)
+
+        result = BOOTSTRAP._install_exact(
+            target,
+            payload,
+            0o700,
+            temporary_path=temporary,
+            temporary_authority=authority,
+            reject_unowned_staging=True,
+        )
+
+        self.assertEqual(result, BOOTSTRAP.digest(payload))
+        self.assertEqual(target.read_bytes(), payload)
+        self.assertFalse(temporary.exists())
+
+    def test_authorized_install_recovers_after_file_fsync_response_loss(self) -> None:
+        directory = self.root / "fsync-lost-install"
+        directory.mkdir(mode=0o700)
+        target = directory / "router"
+        operation_id = "adopt-fsync-install-test"
+        temporary = directory / f".router.{operation_id}.tmp"
+        payload = b"durable staged payload\n"
+        authority = BOOTSTRAP._adoption_install_staging_plan(
+            temporary,
+            target,
+            payload,
+            0o700,
+            operation_id=operation_id,
+        )
+        original_fsync = BOOTSTRAP.os.fsync
+        lost = False
+
+        def lose_response(descriptor: int) -> None:
+            nonlocal lost
+            original_fsync(descriptor)
+            linked = Path(f"/proc/self/fd/{descriptor}")
+            if not lost and linked.exists() and Path(os.readlink(linked)) == temporary:
+                lost = True
+                raise OSError("injected file-fsync response loss")
+
+        with mock.patch.object(BOOTSTRAP.os, "fsync", side_effect=lose_response):
+            with self.assertRaisesRegex(OSError, "file-fsync response loss"):
+                BOOTSTRAP._install_exact(
+                    target,
+                    payload,
+                    0o700,
+                    temporary_path=temporary,
+                    temporary_authority=authority,
+                )
+        self.assertTrue(lost)
+        self.assertEqual(temporary.read_bytes(), payload)
+        self.assertFalse(target.exists())
+
+        BOOTSTRAP._install_exact(
+            target,
+            payload,
+            0o700,
+            temporary_path=temporary,
+            temporary_authority=authority,
+        )
+        self.assertEqual(target.read_bytes(), payload)
+        self.assertFalse(temporary.exists())
 
     def test_apply_rejects_symlink_inside_production_git(self) -> None:
         target = self.root / "outside"
@@ -2577,6 +4157,210 @@ class BootstrapPullDeployTests(unittest.TestCase):
             json.loads(output)["active_control"]["release_id"],
             active["release_id"],
         )
+
+    def test_legacy_control_intent_recovers_partial_deterministic_owner(self) -> None:
+        original = BOOTSTRAP._write_authorized_staging
+        partial: Path | None = None
+
+        def crash_owner(path: Path, payload: bytes, mode: int) -> None:
+            nonlocal partial
+            if partial is None and path.name == ".owner.json":
+                partial = path
+                path.write_bytes(payload[:9])
+                os.chmod(path, mode)
+                raise BOOTSTRAP.BootstrapError(
+                    "injected legacy deterministic owner crash"
+                )
+            original(path, payload, mode)
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_write_authorized_staging",
+            side_effect=crash_owner,
+        ):
+            result, _output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(result, 2, error)
+        self.assertIn("legacy deterministic owner crash", error)
+        self.assertIsNotNone(partial)
+        assert partial is not None
+        self.assertEqual(partial.stat().st_size, 9)
+
+        result, output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(result, 0, error)
+        self.assertFalse(partial.parent.exists())
+        self.assertEqual(json.loads(output)["status"], "initialized")
+
+    def test_bootstrap_transaction_ancestor_creation_fsyncs_child_and_parent(
+        self,
+    ) -> None:
+        self.runtime.mkdir(mode=0o700)
+        original_fsync = BOOTSTRAP.os.fsync
+        sealed: set[Path] = set()
+
+        def record_fsync(descriptor: int) -> None:
+            try:
+                sealed.add(Path(f"/proc/self/fd/{descriptor}").resolve())
+            except OSError:
+                pass
+            original_fsync(descriptor)
+
+        with mock.patch.object(BOOTSTRAP.os, "fsync", side_effect=record_fsync):
+            directory = BOOTSTRAP._ensure_bootstrap_transaction_directory(
+                self.runtime
+            )
+
+        state = self.runtime / "state"
+        legacy = state / "legacy-takeover"
+        self.assertEqual(directory, legacy / "bootstrap-children")
+        self.assertTrue(
+            {
+                self.runtime,
+                state,
+                legacy,
+                directory,
+            }.issubset(sealed)
+        )
+
+    def test_visible_bootstrap_intent_is_resealed_before_layout_mutation(
+        self,
+    ) -> None:
+        original_atomic = BOOTSTRAP._atomic_json
+        exposed = False
+
+        def expose_intent(path: Path, document: dict[str, object]) -> None:
+            nonlocal exposed
+            original_atomic(path, document)
+            if (
+                not exposed
+                and path.parent.name == "bootstrap-children"
+                and document.get("phase") == "runtime-layout-intent"
+            ):
+                exposed = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected visible bootstrap intent"
+                )
+
+        with mock.patch.object(
+            BOOTSTRAP, "_atomic_json", side_effect=expose_intent
+        ):
+            result, _output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(result, 2, error)
+        self.assertIn("visible bootstrap intent", error)
+        self.assertTrue(exposed)
+
+        original_reseal = BOOTSTRAP._reseal_bootstrap_transaction
+        original_initialize = BOOTSTRAP._initialize_runtime_root
+        resealed = False
+        second_fault = False
+
+        def record_reseal(path: Path) -> dict[str, object]:
+            nonlocal resealed
+            value = original_reseal(path)
+            resealed = True
+            return value
+
+        def crash_after_layout(runtime_root: Path) -> None:
+            nonlocal second_fault
+            self.assertTrue(
+                resealed,
+                "runtime layout mutation preceded journal durability reseal",
+            )
+            original_initialize(runtime_root)
+            if not second_fault:
+                second_fault = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected second bootstrap layout fault"
+                )
+
+        with (
+            mock.patch.object(
+                BOOTSTRAP,
+                "_reseal_bootstrap_transaction",
+                side_effect=record_reseal,
+            ),
+            mock.patch.object(
+                BOOTSTRAP,
+                "_initialize_runtime_root",
+                side_effect=crash_after_layout,
+            ),
+        ):
+            result, _output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(result, 2, error)
+        self.assertIn("second bootstrap layout fault", error)
+        self.assertTrue(resealed)
+
+        result, output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "initialized")
+
+    def test_completed_bootstrap_journal_reseals_before_terminal_replay(
+        self,
+    ) -> None:
+        result, output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "initialized")
+        original_reseal = BOOTSTRAP._reseal_bootstrap_transaction
+        first_fault = False
+
+        def lose_terminal_reseal(path: Path) -> dict[str, object]:
+            nonlocal first_fault
+            value = original_reseal(path)
+            if not first_fault:
+                first_fault = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected completed journal reseal response loss"
+                )
+            return value
+
+        with mock.patch.object(
+            BOOTSTRAP,
+            "_reseal_bootstrap_transaction",
+            side_effect=lose_terminal_reseal,
+        ):
+            result, _output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(result, 2, error)
+        self.assertIn("completed journal reseal", error)
+        self.assertTrue(first_fault)
+
+        original_initialize = BOOTSTRAP._initialize_runtime_root
+        resealed = False
+        second_fault = False
+
+        def record_reseal(path: Path) -> dict[str, object]:
+            nonlocal resealed
+            value = original_reseal(path)
+            resealed = True
+            return value
+
+        def crash_terminal_layout(runtime_root: Path) -> None:
+            nonlocal second_fault
+            self.assertTrue(resealed)
+            original_initialize(runtime_root)
+            if not second_fault:
+                second_fault = True
+                raise BOOTSTRAP.BootstrapError(
+                    "injected second completed replay fault"
+                )
+
+        with (
+            mock.patch.object(
+                BOOTSTRAP,
+                "_reseal_bootstrap_transaction",
+                side_effect=record_reseal,
+            ),
+            mock.patch.object(
+                BOOTSTRAP,
+                "_initialize_runtime_root",
+                side_effect=crash_terminal_layout,
+            ),
+        ):
+            result, _output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(result, 2, error)
+        self.assertIn("second completed replay fault", error)
+
+        result, output, error = self.run_main(*self.apply_arguments())
+        self.assertEqual(result, 0, error)
+        self.assertEqual(json.loads(output)["status"], "initialized")
 
     def test_foreign_control_staging_is_never_silently_removed(self) -> None:
         first, _output, error = self.run_main(*self.apply_arguments())

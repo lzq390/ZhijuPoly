@@ -1177,10 +1177,12 @@ def validate_adopted_permission_documentation_text(
                 f"{label} must contain one exact permission-plan/apply/abort "
                 "command sequence"
             )
-        if (
-            section.count("--confirm-plan-sha256") != 2
-            or section.count("--confirm-permission-impact-sha256") != 2
-        ):
+        # The following Worker-unit transaction deliberately uses the same
+        # generic plan-confirmation flag.  Count only the Git-permission-
+        # specific impact confirmations here; ``exact_commands`` above
+        # already proves that both Git apply and Git abort also carry their
+        # plan confirmation.
+        if section.count("--confirm-permission-impact-sha256") != 2:
             failures.append(
                 f"{label} permission apply and abort must both require the "
                 "plan and impact confirmations"
@@ -1208,6 +1210,11 @@ def validate_adopted_permission_documentation_text(
             "state/legacy-git-permission-takeover.json",
             "git_source_trust.takeover_repository_permissions",
             "install_legacy_takeover_prerequisites.py",
+            "authority_publication",
+            "initially_absent=true",
+            ".adopted-unit-permissions.json.create-<operation-id>",
+            "same-operation weak authority",
+            "single-link final authority",
         )
         missing = [
             marker for marker in required if marker not in normalized_section
