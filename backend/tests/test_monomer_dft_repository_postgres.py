@@ -18,9 +18,9 @@ from app.services.monomer_dft_repository import (
 )
 from app.services.monomer_dft_schema import (
     MONOMER_DFT_CATALOG_FINGERPRINT_SHA256,
+    MONOMER_DFT_GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT_SHA256,
     MONOMER_DFT_MIGRATION_VERSION,
     MonomerDftSchemaState,
-    _normalize_catalog_access_control,
     monomer_dft_catalog_document,
     monomer_dft_catalog_sha256,
     probe_monomer_dft_schema,
@@ -28,53 +28,9 @@ from app.services.monomer_dft_schema import (
 
 
 REQUEST_ADAPTER = TypeAdapter(MonomerDftRunRequest)
-ACL_TEST_OWNER_OID = "16384"
-ACL_TEST_AUDIT_ROLE_OID = "16385"
-ACL_TEST_RAW = "owner=UC/owner,nexpoly_mutable_audit=U/owner"
-
-
-def _acl_test_entries(
-    owner_privileges: frozenset[str],
-    audit_privilege: str,
-) -> list[dict[str, object]]:
-    return [
-        *[
-            {
-                "grantee": ACL_TEST_OWNER_OID,
-                "grantor": ACL_TEST_OWNER_OID,
-                "privilege": privilege,
-                "grantable": False,
-            }
-            for privilege in sorted(owner_privileges, reverse=True)
-        ],
-        {
-            "grantee": ACL_TEST_AUDIT_ROLE_OID,
-            "grantor": ACL_TEST_OWNER_OID,
-            "privilege": audit_privilege,
-            "grantable": False,
-        },
-    ]
-
-
-def _normalize_acl_for_test(
-    entries: object,
-    *,
-    owner_privileges: frozenset[str] = frozenset({"CREATE", "USAGE"}),
-    audit_privilege: str = "USAGE",
-    owner_oid: object = ACL_TEST_OWNER_OID,
-    audit_role_oid: object = ACL_TEST_AUDIT_ROLE_OID,
-    owner_matches_contract: object = True,
-    raw_access_control: object = ACL_TEST_RAW,
-) -> str:
-    return _normalize_catalog_access_control(
-        raw_access_control,
-        entries,
-        owner_oid=owner_oid,
-        mutable_audit_role_oid=audit_role_oid,
-        owner_matches_contract=owner_matches_contract,
-        owner_privileges=owner_privileges,
-        mutable_audit_privilege=audit_privilege,
-    )
+EXPLICIT_EMPTY_CATALOG_ACL_SENTINEL = (
+    "<explicit-empty-catalog-acl-array>"
+)
 
 
 def _prepared(smiles: str = "CCO"):
@@ -469,123 +425,6 @@ def test_postgres_cancel_is_local_only_before_durable_dispatch_claim(postgres_ds
         )
 
 
-def test_catalog_acl_normalization_preserves_pristine_acl() -> None:
-    assert _normalize_acl_for_test([], raw_access_control="") == ""
-
-
-@pytest.mark.parametrize(
-    ("owner_privileges", "audit_privilege"),
-    [
-        (frozenset({"CREATE", "USAGE"}), "USAGE"),
-        (
-            frozenset(
-                {
-                    "DELETE",
-                    "INSERT",
-                    "REFERENCES",
-                    "SELECT",
-                    "TRIGGER",
-                    "TRUNCATE",
-                    "UPDATE",
-                }
-            ),
-            "SELECT",
-        ),
-        (frozenset({"SELECT", "UPDATE", "USAGE"}), "SELECT"),
-    ],
-    ids=("schema-usage", "table-select", "sequence-select"),
-)
-def test_catalog_acl_normalization_accepts_exact_audit_read_grant(
-    owner_privileges: frozenset[str],
-    audit_privilege: str,
-) -> None:
-    assert (
-        _normalize_acl_for_test(
-            _acl_test_entries(owner_privileges, audit_privilege),
-            owner_privileges=owner_privileges,
-            audit_privilege=audit_privilege,
-        )
-        == ""
-    )
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        pytest.param(
-            lambda entries: entries
-            + [
-                {
-                    "grantee": "16386",
-                    "grantor": ACL_TEST_OWNER_OID,
-                    "privilege": "USAGE",
-                    "grantable": False,
-                }
-            ],
-            id="unknown-grantee",
-        ),
-        pytest.param(
-            lambda entries: entries
-            + [
-                {
-                    "grantee": ACL_TEST_AUDIT_ROLE_OID,
-                    "grantor": ACL_TEST_OWNER_OID,
-                    "privilege": "CREATE",
-                    "grantable": False,
-                }
-            ],
-            id="extra-privilege",
-        ),
-        pytest.param(
-            lambda entries: [
-                {**entry, "grantable": True}
-                if entry["grantee"] == ACL_TEST_AUDIT_ROLE_OID
-                else entry
-                for entry in entries
-            ],
-            id="grant-option",
-        ),
-        pytest.param(
-            lambda entries: [
-                {**entry, "grantor": "16386"}
-                if entry["grantee"] == ACL_TEST_AUDIT_ROLE_OID
-                else entry
-                for entry in entries
-            ],
-            id="wrong-grantor",
-        ),
-        pytest.param(lambda entries: entries[:-1], id="missing-audit-grant"),
-        pytest.param(lambda entries: entries + [entries[-1]], id="duplicate"),
-        pytest.param(
-            lambda entries: [{**entries[0], "unknown": True}] + entries[1:],
-            id="unknown-entry-field",
-        ),
-    ],
-)
-def test_catalog_acl_normalization_keeps_unsafe_acl_in_fingerprint(
-    mutation,
-) -> None:
-    entries = _acl_test_entries(frozenset({"CREATE", "USAGE"}), "USAGE")
-    assert _normalize_acl_for_test(mutation(entries)) == ACL_TEST_RAW
-
-
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"owner_matches_contract": False},
-        {"owner_oid": "16386"},
-        {"audit_role_oid": None},
-        {"audit_role_oid": ACL_TEST_OWNER_OID},
-    ],
-    ids=("wrong-owner", "wrong-owner-oid", "missing-role", "role-is-owner"),
-)
-def test_catalog_acl_normalization_requires_exact_owner_and_role(
-    overrides: dict[str, object],
-) -> None:
-    entries = _acl_test_entries(frozenset({"CREATE", "USAGE"}), "USAGE")
-    assert _normalize_acl_for_test(entries, **overrides) == ACL_TEST_RAW
-
-
 def test_postgres_exact_0013_catalog_fingerprint_is_ready(
     postgres_dsn: str,
 ) -> None:
@@ -615,7 +454,154 @@ def test_postgres_exact_0013_catalog_fingerprint_is_ready(
     assert all(column["access_control"] == "" for column in document["columns"])
 
 
-def test_postgres_exact_mutable_audit_acl_normalizes_to_pristine_fingerprint(
+@pytest.mark.parametrize(
+    ("acl_kind", "statements", "collection", "identity"),
+    [
+        pytest.param(
+            "namespace",
+            (
+                "REVOKE ALL PRIVILEGES ON SCHEMA monomer_dft "
+                "FROM CURRENT_USER",
+            ),
+            "namespace",
+            {"schema_name": "monomer_dft"},
+            id="namespace",
+        ),
+        pytest.param(
+            "relation",
+            (
+                "REVOKE ALL PRIVILEGES ON TABLE monomer_dft.jobs "
+                "FROM CURRENT_USER",
+            ),
+            "relations",
+            {"relation_kind": "r", "relation_name": "jobs"},
+            id="relation",
+        ),
+        pytest.param(
+            "column",
+            (
+                """
+                UPDATE pg_catalog.pg_attribute AS a
+                SET attacl = '{}'::pg_catalog.aclitem[]
+                FROM pg_catalog.pg_class AS c
+                JOIN pg_catalog.pg_namespace AS n
+                  ON n.oid = c.relnamespace
+                WHERE a.attrelid = c.oid
+                  AND n.nspname = 'monomer_dft'
+                  AND c.relname = 'jobs'
+                  AND a.attname = 'input_smiles'
+                  AND a.attnum > 0
+                  AND NOT a.attisdropped
+                """,
+            ),
+            "columns",
+            {"table_name": "jobs", "column_name": "input_smiles"},
+            id="column",
+        ),
+        pytest.param(
+            "type",
+            (
+                "REVOKE ALL PRIVILEGES ON TYPE monomer_dft.jobs "
+                "FROM CURRENT_USER, PUBLIC",
+            ),
+            "types",
+            {"type_name": "jobs"},
+            id="type",
+        ),
+        pytest.param(
+            "routine",
+            (
+                "CREATE FUNCTION monomer_dft.explicit_empty_acl_probe() "
+                "RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 1'",
+                "REVOKE ALL PRIVILEGES ON FUNCTION "
+                "monomer_dft.explicit_empty_acl_probe() "
+                "FROM CURRENT_USER, PUBLIC",
+            ),
+            "routines",
+            {"routine_name": "explicit_empty_acl_probe"},
+            id="routine",
+        ),
+    ],
+)
+def test_postgres_explicit_empty_acl_sentinel_covers_all_five_catalog_classes(
+    postgres_dsn: str,
+    acl_kind: str,
+    statements: tuple[str, ...],
+    collection: str,
+    identity: dict[str, str],
+) -> None:
+    class RollbackExplicitEmptyAcl(Exception):
+        pass
+
+    acl_collections = (
+        "namespace",
+        "relations",
+        "columns",
+        "types",
+        "routines",
+    )
+
+    with postgres_connection(postgres_dsn) as connection:
+        database_name = str(
+            connection.execute(
+                "SELECT current_database() AS database_name"
+            ).fetchone()["database_name"]
+        )
+        assert database_name.startswith("zhijupoly_test_")
+        baseline_probe = probe_monomer_dft_schema(connection)
+        assert baseline_probe.state is MonomerDftSchemaState.READY
+        assert (
+            baseline_probe.catalog_sha256
+            == MONOMER_DFT_CATALOG_FINGERPRINT_SHA256
+        )
+
+        try:
+            with connection.transaction():
+                for statement in statements:
+                    result = connection.execute(statement)
+                    if "UPDATE pg_catalog.pg_attribute" in statement:
+                        # PostgreSQL turns a normal final column REVOKE back
+                        # into NULL.  Materialize the otherwise reachable
+                        # empty catalog representation only inside this
+                        # rollback-only transaction and prove the exact row
+                        # scope before inspecting it.
+                        assert result.rowcount == 1
+
+                document = monomer_dft_catalog_document(connection)
+                sentinel_rows = [
+                    (candidate_collection, row)
+                    for candidate_collection in acl_collections
+                    for row in document[candidate_collection]
+                    if row["access_control"]
+                    == EXPLICIT_EMPTY_CATALOG_ACL_SENTINEL
+                ]
+                assert len(sentinel_rows) == 1, acl_kind
+                observed_collection, observed_row = sentinel_rows[0]
+                assert observed_collection == collection, acl_kind
+                assert all(
+                    observed_row.get(field) == value
+                    for field, value in identity.items()
+                ), acl_kind
+
+                digest = monomer_dft_catalog_sha256(connection)
+                probe = probe_monomer_dft_schema(connection)
+                assert digest not in {
+                    MONOMER_DFT_CATALOG_FINGERPRINT_SHA256,
+                    MONOMER_DFT_GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT_SHA256,
+                }
+                assert probe.state is MonomerDftSchemaState.INVALID
+                assert probe.reason == "catalog_fingerprint_mismatch"
+                assert probe.catalog_sha256 == digest
+                raise RollbackExplicitEmptyAcl
+        except RollbackExplicitEmptyAcl:
+            pass
+
+        restored_probe = probe_monomer_dft_schema(connection)
+        assert restored_probe.state is MonomerDftSchemaState.READY
+        assert restored_probe.catalog_sha256 == baseline_probe.catalog_sha256
+
+
+def test_postgres_exact_governed_mutable_audit_acl_has_distinct_ready_fingerprint(
     postgres_dsn: str,
 ) -> None:
     class RollbackAuditAcl(Exception):
@@ -624,39 +610,140 @@ def test_postgres_exact_mutable_audit_acl_normalizes_to_pristine_fingerprint(
     class RollbackUnsafeAcl(Exception):
         pass
 
-    unsafe_grants = (
-        "GRANT CREATE ON SCHEMA monomer_dft TO nexpoly_mutable_audit",
-        "GRANT INSERT ON monomer_dft.jobs TO nexpoly_mutable_audit",
-        "GRANT USAGE ON SEQUENCE "
-        "monomer_dft.jobs_enqueue_sequence_seq TO nexpoly_mutable_audit",
-        "GRANT SELECT ON monomer_dft.jobs "
-        "TO nexpoly_mutable_audit WITH GRANT OPTION",
+    unsafe_mutations = (
+        (
+            "extra-role",
+            (
+                "GRANT SELECT ON monomer_dft.jobs "
+                "TO monomer_dft_acl_intruder",
+            ),
+            0,
+        ),
+        (
+            "extra-grant",
+            (
+                "GRANT CREATE ON SCHEMA monomer_dft "
+                "TO nexpoly_mutable_audit",
+            ),
+            0,
+        ),
+        (
+            "grant-option",
+            (
+                "GRANT SELECT ON monomer_dft.jobs "
+                "TO nexpoly_mutable_audit WITH GRANT OPTION",
+            ),
+            0,
+        ),
+        (
+            "revoke-required-grant",
+            (
+                "REVOKE SELECT ON monomer_dft.jobs "
+                "FROM nexpoly_mutable_audit",
+            ),
+            0,
+        ),
+        (
+            "acl-order",
+            (
+                "REVOKE ALL PRIVILEGES ON monomer_dft.jobs FROM polyprop",
+                "GRANT ALL PRIVILEGES ON monomer_dft.jobs TO polyprop",
+            ),
+            0,
+        ),
+        (
+            "single-explicit-empty-acl",
+            (
+                "REVOKE ALL PRIVILEGES ON monomer_dft.jobs "
+                "FROM nexpoly_mutable_audit, polyprop",
+            ),
+            1,
+        ),
+        (
+            "all-production-governed-acl-objects-explicit-empty",
+            (
+                "REVOKE ALL PRIVILEGES ON ALL TABLES "
+                "IN SCHEMA monomer_dft "
+                "FROM nexpoly_mutable_audit, polyprop",
+                "REVOKE ALL PRIVILEGES ON ALL SEQUENCES "
+                "IN SCHEMA monomer_dft "
+                "FROM nexpoly_mutable_audit, polyprop",
+                "REVOKE ALL PRIVILEGES ON SCHEMA monomer_dft "
+                "FROM nexpoly_mutable_audit, polyprop",
+            ),
+            5,
+        ),
     )
 
     with postgres_connection(postgres_dsn) as connection:
         try:
             with connection.transaction():
-                role_exists = connection.execute(
-                    """
-                    SELECT EXISTS (
-                      SELECT 1
-                      FROM pg_catalog.pg_roles
-                      WHERE rolname = 'nexpoly_mutable_audit'
-                    ) AS role_exists
-                    """
-                ).fetchone()["role_exists"]
-                if not role_exists:
-                    connection.execute(
-                        "CREATE ROLE nexpoly_mutable_audit NOLOGIN"
-                    )
+                for role in (
+                    "polyprop",
+                    "nexpoly_mutable_audit",
+                    "monomer_dft_acl_intruder",
+                ):
+                    role_exists = connection.execute(
+                        """
+                        SELECT EXISTS (
+                          SELECT 1
+                          FROM pg_catalog.pg_roles
+                          WHERE rolname = %s
+                        ) AS role_exists
+                        """,
+                        (role,),
+                    ).fetchone()["role_exists"]
+                    if not role_exists:
+                        connection.execute(
+                            psycopg.sql.SQL("CREATE ROLE {} NOLOGIN").format(
+                                psycopg.sql.Identifier(role)
+                            )
+                        )
 
+                # Recreate the production owner spelling so the raw ACL
+                # projection proves the official governed fingerprint, while
+                # the owner booleans keep the pristine document unchanged.
+                connection.execute(
+                    "GRANT USAGE ON SCHEMA governance TO polyprop"
+                )
+                connection.execute(
+                    "GRANT SELECT ON governance.schema_migrations TO polyprop"
+                )
+                for table in ("artifacts", "job_attempts", "jobs"):
+                    connection.execute(
+                        psycopg.sql.SQL(
+                            "ALTER TABLE monomer_dft.{} OWNER TO polyprop"
+                        ).format(psycopg.sql.Identifier(table))
+                    )
+                connection.execute(
+                    "ALTER SCHEMA monomer_dft OWNER TO polyprop"
+                )
+                connection.execute("SET LOCAL ROLE polyprop")
+
+                pristine_document = monomer_dft_catalog_document(connection)
+                assert monomer_dft_catalog_sha256(connection) == (
+                    MONOMER_DFT_CATALOG_FINGERPRINT_SHA256
+                )
+
+                connection.execute(
+                    "REVOKE ALL PRIVILEGES ON SCHEMA monomer_dft "
+                    "FROM nexpoly_mutable_audit"
+                )
                 connection.execute(
                     "GRANT USAGE ON SCHEMA monomer_dft "
                     "TO nexpoly_mutable_audit"
                 )
                 connection.execute(
+                    "REVOKE ALL PRIVILEGES ON ALL TABLES "
+                    "IN SCHEMA monomer_dft FROM nexpoly_mutable_audit"
+                )
+                connection.execute(
                     "GRANT SELECT ON ALL TABLES IN SCHEMA monomer_dft "
                     "TO nexpoly_mutable_audit"
+                )
+                connection.execute(
+                    "REVOKE ALL PRIVILEGES ON ALL SEQUENCES "
+                    "IN SCHEMA monomer_dft FROM nexpoly_mutable_audit"
                 )
                 connection.execute(
                     "GRANT SELECT ON ALL SEQUENCES IN SCHEMA monomer_dft "
@@ -690,18 +777,92 @@ def test_postgres_exact_mutable_audit_acl_normalizes_to_pristine_fingerprint(
                 document = monomer_dft_catalog_document(connection)
                 digest = monomer_dft_catalog_sha256(connection)
                 probe = probe_monomer_dft_schema(connection)
-                assert digest == MONOMER_DFT_CATALOG_FINGERPRINT_SHA256
-                assert probe.state is MonomerDftSchemaState.READY
-                assert document["namespace"][0]["access_control"] == ""
-                assert all(
-                    relation["access_control"] == ""
-                    for relation in document["relations"]
+                assert (
+                    digest
+                    == MONOMER_DFT_GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT_SHA256
                 )
+                assert probe.state is MonomerDftSchemaState.READY
+                assert (
+                    probe.reason
+                    == "exact_0013_with_governed_mutable_audit_acl"
+                )
+                assert probe.catalog_sha256 == digest
+                assert document["namespace"][0]["access_control"] == (
+                    "polyprop=UC/polyprop,"
+                    "nexpoly_mutable_audit=U/polyprop"
+                )
+                relation_acl = {
+                    (relation["relation_kind"], relation["relation_name"]): (
+                        relation["access_control"]
+                    )
+                    for relation in document["relations"]
+                    if relation["access_control"]
+                }
+                assert relation_acl == {
+                    ("S", "jobs_enqueue_sequence_seq"): (
+                        "polyprop=rwU/polyprop,"
+                        "nexpoly_mutable_audit=r/polyprop"
+                    ),
+                    ("r", "artifacts"): (
+                        "polyprop=arwdDxt/polyprop,"
+                        "nexpoly_mutable_audit=r/polyprop"
+                    ),
+                    ("r", "job_attempts"): (
+                        "polyprop=arwdDxt/polyprop,"
+                        "nexpoly_mutable_audit=r/polyprop"
+                    ),
+                    ("r", "jobs"): (
+                        "polyprop=arwdDxt/polyprop,"
+                        "nexpoly_mutable_audit=r/polyprop"
+                    ),
+                }
+                assert {
+                    **document,
+                    "namespace": [
+                        {**row, "access_control": ""}
+                        for row in document["namespace"]
+                    ],
+                    "relations": [
+                        {**row, "access_control": ""}
+                        for row in document["relations"]
+                    ],
+                    "columns": [
+                        {**row, "access_control": ""}
+                        for row in document["columns"]
+                    ],
+                } == pristine_document
 
-                for unsafe_grant in unsafe_grants:
+                for (
+                    mutation_name,
+                    statements,
+                    expected_empty_acl_count,
+                ) in unsafe_mutations:
                     try:
                         with connection.transaction():
-                            connection.execute(unsafe_grant)
+                            for statement in statements:
+                                connection.execute(statement)
+                            unsafe_document = monomer_dft_catalog_document(
+                                connection
+                            )
+                            empty_acl_count = sum(
+                                row["access_control"]
+                                == "<explicit-empty-catalog-acl-array>"
+                                for collection in (
+                                    "namespace",
+                                    "relations",
+                                    "columns",
+                                    "types",
+                                    "routines",
+                                )
+                                for row in unsafe_document[collection]
+                            )
+                            assert (
+                                empty_acl_count
+                                == expected_empty_acl_count
+                            ), mutation_name
+                            unsafe_digest = monomer_dft_catalog_sha256(
+                                connection
+                            )
                             unsafe_probe = probe_monomer_dft_schema(connection)
                             assert (
                                 unsafe_probe.state
@@ -712,12 +873,23 @@ def test_postgres_exact_mutable_audit_acl_normalizes_to_pristine_fingerprint(
                                 == "catalog_fingerprint_mismatch"
                             )
                             assert (
+                                unsafe_probe.catalog_sha256 == unsafe_digest
+                            )
+                            assert (
                                 unsafe_probe.catalog_sha256
                                 != MONOMER_DFT_CATALOG_FINGERPRINT_SHA256
+                            )
+                            assert (
+                                unsafe_probe.catalog_sha256
+                                != MONOMER_DFT_GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT_SHA256
                             )
                             raise RollbackUnsafeAcl
                     except RollbackUnsafeAcl:
                         pass
+                    assert (
+                        probe_monomer_dft_schema(connection).catalog_sha256
+                        == digest
+                    ), mutation_name
 
                 assert (
                     probe_monomer_dft_schema(connection).state

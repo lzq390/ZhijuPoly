@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 import unittest
+from unittest import mock
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +29,157 @@ PREFLIGHT_SPEC.loader.exec_module(PREFLIGHT)
 class MonomerDftReleaseContractTests(unittest.TestCase):
     def test_current_tree_satisfies_release_contract(self) -> None:
         self.assertEqual(VALIDATOR.validate(REPOSITORY_ROOT), [])
+
+    def test_schema_contract_pins_both_exact_acl_fingerprints(self) -> None:
+        self.assertEqual(
+            VALIDATOR.CATALOG_FINGERPRINT,
+            "6dc2e6ca7e1bb052836afec2bbdd46c6aa0928e97efdbbc6669b9b220f9bf6f8",
+        )
+        self.assertEqual(
+            VALIDATOR.GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT,
+            "8972b5de85d2beb43f0e0023c7a842c602e237be8a7902831f32a9ce7eb401e2",
+        )
+        self.assertEqual(
+            VALIDATOR.EXPLICIT_EMPTY_CATALOG_ACL_SENTINEL,
+            "<explicit-empty-catalog-acl-array>",
+        )
+
+        failures: list[str] = []
+        VALIDATOR.validate_database_schema_state_contract(
+            REPOSITORY_ROOT,
+            failures,
+        )
+
+        self.assertEqual(failures, [])
+
+    def test_schema_contract_rejects_missing_or_normalized_governed_acl(
+        self,
+    ) -> None:
+        schema_relative = "backend/app/services/monomer_dft_schema.py"
+        schema = (REPOSITORY_ROOT / schema_relative).read_text(encoding="utf-8")
+        governed_reason = "exact_0013_with_governed_mutable_audit_acl"
+        mutations = {
+            "fingerprint": schema.replace(
+                VALIDATOR.GOVERNED_MUTABLE_AUDIT_CATALOG_FINGERPRINT,
+                "0" * 64,
+                1,
+            ),
+            "reason": schema.replace(governed_reason, "governed_acl", 1),
+            "acl-normalizer": (
+                schema + "\ndef _normalize_catalog_access_control():\n    pass\n"
+            ),
+        }
+        original_read_text = VALIDATOR._read_text
+
+        for mutation_name, mutated_schema in mutations.items():
+            with self.subTest(mutation=mutation_name):
+                def read_text(root, relative, failures):  # type: ignore[no-untyped-def]
+                    if relative == schema_relative:
+                        return mutated_schema
+                    return original_read_text(root, relative, failures)
+
+                failures: list[str] = []
+                with mock.patch.object(
+                    VALIDATOR,
+                    "_read_text",
+                    side_effect=read_text,
+                ):
+                    VALIDATOR.validate_database_schema_state_contract(
+                        REPOSITORY_ROOT,
+                        failures,
+                    )
+                if mutation_name == "acl-normalizer":
+                    self.assertTrue(
+                        any("raw ACLs" in failure for failure in failures),
+                        failures,
+                    )
+                else:
+                    self.assertTrue(
+                        any(
+                            "schema probe is missing" in failure
+                            for failure in failures
+                        ),
+                        failures,
+                    )
+
+    def test_schema_contract_rejects_acl_null_empty_collapse(self) -> None:
+        schema_relative = "backend/app/services/monomer_dft_schema.py"
+        schema = (REPOSITORY_ROOT / schema_relative).read_text(encoding="utf-8")
+        original_read_text = VALIDATOR._read_text
+        acl_projections = (
+            "n.nspacl",
+            "c.relacl",
+            "a.attacl",
+            "t.typacl",
+            "p.proacl",
+        )
+
+        for acl_projection in acl_projections:
+            escaped_projection = re.escape(acl_projection)
+            exact_projection = re.compile(
+                rf"CASE\s+WHEN {escaped_projection} IS NULL THEN ''\s+"
+                rf"WHEN pg_catalog\.cardinality\({escaped_projection}\) = 0\s+"
+                r"THEN '<explicit-empty-catalog-acl-array>'\s+"
+                rf"ELSE pg_catalog\.array_to_string\({escaped_projection}, ','\)\s+"
+                r"END AS access_control"
+            )
+            self.assertEqual(len(exact_projection.findall(schema)), 1)
+
+            mutations = {
+                "missing-explicit-empty-branch": schema.replace(
+                    f"WHEN pg_catalog.cardinality({acl_projection}) = 0",
+                    f"WHEN pg_catalog.cardinality({acl_projection}) = -1",
+                    1,
+                ),
+                "coalesce-null-and-empty": exact_projection.sub(
+                    "COALESCE(pg_catalog.array_to_string("
+                    f"{acl_projection}, ','), '') AS access_control",
+                    schema,
+                    count=1,
+                ),
+            }
+            for mutation_name, mutated_schema in mutations.items():
+                with self.subTest(
+                    acl_projection=acl_projection,
+                    mutation=mutation_name,
+                ):
+                    self.assertNotEqual(mutated_schema, schema)
+
+                    def read_text(  # type: ignore[no-untyped-def]
+                        root,
+                        relative,
+                        failures,
+                    ):
+                        if relative == schema_relative:
+                            return mutated_schema
+                        return original_read_text(root, relative, failures)
+
+                    failures: list[str] = []
+                    with mock.patch.object(
+                        VALIDATOR,
+                        "_read_text",
+                        side_effect=read_text,
+                    ):
+                        VALIDATOR.validate_database_schema_state_contract(
+                            REPOSITORY_ROOT,
+                            failures,
+                        )
+                    self.assertTrue(
+                        any(
+                            "explicit empty ACL arrays for "
+                            f"{acl_projection}" in failure
+                            for failure in failures
+                        ),
+                        failures,
+                    )
+                    if mutation_name == "coalesce-null-and-empty":
+                        self.assertTrue(
+                            any(
+                                "with COALESCE" in failure
+                                for failure in failures
+                            ),
+                            failures,
+                        )
 
     def test_current_development_delivery_satisfies_isolation_contract(self) -> None:
         failures: list[str] = []
