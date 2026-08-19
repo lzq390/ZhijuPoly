@@ -248,6 +248,35 @@ class ProductionGitSnapshotTests(unittest.TestCase):
             )
         self.assertEqual(verified, authority)
 
+    def test_apply_replaces_only_journal_owned_partial_copy(self) -> None:
+        fired = False
+
+        def checkpoint(name: str) -> None:
+            nonlocal fired
+            if name == "snapshot-copy-intent" and not fired:
+                fired = True
+                raise InjectedCrash(name)
+
+        manager = self._manager(checkpoint=checkpoint)
+        planned = self._plan(manager)
+        with mock.patch.object(SNAPSHOT, "_fiemap_has_shared_extents", return_value=False):
+            with self.assertRaises(InjectedCrash):
+                self._apply(manager, planned)
+            staging = (
+                self.runtime
+                / "backups/production-git"
+                / self.operation_id
+                / ".git.copy"
+            )
+            staging.mkdir(mode=0o700)
+            partial = staging / "partial"
+            partial.write_bytes(b"interrupted copy")
+            partial.chmod(0o600)
+            authority = self._apply(manager, planned)
+
+        self.assertFalse(staging.exists())
+        self.assertEqual(authority["operation_id"], self.operation_id)
+
     def test_apply_finishes_journal_after_authority_response_loss(self) -> None:
         fired = False
 

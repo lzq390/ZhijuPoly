@@ -577,6 +577,13 @@ def validate_manifest(document: object) -> dict[str, object]:
         or document.get("total_file_bytes") != total
     ):
         raise SnapshotError("Git snapshot manifest summary differs")
+    kinds = {str(record["path"]): str(record["kind"]) for record in records}
+    for path in paths:
+        parent = PurePosixPath(path).parent
+        while parent != PurePosixPath("."):
+            if kinds.get(parent.as_posix()) != "directory":
+                raise SnapshotError("Git snapshot manifest parent is missing")
+            parent = parent.parent
     return dict(document)
 
 
@@ -832,6 +839,57 @@ def copy_git_directory(
     observed = scan_git_directory(destination)
     if observed != validated:
         raise SnapshotError("completed Git snapshot differs from its manifest")
+
+
+def _remove_private_tree(path: Path) -> None:
+    """Remove only a private, single-link operation-owned directory tree."""
+
+    _require_private_directory(path.parent)
+    parent_fd = _open_directory(path.parent)
+
+    def remove_at(directory_fd: int, name: str, relative: str) -> None:
+        metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if stat.S_ISDIR(metadata.st_mode):
+            if (
+                metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o700
+            ):
+                raise SnapshotError(f"partial snapshot directory is unsafe: {relative}")
+            child_fd = os.open(
+                name,
+                os.O_RDONLY
+                | os.O_DIRECTORY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=directory_fd,
+            )
+            try:
+                for child in sorted(os.listdir(child_fd)):
+                    if not _safe_component(child):
+                        raise SnapshotError("partial snapshot pathname is unsafe")
+                    remove_at(child_fd, child, f"{relative}/{child}")
+                os.fsync(child_fd)
+            finally:
+                os.close(child_fd)
+            os.rmdir(name, dir_fd=directory_fd)
+        elif stat.S_ISREG(metadata.st_mode):
+            if (
+                metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) not in {0o600, 0o700}
+                or metadata.st_nlink != 1
+            ):
+                raise SnapshotError(f"partial snapshot file is unsafe: {relative}")
+            os.unlink(name, dir_fd=directory_fd)
+        else:
+            raise SnapshotError(f"partial snapshot entry is unsafe: {relative}")
+
+    try:
+        remove_at(parent_fd, path.name, path.name)
+        os.fsync(parent_fd)
+    except OSError as exc:
+        raise SnapshotError("partial snapshot tree cannot be removed safely") from exc
+    finally:
+        os.close(parent_fd)
 
 
 def _run_git(
@@ -1359,6 +1417,7 @@ class ProductionGitSnapshotManager:
         operation_root = self.backup_root / operation_id
         manifest_path = operation_root / "MANIFEST.json"
         backup_git_dir = operation_root / "git"
+        snapshot_staging_dir = operation_root / ".git.copy"
         impact = {
             "schema_version": 1,
             "policy": "nexpoly-production-git-snapshot-impact-v1",
@@ -1367,6 +1426,7 @@ class ProductionGitSnapshotManager:
             "target": {"sha": target_sha, "tree": target_tree},
             "source_git_dir": str(self.git_dir),
             "backup_git_dir": str(backup_git_dir),
+            "snapshot_staging_dir": str(snapshot_staging_dir),
             "manifest_path": str(manifest_path),
             "manifest_sha256": canonical_digest(first),
             "manifest_summary": self._manifest_summary(first),
@@ -1391,6 +1451,7 @@ class ProductionGitSnapshotManager:
             "production_source_tree": production_tree,
             "production_git_dir": str(self.git_dir),
             "backup_git_dir": str(backup_git_dir),
+            "snapshot_staging_dir": str(snapshot_staging_dir),
             "manifest_path": str(manifest_path),
             "manifest_sha256": canonical_digest(first),
             "manifest_summary": self._manifest_summary(first),
@@ -1659,6 +1720,7 @@ class ProductionGitSnapshotManager:
             operation_root = self.backup_root / operation_id
             manifest_path = Path(plan["manifest_path"])
             backup_git_dir = Path(plan["backup_git_dir"])
+            snapshot_staging_dir = Path(plan["snapshot_staging_dir"])
             created_at = _now_utc()
             journal = {
                 "schema_version": 1,
@@ -1703,12 +1765,39 @@ class ProductionGitSnapshotManager:
             if backup_git_dir.exists() or backup_git_dir.is_symlink():
                 if scan_git_directory(backup_git_dir) != manifest:
                     raise SnapshotError("partial snapshot copy differs")
+                if snapshot_staging_dir.exists() or snapshot_staging_dir.is_symlink():
+                    raise SnapshotError("completed snapshot has copy staging residue")
             else:
                 journal["phase"] = "copy-intent"
                 _atomic_private_json(journal_path, journal)
                 self.checkpoint("snapshot-copy-intent")
-                copy_git_directory(self.git_dir, backup_git_dir, manifest)
+                if snapshot_staging_dir.exists() or snapshot_staging_dir.is_symlink():
+                    try:
+                        staged_manifest = scan_git_directory(snapshot_staging_dir)
+                    except SnapshotError:
+                        staged_manifest = None
+                    if staged_manifest != manifest:
+                        _remove_private_tree(snapshot_staging_dir)
+                        self.checkpoint("snapshot-partial-copy-removed")
+                if not snapshot_staging_dir.exists():
+                    copy_git_directory(
+                        self.git_dir,
+                        snapshot_staging_dir,
+                        manifest,
+                    )
+                if scan_git_directory(snapshot_staging_dir) != manifest:
+                    raise SnapshotError("snapshot copy staging differs")
                 self.checkpoint("snapshot-copy-complete")
+                try:
+                    os.rename(snapshot_staging_dir, backup_git_dir)
+                except OSError as exc:
+                    raise SnapshotError("snapshot copy cannot be published") from exc
+                operation_fd = _open_directory(operation_root)
+                try:
+                    os.fsync(operation_fd)
+                finally:
+                    os.close(operation_fd)
+                self.checkpoint("snapshot-copy-published")
             snapshot_fsck = strict_fsck(backup_git_dir)
             after = scan_git_directory(self.git_dir)
             if after != manifest or snapshot_fsck != plan["fsck"]:
