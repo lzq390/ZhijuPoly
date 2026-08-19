@@ -137,6 +137,14 @@ jobs:
           persist-credentials: false
       - name: Assert immutable checkout
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Reject blocked commit identities
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python3 scripts/ci/validate_commit_identity.py
+          --base-sha "$BASE_SHA"
+          --head-sha "$HEAD_SHA"
       - name: Run all script tests
         run: |
           bash -n scripts/deploy_server.sh
