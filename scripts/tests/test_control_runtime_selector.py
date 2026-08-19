@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import fcntl
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -247,6 +248,180 @@ class SelectorTests(unittest.TestCase):
         if not alias_marker.exists():
             self._complete_alias_gate(manifest)
         return active
+
+    def router_transition(
+        self,
+        *,
+        active_manifest: dict[str, object],
+        target_manifest: dict[str, object],
+        swap_selector: bool,
+        complete: bool,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        operation_id = "adopt-router-selector-0001"
+        bootstrap_path = self.runtime / "state/bootstrap-control.json"
+        bootstrap_digest = SELECTOR.sha256_file(bootstrap_path)
+        predecessor_path = self.runtime / "bin/control_runtime_selector.py"
+        predecessor_payload = predecessor_path.read_bytes()
+        predecessor_digest = SELECTOR.sha256_bytes(predecessor_payload)
+        successor_payload = SCRIPT.read_bytes()
+        successor_digest = SELECTOR.sha256_bytes(successor_payload)
+        router_root = (
+            self.runtime
+            / SELECTOR.BOOTSTRAP_ROUTER_ROOT_NAME
+            / operation_id
+        )
+        router_root.mkdir(parents=True, mode=0o700)
+        os.chmod(router_root.parent, 0o700)
+        payloads = {
+            "production_git_snapshot.py": b"# snapshot verifier fixture\n",
+            "restore_production_git_snapshot.py": b"# restore fixture\n",
+            "reviewed-selector.py": successor_payload,
+            "predecessor-selector.py": predecessor_payload,
+        }
+        records: dict[str, dict[str, object]] = {}
+        for name, payload in payloads.items():
+            path = router_root / name
+            self._write(path, payload, 0o700)
+            records[name] = {
+                "relative_path": (
+                    f"{SELECTOR.BOOTSTRAP_ROUTER_ROOT_NAME}/"
+                    f"{operation_id}/{name}"
+                ),
+                "sha256": SELECTOR.sha256_bytes(payload),
+                "size": len(payload),
+                "mode": 0o700,
+            }
+        target_root = (
+            self.runtime
+            / "control-releases"
+            / str(target_manifest["release_id"])
+        )
+        target_control = {
+            "release_id": target_manifest["release_id"],
+            "source_sha": target_manifest["source_sha"],
+            "source_tree": target_manifest["source_tree"],
+            "manifest_sha256": SELECTOR.sha256_file(
+                target_root / SELECTOR.CONTROL_MANIFEST_NAME
+            ),
+            "deploy_sha256": SELECTOR.sha256_file(target_root / "deploy.py"),
+        }
+        snapshot_authority = {
+            "schema_version": 1,
+            "status": "completed",
+            "authority_kind": (
+                "manual-runtime-adoption-production-git-snapshot"
+            ),
+            "target_source_sha": target_manifest["source_sha"],
+            "target_source_tree": target_manifest["source_tree"],
+        }
+        snapshot_path = self.runtime / "state/production-git-snapshot.json"
+        self._write(
+            snapshot_path,
+            SELECTOR.canonical_json_bytes(snapshot_authority) + b"\n",
+            0o600,
+        )
+        snapshot_digest = SELECTOR.sha256_file(snapshot_path)
+        source_authority = {
+            "schema_version": 2,
+            "status": "completed",
+            "authority_kind": (
+                "manual-runtime-adoption-git-permission-source-successor"
+            ),
+            "source_sha": target_manifest["source_sha"],
+            "source_tree": target_manifest["source_tree"],
+            "bootstrap_control_sha256": bootstrap_digest,
+            "snapshot_authority_sha256": snapshot_digest,
+        }
+        source_path = (
+            self.runtime
+            / "state/adopted-git-permission-source-successor.json"
+        )
+        self._write(
+            source_path,
+            SELECTOR.canonical_json_bytes(source_authority) + b"\n",
+            0o600,
+        )
+        source_digest = SELECTOR.sha256_file(source_path)
+        unit_authority = {
+            "schema_version": 2,
+            "status": "completed",
+            "authority_kind": (
+                "manual-runtime-adoption-unit-permission-hardening"
+            ),
+            "source_sha": target_manifest["source_sha"],
+            "source_tree": target_manifest["source_tree"],
+            "bootstrap_control_sha256": bootstrap_digest,
+            "adopted_git_permission_source_successor_sha256": (
+                source_digest
+            ),
+            "plan": {
+                "git_permission_successor": {
+                    "source_successor_authority": {
+                        "schema_version": 2,
+                        "authority_file_sha256": source_digest,
+                        "snapshot_authority_sha256": snapshot_digest,
+                    }
+                }
+            },
+        }
+        unit_path = self.runtime / "state/adopted-unit-permissions.json"
+        self._write(
+            unit_path,
+            SELECTOR.canonical_json_bytes(unit_authority) + b"\n",
+            0o600,
+        )
+        unit_digest = SELECTOR.sha256_file(unit_path)
+        intent = {
+            "schema_version": 1,
+            "status": "selector-swap-intent",
+            "authority_kind": SELECTOR.BOOTSTRAP_ROUTER_AUTHORITY_KIND,
+            "policy": SELECTOR.BOOTSTRAP_ROUTER_POLICY,
+            "operation_id": operation_id,
+            "target_source_sha": target_manifest["source_sha"],
+            "target_source_tree": target_manifest["source_tree"],
+            "bootstrap_control_sha256": bootstrap_digest,
+            "predecessor_selector_sha256": predecessor_digest,
+            "successor_selector_sha256": successor_digest,
+            "snapshot_authority_sha256": snapshot_digest,
+            "source_successor_authority_sha256": source_digest,
+            "unit_permission_authority_sha256": unit_digest,
+            "target_control_release": target_control,
+            "router_files": records,
+            "delivery_gate_sha256": "sha256:" + "8" * 64,
+            "plan_sha256": "sha256:" + "9" * 64,
+            "created_at": "2026-08-19T00:00:00.000000Z",
+        }
+        intent_path = (
+            self.runtime / "state/bootstrap-router-successor-intent.json"
+        )
+        self._write(
+            intent_path,
+            SELECTOR.canonical_json_bytes(intent) + b"\n",
+            0o600,
+        )
+        if swap_selector:
+            self._write(predecessor_path, successor_payload, 0o700)
+        if complete:
+            authority = {
+                "schema_version": 1,
+                "status": "completed",
+                "authority_kind": SELECTOR.BOOTSTRAP_ROUTER_AUTHORITY_KIND,
+                "policy": SELECTOR.BOOTSTRAP_ROUTER_POLICY,
+                "operation_id": operation_id,
+                "intent_sha256": SELECTOR.sha256_file(intent_path),
+                "intent": intent,
+                "completed_at": "2026-08-19T00:00:01.000000Z",
+            }
+            self._write(
+                self.runtime / "state/bootstrap-router-successor.json",
+                SELECTOR.canonical_json_bytes(authority) + b"\n",
+                0o600,
+            )
+        self.assertNotEqual(
+            active_manifest["release_id"],
+            target_manifest["release_id"],
+        )
+        return intent, snapshot_authority
 
     @staticmethod
     def _dft_environment_payload(values: dict[str, str]) -> bytes:
@@ -667,6 +842,274 @@ class SelectorTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(
             SELECTOR.ControlRuntimeError, "completed bootstrap authority"
+        ):
+            SELECTOR.load_active_control(self.runtime)
+
+    def test_router_intent_keeps_active_route_but_blocks_deploy_until_complete(
+        self,
+    ) -> None:
+        active_manifest, active_root = self.release(
+            source_sha="1" * 40,
+            source_tree="2" * 40,
+            variant="router-active",
+        )
+        target_manifest, _target_root = self.release(
+            source_sha="3" * 40,
+            source_tree="4" * 40,
+            variant="router-target",
+        )
+        self.activate(active_manifest, operation_id="bootstrap-controls-router")
+        intent, _snapshot_authority = self.router_transition(
+            active_manifest=active_manifest,
+            target_manifest=target_manifest,
+            swap_selector=False,
+            complete=False,
+        )
+
+        selected, selected_root = SELECTOR._selected_release(
+            self.runtime,
+            "production-readiness",
+            [],
+        )
+        self.assertEqual(selected, active_manifest)
+        self.assertEqual(selected_root, active_root)
+        with self.assertRaisesRegex(
+            SELECTOR.ControlRuntimeError,
+            "successor is in progress",
+        ):
+            SELECTOR._selected_release(
+                self.runtime,
+                "deploy",
+                ["plan", "--sha", str(target_manifest["source_sha"])],
+            )
+
+        reviewed_selector = self.runtime / intent["router_files"][
+            "reviewed-selector.py"
+        ]["relative_path"]
+        self._write(
+            self.runtime / "bin/control_runtime_selector.py",
+            reviewed_selector.read_bytes(),
+            0o700,
+        )
+        with self.assertRaisesRegex(
+            SELECTOR.ControlRuntimeError,
+            "successor is incomplete",
+        ):
+            SELECTOR._selected_release(
+                self.runtime,
+                "deploy",
+                ["prepare", "--sha", str(target_manifest["source_sha"])],
+            )
+
+    def test_completed_router_gates_snapshot_and_routes_only_first_deploy(
+        self,
+    ) -> None:
+        active_manifest, active_root = self.release(
+            source_sha="1" * 40,
+            source_tree="2" * 40,
+            variant="router-complete-active",
+        )
+        target_manifest, target_root = self.release(
+            source_sha="3" * 40,
+            source_tree="4" * 40,
+            variant="router-complete-target",
+        )
+        self.activate(
+            active_manifest,
+            operation_id="bootstrap-controls-router-complete",
+        )
+        intent, snapshot_authority = self.router_transition(
+            active_manifest=active_manifest,
+            target_manifest=target_manifest,
+            swap_selector=True,
+            complete=True,
+        )
+        verifier_result = {
+            "action": "production-git-snapshot-verify-integrity",
+            "verified": True,
+            "authority": snapshot_authority,
+            "authority_sha256": intent["snapshot_authority_sha256"],
+        }
+        completed = subprocess.CompletedProcess(
+            args=["fixture"],
+            returncode=0,
+            stdout=SELECTOR.canonical_json_bytes(verifier_result) + b"\n",
+            stderr=b"",
+        )
+        with mock.patch.object(
+            SELECTOR.subprocess,
+            "run",
+        ) as plan_verifier:
+            with self.assertRaisesRegex(
+                SELECTOR.ControlRuntimeError,
+                "private target clone",
+            ):
+                SELECTOR._selected_release(
+                    self.runtime,
+                    "deploy",
+                    ["plan", "--sha", str(target_manifest["source_sha"])],
+                )
+        plan_verifier.assert_not_called()
+
+        with mock.patch.object(
+            SELECTOR.subprocess,
+            "run",
+            return_value=completed,
+        ) as verifier:
+            selected, selected_root = SELECTOR._selected_release(
+                self.runtime,
+                "deploy",
+                ["prepare", "--sha", str(target_manifest["source_sha"])],
+            )
+        self.assertEqual(selected, target_manifest)
+        self.assertEqual(selected_root, target_root)
+        verifier.assert_called_once()
+
+        with self.assertRaisesRegex(
+            SELECTOR.ControlRuntimeError,
+            "target differs",
+        ):
+            SELECTOR._selected_release(
+                self.runtime,
+                "deploy",
+                ["prepare", "--sha", "5" * 40],
+            )
+
+        current_path = self.runtime / "state/current-deployment.json"
+        self._write(
+            current_path,
+            SELECTOR.canonical_json_bytes({"fixture": True}) + b"\n",
+            0o600,
+        )
+        with mock.patch.object(
+            SELECTOR.subprocess,
+            "run",
+        ) as forged_current_verifier:
+            with self.assertRaisesRegex(
+                SELECTOR.ControlRuntimeError,
+                "cannot retire",
+            ):
+                SELECTOR._selected_release(
+                    self.runtime,
+                    "deploy",
+                    ["prepare", "--sha", str(target_manifest["source_sha"])],
+                )
+        forged_current_verifier.assert_not_called()
+
+        target_active = self.activate(
+            target_manifest,
+            operation_id="deploy-router-current",
+            generation=2,
+        )
+        router_authority_path = (
+            self.runtime / "state/bootstrap-router-successor.json"
+        )
+        router_authority = json.loads(
+            router_authority_path.read_text(encoding="utf-8")
+        )
+        current = {
+            "schema_version": 3,
+            "status": "success",
+            "source_sha": target_manifest["source_sha"],
+            "source_tree": target_manifest["source_tree"],
+            "active_control": target_active,
+            "adoption_successor_lineage": {
+                "schema_version": 3,
+                "source_successor_authority_sha256": intent[
+                    "source_successor_authority_sha256"
+                ],
+                "source_successor_completed_journal_sha256": (
+                    "sha256:" + "a" * 64
+                ),
+                "unit_permission_authority_sha256": intent[
+                    "unit_permission_authority_sha256"
+                ],
+                "unit_permission_completed_journal_sha256": (
+                    "sha256:" + "b" * 64
+                ),
+                "unit_permission_transaction_inventory_sha256": (
+                    "sha256:" + "c" * 64
+                ),
+                "production_git_snapshot_authority_sha256": intent[
+                    "snapshot_authority_sha256"
+                ],
+                "bootstrap_router_intent_sha256": router_authority[
+                    "intent_sha256"
+                ],
+                "bootstrap_router_authority_sha256": (
+                    SELECTOR.sha256_file(router_authority_path)
+                ),
+            },
+        }
+        self._write(
+            current_path,
+            SELECTOR.canonical_json_bytes(current) + b"\n",
+            0o600,
+        )
+        with mock.patch.object(
+            SELECTOR.subprocess,
+            "run",
+        ) as retired_verifier:
+            selected, selected_root = SELECTOR._selected_release(
+                self.runtime,
+                "deploy",
+                ["plan", "--sha", "5" * 40],
+            )
+        self.assertEqual(selected, target_manifest)
+        self.assertEqual(selected_root, target_root)
+        retired_verifier.assert_not_called()
+
+    def test_completed_router_rejects_old_selector_and_chain_drift(self) -> None:
+        active_manifest, _active_root = self.release(
+            source_sha="1" * 40,
+            source_tree="2" * 40,
+            variant="router-cas-active",
+        )
+        target_manifest, _target_root = self.release(
+            source_sha="3" * 40,
+            source_tree="4" * 40,
+            variant="router-cas-target",
+        )
+        self.activate(
+            active_manifest,
+            operation_id="bootstrap-controls-router-cas",
+        )
+        self.router_transition(
+            active_manifest=active_manifest,
+            target_manifest=target_manifest,
+            swap_selector=False,
+            complete=True,
+        )
+        with self.assertRaisesRegex(
+            SELECTOR.ControlRuntimeError,
+            "lacks its successor selector",
+        ):
+            SELECTOR.load_active_control(self.runtime)
+
+        reviewed = (
+            self.runtime
+            / SELECTOR.BOOTSTRAP_ROUTER_ROOT_NAME
+            / "adopt-router-selector-0001/reviewed-selector.py"
+        )
+        self._write(
+            self.runtime / "bin/control_runtime_selector.py",
+            reviewed.read_bytes(),
+            0o700,
+        )
+        source_path = (
+            self.runtime
+            / "state/adopted-git-permission-source-successor.json"
+        )
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        source["snapshot_authority_sha256"] = "sha256:" + "f" * 64
+        self._write(
+            source_path,
+            SELECTOR.canonical_json_bytes(source) + b"\n",
+            0o600,
+        )
+        with self.assertRaisesRegex(
+            SELECTOR.ControlRuntimeError,
+            "predecessor authority differs",
         ):
             SELECTOR.load_active_control(self.runtime)
 

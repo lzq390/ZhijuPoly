@@ -89,6 +89,9 @@ ADOPTED_PREREQUISITES_RELATIVE_PATH = Path(
 PERMISSION_MARKER_RELATIVE_PATH = Path(
     "state/legacy-git-permission-takeover.json"
 )
+PRODUCTION_GIT_SNAPSHOT_RELATIVE_PATH = Path(
+    "state/production-git-snapshot.json"
+)
 
 JSON_MAX_BYTES = 32 * 1024 * 1024
 EXCHANGE_EVIDENCE_MAX_BYTES = JSON_MAX_BYTES * 2
@@ -253,6 +256,8 @@ PLAN_FIELDS = {
     "adopted_deployment_sha256",
     "bootstrap_control_sha256",
     "adopted_prerequisites_sha256",
+    "production_git_snapshot",
+    "snapshot_authority_sha256",
     "production_source_trust_sha256",
     "production_repository_transition",
     "production_repository_transition_sha256",
@@ -285,6 +290,7 @@ AUTHORITY_FIELDS = {
     "adopted_deployment_sha256",
     "bootstrap_control_sha256",
     "adopted_prerequisites_sha256",
+    "snapshot_authority_sha256",
     "plan_sha256",
     "source_successor_impact_sha256",
     "files_sha256",
@@ -4327,6 +4333,138 @@ class SourceSuccessorPublisher:
             raise SuccessorError("sealed delivery gate changed")
         return delivery
 
+    def _production_git_snapshot(
+        self,
+        *,
+        source_sha: str,
+        source_tree: str,
+        production_source: Mapping[str, object],
+        delivery: Mapping[str, object],
+        state_fd: int | None,
+    ) -> tuple[dict[str, object], str]:
+        authority, authority_digest = self._load_state_json(
+            PRODUCTION_GIT_SNAPSHOT_RELATIVE_PATH,
+            maximum_bytes=PREDECESSOR_MAX_BYTES,
+            state_fd=state_fd,
+        )
+        fields = {
+            "schema_version",
+            "status",
+            "authority_kind",
+            "policy",
+            "operation_id",
+            "target_source_sha",
+            "target_source_tree",
+            "production_source_sha",
+            "production_source_tree",
+            "production_git_dir",
+            "backup_git_dir",
+            "manifest_path",
+            "manifest_sha256",
+            "manifest_summary",
+            "fsck",
+            "delivery_gate",
+            "delivery_gate_sha256",
+            "plan_sha256",
+            "snapshot_impact_sha256",
+            "copy_policy",
+            "completed_at",
+        }
+        operation_id = authority.get("operation_id")
+        if (
+            set(authority) != fields
+            or not _has_exact_schema(authority, 1)
+            or authority.get("status") != "completed"
+            or authority.get("authority_kind")
+            != "manual-runtime-adoption-production-git-snapshot"
+            or authority.get("policy")
+            != "nexpoly-production-git-golden-snapshot-v1"
+            or authority.get("copy_policy")
+            != "descriptor-relative-read-write-no-link-no-reflink-v1"
+            or not isinstance(operation_id, str)
+            or re.fullmatch(
+                r"snapshot-git-[a-z0-9][a-z0-9._-]{7,95}",
+                operation_id,
+            )
+            is None
+            or authority.get("target_source_sha") != source_sha
+            or authority.get("target_source_tree") != source_tree
+            or authority.get("production_source_sha")
+            != production_source.get("source_sha")
+            or authority.get("production_source_tree")
+            != production_source.get("source_tree")
+            or authority.get("production_git_dir")
+            != str(self.production_root / ".git")
+            or authority.get("delivery_gate") != delivery
+            or authority.get("delivery_gate_sha256")
+            != _digest_bytes(_canonical_bytes(delivery) + b"\n")
+        ):
+            raise SuccessorError("production Git snapshot authority differs")
+        for field in (
+            "manifest_sha256",
+            "delivery_gate_sha256",
+            "plan_sha256",
+            "snapshot_impact_sha256",
+        ):
+            _require_digest(authority.get(field), f"snapshot {field}")
+        operation_root = (
+            self.runtime_root / "backups/production-git" / operation_id
+        )
+        backup = Path(str(authority.get("backup_git_dir", "")))
+        manifest_path = Path(str(authority.get("manifest_path", "")))
+        if (
+            backup != operation_root / "git"
+            or manifest_path != operation_root / "MANIFEST.json"
+        ):
+            raise SuccessorError("production Git snapshot paths differ")
+        _owner_private_metadata(operation_root, directory=True)
+        _owner_private_metadata(backup, directory=True)
+        manifest, manifest_digest = _load_canonical_json_path(
+            manifest_path,
+            maximum_bytes=PREDECESSOR_MAX_BYTES,
+        )
+        summary = authority.get("manifest_summary")
+        if (
+            manifest_digest != authority["manifest_sha256"]
+            or not isinstance(manifest, dict)
+            or manifest.get("schema_version") != 1
+            or manifest.get("policy")
+            != "nexpoly-production-git-raw-manifest-v1"
+            or manifest.get("root_mode") != "0700"
+            or not isinstance(manifest.get("records"), list)
+            or not isinstance(summary, dict)
+            or summary
+            != {
+                "records_sha256": manifest.get("records_sha256"),
+                "file_count": manifest.get("file_count"),
+                "directory_count": manifest.get("directory_count"),
+                "total_file_bytes": manifest.get("total_file_bytes"),
+            }
+        ):
+            raise SuccessorError("production Git snapshot manifest differs")
+        fsck = authority.get("fsck")
+        if (
+            not isinstance(fsck, dict)
+            or fsck.get("schema_version") != 1
+            or fsck.get("policy") != "git-fsck-strict-full-no-reflogs-v1"
+            or fsck.get("exit_code") != 0
+        ):
+            raise SuccessorError("production Git snapshot fsck differs")
+        compact = {
+            "authority_kind": authority["authority_kind"],
+            "operation_id": operation_id,
+            "target_source_sha": source_sha,
+            "target_source_tree": source_tree,
+            "production_source_sha": authority["production_source_sha"],
+            "production_source_tree": authority["production_source_tree"],
+            "manifest_sha256": authority["manifest_sha256"],
+            "manifest_summary": summary,
+            "delivery_gate_sha256": authority["delivery_gate_sha256"],
+            "completed_at": authority["completed_at"],
+            "authority_sha256": authority_digest,
+        }
+        return compact, authority_digest
+
     def _build_plan(
         self,
         source_sha: str,
@@ -4410,6 +4548,15 @@ class SourceSuccessorPublisher:
             != adoption["adopted_prerequisites_plan_sha256"]
         ):
             raise SuccessorError("predecessor authority differs from adoption")
+        snapshot_authority, snapshot_authority_digest = (
+            self._production_git_snapshot(
+                source_sha=source_sha,
+                source_tree=source_tree,
+                production_source=adoption["production_source"],  # type: ignore[arg-type]
+                delivery=delivery,
+                state_fd=state_fd,
+            )
+        )
         marker, _marker_document = self._marker_projection(
             trust, authority, state_fd
         )
@@ -4478,6 +4625,7 @@ class SourceSuccessorPublisher:
         impact = {
             "schema_version": 1,
             "policy": IMPACT_POLICY,
+            "snapshot_authority_sha256": snapshot_authority_digest,
             "predecessor_authority_sha256": authority_digest,
             "predecessor_marker_sha256": marker["raw_sha256"],
             "production_source_trust_sha256": production_trust_digest,
@@ -4496,7 +4644,7 @@ class SourceSuccessorPublisher:
             "mutations": dict(MUTATIONS),
         }
         plan = {
-            "schema_version": 1,
+            "schema_version": 2,
             "authority_kind": AUTHORITY_KIND,
             "policy": POLICY,
             "operation_id": operation_id,
@@ -4515,6 +4663,8 @@ class SourceSuccessorPublisher:
             "adopted_prerequisites_sha256": adoption[
                 "adopted_prerequisites_sha256"
             ],
+            "production_git_snapshot": snapshot_authority,
+            "snapshot_authority_sha256": snapshot_authority_digest,
             "production_source_trust_sha256": production_trust_digest,
             "production_repository_transition": repository_transition,
             "production_repository_transition_sha256": _canonical_digest(
@@ -5872,7 +6022,7 @@ class SourceSuccessorPublisher:
         marker = plan["marker"]
         assert isinstance(predecessor, dict) and isinstance(marker, dict)
         authority = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "completed",
             "authority_kind": AUTHORITY_KIND,
             "policy": POLICY,
@@ -5893,6 +6043,9 @@ class SourceSuccessorPublisher:
             ],
             "adopted_prerequisites_sha256": plan[
                 "adopted_prerequisites_sha256"
+            ],
+            "snapshot_authority_sha256": plan[
+                "snapshot_authority_sha256"
             ],
             "plan_sha256": transaction["plan_sha256"],
             "source_successor_impact_sha256": transaction[

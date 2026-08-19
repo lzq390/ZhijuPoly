@@ -1274,6 +1274,34 @@ def verify_completed_snapshot(
     return normalized, raw_digest
 
 
+def verify_snapshot_integrity(
+    runtime_root: Path = RUNTIME_ROOT,
+    *,
+    production_root: Path | None = PRODUCTION_ROOT,
+) -> tuple[dict[str, Any], str]:
+    """Hash every golden-snapshot byte without repeating semantic Git fsck.
+
+    Snapshot creation already binds a successful strict/full/no-reflogs fsck.
+    Reproducing the exact raw manifest proves that the object bytes behind that
+    evidence have not changed, while keeping the selector's pre-fetch gate to
+    one physical pass over the large object store.
+    """
+
+    authority, authority_digest = verify_completed_snapshot(
+        runtime_root,
+        production_root=production_root,
+        full=False,
+    )
+    manifest, manifest_digest = _load_private_json(Path(authority["manifest_path"]))
+    validated = validate_manifest(manifest)
+    if (
+        manifest_digest != authority["manifest_sha256"]
+        or scan_git_directory(Path(authority["backup_git_dir"])) != validated
+    ):
+        raise SnapshotError("durable production Git snapshot changed")
+    return authority, authority_digest
+
+
 class ProductionGitSnapshotManager:
     def __init__(
         self,
@@ -1833,9 +1861,9 @@ class ProductionGitSnapshotManager:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("plan", "apply", "verify"):
+    for command in ("plan", "apply", "verify", "verify-integrity"):
         child = subparsers.add_parser(command)
-        if command != "verify":
+        if command not in {"verify", "verify-integrity"}:
             child.add_argument("--sha", required=True)
             child.add_argument("--operation-id", required=True)
         if command == "apply":
@@ -1850,10 +1878,13 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
-        if arguments.command == "verify":
-            authority, authority_digest = verify_completed_snapshot(full=True)
+        if arguments.command in {"verify", "verify-integrity"}:
+            if arguments.command == "verify":
+                authority, authority_digest = verify_completed_snapshot(full=True)
+            else:
+                authority, authority_digest = verify_snapshot_integrity()
             result: object = {
-                "action": "production-git-snapshot-verify",
+                "action": "production-git-snapshot-" + arguments.command,
                 "verified": True,
                 "authority": authority,
                 "authority_sha256": authority_digest,

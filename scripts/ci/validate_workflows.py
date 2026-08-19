@@ -100,6 +100,9 @@ EXPECTED_ADOPTION_SUCCESSOR_LINEAGE_FIELDS = {
     "unit_permission_authority_sha256",
     "unit_permission_completed_journal_sha256",
     "unit_permission_transaction_inventory_sha256",
+    "production_git_snapshot_authority_sha256",
+    "bootstrap_router_intent_sha256",
+    "bootstrap_router_authority_sha256",
 }
 ORDINARY_DEPLOYMENT_COMMANDS = (
     "/usr/bin/python3 -I -B ./scripts/pull_deploy_controller.py plan \\\n"
@@ -131,6 +134,18 @@ SOURCE_SUCCESSOR_PLAN_COMMAND = (
     "  --sha <full-main-sha> \\\n"
     '  --operation-id "$source_successor_operation_id"'
 )
+PRODUCTION_GIT_SNAPSHOT_PLAN_COMMAND = (
+    "./scripts/production_git_snapshot.py plan \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$snapshot_operation_id"'
+)
+PRODUCTION_GIT_SNAPSHOT_APPLY_COMMAND = (
+    "./scripts/production_git_snapshot.py apply \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$snapshot_operation_id" \\\n'
+    "  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \\\n"
+    "  --confirm-snapshot-impact-sha256 sha256:<reviewed-impact-digest>"
+)
 SOURCE_SUCCESSOR_APPLY_COMMAND = (
     "./scripts/adopt_git_permission_source_successor.py apply \\\n"
     "  --sha <full-main-sha> \\\n"
@@ -140,19 +155,18 @@ SOURCE_SUCCESSOR_APPLY_COMMAND = (
     "sha256:<reviewed-impact-digest>"
 )
 SOURCE_SUCCESSOR_MAIN_FREEZE_MARKERS = (
-    "This successor merge is control-chain-only",
-    "git-snapshot `plan`/`apply`/`restore` transaction",
-    "installed `prepare` snapshot-authority gate",
-    "must not run source-successor `apply`, unit-permission `apply`",
-    "formal installed `prepare`",
-    "A source-successor `plan` may be used only for zero-write validation",
-    "discarded whenever protected `main` changes",
+    "The first-deployment authority chain is executable only in this order",
+    "snapshot → source-successor → unit-permission → bootstrap-router",
+    "production_git_snapshot.py",
+    "adopt_bootstrap_router_successor.py",
+    "verify-integrity",
+    "discard every uncommitted reviewed plan whenever protected `main` changes",
     "Neither an operator waiver nor a manually copied `.git` directory",
     "cover every first-deployment Git mutation",
     "returns to the predecessor or begins a new operation",
     "restore the entire verified pre-prepare `.git` snapshot",
     "Resetting `HEAD` or deleting individual refs is not sufficient",
-    "Freeze protected `main` before starting the source-successor `plan`",
+    "Freeze protected `main` before starting the snapshot `plan`",
     "until the first deployment has durably written current-state v3",
     "before any durable successor intent, discard the reviewed plan",
     "`authority-commit-intent` or the create-once authority is `completed`",
@@ -160,11 +174,11 @@ SOURCE_SUCCESSOR_MAIN_FREEZE_MARKERS = (
     "separately reviewed compatibility-recovery procedure",
 )
 CONTROL_CHAIN_ONLY_COMMAND_MARKERS = (
-    "The commands below are future-state instructions, not current production",
-    "the hard stop above is lifted",
-    "The Worker-unit commands remain prohibited until the snapshot hard stop is",
-    "The ordinary deployment commands remain prohibited until the installed",
-    "its required snapshot authority",
+    "These commands are production-authorized only for the single frozen target",
+    "Do not start any mutating step until the immediately preceding authority",
+    "The Worker-unit command remains prohibited until the snapshot and source-successor authorities are complete",
+    "The ordinary deployment commands remain prohibited until the bootstrap-router authority is complete",
+    "the exact required snapshot authority",
 )
 UNIT_PERMISSION_PLAN_COMMAND = (
     "./scripts/adopt_runtime_prerequisites.py unit-permission-plan \\\n"
@@ -187,6 +201,27 @@ UNIT_PERMISSION_ABORT_COMMAND = (
     "  --confirm-unit-permission-impact-sha256 "
     "sha256:<reviewed-impact-digest>"
 )
+BOOTSTRAP_ROUTER_PLAN_COMMAND = (
+    "./scripts/adopt_bootstrap_router_successor.py plan \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$router_operation_id"'
+)
+BOOTSTRAP_ROUTER_APPLY_COMMAND = (
+    "./scripts/adopt_bootstrap_router_successor.py apply \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$router_operation_id" \\\n'
+    "  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \\\n"
+    "  --confirm-router-successor-impact-sha256 "
+    "sha256:<reviewed-impact-digest> \\\n"
+    "  --confirm-snapshot-authority-sha256 "
+    "sha256:<reviewed-snapshot-authority-digest> \\\n"
+    "  --confirm-source-successor-authority-sha256 "
+    "sha256:<reviewed-source-authority-digest> \\\n"
+    "  --confirm-unit-permission-authority-sha256 "
+    "sha256:<reviewed-unit-authority-digest> \\\n"
+    "  --confirm-predecessor-selector-sha256 "
+    "sha256:<reviewed-predecessor-selector-digest>"
+)
 MUTABLE_ROLE_PLAN_COMMAND = (
     "./scripts/provision_mutable_data_audit_role.py \\\n"
     "  --sha <full-main-sha> \\\n"
@@ -203,10 +238,14 @@ MUTABLE_ROLE_APPLY_COMMAND = (
     "sha256:<reviewed-public-lo-impact-digest>"
 )
 SUCCESSOR_AUTHORITY_COMMANDS = (
+    PRODUCTION_GIT_SNAPSHOT_PLAN_COMMAND,
+    PRODUCTION_GIT_SNAPSHOT_APPLY_COMMAND,
     SOURCE_SUCCESSOR_PLAN_COMMAND,
     SOURCE_SUCCESSOR_APPLY_COMMAND,
     UNIT_PERMISSION_PLAN_COMMAND,
     UNIT_PERMISSION_APPLY_COMMAND,
+    BOOTSTRAP_ROUTER_PLAN_COMMAND,
+    BOOTSTRAP_ROUTER_APPLY_COMMAND,
 )
 DEPLOYMENT_SUCCESSOR_FIRST_DEPLOYMENT_COMMANDS = (
     *SUCCESSOR_AUTHORITY_COMMANDS,
@@ -924,6 +963,9 @@ def validate_script_tests_budget(
             "test budget"
         )
     protected_tests = (
+        "test_production_git_snapshot.py",
+        "test_restore_production_git_snapshot.py",
+        "test_adopt_bootstrap_router_successor.py",
         "test_adopt_git_permission_source_successor.py",
         "test_adopt_runtime_prerequisites.py",
         "test_production_repository_transition.py",
@@ -1892,7 +1934,7 @@ def validate_successor_authority_contract_source_text(
         != EXPECTED_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
     ):
         failures.append(
-            "current-state successor lineage must contain exactly its five "
+            "current-state successor lineage must contain exactly its eight "
             "permanent raw-authority anchors"
         )
     if not _controller_requires_v2_unit_lineage(controller_module):
@@ -1977,10 +2019,9 @@ def _validate_ordered_successor_first_deployment_commands(
         or any(position < 0 for position in positions)
     ):
         failures.append(
-            f"{label} must order one exact source-successor plan/apply, "
-            "unit-permission plan/apply, mutable-data role plan/apply, direct "
-            "Pull plan, installed prepare, rehearsal plan/apply, and installed "
-            "apply sequence"
+            f"{label} must order one exact snapshot, source-successor, "
+            "unit-permission, bootstrap-router, mutable-data role, Pull, "
+            "rehearsal, and apply sequence"
         )
 
 
@@ -2062,6 +2103,14 @@ def validate_adopted_permission_documentation_text(
         UNIT_PERMISSION_APPLY_COMMAND,
         UNIT_PERMISSION_ABORT_COMMAND,
     )
+    snapshot_commands = (
+        PRODUCTION_GIT_SNAPSHOT_PLAN_COMMAND,
+        PRODUCTION_GIT_SNAPSHOT_APPLY_COMMAND,
+    )
+    router_commands = (
+        BOOTSTRAP_ROUTER_PLAN_COMMAND,
+        BOOTSTRAP_ROUTER_APPLY_COMMAND,
+    )
     for label, section in (
         ("docs/deployment.md", deployment_section),
         ("docs/release-controller.md", controller_section),
@@ -2080,6 +2129,14 @@ def validate_adopted_permission_documentation_text(
             != 1
             or any(section.count(command) != 1 for command in exact_commands)
             or section.count(
+                "snapshot_operation_id=snapshot-git-<utc-timestamp>"
+            )
+            != 1
+            or any(
+                section.count(command) != 1
+                for command in snapshot_commands
+            )
+            or section.count(
                 "source_successor_operation_id="
                 "adopt-git-successor-<utc-timestamp>"
             )
@@ -2092,11 +2149,20 @@ def validate_adopted_permission_documentation_text(
                 section.count(command) != 1
                 for command in required_unit_commands
             )
+            or section.count(
+                "router_operation_id=adopt-router-<utc-timestamp>"
+            )
+            != 1
+            or any(
+                section.count(command) != 1
+                for command in router_commands
+            )
         ):
             failures.append(
-                f"{label} must contain one exact permission, source-successor, "
-                "and unit-permission plan/apply command sequence, with the "
-                "deployment runbook also carrying exact abort"
+                f"{label} must contain one exact permission, snapshot, "
+                "source-successor, unit-permission, and bootstrap-router "
+                "plan/apply sequence, with the deployment runbook also "
+                "carrying exact abort"
             )
         # The following Worker-unit transaction deliberately uses the same
         # generic plan-confirmation flag.  Count only the Git-permission-
@@ -2154,6 +2220,13 @@ def validate_adopted_permission_documentation_text(
             "predecessor-verified",
             "source-successor impact",
             "old-root → source-successor",
+            "state/production-git-snapshot.json",
+            "state/bootstrap-router-successor-intent.json",
+            "state/bootstrap-router-successor.json",
+            "manual-runtime-adoption-bootstrap-router-successor",
+            "active-control",
+            "contract-0012-in-progress.json",
+            "whole-directory",
             "fixed 13-file manifest",
             "`predecessor_source_trust_sha256`",
             "`production_source_trust_sha256`",
@@ -2169,8 +2242,11 @@ def validate_adopted_permission_documentation_text(
             "`unit_permission_authority_sha256`",
             "`unit_permission_completed_journal_sha256`",
             "`unit_permission_transaction_inventory_sha256`",
+            "`production_git_snapshot_authority_sha256`",
+            "`bootstrap_router_intent_sha256`",
+            "`bootstrap_router_authority_sha256`",
             "Historical current-state v3 records may omit",
-            "once written, all five anchors are permanent",
+            "once written, all eight anchors are permanent",
             "`B` is",
             "`F`",
             "`P(operation)`",
@@ -2226,10 +2302,7 @@ def validate_adopted_permission_documentation_text(
     _validate_ordered_successor_first_deployment_commands(
         controller_text,
         label="docs/release-controller.md",
-        start_marker=(
-            "If the final reviewed first-deployment target changes a blob "
-            "governed by that"
-        ),
+        start_marker="First create the independent whole-directory snapshot authority:",
         end_marker="## Runtime and slot records",
         commands=CONTROLLER_SUCCESSOR_FIRST_DEPLOYMENT_COMMANDS,
         failures=failures,

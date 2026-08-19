@@ -192,6 +192,12 @@ class ProductionGitSnapshotTests(unittest.TestCase):
                 full=True,
             )
 
+        with self.assertRaisesRegex(SNAPSHOT.SnapshotError, "snapshot changed"):
+            SNAPSHOT.verify_snapshot_integrity(
+                self.runtime,
+                production_root=self.production,
+            )
+
     def test_scan_rejects_symlink_and_hard_link(self) -> None:
         symlink = self.production / ".git/foreign-link"
         symlink.symlink_to("HEAD")

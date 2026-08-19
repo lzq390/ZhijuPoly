@@ -486,6 +486,21 @@ ADOPTED_GIT_PERMISSION_TRANSACTION_DIRECTORY = Path(
 ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_RELATIVE_PATH = Path(
     "state/adopted-git-permission-source-successor.json"
 )
+PRODUCTION_GIT_SNAPSHOT_RELATIVE_PATH = Path(
+    "state/production-git-snapshot.json"
+)
+BOOTSTRAP_ROUTER_SUCCESSOR_INTENT_RELATIVE_PATH = Path(
+    "state/bootstrap-router-successor-intent.json"
+)
+BOOTSTRAP_ROUTER_SUCCESSOR_AUTHORITY_RELATIVE_PATH = Path(
+    "state/bootstrap-router-successor.json"
+)
+BOOTSTRAP_ROUTER_SUCCESSOR_AUTHORITY_KIND = (
+    "manual-runtime-adoption-bootstrap-router-successor"
+)
+BOOTSTRAP_ROUTER_SUCCESSOR_POLICY = (
+    "nexpoly-bootstrap-router-successor-v1"
+)
 ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY = Path(
     "state/adopted-git-permission-source-successor-transactions"
 )
@@ -529,6 +544,7 @@ ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_AUTHORITY_FIELDS = {
     "adopted_deployment_sha256",
     "bootstrap_control_sha256",
     "adopted_prerequisites_sha256",
+    "snapshot_authority_sha256",
     "plan_sha256",
     "source_successor_impact_sha256",
     "files_sha256",
@@ -556,6 +572,8 @@ ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_PLAN_FIELDS = {
     "adopted_deployment_sha256",
     "bootstrap_control_sha256",
     "adopted_prerequisites_sha256",
+    "production_git_snapshot",
+    "snapshot_authority_sha256",
     "production_source",
     "predecessor",
     "marker",
@@ -649,6 +667,7 @@ ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_BINDING_FIELDS = {
     "adopted_deployment_sha256",
     "bootstrap_control_sha256",
     "adopted_prerequisites_sha256",
+    "snapshot_authority_sha256",
     "plan_sha256",
     "source_successor_impact_sha256",
     "source_trust_sha256",
@@ -1232,6 +1251,14 @@ LEGACY_ADOPTION_SUCCESSOR_LINEAGE_FIELDS = {
     "source_successor_completed_journal_sha256",
     "unit_permission_authority_sha256",
 }
+V2_ADOPTION_SUCCESSOR_LINEAGE_FIELDS = {
+    "schema_version",
+    "source_successor_authority_sha256",
+    "source_successor_completed_journal_sha256",
+    "unit_permission_authority_sha256",
+    "unit_permission_completed_journal_sha256",
+    "unit_permission_transaction_inventory_sha256",
+}
 ADOPTION_SUCCESSOR_LINEAGE_FIELDS = {
     "schema_version",
     "source_successor_authority_sha256",
@@ -1239,6 +1266,9 @@ ADOPTION_SUCCESSOR_LINEAGE_FIELDS = {
     "unit_permission_authority_sha256",
     "unit_permission_completed_journal_sha256",
     "unit_permission_transaction_inventory_sha256",
+    "production_git_snapshot_authority_sha256",
+    "bootstrap_router_intent_sha256",
+    "bootstrap_router_authority_sha256",
 }
 ADOPTED_DEPLOYMENT_FIELDS = {
     "schema_version",
@@ -8899,7 +8929,7 @@ def validate_adopted_git_permission_source_successor_binding(
         or set(document)
         != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_BINDING_FIELDS
         or type(document.get("schema_version")) is not int
-        or document.get("schema_version") != 1
+        or document.get("schema_version") != 2
         or document.get("authority_kind")
         != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_AUTHORITY_KIND
         or re.fullmatch(
@@ -8929,6 +8959,7 @@ def validate_adopted_git_permission_source_successor_binding(
         "adopted_deployment_sha256",
         "bootstrap_control_sha256",
         "adopted_prerequisites_sha256",
+        "snapshot_authority_sha256",
         "plan_sha256",
         "source_successor_impact_sha256",
         "source_trust_sha256",
@@ -9465,21 +9496,25 @@ def validate_adopted_prerequisite_target_binding(
         else None
     )
     exact_schema = type(schema_version) is int
-    if exact_schema and schema_version in {2, 3, 4}:
+    if exact_schema and schema_version in {2, 3, 4, 5}:
         fields.add("git_permission_authority")
-    if exact_schema and schema_version in {3, 4}:
+    if exact_schema and schema_version in {3, 4, 5}:
         fields.add("unit_permission_authority")
-    if exact_schema and schema_version == 4:
+    if exact_schema and schema_version in {4, 5}:
         fields.add("git_permission_source_successor_authority")
         fields.add("production_repository_materialization")
         fields.add("source_successor_completed_journal_sha256")
         fields.add("unit_permission_completed_journal_sha256")
         fields.add("unit_permission_transaction_inventory_sha256")
+    if exact_schema and schema_version == 5:
+        fields.add("production_git_snapshot_authority_sha256")
+        fields.add("bootstrap_router_intent_sha256")
+        fields.add("bootstrap_router_authority_sha256")
     if (
         not isinstance(document, dict)
         or set(document) != fields
         or not exact_schema
-        or schema_version not in {1, 2, 3, 4}
+        or schema_version not in {1, 2, 3, 4, 5}
         or document.get("policy") != ADOPTED_PREREQUISITE_TARGET_POLICY
         or document.get("mode")
         not in ADOPTED_PREREQUISITE_TARGET_RELATIONS
@@ -9580,7 +9615,7 @@ def validate_adopted_prerequisite_target_binding(
         raise PullDeployError(
             "adopted prerequisite target file inventory digest differs"
         )
-    if schema_version in {2, 3, 4}:
+    if schema_version in {2, 3, 4, 5}:
         permission = validate_adopted_git_permission_binding(
             document.get("git_permission_authority")
         )
@@ -9598,7 +9633,7 @@ def validate_adopted_prerequisite_target_binding(
                 "adopted Git permission authority differs from target binding"
             )
     source_successor: dict[str, Any] | None = None
-    if schema_version == 4:
+    if schema_version in {4, 5}:
         require_digest(
             document.get("source_successor_completed_journal_sha256"),
             "source-successor completed journal",
@@ -9611,6 +9646,16 @@ def validate_adopted_prerequisite_target_binding(
             document.get("unit_permission_transaction_inventory_sha256"),
             "unit permission transaction inventory",
         )
+        if schema_version == 5:
+            for field in (
+                "production_git_snapshot_authority_sha256",
+                "bootstrap_router_intent_sha256",
+                "bootstrap_router_authority_sha256",
+            ):
+                require_digest(
+                    document.get(field),
+                    f"adopted prerequisite target {field}",
+                )
         source_successor = (
             validate_adopted_git_permission_source_successor_binding(
                 document.get("git_permission_source_successor_authority")
@@ -9672,7 +9717,7 @@ def validate_adopted_prerequisite_target_binding(
                 "production repository materialization target closure "
                 "differs from transition"
             )
-    if schema_version in {3, 4}:
+    if schema_version in {3, 4, 5}:
         unit = validate_adopted_unit_permission_binding(
             document.get("unit_permission_authority")
         )
@@ -9715,7 +9760,7 @@ def validate_adopted_prerequisite_target_binding(
                 != record["sha256"]
                 for record in files
             )
-            or schema_version == 4
+            or schema_version in {4, 5}
             and (
                 source_successor is None
                 or unit_successor["schema_version"] != 2
@@ -9748,6 +9793,18 @@ def validate_adopted_prerequisite_target_binding(
             raise PullDeployError(
                 "adopted unit permission authority differs from target binding"
             )
+        if schema_version == 5 and (
+            source_successor is None
+            or document["production_git_snapshot_authority_sha256"]
+            != source_successor["snapshot_authority_sha256"]
+            or document["production_git_snapshot_authority_sha256"]
+            != unit_successor["source_successor_authority"][
+                "snapshot_authority_sha256"
+            ]
+        ):
+            raise PullDeployError(
+                "adopted bootstrap-router snapshot anchor differs"
+            )
     identity = {
         key: value for key, value in document.items() if key != "identity_sha256"
     }
@@ -9759,7 +9816,7 @@ def validate_adopted_prerequisite_target_binding(
 
 
 def validate_adoption_successor_lineage(document: object) -> dict[str, Any]:
-    """Validate the permanent raw-authority anchors written by a v4 takeover."""
+    """Validate permanent raw-authority anchors from adoption successors."""
 
     schema_version = (
         document.get("schema_version")
@@ -9769,8 +9826,10 @@ def validate_adoption_successor_lineage(document: object) -> dict[str, Any]:
     expected_fields = (
         LEGACY_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
         if type(schema_version) is int and schema_version == 1
-        else ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+        else V2_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
         if type(schema_version) is int and schema_version == 2
+        else ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+        if type(schema_version) is int and schema_version == 3
         else None
     )
     if (
@@ -9786,11 +9845,19 @@ def validate_adoption_successor_lineage(document: object) -> dict[str, Any]:
         "source_successor_completed_journal_sha256",
         "unit_permission_authority_sha256",
     ]
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         digest_fields.extend(
             [
                 "unit_permission_completed_journal_sha256",
                 "unit_permission_transaction_inventory_sha256",
+            ]
+        )
+    if schema_version == 3:
+        digest_fields.extend(
+            [
+                "production_git_snapshot_authority_sha256",
+                "bootstrap_router_intent_sha256",
+                "bootstrap_router_authority_sha256",
             ]
         )
     for field in digest_fields:
@@ -10643,7 +10710,7 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             )
             if (
                 adopted is None
-                or prerequisite_binding["schema_version"] not in {2, 3, 4}
+                or prerequisite_binding["schema_version"] not in {2, 3, 4, 5}
                 or prerequisite_binding["target"]
                 != {
                     "source_sha": repository["target_sha"],
@@ -10665,7 +10732,7 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
                     "production_source_tree"
                 ]
                 != adopted["source_tree"]
-                or prerequisite_binding["schema_version"] in {3, 4}
+                or prerequisite_binding["schema_version"] in {3, 4, 5}
                 and (
                     prerequisite_binding["unit_permission_authority"][
                         "production_source_sha"
@@ -10676,7 +10743,7 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
                     ]
                     != adopted["source_tree"]
                 )
-                or prerequisite_binding["schema_version"] == 4
+                or prerequisite_binding["schema_version"] in {4, 5}
                 and (
                     prerequisite_binding[
                         "git_permission_source_successor_authority"
@@ -10904,9 +10971,10 @@ def validate_current_state_adoption_lineage(
             "deployment state adoption lineage differs from descriptor authority"
         )
     binding = descriptor.get("adopted_prerequisite_target_binding")
-    v4_binding = (
+    successor_binding = (
         binding
-        if isinstance(binding, dict) and binding.get("schema_version") == 4
+        if isinstance(binding, dict)
+        and binding.get("schema_version") in {4, 5}
         else None
     )
     previous = descriptor.get("previous_deployment")
@@ -10923,20 +10991,34 @@ def validate_current_state_adoption_lineage(
         observed_successor = validate_adoption_successor_lineage(
             state.get("adoption_successor_lineage")
         )
+        expected_version = (
+            3
+            if successor_binding is not None
+            and successor_binding.get("schema_version") == 5
+            else 2
+        )
+        previous_version = expected_successor.get("schema_version")
         if (
-            expected_successor.get("schema_version") == 1
-            and v4_binding is not None
+            successor_binding is not None
+            and isinstance(previous_version, int)
+            and previous_version < expected_version
         ):
-            legacy_projection = {
+            if observed_successor.get("schema_version") != expected_version:
+                raise PullDeployError(
+                    "deployment state successor lineage differs from previous state"
+                )
+            projection_fields = (
+                LEGACY_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+                if previous_version == 1
+                else V2_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+            )
+            historical_projection = {
                 key: observed_successor[key]
-                for key in LEGACY_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+                for key in projection_fields
                 if key != "schema_version"
             }
-            legacy_projection["schema_version"] = 1
-            if (
-                observed_successor.get("schema_version") != 2
-                or legacy_projection != expected_successor
-            ):
+            historical_projection["schema_version"] = previous_version
+            if historical_projection != expected_successor:
                 raise PullDeployError(
                     "deployment state successor lineage differs from previous state"
                 )
@@ -10944,9 +11026,9 @@ def validate_current_state_adoption_lineage(
             raise PullDeployError(
                 "deployment state successor lineage differs from previous state"
             )
-        if v4_binding is None:
+        if successor_binding is None:
             return
-    if v4_binding is not None:
+    if successor_binding is not None:
         successor = binding.get(
             "git_permission_source_successor_authority"
         )
@@ -10954,25 +11036,48 @@ def validate_current_state_adoption_lineage(
         lineage = validate_adoption_successor_lineage(
             state.get("adoption_successor_lineage")
         )
+        expected_lineage: dict[str, Any] | None = None
+        if isinstance(successor, dict) and isinstance(unit, dict):
+            expected_lineage = {
+                "schema_version": (
+                    3 if binding.get("schema_version") == 5 else 2
+                ),
+                "source_successor_authority_sha256": successor.get(
+                    "authority_file_sha256"
+                ),
+                "source_successor_completed_journal_sha256": binding.get(
+                    "source_successor_completed_journal_sha256"
+                ),
+                "unit_permission_authority_sha256": unit.get(
+                    "authority_file_sha256"
+                ),
+                "unit_permission_completed_journal_sha256": binding.get(
+                    "unit_permission_completed_journal_sha256"
+                ),
+                "unit_permission_transaction_inventory_sha256": binding.get(
+                    "unit_permission_transaction_inventory_sha256"
+                ),
+            }
+            if binding.get("schema_version") == 5:
+                expected_lineage.update(
+                    {
+                        "production_git_snapshot_authority_sha256": binding.get(
+                            "production_git_snapshot_authority_sha256"
+                        ),
+                        "bootstrap_router_intent_sha256": binding.get(
+                            "bootstrap_router_intent_sha256"
+                        ),
+                        "bootstrap_router_authority_sha256": binding.get(
+                            "bootstrap_router_authority_sha256"
+                        ),
+                    }
+                )
         if (
             not isinstance(successor, dict)
             or not isinstance(unit, dict)
-            or lineage.get("schema_version") != 2
-            or lineage["source_successor_authority_sha256"]
-            != successor.get("authority_file_sha256")
-            or lineage["source_successor_completed_journal_sha256"]
-            != binding.get(
-                "source_successor_completed_journal_sha256"
-            )
-            or lineage["unit_permission_authority_sha256"]
-            != unit.get("authority_file_sha256")
-            or lineage["unit_permission_completed_journal_sha256"]
-            != binding.get("unit_permission_completed_journal_sha256")
-            or lineage[
-                "unit_permission_transaction_inventory_sha256"
-            ]
-            != binding.get(
-                "unit_permission_transaction_inventory_sha256"
+            or expected_lineage is None
+            or lineage != validate_adoption_successor_lineage(
+                expected_lineage
             )
         ):
             raise PullDeployError(
@@ -16730,6 +16835,14 @@ class PullDeployController:
             self.runtime_root
             / ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_RELATIVE_PATH
         )
+        self.bootstrap_router_successor_intent_path = (
+            self.runtime_root
+            / BOOTSTRAP_ROUTER_SUCCESSOR_INTENT_RELATIVE_PATH
+        )
+        self.bootstrap_router_successor_authority_path = (
+            self.runtime_root
+            / BOOTSTRAP_ROUTER_SUCCESSOR_AUTHORITY_RELATIVE_PATH
+        )
         self.adopted_unit_permissions_path = (
             self.runtime_root / ADOPTED_UNIT_PERMISSIONS_RELATIVE_PATH
         )
@@ -17703,6 +17816,13 @@ class PullDeployController:
             self.runtime_root / ADOPTED_PREREQUISITES_RELATIVE_PATH,
             label="adopted prerequisite authority",
         )
+        snapshot_authority, snapshot_authority_digest = (
+            self._private_json_with_digest(
+                self.runtime_root / PRODUCTION_GIT_SNAPSHOT_RELATIVE_PATH,
+                label="production Git snapshot authority",
+                maximum_bytes=ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES,
+            )
+        )
         root_raw, root_raw_digest = self._private_json_with_digest(
             self.adopted_git_permissions_path,
             label="adopted Git permission authority",
@@ -17757,7 +17877,7 @@ class PullDeployController:
             set(authority)
             != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_AUTHORITY_FIELDS
             or type(authority.get("schema_version")) is not int
-            or authority.get("schema_version") != 1
+            or authority.get("schema_version") != 2
             or authority.get("status") != "completed"
             or authority.get("authority_kind")
             != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_AUTHORITY_KIND
@@ -17788,6 +17908,7 @@ class PullDeployController:
             "adopted_deployment_sha256",
             "bootstrap_control_sha256",
             "adopted_prerequisites_sha256",
+            "snapshot_authority_sha256",
             "plan_sha256",
             "source_successor_impact_sha256",
             "files_sha256",
@@ -17811,7 +17932,7 @@ class PullDeployController:
             or set(plan)
             != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_PLAN_FIELDS
             or type(plan.get("schema_version")) is not int
-            or plan.get("schema_version") != 1
+            or plan.get("schema_version") != 2
             or authority["plan_sha256"] != canonical_json_digest(plan)
             or plan.get("authority_kind") != authority["authority_kind"]
             or plan.get("policy") != authority["policy"]
@@ -17830,6 +17951,151 @@ class PullDeployController:
         delivery = _validate_adopted_source_successor_delivery_gate(
             plan.get("delivery_gate")
         )
+        snapshot_fields = {
+            "schema_version",
+            "status",
+            "authority_kind",
+            "policy",
+            "operation_id",
+            "target_source_sha",
+            "target_source_tree",
+            "production_source_sha",
+            "production_source_tree",
+            "production_git_dir",
+            "backup_git_dir",
+            "manifest_path",
+            "manifest_sha256",
+            "manifest_summary",
+            "fsck",
+            "delivery_gate",
+            "delivery_gate_sha256",
+            "plan_sha256",
+            "snapshot_impact_sha256",
+            "copy_policy",
+            "completed_at",
+        }
+        snapshot_operation = snapshot_authority.get("operation_id")
+        snapshot_root = (
+            self.runtime_root
+            / "backups/production-git"
+            / str(snapshot_operation)
+        )
+        snapshot_manifest_path = Path(
+            str(snapshot_authority.get("manifest_path", ""))
+        )
+        snapshot_backup = Path(
+            str(snapshot_authority.get("backup_git_dir", ""))
+        )
+        if (
+            set(snapshot_authority) != snapshot_fields
+            or snapshot_authority.get("schema_version") != 1
+            or snapshot_authority.get("status") != "completed"
+            or snapshot_authority.get("authority_kind")
+            != "manual-runtime-adoption-production-git-snapshot"
+            or snapshot_authority.get("policy")
+            != "nexpoly-production-git-golden-snapshot-v1"
+            or snapshot_authority.get("copy_policy")
+            != "descriptor-relative-read-write-no-link-no-reflink-v1"
+            or not isinstance(snapshot_operation, str)
+            or re.fullmatch(
+                r"snapshot-git-[a-z0-9][a-z0-9._-]{7,95}",
+                snapshot_operation,
+            )
+            is None
+            or snapshot_authority.get("target_source_sha")
+            != authority["source_sha"]
+            or snapshot_authority.get("target_source_tree")
+            != authority["source_tree"]
+            or snapshot_authority.get("production_source_sha")
+            != adopted["source_sha"]
+            or snapshot_authority.get("production_source_tree")
+            != adopted["source_tree"]
+            or snapshot_authority.get("production_git_dir")
+            != str(self.production_root / ".git")
+            or snapshot_backup != snapshot_root / "git"
+            or snapshot_manifest_path != snapshot_root / "MANIFEST.json"
+            or snapshot_authority.get("delivery_gate") != delivery
+            or snapshot_authority.get("delivery_gate_sha256")
+            != sha256_bytes(canonical_json_bytes(delivery) + b"\n")
+            or snapshot_authority_digest
+            != sha256_bytes(
+                canonical_json_bytes(snapshot_authority) + b"\n"
+            )
+        ):
+            raise PullDeployError("production Git snapshot authority differs")
+        for field in (
+            "manifest_sha256",
+            "delivery_gate_sha256",
+            "plan_sha256",
+            "snapshot_impact_sha256",
+        ):
+            require_digest(
+                snapshot_authority.get(field),
+                f"production Git snapshot {field}",
+            )
+        ensure_private_directory(snapshot_root)
+        ensure_private_directory(snapshot_backup)
+        snapshot_manifest, snapshot_manifest_digest = (
+            self._private_json_with_digest(
+                snapshot_manifest_path,
+                label="production Git snapshot manifest",
+                maximum_bytes=ADOPTED_GIT_PERMISSION_MAX_BYTES,
+            )
+        )
+        snapshot_summary = snapshot_authority.get("manifest_summary")
+        snapshot_fsck = snapshot_authority.get("fsck")
+        if (
+            snapshot_manifest_digest
+            != snapshot_authority["manifest_sha256"]
+            or snapshot_manifest_digest
+            != sha256_bytes(
+                canonical_json_bytes(snapshot_manifest) + b"\n"
+            )
+            or snapshot_manifest.get("schema_version") != 1
+            or snapshot_manifest.get("policy")
+            != "nexpoly-production-git-raw-manifest-v1"
+            or snapshot_manifest.get("root_mode") != "0700"
+            or not isinstance(snapshot_manifest.get("records"), list)
+            or not isinstance(snapshot_summary, dict)
+            or snapshot_summary
+            != {
+                "records_sha256": snapshot_manifest.get("records_sha256"),
+                "file_count": snapshot_manifest.get("file_count"),
+                "directory_count": snapshot_manifest.get("directory_count"),
+                "total_file_bytes": snapshot_manifest.get(
+                    "total_file_bytes"
+                ),
+            }
+            or not isinstance(snapshot_fsck, dict)
+            or snapshot_fsck.get("schema_version") != 1
+            or snapshot_fsck.get("policy")
+            != "git-fsck-strict-full-no-reflogs-v1"
+            or snapshot_fsck.get("exit_code") != 0
+        ):
+            raise PullDeployError("production Git snapshot manifest differs")
+        require_utc_timestamp(
+            snapshot_authority.get("completed_at"),
+            "production Git snapshot completion",
+        )
+        snapshot_compact = {
+            "authority_kind": snapshot_authority["authority_kind"],
+            "operation_id": snapshot_operation,
+            "target_source_sha": snapshot_authority["target_source_sha"],
+            "target_source_tree": snapshot_authority["target_source_tree"],
+            "production_source_sha": snapshot_authority[
+                "production_source_sha"
+            ],
+            "production_source_tree": snapshot_authority[
+                "production_source_tree"
+            ],
+            "manifest_sha256": snapshot_authority["manifest_sha256"],
+            "manifest_summary": snapshot_summary,
+            "delivery_gate_sha256": snapshot_authority[
+                "delivery_gate_sha256"
+            ],
+            "completed_at": snapshot_authority["completed_at"],
+            "authority_sha256": snapshot_authority_digest,
+        }
         repository_transition = validate_production_repository_transition(
             plan.get("production_repository_transition"),
             production_root=self.production_root,
@@ -17928,6 +18194,7 @@ class PullDeployController:
         impact_fields = {
             "schema_version",
             "policy",
+            "snapshot_authority_sha256",
             "predecessor_authority_sha256",
             "predecessor_marker_sha256",
             "production_source_trust_sha256",
@@ -17985,6 +18252,8 @@ class PullDeployController:
             or impact.get("schema_version") != 1
             or impact.get("policy")
             != "nexpoly-adopted-git-permission-source-successor-impact-v1"
+            or impact.get("snapshot_authority_sha256")
+            != snapshot_authority_digest
             or impact.get("predecessor_authority_sha256") != root_raw_digest
             or impact.get("predecessor_marker_sha256")
             != root_binding["permission_marker_sha256"]
@@ -18018,6 +18287,9 @@ class PullDeployController:
             != canonical_json_digest(changed_paths)
             or plan.get("source_successor_impact_sha256")
             != canonical_json_digest(impact)
+            or plan.get("production_git_snapshot") != snapshot_compact
+            or plan.get("snapshot_authority_sha256")
+            != snapshot_authority_digest
             or authority["verifier_agreement_sha256"]
             != canonical_json_digest(verifier_agreement)
             or plan.get("mutations") != mutations
@@ -18038,6 +18310,8 @@ class PullDeployController:
             or authority["bootstrap_control_sha256"] != bootstrap_digest
             or authority["adopted_prerequisites_sha256"]
             != prerequisites_digest
+            or authority["snapshot_authority_sha256"]
+            != snapshot_authority_digest
             or authority["files_sha256"] != plan["files_sha256"]
             or authority["changed_paths"] != changed_paths
             or authority["changed_paths_sha256"]
@@ -18055,12 +18329,14 @@ class PullDeployController:
             or plan["bootstrap_control_sha256"] != bootstrap_digest
             or plan["adopted_prerequisites_sha256"]
             != prerequisites_digest
+            or plan["snapshot_authority_sha256"]
+            != snapshot_authority_digest
         ):
             raise PullDeployError(
                 "adopted Git permission source-successor provenance differs"
             )
         binding: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "authority_kind": authority["authority_kind"],
             "operation_id": authority["operation_id"],
             "predecessor_authority_sha256": root_raw_digest,
@@ -18076,6 +18352,7 @@ class PullDeployController:
             "adopted_deployment_sha256": adopted_digest,
             "bootstrap_control_sha256": bootstrap_digest,
             "adopted_prerequisites_sha256": prerequisites_digest,
+            "snapshot_authority_sha256": snapshot_authority_digest,
             "plan_sha256": authority["plan_sha256"],
             "source_successor_impact_sha256": authority[
                 "source_successor_impact_sha256"
@@ -18304,6 +18581,11 @@ class PullDeployController:
             or journal_digest
             != current_successor_lineage[
                 "source_successor_completed_journal_sha256"
+            ]
+            or current_successor_lineage.get("schema_version") == 3
+            and before["snapshot_authority_sha256"]
+            != current_successor_lineage[
+                "production_git_snapshot_authority_sha256"
             ]
         ):
             raise PullDeployError(
@@ -19568,7 +19850,7 @@ class PullDeployController:
             != current_successor_lineage[
                 "unit_permission_authority_sha256"
             ]
-            or current_successor_lineage.get("schema_version") == 2
+            or current_successor_lineage.get("schema_version") in {2, 3}
             and (
                 before_transaction[1]
                 != current_successor_lineage[
@@ -19601,7 +19883,187 @@ class PullDeployController:
             raise PullDeployError(
                 "adopted unit permission authority changed while validating"
             )
+        if (
+            current_successor_lineage is not None
+            and current_successor_lineage.get("schema_version") == 3
+        ):
+            router = self._bootstrap_router_successor_takeover(
+                source_successor=git_permission_source_successor_takeover,
+                unit_permission=before,
+            )
+            if router is None or any(
+                router[field] != current_successor_lineage[field]
+                for field in (
+                    "production_git_snapshot_authority_sha256",
+                    "bootstrap_router_intent_sha256",
+                    "bootstrap_router_authority_sha256",
+                )
+            ):
+                raise PullDeployError(
+                    "bootstrap-router authority differs from current-state lineage"
+                )
         return before
+
+    def _bootstrap_router_successor_takeover(
+        self,
+        *,
+        source_successor: Mapping[str, Any] | None,
+        unit_permission: Mapping[str, Any] | None,
+    ) -> dict[str, str] | None:
+        """Validate and project the completed one-time selector successor."""
+
+        intent_path = (
+            self.runtime_root
+            / BOOTSTRAP_ROUTER_SUCCESSOR_INTENT_RELATIVE_PATH
+        )
+        authority_path = (
+            self.runtime_root
+            / BOOTSTRAP_ROUTER_SUCCESSOR_AUTHORITY_RELATIVE_PATH
+        )
+        intent_present = intent_path.exists() or intent_path.is_symlink()
+        authority_present = authority_path.exists() or authority_path.is_symlink()
+        if not intent_present and not authority_present:
+            return None
+        if not intent_present or not authority_present:
+            raise PullDeployError(
+                "bootstrap-router successor publication is incomplete"
+            )
+        if source_successor is None or unit_permission is None:
+            raise PullDeployError(
+                "bootstrap-router successor lacks its predecessor chain"
+            )
+        source_successor = (
+            validate_adopted_git_permission_source_successor_binding(
+                dict(source_successor)
+            )
+        )
+        unit_permission = validate_adopted_unit_permission_binding(
+            dict(unit_permission)
+        )
+        bootstrap_path = self.state_dir / "bootstrap-control.json"
+        bootstrap, bootstrap_digest = self._private_json_with_digest(
+            bootstrap_path,
+            label="manual adoption bootstrap authority",
+        )
+        intent, intent_digest = self._private_json_with_digest(
+            intent_path,
+            label="bootstrap-router successor intent",
+            maximum_bytes=ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES,
+        )
+        authority, authority_digest = self._private_json_with_digest(
+            authority_path,
+            label="bootstrap-router successor authority",
+            maximum_bytes=ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES,
+        )
+        for label, document, digest in (
+            ("bootstrap", bootstrap, bootstrap_digest),
+            ("bootstrap-router intent", intent, intent_digest),
+            ("bootstrap-router authority", authority, authority_digest),
+        ):
+            if digest != sha256_bytes(canonical_json_bytes(document) + b"\n"):
+                raise PullDeployError(f"{label} authority is not canonical")
+        immutable = bootstrap.get("immutable_files")
+        predecessor_selector_digest = (
+            immutable.get("control_runtime_selector.py")
+            if isinstance(immutable, dict)
+            else None
+        )
+        require_digest(
+            predecessor_selector_digest,
+            "bootstrap predecessor selector",
+        )
+        selector_path = self.bin_dir / "control_runtime_selector.py"
+        try:
+            selector_digest = sha256_file(selector_path)
+            validated_bootstrap = _control_runtime._validate_bootstrap_authority(
+                self.runtime_root
+            )
+            validated_intent = (
+                _control_runtime._validate_bootstrap_router_intent(
+                    self.runtime_root,
+                    intent,
+                    bootstrap_digest=bootstrap_digest,
+                    predecessor_selector_digest=predecessor_selector_digest,
+                )
+            )
+            validated_authority = (
+                _control_runtime._validate_bootstrap_router_authority(
+                    authority,
+                    intent=validated_intent,
+                    intent_digest=intent_digest,
+                )
+            )
+        except Exception as exc:
+            raise PullDeployError(
+                "bootstrap-router successor authority is invalid"
+            ) from exc
+        if (
+            validated_bootstrap != bootstrap
+            or validated_intent != intent
+            or validated_authority != authority
+            or selector_digest != intent.get("successor_selector_sha256")
+            or intent.get("authority_kind")
+            != BOOTSTRAP_ROUTER_SUCCESSOR_AUTHORITY_KIND
+            or intent.get("policy") != BOOTSTRAP_ROUTER_SUCCESSOR_POLICY
+            or authority.get("authority_kind")
+            != BOOTSTRAP_ROUTER_SUCCESSOR_AUTHORITY_KIND
+            or authority.get("policy") != BOOTSTRAP_ROUTER_SUCCESSOR_POLICY
+            or intent.get("target_source_sha")
+            != source_successor["target_source_sha"]
+            or intent.get("target_source_tree")
+            != source_successor["target_source_tree"]
+            or intent.get("snapshot_authority_sha256")
+            != source_successor["snapshot_authority_sha256"]
+            or intent.get("source_successor_authority_sha256")
+            != source_successor["authority_file_sha256"]
+            or intent.get("unit_permission_authority_sha256")
+            != unit_permission["authority_file_sha256"]
+            or unit_permission.get("source_sha")
+            != source_successor["target_source_sha"]
+            or unit_permission.get("source_tree")
+            != source_successor["target_source_tree"]
+        ):
+            raise PullDeployError(
+                "bootstrap-router successor provenance differs"
+            )
+        bootstrap_after = self._private_json_with_digest(
+            bootstrap_path,
+            label="manual adoption bootstrap authority",
+        )
+        intent_after = self._private_json_with_digest(
+            intent_path,
+            label="bootstrap-router successor intent",
+            maximum_bytes=ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES,
+        )
+        authority_after = self._private_json_with_digest(
+            authority_path,
+            label="bootstrap-router successor authority",
+            maximum_bytes=ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES,
+        )
+        if (
+            bootstrap_after != (bootstrap, bootstrap_digest)
+            or intent_after != (intent, intent_digest)
+            or authority_after != (authority, authority_digest)
+            or sha256_file(selector_path) != selector_digest
+        ):
+            raise PullDeployError(
+                "bootstrap-router successor changed while validating"
+            )
+        return {
+            "target_source_sha": source_successor["target_source_sha"],
+            "target_source_tree": source_successor["target_source_tree"],
+            "production_git_snapshot_authority_sha256": source_successor[
+                "snapshot_authority_sha256"
+            ],
+            "source_successor_authority_sha256": source_successor[
+                "authority_file_sha256"
+            ],
+            "unit_permission_authority_sha256": unit_permission[
+                "authority_file_sha256"
+            ],
+            "bootstrap_router_intent_sha256": intent_digest,
+            "bootstrap_router_authority_sha256": authority_digest,
+        }
 
     def control_environment(self) -> dict[str, str]:
         return clean_control_environment(self.runtime_root)
@@ -19981,6 +20443,7 @@ class PullDeployController:
         | None = None,
         unit_permission_completed_journal_sha256: str | None = None,
         unit_permission_transaction_inventory_sha256: str | None = None,
+        bootstrap_router_successor: Mapping[str, Any] | None = None,
         source_successor_is_ancestor: bool | None = None,
         source_successor_predecessor_file_identities: Mapping[
             str, Mapping[str, Any]
@@ -20070,7 +20533,11 @@ class PullDeployController:
         }
         body: dict[str, Any] = {
             "schema_version": (
-                4
+                5
+                if bootstrap_router_successor is not None
+                and git_permission_source_successor_takeover is not None
+                and unit_permission_takeover is not None
+                else 4
                 if git_permission_source_successor_takeover is not None
                 and unit_permission_takeover is not None
                 else 3
@@ -20304,6 +20771,55 @@ class PullDeployController:
             raise PullDeployError(
                 "unit permission journal exists without its authority"
             )
+        if bootstrap_router_successor is not None:
+            router_fields = {
+                "target_source_sha",
+                "target_source_tree",
+                "production_git_snapshot_authority_sha256",
+                "source_successor_authority_sha256",
+                "unit_permission_authority_sha256",
+                "bootstrap_router_intent_sha256",
+                "bootstrap_router_authority_sha256",
+            }
+            if (
+                set(bootstrap_router_successor) != router_fields
+                or git_permission_source_successor_takeover is None
+                or unit_permission_takeover is None
+                or bootstrap_router_successor.get("target_source_sha")
+                != target_sha
+                or bootstrap_router_successor.get("target_source_tree")
+                != target_tree
+                or bootstrap_router_successor.get(
+                    "production_git_snapshot_authority_sha256"
+                )
+                != body["git_permission_source_successor_authority"][
+                    "snapshot_authority_sha256"
+                ]
+                or bootstrap_router_successor.get(
+                    "source_successor_authority_sha256"
+                )
+                != body["git_permission_source_successor_authority"][
+                    "authority_file_sha256"
+                ]
+                or bootstrap_router_successor.get(
+                    "unit_permission_authority_sha256"
+                )
+                != body["unit_permission_authority"][
+                    "authority_file_sha256"
+                ]
+            ):
+                raise PullDeployError(
+                    "bootstrap-router successor differs from prerequisite chain"
+                )
+            for field in (
+                "production_git_snapshot_authority_sha256",
+                "bootstrap_router_intent_sha256",
+                "bootstrap_router_authority_sha256",
+            ):
+                body[field] = require_digest(
+                    bootstrap_router_successor.get(field),
+                    f"bootstrap-router successor {field}",
+                )
         body["identity_sha256"] = canonical_json_digest(body)
         return validate_adopted_prerequisite_target_binding(body)
 
@@ -21875,6 +22391,20 @@ class PullDeployController:
         unit_successor = unit_permission_takeover[
             "git_permission_successor"
         ]
+        bootstrap_router_successor = (
+            self._bootstrap_router_successor_takeover(
+                source_successor=source_successor_takeover,
+                unit_permission=unit_permission_takeover,
+            )
+        )
+        if (
+            source_successor_takeover is not None
+            and source_successor_takeover.get("schema_version") == 2
+            and bootstrap_router_successor is None
+        ):
+            raise PullDeployError(
+                "first source-successor deployment lacks bootstrap-router authority"
+            )
         unit_root = (
             unit_successor["root_authority"]
             if unit_successor["schema_version"] == 2
@@ -22167,6 +22697,7 @@ class PullDeployController:
                 if unit_successor["schema_version"] == 2
                 else None
             ),
+            bootstrap_router_successor=bootstrap_router_successor,
             unit_permission_is_ancestor=unit_ancestor.returncode == 0,
             unit_permission_authority_file_digests=(
                 unit_authority_digests
@@ -22239,6 +22770,20 @@ class PullDeployController:
         unit_successor = unit_permission_takeover[
             "git_permission_successor"
         ]
+        bootstrap_router_successor = (
+            self._bootstrap_router_successor_takeover(
+                source_successor=source_successor_takeover,
+                unit_permission=unit_permission_takeover,
+            )
+        )
+        if (
+            source_successor_takeover is not None
+            and source_successor_takeover.get("schema_version") == 2
+            and bootstrap_router_successor is None
+        ):
+            raise PullDeployError(
+                "prepared source-successor deployment lacks bootstrap-router authority"
+            )
         unit_root = (
             unit_successor["root_authority"]
             if unit_successor["schema_version"] == 2
@@ -22472,6 +23017,7 @@ class PullDeployController:
                 if unit_successor["schema_version"] == 2
                 else None
             ),
+            bootstrap_router_successor=bootstrap_router_successor,
             unit_permission_is_ancestor=unit_ancestor.returncode == 0,
             unit_permission_authority_file_digests=(
                 unit_authority_digests
@@ -34114,7 +34660,7 @@ class PullDeployController:
                     )
                 if (
                     adopted_prerequisite_binding is not None
-                    and adopted_prerequisite_binding["schema_version"] == 4
+                    and adopted_prerequisite_binding["schema_version"] in {4, 5}
                     and adopted_prerequisite_binding[
                         "git_permission_source_successor_authority"
                     ]["delivery_gate"]
@@ -36441,7 +36987,7 @@ class PullDeployController:
         self,
         descriptor: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        """Pin a completed v4 successor chain, or preserve its prior pin."""
+        """Pin a completed successor chain, or preserve its historical pin."""
 
         previous = descriptor.get("previous_deployment")
         previous_lineage = (
@@ -36453,12 +36999,13 @@ class PullDeployController:
             else None
         )
         binding = descriptor.get("adopted_prerequisite_target_binding")
-        v4_binding = (
+        successor_binding = (
             validate_adopted_prerequisite_target_binding(binding)
-            if isinstance(binding, dict) and binding.get("schema_version") == 4
+            if isinstance(binding, dict)
+            and binding.get("schema_version") in {4, 5}
             else None
         )
-        if previous_lineage is None and v4_binding is None:
+        if previous_lineage is None and successor_binding is None:
             return None
         root = self._git_permission_takeover()
         if root is None:
@@ -36490,67 +37037,121 @@ class PullDeployController:
             unit_journal_digest,
             unit_inventory_digest,
         ) = self._unit_permission_transaction_digests(unit)
+        require_router = (
+            successor_binding is not None
+            and successor_binding.get("schema_version") == 5
+        ) or (
+            previous_lineage is not None
+            and previous_lineage.get("schema_version") == 3
+        )
+        router = (
+            self._bootstrap_router_successor_takeover(
+                source_successor=source_successor,
+                unit_permission=unit,
+            )
+            if require_router
+            else None
+        )
+        if require_router and router is None:
+            raise PullDeployError(
+                "current-state successor lineage lacks bootstrap-router authority"
+            )
+        current_document: dict[str, Any] = {
+            "schema_version": 3 if router is not None else 2,
+            "source_successor_authority_sha256": source_successor[
+                "authority_file_sha256"
+            ],
+            "source_successor_completed_journal_sha256": journal_digest,
+            "unit_permission_authority_sha256": unit[
+                "authority_file_sha256"
+            ],
+            "unit_permission_completed_journal_sha256": unit_journal_digest,
+            "unit_permission_transaction_inventory_sha256": (
+                unit_inventory_digest
+            ),
+        }
+        if router is not None:
+            current_document.update(
+                {
+                    "production_git_snapshot_authority_sha256": router[
+                        "production_git_snapshot_authority_sha256"
+                    ],
+                    "bootstrap_router_intent_sha256": router[
+                        "bootstrap_router_intent_sha256"
+                    ],
+                    "bootstrap_router_authority_sha256": router[
+                        "bootstrap_router_authority_sha256"
+                    ],
+                }
+            )
         current_lineage = validate_adoption_successor_lineage(
-            {
-                "schema_version": 2,
-                "source_successor_authority_sha256": source_successor[
-                    "authority_file_sha256"
-                ],
-                "source_successor_completed_journal_sha256": journal_digest,
-                "unit_permission_authority_sha256": unit[
-                    "authority_file_sha256"
-                ],
-                "unit_permission_completed_journal_sha256": (
-                    unit_journal_digest
-                ),
-                "unit_permission_transaction_inventory_sha256": (
-                    unit_inventory_digest
-                ),
-            }
+            current_document
         )
         lineage = current_lineage
         if previous_lineage is not None:
-            if previous_lineage.get("schema_version") == 1:
-                historical_projection = {
-                    key: current_lineage[key]
-                    for key in LEGACY_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
-                    if key != "schema_version"
-                }
-                historical_projection["schema_version"] = 1
-                if historical_projection != previous_lineage:
-                    raise PullDeployError(
-                        "live successor lineage differs from previous current state"
-                    )
-                # A descriptor-v4 takeover is the authority to extend the
-                # historical three-anchor lineage with the completed unit
-                # journal and full transaction inventory.  Without that
-                # descriptor authority, retain the byte-for-byte v1 lineage.
-                lineage = (
-                    current_lineage
-                    if v4_binding is not None
-                    else previous_lineage
-                )
-            elif current_lineage != previous_lineage:
+            previous_version = previous_lineage["schema_version"]
+            projection_fields = (
+                LEGACY_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+                if previous_version == 1
+                else V2_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+                if previous_version == 2
+                else ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+            )
+            historical_projection = {
+                key: current_lineage[key]
+                for key in projection_fields
+                if key != "schema_version"
+            }
+            historical_projection["schema_version"] = previous_version
+            if historical_projection != previous_lineage:
                 raise PullDeployError(
                     "live successor lineage differs from previous current state"
                 )
-        if v4_binding is not None and (
+            if successor_binding is None:
+                lineage = previous_lineage
+            else:
+                expected_version = (
+                    3
+                    if successor_binding.get("schema_version") == 5
+                    else 2
+                )
+                if current_lineage["schema_version"] != expected_version:
+                    raise PullDeployError(
+                        "descriptor cannot downgrade successor lineage"
+                    )
+        if successor_binding is not None and (
             source_successor
-            != v4_binding["git_permission_source_successor_authority"]
+            != successor_binding[
+                "git_permission_source_successor_authority"
+            ]
             or journal_digest
-            != v4_binding[
+            != successor_binding[
                 "source_successor_completed_journal_sha256"
             ]
-            or unit != v4_binding["unit_permission_authority"]
+            or unit != successor_binding["unit_permission_authority"]
             or unit_journal_digest
-            != v4_binding["unit_permission_completed_journal_sha256"]
+            != successor_binding[
+                "unit_permission_completed_journal_sha256"
+            ]
             or unit_inventory_digest
-            != v4_binding[
+            != successor_binding[
                 "unit_permission_transaction_inventory_sha256"
             ]
+            or successor_binding.get("schema_version") == 5
+            and (
+                router is None
+                or any(
+                    router[field] != successor_binding[field]
+                    for field in (
+                        "production_git_snapshot_authority_sha256",
+                        "bootstrap_router_intent_sha256",
+                        "bootstrap_router_authority_sha256",
+                    )
+                )
+            )
         ):
             raise PullDeployError(
-                "live successor lineage differs from v4 descriptor"
+                "live successor lineage differs from successor descriptor"
             )
         return lineage
 

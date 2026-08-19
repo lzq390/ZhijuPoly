@@ -341,16 +341,11 @@ authorize the current production checkout.
 
 ### One-time Git permission source-successor authority
 
-This successor merge is control-chain-only. Until the separately reviewed
-git-snapshot `plan`/`apply`/`restore` transaction and the
-installed `prepare` snapshot-authority gate
-are merged on the final protected-main target, this is a hard stop: operators
-must not run source-successor `apply`, unit-permission `apply`,
-or formal installed `prepare`.
-A source-successor `plan` may be used only for zero-write validation; its
-reviewed output must be discarded whenever protected `main` changes.
-Neither an operator waiver nor a manually copied `.git` directory satisfies
-this gate.
+The first-deployment authority chain is executable only in this order:
+snapshot → source-successor → unit-permission → bootstrap-router. These commands are production-authorized only for the single frozen target whose
+protected-main CI is complete. Do not start any mutating step until the immediately preceding authority is completed and its raw digest has been
+independently reviewed. Neither an operator waiver nor a manually copied
+`.git` directory satisfies this gate.
 
 The follow-up must cover every first-deployment Git mutation, from the first
 fetch through source switch and rollback. Any failed path that
@@ -359,20 +354,40 @@ restore the entire verified pre-prepare `.git` snapshot before proceeding.
 Resetting `HEAD` or deleting individual refs is not sufficient to re-establish
 the sealed B/F/P state.
 
-Freeze protected `main` before starting the source-successor `plan`, and keep
+Freeze protected `main` before starting the snapshot `plan`, and keep
 it frozen—with no merge, push, force-update, or branch automation—
 until the first deployment has durably written current-state v3. If `main`
-advances before any durable successor intent, discard the reviewed plan and
-create a fresh plan for the new tip; if the transaction is still abortable,
-use the confirmed abort before replanning. Once
+advances before any durable successor intent, discard the reviewed plan;
+discard every uncommitted reviewed plan whenever protected `main` changes and
+create a fresh chain for the new tip. If a transaction is still abortable, use
+its confirmed abort before replanning. Once
 `authority-commit-intent` or the create-once authority is `completed`, any
 `main` advance is a permanent stop for this first-deployment path:
 do not publish a second successor authority or change the sealed target. Use a
 separately reviewed compatibility-recovery procedure.
 
-The commands below are future-state instructions, not current production
-authorization. Use them only after the snapshot transaction and installed
-gate have merged on the final target and the hard stop above is lifted.
+First create the independent whole-directory golden snapshot. `plan` is
+logically zero-write. `apply` copies every `.git` byte without hard links or
+reflinks, runs strict `git fsck`, and publishes the create-once
+`state/production-git-snapshot.json` authority:
+
+```bash
+snapshot_operation_id=snapshot-git-<utc-timestamp>
+
+./scripts/production_git_snapshot.py plan \
+  --sha <full-main-sha> \
+  --operation-id "$snapshot_operation_id"
+
+./scripts/production_git_snapshot.py apply \
+  --sha <full-main-sha> \
+  --operation-id "$snapshot_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-snapshot-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+The snapshot does not alter production Git, services, containers, units, or
+PostgreSQL. Its independent backup and manifest remain immutable for the
+entire first-deployment authority chain.
 
 If a reviewed first-deployment target changes either control blob governed by
 the immutable adopted Git-permission authority, the byte-identical successor
@@ -446,6 +461,32 @@ snapshot (or follow a separately reviewed recovery procedure). Re-run
 plan/prepare with a new operation ID unless the original `P(operation)` is
 independently proved exact.
 
+After making the terminal choice to abandon the interrupted operation, use
+the dedicated restore transaction; never repair individual refs. Review the
+zero-write plan, then repeat its snapshot-authority confirmation exactly:
+
+```bash
+restore_operation_id=restore-git-<utc-timestamp>
+
+./scripts/restore_production_git_snapshot.py plan \
+  --restore-operation-id "$restore_operation_id" \
+  --abandoned-deploy-operation-id <abandoned-deploy-operation-id> \
+  --terminal-decision restore-before-new-operation
+
+./scripts/restore_production_git_snapshot.py apply \
+  --restore-operation-id "$restore_operation_id" \
+  --abandoned-deploy-operation-id <abandoned-deploy-operation-id> \
+  --terminal-decision restore-before-new-operation \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-snapshot-authority-sha256 \
+    sha256:<reviewed-snapshot-authority-digest>
+```
+
+The restore atomically exchanges the entire `.git` directory, materializes a
+clean worktree from the restored authority, and archives the displaced Git
+directory. The golden copy is never used as the live directory and remains
+unchanged for independent verification.
+
 The fixed 13-file manifest contains exactly the ten prerequisite install source
 paths plus `scripts/bootstrap_pull_deploy.py`, `scripts/git_source_trust.py`,
 and `scripts/bridge_deploy_core.py`; it is never populated by discovery. It
@@ -486,8 +527,7 @@ source-successor → unit-authority chain.
 
 ### One-time adopted Worker unit permission hardening
 
-The Worker-unit commands remain prohibited until the snapshot hard stop is
-lifted.
+The Worker-unit command remains prohibited until the snapshot and source-successor authorities are complete.
 
 Before the first formal Pull plan, run one final independent transaction to
 replace only the legacy mode-`0664` MD user-unit inode with an owner-private
@@ -563,25 +603,70 @@ For this source-successor-bearing raw adoption, the unit plan, journal, and
 final `state/adopted-unit-permissions.json` authority must all use schema v2;
 schema v1 remains historical read compatibility only. The resulting raw
 adoption must emit descriptor v4 and, after a successful deployment,
-current-state v3. Descriptor schema v4 binds the immutable old root, raw
-source-successor authority, its completed journal, the schema-v2 Worker-unit
-authority, that unit authority's completed journal, and the digest of the
-complete unit transaction inventory. The inventory must contain exactly one
-completed journal; every other entry must be a valid terminal no-mutation
-abort. A projected authority, schema-v1 unit authority, nonterminal journal,
-or unsealed inventory entry is not a substitute.
+current-state v3. That outer descriptor v4 contains a schema-v5 adopted-
+prerequisite target binding. It binds the immutable old root, raw source-
+successor authority, its completed journal, the schema-v2 Worker-unit
+authority, that unit authority's completed journal, the complete unit
+transaction inventory, and the raw snapshot/router anchors. Historical inner
+binding schemas v2-v4 remain read compatibility only. The inventory must
+contain exactly one completed journal; every other entry must be a valid
+terminal no-mutation abort. A projected authority, schema-v1 unit authority,
+nonterminal journal, or unsealed inventory entry is not a substitute.
 
 Current-state v3 treats `adoption_successor_lineage` as a permanent
-five-anchor schema-v2 record: `source_successor_authority_sha256`,
+eight-anchor schema-v3 record: `source_successor_authority_sha256`,
 `source_successor_completed_journal_sha256`, and
 `unit_permission_authority_sha256`,
 `unit_permission_completed_journal_sha256`, and
-`unit_permission_transaction_inventory_sha256`. Historical current-state v3
-records may omit this record or carry the legacy schema-v1 three-anchor form;
-a descriptor-v4 takeover preserves those three values while upgrading the
-record to schema v2. After that upgrade, once written, all five anchors are
-permanent: every later current-state v3 must preserve their exact values, and
-deletion or replacement fails closed.
+`unit_permission_transaction_inventory_sha256`, plus
+`production_git_snapshot_authority_sha256`,
+`bootstrap_router_intent_sha256`, and
+`bootstrap_router_authority_sha256`. Historical current-state v3 records may
+omit this record or carry the legacy schema-v1 three-anchor or schema-v2 five-
+anchor form; an authorized successor binding preserves every historical value
+while upgrading the record. After that upgrade, once written, all eight
+anchors are permanent: every later current-state v3 must preserve their exact
+values, and deletion or replacement fails closed.
+
+### One-time bootstrap router successor
+
+After the unit authority completes, publish the selector successor. It
+installs the content-addressed target control release and immutable snapshot
+verifier, but keeps `active-control` and both Worker routes unchanged. A
+temporary `state/contract-0012-in-progress.json` fence blocks the old
+controller before its first Git write throughout every selector-swap crash
+window:
+
+```bash
+router_operation_id=adopt-router-<utc-timestamp>
+
+./scripts/adopt_bootstrap_router_successor.py plan \
+  --sha <full-main-sha> \
+  --operation-id "$router_operation_id"
+
+./scripts/adopt_bootstrap_router_successor.py apply \
+  --sha <full-main-sha> \
+  --operation-id "$router_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-router-successor-impact-sha256 sha256:<reviewed-impact-digest> \
+  --confirm-snapshot-authority-sha256 sha256:<reviewed-snapshot-authority-digest> \
+  --confirm-source-successor-authority-sha256 sha256:<reviewed-source-authority-digest> \
+  --confirm-unit-permission-authority-sha256 sha256:<reviewed-unit-authority-digest> \
+  --confirm-predecessor-selector-sha256 sha256:<reviewed-predecessor-selector-digest>
+```
+
+The create-once `state/bootstrap-router-successor-intent.json` records the
+single-file selector CAS and its complete predecessor chain. The completed
+`state/bootstrap-router-successor.json` uses
+`manual-runtime-adoption-bootstrap-router-successor`. The new selector
+explicitly rejects the first-deployment `plan`, which must remain the direct
+read-only private-clone exception documented below. Before `prepare` performs
+the first live Git write, the selector runs snapshot `verify-integrity` and
+routes only the sealed target to its preinstalled control release. Missing,
+partial, or drifted authority blocks deployment. Once current-state v3 is
+durably target-bound and the exact T control release is active, the one-time
+target route retires; a merely present or forged current-state fails closed.
+The selector and all eight lineage anchors remain permanently validated.
 
 Next provision the dedicated mutable-data audit login. This step is mandatory
 before formal Pull `plan` or `prepare`. The source-pinned provisioner reads the
@@ -1090,9 +1175,7 @@ generations can never be retired or rearmed.
 
 ## Current ordinary deployments
 
-The ordinary deployment commands remain prohibited until the installed
-snapshot-authority gate is merged and its required snapshot authority is
-complete.
+The ordinary deployment commands remain prohibited until the bootstrap-router authority is complete and binds the exact required snapshot authority.
 
 The manually adopted production runtime uses descriptor v4 and current-state
 v3 for ordinary deployments. The prerequisite authority, immutable root Git
@@ -1114,31 +1197,30 @@ nexpoly-pull-deploy prepare \
   --operation-id "$deploy_operation_id"
 ```
 
-The direct controller invocation is a one-time exception for the first
-ordinary deployment while `current-deployment.json` is absent. Run it only
-from the same private, standalone, clean, source-pinned target clone used for
-the prerequisite, permission, and role transactions. The installed selector
-cannot route a pre-prepare `plan` to a target control release that does not
-exist yet, and its adopted `cff408…` controller intentionally rejects an active
-MD slot without a current-state record. The target controller instead validates
-that slot, source, active control, prerequisite source/CI, adoption provenance,
-the immutable old-root → source-successor → unit-permission chain, and its
-schema-compatible hardened marker without writing files or changing services.
-Review
-`authority_kind=manual-runtime-adoption`, the adopted-deployment and
-three permission-authority raw digests, the permission
-marker/evidence/inventory digests, and the schema-v4 prerequisite
-target-binding digest in its output.
+The bootstrap-router transaction has already installed the exact target
+control release, but that minimal release intentionally has no complete target
+Git object database. Therefore the first `plan` above is the sole direct
+checkout exception: run it only from the exact private, standalone, clean,
+complete-history, source-pinned T clone. It is read-only and validates the
+active slot, source, active control, prerequisite source/CI, adoption
+provenance, the immutable snapshot → old-root → source-successor → unit-
+permission → router chain, and its schema-compatible hardened marker. Review
+`authority_kind=manual-runtime-adoption`, all raw authority digests, the
+permission marker/evidence/inventory digests, and the schema-v5 prerequisite
+target-binding digest in its output. The stable selector explicitly rejects
+this first `plan` so it cannot silently fall back to A or attempt an incomplete
+proof from the installed release.
 
-Do not invoke checkout code directly for `prepare`, `apply`, `accept`,
-`rollback`, or recovery. The installed launcher owns those mutations; its
-`prepare` command creates the candidate control release and performs the
-sealed target handoff. Its target controller independently revalidates the
-permission wrapper and raw marker; compatibility with the old installed
-controller's marker parser alone is not sufficient. Resume and apply
-pre-switch repeat the same exact binding. After the first deployment writes
-current-state v3 and activates the target controls, all later releases return
-to the normal installed command:
+From `prepare` onward, never invoke a mutating or recovery verb from checkout.
+The installed launcher first verifies the golden snapshot byte-for-byte, then
+routes the sealed target to T before the old active controller can fetch. The
+target controller creates the candidate state and independently revalidates
+the permission wrapper, raw marker, and all eight lineage anchors;
+compatibility with the old installed controller's marker parser alone is not
+sufficient. Resume and apply pre-switch repeat the same exact binding. After
+the first deployment writes current-state v3 and activates the target
+controls, the one-time route retires and later releases continue using the
+same installed command:
 
 ```bash
 nexpoly-pull-deploy plan \
@@ -1146,8 +1228,7 @@ nexpoly-pull-deploy plan \
   --operation-id <later-deploy-operation-id>
 ```
 
-The one-time direct `plan` and installed `prepare` do not interrupt serving
-traffic. `prepare` must finish
+The installed `plan` and `prepare` do not interrupt serving traffic. `prepare` must finish
 before the maintenance window. It verifies the protected-main candidate and CI
 checks, resolves image digests and labels, validates assets and migrations,
 downloads locked wheels, builds the inactive MD Worker environment directly at

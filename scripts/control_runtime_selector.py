@@ -15,6 +15,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import subprocess
 import sys
 from typing import Any, Iterable, Mapping
 
@@ -30,6 +31,18 @@ CONTROL_MANIFEST_NAME = "CONTROL-MANIFEST.json"
 BOOTSTRAP_AUTHORITY_NAME = "bootstrap-control.json"
 ADOPTED_DEPLOYMENT_NAME = "adopted-deployment.json"
 ADOPTION_AUTHORITY_KIND = "manual-runtime-adoption"
+BOOTSTRAP_ROUTER_INTENT_NAME = "bootstrap-router-successor-intent.json"
+BOOTSTRAP_ROUTER_AUTHORITY_NAME = "bootstrap-router-successor.json"
+BOOTSTRAP_ROUTER_AUTHORITY_KIND = (
+    "manual-runtime-adoption-bootstrap-router-successor"
+)
+BOOTSTRAP_ROUTER_POLICY = "nexpoly-bootstrap-router-successor-v1"
+BOOTSTRAP_ROUTER_ROOT_NAME = "bootstrap-router-successors"
+PRODUCTION_GIT_SNAPSHOT_AUTHORITY_NAME = "production-git-snapshot.json"
+SOURCE_SUCCESSOR_AUTHORITY_NAME = (
+    "adopted-git-permission-source-successor.json"
+)
+UNIT_PERMISSION_AUTHORITY_NAME = "adopted-unit-permissions.json"
 BOOTSTRAP_IMMUTABLE_FILES = {
     "control_runtime_selector.py",
     "nexpoly-pull-deploy",
@@ -841,6 +854,79 @@ def _load_private_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ControlRuntimeError(f"control record is invalid: {path}")
     return value
+
+
+def _load_private_canonical_json(
+    path: Path,
+    *,
+    maximum: int = 4 * 1024 * 1024,
+) -> tuple[dict[str, Any], str]:
+    """Load one stable, owner-private canonical authority and its raw digest."""
+
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as exc:
+        raise ControlRuntimeError(f"control authority is unavailable: {path}") from exc
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_nlink != 1
+            or not 1 <= before.st_size <= maximum
+        ):
+            raise ControlRuntimeError(f"control authority is unsafe: {path}")
+        payload = bytearray()
+        while len(payload) < before.st_size:
+            block = os.read(
+                descriptor,
+                min(1024 * 1024, before.st_size - len(payload)),
+            )
+            if not block:
+                raise ControlRuntimeError(
+                    f"control authority changed while reading: {path}"
+                )
+            payload.extend(block)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_uid,
+        before.st_nlink,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_uid,
+        after.st_nlink,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ):
+        raise ControlRuntimeError(f"control authority changed while reading: {path}")
+    raw = bytes(payload)
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ControlRuntimeError(f"control authority is invalid: {path}") from exc
+    if (
+        not isinstance(document, dict)
+        or raw != canonical_json_bytes(document) + b"\n"
+    ):
+        raise ControlRuntimeError(f"control authority is not canonical: {path}")
+    return document, sha256_bytes(raw)
 
 
 def _private_file_identity(path: Path) -> dict[str, Any]:
@@ -2202,8 +2288,400 @@ def _validate_adopted_deployment(
     return dict(value)
 
 
+def _validate_bootstrap_router_file(
+    runtime_root: Path,
+    operation_id: str,
+    name: str,
+    value: object,
+) -> dict[str, Any]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"relative_path", "sha256", "size", "mode"}
+        or value.get("relative_path")
+        != f"{BOOTSTRAP_ROUTER_ROOT_NAME}/{operation_id}/{name}"
+        or not isinstance(value.get("sha256"), str)
+        or DIGEST_RE.fullmatch(value["sha256"]) is None
+        or type(value.get("size")) is not int
+        or not 1 <= value["size"] <= 16 * 1024 * 1024
+        or value.get("mode") != 0o700
+    ):
+        raise ControlRuntimeError("bootstrap-router file authority is invalid")
+    path = runtime_root / value["relative_path"]
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ControlRuntimeError("bootstrap-router file is unavailable") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+        or stat.S_IMODE(metadata.st_mode) != value["mode"]
+        or metadata.st_size != value["size"]
+        or sha256_file(path) != value["sha256"]
+    ):
+        raise ControlRuntimeError("bootstrap-router file differs from authority")
+    return dict(value)
+
+
+def _validate_bootstrap_router_intent(
+    runtime_root: Path,
+    document: object,
+    *,
+    bootstrap_digest: str,
+    predecessor_selector_digest: str,
+) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "status",
+        "authority_kind",
+        "policy",
+        "operation_id",
+        "target_source_sha",
+        "target_source_tree",
+        "bootstrap_control_sha256",
+        "predecessor_selector_sha256",
+        "successor_selector_sha256",
+        "snapshot_authority_sha256",
+        "source_successor_authority_sha256",
+        "unit_permission_authority_sha256",
+        "target_control_release",
+        "router_files",
+        "delivery_gate_sha256",
+        "plan_sha256",
+        "created_at",
+    }
+    operation_id = document.get("operation_id") if isinstance(document, dict) else None
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != 1
+        or document.get("status") != "selector-swap-intent"
+        or document.get("authority_kind") != BOOTSTRAP_ROUTER_AUTHORITY_KIND
+        or document.get("policy") != BOOTSTRAP_ROUTER_POLICY
+        or not isinstance(operation_id, str)
+        or re.fullmatch(r"adopt-router-[a-z0-9][a-z0-9._-]{7,95}", operation_id)
+        is None
+        or not isinstance(document.get("target_source_sha"), str)
+        or SHA_RE.fullmatch(document["target_source_sha"]) is None
+        or not isinstance(document.get("target_source_tree"), str)
+        or SHA_RE.fullmatch(document["target_source_tree"]) is None
+        or document.get("bootstrap_control_sha256") != bootstrap_digest
+        or document.get("predecessor_selector_sha256")
+        != predecessor_selector_digest
+    ):
+        raise ControlRuntimeError("bootstrap-router successor intent is invalid")
+    for field in (
+        "successor_selector_sha256",
+        "snapshot_authority_sha256",
+        "source_successor_authority_sha256",
+        "unit_permission_authority_sha256",
+        "delivery_gate_sha256",
+        "plan_sha256",
+    ):
+        value = document.get(field)
+        if not isinstance(value, str) or DIGEST_RE.fullmatch(value) is None:
+            raise ControlRuntimeError("bootstrap-router successor digest is invalid")
+    created_at = document.get("created_at")
+    if (
+        not isinstance(created_at, str)
+        or re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:"
+            r"[0-9]{2}:[0-9]{2}\.[0-9]{6}Z",
+            created_at,
+        )
+        is None
+    ):
+        raise ControlRuntimeError("bootstrap-router successor timestamp is invalid")
+    target_control = document.get("target_control_release")
+    if (
+        not isinstance(target_control, dict)
+        or set(target_control)
+        != {
+            "release_id",
+            "source_sha",
+            "source_tree",
+            "manifest_sha256",
+            "deploy_sha256",
+        }
+        or not isinstance(target_control.get("release_id"), str)
+        or RELEASE_ID_RE.fullmatch(target_control["release_id"]) is None
+        or target_control.get("source_sha") != document["target_source_sha"]
+        or target_control.get("source_tree") != document["target_source_tree"]
+        or any(
+            not isinstance(target_control.get(field), str)
+            or DIGEST_RE.fullmatch(target_control[field]) is None
+            for field in ("manifest_sha256", "deploy_sha256")
+        )
+    ):
+        raise ControlRuntimeError("bootstrap-router target control is invalid")
+    router_files = document.get("router_files")
+    expected_names = {
+        "production_git_snapshot.py",
+        "restore_production_git_snapshot.py",
+        "reviewed-selector.py",
+        "predecessor-selector.py",
+    }
+    if not isinstance(router_files, dict) or set(router_files) != expected_names:
+        raise ControlRuntimeError("bootstrap-router file inventory is invalid")
+    normalized_files = {
+        name: _validate_bootstrap_router_file(
+            runtime_root,
+            operation_id,
+            name,
+            router_files[name],
+        )
+        for name in sorted(expected_names)
+    }
+    if (
+        normalized_files["reviewed-selector.py"]["sha256"]
+        != document["successor_selector_sha256"]
+        or normalized_files["predecessor-selector.py"]["sha256"]
+        != document["predecessor_selector_sha256"]
+    ):
+        raise ControlRuntimeError("bootstrap-router selector copies differ")
+    authority_bindings = (
+        (
+            PRODUCTION_GIT_SNAPSHOT_AUTHORITY_NAME,
+            "snapshot_authority_sha256",
+            "manual-runtime-adoption-production-git-snapshot",
+        ),
+        (
+            SOURCE_SUCCESSOR_AUTHORITY_NAME,
+            "source_successor_authority_sha256",
+            "manual-runtime-adoption-git-permission-source-successor",
+        ),
+        (
+            UNIT_PERMISSION_AUTHORITY_NAME,
+            "unit_permission_authority_sha256",
+            "manual-runtime-adoption-unit-permission-hardening",
+        ),
+    )
+    for name, digest_field, authority_kind in authority_bindings:
+        authority, digest = _load_private_canonical_json(runtime_root / "state" / name)
+        if (
+            digest != document[digest_field]
+            or authority.get("status") != "completed"
+            or authority.get("authority_kind") != authority_kind
+        ):
+            raise ControlRuntimeError(
+                "bootstrap-router predecessor authority differs"
+            )
+        if name == PRODUCTION_GIT_SNAPSHOT_AUTHORITY_NAME:
+            if (
+                authority.get("schema_version") != 1
+                or authority.get("target_source_sha")
+                != document["target_source_sha"]
+                or authority.get("target_source_tree")
+                != document["target_source_tree"]
+            ):
+                raise ControlRuntimeError(
+                    "bootstrap-router snapshot target differs"
+                )
+        if name == SOURCE_SUCCESSOR_AUTHORITY_NAME:
+            if (
+                authority.get("schema_version") != 2
+                or authority.get("source_sha")
+                != document["target_source_sha"]
+                or authority.get("source_tree")
+                != document["target_source_tree"]
+                or authority.get("snapshot_authority_sha256")
+                != document["snapshot_authority_sha256"]
+                or authority.get("bootstrap_control_sha256")
+                != document["bootstrap_control_sha256"]
+            ):
+                raise ControlRuntimeError(
+                    "bootstrap-router source target differs"
+                )
+        if name == UNIT_PERMISSION_AUTHORITY_NAME:
+            unit_plan = authority.get("plan")
+            unit_successor = (
+                unit_plan.get("git_permission_successor")
+                if isinstance(unit_plan, dict)
+                else None
+            )
+            source_binding = (
+                unit_successor.get("source_successor_authority")
+                if isinstance(unit_successor, dict)
+                else None
+            )
+            if (
+                authority.get("schema_version") != 2
+                or authority.get("source_sha")
+                != document["target_source_sha"]
+                or authority.get("source_tree")
+                != document["target_source_tree"]
+                or authority.get("bootstrap_control_sha256")
+                != document["bootstrap_control_sha256"]
+                or authority.get(
+                    "adopted_git_permission_source_successor_sha256"
+                )
+                != document["source_successor_authority_sha256"]
+                or not isinstance(source_binding, dict)
+                or source_binding.get("snapshot_authority_sha256")
+                != document["snapshot_authority_sha256"]
+                or source_binding.get("authority_file_sha256")
+                != document["source_successor_authority_sha256"]
+            ):
+                raise ControlRuntimeError(
+                    "bootstrap-router unit target differs"
+                )
+    manifest, release_root = load_control_release(
+        runtime_root,
+        target_control["release_id"],
+    )
+    deploy = manifest["entrypoints"].get("deploy")
+    if (
+        manifest["source_sha"] != document["target_source_sha"]
+        or manifest["source_tree"] != document["target_source_tree"]
+        or sha256_file(release_root / CONTROL_MANIFEST_NAME)
+        != target_control["manifest_sha256"]
+        or not isinstance(deploy, dict)
+        or deploy.get("kind") != "python"
+        or sha256_file(release_root / str(deploy.get("file")))
+        != target_control["deploy_sha256"]
+    ):
+        raise ControlRuntimeError("bootstrap-router target release differs")
+    normalized = dict(document)
+    normalized["target_control_release"] = dict(target_control)
+    normalized["router_files"] = normalized_files
+    return normalized
+
+
+def _validate_bootstrap_router_authority(
+    document: object,
+    *,
+    intent: Mapping[str, Any],
+    intent_digest: str,
+) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "status",
+        "authority_kind",
+        "policy",
+        "operation_id",
+        "intent_sha256",
+        "intent",
+        "completed_at",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or document.get("schema_version") != 1
+        or document.get("status") != "completed"
+        or document.get("authority_kind") != BOOTSTRAP_ROUTER_AUTHORITY_KIND
+        or document.get("policy") != BOOTSTRAP_ROUTER_POLICY
+        or document.get("operation_id") != intent["operation_id"]
+        or document.get("intent_sha256") != intent_digest
+        or document.get("intent") != intent
+        or not isinstance(document.get("completed_at"), str)
+        or re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:"
+            r"[0-9]{2}:[0-9]{2}\.[0-9]{6}Z",
+            document["completed_at"],
+        )
+        is None
+        or document["completed_at"] < intent["created_at"]
+    ):
+        raise ControlRuntimeError("bootstrap-router successor authority is invalid")
+    return dict(document)
+
+
+def _bootstrap_router_transition(
+    runtime_root: Path,
+    *,
+    bootstrap_digest: str,
+    predecessor_selector_digest: str,
+    observed_selector_digest: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None] | None:
+    intent_path = runtime_root / "state" / BOOTSTRAP_ROUTER_INTENT_NAME
+    authority_path = runtime_root / "state" / BOOTSTRAP_ROUTER_AUTHORITY_NAME
+    intent_present = intent_path.exists() or intent_path.is_symlink()
+    authority_present = authority_path.exists() or authority_path.is_symlink()
+    if not intent_present:
+        if authority_present:
+            raise ControlRuntimeError(
+                "bootstrap-router authority exists without swap intent"
+            )
+        if observed_selector_digest != predecessor_selector_digest:
+            raise ControlRuntimeError(
+                "bootstrap selector changed without successor intent"
+            )
+        return None
+    raw_intent, intent_digest = _load_private_canonical_json(intent_path)
+    intent = _validate_bootstrap_router_intent(
+        runtime_root,
+        raw_intent,
+        bootstrap_digest=bootstrap_digest,
+        predecessor_selector_digest=predecessor_selector_digest,
+    )
+    if observed_selector_digest not in {
+        predecessor_selector_digest,
+        intent["successor_selector_sha256"],
+    }:
+        raise ControlRuntimeError("bootstrap selector is outside its successor CAS")
+    authority: dict[str, Any] | None = None
+    if authority_present:
+        raw_authority, _authority_digest = _load_private_canonical_json(
+            authority_path
+        )
+        authority = _validate_bootstrap_router_authority(
+            raw_authority,
+            intent=intent,
+            intent_digest=intent_digest,
+        )
+        if observed_selector_digest != intent["successor_selector_sha256"]:
+            raise ControlRuntimeError(
+                "completed bootstrap-router authority lacks its successor selector"
+            )
+    return intent, authority
+
+
+def _validate_bootstrap_bin(
+    runtime_root: Path,
+    immutable: Mapping[str, Any],
+    *,
+    bootstrap_digest: str,
+) -> None:
+    bin_root = runtime_root / "bin"
+    _require_private_directory(bin_root)
+    if {entry.name for entry in bin_root.iterdir()} != BOOTSTRAP_IMMUTABLE_FILES:
+        raise ControlRuntimeError("immutable bootstrap router inventory differs")
+    for name, expected_digest in immutable.items():
+        path = bin_root / name
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise ControlRuntimeError(
+                f"immutable bootstrap router is unavailable: {name}"
+            ) from exc
+        observed_digest = sha256_file(path)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or path.is_symlink()
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or (
+                name != "control_runtime_selector.py"
+                and observed_digest != expected_digest
+            )
+        ):
+            raise ControlRuntimeError(f"immutable bootstrap router differs: {name}")
+        if name == "control_runtime_selector.py":
+            _bootstrap_router_transition(
+                runtime_root,
+                bootstrap_digest=bootstrap_digest,
+                predecessor_selector_digest=expected_digest,
+                observed_selector_digest=observed_digest,
+            )
+
+
 def _validate_adoption_bootstrap_authority(
-    runtime_root: Path, record: dict[str, Any]
+    runtime_root: Path,
+    record: dict[str, Any],
+    *,
+    bootstrap_digest: str,
 ) -> dict[str, Any]:
     fields = {
         "schema_version",
@@ -2302,30 +2780,23 @@ def _validate_adoption_bootstrap_authority(
         )
     ):
         raise ControlRuntimeError("adoption immutable controls are invalid")
-    bin_root = runtime_root / "bin"
-    _require_private_directory(bin_root)
-    if {entry.name for entry in bin_root.iterdir()} != BOOTSTRAP_IMMUTABLE_FILES:
-        raise ControlRuntimeError("immutable bootstrap router inventory differs")
-    for name, expected_digest in immutable.items():
-        path = bin_root / name
-        metadata = path.lstat()
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or path.is_symlink()
-            or metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o700
-            or sha256_file(path) != expected_digest
-        ):
-            raise ControlRuntimeError(f"immutable bootstrap router differs: {name}")
+    _validate_bootstrap_bin(
+        runtime_root,
+        immutable,
+        bootstrap_digest=bootstrap_digest,
+    )
     return record
 
 
 def _validate_bootstrap_authority(runtime_root: Path) -> dict[str, Any]:
-    record = _load_private_json(
-        runtime_root / "state" / BOOTSTRAP_AUTHORITY_NAME
-    )
+    authority_path = runtime_root / "state" / BOOTSTRAP_AUTHORITY_NAME
+    record, bootstrap_digest = _load_private_canonical_json(authority_path)
     if record.get("schema_version") == 3:
-        return _validate_adoption_bootstrap_authority(runtime_root, record)
+        return _validate_adoption_bootstrap_authority(
+            runtime_root,
+            record,
+            bootstrap_digest=bootstrap_digest,
+        )
     expected_fields = {
         "schema_version",
         "status",
@@ -2487,28 +2958,11 @@ def _validate_bootstrap_authority(runtime_root: Path) -> dict[str, Any]:
         raise ControlRuntimeError(
             "completed bootstrap legacy takeover authority is invalid"
         )
-    bin_root = runtime_root / "bin"
-    _require_private_directory(bin_root)
-    if {entry.name for entry in bin_root.iterdir()} != BOOTSTRAP_IMMUTABLE_FILES:
-        raise ControlRuntimeError("immutable bootstrap router inventory differs")
-    for name, expected_digest in immutable.items():
-        path = bin_root / name
-        try:
-            metadata = path.lstat()
-        except OSError as exc:
-            raise ControlRuntimeError(
-                f"immutable bootstrap router is unavailable: {name}"
-            ) from exc
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or path.is_symlink()
-            or metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o700
-            or sha256_file(path) != expected_digest
-        ):
-            raise ControlRuntimeError(
-                f"immutable bootstrap router differs: {name}"
-            )
+    _validate_bootstrap_bin(
+        runtime_root,
+        immutable,
+        bootstrap_digest=bootstrap_digest,
+    )
     return record
 
 
@@ -3239,11 +3693,209 @@ def _validate_worker_route_authority(
     )
 
 
+def _bootstrap_router_deploy_release(
+    runtime_root: Path,
+    arguments: list[str],
+) -> tuple[dict[str, Any], Path] | None:
+    """Gate and route the one-time first deployment before active-control moves."""
+
+    bootstrap = _validate_bootstrap_authority(runtime_root)
+    immutable = bootstrap.get("immutable_files")
+    if not isinstance(immutable, dict):
+        raise ControlRuntimeError("bootstrap immutable authority is unavailable")
+    bootstrap_path = runtime_root / "state" / BOOTSTRAP_AUTHORITY_NAME
+    observed_bootstrap, bootstrap_digest = _load_private_canonical_json(
+        bootstrap_path
+    )
+    if observed_bootstrap != bootstrap:
+        raise ControlRuntimeError(
+            "bootstrap authority changed during router validation"
+        )
+    predecessor_selector_digest = immutable.get("control_runtime_selector.py")
+    if (
+        not isinstance(predecessor_selector_digest, str)
+        or DIGEST_RE.fullmatch(predecessor_selector_digest) is None
+    ):
+        raise ControlRuntimeError("bootstrap selector authority is invalid")
+    selector_path = runtime_root / "bin/control_runtime_selector.py"
+    selector_digest = sha256_file(selector_path)
+    transition = _bootstrap_router_transition(
+        runtime_root,
+        bootstrap_digest=bootstrap_digest,
+        predecessor_selector_digest=predecessor_selector_digest,
+        observed_selector_digest=selector_digest,
+    )
+    if transition is None:
+        return None
+    intent, authority = transition
+    if selector_digest == predecessor_selector_digest:
+        # Worker routes may remain on the predecessor while the reviewed
+        # selector is staged, but deploy must not fall through to A once any
+        # successor intent is durable. The publisher's independent fence is a
+        # second guard, not a substitute for this router-level fail closure.
+        raise ControlRuntimeError(
+            "bootstrap-router successor is in progress; deployment is blocked"
+        )
+    if authority is None:
+        raise ControlRuntimeError(
+            "bootstrap-router successor is incomplete; deployment is blocked"
+        )
+    current_path = runtime_root / "state/current-deployment.json"
+    if current_path.exists() or current_path.is_symlink():
+        current, _current_digest = _load_private_canonical_json(
+            current_path,
+            maximum=32 * 1024 * 1024,
+        )
+        lineage = current.get("adoption_successor_lineage")
+        lineage_fields = {
+            "schema_version",
+            "source_successor_authority_sha256",
+            "source_successor_completed_journal_sha256",
+            "unit_permission_authority_sha256",
+            "unit_permission_completed_journal_sha256",
+            "unit_permission_transaction_inventory_sha256",
+            "production_git_snapshot_authority_sha256",
+            "bootstrap_router_intent_sha256",
+            "bootstrap_router_authority_sha256",
+        }
+        active, active_manifest, _active_root = load_active_control(runtime_root)
+        target = intent["target_control_release"]
+        authority_digest = sha256_bytes(
+            canonical_json_bytes(authority) + b"\n"
+        )
+        if (
+            current.get("schema_version") != 3
+            or current.get("status") != "success"
+            or current.get("source_sha") != intent["target_source_sha"]
+            or current.get("source_tree") != intent["target_source_tree"]
+            or current.get("active_control") != active
+            or not isinstance(lineage, dict)
+            or set(lineage) != lineage_fields
+            or lineage.get("schema_version") != 3
+            or any(
+                not isinstance(lineage.get(field), str)
+                or DIGEST_RE.fullmatch(lineage[field]) is None
+                for field in lineage_fields - {"schema_version"}
+            )
+            or lineage.get("source_successor_authority_sha256")
+            != intent["source_successor_authority_sha256"]
+            or lineage.get("unit_permission_authority_sha256")
+            != intent["unit_permission_authority_sha256"]
+            or lineage.get("production_git_snapshot_authority_sha256")
+            != intent["snapshot_authority_sha256"]
+            or lineage.get("bootstrap_router_intent_sha256")
+            != authority["intent_sha256"]
+            or lineage.get("bootstrap_router_authority_sha256")
+            != authority_digest
+            or active.get("release_id") != target["release_id"]
+            or active.get("source_sha") != target["source_sha"]
+            or active.get("source_tree") != target["source_tree"]
+            or active.get("manifest_sha256") != target["manifest_sha256"]
+            or active_manifest.get("release_id") != target["release_id"]
+        ):
+            raise ControlRuntimeError(
+                "current-state cannot retire the bootstrap-router successor"
+            )
+        # The one-time route retires only after a target-bound current-state
+        # and the exact target control release are both durable.
+        return None
+    command = arguments[0] if arguments else None
+    if command == "plan":
+        raise ControlRuntimeError(
+            "first deployment plan must run read-only from the exact private target clone"
+        )
+    target_commands = {
+        "prepare",
+        "bridge-plan",
+        "bridge-prepare",
+    }
+    sha_count = arguments.count("--sha")
+    if sha_count > 1 or command in target_commands and sha_count != 1:
+        raise ControlRuntimeError("first deployment target SHA is ambiguous")
+    if sha_count == 1:
+        try:
+            target_sha = arguments[arguments.index("--sha") + 1]
+        except IndexError:
+            raise ControlRuntimeError("first deployment target SHA is missing") from None
+        if target_sha != intent["target_source_sha"]:
+            raise ControlRuntimeError(
+                "first deployment target differs from router successor"
+            )
+    verifier = intent["router_files"]["production_git_snapshot.py"]
+    verifier_path = runtime_root / verifier["relative_path"]
+    environment = {
+        "USER": "devuser",
+        "LOGNAME": "devuser",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    try:
+        completed = subprocess.run(
+            [
+                "/usr/bin/python3",
+                "-I",
+                "-B",
+                str(verifier_path),
+                "verify-integrity",
+            ],
+            cwd=verifier_path.parent,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=900,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ControlRuntimeError(
+            "production Git snapshot integrity gate failed"
+        ) from exc
+    if len(completed.stdout) > 4 * 1024 * 1024 or len(completed.stderr) > 1024 * 1024:
+        raise ControlRuntimeError("production Git snapshot gate output is oversized")
+    try:
+        result = json.loads(completed.stdout.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ControlRuntimeError("production Git snapshot gate output is invalid") from exc
+    if (
+        not isinstance(result, dict)
+        or set(result) != {"action", "verified", "authority", "authority_sha256"}
+        or completed.stdout != canonical_json_bytes(result) + b"\n"
+        or result.get("action")
+        != "production-git-snapshot-verify-integrity"
+        or result.get("verified") is not True
+        or result.get("authority_sha256") != intent["snapshot_authority_sha256"]
+        or not isinstance(result.get("authority"), dict)
+        or result["authority"].get("target_source_sha")
+        != intent["target_source_sha"]
+    ):
+        raise ControlRuntimeError("production Git snapshot gate evidence differs")
+    if current_path.exists() or current_path.is_symlink():
+        raise ControlRuntimeError("current-state changed during first deployment gate")
+    after = _bootstrap_router_transition(
+        runtime_root,
+        bootstrap_digest=_load_private_canonical_json(bootstrap_path)[1],
+        predecessor_selector_digest=predecessor_selector_digest,
+        observed_selector_digest=sha256_file(selector_path),
+    )
+    if after != transition:
+        raise ControlRuntimeError("bootstrap-router authority changed during gate")
+    target = intent["target_control_release"]
+    manifest, release_root = load_control_release(runtime_root, target["release_id"])
+    return manifest, release_root
+
+
 def _selected_release(
     runtime_root: Path, role: str, arguments: list[str]
 ) -> tuple[dict[str, Any], Path]:
     """Route recovery/apply to a sealed candidate; all other calls use active."""
 
+    router_release = (
+        _bootstrap_router_deploy_release(runtime_root, arguments)
+        if role == "deploy"
+        else None
+    )
     alias_marker = None
     deploy_command = arguments[0] if role == "deploy" and arguments else None
     deploy_preparation = deploy_command in {
@@ -3326,6 +3978,8 @@ def _selected_release(
                 "recorded alias reconciliation control authority differs"
             )
         return recovery_manifest, recovery_root
+    if router_release is not None:
+        return router_release
     active, manifest, root = load_active_control(runtime_root)
     if role in {"monomer-md", "monomer-dft"}:
         _validate_worker_route_authority(

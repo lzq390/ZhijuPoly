@@ -551,6 +551,70 @@ class Fixture:
             "predecessor_source_trust_sha256": "sha256:" + "a" * 64,
             "production_source_trust_sha256": self.production_trust_sha256,
         }
+        snapshot_operation = "snapshot-git-source-successor-0001"
+        snapshot_root = (
+            self.runtime / "backups/production-git" / snapshot_operation
+        )
+        (snapshot_root / "git").mkdir(parents=True, mode=0o700)
+        manifest = {
+            "schema_version": 1,
+            "policy": "nexpoly-production-git-raw-manifest-v1",
+            "root_mode": "0700",
+            "records": [],
+            "records_sha256": _digest(_canonical([]) + b"\n"),
+            "file_count": 0,
+            "directory_count": 0,
+            "total_file_bytes": 0,
+        }
+        manifest_path = snapshot_root / "MANIFEST.json"
+        manifest_digest = _write_json(manifest_path, manifest)
+        snapshot_delivery = self.delivery(self.target_sha)
+        snapshot_authority = {
+            "schema_version": 1,
+            "status": "completed",
+            "authority_kind": (
+                "manual-runtime-adoption-production-git-snapshot"
+            ),
+            "policy": "nexpoly-production-git-golden-snapshot-v1",
+            "operation_id": snapshot_operation,
+            "target_source_sha": self.target_sha,
+            "target_source_tree": self.target_tree,
+            "production_source_sha": self.production_sha,
+            "production_source_tree": self.production_tree,
+            "production_git_dir": str(self.production / ".git"),
+            "backup_git_dir": str(snapshot_root / "git"),
+            "manifest_path": str(manifest_path),
+            "manifest_sha256": manifest_digest,
+            "manifest_summary": {
+                "records_sha256": manifest["records_sha256"],
+                "file_count": 0,
+                "directory_count": 0,
+                "total_file_bytes": 0,
+            },
+            "fsck": {
+                "schema_version": 1,
+                "policy": "git-fsck-strict-full-no-reflogs-v1",
+                "exit_code": 0,
+                "stdout_sha256": d("b"),
+                "stderr_sha256": d("c"),
+                "stdout_lines": 0,
+                "stderr_lines": 0,
+            },
+            "delivery_gate": snapshot_delivery,
+            "delivery_gate_sha256": _digest(
+                _canonical(snapshot_delivery) + b"\n"
+            ),
+            "plan_sha256": d("d"),
+            "snapshot_impact_sha256": d("e"),
+            "copy_policy": (
+                "descriptor-relative-read-write-no-link-no-reflink-v1"
+            ),
+            "completed_at": "2026-08-18T00:00:00.000000Z",
+        }
+        self.snapshot_authority_sha256 = _write_json(
+            self.runtime / SUCCESSOR.PRODUCTION_GIT_SNAPSHOT_RELATIVE_PATH,
+            snapshot_authority,
+        )
         _make_private(self.runtime)
 
     def delivery(self, sha: str) -> dict[str, object]:

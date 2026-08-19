@@ -769,9 +769,82 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
         repository_transition_sha256 = ADOPTER._canonical_digest(
             repository_transition
         )
+        snapshot_operation = "snapshot-git-unit-successor-0001"
+        snapshot_summary = {
+            "records_sha256": "sha256:" + "6" * 64,
+            "file_count": 1,
+            "directory_count": 1,
+            "total_file_bytes": 1,
+        }
+        snapshot_authority = {
+            "schema_version": 1,
+            "status": "completed",
+            "authority_kind": (
+                "manual-runtime-adoption-production-git-snapshot"
+            ),
+            "policy": "nexpoly-production-git-golden-snapshot-v1",
+            "operation_id": snapshot_operation,
+            "target_source_sha": self.sha,
+            "target_source_tree": target_tree,
+            "production_source_sha": production_source["source_sha"],
+            "production_source_tree": production_source["source_tree"],
+            "production_git_dir": str(self.production / ".git"),
+            "backup_git_dir": str(
+                self.runtime
+                / "backups/production-git"
+                / snapshot_operation
+                / "git"
+            ),
+            "manifest_path": str(
+                self.runtime
+                / "backups/production-git"
+                / snapshot_operation
+                / "MANIFEST.json"
+            ),
+            "manifest_sha256": "sha256:" + "7" * 64,
+            "manifest_summary": snapshot_summary,
+            "fsck": {
+                "schema_version": 1,
+                "policy": "git-fsck-strict-full-no-reflogs-v1",
+                "exit_code": 0,
+            },
+            "delivery_gate": delivery,
+            "delivery_gate_sha256": "sha256:" + "8" * 64,
+            "plan_sha256": "sha256:" + "9" * 64,
+            "snapshot_impact_sha256": "sha256:" + "a" * 64,
+            "copy_policy": (
+                "descriptor-relative-read-write-no-link-no-reflink-v1"
+            ),
+            "completed_at": "2026-08-18T11:58:00Z",
+        }
+        snapshot_path = (
+            self.runtime / ADOPTER.PRODUCTION_GIT_SNAPSHOT_AUTHORITY_PATH
+        )
+        _write_private(
+            snapshot_path,
+            ADOPTER._canonical_bytes(snapshot_authority) + b"\n",
+            0o600,
+        )
+        snapshot_digest = ADOPTER._file_digest(snapshot_path, mode=0o600)
+        snapshot_compact = {
+            "authority_kind": snapshot_authority["authority_kind"],
+            "operation_id": snapshot_operation,
+            "target_source_sha": self.sha,
+            "target_source_tree": target_tree,
+            "production_source_sha": production_source["source_sha"],
+            "production_source_tree": production_source["source_tree"],
+            "manifest_sha256": snapshot_authority["manifest_sha256"],
+            "manifest_summary": snapshot_summary,
+            "delivery_gate_sha256": snapshot_authority[
+                "delivery_gate_sha256"
+            ],
+            "completed_at": snapshot_authority["completed_at"],
+            "authority_sha256": snapshot_digest,
+        }
         impact = {
             "schema_version": 1,
             "policy": ADOPTER.SOURCE_SUCCESSOR_IMPACT_POLICY,
+            "snapshot_authority_sha256": snapshot_digest,
             "predecessor_authority_sha256": root_digest,
             "predecessor_marker_sha256": root_authority[
                 "permission_marker_sha256"
@@ -796,7 +869,7 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             "mutations": dict(ADOPTER.SOURCE_SUCCESSOR_MUTATIONS),
         }
         plan: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "authority_kind": ADOPTER.SOURCE_SUCCESSOR_AUTHORITY_KIND,
             "policy": ADOPTER.SOURCE_SUCCESSOR_POLICY,
             "operation_id": operation_id,
@@ -815,6 +888,8 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             "adopted_prerequisites_sha256": root_authority[
                 "adopted_prerequisites_sha256"
             ],
+            "production_git_snapshot": snapshot_compact,
+            "snapshot_authority_sha256": snapshot_digest,
             "production_source_trust_sha256": (
                 production_source_trust_sha256
             ),
@@ -841,7 +916,7 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
         }
         completed_at = "2026-08-18T12:00:00Z"
         authority: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "completed",
             "authority_kind": ADOPTER.SOURCE_SUCCESSOR_AUTHORITY_KIND,
             "policy": ADOPTER.SOURCE_SUCCESSOR_POLICY,
@@ -863,6 +938,7 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             "adopted_prerequisites_sha256": root_authority[
                 "adopted_prerequisites_sha256"
             ],
+            "snapshot_authority_sha256": snapshot_digest,
             "plan_sha256": ADOPTER._canonical_digest(plan),
             "source_successor_impact_sha256": plan[
                 "source_successor_impact_sha256"
