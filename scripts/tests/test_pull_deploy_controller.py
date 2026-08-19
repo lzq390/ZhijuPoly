@@ -9457,10 +9457,19 @@ class SlotAndDescriptorTests(PullDeployTestCase):
             durable_old,
         )
 
-        replay = controller.abort_prepare(operation_id=OPERATION_ID)
+        replay_completed_at = "2099-12-31T23:59:59Z"
+        with mock.patch.object(
+            CONTROLLER,
+            "utc_now",
+            return_value=replay_completed_at,
+        ):
+            replay = controller.abort_prepare(operation_id=OPERATION_ID)
         self.assertEqual(replay["status"], "aborted")
         resealed = CONTROLLER.load_private_json(journal_path)
-        self.assertEqual(resealed, completed)
+        self.assertEqual(
+            resealed,
+            {**completed, "completed_at": replay_completed_at},
+        )
         self.assertEqual(resealed["phase"], "completed")
 
     def test_prepare_abort_target_only_archive_reseals_move_namespaces(

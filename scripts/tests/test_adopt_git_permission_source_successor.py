@@ -69,14 +69,49 @@ def _write_json(path: Path, value: object) -> str:
 
 
 def _make_private(root: Path) -> None:
-    for directory, directories, files in os.walk(root):
-        Path(directory).chmod(0o700)
-        for name in directories:
-            (Path(directory) / name).chmod(0o700)
-        for name in files:
-            path = Path(directory) / name
-            current = stat.S_IMODE(path.stat().st_mode)
-            path.chmod(current & ~0o077)
+    previous_inventory: set[str] | None = None
+    for _attempt in range(8):
+        inventory: set[str] = set()
+        raced = False
+        walk_errors: list[OSError] = []
+        for directory, directories, files in os.walk(
+            root,
+            onerror=walk_errors.append,
+        ):
+            current_directory = Path(directory)
+            try:
+                current_directory.chmod(0o700)
+            except FileNotFoundError:
+                raced = True
+                continue
+            inventory.add(current_directory.relative_to(root).as_posix())
+            for name in directories:
+                path = current_directory / name
+                try:
+                    metadata = path.lstat()
+                    inventory.add(path.relative_to(root).as_posix())
+                    if not stat.S_ISLNK(metadata.st_mode):
+                        path.chmod(0o700)
+                except FileNotFoundError:
+                    raced = True
+            for name in files:
+                path = current_directory / name
+                try:
+                    metadata = path.lstat()
+                    inventory.add(path.relative_to(root).as_posix())
+                    if not stat.S_ISLNK(metadata.st_mode):
+                        path.chmod(
+                            stat.S_IMODE(metadata.st_mode) & ~0o077
+                        )
+                except FileNotFoundError:
+                    raced = True
+        root.chmod(0o700)
+        if walk_errors:
+            raced = True
+        if not raced and inventory == previous_inventory:
+            return
+        previous_inventory = None if raced else inventory
+    raise AssertionError("fixture tree did not stabilize while sealing modes")
 
 
 OLD_BOOTSTRAP = b'''#!/usr/bin/python3 -I
