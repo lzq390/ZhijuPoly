@@ -1292,6 +1292,75 @@ def test_residency_is_single_owner_and_idempotent_for_same_process(tmp_path: Pat
     assert error.value.code == "gpu_capacity_unavailable"
 
 
+def test_zero_wait_acquire_attempts_admission_after_slow_waiter_persist(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    now = [1_000.0]
+    broker = HostGpuBroker(tmp_path / "state.json", now=lambda: now[0])
+    persist = broker._persist_locked
+    persist_calls = 0
+
+    def slow_first_persist() -> None:
+        nonlocal persist_calls
+        persist()
+        persist_calls += 1
+        if persist_calls == 1:
+            now[0] += 1.0
+
+    monkeypatch.setattr(broker, "_persist_locked", slow_first_persist)
+
+    lease = _acquire(
+        broker,
+        component="backend",
+        environment="dev",
+        kind="residency",
+        wait=0,
+    )
+
+    assert lease.gpu_index == 1
+    assert broker.status()["waiters"] == 0
+
+
+def test_zero_wait_acquire_does_not_preserve_waiter_for_dead_owner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    owner_alive = [True]
+    broker = HostGpuBroker(
+        tmp_path / "state.json",
+        process_alive=lambda _owner: owner_alive[0],
+    )
+    persist = broker._persist_locked
+    persist_calls = 0
+
+    def owner_dies_during_first_persist() -> None:
+        nonlocal persist_calls
+        persist()
+        persist_calls += 1
+        if persist_calls == 1:
+            owner_alive[0] = False
+
+    monkeypatch.setattr(
+        broker,
+        "_persist_locked",
+        owner_dies_during_first_persist,
+    )
+
+    with pytest.raises(BrokerError) as error:
+        _acquire(
+            broker,
+            component="backend",
+            environment="dev",
+            kind="residency",
+            wait=0,
+        )
+
+    assert error.value.code == "gpu_capacity_unavailable"
+    assert broker.status()["leases"] == []
+    assert broker.status()["waiters"] == 0
+
+
 def test_prod_waiter_has_priority_over_earlier_dev_waiter(tmp_path: Path) -> None:
     allowed_indices: set[int] = set()
     broker = HostGpuBroker(

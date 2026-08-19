@@ -160,7 +160,7 @@ describe("KnowledgeSearch", () => {
     expect(screen.getByText("已选中")).not.toBeNull();
 
     fireEvent.click(screen.getByRole("tab", { name: "原文与溯源" }));
-    expect(screen.getByText("polymer_knowledge.jsonl")).not.toBeNull();
+    expect(await screen.findByText("polymer_knowledge.jsonl")).not.toBeNull();
 
     const resizer = screen.getByRole("separator", { name: "调整详情抽屉宽度" });
     fireEvent.keyDown(resizer, { key: "ArrowLeft" });
