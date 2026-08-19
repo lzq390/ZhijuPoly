@@ -81,8 +81,7 @@ jobs:
       - name: Validate every tracked shell script
         run: |
           git ls-files -z -- '*.sh' | xargs -0 --no-run-if-empty -n1 bash -n
-          sudo apt-get update
-          sudo apt-get install --yes shellcheck
+          shellcheck --version
           git ls-files -z -- '*.sh' | xargs -0 --no-run-if-empty shellcheck --severity=error
       - name: Verify deterministic backend test coverage
         run: python3 scripts/ci/backend_test_shards.py --shards 3 --verify
