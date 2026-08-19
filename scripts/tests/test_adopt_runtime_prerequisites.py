@@ -259,11 +259,16 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             trust_target = self.source / "scripts/git_source_trust.py"
             shutil.copyfile(trust_source, trust_target)
             trust_target.chmod(0o700)
+            bridge_source = SOURCE_ROOT / "scripts/bridge_deploy_core.py"
+            bridge_target = self.source / "scripts/bridge_deploy_core.py"
+            shutil.copyfile(bridge_source, bridge_target)
+            bridge_target.chmod(0o700)
             _run(
                 self.source,
                 "/usr/bin/git",
                 "add",
                 "scripts/git_source_trust.py",
+                "scripts/bridge_deploy_core.py",
             )
             _run(
                 self.source,
@@ -451,6 +456,519 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             delivery_gate_probe=self.installer().delivery_gate_probe,
             systemd_probe=systemd_probe,
             daemon_reload=daemon_reload,
+        )
+
+    def git_blob_identity(
+        self,
+        commit: str,
+        relative: str,
+    ) -> dict[str, str]:
+        raw = _run(
+            self.source,
+            "/usr/bin/git",
+            "ls-tree",
+            commit,
+            "--",
+            relative,
+        )
+        header, observed_path = raw.split("\t", 1)
+        mode, object_type, blob_sha = header.split()
+        self.assertEqual(observed_path, relative)
+        payload = subprocess.run(
+            [
+                "/usr/bin/git",
+                "show",
+                f"{commit}:{relative}",
+            ],
+            cwd=self.source,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout
+        return {
+            "object_type": object_type,
+            "mode": mode,
+            "blob_sha": blob_sha,
+            "sha256": ADOPTER._digest(payload),
+        }
+
+    def seed_source_successor_authority(
+        self,
+        *,
+        root_journal_source_trust_sha256: str | None = None,
+    ):  # type: ignore[no-untyped-def]
+        """Publish a validator-exact completed source-successor fixture."""
+
+        installer = self.unit_permission_installer()
+        root_sha = self.git_permission_source_sha
+        for relative in ADOPTER.SOURCE_SUCCESSOR_ALLOWED_CHANGED_BLOBS:
+            path = self.source / relative
+            path.write_bytes(
+                path.read_bytes()
+                + b"\n# source-successor unit consumer fixture\n"
+            )
+            path.chmod(0o700)
+        _run(
+            self.source,
+            "/usr/bin/git",
+            "add",
+            *ADOPTER.SOURCE_SUCCESSOR_ALLOWED_CHANGED_BLOBS,
+        )
+        _run(
+            self.source,
+            "/usr/bin/git",
+            "commit",
+            "-m",
+            "source successor fixture",
+        )
+        self.sha = _run(
+            self.source,
+            "/usr/bin/git",
+            "rev-parse",
+            "HEAD",
+        )
+        _run(
+            self.source,
+            "/usr/bin/git",
+            "update-ref",
+            "refs/remotes/origin/main",
+            self.sha,
+        )
+        _make_tree_private(self.source)
+        self.delivery_gate["remote_main"] = self.sha
+        self.delivery_gate["ci"]["head_sha"] = self.sha
+
+        root_path = self.runtime / ADOPTER.PERMISSION_AUTHORITY_PATH
+        root_authority, root_digest = ADOPTER._load_json_with_digest(
+            root_path
+        )
+        root_journal_path = (
+            self.runtime
+            / ADOPTER.PERMISSION_TRANSACTION_DIRECTORY
+            / f"{root_authority['operation_id']}.json"
+        )
+        root_journal, root_journal_digest = (
+            ADOPTER._load_json_with_digest(root_journal_path)
+        )
+        if root_journal_source_trust_sha256 is not None:
+            root_journal = json.loads(json.dumps(root_journal))
+            root_journal["source_trust_sha256"] = (
+                root_journal_source_trust_sha256
+            )
+            _write_private(
+                root_journal_path,
+                ADOPTER._canonical_bytes(root_journal) + b"\n",
+                0o600,
+            )
+            root_journal, root_journal_digest = (
+                ADOPTER._load_json_with_digest(root_journal_path)
+            )
+        root_source_trust_sha256 = root_journal["source_trust_sha256"]
+        target_tree, readiness, delivery = installer._source_authority(
+            self.sha
+        )
+        self.assertEqual(delivery, self.delivery_gate)
+        files: list[dict[str, object]] = []
+        for relative in ADOPTER.UNIT_PERMISSION_SUCCESSOR_V2_BLOBS:
+            predecessor = self.git_blob_identity(root_sha, relative)
+            target = self.git_blob_identity(self.sha, relative)
+            files.append(
+                {
+                    "path": relative,
+                    "relation": (
+                        "byte-identical"
+                        if predecessor == target
+                        else "changed"
+                    ),
+                    "predecessor": predecessor,
+                    "target": target,
+                }
+            )
+        changed_paths = list(
+            ADOPTER.SOURCE_SUCCESSOR_ALLOWED_CHANGED_BLOBS
+        )
+        operation_id = "adopt-git-successor-test-0001"
+        publication = installer._source_successor_publication_plan(
+            operation_id,
+            self.runtime / "state",
+        )
+        predecessor = {
+            "authority_kind": root_authority["authority_kind"],
+            "operation_id": root_authority["operation_id"],
+            "source_sha": root_authority["source_sha"],
+            "source_tree": root_authority["source_tree"],
+            "authority_sha256": root_digest,
+            "plan_sha256": root_authority["plan_sha256"],
+            "permission_marker_sha256": root_authority[
+                "permission_marker_sha256"
+            ],
+            "permission_evidence_sha256": root_authority[
+                "permission_evidence_sha256"
+            ],
+            "permission_inventory_sha256": root_authority[
+                "permission_inventory_sha256"
+            ],
+            "original_permissions_sha256": root_authority[
+                "original_permissions_sha256"
+            ],
+            "hardened_permissions_sha256": root_authority[
+                "hardened_permissions_sha256"
+            ],
+            "completed_journal_sha256": root_journal_digest,
+            "source_trust_sha256": root_source_trust_sha256,
+        }
+        marker = {
+            "path": str(installer.permission_marker_path),
+            "raw_sha256": root_authority["permission_marker_sha256"],
+            "evidence_sha256": root_authority[
+                "permission_evidence_sha256"
+            ],
+            "inventory_sha256": root_authority[
+                "permission_inventory_sha256"
+            ],
+            "original_permissions_sha256": root_authority[
+                "original_permissions_sha256"
+            ],
+            "hardened_permissions_sha256": root_authority[
+                "hardened_permissions_sha256"
+            ],
+        }
+        records_by_path = {
+            str(record["path"]): record for record in files
+        }
+        verifier_agreement = {
+            "schema_version": 1,
+            "policy": ADOPTER.SOURCE_SUCCESSOR_VERIFIER_POLICY,
+            "candidate_execution": "forbidden-before-authority",
+            "predecessor_source_sha": root_authority["source_sha"],
+            "predecessor_source_tree": root_authority["source_tree"],
+            "bootstrap": records_by_path[
+                "scripts/bootstrap_pull_deploy.py"
+            ],
+            "git_source_trust": records_by_path[
+                "scripts/git_source_trust.py"
+            ],
+            "ci_contract": records_by_path[
+                "scripts/bridge_deploy_core.py"
+            ],
+            "required_jobs": delivery["ci"]["required_jobs"],
+            "required_jobs_sha256": ADOPTER._canonical_digest(
+                delivery["ci"]["required_jobs"]
+            ),
+        }
+        production_source = {
+            "source_sha": root_authority["production_source_sha"],
+            "source_tree": root_authority["production_source_tree"],
+        }
+        production_source_trust_sha256 = (
+            installer._production_source_trust(
+                {"production_source": production_source}
+            )
+        )
+        stable_projection = {
+            "schema_version": 1,
+            "policy": "nexpoly-production-repository-stable-projection-v1",
+            "repository_root": str(self.production),
+            "git_dir": str(self.production / ".git"),
+            "object_dir": str(self.production / ".git/objects"),
+            "index_path": str(self.production / ".git/index"),
+            "source": {
+                "sha": production_source["source_sha"],
+                "tree": production_source["source_tree"],
+                "branch": "refs/heads/main",
+                "origin": None,
+            },
+            "git_binary": "/usr/bin/git",
+            "local_config": [],
+            "head": {"kind": "symbolic", "target": "refs/heads/main"},
+            "index": {"version": 2, "entries": 1},
+            "forbidden_markers_absent": True,
+            "execution_environment": {},
+        }
+        logical_refs = [
+            {
+                "name": "refs/heads/main",
+                "object_sha": production_source["source_sha"],
+                "object_type": "commit",
+                "symbolic_target": None,
+            },
+            {
+                "name": ADOPTER.SOURCE_SUCCESSOR_DEPLOY_REMOTE_REF,
+                "object_sha": root_authority["source_sha"],
+                "object_type": "commit",
+                "symbolic_target": None,
+            },
+        ]
+        raw_refs = [
+            {"path": "refs", "kind": "directory", "mode": "0700"}
+        ]
+        target_objects = [
+            {"oid": self.sha, "type": "commit", "size": 123}
+        ]
+        repository_transition = {
+            "schema_version": 1,
+            "policy": (
+                ADOPTER.SOURCE_SUCCESSOR_REPOSITORY_TRANSITION_POLICY
+            ),
+            "source": {
+                "sha": production_source["source_sha"],
+                "tree": production_source["source_tree"],
+            },
+            "target": {"sha": self.sha, "tree": target_tree},
+            "baseline_evidence_sha256": (
+                production_source_trust_sha256
+            ),
+            "stable_projection": stable_projection,
+            "stable_projection_sha256": ADOPTER._canonical_digest(
+                stable_projection
+            ),
+            "logical_refs": logical_refs,
+            "logical_refs_sha256": ADOPTER._canonical_digest(logical_refs),
+            "raw_ref_inventory": raw_refs,
+            "raw_ref_inventory_sha256": ADOPTER._canonical_digest(raw_refs),
+            "baseline_auxiliary_inventory": [],
+            "baseline_auxiliary_inventory_sha256": (
+                ADOPTER._canonical_digest([])
+            ),
+            "baseline_semantic_object_count": 0,
+            "baseline_semantic_objects_sha256": ADOPTER._canonical_digest(
+                []
+            ),
+            "baseline_only_object_count": 0,
+            "baseline_only_objects_sha256": ADOPTER._canonical_digest([]),
+            "target_reachable_object_count": 1,
+            "target_reachable_objects_sha256": ADOPTER._canonical_digest(
+                target_objects
+            ),
+            "expected_materialized_object_count": 1,
+            "expected_materialized_objects_sha256": (
+                ADOPTER._canonical_digest(target_objects)
+            ),
+            "mutable_refs": {
+                "deploy_remote": ADOPTER.SOURCE_SUCCESSOR_DEPLOY_REMOTE_REF,
+                "prepared_prefix": (
+                    ADOPTER.SOURCE_SUCCESSOR_PREPARED_REF_PREFIX
+                ),
+            },
+            "storage_policy": {
+                "standalone": True,
+                "promisor": False,
+                "alternates": False,
+                "replace_refs": 0,
+            },
+            "auxiliary_policy": (
+                ADOPTER.SOURCE_SUCCESSOR_GIT_AUXILIARY_POLICY
+            ),
+            "object_storage_policy": (
+                ADOPTER.SOURCE_SUCCESSOR_GIT_OBJECT_STORAGE_POLICY
+            ),
+            "object_materialization_policy": (
+                "strict-fsck-owner-private-content-addressed-target-closure-v1"
+            ),
+        }
+        repository_transition_sha256 = ADOPTER._canonical_digest(
+            repository_transition
+        )
+        impact = {
+            "schema_version": 1,
+            "policy": ADOPTER.SOURCE_SUCCESSOR_IMPACT_POLICY,
+            "predecessor_authority_sha256": root_digest,
+            "predecessor_marker_sha256": root_authority[
+                "permission_marker_sha256"
+            ],
+            "production_source_trust_sha256": (
+                production_source_trust_sha256
+            ),
+            "production_repository_transition_sha256": (
+                repository_transition_sha256
+            ),
+            "target": {
+                "source_sha": self.sha,
+                "source_tree": target_tree,
+            },
+            "files": files,
+            "files_sha256": ADOPTER._canonical_digest(files),
+            "changed_paths": changed_paths,
+            "changed_paths_sha256": ADOPTER._canonical_digest(
+                changed_paths
+            ),
+            "authority_publication": publication,
+            "mutations": dict(ADOPTER.SOURCE_SUCCESSOR_MUTATIONS),
+        }
+        plan: dict[str, object] = {
+            "schema_version": 1,
+            "authority_kind": ADOPTER.SOURCE_SUCCESSOR_AUTHORITY_KIND,
+            "policy": ADOPTER.SOURCE_SUCCESSOR_POLICY,
+            "operation_id": operation_id,
+            "source_sha": self.sha,
+            "source_tree": target_tree,
+            "source_readiness": readiness,
+            "source_readiness_sha256": ADOPTER._canonical_digest(readiness),
+            "delivery_gate": delivery,
+            "delivery_gate_sha256": ADOPTER._canonical_digest(delivery),
+            "adopted_deployment_sha256": root_authority[
+                "adopted_deployment_sha256"
+            ],
+            "bootstrap_control_sha256": root_authority[
+                "bootstrap_control_sha256"
+            ],
+            "adopted_prerequisites_sha256": root_authority[
+                "adopted_prerequisites_sha256"
+            ],
+            "production_source_trust_sha256": (
+                production_source_trust_sha256
+            ),
+            "production_repository_transition": repository_transition,
+            "production_repository_transition_sha256": (
+                repository_transition_sha256
+            ),
+            "production_source": production_source,
+            "predecessor": predecessor,
+            "marker": marker,
+            "verifier_agreement": verifier_agreement,
+            "files": files,
+            "files_sha256": ADOPTER._canonical_digest(files),
+            "changed_paths": changed_paths,
+            "changed_paths_sha256": ADOPTER._canonical_digest(
+                changed_paths
+            ),
+            "authority_publication": publication,
+            "source_successor_impact": impact,
+            "source_successor_impact_sha256": ADOPTER._canonical_digest(
+                impact
+            ),
+            "mutations": dict(ADOPTER.SOURCE_SUCCESSOR_MUTATIONS),
+        }
+        completed_at = "2026-08-18T12:00:00Z"
+        authority: dict[str, object] = {
+            "schema_version": 1,
+            "status": "completed",
+            "authority_kind": ADOPTER.SOURCE_SUCCESSOR_AUTHORITY_KIND,
+            "policy": ADOPTER.SOURCE_SUCCESSOR_POLICY,
+            "operation_id": operation_id,
+            "source_sha": self.sha,
+            "source_tree": target_tree,
+            "predecessor_source_sha": root_authority["source_sha"],
+            "predecessor_source_tree": root_authority["source_tree"],
+            "predecessor_authority_sha256": root_digest,
+            "predecessor_marker_sha256": root_authority[
+                "permission_marker_sha256"
+            ],
+            "adopted_deployment_sha256": root_authority[
+                "adopted_deployment_sha256"
+            ],
+            "bootstrap_control_sha256": root_authority[
+                "bootstrap_control_sha256"
+            ],
+            "adopted_prerequisites_sha256": root_authority[
+                "adopted_prerequisites_sha256"
+            ],
+            "plan_sha256": ADOPTER._canonical_digest(plan),
+            "source_successor_impact_sha256": plan[
+                "source_successor_impact_sha256"
+            ],
+            "files_sha256": plan["files_sha256"],
+            "changed_paths": changed_paths,
+            "changed_paths_sha256": plan["changed_paths_sha256"],
+            "delivery_gate": delivery,
+            "delivery_gate_sha256": plan["delivery_gate_sha256"],
+            "verifier_agreement_sha256": ADOPTER._canonical_digest(
+                verifier_agreement
+            ),
+            "production_source_trust_sha256": (
+                production_source_trust_sha256
+            ),
+            "production_repository_transition_sha256": (
+                repository_transition_sha256
+            ),
+            "plan": plan,
+            "completed_at": completed_at,
+        }
+        authority_path = (
+            self.runtime / ADOPTER.SOURCE_SUCCESSOR_AUTHORITY_PATH
+        )
+        _write_private(
+            authority_path,
+            ADOPTER._canonical_bytes(authority) + b"\n",
+            0o600,
+        )
+        transaction_root = (
+            self.runtime / ADOPTER.SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY
+        )
+        transaction_root.mkdir(mode=0o700)
+        transaction_root.chmod(0o700)
+        journal = {
+            "schema_version": 1,
+            "status": "completed",
+            "phase": "completed",
+            "operation_id": operation_id,
+            "plan": plan,
+            "plan_sha256": authority["plan_sha256"],
+            "source_successor_impact_sha256": authority[
+                "source_successor_impact_sha256"
+            ],
+            "production_source_trust_sha256": (
+                production_source_trust_sha256
+            ),
+            "created_at": "2026-08-18T11:59:00Z",
+            "completed_at": completed_at,
+            "aborted_at": None,
+        }
+        journal_path = transaction_root / f"{operation_id}.json"
+        _write_private(
+            journal_path,
+            ADOPTER._canonical_bytes(journal) + b"\n",
+            0o600,
+        )
+        successor_digest = ADOPTER._file_digest(
+            authority_path,
+            mode=0o600,
+        )
+        self.source_successor_fixture = {
+            "authority": authority,
+            "authority_path": authority_path,
+            "journal": journal,
+            "journal_path": journal_path,
+            "root_authority": root_authority,
+            "root_digest": root_digest,
+            "root_journal": root_journal,
+            "root_journal_path": root_journal_path,
+            "root_journal_digest": root_journal_digest,
+            "root_source_trust_sha256": root_source_trust_sha256,
+            "successor_digest": successor_digest,
+            "repository_transition": repository_transition,
+            "repository_transition_sha256": (
+                repository_transition_sha256
+            ),
+        }
+        return installer, self.source_successor_fixture
+
+    def rewrite_source_successor_fixture(
+        self,
+        authority: dict[str, object],
+    ) -> None:
+        fixture = self.source_successor_fixture
+        authority["plan_sha256"] = ADOPTER._canonical_digest(
+            authority["plan"]
+        )
+        _write_private(
+            fixture["authority_path"],
+            ADOPTER._canonical_bytes(authority) + b"\n",
+            0o600,
+        )
+        journal = json.loads(json.dumps(fixture["journal"]))
+        journal["plan"] = authority["plan"]
+        journal["plan_sha256"] = authority["plan_sha256"]
+        journal["source_successor_impact_sha256"] = authority[
+            "source_successor_impact_sha256"
+        ]
+        journal["production_source_trust_sha256"] = authority[
+            "production_source_trust_sha256"
+        ]
+        _write_private(
+            fixture["journal_path"],
+            ADOPTER._canonical_bytes(journal) + b"\n",
+            0o600,
         )
 
     def prepare_abort_residue(
@@ -905,7 +1423,11 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ADOPTER.PrerequisiteError,
-            "publication namespace predates commit intent",
+            (
+                "unit permission authority schema is invalid"
+                if role == "final"
+                else "publication namespace predates commit intent"
+            ),
         ):
             self.unit_permission_installer().apply(
                 source_sha=self.sha,
@@ -1345,6 +1867,791 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             authority,
         )
 
+    def test_source_successor_unit_plan_and_authority_bind_both_roots(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority(
+            root_journal_source_trust_sha256="sha256:" + "f" * 64,
+        )
+
+        planned = installer.plan(
+            source_sha=self.sha,
+            operation_id=self.unit_operation_id,
+        )
+        plan = planned["plan"]
+        successor = plan["git_permission_successor"]
+        self.assertEqual(plan["schema_version"], 2)
+        self.assertEqual(successor["schema_version"], 2)
+        self.assertEqual(
+            successor["mode"],
+            "protected-main-ci-exact-target",
+        )
+        self.assertEqual(
+            plan["adopted_git_permissions_sha256"],
+            fixture["root_digest"],
+        )
+        self.assertEqual(
+            plan[
+                "adopted_git_permission_source_successor_sha256"
+            ],
+            fixture["successor_digest"],
+        )
+        self.assertEqual(
+            successor["root_authority"]["raw_sha256"],
+            fixture["root_digest"],
+        )
+        self.assertEqual(
+            successor["source_successor_authority"][
+                "authority_file_sha256"
+            ],
+            fixture["successor_digest"],
+        )
+        self.assertEqual(
+            successor["source_successor_authority"][
+                "production_repository_transition"
+            ],
+            fixture["repository_transition"],
+        )
+        self.assertEqual(
+            successor["source_successor_authority"][
+                "production_repository_transition_sha256"
+            ],
+            fixture["repository_transition_sha256"],
+        )
+        self.assertEqual(
+            fixture["authority"]["plan"]["predecessor"][
+                "completed_journal_sha256"
+            ],
+            fixture["root_journal_digest"],
+        )
+        self.assertEqual(
+            fixture["authority"]["plan"]["predecessor"][
+                "source_trust_sha256"
+            ],
+            fixture["root_source_trust_sha256"],
+        )
+        self.assertEqual(
+            {
+                fixture["authority"][
+                    "production_source_trust_sha256"
+                ],
+                fixture["authority"]["plan"][
+                    "production_source_trust_sha256"
+                ],
+                fixture["authority"]["plan"][
+                    "source_successor_impact"
+                ]["production_source_trust_sha256"],
+                fixture["journal"][
+                    "production_source_trust_sha256"
+                ],
+            },
+            {
+                fixture["authority"][
+                    "production_source_trust_sha256"
+                ]
+            },
+        )
+        self.assertNotEqual(
+            fixture["root_source_trust_sha256"],
+            fixture["authority"]["production_source_trust_sha256"],
+        )
+        self.assertEqual(
+            successor["target"],
+            {
+                "source_sha": self.sha,
+                "source_tree": plan["source_tree"],
+            },
+        )
+        self.assertEqual(
+            len(successor["files"]),
+            len(ADOPTER.UNIT_PERMISSION_SUCCESSOR_V2_BLOBS),
+        )
+        self.assertEqual(len(successor["files"]), 13)
+
+        authority = installer.apply(
+            source_sha=self.sha,
+            operation_id=self.unit_operation_id,
+            confirm_plan_sha256=planned["plan_sha256"],
+            confirm_unit_permission_impact_sha256=planned[
+                "unit_permission_impact_sha256"
+            ],
+        )
+        self.assertEqual(authority["schema_version"], 2)
+        self.assertEqual(authority["plan"]["schema_version"], 2)
+        self.assertEqual(
+            authority["adopted_git_permissions_sha256"],
+            fixture["root_digest"],
+        )
+        self.assertEqual(
+            authority[
+                "adopted_git_permission_source_successor_sha256"
+            ],
+            fixture["successor_digest"],
+        )
+        self.assertEqual(
+            authority["plan"]["git_permission_successor"],
+            successor,
+        )
+        replanned = installer.plan(
+            source_sha=self.sha,
+            operation_id=self.unit_operation_id,
+        )
+        self.assertEqual(replanned, planned)
+        self.assertEqual(
+            installer.apply(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_unit_permission_impact_sha256=planned[
+                    "unit_permission_impact_sha256"
+                ],
+            ),
+            authority,
+        )
+
+    def test_source_successor_v2_intent_crash_resumes(self) -> None:
+        installer, _fixture = self.seed_source_successor_authority()
+        planned = installer.plan(
+            source_sha=self.sha,
+            operation_id=self.unit_operation_id,
+        )
+
+        def crash(phase: str) -> None:
+            if phase == "unit-permission-intent":
+                raise RuntimeError("crash after v2 unit intent")
+
+        with self.assertRaisesRegex(RuntimeError, "after v2 unit intent"):
+            self.unit_permission_installer(crash).apply(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_unit_permission_impact_sha256=planned[
+                    "unit_permission_impact_sha256"
+                ],
+            )
+        transaction = installer._load_unit_transaction(
+            self.unit_operation_id
+        )
+        self.assertIsNotNone(transaction)
+        assert transaction is not None
+        self.assertEqual(transaction["schema_version"], 2)
+        self.assertEqual(transaction["plan"]["schema_version"], 2)
+        self.assertEqual(transaction["phase"], "intent")
+
+        authority = self.unit_permission_installer().apply(
+            source_sha=self.sha,
+            operation_id=self.unit_operation_id,
+            confirm_plan_sha256=planned["plan_sha256"],
+            confirm_unit_permission_impact_sha256=planned[
+                "unit_permission_impact_sha256"
+            ],
+        )
+        self.assertEqual(authority["schema_version"], 2)
+        self.assertEqual(
+            self.unit_permission_installer().plan(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+            ),
+            planned,
+        )
+
+    def test_unit_transaction_inventory_rejects_v2_schema_drift(self) -> None:
+        installer, _fixture = self.seed_source_successor_authority()
+        planned = installer.plan(
+            source_sha=self.sha,
+            operation_id=self.unit_operation_id,
+        )
+
+        def crash(phase: str) -> None:
+            if phase == "unit-permission-intent":
+                raise RuntimeError("crash after v2 inventory intent")
+
+        with self.assertRaisesRegex(RuntimeError, "v2 inventory intent"):
+            self.unit_permission_installer(crash).apply(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_unit_permission_impact_sha256=planned[
+                    "unit_permission_impact_sha256"
+                ],
+            )
+        transaction_path = installer._unit_transaction_path(
+            self.unit_operation_id
+        )
+        baseline = json.loads(transaction_path.read_text(encoding="utf-8"))
+
+        def reseal(document: dict[str, object]) -> None:
+            plan = document["plan"]
+            document["plan_sha256"] = ADOPTER._canonical_digest(plan)
+            document["unit_permission_impact_sha256"] = plan[
+                "unit_permission_impact_sha256"
+            ]
+            _write_private(
+                transaction_path,
+                ADOPTER._canonical_bytes(document) + b"\n",
+                0o600,
+            )
+
+        def top_bool(document: dict[str, object]) -> None:
+            document["schema_version"] = True
+
+        def top_float(document: dict[str, object]) -> None:
+            document["schema_version"] = 2.0
+
+        def plan_bool(document: dict[str, object]) -> None:
+            document["plan"]["schema_version"] = True
+
+        def plan_float(document: dict[str, object]) -> None:
+            document["plan"]["schema_version"] = 2.0
+
+        def mismatch(document: dict[str, object]) -> None:
+            document["schema_version"] = 1
+
+        def successor_bool(document: dict[str, object]) -> None:
+            document["plan"]["git_permission_successor"][
+                "schema_version"
+            ] = True
+
+        def successor_float(document: dict[str, object]) -> None:
+            document["plan"]["git_permission_successor"][
+                "schema_version"
+            ] = 2.0
+
+        def missing_successor_digest(document: dict[str, object]) -> None:
+            document["plan"].pop(
+                "adopted_git_permission_source_successor_sha256"
+            )
+
+        def extra_successor_field(document: dict[str, object]) -> None:
+            successor = document["plan"]["git_permission_successor"]
+            successor["unexpected_source_successor"] = True
+            body = dict(successor)
+            body.pop("identity_sha256")
+            successor["identity_sha256"] = ADOPTER._canonical_digest(body)
+
+        def missing_repository_transition(
+            document: dict[str, object],
+        ) -> None:
+            successor = document["plan"]["git_permission_successor"]
+            compact = successor["source_successor_authority"]
+            compact.pop("production_repository_transition")
+            compact_body = dict(compact)
+            compact_body.pop("identity_sha256")
+            compact["identity_sha256"] = ADOPTER._canonical_digest(
+                compact_body
+            )
+            successor_body = dict(successor)
+            successor_body.pop("identity_sha256")
+            successor["identity_sha256"] = ADOPTER._canonical_digest(
+                successor_body
+            )
+
+        variants = (
+            ("top-bool", top_bool),
+            ("top-float", top_float),
+            ("plan-bool", plan_bool),
+            ("plan-float", plan_float),
+            ("top-plan-mismatch", mismatch),
+            ("successor-bool", successor_bool),
+            ("successor-float", successor_float),
+            ("missing-successor-digest", missing_successor_digest),
+            ("extra-successor-field", extra_successor_field),
+            ("missing-repository-transition", missing_repository_transition),
+        )
+        for label, mutate in variants:
+            with self.subTest(schema_drift=label):
+                transaction = json.loads(json.dumps(baseline))
+                mutate(transaction)
+                reseal(transaction)
+                with self.assertRaisesRegex(
+                    ADOPTER.PrerequisiteError,
+                    "transaction inventory is invalid",
+                ):
+                    installer._assert_unit_exclusive(
+                        self.unit_operation_id
+                    )
+
+    def test_unit_transaction_inventory_rejects_v1_successor_extension(
+        self,
+    ) -> None:
+        installer = self.unit_permission_installer()
+        planned = installer.plan(
+            source_sha=self.sha,
+            operation_id=self.unit_operation_id,
+        )
+
+        def crash(phase: str) -> None:
+            if phase == "unit-permission-intent":
+                raise RuntimeError("crash after v1 inventory intent")
+
+        with self.assertRaisesRegex(RuntimeError, "v1 inventory intent"):
+            self.unit_permission_installer(crash).apply(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+                confirm_plan_sha256=planned["plan_sha256"],
+                confirm_unit_permission_impact_sha256=planned[
+                    "unit_permission_impact_sha256"
+                ],
+            )
+        transaction_path = installer._unit_transaction_path(
+            self.unit_operation_id
+        )
+        transaction = json.loads(
+            transaction_path.read_text(encoding="utf-8")
+        )
+        transaction["plan"][
+            "adopted_git_permission_source_successor_sha256"
+        ] = "sha256:" + "0" * 64
+        transaction["plan_sha256"] = ADOPTER._canonical_digest(
+            transaction["plan"]
+        )
+        _write_private(
+            transaction_path,
+            ADOPTER._canonical_bytes(transaction) + b"\n",
+            0o600,
+        )
+
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "transaction inventory is invalid",
+        ):
+            installer._assert_unit_exclusive(self.unit_operation_id)
+
+    def test_source_successor_missing_final_fails_without_v1_fallback(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        fixture["authority_path"].unlink()
+
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "source-successor|source successor|private JSON is unavailable",
+        ):
+            installer.plan(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+            )
+
+    def test_source_successor_residue_fails_without_v1_fallback(self) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        staging = (
+            self.runtime
+            / "state"
+            / (
+                f".{ADOPTER.SOURCE_SUCCESSOR_AUTHORITY_PATH.name}"
+                f".create-{fixture['authority']['operation_id']}"
+            )
+        )
+        _write_private(staging, b"{}\n", 0o600)
+
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "lineage contains publication residue",
+        ):
+            installer.plan(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+            )
+
+    def test_source_successor_tamper_fails_without_v1_fallback(self) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        authority = json.loads(json.dumps(fixture["authority"]))
+        authority["unexpected"] = True
+        self.rewrite_source_successor_fixture(authority)
+
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "source successor authority has an invalid shape",
+        ):
+            installer.plan(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+            )
+
+    def test_source_successor_noncanonical_authority_raw_is_rejected(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        _write_private(
+            fixture["authority_path"],
+            json.dumps(
+                fixture["authority"],
+                sort_keys=True,
+                indent=2,
+            ).encode("utf-8")
+            + b"\n",
+            0o600,
+        )
+
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "source successor authority has an invalid shape",
+        ):
+            installer.plan(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+            )
+
+    def test_source_successor_completed_journal_raw_and_shape_are_exact(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        baseline = fixture["journal"]
+        variants = []
+        variants.append(
+            (
+                "noncanonical-raw",
+                json.dumps(
+                    baseline,
+                    sort_keys=True,
+                    indent=2,
+                ).encode("utf-8")
+                + b"\n",
+            )
+        )
+        extra_field = json.loads(json.dumps(baseline))
+        extra_field["unexpected"] = True
+        variants.append(
+            (
+                "extra-field",
+                ADOPTER._canonical_bytes(extra_field) + b"\n",
+            )
+        )
+
+        for label, payload in variants:
+            with self.subTest(journal=label):
+                _write_private(fixture["journal_path"], payload, 0o600)
+                with self.assertRaisesRegex(
+                    ADOPTER.PrerequisiteError,
+                    "source successor completed journal differs",
+                ):
+                    installer.plan(
+                        source_sha=self.sha,
+                        operation_id=self.unit_operation_id,
+                    )
+
+    def test_source_successor_completed_journal_time_matches_authority(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        journal = json.loads(json.dumps(fixture["journal"]))
+        journal["completed_at"] = "2026-08-18T12:00:01Z"
+        _write_private(
+            fixture["journal_path"],
+            ADOPTER._canonical_bytes(journal) + b"\n",
+            0o600,
+        )
+
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "source successor completed journal differs",
+        ):
+            installer.plan(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+            )
+
+    def test_source_successor_completed_journal_time_is_ordered(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        journal = json.loads(json.dumps(fixture["journal"]))
+        journal["created_at"] = "2026-08-18T12:00:01Z"
+        _write_private(
+            fixture["journal_path"],
+            ADOPTER._canonical_bytes(journal) + b"\n",
+            0o600,
+        )
+
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "source successor completed journal differs",
+        ):
+            installer.plan(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+            )
+
+    def test_source_successor_timestamps_are_real_canonical_utc(self) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        baseline_authority = fixture["authority"]
+        baseline_journal = fixture["journal"]
+        variants = (
+            ("invalid-calendar", "2026-02-30T11:59:00Z"),
+            ("noncanonical-offset", "2026-08-18T11:59:00+00:00"),
+        )
+
+        for label, timestamp in variants:
+            with self.subTest(journal_timestamp=label):
+                journal = json.loads(json.dumps(baseline_journal))
+                journal["created_at"] = timestamp
+                _write_private(
+                    fixture["journal_path"],
+                    ADOPTER._canonical_bytes(journal) + b"\n",
+                    0o600,
+                )
+                with self.assertRaisesRegex(
+                    ADOPTER.PrerequisiteError,
+                    "source successor completed journal differs",
+                ):
+                    installer.plan(
+                        source_sha=self.sha,
+                        operation_id=self.unit_operation_id,
+                    )
+
+        for label, timestamp in variants:
+            with self.subTest(authority_timestamp=label):
+                authority = json.loads(json.dumps(baseline_authority))
+                authority["completed_at"] = timestamp
+                journal = json.loads(json.dumps(baseline_journal))
+                journal["completed_at"] = timestamp
+                _write_private(
+                    fixture["authority_path"],
+                    ADOPTER._canonical_bytes(authority) + b"\n",
+                    0o600,
+                )
+                _write_private(
+                    fixture["journal_path"],
+                    ADOPTER._canonical_bytes(journal) + b"\n",
+                    0o600,
+                )
+                with self.assertRaises(ADOPTER.PrerequisiteError):
+                    installer.plan(
+                        source_sha=self.sha,
+                        operation_id=self.unit_operation_id,
+                    )
+
+    def test_source_successor_journal_swap_between_snapshots_is_rejected(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        alternate = json.loads(json.dumps(fixture["journal"]))
+        alternate["created_at"] = "2026-08-18T11:58:00Z"
+        read_snapshot = installer._read_source_successor_authority
+        read_count = 0
+
+        def read_then_swap():  # type: ignore[no-untyped-def]
+            nonlocal read_count
+            snapshot = read_snapshot()
+            read_count += 1
+            if read_count == 1:
+                _write_private(
+                    fixture["journal_path"],
+                    ADOPTER._canonical_bytes(alternate) + b"\n",
+                    0o600,
+                )
+            return snapshot
+
+        with mock.patch.object(
+            installer,
+            "_read_source_successor_authority",
+            side_effect=read_then_swap,
+        ), self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "source successor authority changed while reading",
+        ):
+            installer.plan(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+            )
+        self.assertEqual(read_count, 2)
+
+    def test_source_successor_root_completed_journal_is_canonical_and_exact(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        baseline = fixture["root_journal"]
+        extra_field = json.loads(json.dumps(baseline))
+        extra_field["unexpected"] = True
+        variants = (
+            (
+                "noncanonical-raw",
+                json.dumps(
+                    baseline,
+                    sort_keys=True,
+                    indent=2,
+                ).encode("utf-8")
+                + b"\n",
+            ),
+            (
+                "extra-field",
+                ADOPTER._canonical_bytes(extra_field) + b"\n",
+            ),
+        )
+
+        for label, payload in variants:
+            with self.subTest(root_journal=label):
+                _write_private(
+                    fixture["root_journal_path"],
+                    payload,
+                    0o600,
+                )
+                with self.assertRaisesRegex(
+                    ADOPTER.PrerequisiteError,
+                    "adopted Git permission completed journal differs",
+                ):
+                    installer.plan(
+                        source_sha=self.sha,
+                        operation_id=self.unit_operation_id,
+                    )
+
+    def test_source_successor_predecessor_journal_binding_drift_is_rejected(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        baseline = fixture["authority"]
+        for field in (
+            "completed_journal_sha256",
+            "source_trust_sha256",
+        ):
+            with self.subTest(predecessor_field=field):
+                authority = json.loads(json.dumps(baseline))
+                authority["plan"]["predecessor"][field] = (
+                    "sha256:" + "0" * 64
+                )
+                self.rewrite_source_successor_fixture(authority)
+                with self.assertRaisesRegex(
+                    ADOPTER.PrerequisiteError,
+                    "source successor authority differs from its root or target",
+                ):
+                    installer.plan(
+                        source_sha=self.sha,
+                        operation_id=self.unit_operation_id,
+                    )
+
+    def test_source_successor_production_trust_four_way_drift_is_rejected(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        baseline_authority = fixture["authority"]
+        baseline_journal = fixture["journal"]
+        changed = "sha256:" + "0" * 64
+
+        for layer in ("authority", "plan", "impact", "journal"):
+            with self.subTest(production_trust_layer=layer):
+                authority = json.loads(json.dumps(baseline_authority))
+                if layer == "authority":
+                    authority["production_source_trust_sha256"] = changed
+                    self.rewrite_source_successor_fixture(authority)
+                elif layer == "plan":
+                    authority["plan"][
+                        "production_source_trust_sha256"
+                    ] = changed
+                    self.rewrite_source_successor_fixture(authority)
+                elif layer == "impact":
+                    impact = authority["plan"][
+                        "source_successor_impact"
+                    ]
+                    impact["production_source_trust_sha256"] = changed
+                    impact_digest = ADOPTER._canonical_digest(impact)
+                    authority["plan"][
+                        "source_successor_impact_sha256"
+                    ] = impact_digest
+                    authority[
+                        "source_successor_impact_sha256"
+                    ] = impact_digest
+                    self.rewrite_source_successor_fixture(authority)
+                else:
+                    self.rewrite_source_successor_fixture(authority)
+                    journal = json.loads(json.dumps(baseline_journal))
+                    journal[
+                        "production_source_trust_sha256"
+                    ] = changed
+                    _write_private(
+                        fixture["journal_path"],
+                        ADOPTER._canonical_bytes(journal) + b"\n",
+                        0o600,
+                    )
+                with self.assertRaises(ADOPTER.PrerequisiteError):
+                    installer.plan(
+                        source_sha=self.sha,
+                        operation_id=self.unit_operation_id,
+                    )
+
+    def test_source_successor_transaction_staging_is_lineage_residue(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        residue = (
+            self.runtime
+            / "state"
+            / (
+                f".{ADOPTER.SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY.name}"
+                f".create-{fixture['authority']['operation_id']}.json"
+            )
+        )
+        _write_private(residue, b"{}\n", 0o600)
+
+        with self.assertRaisesRegex(
+            ADOPTER.PrerequisiteError,
+            "lineage contains publication residue",
+        ):
+            installer.plan(
+                source_sha=self.sha,
+                operation_id=self.unit_operation_id,
+            )
+
+    def test_source_successor_identity_and_manifest_drift_fail_closed(
+        self,
+    ) -> None:
+        installer, fixture = self.seed_source_successor_authority()
+        baseline = fixture["authority"]
+
+        def target_drift(document: dict[str, object]) -> None:
+            document["source_sha"] = "0" * 40
+
+        def tree_drift(document: dict[str, object]) -> None:
+            document["source_tree"] = "0" * 40
+
+        def delivery_drift(document: dict[str, object]) -> None:
+            document["plan"]["delivery_gate"]["ci"][
+                "conclusion"
+            ] = "failure"
+
+        def count_drift(document: dict[str, object]) -> None:
+            document["plan"]["files"].pop()
+
+        def mode_drift(document: dict[str, object]) -> None:
+            record = document["plan"]["files"][0]
+            record["predecessor"]["mode"] = "100644"
+            record["target"]["mode"] = "100644"
+
+        def blob_drift(document: dict[str, object]) -> None:
+            record = document["plan"]["files"][0]
+            record["predecessor"]["sha256"] = "sha256:" + "0" * 64
+            record["target"]["sha256"] = "sha256:" + "0" * 64
+
+        def relation_drift(document: dict[str, object]) -> None:
+            document["plan"]["files"][0]["relation"] = "changed"
+
+        def repository_transition_drift(
+            document: dict[str, object],
+        ) -> None:
+            document["plan"]["production_repository_transition"][
+                "target"
+            ]["sha"] = "0" * 40
+
+        mutations = (
+            ("target", target_drift),
+            ("tree", tree_drift),
+            ("delivery", delivery_drift),
+            ("13-file-count", count_drift),
+            ("file-mode", mode_drift),
+            ("file-blob", blob_drift),
+            ("file-relation", relation_drift),
+            ("repository-transition", repository_transition_drift),
+        )
+        for label, mutate in mutations:
+            with self.subTest(drift=label):
+                authority = json.loads(json.dumps(baseline))
+                mutate(authority)
+                self.rewrite_source_successor_fixture(authority)
+                with self.assertRaises(ADOPTER.PrerequisiteError):
+                    installer.plan(
+                        source_sha=self.sha,
+                        operation_id=self.unit_operation_id,
+                    )
+
     def test_unit_permission_plan_apply_and_authority_evidence(self) -> None:
         installer = self.unit_permission_installer()
         runtime_before = _inventory(self.runtime)
@@ -1465,7 +2772,10 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
 
         for bad_version in (True, 1.0):
             for discriminator, expected_error in (
-                ("plan", "plan context changed"),
+                (
+                    "plan",
+                    "unit permission hardening plan schema changed",
+                ),
                 ("git-successor", "predecessor authority changed"),
             ):
                 plan = json.loads(json.dumps(original))
@@ -3570,6 +4880,10 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             reference,
             self.production_sha,
         )
+        prepared_ref = self.production / ".git" / reference
+        prepared_ref.chmod(0o600)
+        prepared_ref.parent.chmod(0o700)
+        prepared_ref.parent.parent.chmod(0o700)
         with self.assertRaisesRegex(
             ADOPTER.PrerequisiteError, "prepared Git ref remains"
         ):

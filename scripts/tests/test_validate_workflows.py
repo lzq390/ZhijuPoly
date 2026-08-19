@@ -28,6 +28,15 @@ DEPLOYMENT_TEXT = (ROOT / "docs/deployment.md").read_text(encoding="utf-8")
 RELEASE_CONTROLLER_TEXT = (ROOT / "docs/release-controller.md").read_text(
     encoding="utf-8"
 )
+SOURCE_SUCCESSOR_TEXT = (
+    ROOT / "scripts/adopt_git_permission_source_successor.py"
+).read_text(encoding="utf-8")
+ADOPT_RUNTIME_PREREQUISITES_TEXT = (
+    ROOT / "scripts/adopt_runtime_prerequisites.py"
+).read_text(encoding="utf-8")
+PULL_DEPLOY_CONTROLLER_TEXT = (
+    ROOT / "scripts/pull_deploy_controller.py"
+).read_text(encoding="utf-8")
 
 
 class StructuredWorkflowPolicyTests(unittest.TestCase):
@@ -56,6 +65,500 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
             any("plan and impact confirmations" in failure for failure in failures),
             failures,
         )
+
+    def test_source_successor_docs_require_both_confirmations(self) -> None:
+        changed = DEPLOYMENT_TEXT.replace(
+            "  --confirm-source-successor-impact-sha256 "
+            "sha256:<reviewed-impact-digest>\n",
+            "",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_adopted_permission_documentation_text(
+            changed,
+            RELEASE_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertTrue(
+            any(
+                "source-successor apply and abort" in failure
+                for failure in failures
+            ),
+            failures,
+        )
+
+    def test_source_successor_docs_bind_candidate_nonexecution(self) -> None:
+        changed = DEPLOYMENT_TEXT.replace(
+            "standard-library-only",
+            "candidate-powered",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_adopted_permission_documentation_text(
+            changed,
+            RELEASE_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertTrue(
+            any("standard-library-only" in failure for failure in failures),
+            failures,
+        )
+
+    def test_source_successor_docs_keep_old_and_current_trust_separate(
+        self,
+    ) -> None:
+        changed = DEPLOYMENT_TEXT.replace(
+            "separate evidence and must not be compared for equality",
+            "interchangeable evidence that may be compared for equality",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_adopted_permission_documentation_text(
+            changed,
+            RELEASE_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertTrue(
+            any("must not be compared for equality" in failure for failure in failures),
+            failures,
+        )
+
+    def test_source_successor_docs_pin_the_fixed_13_file_manifest(
+        self,
+    ) -> None:
+        changed = RELEASE_CONTROLLER_TEXT.replace(
+            "fixed 13-file manifest",
+            "dynamically discovered manifest",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_adopted_permission_documentation_text(
+            DEPLOYMENT_TEXT,
+            changed,
+            failures,
+        )
+        self.assertTrue(
+            any("fixed 13-file manifest" in failure for failure in failures),
+            failures,
+        )
+
+    def test_source_successor_docs_require_unit_schema_v2_and_v4_v3(
+        self,
+    ) -> None:
+        mutations = (
+            (
+                "`state/adopted-unit-permissions.json` authority must all use "
+                "schema v2",
+                "`state/adopted-unit-permissions.json` authority may use "
+                "schema v1",
+            ),
+            ("descriptor v4", "descriptor v3"),
+            ("current-state v3", "current-state v2"),
+        )
+        for old, new in mutations:
+            with self.subTest(contract=old):
+                changed = DEPLOYMENT_TEXT.replace(old, new, 1)
+                failures: list[str] = []
+                policy.validate_adopted_permission_documentation_text(
+                    changed,
+                    RELEASE_CONTROLLER_TEXT,
+                    failures,
+                )
+                self.assertTrue(failures)
+
+    def test_source_successor_docs_pin_all_five_lineage_anchors(
+        self,
+    ) -> None:
+        for anchor in (
+            "`source_successor_authority_sha256`",
+            "`source_successor_completed_journal_sha256`",
+            "`unit_permission_authority_sha256`",
+            "`unit_permission_completed_journal_sha256`",
+            "`unit_permission_transaction_inventory_sha256`",
+        ):
+            with self.subTest(anchor=anchor):
+                changed = RELEASE_CONTROLLER_TEXT.replace(
+                    anchor,
+                    "`removed_lineage_anchor`",
+                    1,
+                )
+                failures: list[str] = []
+                policy.validate_adopted_permission_documentation_text(
+                    DEPLOYMENT_TEXT,
+                    changed,
+                    failures,
+                )
+                self.assertTrue(
+                    any(anchor in failure for failure in failures),
+                    failures,
+                )
+
+    def test_source_successor_docs_make_written_lineage_permanent(
+        self,
+    ) -> None:
+        mutations = (
+            (
+                "Historical current-state v3\nrecords may omit",
+                "Historical current-state v3\nrecords must invent",
+            ),
+            (
+                "once written, all five anchors are\npermanent",
+                "all five anchors may later be\nremoved",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(contract=old):
+                changed = DEPLOYMENT_TEXT.replace(old, new, 1)
+                failures: list[str] = []
+                policy.validate_adopted_permission_documentation_text(
+                    changed,
+                    RELEASE_CONTROLLER_TEXT,
+                    failures,
+                )
+                self.assertTrue(
+                    any(old.split()[0] in failure for failure in failures),
+                    failures,
+                )
+
+    def test_first_deployment_commands_are_strictly_ordered(self) -> None:
+        rehearsal_plan = policy.ORDINARY_DEPLOYMENT_COMMANDS[2]
+        rehearsal_apply = policy.ORDINARY_DEPLOYMENT_COMMANDS[3]
+        for label, deployment, controller in (
+            (
+                "deployment",
+                DEPLOYMENT_TEXT,
+                RELEASE_CONTROLLER_TEXT,
+            ),
+            (
+                "release-controller",
+                DEPLOYMENT_TEXT,
+                RELEASE_CONTROLLER_TEXT,
+            ),
+        ):
+            with self.subTest(document=label):
+                original = deployment if label == "deployment" else controller
+                changed = original.replace(rehearsal_plan, "ORDER-TOKEN", 1)
+                changed = changed.replace(rehearsal_apply, rehearsal_plan, 1)
+                changed = changed.replace("ORDER-TOKEN", rehearsal_apply, 1)
+                self.assertEqual(changed.count(rehearsal_plan), 1)
+                self.assertEqual(changed.count(rehearsal_apply), 1)
+                failures: list[str] = []
+                policy.validate_adopted_permission_documentation_text(
+                    changed if label == "deployment" else deployment,
+                    changed if label == "release-controller" else controller,
+                    failures,
+                )
+                self.assertTrue(
+                    any(
+                        "must order one exact direct plan" in failure
+                        for failure in failures
+                    ),
+                    failures,
+                )
+
+    def test_successor_and_unit_authorities_precede_first_deployment(
+        self,
+    ) -> None:
+        successor_apply = policy.SOURCE_SUCCESSOR_APPLY_COMMAND
+        unit_plan = policy.UNIT_PERMISSION_PLAN_COMMAND
+        for label, original in (
+            ("deployment", DEPLOYMENT_TEXT),
+            ("release-controller", RELEASE_CONTROLLER_TEXT),
+        ):
+            with self.subTest(document=label):
+                changed = original.replace(successor_apply, "ORDER-TOKEN", 1)
+                changed = changed.replace(unit_plan, successor_apply, 1)
+                changed = changed.replace("ORDER-TOKEN", unit_plan, 1)
+                self.assertEqual(changed.count(successor_apply), 1)
+                self.assertEqual(changed.count(unit_plan), 1)
+                failures: list[str] = []
+                policy.validate_adopted_permission_documentation_text(
+                    changed if label == "deployment" else DEPLOYMENT_TEXT,
+                    (
+                        changed
+                        if label == "release-controller"
+                        else RELEASE_CONTROLLER_TEXT
+                    ),
+                    failures,
+                )
+                self.assertTrue(
+                    any(
+                        "must order one exact source-successor plan/apply"
+                        in failure
+                        for failure in failures
+                    ),
+                    failures,
+                )
+
+    def test_source_successor_docs_freeze_main_until_first_current_state(
+        self,
+    ) -> None:
+        for label, original in (
+            ("deployment", DEPLOYMENT_TEXT),
+            ("release-controller", RELEASE_CONTROLLER_TEXT),
+        ):
+            for marker in policy.SOURCE_SUCCESSOR_MAIN_FREEZE_MARKERS:
+                with self.subTest(document=label, marker=marker):
+                    self.assertEqual(original.count(marker), 1)
+                    changed = original.replace(
+                        marker,
+                        "removed-source-successor-main-freeze-contract",
+                        1,
+                    )
+                    failures: list[str] = []
+                    policy.validate_adopted_permission_documentation_text(
+                        changed if label == "deployment" else DEPLOYMENT_TEXT,
+                        (
+                            changed
+                            if label == "release-controller"
+                            else RELEASE_CONTROLLER_TEXT
+                        ),
+                        failures,
+                    )
+                    self.assertTrue(
+                        any(marker in failure for failure in failures),
+                        failures,
+                    )
+
+    def test_control_chain_only_docs_do_not_authorize_mutating_commands(
+        self,
+    ) -> None:
+        for label, original in (
+            ("deployment", DEPLOYMENT_TEXT),
+            ("release-controller", RELEASE_CONTROLLER_TEXT),
+        ):
+            for marker in policy.CONTROL_CHAIN_ONLY_COMMAND_MARKERS:
+                with self.subTest(document=label, marker=marker):
+                    self.assertEqual(original.count(marker), 1)
+                    changed = original.replace(
+                        marker,
+                        "removed-control-chain-only-command-warning",
+                        1,
+                    )
+                    failures: list[str] = []
+                    policy.validate_adopted_permission_documentation_text(
+                        changed if label == "deployment" else DEPLOYMENT_TEXT,
+                        (
+                            changed
+                            if label == "release-controller"
+                            else RELEASE_CONTROLLER_TEXT
+                        ),
+                        failures,
+                    )
+                    self.assertTrue(
+                        any(marker in failure for failure in failures),
+                        failures,
+                    )
+
+    def test_mutable_role_precedes_first_deployment(self) -> None:
+        for label, original, role_marker in (
+            (
+                "deployment",
+                DEPLOYMENT_TEXT,
+                policy.MUTABLE_ROLE_PLAN_COMMAND,
+            ),
+            (
+                "release-controller",
+                RELEASE_CONTROLLER_TEXT,
+                policy.CONTROLLER_MUTABLE_ROLE_MARKER,
+            ),
+        ):
+            with self.subTest(document=label):
+                unit_apply = policy.UNIT_PERMISSION_APPLY_COMMAND
+                changed = original.replace(unit_apply, "ORDER-TOKEN", 1)
+                changed = changed.replace(role_marker, unit_apply, 1)
+                changed = changed.replace("ORDER-TOKEN", role_marker, 1)
+                failures: list[str] = []
+                policy.validate_adopted_permission_documentation_text(
+                    changed if label == "deployment" else DEPLOYMENT_TEXT,
+                    (
+                        changed
+                        if label == "release-controller"
+                        else RELEASE_CONTROLLER_TEXT
+                    ),
+                    failures,
+                )
+                self.assertTrue(
+                    any("mutable-data role plan/apply" in failure for failure in failures),
+                    failures,
+                )
+
+    def test_unit_permission_docs_require_exact_abort(self) -> None:
+        changed = DEPLOYMENT_TEXT.replace(
+            policy.UNIT_PERMISSION_ABORT_COMMAND,
+            "removed-unit-permission-abort",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_adopted_permission_documentation_text(
+            changed,
+            RELEASE_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertTrue(
+            any(
+                "deployment runbook also carrying exact abort" in failure
+                for failure in failures
+            ),
+            failures,
+        )
+
+    def test_successor_implementation_contract_is_cross_checked(self) -> None:
+        failures: list[str] = []
+        policy.validate_successor_authority_contract_source_text(
+            SOURCE_SUCCESSOR_TEXT,
+            ADOPT_RUNTIME_PREREQUISITES_TEXT,
+            PULL_DEPLOY_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertEqual(failures, [])
+
+    def test_successor_implementation_rejects_manifest_drift(self) -> None:
+        mutations = (
+            (
+                SOURCE_SUCCESSOR_TEXT.replace(
+                    '    "scripts/bridge_deploy_core.py",\n',
+                    '    "scripts/unreviewed_dynamic_file.py",\n',
+                    1,
+                ),
+                ADOPT_RUNTIME_PREREQUISITES_TEXT,
+                PULL_DEPLOY_CONTROLLER_TEXT,
+            ),
+            (
+                SOURCE_SUCCESSOR_TEXT,
+                ADOPT_RUNTIME_PREREQUISITES_TEXT.replace(
+                    '    "scripts/bridge_deploy_core.py",\n',
+                    '    "scripts/unreviewed_dynamic_file.py",\n',
+                    1,
+                ),
+                PULL_DEPLOY_CONTROLLER_TEXT,
+            ),
+            (
+                SOURCE_SUCCESSOR_TEXT,
+                ADOPT_RUNTIME_PREREQUISITES_TEXT,
+                PULL_DEPLOY_CONTROLLER_TEXT.replace(
+                    '+ ("scripts/bridge_deploy_core.py",)',
+                    '+ ("scripts/unreviewed_dynamic_file.py",)',
+                    1,
+                ),
+            ),
+        )
+        for successor, prerequisites, controller in mutations:
+            with self.subTest(
+                changed_source=(
+                    "publisher"
+                    if successor != SOURCE_SUCCESSOR_TEXT
+                    else "adopter"
+                    if prerequisites != ADOPT_RUNTIME_PREREQUISITES_TEXT
+                    else "controller"
+                )
+            ):
+                failures: list[str] = []
+                policy.validate_successor_authority_contract_source_text(
+                    successor,
+                    prerequisites,
+                    controller,
+                    failures,
+                )
+                self.assertTrue(
+                    any(
+                        "fixed 13-file manifest" in failure
+                        for failure in failures
+                    ),
+                    failures,
+                )
+
+    def test_successor_implementation_rejects_equal_trust_proofs(self) -> None:
+        changed = SOURCE_SUCCESSOR_TEXT.replace(
+            "sha256:ba12709eb87ebc3ca51ac6ebcaca425be50487420c3529b80ec8696cb8602a3b",
+            "sha256:dd8c493199fd02daf621e7ffbcd51ca35ebf7da0e6f77fefd0759137c7a408d4",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_successor_authority_contract_source_text(
+            changed,
+            ADOPT_RUNTIME_PREREQUISITES_TEXT,
+            PULL_DEPLOY_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertTrue(
+            any("two distinct digest proofs" in failure for failure in failures),
+            failures,
+        )
+
+    def test_successor_implementation_rejects_unit_schema_drift(self) -> None:
+        changed = ADOPT_RUNTIME_PREREQUISITES_TEXT.replace(
+            "        schema_version = (\n"
+            "            2\n"
+            "            if \"adopted_git_permission_source_successor_sha256\" "
+            "in context\n",
+            "        schema_version = (\n"
+            "            3\n"
+            "            if \"adopted_git_permission_source_successor_sha256\" "
+            "in context\n",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_successor_authority_contract_source_text(
+            SOURCE_SUCCESSOR_TEXT,
+            changed,
+            PULL_DEPLOY_CONTROLLER_TEXT,
+            failures,
+        )
+        self.assertTrue(
+            any(
+                "final authority must use schema v2" in failure
+                for failure in failures
+            ),
+            failures,
+        )
+
+    def test_successor_implementation_rejects_descriptor_or_lineage_drift(
+        self,
+    ) -> None:
+        mutations = (
+            (
+                "DESCRIPTOR_SCHEMA_VERSION = 4",
+                "DESCRIPTOR_SCHEMA_VERSION = 3",
+                "descriptor v4",
+            ),
+            (
+                '\nADOPTION_SUCCESSOR_LINEAGE_FIELDS = {\n'
+                '    "schema_version",\n'
+                '    "source_successor_authority_sha256",\n'
+                '    "source_successor_completed_journal_sha256",\n',
+                '\nADOPTION_SUCCESSOR_LINEAGE_FIELDS = {\n'
+                '    "schema_version",\n'
+                '    "source_successor_authority_sha256",\n'
+                '    "removed_completed_journal_anchor",\n',
+                "five permanent raw-authority anchors",
+            ),
+            (
+                '    "unit_permission_transaction_inventory_sha256",\n',
+                '    "removed_unit_transaction_inventory_anchor",\n',
+                "five permanent raw-authority anchors",
+            ),
+            (
+                'if unit is None or unit.get("schema_version") != 2:',
+                'if unit is None or unit.get("schema_version") != 1:',
+                "reject a non-v2 unit authority",
+            ),
+        )
+        for old, new, expected_failure in mutations:
+            with self.subTest(contract=old):
+                changed = PULL_DEPLOY_CONTROLLER_TEXT.replace(old, new, 1)
+                self.assertNotEqual(changed, PULL_DEPLOY_CONTROLLER_TEXT)
+                failures: list[str] = []
+                policy.validate_successor_authority_contract_source_text(
+                    SOURCE_SUCCESSOR_TEXT,
+                    ADOPT_RUNTIME_PREREQUISITES_TEXT,
+                    changed,
+                    failures,
+                )
+                self.assertTrue(
+                    any(expected_failure in failure for failure in failures),
+                    failures,
+                )
 
     def test_adopted_git_permission_docs_reject_legacy_execution(self) -> None:
         insertion = "./scripts/install_legacy_takeover_prerequisites.py \\\n"
@@ -134,6 +637,41 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         self.assertTrue(
             any(
                 "script-tests must have one exact candidate checkout" in failure
+                for failure in failures
+            ),
+            failures,
+        )
+
+    def test_script_tests_keep_fault_injection_budget(self) -> None:
+        script_job = CI_TEXT.index("  script-tests:\n")
+        timeout = CI_TEXT.index("    timeout-minutes: 40\n", script_job)
+        changed = (
+            CI_TEXT[:timeout]
+            + "    timeout-minutes: 20\n"
+            + CI_TEXT[timeout + len("    timeout-minutes: 40\n") :]
+        )
+        failures: list[str] = []
+        policy.validate_script_tests_budget(changed, failures)
+        self.assertTrue(
+            any("40-minute fault-injection" in failure for failure in failures),
+            failures,
+        )
+
+    def test_script_tests_cannot_exclude_successor_contracts(self) -> None:
+        marker = "              ! -name 'test_dev_gpu_session.py' \\\n"
+        changed = CI_TEXT.replace(
+            marker,
+            marker
+            + "              ! -name "
+            "'test_adopt_git_permission_source_successor.py' \\\n",
+            1,
+        )
+        failures: list[str] = []
+        policy.validate_script_tests_budget(changed, failures)
+        self.assertTrue(
+            any(
+                "must not exclude successor deployment contract tests"
+                in failure
                 for failure in failures
             ),
             failures,

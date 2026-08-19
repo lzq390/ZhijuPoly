@@ -480,6 +480,98 @@ ADOPTED_GIT_PERMISSION_AUTHORITY_KIND = (
     "manual-runtime-adoption-permission-hardening"
 )
 ADOPTED_GIT_PERMISSION_MAX_BYTES = 256 * 1024 * 1024
+ADOPTED_GIT_PERMISSION_TRANSACTION_DIRECTORY = Path(
+    "state/adopted-git-permission-transactions"
+)
+ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_RELATIVE_PATH = Path(
+    "state/adopted-git-permission-source-successor.json"
+)
+ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY = Path(
+    "state/adopted-git-permission-source-successor-transactions"
+)
+ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_AUTHORITY_KIND = (
+    "manual-runtime-adoption-git-permission-source-successor"
+)
+ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_POLICY = (
+    "nexpoly-adopted-git-permission-source-successor-v1"
+)
+PRODUCTION_REPOSITORY_TRANSITION_POLICY = (
+    "nexpoly-production-repository-materialization-transition-v1"
+)
+DEPLOY_REMOTE_REF = "refs/remotes/nexpoly-deploy/main"
+PREPARED_REF_PREFIX = "refs/nexpoly/prepared/"
+GIT_AUXILIARY_POLICY = (
+    "baseline-exact-fetch-head-and-transition-reflogs-only-v1"
+)
+GIT_OBJECT_STORAGE_POLICY = (
+    "canonical-loose-pack-index-rev-commit-graph-no-locks-v1"
+)
+GIT_FETCH_HEAD_DESCRIPTION = (
+    "branch 'main' of github.com:lzq390/ZhijuPoly"
+)
+GIT_DEPLOY_REFLOG_MESSAGE = (
+    "fetch --no-tags --prune github.com:lzq390/ZhijuPoly.git "
+    "+refs/heads/main:refs/remotes/nexpoly-deploy/main: fast-forward"
+)
+ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES = 32 * 1024 * 1024
+ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_AUTHORITY_FIELDS = {
+    "schema_version",
+    "status",
+    "authority_kind",
+    "policy",
+    "operation_id",
+    "source_sha",
+    "source_tree",
+    "predecessor_source_sha",
+    "predecessor_source_tree",
+    "predecessor_authority_sha256",
+    "predecessor_marker_sha256",
+    "adopted_deployment_sha256",
+    "bootstrap_control_sha256",
+    "adopted_prerequisites_sha256",
+    "plan_sha256",
+    "source_successor_impact_sha256",
+    "files_sha256",
+    "changed_paths",
+    "changed_paths_sha256",
+    "delivery_gate",
+    "delivery_gate_sha256",
+    "verifier_agreement_sha256",
+    "production_source_trust_sha256",
+    "production_repository_transition_sha256",
+    "plan",
+    "completed_at",
+}
+ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_PLAN_FIELDS = {
+    "schema_version",
+    "authority_kind",
+    "policy",
+    "operation_id",
+    "source_sha",
+    "source_tree",
+    "source_readiness",
+    "source_readiness_sha256",
+    "delivery_gate",
+    "delivery_gate_sha256",
+    "adopted_deployment_sha256",
+    "bootstrap_control_sha256",
+    "adopted_prerequisites_sha256",
+    "production_source",
+    "predecessor",
+    "marker",
+    "verifier_agreement",
+    "files",
+    "files_sha256",
+    "changed_paths",
+    "changed_paths_sha256",
+    "authority_publication",
+    "source_successor_impact",
+    "source_successor_impact_sha256",
+    "production_source_trust_sha256",
+    "production_repository_transition",
+    "production_repository_transition_sha256",
+    "mutations",
+}
 ADOPTED_GIT_PERMISSION_AUTHORITY_FIELDS = {
     "schema_version",
     "status",
@@ -542,8 +634,41 @@ ADOPTED_GIT_PERMISSION_BINDING_FIELDS = {
     "authority_file_sha256",
     "identity_sha256",
 }
+ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_BINDING_FIELDS = {
+    "schema_version",
+    "authority_kind",
+    "operation_id",
+    "predecessor_authority_sha256",
+    "predecessor_source_sha",
+    "predecessor_source_tree",
+    "predecessor_marker_sha256",
+    "target_source_sha",
+    "target_source_tree",
+    "production_source_sha",
+    "production_source_tree",
+    "adopted_deployment_sha256",
+    "bootstrap_control_sha256",
+    "adopted_prerequisites_sha256",
+    "plan_sha256",
+    "source_successor_impact_sha256",
+    "source_trust_sha256",
+    "production_repository_transition",
+    "production_repository_transition_sha256",
+    "delivery_gate",
+    "delivery_gate_sha256",
+    "fixed_files",
+    "fixed_files_sha256",
+    "changed_files",
+    "changed_files_sha256",
+    "completed_at",
+    "authority_file_sha256",
+    "identity_sha256",
+}
 ADOPTED_UNIT_PERMISSIONS_RELATIVE_PATH = Path(
     "state/adopted-unit-permissions.json"
+)
+ADOPTED_UNIT_PERMISSION_TRANSACTION_DIRECTORY = Path(
+    "state/adopted-unit-permission-transactions"
 )
 ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND = (
     "manual-runtime-adoption-unit-permission-hardening"
@@ -551,6 +676,9 @@ ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND = (
 ADOPTED_UNIT_PERMISSION_MAX_BYTES = 16 * 1024 * 1024
 ADOPTED_UNIT_PERMISSION_SUCCESSOR_POLICY = (
     "nexpoly-adopted-git-permission-successor-v1"
+)
+ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_POLICY = (
+    "nexpoly-adopted-git-permission-successor-v2"
 )
 ADOPTED_UNIT_PERMISSION_AUTHORITY_PUBLICATION_POLICY = (
     "nexpoly-adopted-unit-authority-publication-v1"
@@ -633,6 +761,14 @@ ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES = tuple(
     "scripts/bootstrap_pull_deploy.py",
     "scripts/git_source_trust.py",
 )
+ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES = (
+    ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+    + ("scripts/bridge_deploy_core.py",)
+)
+ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_ALLOWED_CHANGED_FILES = (
+    "scripts/bootstrap_pull_deploy.py",
+    "scripts/git_source_trust.py",
+)
 ADOPTED_UNIT_PERMISSION_PLAN_FIELDS = {
     "schema_version",
     "authority_kind",
@@ -706,6 +842,21 @@ ADOPTED_UNIT_PERMISSION_BINDING_FIELDS = {
     "git_permission_successor",
     "identity_sha256",
 }
+ADOPTED_UNIT_PERMISSION_PLAN_V2_FIELDS = (
+    ADOPTED_UNIT_PERMISSION_PLAN_FIELDS
+    | {"adopted_git_permission_source_successor_sha256"}
+)
+ADOPTED_UNIT_PERMISSION_AUTHORITY_V2_FIELDS = (
+    ADOPTED_UNIT_PERMISSION_AUTHORITY_FIELDS
+    | {"adopted_git_permission_source_successor_sha256"}
+)
+ADOPTED_UNIT_PERMISSION_BINDING_V2_FIELDS = (
+    ADOPTED_UNIT_PERMISSION_BINDING_FIELDS
+    | {
+        "schema_version",
+        "adopted_git_permission_source_successor_sha256",
+    }
+)
 ADOPTED_PREREQUISITE_SOURCE_READINESS_FIELDS = {
     "schema_version",
     "ready",
@@ -1064,6 +1215,7 @@ CURRENT_STATE_FIELDS = LEGACY_CURRENT_STATE_FIELDS | {
     "monomer_dft",
 }
 CURRENT_STATE_OPTIONAL_FIELDS = {
+    "adoption_successor_lineage",
     "contract_mutable_data_audit",
     "final_mutable_data_audit",
     "external_database_audit",
@@ -1073,6 +1225,20 @@ CURRENT_STATE_OPTIONAL_FIELDS = {
     "queue_mutable_data_audit",
     "rollback_provenance",
     "postgres_rehearsal",
+}
+LEGACY_ADOPTION_SUCCESSOR_LINEAGE_FIELDS = {
+    "schema_version",
+    "source_successor_authority_sha256",
+    "source_successor_completed_journal_sha256",
+    "unit_permission_authority_sha256",
+}
+ADOPTION_SUCCESSOR_LINEAGE_FIELDS = {
+    "schema_version",
+    "source_successor_authority_sha256",
+    "source_successor_completed_journal_sha256",
+    "unit_permission_authority_sha256",
+    "unit_permission_completed_journal_sha256",
+    "unit_permission_transaction_inventory_sha256",
 }
 ADOPTED_DEPLOYMENT_FIELDS = {
     "schema_version",
@@ -1668,6 +1834,165 @@ def private_regular_file(
         return payload, sha256_bytes(payload)
     finally:
         os.close(descriptor)
+
+
+def owner_private_metadata(path: Path, *, directory: bool) -> os.stat_result:
+    """Return stable owner-private Git metadata without following links."""
+
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise PullDeployError(f"Git metadata is unavailable: {path}") from exc
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if (
+        not expected_type(metadata.st_mode)
+        or path.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+        or not directory
+        and metadata.st_nlink != 1
+    ):
+        raise PullDeployError(f"Git metadata is not owner-private: {path}")
+    return metadata
+
+
+def owner_private_payload(
+    path: Path, *, maximum_bytes: int
+) -> tuple[bytes, os.stat_result]:
+    """Read an owner-private Git metadata file, allowing an empty payload."""
+
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as exc:
+        raise PullDeployError(f"Git metadata cannot be opened: {path}") from exc
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) & 0o077
+            or before.st_nlink != 1
+            or before.st_size < 0
+            or before.st_size > maximum_bytes
+        ):
+            raise PullDeployError(f"Git metadata is not owner-private: {path}")
+        chunks: list[bytes] = []
+        remaining = maximum_bytes + 1
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if (
+            len(payload) > maximum_bytes
+            or (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_mode,
+                before.st_uid,
+                before.st_nlink,
+            )
+            != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_mode,
+                after.st_uid,
+                after.st_nlink,
+            )
+        ):
+            raise PullDeployError(f"Git metadata changed while reading: {path}")
+        return payload, after
+    finally:
+        os.close(descriptor)
+
+
+def git_directory_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_nlink,
+    )
+
+
+def open_owner_private_git_directory(
+    path: Path,
+    *,
+    parent_fd: int | None = None,
+) -> int:
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+    except OSError as exc:
+        raise PullDeployError(
+            f"Git directory cannot be opened without links: {path}"
+        ) from exc
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+    ):
+        os.close(descriptor)
+        raise PullDeployError(f"Git directory is not owner-private: {path}")
+    return descriptor
+
+
+def owner_private_git_child_directory_identities(
+    directory_fd: int,
+    names: list[str],
+    *,
+    label: str,
+) -> dict[str, tuple[int, ...]]:
+    """Pin direct Git subdirectories and reject links before traversal."""
+
+    identities: dict[str, tuple[int, ...]] = {}
+    for name in names:
+        if not name or name in {".", ".."} or "/" in name or "\0" in name:
+            raise PullDeployError(f"{label} child directory name is unsafe")
+        child_fd = open_owner_private_git_directory(
+            Path(name),
+            parent_fd=directory_fd,
+        )
+        try:
+            held = os.fstat(child_fd)
+            observed = os.stat(
+                name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            identity = git_directory_identity(held)
+            if (
+                not stat.S_ISDIR(observed.st_mode)
+                or git_directory_identity(observed) != identity
+            ):
+                raise PullDeployError(
+                    f"{label} child directory identity differs: {name}"
+                )
+            identities[name] = identity
+        finally:
+            os.close(child_fd)
+    return identities
 
 
 @contextlib.contextmanager
@@ -8012,20 +8337,193 @@ def validate_adopted_git_permission_takeover(
     return dict(document)
 
 
-def validate_adopted_git_permission_successor(
-    document: object,
+def _validate_adopted_source_successor_delivery_gate(
+    value: object,
 ) -> dict[str, Any]:
-    """Validate the byte-identical bridge from Git authority A to target T2."""
+    if not isinstance(value, dict) or set(value) != {"remote_main", "ci"}:
+        raise PullDeployError(
+            "adopted Git permission source-successor delivery gate is invalid"
+        )
+    remote_main = require_sha(
+        value.get("remote_main"),
+        "adopted Git permission source-successor remote main",
+    )
+    ci = value.get("ci")
+    fields = {
+        "workflow_run_id",
+        "run_attempt",
+        "head_sha",
+        "head_branch",
+        "event",
+        "path",
+        "conclusion",
+        "required_jobs",
+    }
+    if (
+        not isinstance(ci, dict)
+        or set(ci) != fields
+        or not isinstance(ci.get("workflow_run_id"), int)
+        or isinstance(ci.get("workflow_run_id"), bool)
+        or ci["workflow_run_id"] <= 0
+        or not isinstance(ci.get("run_attempt"), int)
+        or isinstance(ci.get("run_attempt"), bool)
+        or ci["run_attempt"] <= 0
+        or ci.get("head_sha") != remote_main
+        or ci.get("head_branch") != "main"
+        or ci.get("event") != "push"
+        or ci.get("path") != ".github/workflows/ci.yml"
+        or ci.get("conclusion") != "success"
+        or not isinstance(ci.get("required_jobs"), list)
+        or not ci["required_jobs"]
+        or len(ci["required_jobs"]) > 32
+        or ci["required_jobs"] != sorted(set(ci["required_jobs"]))
+        or any(not isinstance(name, str) or not name for name in ci["required_jobs"])
+    ):
+        raise PullDeployError(
+            "adopted Git permission source-successor CI authority is invalid"
+        )
+    return {"remote_main": remote_main, "ci": dict(ci)}
 
+
+def validate_adopted_git_permission_source_successor_files(
+    value: object,
+) -> list[dict[str, Any]]:
+    """Validate the closed old/new Git-object manifest authorized once."""
+
+    if not isinstance(value, list) or len(value) != len(
+        ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES
+    ):
+        raise PullDeployError(
+            "adopted Git permission source-successor manifest is invalid"
+        )
+    result: list[dict[str, Any]] = []
+    changed: list[str] = []
+    for record, path in zip(
+        value,
+        ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES,
+        strict=True,
+    ):
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"path", "relation", "predecessor", "target"}
+            or record.get("path") != path
+            or record.get("relation") not in {"byte-identical", "changed"}
+        ):
+            raise PullDeployError(
+                "adopted Git permission source-successor manifest differs"
+            )
+        expected_mode = (
+            "100644"
+            if path == "ops/config/mutable-data-audit.pg_service.conf.example"
+            else "100755"
+        )
+        identities: dict[str, dict[str, Any]] = {}
+        for label in ("predecessor", "target"):
+            identity = record.get(label)
+            if (
+                not isinstance(identity, dict)
+                or set(identity)
+                != {"object_type", "mode", "blob_sha", "sha256"}
+                or identity.get("object_type") != "blob"
+                or identity.get("mode") != expected_mode
+            ):
+                raise PullDeployError(
+                    "adopted Git permission source-successor Git identity is invalid"
+                )
+            require_sha(
+                identity.get("blob_sha"),
+                f"adopted source-successor {label} blob {path}",
+            )
+            require_digest(
+                identity.get("sha256"),
+                f"adopted source-successor {label} content {path}",
+            )
+            identities[label] = dict(identity)
+        same = identities["predecessor"] == identities["target"]
+        if same != (record["relation"] == "byte-identical"):
+            raise PullDeployError(
+                "adopted Git permission source-successor relation is inconsistent"
+            )
+        if record["relation"] == "changed":
+            changed.append(path)
+        result.append(
+            {
+                "path": path,
+                "relation": record["relation"],
+                "predecessor": identities["predecessor"],
+                "target": identities["target"],
+            }
+        )
+    if tuple(changed) != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_ALLOWED_CHANGED_FILES:
+        raise PullDeployError(
+            "adopted Git permission source-successor changed paths differ"
+        )
+    return result
+
+
+def _valid_transition_ref_name(value: str) -> bool:
+    if (
+        not value.startswith("refs/")
+        or len(value) > 1024
+        or value.endswith(("/", "."))
+        or "//" in value
+        or "@{" in value
+        or any(character in value for character in " ~^:?*[\\\x00\n\r")
+    ):
+        return False
+    components = value.split("/")
+    return all(
+        component
+        and component not in {".", "..", "@"}
+        and not component.startswith(".")
+        and not component.endswith(".lock")
+        for component in components
+    )
+
+
+def _valid_transition_ref_directory(value: str) -> bool:
+    return value == "refs" or _valid_transition_ref_name(
+        f"{value}/sentinel"
+    )
+
+
+def validate_production_repository_transition(
+    document: object,
+    *,
+    production_root: Path,
+    production_sha: str,
+    production_tree: str,
+    target_sha: str,
+    target_tree: str,
+    baseline_trust_sha256: str,
+) -> dict[str, Any]:
     fields = {
         "schema_version",
         "policy",
-        "mode",
-        "authority",
+        "source",
         "target",
-        "files",
-        "files_sha256",
-        "identity_sha256",
+        "baseline_evidence_sha256",
+        "stable_projection",
+        "stable_projection_sha256",
+        "logical_refs",
+        "logical_refs_sha256",
+        "raw_ref_inventory",
+        "raw_ref_inventory_sha256",
+        "baseline_auxiliary_inventory",
+        "baseline_auxiliary_inventory_sha256",
+        "baseline_semantic_object_count",
+        "baseline_semantic_objects_sha256",
+        "baseline_only_object_count",
+        "baseline_only_objects_sha256",
+        "target_reachable_object_count",
+        "target_reachable_objects_sha256",
+        "expected_materialized_object_count",
+        "expected_materialized_objects_sha256",
+        "mutable_refs",
+        "storage_policy",
+        "auxiliary_policy",
+        "object_storage_policy",
+        "object_materialization_policy",
     }
     if (
         not isinstance(document, dict)
@@ -8033,14 +8531,544 @@ def validate_adopted_git_permission_successor(
         or type(document.get("schema_version")) is not int
         or document.get("schema_version") != 1
         or document.get("policy")
-        != ADOPTED_UNIT_PERMISSION_SUCCESSOR_POLICY
-        or document.get("mode")
-        not in ADOPTED_PREREQUISITE_TARGET_RELATIONS
+        != PRODUCTION_REPOSITORY_TRANSITION_POLICY
+        or document.get("source")
+        != {"sha": production_sha, "tree": production_tree}
+        or document.get("target")
+        != {"sha": target_sha, "tree": target_tree}
+        or document.get("baseline_evidence_sha256")
+        != baseline_trust_sha256
+        or document.get("mutable_refs")
+        != {
+            "deploy_remote": DEPLOY_REMOTE_REF,
+            "prepared_prefix": PREPARED_REF_PREFIX,
+        }
+        or document.get("storage_policy")
+        != {
+            "standalone": True,
+            "promisor": False,
+            "alternates": False,
+            "replace_refs": 0,
+        }
+        or document.get("object_materialization_policy")
+        != "strict-fsck-owner-private-content-addressed-target-closure-v1"
+        or document.get("auxiliary_policy") != GIT_AUXILIARY_POLICY
+        or document.get("object_storage_policy")
+        != GIT_OBJECT_STORAGE_POLICY
     ):
+        raise PullDeployError(
+            "production repository transition has an invalid shape"
+        )
+    stable = document.get("stable_projection")
+    stable_fields = {
+        "schema_version",
+        "policy",
+        "repository_root",
+        "git_dir",
+        "object_dir",
+        "index_path",
+        "source",
+        "git_binary",
+        "local_config",
+        "head",
+        "index",
+        "forbidden_markers_absent",
+        "execution_environment",
+    }
+    if (
+        not isinstance(stable, dict)
+        or set(stable) != stable_fields
+        or stable.get("repository_root") != str(production_root)
+        or stable.get("git_dir") != str(production_root / ".git")
+        or stable.get("object_dir")
+        != str(production_root / ".git/objects")
+        or stable.get("index_path") != str(production_root / ".git/index")
+        or stable.get("source")
+        != {
+            "sha": production_sha,
+            "tree": production_tree,
+            "branch": "refs/heads/main",
+            "origin": None,
+        }
+        or document.get("stable_projection_sha256")
+        != canonical_json_digest(stable)
+    ):
+        raise PullDeployError(
+            "production repository stable projection differs"
+        )
+    logical = document.get("logical_refs")
+    logical_names: list[str] = []
+    if not isinstance(logical, list):
+        raise PullDeployError("production logical ref baseline is invalid")
+    for record in logical:
+        if (
+            not isinstance(record, dict)
+            or set(record)
+            != {
+                "name",
+                "object_sha",
+                "object_type",
+                "symbolic_target",
+            }
+            or not isinstance(record.get("name"), str)
+            or not _valid_transition_ref_name(record["name"])
+            or record["name"].startswith("refs/replace/")
+            or record.get("object_type")
+            not in {"blob", "tree", "commit", "tag"}
+            or record.get("symbolic_target") is not None
+            and (
+                not isinstance(record.get("symbolic_target"), str)
+                or not _valid_transition_ref_name(
+                    str(record["symbolic_target"])
+                )
+            )
+        ):
+            raise PullDeployError(
+                "production logical ref baseline is invalid"
+            )
+        require_sha(record.get("object_sha"), "production logical ref object")
+        logical_names.append(record["name"])
+    logical_map = {record["name"]: record for record in logical}
+    main_ref = logical_map.get("refs/heads/main")
+    deploy_ref = logical_map.get(DEPLOY_REMOTE_REF)
+    if (
+        logical_names != sorted(set(logical_names))
+        or len(logical_names) > 10000
+        or any(name.startswith(PREPARED_REF_PREFIX) for name in logical_names)
+        or not isinstance(main_ref, dict)
+        or main_ref.get("object_sha") != production_sha
+        or main_ref.get("object_type") != "commit"
+        or main_ref.get("symbolic_target") is not None
+        or not isinstance(deploy_ref, dict)
+        or deploy_ref.get("object_type") != "commit"
+        or deploy_ref.get("symbolic_target") is not None
+        or document.get("logical_refs_sha256")
+        != canonical_json_digest(logical)
+    ):
+        raise PullDeployError("production logical ref baseline differs")
+    raw = document.get("raw_ref_inventory")
+    paths: list[str] = []
+    if not isinstance(raw, list):
+        raise PullDeployError("production raw ref baseline is invalid")
+    for record in raw:
+        if not isinstance(record, dict) or not isinstance(
+            record.get("path"), str
+        ):
+            raise PullDeployError("production raw ref baseline is invalid")
+        path = record["path"]
+        paths.append(path)
+        if record.get("kind") == "directory":
+            if (
+                set(record) != {"path", "kind", "mode"}
+                or not _valid_transition_ref_directory(path)
+                or record.get("mode") != "0700"
+            ):
+                raise PullDeployError(
+                    "production raw ref directory baseline is invalid"
+                )
+        elif record.get("kind") == "file":
+            if (
+                set(record)
+                != {"path", "kind", "mode", "size", "raw_sha256"}
+                or record.get("mode") != "0600"
+                or isinstance(record.get("size"), bool)
+                or not isinstance(record.get("size"), int)
+                or record["size"] < 0
+                or record["size"] > ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES
+                or path != "packed-refs"
+                and (
+                    not _valid_transition_ref_name(path)
+                    or path not in logical_names
+                )
+            ):
+                raise PullDeployError(
+                    "production raw ref file baseline is invalid"
+                )
+            require_digest(
+                record.get("raw_sha256"), "production raw ref payload"
+            )
+        else:
+            raise PullDeployError("production raw ref baseline is invalid")
+    if (
+        paths != sorted(set(paths))
+        or "refs" not in paths
+        or document.get("raw_ref_inventory_sha256")
+        != canonical_json_digest(raw)
+    ):
+        raise PullDeployError("production raw ref baseline differs")
+    auxiliary = document.get("baseline_auxiliary_inventory")
+    if (
+        not isinstance(auxiliary, list)
+        or document.get("baseline_auxiliary_inventory_sha256")
+        != canonical_json_digest(auxiliary)
+    ):
+        raise PullDeployError("production Git auxiliary baseline differs")
+    auxiliary_paths: list[str] = []
+    for record in auxiliary:
+        if not isinstance(record, dict) or not isinstance(
+            record.get("path"), str
+        ):
+            raise PullDeployError(
+                "production Git auxiliary baseline is invalid"
+            )
+        path = record["path"]
+        auxiliary_paths.append(path)
+        if (
+            path.startswith(("objects/", "refs/"))
+            or path in {
+                "objects",
+                "refs",
+                "HEAD",
+                "config",
+                "index",
+                "packed-refs",
+            }
+            or path.endswith(".lock")
+            or path.startswith(f"logs/{PREPARED_REF_PREFIX}")
+            or Path(path).is_absolute()
+            or ".." in Path(path).parts
+            or Path(path).as_posix() != path
+        ):
+            raise PullDeployError(
+                "production Git auxiliary path is invalid"
+            )
+        if record.get("kind") == "directory":
+            if (
+                set(record) != {"path", "kind", "mode"}
+                or not isinstance(record.get("mode"), str)
+                or re.fullmatch(r"0[4-7]00", record["mode"]) is None
+            ):
+                raise PullDeployError(
+                    "production Git auxiliary directory is invalid"
+                )
+        elif record.get("kind") == "file":
+            if (
+                set(record)
+                != {"path", "kind", "mode", "size", "raw_sha256"}
+                or not isinstance(record.get("mode"), str)
+                or re.fullmatch(r"0[4-7]00", record["mode"]) is None
+                or isinstance(record.get("size"), bool)
+                or not isinstance(record.get("size"), int)
+                or record["size"] < 0
+                or record["size"] > ADOPTED_GIT_PERMISSION_MAX_BYTES
+            ):
+                raise PullDeployError(
+                    "production Git auxiliary file is invalid"
+                )
+            require_digest(
+                record.get("raw_sha256"),
+                "production Git auxiliary payload",
+            )
+        else:
+            raise PullDeployError(
+                "production Git auxiliary baseline is invalid"
+            )
+    if auxiliary_paths != sorted(set(auxiliary_paths)):
+        raise PullDeployError(
+            "production Git auxiliary baseline is not canonical"
+        )
+    counts: dict[str, int] = {}
+    for field, allow_zero in (
+        ("baseline_semantic_object_count", True),
+        ("baseline_only_object_count", True),
+        ("target_reachable_object_count", False),
+        ("expected_materialized_object_count", False),
+    ):
+        value = document.get(field)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < (0 if allow_zero else 1)
+            or value > 10_000_000
+        ):
+            raise PullDeployError(f"{field} is invalid")
+        counts[field] = value
+    for field in (
+        "baseline_semantic_objects_sha256",
+        "baseline_only_objects_sha256",
+        "target_reachable_objects_sha256",
+        "expected_materialized_objects_sha256",
+    ):
+        require_digest(document.get(field), field)
+    if (
+        counts["expected_materialized_object_count"]
+        != counts["baseline_only_object_count"]
+        + counts["target_reachable_object_count"]
+        or counts["expected_materialized_object_count"]
+        < counts["baseline_semantic_object_count"]
+    ):
+        raise PullDeployError(
+            "production materialized semantic object counts differ"
+        )
+    return dict(document)
+
+
+def validate_production_repository_materialization(
+    document: object,
+) -> dict[str, Any]:
+    fields = {
+        "schema_version",
+        "phase",
+        "full_trust_sha256",
+        "object_inventory_sha256",
+        "object_count",
+        "object_total_size",
+        "semantic_object_count",
+        "semantic_object_inventory_sha256",
+        "logical_refs_sha256",
+        "raw_ref_inventory_sha256",
+        "auxiliary_inventory_sha256",
+        "object_storage_inventory_sha256",
+        "target_reachable_object_count",
+        "target_reachable_objects_sha256",
+        "operation_id",
+    }
+    if (
+        not isinstance(document, dict)
+        or set(document) != fields
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != 1
+        or document.get("phase")
+        not in {"baseline", "materialized", "prepared"}
+    ):
+        raise PullDeployError(
+            "production repository materialization has an invalid shape"
+        )
+    for field in (
+        "full_trust_sha256",
+        "object_inventory_sha256",
+        "semantic_object_inventory_sha256",
+        "logical_refs_sha256",
+        "raw_ref_inventory_sha256",
+        "auxiliary_inventory_sha256",
+        "object_storage_inventory_sha256",
+    ):
+        require_digest(
+            document.get(field),
+            f"production repository materialization {field}",
+        )
+    for field in (
+        "object_count",
+        "object_total_size",
+        "semantic_object_count",
+    ):
+        value = document.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise PullDeployError(
+                f"production repository materialization {field} is invalid"
+            )
+    materialized = document["phase"] in {"materialized", "prepared"}
+    if materialized:
+        count = document.get("target_reachable_object_count")
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise PullDeployError(
+                "production materialized target object count is invalid"
+            )
+        require_digest(
+            document.get("target_reachable_objects_sha256"),
+            "production materialized target object inventory",
+        )
+    elif (
+        document.get("target_reachable_object_count") is not None
+        or document.get("target_reachable_objects_sha256") is not None
+    ):
+        raise PullDeployError(
+            "baseline repository unexpectedly has target closure evidence"
+        )
+    if document["phase"] == "prepared":
+        operation_id = document.get("operation_id")
+        if not isinstance(operation_id, str):
+            raise PullDeployError(
+                "prepared repository materialization lacks operation"
+            )
+        require_operation_id(operation_id)
+    elif document.get("operation_id") is not None:
+        raise PullDeployError(
+            "non-prepared repository materialization has an operation"
+        )
+    return dict(document)
+
+
+def validate_adopted_git_permission_source_successor_binding(
+    document: object,
+) -> dict[str, Any]:
+    """Validate the path-independent projection of the create-once authority."""
+
+    if (
+        not isinstance(document, dict)
+        or set(document)
+        != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_BINDING_FIELDS
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != 1
+        or document.get("authority_kind")
+        != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_AUTHORITY_KIND
+        or re.fullmatch(
+            r"adopt-git-successor-[a-z0-9][a-z0-9._-]{7,95}",
+            str(document.get("operation_id", "")),
+        )
+        is None
+    ):
+        raise PullDeployError(
+            "adopted Git permission source-successor binding has an invalid shape"
+        )
+    for field in (
+        "predecessor_source_sha",
+        "predecessor_source_tree",
+        "target_source_sha",
+        "target_source_tree",
+        "production_source_sha",
+        "production_source_tree",
+    ):
+        require_sha(
+            document.get(field),
+            f"adopted Git permission source-successor {field}",
+        )
+    for field in (
+        "predecessor_authority_sha256",
+        "predecessor_marker_sha256",
+        "adopted_deployment_sha256",
+        "bootstrap_control_sha256",
+        "adopted_prerequisites_sha256",
+        "plan_sha256",
+        "source_successor_impact_sha256",
+        "source_trust_sha256",
+        "production_repository_transition_sha256",
+        "delivery_gate_sha256",
+        "fixed_files_sha256",
+        "changed_files_sha256",
+        "authority_file_sha256",
+    ):
+        require_digest(
+            document.get(field),
+            f"adopted Git permission source-successor {field}",
+        )
+    transition = validate_production_repository_transition(
+        document.get("production_repository_transition"),
+        production_root=Path(
+            str(
+                document.get("production_repository_transition", {})
+                .get("stable_projection", {})
+                .get("repository_root", "")
+            )
+        ),
+        production_sha=document["production_source_sha"],
+        production_tree=document["production_source_tree"],
+        target_sha=document["target_source_sha"],
+        target_tree=document["target_source_tree"],
+        baseline_trust_sha256=document["source_trust_sha256"],
+    )
+    if document.get("production_repository_transition_sha256") != (
+        canonical_json_digest(transition)
+    ):
+        raise PullDeployError(
+            "production repository transition digest differs"
+        )
+    delivery = _validate_adopted_source_successor_delivery_gate(
+        document.get("delivery_gate")
+    )
+    if (
+        delivery["remote_main"] != document["target_source_sha"]
+        or delivery["ci"]["head_sha"] != document["target_source_sha"]
+        or document["delivery_gate_sha256"]
+        != canonical_json_digest(delivery)
+    ):
+        raise PullDeployError(
+            "adopted Git permission source-successor delivery gate differs"
+        )
+    files = validate_adopted_git_permission_source_successor_files(
+        document.get("fixed_files")
+    )
+    changed_paths = document.get("changed_files")
+    if (
+        not isinstance(changed_paths, list)
+        or changed_paths
+        != list(ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_ALLOWED_CHANGED_FILES)
+        or document.get("fixed_files_sha256")
+        != canonical_json_digest(files)
+        or document.get("changed_files_sha256")
+        != canonical_json_digest(changed_paths)
+        or document["predecessor_source_sha"]
+        == document["target_source_sha"]
+    ):
+        raise PullDeployError(
+            "adopted Git permission source-successor manifest digest differs"
+        )
+    require_utc_timestamp(
+        document.get("completed_at"),
+        "adopted Git permission source-successor completion",
+    )
+    identity = {
+        key: value for key, value in document.items() if key != "identity_sha256"
+    }
+    if document.get("identity_sha256") != canonical_json_digest(identity):
+        raise PullDeployError(
+            "adopted Git permission source-successor binding digest differs"
+        )
+    return dict(document)
+
+
+def validate_adopted_git_permission_successor(
+    document: object,
+) -> dict[str, Any]:
+    """Validate either a historical byte bridge or the exact v2 chain."""
+
+    if not isinstance(document, dict) or type(
+        document.get("schema_version")
+    ) is not int:
         raise PullDeployError(
             "adopted unit permission successor has an invalid shape"
         )
-    authority = document.get("authority")
+    schema_version = document["schema_version"]
+    if schema_version == 1:
+        fields = {
+            "schema_version",
+            "policy",
+            "mode",
+            "authority",
+            "target",
+            "files",
+            "files_sha256",
+            "identity_sha256",
+        }
+        if (
+            set(document) != fields
+            or document.get("policy")
+            != ADOPTED_UNIT_PERMISSION_SUCCESSOR_POLICY
+            or document.get("mode")
+            not in ADOPTED_PREREQUISITE_TARGET_RELATIONS
+        ):
+            raise PullDeployError(
+                "adopted unit permission successor has an invalid shape"
+            )
+        authority = document.get("authority")
+        expected_files = ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+    elif schema_version == 2:
+        fields = {
+            "schema_version",
+            "policy",
+            "mode",
+            "root_authority",
+            "source_successor_authority",
+            "target",
+            "files",
+            "files_sha256",
+            "identity_sha256",
+        }
+        if (
+            set(document) != fields
+            or document.get("policy")
+            != ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_POLICY
+            or document.get("mode") != "protected-main-ci-exact-target"
+        ):
+            raise PullDeployError(
+                "adopted unit permission successor has an invalid shape"
+            )
+        authority = document.get("root_authority")
+        expected_files = ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES
+    else:
+        raise PullDeployError(
+            "adopted unit permission successor has an invalid schema"
+        )
     target = document.get("target")
     if (
         not isinstance(authority, dict)
@@ -8064,39 +9092,64 @@ def validate_adopted_git_permission_successor(
         authority.get("raw_sha256"),
         "adopted unit permission predecessor authority",
     )
-    exact = (
-        authority["source_sha"] == target["source_sha"]
-        and authority["source_tree"] == target["source_tree"]
-    )
-    if exact != (document["mode"] == "exact-source") or (
-        document["mode"] == "ancestor-byte-identical"
-        and authority["source_sha"] == target["source_sha"]
-    ):
-        raise PullDeployError(
-            "adopted unit permission successor relation is inconsistent"
+    if schema_version == 1:
+        exact = (
+            authority["source_sha"] == target["source_sha"]
+            and authority["source_tree"] == target["source_tree"]
         )
+        if exact != (document["mode"] == "exact-source") or (
+            document["mode"] == "ancestor-byte-identical"
+            and authority["source_sha"] == target["source_sha"]
+        ):
+            raise PullDeployError(
+                "adopted unit permission successor relation is inconsistent"
+            )
     files = document.get("files")
-    if not isinstance(files, list) or len(files) != len(
-        ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
-    ):
+    if not isinstance(files, list) or len(files) != len(expected_files):
         raise PullDeployError(
             "adopted unit permission successor inventory is invalid"
         )
-    for record, path in zip(
-        files, ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES, strict=True
-    ):
+    if schema_version == 1:
+        for record, path in zip(files, expected_files, strict=True):
+            if (
+                not isinstance(record, dict)
+                or set(record) != {"path", "sha256"}
+                or record.get("path") != path
+            ):
+                raise PullDeployError(
+                    "adopted unit permission successor inventory differs"
+                )
+            require_digest(
+                record.get("sha256"),
+                f"adopted unit permission successor blob {path}",
+            )
+    else:
+        normalized_files = (
+            validate_adopted_git_permission_source_successor_files(files)
+        )
+        source_successor = (
+            validate_adopted_git_permission_source_successor_binding(
+                document.get("source_successor_authority")
+            )
+        )
         if (
-            not isinstance(record, dict)
-            or set(record) != {"path", "sha256"}
-            or record.get("path") != path
+            normalized_files != files
+            or source_successor["predecessor_authority_sha256"]
+            != authority["raw_sha256"]
+            or source_successor["predecessor_source_sha"]
+            != authority["source_sha"]
+            or source_successor["predecessor_source_tree"]
+            != authority["source_tree"]
+            or source_successor["target_source_sha"] != target["source_sha"]
+            or source_successor["target_source_tree"]
+            != target["source_tree"]
+            or source_successor["fixed_files"] != files
+            or source_successor["fixed_files_sha256"]
+            != canonical_json_digest(files)
         ):
             raise PullDeployError(
-                "adopted unit permission successor inventory differs"
+                "adopted unit permission successor authority chain differs"
             )
-        require_digest(
-            record.get("sha256"),
-            f"adopted unit permission successor blob {path}",
-        )
     if document.get("files_sha256") != canonical_json_digest(files):
         raise PullDeployError(
             "adopted unit permission successor inventory digest differs"
@@ -8291,9 +9344,21 @@ def validate_adopted_unit_permission_binding(
 ) -> dict[str, Any]:
     """Validate the path-independent compact unit hardening authority."""
 
+    schema_version = (
+        document.get("schema_version")
+        if isinstance(document, dict)
+        else None
+    )
+    is_v1 = isinstance(document, dict) and "schema_version" not in document
+    is_v2 = type(schema_version) is int and schema_version == 2
     if (
         not isinstance(document, dict)
-        or set(document) != ADOPTED_UNIT_PERMISSION_BINDING_FIELDS
+        or not (
+            is_v1
+            and set(document) == ADOPTED_UNIT_PERMISSION_BINDING_FIELDS
+            or is_v2
+            and set(document) == ADOPTED_UNIT_PERMISSION_BINDING_V2_FIELDS
+        )
         or document.get("authority_kind")
         != ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND
         or re.fullmatch(
@@ -8330,18 +9395,36 @@ def validate_adopted_unit_permission_binding(
         require_digest(
             document.get(field), f"adopted unit permission {field}"
         )
+    if is_v2:
+        require_digest(
+            document.get(
+                "adopted_git_permission_source_successor_sha256"
+            ),
+            "adopted unit permission source-successor authority",
+        )
     successor = validate_adopted_git_permission_successor(
         document.get("git_permission_successor")
     )
+    root = (
+        successor["root_authority"]
+        if successor["schema_version"] == 2
+        else successor["authority"]
+    )
     if (
-        successor["authority"]["source_sha"]
+        successor["schema_version"] != (2 if is_v2 else 1)
+        or root["source_sha"]
         != document["adopted_git_permission_source_sha"]
-        or successor["authority"]["source_tree"]
+        or root["source_tree"]
         != document["adopted_git_permission_source_tree"]
-        or successor["authority"]["raw_sha256"]
+        or root["raw_sha256"]
         != document["adopted_git_permissions_sha256"]
         or successor["target"]["source_sha"] != document["source_sha"]
         or successor["target"]["source_tree"] != document["source_tree"]
+        or is_v2
+        and successor["source_successor_authority"][
+            "authority_file_sha256"
+        ]
+        != document["adopted_git_permission_source_successor_sha256"]
     ):
         raise PullDeployError(
             "adopted unit permission successor differs from its authority"
@@ -8382,15 +9465,21 @@ def validate_adopted_prerequisite_target_binding(
         else None
     )
     exact_schema = type(schema_version) is int
-    if exact_schema and schema_version in {2, 3}:
+    if exact_schema and schema_version in {2, 3, 4}:
         fields.add("git_permission_authority")
-    if exact_schema and schema_version == 3:
+    if exact_schema and schema_version in {3, 4}:
         fields.add("unit_permission_authority")
+    if exact_schema and schema_version == 4:
+        fields.add("git_permission_source_successor_authority")
+        fields.add("production_repository_materialization")
+        fields.add("source_successor_completed_journal_sha256")
+        fields.add("unit_permission_completed_journal_sha256")
+        fields.add("unit_permission_transaction_inventory_sha256")
     if (
         not isinstance(document, dict)
         or set(document) != fields
         or not exact_schema
-        or schema_version not in {1, 2, 3}
+        or schema_version not in {1, 2, 3, 4}
         or document.get("policy") != ADOPTED_PREREQUISITE_TARGET_POLICY
         or document.get("mode")
         not in ADOPTED_PREREQUISITE_TARGET_RELATIONS
@@ -8491,7 +9580,7 @@ def validate_adopted_prerequisite_target_binding(
         raise PullDeployError(
             "adopted prerequisite target file inventory digest differs"
         )
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         permission = validate_adopted_git_permission_binding(
             document.get("git_permission_authority")
         )
@@ -8508,7 +9597,82 @@ def validate_adopted_prerequisite_target_binding(
             raise PullDeployError(
                 "adopted Git permission authority differs from target binding"
             )
-    if schema_version == 3:
+    source_successor: dict[str, Any] | None = None
+    if schema_version == 4:
+        require_digest(
+            document.get("source_successor_completed_journal_sha256"),
+            "source-successor completed journal",
+        )
+        require_digest(
+            document.get("unit_permission_completed_journal_sha256"),
+            "unit permission completed journal",
+        )
+        require_digest(
+            document.get("unit_permission_transaction_inventory_sha256"),
+            "unit permission transaction inventory",
+        )
+        source_successor = (
+            validate_adopted_git_permission_source_successor_binding(
+                document.get("git_permission_source_successor_authority")
+            )
+        )
+        materialization = validate_production_repository_materialization(
+            document.get("production_repository_materialization")
+        )
+        if (
+            source_successor["predecessor_authority_sha256"]
+            != permission["authority_file_sha256"]
+            or source_successor["predecessor_source_sha"]
+            != permission["source_sha"]
+            or source_successor["predecessor_source_tree"]
+            != permission["source_tree"]
+            or source_successor["predecessor_marker_sha256"]
+            != permission["permission_marker_sha256"]
+            or source_successor["target_source_sha"] != target["source_sha"]
+            or source_successor["target_source_tree"]
+            != target["source_tree"]
+        ):
+            raise PullDeployError(
+                "adopted source-successor authority differs from target binding"
+            )
+        transition = source_successor[
+            "production_repository_transition"
+        ]
+        is_materialized = materialization["phase"] in {
+            "materialized",
+            "prepared",
+        }
+        semantic_count_field = (
+            "expected_materialized_object_count"
+            if is_materialized
+            else "baseline_semantic_object_count"
+        )
+        semantic_digest_field = (
+            "expected_materialized_objects_sha256"
+            if is_materialized
+            else "baseline_semantic_objects_sha256"
+        )
+        if (
+            materialization["semantic_object_count"]
+            != transition[semantic_count_field]
+            or materialization["semantic_object_inventory_sha256"]
+            != transition[semantic_digest_field]
+        ):
+            raise PullDeployError(
+                "production repository materialization semantic inventory "
+                "differs from transition"
+            )
+        if is_materialized and (
+            materialization["target_reachable_object_count"]
+            != transition["target_reachable_object_count"]
+            or materialization["target_reachable_objects_sha256"]
+            != transition["target_reachable_objects_sha256"]
+        ):
+            raise PullDeployError(
+                "production repository materialization target closure "
+                "differs from transition"
+            )
+    if schema_version in {3, 4}:
         unit = validate_adopted_unit_permission_binding(
             document.get("unit_permission_authority")
         )
@@ -8519,10 +9683,18 @@ def validate_adopted_prerequisite_target_binding(
             "bootstrap_control_sha256",
             "adopted_prerequisites_sha256",
         )
-        unit_target_files = {
-            record["path"]: record["sha256"]
-            for record in unit["git_permission_successor"]["files"]
-        }
+        unit_successor = unit["git_permission_successor"]
+        unit_target_files = (
+            {
+                record["path"]: record["target"]["sha256"]
+                for record in unit_successor["files"]
+            }
+            if unit_successor["schema_version"] == 2
+            else {
+                record["path"]: record["sha256"]
+                for record in unit_successor["files"]
+            }
+        )
         if (
             unit["source_sha"] != target["source_sha"]
             or unit["source_tree"] != target["source_tree"]
@@ -8543,6 +9715,35 @@ def validate_adopted_prerequisite_target_binding(
                 != record["sha256"]
                 for record in files
             )
+            or schema_version == 4
+            and (
+                source_successor is None
+                or unit_successor["schema_version"] != 2
+                or unit.get("schema_version") != 2
+                or unit[
+                    "adopted_git_permission_source_successor_sha256"
+                ]
+                != source_successor["authority_file_sha256"]
+                or unit_successor["source_successor_authority"]
+                != source_successor
+                or unit_successor["root_authority"]
+                != {
+                    "source_sha": permission["source_sha"],
+                    "source_tree": permission["source_tree"],
+                    "raw_sha256": permission["authority_file_sha256"],
+                }
+                or unit_successor["target"] != target
+                or unit_successor["files"]
+                != source_successor["fixed_files"]
+                or unit_successor["files_sha256"]
+                != source_successor["fixed_files_sha256"]
+                or any(
+                    unit[field] != source_successor[field]
+                    for field in shared_provenance_fields
+                )
+            )
+            or schema_version == 3
+            and unit_successor["schema_version"] != 1
         ):
             raise PullDeployError(
                 "adopted unit permission authority differs from target binding"
@@ -8553,6 +9754,49 @@ def validate_adopted_prerequisite_target_binding(
     if document.get("identity_sha256") != canonical_json_digest(identity):
         raise PullDeployError(
             "adopted prerequisite target binding digest differs"
+        )
+    return dict(document)
+
+
+def validate_adoption_successor_lineage(document: object) -> dict[str, Any]:
+    """Validate the permanent raw-authority anchors written by a v4 takeover."""
+
+    schema_version = (
+        document.get("schema_version")
+        if isinstance(document, dict)
+        else None
+    )
+    expected_fields = (
+        LEGACY_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+        if type(schema_version) is int and schema_version == 1
+        else ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+        if type(schema_version) is int and schema_version == 2
+        else None
+    )
+    if (
+        not isinstance(document, dict)
+        or expected_fields is None
+        or set(document) != expected_fields
+    ):
+        raise PullDeployError(
+            "current adoption successor lineage has an invalid shape"
+        )
+    digest_fields = [
+        "source_successor_authority_sha256",
+        "source_successor_completed_journal_sha256",
+        "unit_permission_authority_sha256",
+    ]
+    if schema_version == 2:
+        digest_fields.extend(
+            [
+                "unit_permission_completed_journal_sha256",
+                "unit_permission_transaction_inventory_sha256",
+            ]
+        )
+    for field in digest_fields:
+        require_digest(
+            document.get(field),
+            f"current adoption successor lineage {field}",
         )
     return dict(document)
 
@@ -8668,6 +9912,15 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
     require_digest(worker_env.get("sha256"), "current Worker environment digest")
     require_digest(worker_env.get("gmx_sha256"), "current Worker GMX digest")
     dft = None
+    successor_lineage_present = "adoption_successor_lineage" in document
+    successor_lineage = document.get("adoption_successor_lineage")
+    if (
+        successor_lineage_present
+        and schema_version != CURRENT_STATE_SCHEMA_VERSION
+    ):
+        raise PullDeployError(
+            "legacy current state has an adoption successor lineage"
+        )
     if schema_version == CURRENT_STATE_SCHEMA_VERSION:
         authority_kind = document.get("authority_kind")
         adoption_evidence = document.get("adoption_evidence")
@@ -8697,6 +9950,8 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
                 adopted_deployment_sha256,
                 "current adopted deployment authority",
             )
+            if successor_lineage_present:
+                validate_adoption_successor_lineage(successor_lineage)
         elif any(
             value is not None
             for value in (
@@ -8704,7 +9959,7 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
                 adoption_evidence_sha256,
                 adopted_deployment_sha256,
             )
-        ):
+        ) or successor_lineage_present:
             raise PullDeployError(
                 "governed deployment has unbound adoption provenance"
             )
@@ -9388,7 +10643,7 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
             )
             if (
                 adopted is None
-                or prerequisite_binding["schema_version"] not in {2, 3}
+                or prerequisite_binding["schema_version"] not in {2, 3, 4}
                 or prerequisite_binding["target"]
                 != {
                     "source_sha": repository["target_sha"],
@@ -9410,7 +10665,7 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
                     "production_source_tree"
                 ]
                 != adopted["source_tree"]
-                or prerequisite_binding["schema_version"] == 3
+                or prerequisite_binding["schema_version"] in {3, 4}
                 and (
                     prerequisite_binding["unit_permission_authority"][
                         "production_source_sha"
@@ -9420,6 +10675,32 @@ def validate_descriptor(document: dict[str, Any]) -> dict[str, Any]:
                         "production_source_tree"
                     ]
                     != adopted["source_tree"]
+                )
+                or prerequisite_binding["schema_version"] == 4
+                and (
+                    prerequisite_binding[
+                        "git_permission_source_successor_authority"
+                    ]["production_source_sha"]
+                    != adopted["source_sha"]
+                    or prerequisite_binding[
+                        "git_permission_source_successor_authority"
+                    ]["production_source_tree"]
+                    != adopted["source_tree"]
+                    or prerequisite_binding[
+                        "git_permission_source_successor_authority"
+                    ]["delivery_gate"]
+                    != {
+                        "remote_main": repository["target_sha"],
+                        "ci": document["ci"],
+                    }
+                    or prerequisite_binding[
+                        "production_repository_materialization"
+                    ]["phase"]
+                    != "prepared"
+                    or prerequisite_binding[
+                        "production_repository_materialization"
+                    ]["operation_id"]
+                    != document["operation_id"]
                 )
             ):
                 raise PullDeployError(
@@ -9621,6 +10902,86 @@ def validate_current_state_adoption_lineage(
     if observed != expected:
         raise PullDeployError(
             "deployment state adoption lineage differs from descriptor authority"
+        )
+    binding = descriptor.get("adopted_prerequisite_target_binding")
+    v4_binding = (
+        binding
+        if isinstance(binding, dict) and binding.get("schema_version") == 4
+        else None
+    )
+    previous = descriptor.get("previous_deployment")
+    previous_successor = (
+        previous.get("adoption_successor_lineage")
+        if isinstance(previous, dict)
+        and previous.get("schema_version") == CURRENT_STATE_SCHEMA_VERSION
+        else None
+    )
+    if previous_successor is not None:
+        expected_successor = validate_adoption_successor_lineage(
+            previous_successor
+        )
+        observed_successor = validate_adoption_successor_lineage(
+            state.get("adoption_successor_lineage")
+        )
+        if (
+            expected_successor.get("schema_version") == 1
+            and v4_binding is not None
+        ):
+            legacy_projection = {
+                key: observed_successor[key]
+                for key in LEGACY_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+                if key != "schema_version"
+            }
+            legacy_projection["schema_version"] = 1
+            if (
+                observed_successor.get("schema_version") != 2
+                or legacy_projection != expected_successor
+            ):
+                raise PullDeployError(
+                    "deployment state successor lineage differs from previous state"
+                )
+        elif observed_successor != expected_successor:
+            raise PullDeployError(
+                "deployment state successor lineage differs from previous state"
+            )
+        if v4_binding is None:
+            return
+    if v4_binding is not None:
+        successor = binding.get(
+            "git_permission_source_successor_authority"
+        )
+        unit = binding.get("unit_permission_authority")
+        lineage = validate_adoption_successor_lineage(
+            state.get("adoption_successor_lineage")
+        )
+        if (
+            not isinstance(successor, dict)
+            or not isinstance(unit, dict)
+            or lineage.get("schema_version") != 2
+            or lineage["source_successor_authority_sha256"]
+            != successor.get("authority_file_sha256")
+            or lineage["source_successor_completed_journal_sha256"]
+            != binding.get(
+                "source_successor_completed_journal_sha256"
+            )
+            or lineage["unit_permission_authority_sha256"]
+            != unit.get("authority_file_sha256")
+            or lineage["unit_permission_completed_journal_sha256"]
+            != binding.get("unit_permission_completed_journal_sha256")
+            or lineage[
+                "unit_permission_transaction_inventory_sha256"
+            ]
+            != binding.get(
+                "unit_permission_transaction_inventory_sha256"
+            )
+        ):
+            raise PullDeployError(
+                "deployment state successor lineage differs from descriptor authority"
+            )
+        return
+    if "adoption_successor_lineage" in state:
+        raise PullDeployError(
+            "deployment state has an unbound adoption successor lineage"
         )
 
 
@@ -15365,6 +16726,10 @@ class PullDeployController:
         self.adopted_git_permissions_path = (
             self.runtime_root / ADOPTED_GIT_PERMISSIONS_RELATIVE_PATH
         )
+        self.adopted_git_permission_source_successor_path = (
+            self.runtime_root
+            / ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_RELATIVE_PATH
+        )
         self.adopted_unit_permissions_path = (
             self.runtime_root / ADOPTED_UNIT_PERMISSIONS_RELATIVE_PATH
         )
@@ -15717,8 +17082,12 @@ class PullDeployController:
         if self.test_root_mode and not self._has_complete_test_git_layout():
             return None
         git_permission = self._git_permission_takeover()
+        source_successor = self._git_permission_source_successor_takeover(
+            git_permission_takeover=git_permission,
+        )
         self._unit_permission_takeover(
             git_permission_takeover=git_permission,
+            git_permission_source_successor_takeover=source_successor,
         )
         environment = self._clean_environment()
         try:
@@ -16167,6 +17536,781 @@ class PullDeployController:
             )
         return combined
 
+    def _source_successor_lineage_entries(self) -> list[str]:
+        """List every fixed-path authority or publication-residue sentinel."""
+
+        try:
+            ensure_private_directory(self.state_dir)
+            names = [entry.name for entry in self.state_dir.iterdir()]
+        except OSError as exc:
+            raise PullDeployError(
+                "adopted Git permission source-successor namespace is unavailable"
+            ) from exc
+        final = ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_RELATIVE_PATH.name
+        transaction = (
+            ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY.name
+        )
+        prefix = f".{final}.create-"
+        transaction_prefix = f".{transaction}.create-"
+        return sorted(
+            name
+            for name in names
+            if name == final
+            or name == transaction
+            or name.startswith(prefix)
+            or name.startswith(transaction_prefix)
+        )
+
+    def _validate_source_successor_publication(
+        self,
+        value: object,
+        *,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        final = ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_RELATIVE_PATH.name
+        staging = f".{final}.create-{operation_id}"
+        quarantine = f"{staging}.quarantine"
+        expected: dict[str, Any] = {
+            "schema_version": 1,
+            "policy": "nexpoly-source-successor-authority-publication-v1",
+            "directory": str(self.state_dir),
+            "entries": [
+                {
+                    "role": "final",
+                    "name": final,
+                    "path": str(self.state_dir / final),
+                    "initially_absent": True,
+                },
+                {
+                    "role": "staging",
+                    "name": staging,
+                    "path": str(self.state_dir / staging),
+                    "initially_absent": True,
+                },
+                {
+                    "role": "staging-quarantine",
+                    "name": quarantine,
+                    "path": str(self.state_dir / quarantine),
+                    "initially_absent": True,
+                },
+            ],
+        }
+        if value != expected:
+            raise PullDeployError(
+                "adopted Git permission source-successor publication differs"
+            )
+        return expected
+
+    def _adopted_git_permission_completed_journal(
+        self,
+        *,
+        root_authority: Mapping[str, Any],
+        root_binding: Mapping[str, Any],
+    ) -> tuple[str, str]:
+        """Read the one canonical completed journal behind the root wrapper."""
+
+        transaction_root = (
+            self.runtime_root / ADOPTED_GIT_PERMISSION_TRANSACTION_DIRECTORY
+        )
+        ensure_private_directory(transaction_root)
+        expected_name = f"{root_binding['operation_id']}.json"
+        try:
+            entries = sorted(entry.name for entry in transaction_root.iterdir())
+        except OSError as exc:
+            raise PullDeployError(
+                "adopted Git permission completed journal is unavailable"
+            ) from exc
+        if entries != [expected_name]:
+            raise PullDeployError(
+                "adopted Git permission completed journal lineage is incomplete"
+            )
+        journal, journal_digest = self._private_json_with_digest(
+            transaction_root / expected_name,
+            label="adopted Git permission completed journal",
+            maximum_bytes=ADOPTED_GIT_PERMISSION_MAX_BYTES,
+        )
+        fields = {
+            "schema_version",
+            "status",
+            "phase",
+            "operation_id",
+            "plan",
+            "plan_sha256",
+            "permission_impact_sha256",
+            "permission_checkpoint",
+            "permission_marker_sha256",
+            "permission_evidence_sha256",
+            "source_trust_sha256",
+            "created_at",
+            "completed_at",
+            "aborted_at",
+        }
+        source_trust = require_digest(
+            journal.get("source_trust_sha256"),
+            "adopted Git permission completed journal source trust",
+        )
+        if (
+            set(journal) != fields
+            or type(journal.get("schema_version")) is not int
+            or journal.get("schema_version") != 1
+            or journal_digest
+            != sha256_bytes(canonical_json_bytes(journal) + b"\n")
+            or journal.get("status") != "completed"
+            or journal.get("phase") != "completed"
+            or journal.get("operation_id") != root_binding["operation_id"]
+            or journal.get("plan") != root_authority.get("plan")
+            or journal.get("plan_sha256") != root_binding["plan_sha256"]
+            or journal.get("permission_impact_sha256")
+            != root_binding["permission_impact_sha256"]
+            or journal.get("permission_checkpoint") != "permission:hardened"
+            or journal.get("permission_marker_sha256")
+            != root_binding["permission_marker_sha256"]
+            or journal.get("permission_evidence_sha256")
+            != root_binding["permission_evidence_sha256"]
+            or journal.get("completed_at") != root_binding["completed_at"]
+            or journal.get("aborted_at") is not None
+        ):
+            raise PullDeployError(
+                "adopted Git permission completed journal differs"
+            )
+        require_utc_timestamp(
+            journal.get("created_at"),
+            "adopted Git permission journal creation",
+        )
+        require_utc_timestamp(
+            journal.get("completed_at"),
+            "adopted Git permission journal completion",
+        )
+        return journal_digest, source_trust
+
+    def _validate_adopted_git_permission_source_successor_authority(
+        self,
+        *,
+        adopted: Mapping[str, Any],
+        git_permission_takeover: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Bind the create-once successor to every raw predecessor byte."""
+
+        adopted_document, adopted_digest = self._private_json_with_digest(
+            self.adopted_state_path,
+            label="adopted deployment authority",
+        )
+        bootstrap, bootstrap_digest = self._private_json_with_digest(
+            self.state_dir / "bootstrap-control.json",
+            label="manual adoption bootstrap authority",
+        )
+        prerequisites, prerequisites_digest = self._private_json_with_digest(
+            self.runtime_root / ADOPTED_PREREQUISITES_RELATIVE_PATH,
+            label="adopted prerequisite authority",
+        )
+        root_raw, root_raw_digest = self._private_json_with_digest(
+            self.adopted_git_permissions_path,
+            label="adopted Git permission authority",
+            maximum_bytes=ADOPTED_GIT_PERMISSION_MAX_BYTES,
+        )
+        authority, authority_file_digest = self._private_json_with_digest(
+            self.adopted_git_permission_source_successor_path,
+            label="adopted Git permission source-successor authority",
+            maximum_bytes=ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES,
+        )
+        if authority_file_digest != sha256_bytes(
+            canonical_json_bytes(authority) + b"\n"
+        ):
+            raise PullDeployError(
+                "adopted Git permission source-successor authority is not canonical"
+            )
+        root = validate_adopted_git_permission_takeover(
+            dict(git_permission_takeover)
+        )
+        root_binding = root["authority"]
+        prerequisite_plan = prerequisites.get("plan")
+        if (
+            adopted_document != adopted
+            or bootstrap.get("adopted_deployment") != adopted_document
+            or bootstrap.get("adopted_deployment_sha256")
+            != canonical_json_digest(adopted_document)
+            or type(prerequisites.get("schema_version")) is not int
+            or prerequisites.get("schema_version") != 1
+            or prerequisites.get("status") != "completed"
+            or prerequisites.get("authority_kind")
+            != "manual-runtime-adoption-prerequisites"
+            or not isinstance(prerequisite_plan, dict)
+            or prerequisites.get("plan_sha256")
+            != canonical_json_digest(prerequisite_plan)
+            or prerequisites.get("adopted_deployment_sha256")
+            != adopted_digest
+            or root_raw_digest != root["authority_file_sha256"]
+            or root_raw.get("plan_sha256")
+            != root_binding["plan_sha256"]
+        ):
+            raise PullDeployError(
+                "adopted Git permission source-successor base authority differs"
+            )
+        (
+            root_completed_journal_sha256,
+            root_source_trust_sha256,
+        ) = self._adopted_git_permission_completed_journal(
+            root_authority=root_raw,
+            root_binding=root_binding,
+        )
+        if (
+            set(authority)
+            != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_AUTHORITY_FIELDS
+            or type(authority.get("schema_version")) is not int
+            or authority.get("schema_version") != 1
+            or authority.get("status") != "completed"
+            or authority.get("authority_kind")
+            != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_AUTHORITY_KIND
+            or authority.get("policy")
+            != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_POLICY
+            or re.fullmatch(
+                r"adopt-git-successor-[a-z0-9][a-z0-9._-]{7,95}",
+                str(authority.get("operation_id", "")),
+            )
+            is None
+        ):
+            raise PullDeployError(
+                "adopted Git permission source-successor authority has an invalid shape"
+            )
+        for field in (
+            "source_sha",
+            "source_tree",
+            "predecessor_source_sha",
+            "predecessor_source_tree",
+        ):
+            require_sha(
+                authority.get(field),
+                f"adopted Git permission source-successor {field}",
+            )
+        for field in (
+            "predecessor_authority_sha256",
+            "predecessor_marker_sha256",
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+            "plan_sha256",
+            "source_successor_impact_sha256",
+            "files_sha256",
+            "changed_paths_sha256",
+            "delivery_gate_sha256",
+            "verifier_agreement_sha256",
+            "production_source_trust_sha256",
+            "production_repository_transition_sha256",
+        ):
+            require_digest(
+                authority.get(field),
+                f"adopted Git permission source-successor {field}",
+            )
+        require_utc_timestamp(
+            authority.get("completed_at"),
+            "adopted Git permission source-successor completion",
+        )
+        plan = authority.get("plan")
+        if (
+            not isinstance(plan, dict)
+            or set(plan)
+            != ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_PLAN_FIELDS
+            or type(plan.get("schema_version")) is not int
+            or plan.get("schema_version") != 1
+            or authority["plan_sha256"] != canonical_json_digest(plan)
+            or plan.get("authority_kind") != authority["authority_kind"]
+            or plan.get("policy") != authority["policy"]
+            or plan.get("operation_id") != authority["operation_id"]
+            or plan.get("source_sha") != authority["source_sha"]
+            or plan.get("source_tree") != authority["source_tree"]
+        ):
+            raise PullDeployError(
+                "adopted Git permission source-successor plan differs"
+            )
+        self._validate_unit_permission_source_authority(
+            plan,
+            source_sha=authority["source_sha"],
+            source_tree=authority["source_tree"],
+        )
+        delivery = _validate_adopted_source_successor_delivery_gate(
+            plan.get("delivery_gate")
+        )
+        repository_transition = validate_production_repository_transition(
+            plan.get("production_repository_transition"),
+            production_root=self.production_root,
+            production_sha=adopted["source_sha"],
+            production_tree=adopted["source_tree"],
+            target_sha=authority["source_sha"],
+            target_tree=authority["source_tree"],
+            baseline_trust_sha256=authority[
+                "production_source_trust_sha256"
+            ],
+        )
+        transition_logical_refs = {
+            record["name"]: record["object_sha"]
+            for record in repository_transition["logical_refs"]
+        }
+        if (
+            transition_logical_refs.get(DEPLOY_REMOTE_REF)
+            != root_binding["source_sha"]
+            or plan.get("production_repository_transition_sha256")
+            != canonical_json_digest(repository_transition)
+        ):
+            raise PullDeployError(
+                "production repository transition predecessor differs"
+            )
+        files = validate_adopted_git_permission_source_successor_files(
+            plan.get("files")
+        )
+        changed_paths = plan.get("changed_paths")
+        predecessor = plan.get("predecessor")
+        production_source = plan.get("production_source")
+        marker = plan.get("marker")
+        verifier_agreement = plan.get("verifier_agreement")
+        impact = plan.get("source_successor_impact")
+        expected_predecessor = {
+            "authority_kind": root_binding["authority_kind"],
+            "operation_id": root_binding["operation_id"],
+            "source_sha": root_binding["source_sha"],
+            "source_tree": root_binding["source_tree"],
+            "authority_sha256": root_raw_digest,
+            "plan_sha256": root_binding["plan_sha256"],
+            "permission_marker_sha256": root_binding[
+                "permission_marker_sha256"
+            ],
+            "permission_evidence_sha256": root_binding[
+                "permission_evidence_sha256"
+            ],
+            "permission_inventory_sha256": root_binding[
+                "permission_inventory_sha256"
+            ],
+            "original_permissions_sha256": root_binding[
+                "original_permissions_sha256"
+            ],
+            "hardened_permissions_sha256": root_binding[
+                "hardened_permissions_sha256"
+            ],
+            "completed_journal_sha256": root_completed_journal_sha256,
+            "source_trust_sha256": root_source_trust_sha256,
+        }
+        expected_marker = {
+            "path": str(self.git_permission_marker_path),
+            "raw_sha256": root_binding["permission_marker_sha256"],
+            "evidence_sha256": root_binding["permission_evidence_sha256"],
+            "inventory_sha256": root_binding[
+                "permission_inventory_sha256"
+            ],
+            "original_permissions_sha256": root_binding[
+                "original_permissions_sha256"
+            ],
+            "hardened_permissions_sha256": root_binding[
+                "hardened_permissions_sha256"
+            ],
+        }
+        verifier_fields = {
+            "schema_version",
+            "policy",
+            "candidate_execution",
+            "predecessor_source_sha",
+            "predecessor_source_tree",
+            "bootstrap",
+            "git_source_trust",
+            "ci_contract",
+            "required_jobs",
+            "required_jobs_sha256",
+        }
+        verifier_file_paths = {
+            "bootstrap": "scripts/bootstrap_pull_deploy.py",
+            "git_source_trust": "scripts/git_source_trust.py",
+            "ci_contract": "scripts/bridge_deploy_core.py",
+        }
+        files_by_path = {record["path"]: record for record in files}
+        required_jobs = (
+            verifier_agreement.get("required_jobs")
+            if isinstance(verifier_agreement, dict)
+            else None
+        )
+        impact_fields = {
+            "schema_version",
+            "policy",
+            "predecessor_authority_sha256",
+            "predecessor_marker_sha256",
+            "production_source_trust_sha256",
+            "production_repository_transition_sha256",
+            "target",
+            "files",
+            "files_sha256",
+            "changed_paths",
+            "changed_paths_sha256",
+            "authority_publication",
+            "mutations",
+        }
+        mutations = {
+            "services": False,
+            "source": False,
+            "source_refs": False,
+            "database": False,
+            "credentials": False,
+            "git_permissions": False,
+            "units": False,
+            "runtime_authority": True,
+        }
+        publication = self._validate_source_successor_publication(
+            plan.get("authority_publication"),
+            operation_id=authority["operation_id"],
+        )
+        if (
+            not isinstance(predecessor, dict)
+            or predecessor != expected_predecessor
+            or not isinstance(marker, dict)
+            or marker != expected_marker
+            or not isinstance(verifier_agreement, dict)
+            or set(verifier_agreement) != verifier_fields
+            or type(verifier_agreement.get("schema_version")) is not int
+            or verifier_agreement.get("schema_version") != 1
+            or verifier_agreement.get("policy")
+            != "nexpoly-frozen-predecessor-verifier-agreement-v1"
+            or verifier_agreement.get("candidate_execution")
+            != "forbidden-before-authority"
+            or verifier_agreement.get("predecessor_source_sha")
+            != root_binding["source_sha"]
+            or verifier_agreement.get("predecessor_source_tree")
+            != root_binding["source_tree"]
+            or any(
+                verifier_agreement.get(label) != files_by_path[path]
+                for label, path in verifier_file_paths.items()
+            )
+            or not isinstance(required_jobs, list)
+            or required_jobs != delivery["ci"]["required_jobs"]
+            or verifier_agreement.get("required_jobs_sha256")
+            != canonical_json_digest(required_jobs)
+            or not isinstance(impact, dict)
+            or set(impact) != impact_fields
+            or type(impact.get("schema_version")) is not int
+            or impact.get("schema_version") != 1
+            or impact.get("policy")
+            != "nexpoly-adopted-git-permission-source-successor-impact-v1"
+            or impact.get("predecessor_authority_sha256") != root_raw_digest
+            or impact.get("predecessor_marker_sha256")
+            != root_binding["permission_marker_sha256"]
+            or impact.get("production_source_trust_sha256")
+            != plan.get("production_source_trust_sha256")
+            or impact.get("production_repository_transition_sha256")
+            != plan.get("production_repository_transition_sha256")
+            or impact.get("target")
+            != {
+                "source_sha": authority["source_sha"],
+                "source_tree": authority["source_tree"],
+            }
+            or impact.get("files") != files
+            or impact.get("files_sha256") != canonical_json_digest(files)
+            or impact.get("changed_paths") != changed_paths
+            or impact.get("changed_paths_sha256")
+            != canonical_json_digest(changed_paths)
+            or impact.get("authority_publication") != publication
+            or impact.get("mutations") != mutations
+            or production_source
+            != {
+                "source_sha": adopted["source_sha"],
+                "source_tree": adopted["source_tree"],
+            }
+            or changed_paths
+            != list(
+                ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_ALLOWED_CHANGED_FILES
+            )
+            or plan.get("files_sha256") != canonical_json_digest(files)
+            or plan.get("changed_paths_sha256")
+            != canonical_json_digest(changed_paths)
+            or plan.get("source_successor_impact_sha256")
+            != canonical_json_digest(impact)
+            or authority["verifier_agreement_sha256"]
+            != canonical_json_digest(verifier_agreement)
+            or plan.get("mutations") != mutations
+        ):
+            raise PullDeployError(
+                "adopted Git permission source-successor evidence differs"
+            )
+        if (
+            authority["source_sha"] == authority["predecessor_source_sha"]
+            or authority["predecessor_source_sha"]
+            != root_binding["source_sha"]
+            or authority["predecessor_source_tree"]
+            != root_binding["source_tree"]
+            or authority["predecessor_authority_sha256"] != root_raw_digest
+            or authority["predecessor_marker_sha256"]
+            != root_binding["permission_marker_sha256"]
+            or authority["adopted_deployment_sha256"] != adopted_digest
+            or authority["bootstrap_control_sha256"] != bootstrap_digest
+            or authority["adopted_prerequisites_sha256"]
+            != prerequisites_digest
+            or authority["files_sha256"] != plan["files_sha256"]
+            or authority["changed_paths"] != changed_paths
+            or authority["changed_paths_sha256"]
+            != plan["changed_paths_sha256"]
+            or authority["delivery_gate"] != delivery
+            or authority["delivery_gate_sha256"]
+            != plan["delivery_gate_sha256"]
+            or authority["source_successor_impact_sha256"]
+            != plan["source_successor_impact_sha256"]
+            or authority["production_source_trust_sha256"]
+            != plan["production_source_trust_sha256"]
+            or authority["production_repository_transition_sha256"]
+            != plan["production_repository_transition_sha256"]
+            or plan["adopted_deployment_sha256"] != adopted_digest
+            or plan["bootstrap_control_sha256"] != bootstrap_digest
+            or plan["adopted_prerequisites_sha256"]
+            != prerequisites_digest
+        ):
+            raise PullDeployError(
+                "adopted Git permission source-successor provenance differs"
+            )
+        binding: dict[str, Any] = {
+            "schema_version": 1,
+            "authority_kind": authority["authority_kind"],
+            "operation_id": authority["operation_id"],
+            "predecessor_authority_sha256": root_raw_digest,
+            "predecessor_source_sha": authority["predecessor_source_sha"],
+            "predecessor_source_tree": authority["predecessor_source_tree"],
+            "predecessor_marker_sha256": authority[
+                "predecessor_marker_sha256"
+            ],
+            "target_source_sha": authority["source_sha"],
+            "target_source_tree": authority["source_tree"],
+            "production_source_sha": adopted["source_sha"],
+            "production_source_tree": adopted["source_tree"],
+            "adopted_deployment_sha256": adopted_digest,
+            "bootstrap_control_sha256": bootstrap_digest,
+            "adopted_prerequisites_sha256": prerequisites_digest,
+            "plan_sha256": authority["plan_sha256"],
+            "source_successor_impact_sha256": authority[
+                "source_successor_impact_sha256"
+            ],
+            "source_trust_sha256": authority[
+                "production_source_trust_sha256"
+            ],
+            "production_repository_transition": repository_transition,
+            "production_repository_transition_sha256": authority[
+                "production_repository_transition_sha256"
+            ],
+            "delivery_gate": delivery,
+            "delivery_gate_sha256": authority["delivery_gate_sha256"],
+            "fixed_files": files,
+            "fixed_files_sha256": authority["files_sha256"],
+            "changed_files": changed_paths,
+            "changed_files_sha256": authority["changed_paths_sha256"],
+            "completed_at": authority["completed_at"],
+            "authority_file_sha256": authority_file_digest,
+        }
+        binding["identity_sha256"] = canonical_json_digest(binding)
+        return validate_adopted_git_permission_source_successor_binding(
+            binding
+        )
+
+    def _source_successor_completed_journal_snapshot(
+        self,
+        source_successor: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], str, list[str]]:
+        """Read one exact completed journal and its authority under CAS."""
+
+        binding = validate_adopted_git_permission_source_successor_binding(
+            dict(source_successor)
+        )
+        transaction_root = (
+            self.runtime_root
+            / ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY
+        )
+        ensure_private_directory(transaction_root)
+        try:
+            journal_names = sorted(
+                path.name for path in transaction_root.iterdir()
+            )
+        except OSError as exc:
+            raise PullDeployError(
+                "source-successor completed journal is unavailable"
+            ) from exc
+        expected_names = [f"{binding['operation_id']}.json"]
+        if journal_names != expected_names:
+            raise PullDeployError(
+                "source-successor completed journal lineage is incomplete"
+            )
+        authority, authority_digest = self._private_json_with_digest(
+            self.adopted_git_permission_source_successor_path,
+            label="adopted Git permission source-successor authority",
+            maximum_bytes=ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES,
+        )
+        if (
+            authority_digest != binding["authority_file_sha256"]
+            or authority_digest
+            != sha256_bytes(canonical_json_bytes(authority) + b"\n")
+            or authority.get("plan_sha256") != binding["plan_sha256"]
+        ):
+            raise PullDeployError(
+                "source-successor journal authority differs"
+            )
+        journal, journal_digest = self._private_json_with_digest(
+            transaction_root / expected_names[0],
+            label="source-successor completed journal",
+            maximum_bytes=ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES,
+        )
+        journal_fields = {
+            "schema_version",
+            "status",
+            "phase",
+            "operation_id",
+            "plan",
+            "plan_sha256",
+            "source_successor_impact_sha256",
+            "production_source_trust_sha256",
+            "created_at",
+            "completed_at",
+            "aborted_at",
+        }
+        if (
+            set(journal) != journal_fields
+            or type(journal.get("schema_version")) is not int
+            or journal.get("schema_version") != 1
+            or journal_digest
+            != sha256_bytes(canonical_json_bytes(journal) + b"\n")
+            or journal.get("operation_id") != binding["operation_id"]
+            or journal.get("status") != "completed"
+            or journal.get("phase") != "completed"
+            or journal.get("plan") != authority.get("plan")
+            or journal.get("plan_sha256") != binding["plan_sha256"]
+            or journal.get("source_successor_impact_sha256")
+            != binding["source_successor_impact_sha256"]
+            or journal.get("production_source_trust_sha256")
+            != binding["source_trust_sha256"]
+            or journal.get("completed_at") != authority.get("completed_at")
+            or journal.get("aborted_at") is not None
+        ):
+            raise PullDeployError(
+                "source-successor completed journal differs"
+            )
+        created_at = require_utc_timestamp(
+            journal.get("created_at"),
+            "source-successor journal creation",
+        )
+        completed_at = require_utc_timestamp(
+            journal.get("completed_at"),
+            "source-successor journal completion",
+        )
+        if completed_at < created_at:
+            raise PullDeployError(
+                "source-successor journal completion precedes creation"
+            )
+        return journal, journal_digest, journal_names
+
+    def _source_successor_completed_journal_digest(
+        self,
+        source_successor: Mapping[str, Any],
+    ) -> str:
+        """Return the raw completed-journal digest after exact validation."""
+
+        _journal, journal_digest, _journal_names = (
+            self._source_successor_completed_journal_snapshot(
+                source_successor
+            )
+        )
+        return journal_digest
+
+    def _git_permission_source_successor_takeover(
+        self,
+        *,
+        git_permission_takeover: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        adoption_binding = self._adoption_bootstrap_binding()
+        manual_current = False
+        current_successor_lineage: dict[str, Any] | None = None
+        if self.current_state_path.exists() or self.current_state_path.is_symlink():
+            current = validate_current_deployment_state(
+                load_private_json(self.current_state_path)
+            )
+            manual_current = (
+                current.get("schema_version") == CURRENT_STATE_SCHEMA_VERSION
+                and current.get("authority_kind") == "manual-runtime-adoption"
+            )
+            if manual_current and "adoption_successor_lineage" in current:
+                current_successor_lineage = (
+                    validate_adoption_successor_lineage(
+                        current["adoption_successor_lineage"]
+                    )
+                )
+        entries = self._source_successor_lineage_entries()
+        if not entries:
+            if current_successor_lineage is not None:
+                raise PullDeployError(
+                    "manual adoption lineage requires the source-successor authority"
+                )
+            return None
+        expected_entries = sorted(
+            [
+                ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_RELATIVE_PATH.name,
+                ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY.name,
+            ]
+        )
+        if entries != expected_entries:
+            raise PullDeployError(
+                "manual adoption lineage requires one completed source-successor authority"
+            )
+        if adoption_binding is None:
+            raise PullDeployError(
+                "source-successor authority lost its adoption binding"
+            )
+        if git_permission_takeover is None:
+            git_permission_takeover = self._git_permission_takeover()
+        if git_permission_takeover is None:
+            raise PullDeployError(
+                "source-successor authority lacks its root predecessor"
+            )
+        adopted = adoption_binding[0]
+        before = (
+            self._validate_adopted_git_permission_source_successor_authority(
+                adopted=adopted,
+                git_permission_takeover=git_permission_takeover,
+            )
+        )
+        journal, journal_digest, journal_names = (
+            self._source_successor_completed_journal_snapshot(before)
+        )
+        adoption_after = self._adoption_bootstrap_binding()
+        if adoption_after is None or adoption_after != adoption_binding:
+            raise PullDeployError(
+                "source-successor base authority changed while validating"
+            )
+        root_after = self._git_permission_takeover()
+        if root_after != git_permission_takeover:
+            raise PullDeployError(
+                "source-successor root authority changed while validating"
+            )
+        after = (
+            self._validate_adopted_git_permission_source_successor_authority(
+                adopted=adoption_after[0],
+                git_permission_takeover=root_after,
+            )
+        )
+        journal_after, journal_digest_after, journal_names_after = (
+            self._source_successor_completed_journal_snapshot(after)
+        )
+        if (
+            after != before
+            or journal_after != journal
+            or journal_digest_after != journal_digest
+            or journal_names_after != journal_names
+            or self._source_successor_lineage_entries() != expected_entries
+        ):
+            raise PullDeployError(
+                "source-successor authority changed while validating"
+            )
+        if current_successor_lineage is not None and (
+            before["authority_file_sha256"]
+            != current_successor_lineage[
+                "source_successor_authority_sha256"
+            ]
+            or journal_digest
+            != current_successor_lineage[
+                "source_successor_completed_journal_sha256"
+            ]
+        ):
+            raise PullDeployError(
+                "source-successor authority differs from current-state lineage"
+            )
+        return before
+
     @staticmethod
     def _validate_unit_permission_source_authority(
         plan: Mapping[str, Any],
@@ -16564,6 +18708,7 @@ class PullDeployController:
         *,
         adopted: Mapping[str, Any],
         git_permission_takeover: Mapping[str, Any],
+        git_permission_source_successor_takeover: Mapping[str, Any] | None = None,
         verify_live: bool,
     ) -> dict[str, Any]:
         """Bind unit hardening to every raw adoption predecessor byte."""
@@ -16589,6 +18734,19 @@ class PullDeployController:
             label="adopted Git permission authority",
             maximum_bytes=ADOPTED_GIT_PERMISSION_MAX_BYTES,
         )
+        source_successor_raw: dict[str, Any] | None = None
+        source_successor_raw_digest: str | None = None
+        if git_permission_source_successor_takeover is not None:
+            (
+                source_successor_raw,
+                source_successor_raw_digest,
+            ) = self._private_json_with_digest(
+                self.adopted_git_permission_source_successor_path,
+                label="adopted Git permission source-successor authority",
+                maximum_bytes=(
+                    ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES
+                ),
+            )
         authority, authority_file_digest = self._private_json_with_digest(
             self.adopted_unit_permissions_path,
             label="adopted unit permission authority",
@@ -16597,6 +18755,13 @@ class PullDeployController:
         prerequisite_plan = prerequisites.get("plan")
         git_combined = validate_adopted_git_permission_takeover(
             dict(git_permission_takeover)
+        )
+        source_successor = (
+            validate_adopted_git_permission_source_successor_binding(
+                dict(git_permission_source_successor_takeover)
+            )
+            if git_permission_source_successor_takeover is not None
+            else None
         )
         if (
             adopted_document != adopted
@@ -16619,14 +18784,28 @@ class PullDeployController:
             != git_combined["authority_file_sha256"]
             or git_authority.get("plan_sha256")
             != git_combined["authority"]["plan_sha256"]
+            or source_successor is not None
+            and (
+                source_successor_raw_digest
+                != source_successor["authority_file_sha256"]
+                or not isinstance(source_successor_raw, dict)
+                or source_successor_raw.get("plan_sha256")
+                != source_successor["plan_sha256"]
+            )
         ):
             raise PullDeployError(
                 "adopted unit permission base authority differs"
             )
+        schema_version = authority.get("schema_version")
+        expected_authority_fields = (
+            ADOPTED_UNIT_PERMISSION_AUTHORITY_V2_FIELDS
+            if type(schema_version) is int and schema_version == 2
+            else ADOPTED_UNIT_PERMISSION_AUTHORITY_FIELDS
+        )
         if (
-            set(authority) != ADOPTED_UNIT_PERMISSION_AUTHORITY_FIELDS
-            or type(authority.get("schema_version")) is not int
-            or authority.get("schema_version") != 1
+            set(authority) != expected_authority_fields
+            or type(schema_version) is not int
+            or schema_version not in {1, 2}
             or authority.get("status") != "completed"
             or authority.get("authority_kind")
             != ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND
@@ -16663,17 +18842,29 @@ class PullDeployController:
             require_digest(
                 authority.get(field), f"adopted unit permission {field}"
             )
+        if schema_version == 2:
+            require_digest(
+                authority.get(
+                    "adopted_git_permission_source_successor_sha256"
+                ),
+                "adopted unit permission source-successor authority",
+            )
         require_utc_timestamp(
             authority.get("completed_at"),
             "adopted unit permission completion",
         )
         plan = authority.get("plan")
+        expected_plan_fields = (
+            ADOPTED_UNIT_PERMISSION_PLAN_V2_FIELDS
+            if schema_version == 2
+            else ADOPTED_UNIT_PERMISSION_PLAN_FIELDS
+        )
         if (
             not isinstance(plan, dict)
-            or set(plan) != ADOPTED_UNIT_PERMISSION_PLAN_FIELDS
+            or set(plan) != expected_plan_fields
             or authority["plan_sha256"] != canonical_json_digest(plan)
             or type(plan.get("schema_version")) is not int
-            or plan.get("schema_version") != 1
+            or plan.get("schema_version") != schema_version
             or plan.get("authority_kind") != authority["authority_kind"]
             or plan.get("operation_id") != authority["operation_id"]
             or plan.get("source_sha") != authority["source_sha"]
@@ -16686,6 +18877,11 @@ class PullDeployController:
             != prerequisites["plan_sha256"]
             or plan.get("adopted_git_permissions_sha256")
             != git_authority_digest
+            or schema_version == 2
+            and plan.get(
+                "adopted_git_permission_source_successor_sha256"
+            )
+            != source_successor_raw_digest
             or plan.get("production_source")
             != {
                 "source_sha": adopted["source_sha"],
@@ -16743,12 +18939,18 @@ class PullDeployController:
         adopted_md = adopted.get("monomer_md", {}).get("systemd_unit", {})
         adopted_dft = adopted.get("monomer_dft", {}).get("systemd_unit", {})
         permission = git_combined["authority"]
+        successor_root = (
+            successor["root_authority"]
+            if successor["schema_version"] == 2
+            else successor["authority"]
+        )
         if (
-            successor["authority"]["source_sha"]
+            successor["schema_version"] != schema_version
+            or successor_root["source_sha"]
             != permission["source_sha"]
-            or successor["authority"]["source_tree"]
+            or successor_root["source_tree"]
             != permission["source_tree"]
-            or successor["authority"]["raw_sha256"]
+            or successor_root["raw_sha256"]
             != git_authority_digest
             or successor["target"]
             != {
@@ -16761,6 +18963,20 @@ class PullDeployController:
             != prerequisites_digest
             or authority["adopted_git_permissions_sha256"]
             != git_authority_digest
+            or schema_version == 2
+            and (
+                source_successor is None
+                or authority[
+                    "adopted_git_permission_source_successor_sha256"
+                ]
+                != source_successor_raw_digest
+                or successor["source_successor_authority"]
+                != source_successor
+                or source_successor["delivery_gate"]
+                != plan["delivery_gate"]
+            )
+            or schema_version == 1
+            and source_successor is not None
             or authority["adopted_git_permission_source_sha"]
             != permission["source_sha"]
             or authority["adopted_git_permission_source_tree"]
@@ -16831,10 +19047,15 @@ class PullDeployController:
                 units,
                 hardened_units,
             )
+        binding_fields = (
+            ADOPTED_UNIT_PERMISSION_BINDING_V2_FIELDS
+            if schema_version == 2
+            else ADOPTED_UNIT_PERMISSION_BINDING_FIELDS
+        )
         projection = {
             field: authority[field]
             for field in (
-                ADOPTED_UNIT_PERMISSION_BINDING_FIELDS
+                binding_fields
                 - {
                     "authority_file_sha256",
                     "git_permission_successor",
@@ -16850,10 +19071,435 @@ class PullDeployController:
         binding["identity_sha256"] = canonical_json_digest(binding)
         return validate_adopted_unit_permission_binding(binding)
 
+    def _validate_aborted_unit_permission_journal(
+        self,
+        journal: Mapping[str, Any],
+        *,
+        operation_id: str,
+    ) -> None:
+        """Validate one terminal no-mutation journal retained before success."""
+
+        schema_version = journal.get("schema_version")
+        plan = journal.get("plan")
+        expected_plan_fields = (
+            ADOPTED_UNIT_PERMISSION_PLAN_V2_FIELDS
+            if type(schema_version) is int and schema_version == 2
+            else ADOPTED_UNIT_PERMISSION_PLAN_FIELDS
+            if type(schema_version) is int and schema_version == 1
+            else None
+        )
+        if (
+            expected_plan_fields is None
+            or not isinstance(plan, dict)
+            or set(plan) != expected_plan_fields
+            or type(plan.get("schema_version")) is not int
+            or plan.get("schema_version") != schema_version
+            or plan.get("authority_kind")
+            != ADOPTED_UNIT_PERMISSION_AUTHORITY_KIND
+            or plan.get("operation_id") != operation_id
+            or journal.get("plan_sha256") != canonical_json_digest(plan)
+            or journal.get("unit_permission_impact_sha256")
+            != plan.get("unit_permission_impact_sha256")
+        ):
+            raise PullDeployError(
+                "aborted unit permission journal plan is invalid"
+            )
+        source_sha = require_sha(
+            plan.get("source_sha"),
+            "aborted unit permission journal source SHA",
+        )
+        source_tree = require_sha(
+            plan.get("source_tree"),
+            "aborted unit permission journal source tree",
+        )
+        self._validate_unit_permission_source_authority(
+            plan,
+            source_sha=source_sha,
+            source_tree=source_tree,
+        )
+        for field in (
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+            "adopted_prerequisites_plan_sha256",
+            "adopted_git_permissions_sha256",
+            "unit_permission_impact_sha256",
+        ):
+            require_digest(
+                plan.get(field),
+                f"aborted unit permission journal {field}",
+            )
+        successor = validate_adopted_git_permission_successor(
+            plan.get("git_permission_successor")
+        )
+        successor_root = (
+            successor["root_authority"]
+            if successor["schema_version"] == 2
+            else successor["authority"]
+        )
+        if (
+            successor.get("schema_version") != schema_version
+            or successor.get("target")
+            != {"source_sha": source_sha, "source_tree": source_tree}
+            or successor_root["raw_sha256"]
+            != plan.get("adopted_git_permissions_sha256")
+        ):
+            raise PullDeployError(
+                "aborted unit permission journal successor differs"
+            )
+        if schema_version == 2:
+            successor_authority = successor.get(
+                "source_successor_authority"
+            )
+            if (
+                not isinstance(successor_authority, dict)
+                or require_digest(
+                    plan.get(
+                        "adopted_git_permission_source_successor_sha256"
+                    ),
+                    "aborted unit permission source-successor authority",
+                )
+                != successor_authority.get("authority_file_sha256")
+                or successor_authority.get("delivery_gate")
+                != plan.get("delivery_gate")
+                or successor_authority.get("delivery_gate_sha256")
+                != plan.get("delivery_gate_sha256")
+                or successor_authority.get("adopted_deployment_sha256")
+                != plan.get("adopted_deployment_sha256")
+                or successor_authority.get("bootstrap_control_sha256")
+                != plan.get("bootstrap_control_sha256")
+                or successor_authority.get("adopted_prerequisites_sha256")
+                != plan.get("adopted_prerequisites_sha256")
+            ):
+                raise PullDeployError(
+                    "aborted unit permission journal source-successor differs"
+                )
+        units = validate_adopted_unit_permission_records(
+            plan.get("units"), final=False
+        )
+        publication = self._validate_adopted_unit_authority_publication(
+            plan.get("authority_publication"),
+            operation_id=operation_id,
+        )
+        impact = {
+            "schema_version": 1,
+            "policy": "nexpoly-adopted-unit-permission-hardening-v1",
+            "units": units,
+            "authority_publication": publication,
+        }
+        production_source = plan.get("production_source")
+        if (
+            not isinstance(production_source, dict)
+            or set(production_source) != {"source_sha", "source_tree"}
+            or require_sha(
+                production_source.get("source_sha"),
+                "aborted unit permission production source SHA",
+            )
+            != production_source["source_sha"]
+            or require_sha(
+                production_source.get("source_tree"),
+                "aborted unit permission production source tree",
+            )
+            != production_source["source_tree"]
+            or schema_version == 2
+            and (
+                successor_authority.get("production_source_sha")
+                != production_source["source_sha"]
+                or successor_authority.get("production_source_tree")
+                != production_source["source_tree"]
+            )
+            or plan.get("unit_permission_impact_sha256")
+            != canonical_json_digest(impact)
+            or plan.get("mutations")
+            != {
+                "services_restarted": False,
+                "source": False,
+                "database": False,
+                "credentials": False,
+                "md_unit_inode": True,
+                "dft_unit": False,
+                "runtime_authority": True,
+                "systemd_daemon_reload": True,
+            }
+        ):
+            raise PullDeployError(
+                "aborted unit permission journal evidence differs"
+            )
+
+    def _unit_permission_transaction_snapshot(
+        self,
+        unit_permission: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], str, list[dict[str, str]], str]:
+        """Read the completed journal and all terminal predecessors under CAS."""
+
+        binding = validate_adopted_unit_permission_binding(
+            dict(unit_permission)
+        )
+        authority, authority_digest = self._private_json_with_digest(
+            self.adopted_unit_permissions_path,
+            label="adopted unit permission transaction authority",
+            maximum_bytes=ADOPTED_UNIT_PERMISSION_MAX_BYTES,
+        )
+        if (
+            authority_digest != binding["authority_file_sha256"]
+            or authority.get("operation_id") != binding["operation_id"]
+            or authority.get("plan_sha256") != binding["plan_sha256"]
+        ):
+            raise PullDeployError(
+                "unit permission journal authority differs"
+            )
+        transaction_root = (
+            self.runtime_root
+            / ADOPTED_UNIT_PERMISSION_TRANSACTION_DIRECTORY
+        )
+        ensure_private_directory(transaction_root)
+        try:
+            journal_names = sorted(
+                entry.name for entry in transaction_root.iterdir()
+            )
+        except OSError as exc:
+            raise PullDeployError(
+                "unit permission transaction inventory is unavailable"
+            ) from exc
+        if not journal_names:
+            raise PullDeployError(
+                "unit permission completed journal is unavailable"
+            )
+        journal_fields = {
+            "schema_version",
+            "status",
+            "phase",
+            "operation_id",
+            "plan",
+            "plan_sha256",
+            "unit_permission_impact_sha256",
+            "replacement_checkpoint",
+            "backup",
+            "staging",
+            "replacement",
+            "unit_evidence",
+            "source_trust_sha256",
+            "created_at",
+            "completed_at",
+            "aborted_at",
+        }
+        inventory: list[dict[str, str]] = []
+        completed: list[tuple[dict[str, Any], str]] = []
+        for name in journal_names:
+            if not name.endswith(".json"):
+                raise PullDeployError(
+                    "unit permission transaction inventory has an unknown entry"
+                )
+            operation_id = name.removesuffix(".json")
+            if re.fullmatch(
+                r"adopt-unit-permission-[a-z0-9][a-z0-9._-]{7,95}",
+                operation_id,
+            ) is None:
+                raise PullDeployError(
+                    "unit permission transaction inventory has an invalid operation"
+                )
+            journal, journal_digest = self._private_json_with_digest(
+                transaction_root / name,
+                label="unit permission transaction journal",
+                maximum_bytes=ADOPTED_UNIT_PERMISSION_MAX_BYTES,
+            )
+            if (
+                set(journal) != journal_fields
+                or journal_digest
+                != sha256_bytes(canonical_json_bytes(journal) + b"\n")
+                or journal.get("operation_id") != operation_id
+            ):
+                raise PullDeployError(
+                    "unit permission transaction journal is invalid"
+                )
+            inventory.append(
+                {"name": name, "raw_sha256": journal_digest}
+            )
+            if (
+                journal.get("status") == "completed"
+                and journal.get("phase") == "completed"
+            ):
+                completed.append((journal, journal_digest))
+                continue
+            if (
+                journal.get("status") != "aborted"
+                or journal.get("phase") != "aborted"
+                or journal.get("completed_at") is not None
+                or any(
+                    journal.get(field) is not None
+                    for field in (
+                        "replacement_checkpoint",
+                        "backup",
+                        "staging",
+                        "replacement",
+                        "unit_evidence",
+                        "source_trust_sha256",
+                    )
+                )
+            ):
+                raise PullDeployError(
+                    "unit permission transaction inventory is not terminal"
+                )
+            created_at = require_utc_timestamp(
+                journal.get("created_at"),
+                "aborted unit permission journal creation",
+            )
+            aborted_at = require_utc_timestamp(
+                journal.get("aborted_at"),
+                "aborted unit permission journal completion",
+            )
+            if aborted_at < created_at:
+                raise PullDeployError(
+                    "aborted unit permission journal precedes creation"
+                )
+            self._validate_aborted_unit_permission_journal(
+                journal,
+                operation_id=operation_id,
+            )
+        if len(completed) != 1:
+            raise PullDeployError(
+                "unit permission transaction inventory requires one completed journal"
+            )
+        completed_journal, completed_digest = completed[0]
+        schema_version = authority.get("schema_version")
+        created_at = require_utc_timestamp(
+            completed_journal.get("created_at"),
+            "unit permission journal creation",
+        )
+        completed_at = require_utc_timestamp(
+            completed_journal.get("completed_at"),
+            "unit permission journal completion",
+        )
+        require_digest(
+            completed_journal.get("source_trust_sha256"),
+            "unit permission journal source trust",
+        )
+        hardened_units = authority.get("hardened_units")
+        if not isinstance(hardened_units, list) or not hardened_units:
+            raise PullDeployError(
+                "unit permission journal authority lacks hardened units"
+            )
+        transition_fields = {
+            "path",
+            "type",
+            "device",
+            "inode",
+            "uid",
+            "gid",
+            "mode",
+            "nlink",
+            "size",
+            "content_sha256",
+        }
+        expected_replacement = {
+            field: hardened_units[0][field]
+            for field in transition_fields
+        }
+        expected_staging = {
+            **expected_replacement,
+            "path": str(
+                Path(str(expected_replacement["path"])).parent
+                / (
+                    f".{MONOMER_MD_UNIT_NAME}."
+                    f"{binding['operation_id']}.replacement"
+                )
+            ),
+        }
+        successor = binding["git_permission_successor"]
+        expected_source_trust = (
+            successor["source_successor_authority"][
+                "source_trust_sha256"
+            ]
+            if successor.get("schema_version") == 2
+            else None
+        )
+        if (
+            type(completed_journal.get("schema_version")) is not int
+            or completed_journal.get("schema_version") != schema_version
+            or completed_journal.get("operation_id")
+            != binding["operation_id"]
+            or completed_journal.get("plan") != authority.get("plan")
+            or completed_journal.get("plan_sha256")
+            != binding["plan_sha256"]
+            or completed_journal.get("unit_permission_impact_sha256")
+            != binding["unit_permission_impact_sha256"]
+            or completed_journal.get("replacement_checkpoint")
+            != "hardened"
+            or completed_journal.get("backup") != authority.get("backup")
+            or completed_journal.get("unit_evidence") != hardened_units
+            or completed_journal.get("staging") != expected_staging
+            or completed_journal.get("replacement")
+            != expected_replacement
+            or completed_journal.get("completed_at")
+            != authority.get("completed_at")
+            or completed_journal.get("aborted_at") is not None
+            or completed_at < created_at
+            or expected_source_trust is not None
+            and completed_journal.get("source_trust_sha256")
+            != expected_source_trust
+        ):
+            raise PullDeployError(
+                "unit permission completed journal differs from authority"
+            )
+        try:
+            journal_names_after = sorted(
+                entry.name for entry in transaction_root.iterdir()
+            )
+            inventory_after: list[dict[str, str]] = []
+            for name in journal_names_after:
+                _journal_after, journal_digest_after = (
+                    self._private_json_with_digest(
+                        transaction_root / name,
+                        label="unit permission transaction journal",
+                        maximum_bytes=ADOPTED_UNIT_PERMISSION_MAX_BYTES,
+                    )
+                )
+                inventory_after.append(
+                    {"name": name, "raw_sha256": journal_digest_after}
+                )
+        except (OSError, PullDeployError) as exc:
+            raise PullDeployError(
+                "unit permission transaction inventory changed"
+            ) from exc
+        authority_after, authority_digest_after = (
+            self._private_json_with_digest(
+                self.adopted_unit_permissions_path,
+                label="adopted unit permission transaction authority",
+                maximum_bytes=ADOPTED_UNIT_PERMISSION_MAX_BYTES,
+            )
+        )
+        if (
+            journal_names_after != journal_names
+            or inventory_after != inventory
+            or authority_after != authority
+            or authority_digest_after != authority_digest
+        ):
+            raise PullDeployError(
+                "unit permission transaction changed while validating"
+            )
+        return (
+            completed_journal,
+            completed_digest,
+            inventory,
+            canonical_json_digest(inventory),
+        )
+
+    def _unit_permission_transaction_digests(
+        self,
+        unit_permission: Mapping[str, Any],
+    ) -> tuple[str, str]:
+        """Return the completed-journal and complete inventory digests."""
+
+        _journal, journal_digest, _inventory, inventory_digest = (
+            self._unit_permission_transaction_snapshot(unit_permission)
+        )
+        return journal_digest, inventory_digest
+
     def _unit_permission_takeover(
         self,
         *,
         git_permission_takeover: Mapping[str, Any] | None = None,
+        git_permission_source_successor_takeover: Mapping[str, Any] | None = None,
         verify_live: bool | None = None,
     ) -> dict[str, Any] | None:
         adoption_binding = self._adoption_bootstrap_binding()
@@ -16862,6 +19508,7 @@ class PullDeployController:
             or self.adopted_unit_permissions_path.is_symlink()
         )
         manual_current = False
+        current_successor_lineage: dict[str, Any] | None = None
         if self.current_state_path.exists() or self.current_state_path.is_symlink():
             current = validate_current_deployment_state(
                 load_private_json(self.current_state_path)
@@ -16870,6 +19517,12 @@ class PullDeployController:
                 current.get("schema_version") == CURRENT_STATE_SCHEMA_VERSION
                 and current.get("authority_kind") == "manual-runtime-adoption"
             )
+            if manual_current and "adoption_successor_lineage" in current:
+                current_successor_lineage = (
+                    validate_adoption_successor_lineage(
+                        current["adoption_successor_lineage"]
+                    )
+                )
         if authority_present and adoption_binding is None:
             raise PullDeployError(
                 "adopted unit permission authority lost its adoption binding"
@@ -16886,6 +19539,12 @@ class PullDeployController:
             raise PullDeployError(
                 "adopted unit permission authority lacks Git predecessor"
             )
+        if git_permission_source_successor_takeover is None:
+            git_permission_source_successor_takeover = (
+                self._git_permission_source_successor_takeover(
+                    git_permission_takeover=git_permission_takeover,
+                )
+            )
         adopted = adoption_binding[0]
         should_verify_live = (
             verify_live
@@ -16896,8 +19555,34 @@ class PullDeployController:
         before = self._validate_adopted_unit_permission_authority(
             adopted=adopted,
             git_permission_takeover=git_permission_takeover,
+            git_permission_source_successor_takeover=(
+                git_permission_source_successor_takeover
+            ),
             verify_live=should_verify_live,
         )
+        before_transaction = self._unit_permission_transaction_snapshot(
+            before
+        )
+        if current_successor_lineage is not None and (
+            before["authority_file_sha256"]
+            != current_successor_lineage[
+                "unit_permission_authority_sha256"
+            ]
+            or current_successor_lineage.get("schema_version") == 2
+            and (
+                before_transaction[1]
+                != current_successor_lineage[
+                    "unit_permission_completed_journal_sha256"
+                ]
+                or before_transaction[3]
+                != current_successor_lineage[
+                    "unit_permission_transaction_inventory_sha256"
+                ]
+            )
+        ):
+            raise PullDeployError(
+                "unit permission authority differs from current-state lineage"
+            )
         adoption_after = self._adoption_bootstrap_binding()
         if adoption_after is None or adoption_after != adoption_binding:
             raise PullDeployError(
@@ -16906,9 +19591,13 @@ class PullDeployController:
         after = self._validate_adopted_unit_permission_authority(
             adopted=adoption_after[0],
             git_permission_takeover=git_permission_takeover,
+            git_permission_source_successor_takeover=(
+                git_permission_source_successor_takeover
+            ),
             verify_live=should_verify_live,
         )
-        if after != before:
+        after_transaction = self._unit_permission_transaction_snapshot(after)
+        if after != before or after_transaction != before_transaction:
             raise PullDeployError(
                 "adopted unit permission authority changed while validating"
             )
@@ -17285,6 +19974,22 @@ class PullDeployController:
         authority_file_digests: Mapping[str, str],
         target_file_digests: Mapping[str, str],
         git_permission_takeover: Mapping[str, Any] | None = None,
+        git_permission_source_successor_takeover: Mapping[str, Any]
+        | None = None,
+        source_successor_completed_journal_sha256: str | None = None,
+        production_repository_materialization: Mapping[str, Any]
+        | None = None,
+        unit_permission_completed_journal_sha256: str | None = None,
+        unit_permission_transaction_inventory_sha256: str | None = None,
+        source_successor_is_ancestor: bool | None = None,
+        source_successor_predecessor_file_identities: Mapping[
+            str, Mapping[str, Any]
+        ]
+        | None = None,
+        source_successor_target_file_identities: Mapping[
+            str, Mapping[str, Any]
+        ]
+        | None = None,
         unit_permission_takeover: Mapping[str, Any] | None = None,
         unit_permission_is_ancestor: bool | None = None,
         unit_permission_authority_file_digests: Mapping[str, str]
@@ -17365,7 +20070,10 @@ class PullDeployController:
         }
         body: dict[str, Any] = {
             "schema_version": (
-                3
+                4
+                if git_permission_source_successor_takeover is not None
+                and unit_permission_takeover is not None
+                else 3
                 if unit_permission_takeover is not None
                 else 2
                 if git_permission_takeover is not None
@@ -17417,6 +20125,80 @@ class PullDeployController:
                     permission_binding
                 )
             )
+        if git_permission_source_successor_takeover is not None:
+            if git_permission_takeover is None:
+                raise PullDeployError(
+                    "source-successor target lacks its Git root authority"
+                )
+            source_successor = (
+                validate_adopted_git_permission_source_successor_binding(
+                    dict(git_permission_source_successor_takeover)
+                )
+            )
+            if production_repository_materialization is None:
+                raise PullDeployError(
+                    "source-successor target lacks repository materialization"
+                )
+            materialization = (
+                validate_production_repository_materialization(
+                    dict(production_repository_materialization)
+                )
+            )
+            expected_source_paths = set(
+                ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES
+            )
+            if (
+                source_successor_is_ancestor is not True
+                or source_successor_predecessor_file_identities is None
+                or source_successor_target_file_identities is None
+                or set(source_successor_predecessor_file_identities)
+                != expected_source_paths
+                or set(source_successor_target_file_identities)
+                != expected_source_paths
+                or source_successor["predecessor_authority_sha256"]
+                != body["git_permission_authority"][
+                    "authority_file_sha256"
+                ]
+                or source_successor["predecessor_source_sha"]
+                != body["git_permission_authority"]["source_sha"]
+                or source_successor["predecessor_source_tree"]
+                != body["git_permission_authority"]["source_tree"]
+                or source_successor["target_source_sha"] != target_sha
+                or source_successor["target_source_tree"] != target_tree
+            ):
+                raise PullDeployError(
+                    "source-successor exact target proof is unavailable"
+                )
+            for sealed in source_successor["fixed_files"]:
+                path = sealed["path"]
+                if (
+                    dict(
+                        source_successor_predecessor_file_identities[path]
+                    )
+                    != sealed["predecessor"]
+                    or dict(source_successor_target_file_identities[path])
+                    != sealed["target"]
+                ):
+                    raise PullDeployError(
+                        f"source-successor Git object differs: {path}"
+                    )
+            body["git_permission_source_successor_authority"] = (
+                source_successor
+            )
+            body["production_repository_materialization"] = materialization
+            body["source_successor_completed_journal_sha256"] = (
+                require_digest(
+                    source_successor_completed_journal_sha256,
+                    "source-successor completed journal",
+                )
+            )
+        elif (
+            source_successor_completed_journal_sha256 is not None
+            or production_repository_materialization is not None
+        ):
+            raise PullDeployError(
+                "source-successor journal exists without its authority"
+            )
         if unit_permission_takeover is not None:
             if git_permission_takeover is None:
                 raise PullDeployError(
@@ -17426,7 +20208,11 @@ class PullDeployController:
                 dict(unit_permission_takeover)
             )
             successor = unit_binding["git_permission_successor"]
-            expected_paths = set(ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES)
+            expected_paths = set(
+                ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES
+                if successor["schema_version"] == 2
+                else ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+            )
             if (
                 unit_permission_authority_file_digests is None
                 or unit_permission_target_file_digests is None
@@ -17446,24 +20232,78 @@ class PullDeployController:
                 raise PullDeployError(
                     "adopted unit permission successor proof is unavailable"
                 )
-            for sealed in successor["files"]:
-                path = sealed["path"]
-                authority_digest = require_digest(
-                    unit_permission_authority_file_digests.get(path),
-                    f"unit permission predecessor Git blob {path}",
-                )
-                target_digest = require_digest(
-                    unit_permission_target_file_digests.get(path),
-                    f"unit permission target Git blob {path}",
-                )
+            if successor["schema_version"] == 2:
                 if (
-                    authority_digest != target_digest
-                    or target_digest != sealed["sha256"]
+                    git_permission_source_successor_takeover is None
+                    or successor["source_successor_authority"]
+                    != body.get(
+                        "git_permission_source_successor_authority"
+                    )
+                    or source_successor_predecessor_file_identities is None
+                    or source_successor_target_file_identities is None
                 ):
                     raise PullDeployError(
-                        f"unit permission successor Git blob differs: {path}"
+                        "unit permission v2 lost its source-successor authority"
                     )
+                for sealed in successor["files"]:
+                    path = sealed["path"]
+                    if (
+                        dict(
+                            source_successor_predecessor_file_identities[path]
+                        )
+                        != sealed["predecessor"]
+                        or dict(source_successor_target_file_identities[path])
+                        != sealed["target"]
+                    ):
+                        raise PullDeployError(
+                            f"unit permission successor Git object differs: {path}"
+                        )
+            else:
+                for sealed in successor["files"]:
+                    path = sealed["path"]
+                    authority_digest = require_digest(
+                        unit_permission_authority_file_digests.get(path),
+                        f"unit permission predecessor Git blob {path}",
+                    )
+                    target_digest = require_digest(
+                        unit_permission_target_file_digests.get(path),
+                        f"unit permission target Git blob {path}",
+                    )
+                    if (
+                        authority_digest != target_digest
+                        or target_digest != sealed["sha256"]
+                    ):
+                        raise PullDeployError(
+                            f"unit permission successor Git blob differs: {path}"
+                        )
             body["unit_permission_authority"] = unit_binding
+            if successor["schema_version"] == 2:
+                body["unit_permission_completed_journal_sha256"] = (
+                    require_digest(
+                        unit_permission_completed_journal_sha256,
+                        "unit permission completed journal",
+                    )
+                )
+                body[
+                    "unit_permission_transaction_inventory_sha256"
+                ] = require_digest(
+                    unit_permission_transaction_inventory_sha256,
+                    "unit permission transaction inventory",
+                )
+            elif (
+                unit_permission_completed_journal_sha256 is not None
+                or unit_permission_transaction_inventory_sha256 is not None
+            ):
+                raise PullDeployError(
+                    "historical unit authority has successor journal anchors"
+                )
+        elif (
+            unit_permission_completed_journal_sha256 is not None
+            or unit_permission_transaction_inventory_sha256 is not None
+        ):
+            raise PullDeployError(
+                "unit permission journal exists without its authority"
+            )
         body["identity_sha256"] = canonical_json_digest(body)
         return validate_adopted_prerequisite_target_binding(body)
 
@@ -17494,6 +20334,1468 @@ class PullDeployController:
             raise PullDeployError(
                 "cannot verify the private target source repository"
             ) from exc
+
+    @staticmethod
+    def _git_blob_identity_from_evidence(
+        tree_entry: str,
+        payload: bytes,
+        *,
+        path: str,
+    ) -> dict[str, str]:
+        match = re.fullmatch(
+            r"([0-7]{6}) (blob) ([0-9a-f]{40})\t(.+)",
+            tree_entry.strip(),
+        )
+        if match is None or match.group(4) != path:
+            raise PullDeployError(
+                f"Git object identity is invalid: {path}"
+            )
+        return {
+            "object_type": match.group(2),
+            "mode": match.group(1),
+            "blob_sha": match.group(3),
+            "sha256": sha256_bytes(payload),
+        }
+
+    def _private_source_git_blob_identity(
+        self,
+        source_root: Path,
+        source_sha: str,
+        path: str,
+    ) -> dict[str, str]:
+        entry = str(
+            self._private_source_git(
+                source_root,
+                "ls-tree",
+                source_sha,
+                "--",
+                path,
+            ).stdout
+        )
+        payload = bytes(
+            self._private_source_git(
+                source_root,
+                "show",
+                f"{source_sha}:{path}",
+                text=False,
+            ).stdout
+        )
+        return self._git_blob_identity_from_evidence(
+            entry,
+            payload,
+            path=path,
+        )
+
+    def _production_git_blob_identity(
+        self,
+        source_sha: str,
+        path: str,
+    ) -> dict[str, str]:
+        entry = str(
+            self._git(
+                "ls-tree",
+                source_sha,
+                "--",
+                path,
+            ).stdout
+        )
+        return self._git_blob_identity_from_evidence(
+            entry,
+            self._git_show(source_sha, path),
+            path=path,
+        )
+
+    def _production_source_trust_digest(
+        self,
+        *,
+        source_sha: str,
+        source_tree: str,
+    ) -> str:
+        """Recompute the frozen production-checkout trust projection."""
+
+        source_sha = require_sha(source_sha, "production trust source SHA")
+        source_tree = require_sha(source_tree, "production trust source tree")
+        try:
+            before = _git_source_trust.repository_preflight_evidence(
+                self.production_root,
+                ambient={},
+            )
+            status = _git_source_trust.run_git(
+                self.production_root,
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                ambient={},
+            ).stdout
+            if status:
+                raise PullDeployError(
+                    "production checkout changed after manual adoption"
+                )
+            trust = _git_source_trust.repository_trust_evidence(
+                self.production_root,
+                source_sha=source_sha,
+                source_tree=source_tree,
+                branch="refs/heads/main",
+                origin=None,
+                ambient={},
+            )
+            _git_source_trust.require_stable_trust_surface(before, trust)
+        except PullDeployError:
+            raise
+        except Exception as exc:
+            raise PullDeployError(
+                "production source trust differs from successor authority"
+            ) from exc
+        return require_digest(
+            trust.get("evidence_sha256"),
+            "production source trust evidence",
+        )
+
+    @staticmethod
+    def _production_repository_stable_projection(
+        evidence: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in evidence.items()
+            if key
+            not in {
+                "refs",
+                "objects",
+                "trust_surface_sha256",
+                "evidence_sha256",
+            }
+        }
+
+    def _production_logical_ref_inventory(self) -> list[dict[str, Any]]:
+        try:
+            raw = _git_source_trust.run_git(
+                self.production_root,
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)%00%(objecttype)%00%(symref)",
+                ambient={},
+            ).stdout
+        except Exception as exc:
+            raise PullDeployError(
+                "production logical refs cannot be enumerated"
+            ) from exc
+        if not isinstance(raw, str) or len(raw.encode("utf-8")) > (
+            ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES
+        ):
+            raise PullDeployError("production logical ref inventory is invalid")
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for line in raw.splitlines():
+            fields = line.split("\0")
+            if len(fields) != 4:
+                raise PullDeployError(
+                    "production logical ref inventory is malformed"
+                )
+            name, object_sha, object_type, symbolic_target = fields
+            if (
+                not _valid_transition_ref_name(name)
+                or name.startswith("refs/replace/")
+                or name in seen
+                or object_type not in {"blob", "tree", "commit", "tag"}
+                or symbolic_target
+                and not _valid_transition_ref_name(symbolic_target)
+            ):
+                raise PullDeployError("production logical ref is unsafe")
+            seen.add(name)
+            records.append(
+                {
+                    "name": name,
+                    "object_sha": require_sha(
+                        object_sha, "production logical ref object"
+                    ),
+                    "object_type": object_type,
+                    "symbolic_target": symbolic_target or None,
+                }
+            )
+        records.sort(key=lambda item: item["name"])
+        if len(records) > 10000:
+            raise PullDeployError(
+                "production logical ref inventory is oversized"
+            )
+        return records
+
+    def _production_raw_ref_inventory(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+        git_dir = self.production_root / ".git"
+        refs_root = git_dir / "refs"
+        records: list[dict[str, Any]] = []
+        trust_order_loose: list[dict[str, str]] = []
+        refs_fd = open_owner_private_git_directory(refs_root)
+        try:
+            expected_directories = {
+                refs_root: git_directory_identity(os.fstat(refs_fd))
+            }
+        finally:
+            os.close(refs_fd)
+        for directory, directory_names, file_names in os.walk(
+            refs_root, topdown=True, followlinks=False
+        ):
+            file_names.sort()
+            current = Path(directory)
+            relative_directory = current.relative_to(git_dir).as_posix()
+            if not _valid_transition_ref_directory(relative_directory):
+                raise PullDeployError("production raw ref directory is unsafe")
+            directory_fd = open_owner_private_git_directory(current)
+            try:
+                before = os.fstat(directory_fd)
+                expected_identity = expected_directories.pop(current, None)
+                if (
+                    expected_identity is None
+                    or git_directory_identity(before) != expected_identity
+                ):
+                    raise PullDeployError(
+                        "production raw ref traversal escaped its parent"
+                    )
+                child_identities = (
+                    owner_private_git_child_directory_identities(
+                        directory_fd,
+                        directory_names,
+                        label="production raw ref",
+                    )
+                )
+                for name, identity in child_identities.items():
+                    expected_directories[current / name] = identity
+                expected_names = sorted([*directory_names, *file_names])
+                if sorted(os.listdir(directory_fd)) != expected_names:
+                    raise PullDeployError(
+                        "production raw ref directory changed"
+                    )
+                records.append(
+                    {
+                        "path": relative_directory,
+                        "kind": "directory",
+                        "mode": format(
+                            stat.S_IMODE(before.st_mode), "04o"
+                        ),
+                    }
+                )
+                for name in file_names:
+                    path = current / name
+                    relative = path.relative_to(git_dir).as_posix()
+                    if not _valid_transition_ref_name(relative):
+                        raise PullDeployError(
+                            "production raw ref file is unsafe"
+                        )
+                    payload, digest = private_regular_file(
+                        path, mode=0o600, maximum_bytes=1024 * 1024
+                    )
+                    record = {
+                        "path": relative,
+                        "kind": "file",
+                        "mode": "0600",
+                        "size": len(payload),
+                        "raw_sha256": digest,
+                    }
+                    records.append(record)
+                    trust_order_loose.append(
+                        {
+                            "path": relative,
+                            "mode": "0600",
+                            "sha256": digest,
+                        }
+                    )
+                if (
+                    git_directory_identity(os.fstat(directory_fd))
+                    != git_directory_identity(before)
+                    or sorted(os.listdir(directory_fd)) != expected_names
+                    or owner_private_git_child_directory_identities(
+                        directory_fd,
+                        directory_names,
+                        label="production raw ref",
+                    )
+                    != child_identities
+                ):
+                    raise PullDeployError(
+                        "production raw ref directory changed"
+                    )
+            finally:
+                os.close(directory_fd)
+        if expected_directories:
+            raise PullDeployError(
+                "production raw ref traversal is not self-contained"
+            )
+        packed = git_dir / "packed-refs"
+        if packed.exists() or packed.is_symlink():
+            payload, digest = private_regular_file(
+                packed,
+                mode=0o600,
+                maximum_bytes=ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_MAX_BYTES,
+            )
+            records.append(
+                {
+                    "path": "packed-refs",
+                    "kind": "file",
+                    "mode": "0600",
+                    "size": len(payload),
+                    "raw_sha256": digest,
+                }
+            )
+        return (
+            sorted(records, key=lambda item: item["path"]),
+            trust_order_loose,
+        )
+
+    def _production_git_auxiliary_inventory(
+        self,
+    ) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
+        """Inventory non-ref/object Git metadata and reject transaction locks."""
+
+        git_dir = self.production_root / ".git"
+        owner_private_metadata(git_dir, directory=True)
+        excluded_files = {"HEAD", "config", "index", "packed-refs"}
+        records: list[dict[str, Any]] = []
+        payloads: dict[str, bytes] = {}
+        total_bytes = 0
+        git_fd = open_owner_private_git_directory(git_dir)
+        try:
+            expected_directories = {
+                git_dir: git_directory_identity(os.fstat(git_fd))
+            }
+        finally:
+            os.close(git_fd)
+        for directory, directory_names, file_names in os.walk(
+            git_dir, topdown=True, followlinks=False
+        ):
+            directory_names.sort()
+            file_names.sort()
+            current = Path(directory)
+            relative_directory = current.relative_to(git_dir).as_posix()
+            directory_fd = open_owner_private_git_directory(current)
+            try:
+                before = os.fstat(directory_fd)
+                expected_identity = expected_directories.pop(current, None)
+                if (
+                    expected_identity is None
+                    or git_directory_identity(before) != expected_identity
+                ):
+                    raise PullDeployError(
+                        "production Git auxiliary traversal escaped its parent"
+                    )
+                all_child_names = list(directory_names)
+                child_identities = (
+                    owner_private_git_child_directory_identities(
+                        directory_fd,
+                        all_child_names,
+                        label="production Git auxiliary",
+                    )
+                )
+                expected_names = sorted([*all_child_names, *file_names])
+                if sorted(os.listdir(directory_fd)) != expected_names:
+                    raise PullDeployError(
+                        "production Git auxiliary directory changed"
+                    )
+                if current == git_dir:
+                    for excluded in ("objects", "refs"):
+                        if excluded in directory_names:
+                            directory_names.remove(excluded)
+                for name in directory_names:
+                    expected_directories[current / name] = (
+                        child_identities[name]
+                    )
+                if current != git_dir:
+                    records.append(
+                        {
+                            "path": relative_directory,
+                            "kind": "directory",
+                            "mode": format(
+                                stat.S_IMODE(before.st_mode), "04o"
+                            ),
+                        }
+                    )
+                for name in file_names:
+                    relative = (
+                        (current / name).relative_to(git_dir).as_posix()
+                    )
+                    if name.endswith(".lock"):
+                        raise PullDeployError(
+                            "production Git transaction lock remains: "
+                            + relative
+                        )
+                    if current == git_dir and name in excluded_files:
+                        owner_private_payload(
+                            current / name,
+                            maximum_bytes=(
+                                ADOPTED_GIT_PERMISSION_MAX_BYTES
+                            ),
+                        )
+                        continue
+                    payload, metadata = owner_private_payload(
+                        current / name,
+                        maximum_bytes=ADOPTED_GIT_PERMISSION_MAX_BYTES,
+                    )
+                    total_bytes += len(payload)
+                    if total_bytes > ADOPTED_GIT_PERMISSION_MAX_BYTES:
+                        raise PullDeployError(
+                            "production Git auxiliary inventory is oversized"
+                        )
+                    payloads[relative] = payload
+                    records.append(
+                        {
+                            "path": relative,
+                            "kind": "file",
+                            "mode": format(
+                                stat.S_IMODE(metadata.st_mode), "04o"
+                            ),
+                            "size": len(payload),
+                            "raw_sha256": sha256_bytes(payload),
+                        }
+                    )
+                if (
+                    git_directory_identity(os.fstat(directory_fd))
+                    != git_directory_identity(before)
+                    or sorted(os.listdir(directory_fd)) != expected_names
+                    or owner_private_git_child_directory_identities(
+                        directory_fd,
+                        all_child_names,
+                        label="production Git auxiliary",
+                    )
+                    != child_identities
+                ):
+                    raise PullDeployError(
+                        "production Git auxiliary directory changed"
+                    )
+            finally:
+                os.close(directory_fd)
+        if expected_directories:
+            raise PullDeployError(
+                "production Git auxiliary traversal is not self-contained"
+            )
+        records.sort(key=lambda record: record["path"])
+        paths = [record["path"] for record in records]
+        if paths != sorted(set(paths)) or set(payloads) != {
+            record["path"]
+            for record in records
+            if record["kind"] == "file"
+        }:
+            raise PullDeployError(
+                "production Git auxiliary inventory is not canonical"
+            )
+        return records, payloads
+
+    @staticmethod
+    def _valid_object_storage_directory(path: str) -> bool:
+        return bool(
+            path in {"info", "pack", "info/commit-graphs"}
+            or re.fullmatch(r"[0-9a-f]{2}", path)
+        )
+
+    @staticmethod
+    def _valid_object_storage_file(path: str) -> bool:
+        return bool(
+            re.fullmatch(r"[0-9a-f]{2}/[0-9a-f]{38}", path)
+            or re.fullmatch(
+                r"pack/pack-[0-9a-f]{40}\.(?:pack|idx|rev|bitmap|mtimes)",
+                path,
+            )
+            or path in {
+                "pack/multi-pack-index",
+                "info/commit-graph",
+                "info/packs",
+                "info/commit-graphs/commit-graph-chain",
+            }
+            or re.fullmatch(
+                r"pack/multi-pack-index-[0-9a-f]{40}\.bitmap", path
+            )
+            or re.fullmatch(
+                r"info/commit-graphs/graph-[0-9a-f]{40}\.graph", path
+            )
+        )
+
+    def _production_git_object_storage_inventory(
+        self,
+    ) -> list[dict[str, Any]]:
+        """Reject incomplete fetch residue and seal canonical object storage."""
+
+        objects = self.production_root / ".git/objects"
+        owner_private_metadata(objects, directory=True)
+        records: list[dict[str, Any]] = []
+        objects_fd = open_owner_private_git_directory(objects)
+        try:
+            expected_directories = {
+                objects: git_directory_identity(os.fstat(objects_fd))
+            }
+        finally:
+            os.close(objects_fd)
+        for directory, directory_names, file_names in os.walk(
+            objects, topdown=True, followlinks=False
+        ):
+            directory_names.sort()
+            file_names.sort()
+            current = Path(directory)
+            relative_directory = current.relative_to(objects).as_posix()
+            directory_fd = open_owner_private_git_directory(current)
+            try:
+                before = os.fstat(directory_fd)
+                expected_identity = expected_directories.pop(current, None)
+                if (
+                    expected_identity is None
+                    or git_directory_identity(before) != expected_identity
+                ):
+                    raise PullDeployError(
+                        "production Git object traversal escaped its parent"
+                    )
+                child_identities = (
+                    owner_private_git_child_directory_identities(
+                        directory_fd,
+                        directory_names,
+                        label="production Git object storage",
+                    )
+                )
+                expected_names = sorted([*directory_names, *file_names])
+                if sorted(os.listdir(directory_fd)) != expected_names:
+                    raise PullDeployError(
+                        "production Git object directory changed"
+                    )
+                for name, identity in child_identities.items():
+                    expected_directories[current / name] = identity
+                if current != objects:
+                    if not self._valid_object_storage_directory(
+                        relative_directory
+                    ):
+                        raise PullDeployError(
+                            "production Git object directory is not canonical: "
+                            + relative_directory
+                        )
+                    records.append(
+                        {
+                            "path": relative_directory,
+                            "kind": "directory",
+                            "mode": format(
+                                stat.S_IMODE(before.st_mode), "04o"
+                            ),
+                        }
+                    )
+                for name in file_names:
+                    path = current / name
+                    relative = path.relative_to(objects).as_posix()
+                    if name.endswith(
+                        ".lock"
+                    ) or not self._valid_object_storage_file(relative):
+                        raise PullDeployError(
+                            "production Git object file is not canonical: "
+                            + relative
+                        )
+                    metadata = owner_private_metadata(
+                        path, directory=False
+                    )
+                    records.append(
+                        {
+                            "path": relative,
+                            "kind": "file",
+                            "mode": format(
+                                stat.S_IMODE(metadata.st_mode), "04o"
+                            ),
+                            "size": metadata.st_size,
+                        }
+                    )
+                if (
+                    git_directory_identity(os.fstat(directory_fd))
+                    != git_directory_identity(before)
+                    or sorted(os.listdir(directory_fd)) != expected_names
+                    or owner_private_git_child_directory_identities(
+                        directory_fd,
+                        directory_names,
+                        label="production Git object storage",
+                    )
+                    != child_identities
+                ):
+                    raise PullDeployError(
+                        "production Git object directory changed"
+                    )
+            finally:
+                os.close(directory_fd)
+        if expected_directories:
+            raise PullDeployError(
+                "production Git object traversal is not self-contained"
+            )
+        records.sort(key=lambda record: record["path"])
+        paths = [record["path"] for record in records]
+        if paths != sorted(set(paths)):
+            raise PullDeployError(
+                "production Git object inventory is not canonical"
+            )
+        files = {
+            record["path"]
+            for record in records
+            if record["kind"] == "file"
+        }
+        pack_bases = {
+            path[: -len(".pack")]
+            for path in files
+            if path.endswith(".pack")
+        }
+        if any(f"{base}.idx" not in files for base in pack_bases) or any(
+            path.rsplit(".", 1)[0] not in pack_bases
+            for path in files
+            if re.fullmatch(
+                r"pack/pack-[0-9a-f]{40}\.(?:idx|rev|bitmap|mtimes)",
+                path,
+            )
+        ):
+            raise PullDeployError(
+                "production Git pack sidecar set is incomplete"
+            )
+        return records
+
+    def _assert_production_git_write_domain(self) -> None:
+        """Reject links or unstable entries anywhere Git may mutate."""
+
+        if (
+            getattr(self, "test_root_mode", False)
+            and not self._has_complete_test_git_layout()
+        ):
+            return
+        self._production_raw_ref_inventory()
+        self._production_git_auxiliary_inventory()
+        self._production_git_object_storage_inventory()
+
+    def _assert_production_git_mutation_preconditions(self) -> None:
+        """Re-prove lock ownership and the Git write domain at the write."""
+
+        self._require_deploy_lock_for_staging()
+        self._assert_production_git_write_domain()
+
+    def _source_successor_transition_for_target(
+        self,
+        target_sha: str,
+    ) -> tuple[dict[str, Any], str] | None:
+        """Load the one-time B/F/P authority when it governs this target."""
+
+        if not hasattr(
+            self,
+            "adopted_git_permission_source_successor_path",
+        ):
+            # A few narrow unit tests construct an uninitialized controller.
+            return None
+        if (
+            getattr(self, "test_root_mode", False)
+            and not self._has_complete_test_git_layout()
+        ):
+            return None
+        git_permission = self._git_permission_takeover()
+        if git_permission is None:
+            return None
+        source_successor = (
+            self._git_permission_source_successor_takeover(
+                git_permission_takeover=git_permission,
+            )
+        )
+        if source_successor is None:
+            return None
+        if self.current_state_path.exists() or self.current_state_path.is_symlink():
+            # The B/F/P transition is a one-time first-deployment authority.
+            # Its lineage remains validated above, but must not govern any
+            # ordinary deployment after current-state has been published.
+            return None
+        if source_successor["target_source_sha"] != target_sha:
+            raise PullDeployError(
+                "first source-successor target differs from its sealed authority"
+            )
+        return (
+            source_successor,
+            require_sha(
+                source_successor["target_source_tree"],
+                "source-successor transition target tree",
+            ),
+        )
+
+    def _assert_source_successor_repository_state(
+        self,
+        *,
+        target_sha: str,
+        operation_id: str,
+        phase: str,
+    ) -> dict[str, Any] | None:
+        """Prove the authorized B/F/P state at a Git mutation checkpoint."""
+
+        transition = self._source_successor_transition_for_target(target_sha)
+        if transition is None:
+            return None
+        source_successor, target_tree = transition
+        return self._verify_production_repository_transition(
+            source_successor,
+            target_sha=target_sha,
+            target_tree=target_tree,
+            phase=phase,
+            operation_id=operation_id,
+        )
+
+    def _assert_descriptor_source_successor_pre_switch_state(
+        self,
+        descriptor: Mapping[str, Any],
+    ) -> None:
+        """Match the immediate P proof to the descriptor's exact seal."""
+
+        repository = descriptor["repository"]
+        observed = self._assert_source_successor_repository_state(
+            target_sha=repository["target_sha"],
+            operation_id=descriptor["operation_id"],
+            phase="prepared",
+        )
+        if observed is None:
+            return
+        binding = descriptor.get(
+            "adopted_prerequisite_target_binding"
+        )
+        sealed = (
+            binding.get("production_repository_materialization")
+            if isinstance(binding, Mapping)
+            else None
+        )
+        if observed != sealed:
+            raise PullDeployError(
+                "pre-switch repository differs from the sealed P state"
+            )
+
+    def _production_repository_transition_snapshot(
+        self,
+        *,
+        source_sha: str,
+        source_tree: str,
+    ) -> tuple[
+        dict[str, Any],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        dict[str, bytes],
+        list[dict[str, Any]],
+    ]:
+        source_sha = require_sha(source_sha, "production transition source SHA")
+        source_tree = require_sha(
+            source_tree, "production transition source tree"
+        )
+        try:
+            before = _git_source_trust.repository_preflight_evidence(
+                self.production_root, ambient={}
+            )
+            status = _git_source_trust.run_git(
+                self.production_root,
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                ambient={},
+            ).stdout
+            if status:
+                raise PullDeployError(
+                    "production checkout changed after manual adoption"
+                )
+            evidence = _git_source_trust.repository_trust_evidence(
+                self.production_root,
+                source_sha=source_sha,
+                source_tree=source_tree,
+                branch="refs/heads/main",
+                origin=None,
+                ambient={},
+            )
+            _git_source_trust.require_stable_trust_surface(before, evidence)
+            logical = self._production_logical_ref_inventory()
+            raw, trust_order_loose = self._production_raw_ref_inventory()
+            auxiliary, auxiliary_payloads = (
+                self._production_git_auxiliary_inventory()
+            )
+            object_storage = (
+                self._production_git_object_storage_inventory()
+            )
+            semantic_objects = self._production_semantic_object_inventory()
+            middle = _git_source_trust.repository_preflight_evidence(
+                self.production_root, ambient={}
+            )
+            _git_source_trust.require_stable_trust_surface(evidence, middle)
+            logical_after = self._production_logical_ref_inventory()
+            raw_after, trust_order_loose_after = (
+                self._production_raw_ref_inventory()
+            )
+            auxiliary_after, auxiliary_payloads_after = (
+                self._production_git_auxiliary_inventory()
+            )
+            object_storage_after = (
+                self._production_git_object_storage_inventory()
+            )
+            semantic_objects_after = (
+                self._production_semantic_object_inventory()
+            )
+            after = _git_source_trust.repository_preflight_evidence(
+                self.production_root, ambient={}
+            )
+            _git_source_trust.require_stable_trust_surface(middle, after)
+        except PullDeployError:
+            raise
+        except Exception as exc:
+            raise PullDeployError(
+                "production repository transition trust failed"
+            ) from exc
+        if (
+            logical_after != logical
+            or raw_after != raw
+            or trust_order_loose_after != trust_order_loose
+            or auxiliary_after != auxiliary
+            or auxiliary_payloads_after != auxiliary_payloads
+            or object_storage_after != object_storage
+            or semantic_objects_after != semantic_objects
+        ):
+            raise PullDeployError(
+                "production repository transition changed while reading"
+            )
+        refs = evidence.get("refs")
+        packed = next(
+            (record for record in raw if record["path"] == "packed-refs"),
+            None,
+        )
+        if refs != {
+            "loose_count": len(trust_order_loose),
+            "loose_sha256": canonical_json_digest(trust_order_loose),
+            "packed_refs_sha256": (
+                packed["raw_sha256"] if packed is not None else None
+            ),
+            "replace_refs": 0,
+        }:
+            raise PullDeployError(
+                "production raw refs differ from trust evidence"
+            )
+        return (
+            evidence,
+            logical,
+            raw,
+            semantic_objects,
+            auxiliary,
+            auxiliary_payloads,
+            object_storage,
+        )
+
+    def _production_semantic_object_inventory(
+        self,
+    ) -> list[dict[str, Any]]:
+        try:
+            raw = _git_source_trust.run_git(
+                self.production_root,
+                "cat-file",
+                "--batch-all-objects",
+                "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+                ambient={},
+                timeout=600,
+            ).stdout
+        except Exception as exc:
+            raise PullDeployError(
+                "production semantic objects cannot be enumerated"
+            ) from exc
+        if not isinstance(raw, str) or len(raw.encode("utf-8")) > (
+            ADOPTED_GIT_PERMISSION_MAX_BYTES * 4
+        ):
+            raise PullDeployError(
+                "production semantic object inventory is invalid"
+            )
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for line in raw.splitlines():
+            fields = line.split(" ")
+            if len(fields) != 3:
+                raise PullDeployError(
+                    "production semantic object inventory is malformed"
+                )
+            object_sha, object_type, raw_size = fields
+            object_sha = require_sha(
+                object_sha, "production semantic object"
+            )
+            if (
+                object_sha in seen
+                or object_type not in {"blob", "tree", "commit", "tag"}
+            ):
+                raise PullDeployError(
+                    "production semantic object identity is invalid"
+                )
+            try:
+                size = int(raw_size)
+            except ValueError as exc:
+                raise PullDeployError(
+                    "production semantic object size is invalid"
+                ) from exc
+            if size < 0 or size > 1024**4:
+                raise PullDeployError(
+                    "production semantic object size is invalid"
+                )
+            seen.add(object_sha)
+            records.append(
+                {"oid": object_sha, "type": object_type, "size": size}
+            )
+        records.sort(key=lambda record: record["oid"])
+        if len(records) > 10_000_000:
+            raise PullDeployError(
+                "production semantic object inventory is oversized"
+            )
+        return records
+
+    @staticmethod
+    def _transition_expected_logical_refs(
+        transition: Mapping[str, Any],
+        *,
+        materialized: bool,
+        target_sha: str,
+        prepared_operation_id: str | None,
+    ) -> list[dict[str, Any]]:
+        records = {
+            record["name"]: dict(record)
+            for record in transition["logical_refs"]
+        }
+        if materialized:
+            records[DEPLOY_REMOTE_REF] = {
+                "name": DEPLOY_REMOTE_REF,
+                "object_sha": target_sha,
+                "object_type": "commit",
+                "symbolic_target": None,
+            }
+        if prepared_operation_id is not None:
+            prepared_ref = f"{PREPARED_REF_PREFIX}{prepared_operation_id}"
+            records[prepared_ref] = {
+                "name": prepared_ref,
+                "object_sha": target_sha,
+                "object_type": "commit",
+                "symbolic_target": None,
+            }
+        return [records[name] for name in sorted(records)]
+
+    @staticmethod
+    def _transition_ref_ancestors(ref_name: str) -> set[str]:
+        parts = ref_name.split("/")
+        return {"/".join(parts[:index]) for index in range(1, len(parts))}
+
+    def _verify_transition_raw_refs(
+        self,
+        transition: Mapping[str, Any],
+        observed: list[dict[str, Any]],
+        *,
+        materialized: bool,
+        target_sha: str,
+        prepared_operation_id: str | None,
+    ) -> None:
+        baseline = {
+            record["path"]: dict(record)
+            for record in transition["raw_ref_inventory"]
+        }
+        observed_by_path = {record["path"]: record for record in observed}
+        remote_payload = (target_sha + "\n").encode("ascii")
+        expected_files = {
+            path: record
+            for path, record in baseline.items()
+            if record["kind"] == "file"
+        }
+        if materialized:
+            expected_files[DEPLOY_REMOTE_REF] = {
+                "path": DEPLOY_REMOTE_REF,
+                "kind": "file",
+                "mode": "0600",
+                "size": len(remote_payload),
+                "raw_sha256": sha256_bytes(remote_payload),
+            }
+        prepared_ref: str | None = None
+        if prepared_operation_id is not None:
+            prepared_ref = f"{PREPARED_REF_PREFIX}{prepared_operation_id}"
+            expected_files[prepared_ref] = {
+                "path": prepared_ref,
+                "kind": "file",
+                "mode": "0600",
+                "size": len(remote_payload),
+                "raw_sha256": sha256_bytes(remote_payload),
+            }
+        observed_files = {
+            path: record
+            for path, record in observed_by_path.items()
+            if record["kind"] == "file"
+        }
+        if observed_files != expected_files:
+            raise PullDeployError(
+                "production repository materialized raw refs differ"
+            )
+        baseline_directories = {
+            path
+            for path, record in baseline.items()
+            if record["kind"] == "directory"
+        }
+        optional_directories = self._transition_ref_ancestors(
+            f"{PREPARED_REF_PREFIX}sentinel"
+        )
+        allowed_directories = baseline_directories | optional_directories
+        if materialized:
+            allowed_directories |= self._transition_ref_ancestors(
+                DEPLOY_REMOTE_REF
+            )
+        if prepared_ref is not None:
+            allowed_directories |= self._transition_ref_ancestors(
+                prepared_ref
+            )
+        observed_directories = {
+            path
+            for path, record in observed_by_path.items()
+            if record["kind"] == "directory"
+        }
+        required_directories = set(baseline_directories)
+        for path in expected_files:
+            if path != "packed-refs":
+                required_directories |= self._transition_ref_ancestors(path)
+        if (
+            not required_directories.issubset(observed_directories)
+            or not observed_directories.issubset(allowed_directories)
+            or any(
+                observed_by_path[path]
+                != {"path": path, "kind": "directory", "mode": "0700"}
+                for path in observed_directories
+            )
+        ):
+            raise PullDeployError(
+                "production repository materialized ref directories differ"
+            )
+
+    @staticmethod
+    def _transition_log_ancestors(path: str) -> set[str]:
+        parts = path.split("/")
+        return {"/".join(parts[:index]) for index in range(1, len(parts))}
+
+    @staticmethod
+    def _verify_transition_reflog(
+        payload: bytes,
+        *,
+        target_sha: str,
+        allowed_old: set[str],
+        expected_message: bytes,
+        label: str,
+    ) -> None:
+        if not payload or len(payload) > ADOPTED_GIT_PERMISSION_MAX_BYTES:
+            raise PullDeployError(f"{label} is empty or oversized")
+        lines = payload.splitlines()
+        if not lines or b"\0" in payload:
+            raise PullDeployError(f"{label} is malformed")
+        identity, separator, message = lines[-1].partition(b"\t")
+        fields = identity.split(b" ", 2)
+        try:
+            old_sha = fields[0].decode("ascii")
+            new_sha = fields[1].decode("ascii")
+        except (IndexError, UnicodeError) as exc:
+            raise PullDeployError(f"{label} is malformed") from exc
+        if (
+            not separator
+            or len(fields) != 3
+            or old_sha not in allowed_old
+            or new_sha != target_sha
+            or message != expected_message
+        ):
+            raise PullDeployError(f"{label} does not bind the target")
+
+    def _verify_transition_auxiliary(
+        self,
+        transition: Mapping[str, Any],
+        observed: list[dict[str, Any]],
+        payloads: Mapping[str, bytes],
+        *,
+        materialized: bool,
+        target_sha: str,
+        prepared_operation_id: str | None,
+    ) -> None:
+        baseline = {
+            record["path"]: dict(record)
+            for record in transition["baseline_auxiliary_inventory"]
+        }
+        observed_by_path = {
+            record["path"]: dict(record) for record in observed
+        }
+        if not materialized:
+            if observed_by_path != baseline:
+                raise PullDeployError(
+                    "baseline production Git auxiliary inventory differs"
+                )
+            return
+
+        deploy_log = f"logs/{DEPLOY_REMOTE_REF}"
+        prepared_log = (
+            f"logs/{PREPARED_REF_PREFIX}{prepared_operation_id}"
+            if prepared_operation_id is not None
+            else None
+        )
+        dynamic_files = {"FETCH_HEAD", deploy_log}
+        if prepared_log is not None:
+            dynamic_files.add(prepared_log)
+        dynamic_directories: set[str] = set()
+        for path in dynamic_files - {"FETCH_HEAD"}:
+            dynamic_directories |= self._transition_log_ancestors(path)
+        baseline_static = {
+            path: record
+            for path, record in baseline.items()
+            if path not in dynamic_files and path not in dynamic_directories
+        }
+        observed_static = {
+            path: record
+            for path, record in observed_by_path.items()
+            if path not in dynamic_files and path not in dynamic_directories
+        }
+        if baseline_static != observed_static or any(
+            path not in baseline
+            and path not in dynamic_files
+            and path not in dynamic_directories
+            for path in observed_by_path
+        ):
+            raise PullDeployError(
+                "materialized production Git auxiliary inventory differs"
+            )
+        for path in dynamic_directories:
+            record = observed_by_path.get(path)
+            baseline_record = baseline.get(path)
+            if baseline_record is not None:
+                if record != baseline_record:
+                    raise PullDeployError(
+                        "materialized production Git log directory differs"
+                    )
+            elif record is not None and record != {
+                "path": path,
+                "kind": "directory",
+                "mode": "0700",
+            }:
+                raise PullDeployError(
+                    "materialized production Git log directory is invalid"
+                )
+        fetch_record = observed_by_path.get("FETCH_HEAD")
+        fetch_payload = payloads.get("FETCH_HEAD")
+        expected_fetch_head = (
+            target_sha
+            + "\t\t"
+            + GIT_FETCH_HEAD_DESCRIPTION
+            + "\n"
+        ).encode("ascii")
+        if (
+            fetch_record is None
+            or fetch_record.get("kind") != "file"
+            or fetch_record.get("mode") != "0600"
+            or fetch_payload is None
+            or fetch_payload != expected_fetch_head
+        ):
+            raise PullDeployError(
+                "materialized FETCH_HEAD does not bind the target"
+            )
+        baseline_refs = {
+            record["name"]: record["object_sha"]
+            for record in transition["logical_refs"]
+        }
+        deploy_payload = payloads.get(deploy_log)
+        baseline_deploy_record = baseline.get(deploy_log)
+        if baseline_deploy_record is not None and deploy_payload is None:
+            raise PullDeployError(
+                "production deployment remote reflog disappeared"
+            )
+        if deploy_payload is not None:
+            delta = deploy_payload
+            if baseline_deploy_record is not None:
+                baseline_size = baseline_deploy_record["size"]
+                baseline_prefix = deploy_payload[:baseline_size]
+                if (
+                    len(deploy_payload) < baseline_size
+                    or sha256_bytes(baseline_prefix)
+                    != baseline_deploy_record["raw_sha256"]
+                ):
+                    raise PullDeployError(
+                        "production deployment remote reflog lost its baseline"
+                    )
+                delta = deploy_payload[baseline_size:]
+            if delta:
+                if not delta.endswith(b"\n") or delta.count(b"\n") != 1:
+                    raise PullDeployError(
+                        "production deployment remote reflog append differs"
+                    )
+                self._verify_transition_reflog(
+                    delta,
+                    target_sha=target_sha,
+                    allowed_old={
+                        str(baseline_refs[DEPLOY_REMOTE_REF]),
+                        target_sha,
+                    },
+                    expected_message=GIT_DEPLOY_REFLOG_MESSAGE.encode(
+                        "ascii"
+                    ),
+                    label="production deployment remote reflog",
+                )
+            elif baseline_deploy_record is None:
+                raise PullDeployError(
+                    "production deployment remote reflog is empty"
+                )
+        if prepared_log is not None and prepared_log in payloads:
+            prepared_payload = payloads[prepared_log]
+            if (
+                not prepared_payload.endswith(b"\n")
+                or prepared_payload.count(b"\n") != 1
+            ):
+                raise PullDeployError(
+                    "production prepared ref reflog differs"
+                )
+            self._verify_transition_reflog(
+                prepared_payload,
+                target_sha=target_sha,
+                allowed_old={"0" * 40, target_sha},
+                expected_message=b"",
+                label="production prepared ref reflog",
+            )
+
+    def _target_reachable_object_evidence(
+        self,
+        target_sha: str,
+        target_tree: str,
+        semantic_objects: list[dict[str, Any]],
+    ) -> tuple[int, str]:
+        try:
+            object_type = _git_source_trust.run_git(
+                self.production_root,
+                "cat-file",
+                "-t",
+                target_sha,
+                ambient={},
+            ).stdout.strip()
+            observed_tree = _git_source_trust.run_git(
+                self.production_root,
+                "rev-parse",
+                f"{target_sha}^{{tree}}",
+                ambient={},
+            ).stdout.strip()
+            raw = _git_source_trust.run_git(
+                self.production_root,
+                "rev-list",
+                "--objects",
+                "--no-object-names",
+                target_sha,
+                ambient={},
+                timeout=600,
+            ).stdout
+        except Exception as exc:
+            raise PullDeployError(
+                "materialized target object closure is unavailable"
+            ) from exc
+        if object_type != "commit" or observed_tree != target_tree:
+            raise PullDeployError(
+                "materialized target commit or tree differs"
+            )
+        object_ids = sorted(
+            {line.strip() for line in str(raw).splitlines() if line.strip()}
+        )
+        if not object_ids or target_sha not in object_ids:
+            raise PullDeployError(
+                "materialized target object closure is invalid"
+            )
+        for object_sha in object_ids:
+            require_sha(object_sha, "materialized target object")
+        by_oid = {
+            str(record["oid"]): record for record in semantic_objects
+        }
+        if not set(object_ids).issubset(by_oid):
+            raise PullDeployError(
+                "materialized target semantic closure is incomplete"
+            )
+        objects = [by_oid[object_sha] for object_sha in object_ids]
+        return len(objects), canonical_json_digest(objects)
+
+    def _verify_production_repository_transition(
+        self,
+        source_successor: Mapping[str, Any],
+        *,
+        target_sha: str,
+        target_tree: str,
+        phase: str,
+        operation_id: str | None = None,
+    ) -> dict[str, Any]:
+        allowed_states = {
+            "plan": frozenset({"baseline", "materialized"}),
+            "prepared": frozenset({"prepared"}),
+            "fetch-before": frozenset(
+                {"baseline", "materialized", "prepared"}
+            ),
+            "fetch-after": frozenset({"materialized", "prepared"}),
+            "ref-after": frozenset({"prepared"}),
+            "abort-no-ref": frozenset({"baseline", "materialized"}),
+            "abort-after": frozenset({"materialized"}),
+        }
+        source_successor = (
+            validate_adopted_git_permission_source_successor_binding(
+                dict(source_successor)
+            )
+        )
+        transition = validate_production_repository_transition(
+            source_successor["production_repository_transition"],
+            production_root=self.production_root,
+            production_sha=source_successor["production_source_sha"],
+            production_tree=source_successor["production_source_tree"],
+            target_sha=target_sha,
+            target_tree=target_tree,
+            baseline_trust_sha256=source_successor["source_trust_sha256"],
+        )
+        if (
+            target_sha != source_successor["target_source_sha"]
+            or target_tree != source_successor["target_source_tree"]
+            or source_successor["production_repository_transition_sha256"]
+            != canonical_json_digest(transition)
+            or phase not in allowed_states
+            or phase == "plan"
+            and operation_id is not None
+            or phase != "plan"
+            and operation_id is None
+        ):
+            raise PullDeployError(
+                "production repository transition request differs"
+            )
+        (
+            evidence,
+            logical,
+            raw,
+            semantic_objects,
+            auxiliary,
+            auxiliary_payloads,
+            object_storage,
+        ) = (
+            self._production_repository_transition_snapshot(
+                source_sha=source_successor["production_source_sha"],
+                source_tree=source_successor["production_source_tree"],
+            )
+        )
+        if (
+            self._production_repository_stable_projection(evidence)
+            != transition["stable_projection"]
+            or {
+                "standalone": evidence["objects"]["standalone"],
+                "promisor": evidence["objects"]["promisor"],
+                "alternates": evidence["objects"]["alternates"],
+                "replace_refs": evidence["refs"]["replace_refs"],
+            }
+            != transition["storage_policy"]
+        ):
+            raise PullDeployError(
+                "production repository stable transition differs"
+            )
+        baseline_logical = self._transition_expected_logical_refs(
+            transition,
+            materialized=False,
+            target_sha=target_sha,
+            prepared_operation_id=None,
+        )
+        materialized_logical = self._transition_expected_logical_refs(
+            transition,
+            materialized=True,
+            target_sha=target_sha,
+            prepared_operation_id=None,
+        )
+        prepared_logical = self._transition_expected_logical_refs(
+            transition,
+            materialized=True,
+            target_sha=target_sha,
+            prepared_operation_id=operation_id,
+        )
+        if logical == baseline_logical:
+            observed_state = "baseline"
+            materialized = False
+            prepared_operation = None
+        elif logical == materialized_logical:
+            observed_state = "materialized"
+            materialized = True
+            prepared_operation = None
+        elif operation_id is not None and logical == prepared_logical:
+            observed_state = "prepared"
+            materialized = True
+            prepared_operation = operation_id
+        else:
+            raise PullDeployError(
+                "production repository logical materialization differs"
+            )
+        if observed_state not in allowed_states[phase]:
+            raise PullDeployError(
+                "production repository state violates the transition phase"
+            )
+        self._verify_transition_raw_refs(
+            transition,
+            raw,
+            materialized=materialized,
+            target_sha=target_sha,
+            prepared_operation_id=prepared_operation,
+        )
+        self._verify_transition_auxiliary(
+            transition,
+            auxiliary,
+            auxiliary_payloads,
+            materialized=materialized,
+            target_sha=target_sha,
+            prepared_operation_id=prepared_operation,
+        )
+        closure_count: int | None = None
+        closure_digest: str | None = None
+        semantic_digest = canonical_json_digest(semantic_objects)
+        if not materialized and (
+            evidence.get("evidence_sha256")
+            != transition["baseline_evidence_sha256"]
+            or len(semantic_objects)
+            != transition["baseline_semantic_object_count"]
+            or semantic_digest
+            != transition["baseline_semantic_objects_sha256"]
+        ):
+            raise PullDeployError(
+                "baseline production repository trust differs"
+            )
+        if materialized and (
+            len(semantic_objects)
+            != transition["expected_materialized_object_count"]
+            or semantic_digest
+            != transition["expected_materialized_objects_sha256"]
+        ):
+            raise PullDeployError(
+                "materialized semantic object inventory differs"
+            )
+        if materialized:
+            closure_count, closure_digest = (
+                self._target_reachable_object_evidence(
+                    target_sha, target_tree, semantic_objects
+                )
+            )
+            if (
+                closure_count
+                != transition["target_reachable_object_count"]
+                or closure_digest
+                != transition["target_reachable_objects_sha256"]
+            ):
+                raise PullDeployError(
+                    "materialized target object closure differs"
+                )
+        try:
+            final = _git_source_trust.repository_preflight_evidence(
+                self.production_root, ambient={}
+            )
+            _git_source_trust.require_stable_trust_surface(evidence, final)
+        except Exception as exc:
+            raise PullDeployError(
+                "production repository changed during transition proof"
+            ) from exc
+        return {
+            "schema_version": 1,
+            "phase": observed_state,
+            "full_trust_sha256": require_digest(
+                evidence.get("evidence_sha256"),
+                "production materialization trust",
+            ),
+            "object_inventory_sha256": require_digest(
+                evidence["objects"].get("inventory_sha256"),
+                "production materialization object inventory",
+            ),
+            "object_count": evidence["objects"]["object_count"],
+            "object_total_size": evidence["objects"]["total_size"],
+            "semantic_object_count": len(semantic_objects),
+            "semantic_object_inventory_sha256": semantic_digest,
+            "logical_refs_sha256": canonical_json_digest(logical),
+            "raw_ref_inventory_sha256": canonical_json_digest(raw),
+            "auxiliary_inventory_sha256": canonical_json_digest(
+                auxiliary
+            ),
+            "object_storage_inventory_sha256": canonical_json_digest(
+                object_storage
+            ),
+            "target_reachable_object_count": closure_count,
+            "target_reachable_objects_sha256": closure_digest,
+            "operation_id": prepared_operation,
+        }
 
     def _plan_adopted_prerequisite_target_binding(
         self,
@@ -17541,19 +21843,68 @@ class PullDeployController:
             raise PullDeployError(
                 "adopted target lacks Git permission authority"
             )
+        source_successor_takeover = (
+            self._git_permission_source_successor_takeover(
+                git_permission_takeover=permission_takeover,
+            )
+        )
+        source_successor_journal_digest = (
+            self._source_successor_completed_journal_digest(
+                source_successor_takeover
+            )
+            if source_successor_takeover is not None
+            else None
+        )
         unit_permission_takeover = self._unit_permission_takeover(
             git_permission_takeover=permission_takeover,
+            git_permission_source_successor_takeover=(
+                source_successor_takeover
+            ),
             verify_live=True,
         )
         if unit_permission_takeover is None:
             raise PullDeployError(
                 "adopted target lacks unit permission authority"
             )
+        (
+            unit_permission_journal_digest,
+            unit_permission_inventory_digest,
+        ) = self._unit_permission_transaction_digests(
+            unit_permission_takeover
+        )
         unit_successor = unit_permission_takeover[
             "git_permission_successor"
         ]
-        unit_source_sha = unit_successor["authority"]["source_sha"]
-        unit_source_tree = unit_successor["authority"]["source_tree"]
+        unit_root = (
+            unit_successor["root_authority"]
+            if unit_successor["schema_version"] == 2
+            else unit_successor["authority"]
+        )
+        unit_source_sha = unit_root["source_sha"]
+        unit_source_tree = unit_root["source_tree"]
+        source_successor_source_sha = (
+            source_successor_takeover["predecessor_source_sha"]
+            if source_successor_takeover is not None
+            else None
+        )
+        source_successor_source_tree = (
+            source_successor_takeover["predecessor_source_tree"]
+            if source_successor_takeover is not None
+            else None
+        )
+        repository_materialization = (
+            self._verify_production_repository_transition(
+                source_successor_takeover,
+                target_sha=target_sha,
+                target_tree=target_tree,
+                phase="plan",
+            )
+            if source_successor_takeover is not None
+            else None
+        )
+        source_successor_ancestor: subprocess.CompletedProcess[Any] | None = None
+        source_successor_predecessor_identities = None
+        source_successor_target_identities = None
         try:
             if (
                 str(
@@ -17645,6 +21996,61 @@ class PullDeployController:
                 target_sha,
                 check=False,
             )
+            if source_successor_takeover is not None:
+                source_successor_ancestor = self._private_source_git(
+                    source_root,
+                    "merge-base",
+                    "--is-ancestor",
+                    str(source_successor_source_sha),
+                    target_sha,
+                    check=False,
+                )
+                if (
+                    str(
+                        self._private_source_git(
+                            source_root,
+                            "cat-file",
+                            "-t",
+                            str(source_successor_source_sha),
+                        ).stdout
+                    ).strip()
+                    != "commit"
+                    or require_sha(
+                        str(
+                            self._private_source_git(
+                                source_root,
+                                "rev-parse",
+                                f"{source_successor_source_sha}^{{tree}}",
+                            ).stdout
+                        ).strip(),
+                        "private source-successor predecessor tree",
+                    )
+                    != source_successor_source_tree
+                ):
+                    raise PullDeployError(
+                        "private target clone lacks source-successor predecessor"
+                    )
+                source_successor_predecessor_identities = {
+                    path: self._private_source_git_blob_identity(
+                        source_root,
+                        str(source_successor_source_sha),
+                        path,
+                    )
+                    for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES
+                }
+                source_successor_target_identities = {
+                    path: self._private_source_git_blob_identity(
+                        source_root,
+                        target_sha,
+                        path,
+                    )
+                    for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES
+                }
+            unit_paths = (
+                ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES
+                if unit_successor["schema_version"] == 2
+                else ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+            )
             unit_authority_digests = {
                 path: sha256_bytes(
                     bytes(
@@ -17656,7 +22062,7 @@ class PullDeployController:
                         ).stdout
                     )
                 )
-                for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+                for path in unit_paths
             }
             unit_target_digests = {
                 path: sha256_bytes(
@@ -17669,7 +22075,7 @@ class PullDeployController:
                         ).stdout
                     )
                 )
-                for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+                for path in unit_paths
             }
         except PullDeployError:
             raise
@@ -17689,6 +22095,39 @@ class PullDeployController:
             raise PullDeployError(
                 "private target source changed during compatibility proof"
             )
+        if source_successor_takeover is not None:
+            ci = self.ci_evidence(target_sha)
+            if source_successor_takeover["delivery_gate"] != {
+                "remote_main": target_sha,
+                "ci": ci,
+            }:
+                raise PullDeployError(
+                    "target CI differs from source-successor delivery authority"
+                )
+            if self._source_successor_completed_journal_digest(
+                source_successor_takeover
+            ) != source_successor_journal_digest:
+                raise PullDeployError(
+                    "source-successor completed journal changed during plan"
+                )
+            if self._verify_production_repository_transition(
+                source_successor_takeover,
+                target_sha=target_sha,
+                target_tree=target_tree,
+                phase="plan",
+            ) != repository_materialization:
+                raise PullDeployError(
+                    "production repository changed during target plan"
+                )
+        if self._unit_permission_transaction_digests(
+            unit_permission_takeover
+        ) != (
+            unit_permission_journal_digest,
+            unit_permission_inventory_digest,
+        ):
+            raise PullDeployError(
+                "unit permission transaction changed during plan"
+            )
         return self._build_adopted_prerequisite_target_binding(
             authority,
             target_sha=target_sha,
@@ -17697,7 +22136,37 @@ class PullDeployController:
             authority_file_digests=authority_digests,
             target_file_digests=target_digests,
             git_permission_takeover=permission_takeover,
+            git_permission_source_successor_takeover=(
+                source_successor_takeover
+            ),
+            source_successor_completed_journal_sha256=(
+                source_successor_journal_digest
+            ),
+            production_repository_materialization=(
+                repository_materialization
+            ),
+            source_successor_is_ancestor=(
+                source_successor_ancestor.returncode == 0
+                if source_successor_ancestor is not None
+                else None
+            ),
+            source_successor_predecessor_file_identities=(
+                source_successor_predecessor_identities
+            ),
+            source_successor_target_file_identities=(
+                source_successor_target_identities
+            ),
             unit_permission_takeover=unit_permission_takeover,
+            unit_permission_completed_journal_sha256=(
+                unit_permission_journal_digest
+                if unit_successor["schema_version"] == 2
+                else None
+            ),
+            unit_permission_transaction_inventory_sha256=(
+                unit_permission_inventory_digest
+                if unit_successor["schema_version"] == 2
+                else None
+            ),
             unit_permission_is_ancestor=unit_ancestor.returncode == 0,
             unit_permission_authority_file_digests=(
                 unit_authority_digests
@@ -17711,6 +22180,7 @@ class PullDeployController:
         *,
         target_sha: str,
         target_tree: str,
+        operation_id: str,
     ) -> dict[str, Any]:
         """Re-prove the same binding after fetch in the trusted live repo."""
 
@@ -17737,19 +22207,66 @@ class PullDeployController:
             raise PullDeployError(
                 "adopted target lacks Git permission authority"
             )
+        source_successor_takeover = (
+            self._git_permission_source_successor_takeover(
+                git_permission_takeover=permission_takeover,
+            )
+        )
+        source_successor_journal_digest = (
+            self._source_successor_completed_journal_digest(
+                source_successor_takeover
+            )
+            if source_successor_takeover is not None
+            else None
+        )
         unit_permission_takeover = self._unit_permission_takeover(
             git_permission_takeover=permission_takeover,
+            git_permission_source_successor_takeover=(
+                source_successor_takeover
+            ),
             verify_live=True,
         )
         if unit_permission_takeover is None:
             raise PullDeployError(
                 "adopted target lacks unit permission authority"
             )
+        (
+            unit_permission_journal_digest,
+            unit_permission_inventory_digest,
+        ) = self._unit_permission_transaction_digests(
+            unit_permission_takeover
+        )
         unit_successor = unit_permission_takeover[
             "git_permission_successor"
         ]
-        unit_source_sha = unit_successor["authority"]["source_sha"]
-        unit_source_tree = unit_successor["authority"]["source_tree"]
+        unit_root = (
+            unit_successor["root_authority"]
+            if unit_successor["schema_version"] == 2
+            else unit_successor["authority"]
+        )
+        unit_source_sha = unit_root["source_sha"]
+        unit_source_tree = unit_root["source_tree"]
+        source_successor_source_sha = (
+            source_successor_takeover["predecessor_source_sha"]
+            if source_successor_takeover is not None
+            else None
+        )
+        source_successor_source_tree = (
+            source_successor_takeover["predecessor_source_tree"]
+            if source_successor_takeover is not None
+            else None
+        )
+        repository_materialization = (
+            self._verify_production_repository_transition(
+                source_successor_takeover,
+                target_sha=target_sha,
+                target_tree=target_tree,
+                phase="prepared",
+                operation_id=operation_id,
+            )
+            if source_successor_takeover is not None
+            else None
+        )
         if (
             str(self._git("cat-file", "-t", source_sha).stdout).strip()
             != "commit"
@@ -17817,13 +22334,61 @@ class PullDeployController:
             target_sha,
             check=False,
         )
+        source_successor_ancestor = None
+        source_successor_predecessor_identities = None
+        source_successor_target_identities = None
+        if source_successor_takeover is not None:
+            source_successor_ancestor = self._git(
+                "merge-base",
+                "--is-ancestor",
+                str(source_successor_source_sha),
+                target_sha,
+                check=False,
+            )
+            if (
+                str(
+                    self._git(
+                        "cat-file", "-t", str(source_successor_source_sha)
+                    ).stdout
+                ).strip()
+                != "commit"
+                or require_sha(
+                    str(
+                        self._git(
+                            "rev-parse",
+                            f"{source_successor_source_sha}^{{tree}}",
+                        ).stdout
+                    ).strip(),
+                    "fetched source-successor predecessor tree",
+                )
+                != source_successor_source_tree
+            ):
+                raise PullDeployError(
+                    "fetched target lacks source-successor predecessor"
+                )
+            source_successor_predecessor_identities = {
+                path: self._production_git_blob_identity(
+                    str(source_successor_source_sha),
+                    path,
+                )
+                for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES
+            }
+            source_successor_target_identities = {
+                path: self._production_git_blob_identity(target_sha, path)
+                for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES
+            }
+        unit_paths = (
+            ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES
+            if unit_successor["schema_version"] == 2
+            else ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+        )
         unit_authority_digests = {
             path: sha256_bytes(self._git_show(unit_source_sha, path))
-            for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+            for path in unit_paths
         }
         unit_target_digests = {
             path: sha256_bytes(self._git_show(target_sha, path))
-            for path in ADOPTED_UNIT_PERMISSION_SUCCESSOR_FILES
+            for path in unit_paths
         }
         after = self._git_trust_preflight()
         if before != after:
@@ -17834,6 +22399,40 @@ class PullDeployController:
             raise PullDeployError(
                 "prerequisite compatibility target changed during proof"
             )
+        if source_successor_takeover is not None:
+            ci = self.ci_evidence(target_sha)
+            if source_successor_takeover["delivery_gate"] != {
+                "remote_main": target_sha,
+                "ci": ci,
+            }:
+                raise PullDeployError(
+                    "target CI differs from source-successor delivery authority"
+                )
+            if self._source_successor_completed_journal_digest(
+                source_successor_takeover
+            ) != source_successor_journal_digest:
+                raise PullDeployError(
+                    "source-successor completed journal changed during prepare"
+                )
+            if self._verify_production_repository_transition(
+                source_successor_takeover,
+                target_sha=target_sha,
+                target_tree=target_tree,
+                phase="prepared",
+                operation_id=operation_id,
+            ) != repository_materialization:
+                raise PullDeployError(
+                    "production repository changed during target prepare"
+                )
+        if self._unit_permission_transaction_digests(
+            unit_permission_takeover
+        ) != (
+            unit_permission_journal_digest,
+            unit_permission_inventory_digest,
+        ):
+            raise PullDeployError(
+                "unit permission transaction changed during prepare"
+            )
         return self._build_adopted_prerequisite_target_binding(
             authority,
             target_sha=target_sha,
@@ -17842,7 +22441,37 @@ class PullDeployController:
             authority_file_digests=authority_digests,
             target_file_digests=target_digests,
             git_permission_takeover=permission_takeover,
+            git_permission_source_successor_takeover=(
+                source_successor_takeover
+            ),
+            source_successor_completed_journal_sha256=(
+                source_successor_journal_digest
+            ),
+            production_repository_materialization=(
+                repository_materialization
+            ),
+            source_successor_is_ancestor=(
+                source_successor_ancestor.returncode == 0
+                if source_successor_ancestor is not None
+                else None
+            ),
+            source_successor_predecessor_file_identities=(
+                source_successor_predecessor_identities
+            ),
+            source_successor_target_file_identities=(
+                source_successor_target_identities
+            ),
             unit_permission_takeover=unit_permission_takeover,
+            unit_permission_completed_journal_sha256=(
+                unit_permission_journal_digest
+                if unit_successor["schema_version"] == 2
+                else None
+            ),
+            unit_permission_transaction_inventory_sha256=(
+                unit_permission_inventory_digest
+                if unit_successor["schema_version"] == 2
+                else None
+            ),
             unit_permission_is_ancestor=unit_ancestor.returncode == 0,
             unit_permission_authority_file_digests=(
                 unit_authority_digests
@@ -17879,6 +22508,7 @@ class PullDeployController:
             authority,
             target_sha=repository["target_sha"],
             target_tree=repository["target_tree"],
+            operation_id=descriptor["operation_id"],
         )
         if observed != sealed:
             raise PullDeployError(
@@ -19992,13 +24622,35 @@ class PullDeployController:
 
     def fetch_target(self, target_sha: str, operation_id: str) -> str:
         self._require_deploy_lock_for_staging()
-        self._git(
-            "fetch",
-            "--no-tags",
-            "--prune",
-            REPOSITORY_SSH_URL,
-            "+refs/heads/main:refs/remotes/nexpoly-deploy/main",
+        successor_state = self._assert_source_successor_repository_state(
+            target_sha=target_sha,
+            operation_id=operation_id,
+            phase="fetch-before",
         )
+        successor_phase = (
+            successor_state.get("phase")
+            if successor_state is not None
+            else None
+        )
+        if successor_phase not in {
+            None,
+            "baseline",
+            "materialized",
+            "prepared",
+        }:
+            raise PullDeployError(
+                "source-successor transition returned an invalid phase"
+            )
+        fetched_now = successor_phase in {None, "baseline"}
+        if fetched_now:
+            self._assert_production_git_mutation_preconditions()
+            self._git(
+                "fetch",
+                "--no-tags",
+                "--prune",
+                REPOSITORY_SSH_URL,
+                "+refs/heads/main:refs/remotes/nexpoly-deploy/main",
+            )
         fetched = require_sha(
             str(
                 self._git("rev-parse", "refs/remotes/nexpoly-deploy/main").stdout
@@ -20021,11 +24673,34 @@ class PullDeployController:
             raise PullDeployError(
                 "target main is not a fast-forward of production HEAD"
             )
+        if successor_phase == "prepared":
+            # The entry proof already matched this operation's exact P state.
+            # Only read-only remote/object checks followed, so no Git write or
+            # second full object scan is required for a replay.
+            return target_tree
+        if fetched_now:
+            successor_state = self._assert_source_successor_repository_state(
+                target_sha=target_sha,
+                operation_id=operation_id,
+                phase="fetch-after",
+            )
+            successor_phase = (
+                successor_state.get("phase")
+                if successor_state is not None
+                else None
+            )
+            if successor_phase not in {None, "materialized", "prepared"}:
+                raise PullDeployError(
+                    "source-successor post-fetch phase is invalid"
+                )
+            if successor_phase == "prepared":
+                return target_tree
         prepared_ref = f"refs/nexpoly/prepared/{operation_id}"
         existing_prepared = self._observe_prepare_abort_prepared_ref(
             prepared_ref
         )
         if existing_prepared is None:
+            self._assert_production_git_mutation_preconditions()
             self._git(
                 "update-ref",
                 "--no-deref",
@@ -20037,6 +24712,11 @@ class PullDeployController:
             raise PullDeployError(
                 "prepared Git ref is already bound to another target"
             )
+        self._assert_source_successor_repository_state(
+            target_sha=target_sha,
+            operation_id=operation_id,
+            phase="ref-after",
+        )
         return target_tree
 
     def bridge_policy_relation(
@@ -20059,6 +24739,7 @@ class PullDeployController:
         if self.remote_main() != authority_sha:
             raise PullDeployError("bridge authority is no longer current remote main")
         if fetch_authority:
+            self._assert_production_git_mutation_preconditions()
             self._git(
                 "fetch",
                 "--no-tags",
@@ -20132,6 +24813,7 @@ class PullDeployController:
             ) != target_sha:
                 raise PullDeployError("exact bridge target ref was repointed")
         elif create_target_ref:
+            self._assert_production_git_mutation_preconditions()
             self._git(
                 "update-ref",
                 target_ref,
@@ -20218,6 +24900,7 @@ class PullDeployController:
         target = ready["source"]["target"]
         bundle = Path(ready["git_bundle"]["path"])
         authority_ref = f"refs/nexpoly/prefetch/{operation_id}/authority"
+        self._assert_production_git_mutation_preconditions()
         self._git(
             "fetch",
             "--no-tags",
@@ -20316,6 +24999,7 @@ class PullDeployController:
                     "exact prefetched bridge target ref was repointed"
                 )
         elif create_target_ref:
+            self._assert_production_git_mutation_preconditions()
             self._git(
                 "update-ref",
                 target_ref,
@@ -27405,6 +32089,11 @@ class PullDeployController:
         expected_ref = prepared_ref["target_sha"]
         ref_evidence_path = archive / "prepared-ref.json"
         if expected_ref is None:
+            self._assert_source_successor_repository_state(
+                target_sha=journal["target_sha"],
+                operation_id=operation_id,
+                phase="abort-no-ref",
+            )
             if self._observe_prepare_abort_prepared_ref(ref_name) is not None:
                 raise PullDeployError(
                     "unrecorded prepared Git ref appeared during abort"
@@ -27436,6 +32125,12 @@ class PullDeployController:
                 atomic_json(ref_evidence_path, ref_evidence)
             observed_ref = self._observe_prepare_abort_prepared_ref(ref_name)
             if observed_ref == expected_ref:
+                self._assert_source_successor_repository_state(
+                    target_sha=journal["target_sha"],
+                    operation_id=operation_id,
+                    phase="prepared",
+                )
+                self._assert_production_git_mutation_preconditions()
                 try:
                     self._git(
                         "update-ref",
@@ -27456,6 +32151,12 @@ class PullDeployController:
                 raise PullDeployError(
                     "prepared Git ref changed before CAS deletion"
                 )
+            else:
+                self._assert_source_successor_repository_state(
+                    target_sha=journal["target_sha"],
+                    operation_id=operation_id,
+                    phase="abort-after",
+                )
         # Git 2.43 can return from update-ref without issuing any fsync.
         # Replays must seal both loose/packed ref storage and each owning
         # namespace even when the intent recorded that this ref was initially
@@ -27465,6 +32166,15 @@ class PullDeployController:
             raise PullDeployError(
                 "prepared Git ref remains after CAS deletion"
             )
+        self._assert_source_successor_repository_state(
+            target_sha=journal["target_sha"],
+            operation_id=operation_id,
+            phase=(
+                "abort-no-ref"
+                if expected_ref is None
+                else "abort-after"
+            ),
+        )
 
         if ready_path.exists() or ready_path.is_symlink():
             raise PullDeployError(
@@ -27629,7 +32339,11 @@ class PullDeployController:
             successor = validate_adopted_git_permission_successor(
                 unit_permission["git_permission_successor"]
             )
-            predecessor = successor["authority"]
+            predecessor = (
+                successor["root_authority"]
+                if successor["schema_version"] == 2
+                else successor["authority"]
+            )
             if (
                 raw_unit_digest
                 != unit_permission["authority_file_sha256"]
@@ -29295,6 +34009,7 @@ class PullDeployController:
                             adopted_prerequisites,
                             target_sha=target_sha,
                             target_tree=target_tree,
+                            operation_id=operation_id,
                         )
                     )
                 self.validate_installed_controls_against_target(target_sha)
@@ -29396,6 +34111,18 @@ class PullDeployController:
                     raise PullDeployError(
                         "first adopted deployment CI differs from final "
                         "prerequisite delivery gate (exact-source)"
+                    )
+                if (
+                    adopted_prerequisite_binding is not None
+                    and adopted_prerequisite_binding["schema_version"] == 4
+                    and adopted_prerequisite_binding[
+                        "git_permission_source_successor_authority"
+                    ]["delivery_gate"]
+                    != {"remote_main": target_sha, "ci": ci}
+                ):
+                    raise PullDeployError(
+                        "first adopted deployment CI differs from the "
+                        "source-successor delivery gate"
                     )
                 worker_controls = self.prepare_worker_controls(
                     operation_id=operation_id,
@@ -31310,6 +36037,9 @@ class PullDeployController:
 
     def _switch_source(self, descriptor: dict[str, Any]) -> None:
         repository = descriptor["repository"]
+        self._assert_descriptor_source_successor_pre_switch_state(
+            descriptor
+        )
         existing = self._git(
             "show-ref",
             "--verify",
@@ -31324,6 +36054,7 @@ class PullDeployController:
             if existing.returncode == 0
             else "0" * 40
         )
+        self._assert_production_git_mutation_preconditions()
         self._git(
             "update-ref",
             "refs/nexpoly/previous",
@@ -31335,6 +36066,7 @@ class PullDeployController:
             if descriptor["schema_version"] == BRIDGE_DESCRIPTOR_SCHEMA_VERSION
             else "refs/remotes/nexpoly-deploy/main"
         )
+        self._assert_production_git_mutation_preconditions()
         self._git("merge", "--ff-only", source_ref)
         current = self.repository_identity(require_ssh_origin=True)
         if (
@@ -31345,6 +36077,7 @@ class PullDeployController:
 
     def _restore_source(self, descriptor: dict[str, Any]) -> None:
         previous = descriptor["repository"]["previous_sha"]
+        self._assert_production_git_mutation_preconditions()
         self._git("reset", "--hard", previous)
         current = self.repository_identity()
         if (
@@ -31704,6 +36437,123 @@ class PullDeployController:
         }
         return validate_dft_current_projection(projection)
 
+    def _current_adoption_successor_lineage(
+        self,
+        descriptor: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Pin a completed v4 successor chain, or preserve its prior pin."""
+
+        previous = descriptor.get("previous_deployment")
+        previous_lineage = (
+            validate_adoption_successor_lineage(
+                previous["adoption_successor_lineage"]
+            )
+            if isinstance(previous, dict)
+            and "adoption_successor_lineage" in previous
+            else None
+        )
+        binding = descriptor.get("adopted_prerequisite_target_binding")
+        v4_binding = (
+            validate_adopted_prerequisite_target_binding(binding)
+            if isinstance(binding, dict) and binding.get("schema_version") == 4
+            else None
+        )
+        if previous_lineage is None and v4_binding is None:
+            return None
+        root = self._git_permission_takeover()
+        if root is None:
+            raise PullDeployError(
+                "current-state successor lineage lacks its root authority"
+            )
+        source_successor = self._git_permission_source_successor_takeover(
+            git_permission_takeover=root,
+        )
+        if source_successor is None:
+            raise PullDeployError(
+                "current-state successor lineage lacks its source authority"
+            )
+        unit = self._unit_permission_takeover(
+            git_permission_takeover=root,
+            git_permission_source_successor_takeover=source_successor,
+            verify_live=False,
+        )
+        if unit is None or unit.get("schema_version") != 2:
+            raise PullDeployError(
+                "current-state successor lineage lacks its unit authority"
+            )
+        _journal, journal_digest, _entries = (
+            self._source_successor_completed_journal_snapshot(
+                source_successor
+            )
+        )
+        (
+            unit_journal_digest,
+            unit_inventory_digest,
+        ) = self._unit_permission_transaction_digests(unit)
+        current_lineage = validate_adoption_successor_lineage(
+            {
+                "schema_version": 2,
+                "source_successor_authority_sha256": source_successor[
+                    "authority_file_sha256"
+                ],
+                "source_successor_completed_journal_sha256": journal_digest,
+                "unit_permission_authority_sha256": unit[
+                    "authority_file_sha256"
+                ],
+                "unit_permission_completed_journal_sha256": (
+                    unit_journal_digest
+                ),
+                "unit_permission_transaction_inventory_sha256": (
+                    unit_inventory_digest
+                ),
+            }
+        )
+        lineage = current_lineage
+        if previous_lineage is not None:
+            if previous_lineage.get("schema_version") == 1:
+                historical_projection = {
+                    key: current_lineage[key]
+                    for key in LEGACY_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+                    if key != "schema_version"
+                }
+                historical_projection["schema_version"] = 1
+                if historical_projection != previous_lineage:
+                    raise PullDeployError(
+                        "live successor lineage differs from previous current state"
+                    )
+                # A descriptor-v4 takeover is the authority to extend the
+                # historical three-anchor lineage with the completed unit
+                # journal and full transaction inventory.  Without that
+                # descriptor authority, retain the byte-for-byte v1 lineage.
+                lineage = (
+                    current_lineage
+                    if v4_binding is not None
+                    else previous_lineage
+                )
+            elif current_lineage != previous_lineage:
+                raise PullDeployError(
+                    "live successor lineage differs from previous current state"
+                )
+        if v4_binding is not None and (
+            source_successor
+            != v4_binding["git_permission_source_successor_authority"]
+            or journal_digest
+            != v4_binding[
+                "source_successor_completed_journal_sha256"
+            ]
+            or unit != v4_binding["unit_permission_authority"]
+            or unit_journal_digest
+            != v4_binding["unit_permission_completed_journal_sha256"]
+            or unit_inventory_digest
+            != v4_binding[
+                "unit_permission_transaction_inventory_sha256"
+            ]
+        ):
+            raise PullDeployError(
+                "live successor lineage differs from v4 descriptor"
+            )
+        return lineage
+
     def _current_state(
         self, descriptor: dict[str, Any], descriptor_digest: str, marker: dict[str, Any]
     ) -> dict[str, Any]:
@@ -31848,6 +36698,11 @@ class PullDeployController:
                     ),
                 }
             )
+            successor_lineage = self._current_adoption_successor_lineage(
+                descriptor
+            )
+            if successor_lineage is not None:
+                state["adoption_successor_lineage"] = successor_lineage
         external_database_transition_chain = None
         if (
             descriptor["schema_version"]

@@ -65,6 +65,52 @@ PERMISSION_TRANSACTION_PHASES = frozenset(
 # and adoption evidence, so its journal/authority ceiling must exceed the
 # marker engine's independent 128 MiB ceiling.
 PERMISSION_JSON_MAX_BYTES = 256 * 1024 * 1024
+SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY = Path(
+    "state/adopted-git-permission-source-successor-transactions"
+)
+SOURCE_SUCCESSOR_AUTHORITY_PATH = Path(
+    "state/adopted-git-permission-source-successor.json"
+)
+SOURCE_SUCCESSOR_AUTHORITY_KIND = (
+    "manual-runtime-adoption-git-permission-source-successor"
+)
+SOURCE_SUCCESSOR_POLICY = (
+    "nexpoly-adopted-git-permission-source-successor-v1"
+)
+SOURCE_SUCCESSOR_IMPACT_POLICY = (
+    "nexpoly-adopted-git-permission-source-successor-impact-v1"
+)
+SOURCE_SUCCESSOR_VERIFIER_POLICY = (
+    "nexpoly-frozen-predecessor-verifier-agreement-v1"
+)
+SOURCE_SUCCESSOR_PUBLICATION_POLICY = (
+    "nexpoly-source-successor-authority-publication-v1"
+)
+SOURCE_SUCCESSOR_REPOSITORY_TRANSITION_POLICY = (
+    "nexpoly-production-repository-materialization-transition-v1"
+)
+SOURCE_SUCCESSOR_DEPLOY_REMOTE_REF = "refs/remotes/nexpoly-deploy/main"
+SOURCE_SUCCESSOR_PREPARED_REF_PREFIX = "refs/nexpoly/prepared/"
+SOURCE_SUCCESSOR_GIT_AUXILIARY_POLICY = (
+    "baseline-exact-fetch-head-and-transition-reflogs-only-v1"
+)
+SOURCE_SUCCESSOR_GIT_OBJECT_STORAGE_POLICY = (
+    "canonical-loose-pack-index-rev-commit-graph-no-locks-v1"
+)
+SOURCE_SUCCESSOR_OPERATION_RE = re.compile(
+    r"adopt-git-successor-[a-z0-9][a-z0-9._-]{7,95}\Z"
+)
+SOURCE_SUCCESSOR_TRANSACTION_PHASES = frozenset(
+    {
+        "intent",
+        "predecessor-verified",
+        "source-verified",
+        "authority-commit-intent",
+        "completed",
+        "aborted",
+    }
+)
+SOURCE_SUCCESSOR_JSON_MAX_BYTES = 32 * 1024 * 1024
 UNIT_PERMISSION_TRANSACTION_DIRECTORY = Path(
     "state/adopted-unit-permission-transactions"
 )
@@ -193,6 +239,23 @@ UNIT_PERMISSION_SUCCESSOR_BLOBS = tuple(
     "scripts/bootstrap_pull_deploy.py",
     "scripts/git_source_trust.py",
 )
+UNIT_PERMISSION_SUCCESSOR_V2_BLOBS = UNIT_PERMISSION_SUCCESSOR_BLOBS + (
+    "scripts/bridge_deploy_core.py",
+)
+SOURCE_SUCCESSOR_ALLOWED_CHANGED_BLOBS = (
+    "scripts/bootstrap_pull_deploy.py",
+    "scripts/git_source_trust.py",
+)
+SOURCE_SUCCESSOR_MUTATIONS = {
+    "services": False,
+    "source": False,
+    "source_refs": False,
+    "database": False,
+    "credentials": False,
+    "git_permissions": False,
+    "units": False,
+    "runtime_authority": True,
+}
 PGPASS_NAME = "mutable-data-audit.pgpass"
 
 
@@ -493,6 +556,24 @@ def _utc_now() -> str:
     )
 
 
+def _parse_canonical_utc_timestamp(value: object) -> dt.datetime | None:
+    """Return a real UTC second only for the one canonical wire format."""
+
+    pattern = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+    if not isinstance(value, str) or re.fullmatch(pattern, value) is None:
+        return None
+    try:
+        parsed = dt.datetime.strptime(
+            value,
+            "%Y-%m-%dT%H:%M:%SZ",
+        ).replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return None
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
+        return None
+    return parsed
+
+
 def _fsync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
@@ -510,6 +591,14 @@ def _require_operation_id(value: str) -> str:
 def _require_permission_operation_id(value: str) -> str:
     if not isinstance(value, str) or PERMISSION_OPERATION_RE.fullmatch(value) is None:
         raise PrerequisiteError("permission hardening operation ID is invalid")
+    return value
+
+
+def _require_source_successor_operation_id(value: str) -> str:
+    if SOURCE_SUCCESSOR_OPERATION_RE.fullmatch(value) is None:
+        raise PrerequisiteError(
+            "Git permission source successor operation ID is invalid"
+        )
     return value
 
 
@@ -1134,6 +1223,49 @@ def _git_blob(source_root: Path, source_sha: str, relative: str) -> bytes:
             raise PrerequisiteError(f"tracked prerequisite differs from Git: {relative}")
     finally:
         os.close(descriptor)
+    return payload
+
+
+def _git_object_blob(
+    source_root: Path,
+    source_sha: str,
+    relative: str,
+    *,
+    maximum_bytes: int = 8 * 1024 * 1024,
+) -> bytes:
+    """Read one historical Git blob without consulting the live worktree.
+
+    The source-successor transaction needs the predecessor verifier bytes
+    after the worktree has advanced to the exact target.  The surrounding
+    checkout trust gate rejects redirects, alternates, replacements and
+    executable attributes before this fixed `/usr/bin/git` object read.
+    """
+
+    source_sha = _require_sha(source_sha)
+    if (
+        not isinstance(relative, str)
+        or not relative
+        or relative.startswith("/")
+        or ".." in Path(relative).parts
+        or "\x00" in relative
+        or "\n" in relative
+    ):
+        raise PrerequisiteError("historical verifier path is invalid")
+    object_type = _run_git(
+        source_root,
+        "cat-file",
+        "-t",
+        f"{source_sha}:{relative}",
+    ).decode().strip()
+    if object_type != "blob":
+        raise PrerequisiteError(
+            f"historical verifier is not a Git blob: {relative}"
+        )
+    payload = _run_git(source_root, "show", f"{source_sha}:{relative}")
+    if not payload or len(payload) > maximum_bytes:
+        raise PrerequisiteError(
+            f"historical verifier has an invalid size: {relative}"
+        )
     return payload
 
 
@@ -5361,9 +5493,9 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
 
     def _read_git_permission_authority(
         self,
-    ) -> tuple[dict[str, object], str]:
+    ) -> tuple[dict[str, object], str, dict[str, str]]:
         state_fd = self._pinned_directory_fd(self.runtime_root / "state")
-        return (
+        authority, authority_digest = (
             _load_json_with_digest(self.permission_authority_path)
             if state_fd is None
             else _load_json_with_digest_at(
@@ -5372,6 +5504,1206 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
                 maximum_bytes=PERMISSION_JSON_MAX_BYTES,
             )
         )
+        journal = self._read_git_permission_completed_journal(
+            authority,
+            state_fd=state_fd,
+        )
+        return authority, authority_digest, journal
+
+    def _read_git_permission_completed_journal(
+        self,
+        authority: dict[str, object],
+        *,
+        state_fd: int | None,
+    ) -> dict[str, str]:
+        """Bind the root wrapper to its one canonical completed journal."""
+
+        operation_id = str(authority.get("operation_id", ""))
+        _require_permission_operation_id(operation_id)
+        close_state = False
+        if state_fd is None:
+            state_fd = _open_private_directory(self.runtime_root / "state")
+            close_state = True
+        try:
+            transaction_fd = _open_private_directory(
+                Path(PERMISSION_TRANSACTION_DIRECTORY.name),
+                parent_fd=state_fd,
+            )
+            try:
+                name = f"{operation_id}.json"
+                if sorted(os.listdir(transaction_fd)) != [name]:
+                    raise PrerequisiteError(
+                        "adopted Git permission completed journal lineage "
+                        "is incomplete"
+                    )
+                journal, journal_digest = _load_json_with_digest_at(
+                    transaction_fd,
+                    name,
+                    maximum_bytes=PERMISSION_JSON_MAX_BYTES,
+                )
+            finally:
+                os.close(transaction_fd)
+        finally:
+            if close_state:
+                os.close(state_fd)
+        fields = {
+            "schema_version",
+            "status",
+            "phase",
+            "operation_id",
+            "plan",
+            "plan_sha256",
+            "permission_impact_sha256",
+            "permission_checkpoint",
+            "permission_marker_sha256",
+            "permission_evidence_sha256",
+            "source_trust_sha256",
+            "created_at",
+            "completed_at",
+            "aborted_at",
+        }
+        source_trust = journal.get("source_trust_sha256")
+        timestamp_pattern = (
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+            r"[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+        )
+        if (
+            set(journal) != fields
+            or journal_digest
+            != _digest(_canonical_bytes(journal) + b"\n")
+            or not _has_exact_schema_version(journal, 1)
+            or journal.get("status") != "completed"
+            or journal.get("phase") != "completed"
+            or journal.get("operation_id") != operation_id
+            or journal.get("plan") != authority.get("plan")
+            or journal.get("plan_sha256") != authority.get("plan_sha256")
+            or journal.get("permission_impact_sha256")
+            != authority.get("permission_impact_sha256")
+            or journal.get("permission_checkpoint") != "permission:hardened"
+            or journal.get("permission_marker_sha256")
+            != authority.get("permission_marker_sha256")
+            or journal.get("permission_evidence_sha256")
+            != authority.get("permission_evidence_sha256")
+            or not isinstance(source_trust, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", source_trust) is None
+            or not isinstance(journal.get("created_at"), str)
+            or re.fullmatch(timestamp_pattern, journal["created_at"]) is None
+            or journal.get("completed_at") != authority.get("completed_at")
+            or not isinstance(journal.get("completed_at"), str)
+            or re.fullmatch(timestamp_pattern, journal["completed_at"])
+            is None
+            or journal.get("aborted_at") is not None
+        ):
+            raise PrerequisiteError(
+                "adopted Git permission completed journal differs"
+            )
+        return {
+            "completed_journal_sha256": journal_digest,
+            "source_trust_sha256": source_trust,
+        }
+
+    def _source_successor_lineage_entries(self) -> list[str]:
+        """Return every fixed-path successor sentinel, including residue."""
+
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        close_state = False
+        if state_fd is None:
+            state_fd = _open_private_directory(self.runtime_root / "state")
+            close_state = True
+        try:
+            prefix = f".{SOURCE_SUCCESSOR_AUTHORITY_PATH.name}.create-"
+            transaction_prefix = (
+                f".{SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY.name}.create-"
+            )
+            entries = [
+                name
+                for name in os.listdir(state_fd)
+                if name == SOURCE_SUCCESSOR_AUTHORITY_PATH.name
+                or name.startswith(prefix)
+                or name.startswith(transaction_prefix)
+                or name == SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY.name
+            ]
+            return sorted(entries)
+        finally:
+            if close_state:
+                os.close(state_fd)
+
+    @staticmethod
+    def _source_successor_publication_plan(
+        operation_id: str,
+        state_root: Path,
+    ) -> dict[str, object]:
+        final = SOURCE_SUCCESSOR_AUTHORITY_PATH.name
+        staging = f".{final}.create-{operation_id}"
+        quarantine = f"{staging}.quarantine"
+        return {
+            "schema_version": 1,
+            "policy": SOURCE_SUCCESSOR_PUBLICATION_POLICY,
+            "directory": str(state_root),
+            "entries": [
+                {
+                    "role": "final",
+                    "name": final,
+                    "path": str(state_root / final),
+                    "initially_absent": True,
+                },
+                {
+                    "role": "staging",
+                    "name": staging,
+                    "path": str(state_root / staging),
+                    "initially_absent": True,
+                },
+                {
+                    "role": "staging-quarantine",
+                    "name": quarantine,
+                    "path": str(state_root / quarantine),
+                    "initially_absent": True,
+                },
+            ],
+        }
+
+    @staticmethod
+    def _source_successor_file_records(
+        value: object,
+    ) -> list[dict[str, object]]:
+        if not isinstance(value, list) or len(value) != len(
+            UNIT_PERMISSION_SUCCESSOR_V2_BLOBS
+        ):
+            raise PrerequisiteError(
+                "source successor fixed file manifest is invalid"
+            )
+        records: list[dict[str, object]] = []
+        changed: list[str] = []
+        for record, expected_path in zip(
+            value,
+            UNIT_PERMISSION_SUCCESSOR_V2_BLOBS,
+            strict=True,
+        ):
+            if (
+                not isinstance(record, dict)
+                or set(record)
+                != {"path", "relation", "predecessor", "target"}
+                or record.get("path") != expected_path
+                or record.get("relation")
+                not in {"byte-identical", "changed"}
+            ):
+                raise PrerequisiteError(
+                    "source successor fixed file manifest differs"
+                )
+            identities: dict[str, dict[str, str]] = {}
+            for label in ("predecessor", "target"):
+                identity = record.get(label)
+                if (
+                    not isinstance(identity, dict)
+                    or set(identity)
+                    != {"object_type", "mode", "blob_sha", "sha256"}
+                    or identity.get("object_type") != "blob"
+                    or identity.get("mode") not in {"100644", "100755"}
+                    or not isinstance(identity.get("blob_sha"), str)
+                    or SHA_RE.fullmatch(identity["blob_sha"]) is None
+                    or not isinstance(identity.get("sha256"), str)
+                    or re.fullmatch(
+                        r"sha256:[0-9a-f]{64}",
+                        identity["sha256"],
+                    )
+                    is None
+                ):
+                    raise PrerequisiteError(
+                        "source successor Git blob identity is invalid"
+                    )
+                identities[label] = dict(identity)
+            same = identities["predecessor"] == identities["target"]
+            expected_mode = (
+                "100644"
+                if expected_path
+                == "ops/config/mutable-data-audit.pg_service.conf.example"
+                else "100755"
+            )
+            if (
+                same != (record["relation"] == "byte-identical")
+                or identities["predecessor"]["mode"] != expected_mode
+                or identities["target"]["mode"] != expected_mode
+            ):
+                raise PrerequisiteError(
+                    "source successor blob relation is inconsistent"
+                )
+            if record["relation"] == "changed":
+                changed.append(expected_path)
+            records.append(
+                {
+                    "path": expected_path,
+                    "relation": record["relation"],
+                    "predecessor": identities["predecessor"],
+                    "target": identities["target"],
+                }
+            )
+        if tuple(changed) != SOURCE_SUCCESSOR_ALLOWED_CHANGED_BLOBS:
+            raise PrerequisiteError(
+                "source successor changed paths differ from authorization"
+            )
+        return records
+
+    @staticmethod
+    def _valid_source_successor_ref_name(value: str) -> bool:
+        if (
+            not value.startswith("refs/")
+            or len(value) > 1024
+            or value.endswith(("/", "."))
+            or "//" in value
+            or "@{" in value
+            or any(character in value for character in " ~^:?*[\\\x00\n\r")
+        ):
+            return False
+        components = value.split("/")
+        return all(
+            component
+            and component not in {".", "..", "@"}
+            and not component.startswith(".")
+            and not component.endswith(".lock")
+            for component in components
+        )
+
+    @classmethod
+    def _valid_source_successor_ref_directory(cls, value: str) -> bool:
+        return value == "refs" or cls._valid_source_successor_ref_name(
+            f"{value}/sentinel"
+        )
+
+    def _validate_source_successor_repository_transition(
+        self,
+        value: object,
+        *,
+        production_sha: str,
+        production_tree: str,
+        target_sha: str,
+        target_tree: str,
+        baseline_trust_sha256: str,
+    ) -> dict[str, object]:
+        """Validate the immutable pre-materialization repository baseline."""
+
+        fields = {
+            "schema_version",
+            "policy",
+            "source",
+            "target",
+            "baseline_evidence_sha256",
+            "stable_projection",
+            "stable_projection_sha256",
+            "logical_refs",
+            "logical_refs_sha256",
+            "raw_ref_inventory",
+            "raw_ref_inventory_sha256",
+            "baseline_auxiliary_inventory",
+            "baseline_auxiliary_inventory_sha256",
+            "baseline_semantic_object_count",
+            "baseline_semantic_objects_sha256",
+            "baseline_only_object_count",
+            "baseline_only_objects_sha256",
+            "target_reachable_object_count",
+            "target_reachable_objects_sha256",
+            "expected_materialized_object_count",
+            "expected_materialized_objects_sha256",
+            "mutable_refs",
+            "storage_policy",
+            "auxiliary_policy",
+            "object_storage_policy",
+            "object_materialization_policy",
+        }
+        if (
+            not isinstance(value, dict)
+            or set(value) != fields
+            or not _has_exact_schema_version(value, 1)
+            or value.get("policy")
+            != SOURCE_SUCCESSOR_REPOSITORY_TRANSITION_POLICY
+            or value.get("source")
+            != {"sha": production_sha, "tree": production_tree}
+            or value.get("target")
+            != {"sha": target_sha, "tree": target_tree}
+            or value.get("baseline_evidence_sha256")
+            != baseline_trust_sha256
+            or value.get("mutable_refs")
+            != {
+                "deploy_remote": SOURCE_SUCCESSOR_DEPLOY_REMOTE_REF,
+                "prepared_prefix": SOURCE_SUCCESSOR_PREPARED_REF_PREFIX,
+            }
+            or value.get("storage_policy")
+            != {
+                "standalone": True,
+                "promisor": False,
+                "alternates": False,
+                "replace_refs": 0,
+            }
+            or value.get("object_materialization_policy")
+            != (
+                "strict-fsck-owner-private-content-addressed-target-closure-v1"
+            )
+            or value.get("auxiliary_policy")
+            != SOURCE_SUCCESSOR_GIT_AUXILIARY_POLICY
+            or value.get("object_storage_policy")
+            != SOURCE_SUCCESSOR_GIT_OBJECT_STORAGE_POLICY
+        ):
+            raise PrerequisiteError(
+                "source successor repository transition is invalid"
+            )
+        stable = value.get("stable_projection")
+        stable_fields = {
+            "schema_version",
+            "policy",
+            "repository_root",
+            "git_dir",
+            "object_dir",
+            "index_path",
+            "source",
+            "git_binary",
+            "local_config",
+            "head",
+            "index",
+            "forbidden_markers_absent",
+            "execution_environment",
+        }
+        if (
+            not isinstance(stable, dict)
+            or set(stable) != stable_fields
+            or stable.get("repository_root") != str(self.production_root)
+            or stable.get("git_dir") != str(self.production_root / ".git")
+            or stable.get("object_dir")
+            != str(self.production_root / ".git/objects")
+            or stable.get("index_path")
+            != str(self.production_root / ".git/index")
+            or stable.get("source")
+            != {
+                "sha": production_sha,
+                "tree": production_tree,
+                "branch": "refs/heads/main",
+                "origin": None,
+            }
+            or value.get("stable_projection_sha256")
+            != _canonical_digest(stable)
+        ):
+            raise PrerequisiteError(
+                "source successor repository stable projection differs"
+            )
+        logical = value.get("logical_refs")
+        logical_names: list[str] = []
+        if not isinstance(logical, list):
+            raise PrerequisiteError(
+                "source successor logical ref baseline is invalid"
+            )
+        for record in logical:
+            if (
+                not isinstance(record, dict)
+                or set(record)
+                != {
+                    "name",
+                    "object_sha",
+                    "object_type",
+                    "symbolic_target",
+                }
+                or not isinstance(record.get("name"), str)
+                or not self._valid_source_successor_ref_name(record["name"])
+                or record["name"].startswith("refs/replace/")
+                or record.get("object_type")
+                not in {"blob", "tree", "commit", "tag"}
+                or record.get("symbolic_target") is not None
+                and (
+                    not isinstance(record.get("symbolic_target"), str)
+                    or not self._valid_source_successor_ref_name(
+                        str(record["symbolic_target"])
+                    )
+                )
+            ):
+                raise PrerequisiteError(
+                    "source successor logical ref record is invalid"
+                )
+            object_sha = record.get("object_sha")
+            if not isinstance(object_sha, str) or SHA_RE.fullmatch(
+                object_sha
+            ) is None:
+                raise PrerequisiteError(
+                    "source successor logical ref object is invalid"
+                )
+            logical_names.append(record["name"])
+        logical_map = {
+            record["name"]: record["object_sha"] for record in logical
+        }
+        logical_records = {
+            record["name"]: record for record in logical
+        }
+        if (
+            logical_names != sorted(set(logical_names))
+            or len(logical_names) > 10_000
+            or any(
+                name.startswith(SOURCE_SUCCESSOR_PREPARED_REF_PREFIX)
+                for name in logical_names
+            )
+            or logical_map.get("refs/heads/main") != production_sha
+            or logical_records.get("refs/heads/main", {}).get(
+                "object_type"
+            )
+            != "commit"
+            or logical_records.get("refs/heads/main", {}).get(
+                "symbolic_target"
+            )
+            is not None
+            or logical_records.get(
+                SOURCE_SUCCESSOR_DEPLOY_REMOTE_REF, {}
+            ).get("object_type")
+            != "commit"
+            or logical_records.get(
+                SOURCE_SUCCESSOR_DEPLOY_REMOTE_REF, {}
+            ).get("symbolic_target")
+            is not None
+            or value.get("logical_refs_sha256")
+            != _canonical_digest(logical)
+        ):
+            raise PrerequisiteError(
+                "source successor logical ref baseline differs"
+            )
+        raw = value.get("raw_ref_inventory")
+        paths: list[str] = []
+        if not isinstance(raw, list):
+            raise PrerequisiteError(
+                "source successor raw ref baseline is invalid"
+            )
+        for record in raw:
+            if not isinstance(record, dict) or not isinstance(
+                record.get("path"), str
+            ):
+                raise PrerequisiteError(
+                    "source successor raw ref record is invalid"
+                )
+            path = record["path"]
+            paths.append(path)
+            if record.get("kind") == "directory":
+                if (
+                    set(record) != {"path", "kind", "mode"}
+                    or not self._valid_source_successor_ref_directory(path)
+                    or record.get("mode") != "0700"
+                ):
+                    raise PrerequisiteError(
+                        "source successor raw ref directory is invalid"
+                    )
+            elif record.get("kind") == "file":
+                digest = record.get("raw_sha256")
+                if (
+                    set(record)
+                    != {"path", "kind", "mode", "size", "raw_sha256"}
+                    or record.get("mode") != "0600"
+                    or isinstance(record.get("size"), bool)
+                    or not isinstance(record.get("size"), int)
+                    or not 0 <= record["size"] <= SOURCE_SUCCESSOR_JSON_MAX_BYTES
+                    or not isinstance(digest, str)
+                    or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+                    or path != "packed-refs"
+                    and (
+                        not self._valid_source_successor_ref_name(path)
+                        or path not in logical_names
+                    )
+                ):
+                    raise PrerequisiteError(
+                        "source successor raw ref file is invalid"
+                    )
+            else:
+                raise PrerequisiteError(
+                    "source successor raw ref kind is invalid"
+                )
+        auxiliary = value.get("baseline_auxiliary_inventory")
+        if (
+            not isinstance(auxiliary, list)
+            or value.get("baseline_auxiliary_inventory_sha256")
+            != _canonical_digest(auxiliary)
+        ):
+            raise PrerequisiteError(
+                "source successor Git auxiliary baseline differs"
+            )
+        auxiliary_paths: list[str] = []
+        for record in auxiliary:
+            if not isinstance(record, dict) or not isinstance(
+                record.get("path"), str
+            ):
+                raise PrerequisiteError(
+                    "source successor Git auxiliary record is invalid"
+                )
+            path = record["path"]
+            auxiliary_paths.append(path)
+            if (
+                path.startswith(("objects/", "refs/"))
+                or path
+                in {
+                    "objects",
+                    "refs",
+                    "HEAD",
+                    "config",
+                    "index",
+                    "packed-refs",
+                }
+                or path.endswith(".lock")
+                or path.startswith(
+                    f"logs/{SOURCE_SUCCESSOR_PREPARED_REF_PREFIX}"
+                )
+                or Path(path).is_absolute()
+                or ".." in Path(path).parts
+                or Path(path).as_posix() != path
+            ):
+                raise PrerequisiteError(
+                    "source successor Git auxiliary path is invalid"
+                )
+            if record.get("kind") == "directory":
+                if (
+                    set(record) != {"path", "kind", "mode"}
+                    or not isinstance(record.get("mode"), str)
+                    or re.fullmatch(r"0[4-7]00", record["mode"]) is None
+                ):
+                    raise PrerequisiteError(
+                        "source successor Git auxiliary directory is invalid"
+                    )
+            elif record.get("kind") == "file":
+                digest = record.get("raw_sha256")
+                if (
+                    set(record)
+                    != {"path", "kind", "mode", "size", "raw_sha256"}
+                    or not isinstance(record.get("mode"), str)
+                    or re.fullmatch(r"0[4-7]00", record["mode"]) is None
+                    or isinstance(record.get("size"), bool)
+                    or not isinstance(record.get("size"), int)
+                    or not 0 <= record["size"] <= PERMISSION_JSON_MAX_BYTES
+                    or not isinstance(digest, str)
+                    or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+                ):
+                    raise PrerequisiteError(
+                        "source successor Git auxiliary file is invalid"
+                    )
+            else:
+                raise PrerequisiteError(
+                    "source successor Git auxiliary record is invalid"
+                )
+        counts: dict[str, int] = {}
+        for field, allow_zero in (
+            ("baseline_semantic_object_count", True),
+            ("baseline_only_object_count", True),
+            ("target_reachable_object_count", False),
+            ("expected_materialized_object_count", False),
+        ):
+            count = value.get(field)
+            if (
+                isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < (0 if allow_zero else 1)
+                or count > 10_000_000
+            ):
+                raise PrerequisiteError(
+                    f"source successor {field} is invalid"
+                )
+            counts[field] = count
+        for field in (
+            "baseline_semantic_objects_sha256",
+            "baseline_only_objects_sha256",
+            "target_reachable_objects_sha256",
+            "expected_materialized_objects_sha256",
+        ):
+            digest = value.get(field)
+            if (
+                not isinstance(digest, str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+            ):
+                raise PrerequisiteError(
+                    f"source successor {field} is invalid"
+                )
+        if (
+            paths != sorted(set(paths))
+            or "refs" not in paths
+            or value.get("raw_ref_inventory_sha256")
+            != _canonical_digest(raw)
+            or auxiliary_paths != sorted(set(auxiliary_paths))
+            or counts["expected_materialized_object_count"]
+            != counts["baseline_only_object_count"]
+            + counts["target_reachable_object_count"]
+            or counts["expected_materialized_object_count"]
+            < counts["baseline_semantic_object_count"]
+        ):
+            raise PrerequisiteError(
+                "source successor repository transition baseline differs"
+            )
+        return dict(value)
+
+    def _validate_source_successor_authority(
+        self,
+        document: dict[str, object],
+        raw_digest: str,
+        *,
+        root_authority: dict[str, object],
+        root_digest: str,
+        root_journal: dict[str, str],
+        target_sha: str,
+        target_tree: str,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        authority_fields = {
+            "schema_version",
+            "status",
+            "authority_kind",
+            "policy",
+            "operation_id",
+            "source_sha",
+            "source_tree",
+            "predecessor_source_sha",
+            "predecessor_source_tree",
+            "predecessor_authority_sha256",
+            "predecessor_marker_sha256",
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+            "plan_sha256",
+            "source_successor_impact_sha256",
+            "files_sha256",
+            "changed_paths",
+            "changed_paths_sha256",
+            "delivery_gate",
+            "delivery_gate_sha256",
+            "verifier_agreement_sha256",
+            "production_source_trust_sha256",
+            "production_repository_transition_sha256",
+            "plan",
+            "completed_at",
+        }
+        plan_fields = {
+            "schema_version",
+            "authority_kind",
+            "policy",
+            "operation_id",
+            "source_sha",
+            "source_tree",
+            "source_readiness",
+            "source_readiness_sha256",
+            "delivery_gate",
+            "delivery_gate_sha256",
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+            "production_source_trust_sha256",
+            "production_repository_transition",
+            "production_repository_transition_sha256",
+            "production_source",
+            "predecessor",
+            "marker",
+            "verifier_agreement",
+            "files",
+            "files_sha256",
+            "changed_paths",
+            "changed_paths_sha256",
+            "authority_publication",
+            "source_successor_impact",
+            "source_successor_impact_sha256",
+            "mutations",
+        }
+        plan = document.get("plan")
+        operation_id = str(document.get("operation_id", ""))
+        if (
+            set(document) != authority_fields
+            or raw_digest
+            != _digest(_canonical_bytes(document) + b"\n")
+            or not _has_exact_schema_version(document, 1)
+            or document.get("status") != "completed"
+            or document.get("authority_kind")
+            != SOURCE_SUCCESSOR_AUTHORITY_KIND
+            or document.get("policy") != SOURCE_SUCCESSOR_POLICY
+            or SOURCE_SUCCESSOR_OPERATION_RE.fullmatch(operation_id) is None
+            or not isinstance(plan, dict)
+            or set(plan) != plan_fields
+            or not _has_exact_schema_version(plan, 1)
+            or document.get("plan_sha256") != _canonical_digest(plan)
+            or plan.get("operation_id") != operation_id
+            or plan.get("authority_kind")
+            != SOURCE_SUCCESSOR_AUTHORITY_KIND
+            or plan.get("policy") != SOURCE_SUCCESSOR_POLICY
+        ):
+            raise PrerequisiteError(
+                "source successor authority has an invalid shape"
+            )
+        if _parse_canonical_utc_timestamp(document.get("completed_at")) is None:
+            raise PrerequisiteError(
+                "source successor authority completion time is invalid"
+            )
+        for field in (
+            "source_sha",
+            "source_tree",
+            "predecessor_source_sha",
+            "predecessor_source_tree",
+        ):
+            value = document.get(field)
+            if not isinstance(value, str) or SHA_RE.fullmatch(value) is None:
+                raise PrerequisiteError(
+                    "source successor authority identity is invalid"
+                )
+        for field in (
+            "predecessor_authority_sha256",
+            "predecessor_marker_sha256",
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+            "plan_sha256",
+            "source_successor_impact_sha256",
+            "files_sha256",
+            "changed_paths_sha256",
+            "delivery_gate_sha256",
+            "verifier_agreement_sha256",
+            "production_source_trust_sha256",
+            "production_repository_transition_sha256",
+        ):
+            value = document.get(field)
+            if (
+                not isinstance(value, str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
+            ):
+                raise PrerequisiteError(
+                    "source successor authority digest is invalid"
+                )
+        predecessor = plan.get("predecessor")
+        marker = plan.get("marker")
+        production = plan.get("production_source")
+        delivery = plan.get("delivery_gate")
+        ci = delivery.get("ci") if isinstance(delivery, dict) else None
+        changed_paths = plan.get("changed_paths")
+        files = self._source_successor_file_records(plan.get("files"))
+        if (
+            not isinstance(delivery, dict)
+            or set(delivery) != {"remote_main", "ci"}
+            or delivery.get("remote_main") != target_sha
+            or not isinstance(ci, dict)
+            or set(ci)
+            != {
+                "workflow_run_id",
+                "run_attempt",
+                "head_sha",
+                "head_branch",
+                "event",
+                "path",
+                "conclusion",
+                "required_jobs",
+            }
+            or type(ci.get("workflow_run_id")) is not int
+            or ci["workflow_run_id"] <= 0
+            or type(ci.get("run_attempt")) is not int
+            or ci["run_attempt"] <= 0
+            or ci.get("head_sha") != target_sha
+            or ci.get("head_branch") != "main"
+            or ci.get("event") != "push"
+            or ci.get("path") != ".github/workflows/ci.yml"
+            or ci.get("conclusion") != "success"
+            or not isinstance(ci.get("required_jobs"), list)
+            or not ci["required_jobs"]
+            or ci["required_jobs"] != sorted(set(ci["required_jobs"]))
+            or any(
+                not isinstance(name, str) or not name
+                for name in ci["required_jobs"]
+            )
+        ):
+            raise PrerequisiteError(
+                "source successor delivery authority is invalid"
+            )
+        publication = self._source_successor_publication_plan(
+            operation_id,
+            self.runtime_root / "state",
+        )
+        repository_transition = (
+            self._validate_source_successor_repository_transition(
+                plan.get("production_repository_transition"),
+                production_sha=str(
+                    root_authority.get("production_source_sha", "")
+                ),
+                production_tree=str(
+                    root_authority.get("production_source_tree", "")
+                ),
+                target_sha=target_sha,
+                target_tree=target_tree,
+                baseline_trust_sha256=str(
+                    plan.get("production_source_trust_sha256", "")
+                ),
+            )
+        )
+        transition_logical_refs = {
+            str(record["name"]): str(record["object_sha"])
+            for record in repository_transition["logical_refs"]
+        }
+        expected_predecessor = {
+            "authority_kind": root_authority.get("authority_kind"),
+            "operation_id": root_authority.get("operation_id"),
+            "source_sha": root_authority.get("source_sha"),
+            "source_tree": root_authority.get("source_tree"),
+            "authority_sha256": root_digest,
+            "plan_sha256": root_authority.get("plan_sha256"),
+            "permission_marker_sha256": root_authority.get(
+                "permission_marker_sha256"
+            ),
+            "permission_evidence_sha256": root_authority.get(
+                "permission_evidence_sha256"
+            ),
+            "permission_inventory_sha256": root_authority.get(
+                "permission_inventory_sha256"
+            ),
+            "original_permissions_sha256": root_authority.get(
+                "original_permissions_sha256"
+            ),
+            "hardened_permissions_sha256": root_authority.get(
+                "hardened_permissions_sha256"
+            ),
+            "completed_journal_sha256": root_journal.get(
+                "completed_journal_sha256"
+            ),
+            "source_trust_sha256": root_journal.get(
+                "source_trust_sha256"
+            ),
+        }
+        expected_marker = {
+            "path": str(self.permission_marker_path),
+            "raw_sha256": root_authority.get("permission_marker_sha256"),
+            "evidence_sha256": root_authority.get(
+                "permission_evidence_sha256"
+            ),
+            "inventory_sha256": root_authority.get(
+                "permission_inventory_sha256"
+            ),
+            "original_permissions_sha256": root_authority.get(
+                "original_permissions_sha256"
+            ),
+            "hardened_permissions_sha256": root_authority.get(
+                "hardened_permissions_sha256"
+            ),
+        }
+        records_by_path = {str(record["path"]): record for record in files}
+        expected_verifier = {
+            "schema_version": 1,
+            "policy": SOURCE_SUCCESSOR_VERIFIER_POLICY,
+            "candidate_execution": "forbidden-before-authority",
+            "predecessor_source_sha": root_authority.get("source_sha"),
+            "predecessor_source_tree": root_authority.get("source_tree"),
+            "bootstrap": records_by_path["scripts/bootstrap_pull_deploy.py"],
+            "git_source_trust": records_by_path["scripts/git_source_trust.py"],
+            "ci_contract": records_by_path["scripts/bridge_deploy_core.py"],
+            "required_jobs": ci["required_jobs"],
+            "required_jobs_sha256": _canonical_digest(ci["required_jobs"]),
+        }
+        expected_impact = {
+            "schema_version": 1,
+            "policy": SOURCE_SUCCESSOR_IMPACT_POLICY,
+            "predecessor_authority_sha256": root_digest,
+            "predecessor_marker_sha256": root_authority.get(
+                "permission_marker_sha256"
+            ),
+            "production_source_trust_sha256": plan.get(
+                "production_source_trust_sha256"
+            ),
+            "production_repository_transition_sha256": plan.get(
+                "production_repository_transition_sha256"
+            ),
+            "target": {
+                "source_sha": target_sha,
+                "source_tree": target_tree,
+            },
+            "files": files,
+            "files_sha256": _canonical_digest(files),
+            "changed_paths": list(SOURCE_SUCCESSOR_ALLOWED_CHANGED_BLOBS),
+            "changed_paths_sha256": _canonical_digest(
+                list(SOURCE_SUCCESSOR_ALLOWED_CHANGED_BLOBS)
+            ),
+            "authority_publication": publication,
+            "mutations": SOURCE_SUCCESSOR_MUTATIONS,
+        }
+        if (
+            predecessor != expected_predecessor
+            or marker != expected_marker
+            or document.get("source_sha") != target_sha
+            or document.get("source_tree") != target_tree
+            or document.get("predecessor_source_sha")
+            != root_authority.get("source_sha")
+            or document.get("predecessor_source_tree")
+            != root_authority.get("source_tree")
+            or document.get("predecessor_authority_sha256") != root_digest
+            or document.get("predecessor_marker_sha256")
+            != root_authority.get("permission_marker_sha256")
+            or plan.get("source_sha") != target_sha
+            or plan.get("source_tree") != target_tree
+            or plan.get("files_sha256") != _canonical_digest(files)
+            or document.get("files_sha256") != plan.get("files_sha256")
+            or changed_paths != list(SOURCE_SUCCESSOR_ALLOWED_CHANGED_BLOBS)
+            or plan.get("changed_paths_sha256")
+            != _canonical_digest(changed_paths)
+            or document.get("changed_paths") != changed_paths
+            or document.get("changed_paths_sha256")
+            != plan.get("changed_paths_sha256")
+            or not isinstance(delivery, dict)
+            or set(delivery) != {"remote_main", "ci"}
+            or delivery.get("remote_main") != target_sha
+            or not isinstance(ci, dict)
+            or set(ci)
+            != {
+                "workflow_run_id",
+                "run_attempt",
+                "head_sha",
+                "head_branch",
+                "event",
+                "path",
+                "conclusion",
+                "required_jobs",
+            }
+            or not isinstance(ci.get("workflow_run_id"), int)
+            or isinstance(ci.get("workflow_run_id"), bool)
+            or ci["workflow_run_id"] <= 0
+            or not isinstance(ci.get("run_attempt"), int)
+            or isinstance(ci.get("run_attempt"), bool)
+            or ci["run_attempt"] <= 0
+            or ci.get("head_sha") != target_sha
+            or ci.get("head_branch") != "main"
+            or ci.get("event") != "push"
+            or ci.get("path") != ".github/workflows/ci.yml"
+            or ci.get("conclusion") != "success"
+            or not isinstance(ci.get("required_jobs"), list)
+            or not ci["required_jobs"]
+            or ci["required_jobs"] != sorted(set(ci["required_jobs"]))
+            or any(
+                not isinstance(name, str) or not name
+                for name in ci["required_jobs"]
+            )
+            or plan.get("delivery_gate_sha256")
+            != _canonical_digest(delivery)
+            or document.get("delivery_gate") != delivery
+            or document.get("delivery_gate_sha256")
+            != plan.get("delivery_gate_sha256")
+            or document.get("source_successor_impact_sha256")
+            != plan.get("source_successor_impact_sha256")
+            or document.get("production_source_trust_sha256")
+            != plan.get("production_source_trust_sha256")
+            or transition_logical_refs.get(
+                SOURCE_SUCCESSOR_DEPLOY_REMOTE_REF
+            )
+            != root_authority.get("source_sha")
+            or plan.get("production_repository_transition_sha256")
+            != _canonical_digest(repository_transition)
+            or document.get("production_repository_transition_sha256")
+            != plan.get("production_repository_transition_sha256")
+            or plan.get("source_successor_impact") != expected_impact
+            or plan.get("source_successor_impact_sha256")
+            != _canonical_digest(expected_impact)
+            or plan.get("verifier_agreement") != expected_verifier
+            or document.get("verifier_agreement_sha256")
+            != _canonical_digest(expected_verifier)
+            or document.get("adopted_deployment_sha256")
+            != root_authority.get("adopted_deployment_sha256")
+            or document.get("bootstrap_control_sha256")
+            != root_authority.get("bootstrap_control_sha256")
+            or document.get("adopted_prerequisites_sha256")
+            != root_authority.get("adopted_prerequisites_sha256")
+            or plan.get("adopted_deployment_sha256")
+            != document.get("adopted_deployment_sha256")
+            or plan.get("bootstrap_control_sha256")
+            != document.get("bootstrap_control_sha256")
+            or plan.get("adopted_prerequisites_sha256")
+            != document.get("adopted_prerequisites_sha256")
+            or not isinstance(production, dict)
+            or production
+            != {
+                "source_sha": root_authority.get("production_source_sha"),
+                "source_tree": root_authority.get("production_source_tree"),
+            }
+            or plan.get("mutations") != SOURCE_SUCCESSOR_MUTATIONS
+            or plan.get("authority_publication") != publication
+        ):
+            raise PrerequisiteError(
+                "source successor authority differs from its root or target"
+            )
+        readiness = _validate_source_readiness(
+            plan.get("source_readiness"),
+            source_root=self.source_root,
+            source_sha=target_sha,
+            source_tree=target_tree,
+        )
+        if plan.get("source_readiness_sha256") != _canonical_digest(readiness):
+            raise PrerequisiteError(
+                "source successor readiness digest differs"
+            )
+        # Recompute every old/new Git identity from the exact target clone.
+        for record in files:
+            relative = str(record["path"])
+            for label, commit in (
+                ("predecessor", str(root_authority["source_sha"])),
+                ("target", target_sha),
+            ):
+                raw = _run_git(
+                    self.source_root,
+                    "ls-tree",
+                    commit,
+                    "--",
+                    relative,
+                ).decode().strip()
+                match = re.fullmatch(
+                    r"([0-7]{6}) (blob) ([0-9a-f]{40})\t(.+)",
+                    raw,
+                )
+                payload = _git_object_blob(
+                    self.source_root,
+                    commit,
+                    relative,
+                )
+                identity = record[label]
+                if (
+                    match is None
+                    or match.group(4) != relative
+                    or identity
+                    != {
+                        "object_type": match.group(2),
+                        "mode": match.group(1),
+                        "blob_sha": match.group(3),
+                        "sha256": _digest(payload),
+                    }
+                ):
+                    raise PrerequisiteError(
+                        "source successor Git blob differs from its manifest"
+                    )
+        compact: dict[str, object] = {
+            "schema_version": 1,
+            "authority_kind": SOURCE_SUCCESSOR_AUTHORITY_KIND,
+            "operation_id": operation_id,
+            "predecessor_authority_sha256": root_digest,
+            "predecessor_source_sha": root_authority["source_sha"],
+            "predecessor_source_tree": root_authority["source_tree"],
+            "predecessor_marker_sha256": root_authority[
+                "permission_marker_sha256"
+            ],
+            "target_source_sha": target_sha,
+            "target_source_tree": target_tree,
+            "production_source_sha": root_authority[
+                "production_source_sha"
+            ],
+            "production_source_tree": root_authority[
+                "production_source_tree"
+            ],
+            "adopted_deployment_sha256": document[
+                "adopted_deployment_sha256"
+            ],
+            "bootstrap_control_sha256": document[
+                "bootstrap_control_sha256"
+            ],
+            "adopted_prerequisites_sha256": document[
+                "adopted_prerequisites_sha256"
+            ],
+            "plan_sha256": document["plan_sha256"],
+            "source_successor_impact_sha256": document[
+                "source_successor_impact_sha256"
+            ],
+            "source_trust_sha256": document[
+                "production_source_trust_sha256"
+            ],
+            "production_repository_transition": repository_transition,
+            "production_repository_transition_sha256": document[
+                "production_repository_transition_sha256"
+            ],
+            "delivery_gate": delivery,
+            "delivery_gate_sha256": document["delivery_gate_sha256"],
+            "fixed_files": files,
+            "fixed_files_sha256": document["files_sha256"],
+            "changed_files": changed_paths,
+            "changed_files_sha256": document[
+                "changed_paths_sha256"
+            ],
+            "completed_at": document["completed_at"],
+            "authority_file_sha256": raw_digest,
+        }
+        compact["identity_sha256"] = _canonical_digest(compact)
+        return files, compact
+
+    def _read_source_successor_authority(
+        self,
+    ) -> tuple[dict[str, object], str, dict[str, object]]:
+        state_fd = self._pinned_directory_fd(self.runtime_root / "state")
+        authority = (
+            _load_json_with_digest(self.runtime_root / SOURCE_SUCCESSOR_AUTHORITY_PATH)
+            if state_fd is None
+            else _load_json_with_digest_at(
+                state_fd,
+                SOURCE_SUCCESSOR_AUTHORITY_PATH.name,
+                maximum_bytes=SOURCE_SUCCESSOR_JSON_MAX_BYTES,
+            )
+        )
+        entries = self._source_successor_lineage_entries()
+        if entries != sorted(
+            [
+                SOURCE_SUCCESSOR_AUTHORITY_PATH.name,
+                SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY.name,
+            ]
+        ):
+            raise PrerequisiteError(
+                "source successor lineage contains publication residue"
+            )
+        transaction_root = self.runtime_root / SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY
+        transaction_fd = _open_private_directory(transaction_root)
+        try:
+            names = sorted(os.listdir(transaction_fd))
+            document = authority[0]
+            operation_id = str(document.get("operation_id", ""))
+            if names != [f"{operation_id}.json"]:
+                raise PrerequisiteError(
+                    "source successor journal lineage is incomplete"
+                )
+            journal, journal_digest = _load_json_with_digest_at(
+                transaction_fd,
+                names[0],
+                maximum_bytes=SOURCE_SUCCESSOR_JSON_MAX_BYTES,
+            )
+            journal_fields = {
+                "schema_version",
+                "status",
+                "phase",
+                "operation_id",
+                "plan",
+                "plan_sha256",
+                "source_successor_impact_sha256",
+                "production_source_trust_sha256",
+                "created_at",
+                "completed_at",
+                "aborted_at",
+            }
+            created_at = _parse_canonical_utc_timestamp(
+                journal.get("created_at")
+            )
+            completed_at = _parse_canonical_utc_timestamp(
+                journal.get("completed_at")
+            )
+            authority_completed_at = _parse_canonical_utc_timestamp(
+                document.get("completed_at")
+            )
+            if (
+                set(journal) != journal_fields
+                or journal_digest
+                != _digest(_canonical_bytes(journal) + b"\n")
+                or not _has_exact_schema_version(journal, 1)
+                or journal.get("operation_id") != operation_id
+                or journal.get("status") != "completed"
+                or journal.get("phase") != "completed"
+                or journal.get("plan") != document.get("plan")
+                or journal.get("plan_sha256")
+                != document.get("plan_sha256")
+                or journal.get("source_successor_impact_sha256")
+                != document.get("source_successor_impact_sha256")
+                or journal.get("production_source_trust_sha256")
+                != document.get("production_source_trust_sha256")
+                or journal.get("completed_at")
+                != document.get("completed_at")
+                or created_at is None
+                or completed_at is None
+                or authority_completed_at is None
+                or completed_at != authority_completed_at
+                or created_at > completed_at
+                or journal.get("aborted_at") is not None
+            ):
+                raise PrerequisiteError(
+                    "source successor completed journal differs"
+                )
+        finally:
+            os.close(transaction_fd)
+        journal_snapshot: dict[str, object] = {
+            "entries": names,
+            "raw_sha256": journal_digest,
+        }
+        return authority[0], authority[1], journal_snapshot
 
     def _git_permission_successor(
         self,
@@ -5380,6 +6712,9 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
         *,
         target_sha: str,
         target_tree: str,
+        root_journal: dict[str, str] | None = None,
+        source_successor_authority: dict[str, object] | None = None,
+        source_successor_digest: str | None = None,
     ) -> dict[str, object]:
         plan = authority.get("plan")
         authority_sha = authority.get("source_sha")
@@ -5426,6 +6761,52 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
                 raise PrerequisiteError(
                     "adopted Git permission source is not a target ancestor"
                 ) from exc
+        if source_successor_authority is not None:
+            if (
+                not isinstance(root_journal, dict)
+                or set(root_journal)
+                != {
+                    "completed_journal_sha256",
+                    "source_trust_sha256",
+                }
+                or not isinstance(source_successor_digest, str)
+                or re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    source_successor_digest,
+                )
+                is None
+            ):
+                raise PrerequisiteError(
+                    "source successor raw authority digest is invalid"
+                )
+            files, compact = self._validate_source_successor_authority(
+                source_successor_authority,
+                source_successor_digest,
+                root_authority=authority,
+                root_digest=authority_digest,
+                root_journal=root_journal,
+                target_sha=target_sha,
+                target_tree=target_tree,
+            )
+            body_v2: dict[str, object] = {
+                "schema_version": 2,
+                "policy": "nexpoly-adopted-git-permission-successor-v2",
+                "mode": "protected-main-ci-exact-target",
+                "root_authority": {
+                    "source_sha": authority_sha,
+                    "source_tree": authority_tree,
+                    "raw_sha256": authority_digest,
+                },
+                "source_successor_authority": compact,
+                "target": {
+                    "source_sha": target_sha,
+                    "source_tree": target_tree,
+                },
+                "files": files,
+                "files_sha256": _canonical_digest(files),
+            }
+            body_v2["identity_sha256"] = _canonical_digest(body_v2)
+            return body_v2
         files: list[dict[str, str]] = []
         for relative in UNIT_PERMISSION_SUCCESSOR_BLOBS:
             authority_payload = _run_git(
@@ -5470,7 +6851,6 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
         source_sha: str,
         source_tree: str,
     ) -> dict[str, object]:
-        self._validate_prepare_abort_gate()
         context = self._adoption_permission_context(
             permit_prepared_abort=True
         )
@@ -5480,7 +6860,7 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             raise PrerequisiteError(
                 "adopted Git permission authority changed while reading"
             )
-        authority, authority_digest = first
+        authority, authority_digest, root_journal = first
         if (
             authority.get("adopted_deployment_sha256")
             != context["adopted_deployment_sha256"]
@@ -5516,16 +6896,42 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             raise PrerequisiteError(
                 "adopted Git permission evidence differs"
             )
-        return {
+        lineage_entries = self._source_successor_lineage_entries()
+        source_successor: (
+            tuple[dict[str, object], str, dict[str, object]] | None
+        ) = None
+        if lineage_entries:
+            source_first = self._read_source_successor_authority()
+            source_second = self._read_source_successor_authority()
+            if source_first != source_second:
+                raise PrerequisiteError(
+                    "source successor authority changed while reading"
+                )
+            source_successor = source_first
+        successor = self._git_permission_successor(
+            authority,
+            authority_digest,
+            target_sha=source_sha,
+            target_tree=source_tree,
+            root_journal=root_journal,
+            source_successor_authority=(
+                source_successor[0] if source_successor is not None else None
+            ),
+            source_successor_digest=(
+                source_successor[1] if source_successor is not None else None
+            ),
+        )
+        self._validate_prepare_abort_gate()
+        result: dict[str, object] = {
             **context,
             "adopted_git_permissions_sha256": authority_digest,
-            "git_permission_successor": self._git_permission_successor(
-                authority,
-                authority_digest,
-                target_sha=source_sha,
-                target_tree=source_tree,
-            ),
+            "git_permission_successor": successor,
         }
+        if source_successor is not None:
+            result["adopted_git_permission_source_successor_sha256"] = (
+                source_successor[1]
+            )
+        return result
 
     @staticmethod
     def _prepare_abort_digest(value: object, label: str) -> str:
@@ -6129,11 +7535,37 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
     ) -> dict[str, object]:
         source_sha = _require_sha(source_sha)
         operation_id = _require_unit_permission_operation_id(operation_id)
-        source_tree, readiness, delivery = self._source_authority(source_sha)
+        # The fixed successor authority must be validated before the target
+        # bootstrap contract is allowed to execute for the ordinary unit
+        # transaction.  The standalone publisher itself never executes it.
+        source_tree = _validate_source_checkout(self.source_root, source_sha)
         context = self._unit_adoption_context(
             source_sha=source_sha,
             source_tree=source_tree,
         )
+        verified_tree, readiness, delivery = self._source_authority(source_sha)
+        if verified_tree != source_tree:
+            raise PrerequisiteError(
+                "unit permission target tree changed after successor validation"
+            )
+        successor = context.get("git_permission_successor")
+        successor_compact = (
+            successor.get("source_successor_authority")
+            if isinstance(successor, dict)
+            else None
+        )
+        if (
+            "adopted_git_permission_source_successor_sha256" in context
+            and (
+                not isinstance(successor_compact, dict)
+                or successor_compact.get("delivery_gate") != delivery
+                or successor_compact.get("source_trust_sha256")
+                != self._production_source_trust(context)
+            )
+        ):
+            raise PrerequisiteError(
+                "unit permission source evidence differs from successor"
+            )
         authority_publication = self._unit_authority_publication_plan(
             operation_id
         )
@@ -6163,8 +7595,13 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             units,
             authority_publication,
         )
+        schema_version = (
+            2
+            if "adopted_git_permission_source_successor_sha256" in context
+            else 1
+        )
         return {
-            "schema_version": 1,
+            "schema_version": schema_version,
             "authority_kind": UNIT_PERMISSION_AUTHORITY_KIND,
             "operation_id": operation_id,
             "source_sha": source_sha,
@@ -6555,25 +7992,283 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
                 raise
         return directory_fd
 
-    def _load_unit_transaction(
-        self,
-        operation_id: str,
-    ) -> dict[str, object] | None:
-        operation_id = _require_unit_permission_operation_id(operation_id)
-        directory_fd = self._unit_transaction_directory_fd(create=False)
-        if directory_fd is None:
-            return None
-        try:
-            name = f"{operation_id}.json"
-            if not _entry_exists_at(directory_fd, name):
-                return None
-            document = _load_json_at(
-                directory_fd,
-                name,
-                maximum_bytes=UNIT_PERMISSION_JSON_MAX_BYTES,
+    @staticmethod
+    def _unit_plan_schema_fields(schema_version: int) -> set[str]:
+        fields = {
+            "schema_version",
+            "authority_kind",
+            "operation_id",
+            "source_sha",
+            "source_tree",
+            "source_readiness",
+            "source_readiness_sha256",
+            "delivery_gate",
+            "delivery_gate_sha256",
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+            "adopted_prerequisites_plan_sha256",
+            "production_source",
+            "adopted_git_permissions_sha256",
+            "git_permission_successor",
+            "units",
+            "authority_publication",
+            "unit_permission_impact_sha256",
+            "mutations",
+        }
+        if schema_version == 2:
+            fields.add(
+                "adopted_git_permission_source_successor_sha256"
             )
-        finally:
-            os.close(directory_fd)
+        return fields
+
+    @staticmethod
+    def _is_sha256_digest(value: object) -> bool:
+        return (
+            isinstance(value, str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
+        )
+
+    def _validate_unit_journal_successor_schema(
+        self,
+        plan: dict[str, object],
+        schema_version: int,
+    ) -> None:
+        """Validate the self-contained successor sealed in any journal."""
+
+        successor = plan.get("git_permission_successor")
+        if (
+            set(plan) != self._unit_plan_schema_fields(schema_version)
+            or not isinstance(successor, dict)
+            or not _has_exact_schema_version(successor, schema_version)
+        ):
+            raise PrerequisiteError(
+                "unit permission hardening transaction is invalid"
+            )
+        identity = successor.get("identity_sha256")
+        successor_body = dict(successor)
+        successor_body.pop("identity_sha256", None)
+        target = successor.get("target")
+        files = successor.get("files")
+        if (
+            not self._is_sha256_digest(identity)
+            or identity != _canonical_digest(successor_body)
+            or not isinstance(target, dict)
+            or set(target) != {"source_sha", "source_tree"}
+            or target.get("source_sha") != plan.get("source_sha")
+            or target.get("source_tree") != plan.get("source_tree")
+            or not isinstance(files, list)
+            or successor.get("files_sha256") != _canonical_digest(files)
+        ):
+            raise PrerequisiteError(
+                "unit permission hardening transaction is invalid"
+            )
+        if schema_version == 1:
+            if (
+                set(successor)
+                != {
+                    "schema_version",
+                    "policy",
+                    "mode",
+                    "authority",
+                    "target",
+                    "files",
+                    "files_sha256",
+                    "identity_sha256",
+                }
+                or successor.get("policy")
+                != "nexpoly-adopted-git-permission-successor-v1"
+                or successor.get("mode")
+                not in {"exact-source", "ancestor-byte-identical"}
+                or "adopted_git_permission_source_successor_sha256" in plan
+            ):
+                raise PrerequisiteError(
+                    "unit permission hardening transaction is invalid"
+                )
+            authority = successor.get("authority")
+            if (
+                not isinstance(authority, dict)
+                or set(authority)
+                != {"source_sha", "source_tree", "raw_sha256"}
+                or authority.get("raw_sha256")
+                != plan.get("adopted_git_permissions_sha256")
+                or len(files) != len(UNIT_PERMISSION_SUCCESSOR_BLOBS)
+            ):
+                raise PrerequisiteError(
+                    "unit permission hardening transaction is invalid"
+                )
+            for record, expected_path in zip(
+                files,
+                UNIT_PERMISSION_SUCCESSOR_BLOBS,
+                strict=True,
+            ):
+                if (
+                    not isinstance(record, dict)
+                    or set(record) != {"path", "sha256"}
+                    or record.get("path") != expected_path
+                    or not self._is_sha256_digest(record.get("sha256"))
+                ):
+                    raise PrerequisiteError(
+                        "unit permission hardening transaction is invalid"
+                    )
+            return
+
+        if (
+            set(successor)
+            != {
+                "schema_version",
+                "policy",
+                "mode",
+                "root_authority",
+                "source_successor_authority",
+                "target",
+                "files",
+                "files_sha256",
+                "identity_sha256",
+            }
+            or successor.get("policy")
+            != "nexpoly-adopted-git-permission-successor-v2"
+            or successor.get("mode") != "protected-main-ci-exact-target"
+        ):
+            raise PrerequisiteError(
+                "unit permission hardening transaction is invalid"
+            )
+        successor_digest = plan.get(
+            "adopted_git_permission_source_successor_sha256"
+        )
+        root = successor.get("root_authority")
+        compact = successor.get("source_successor_authority")
+        compact_fields = {
+            "schema_version",
+            "authority_kind",
+            "operation_id",
+            "predecessor_authority_sha256",
+            "predecessor_source_sha",
+            "predecessor_source_tree",
+            "predecessor_marker_sha256",
+            "target_source_sha",
+            "target_source_tree",
+            "production_source_sha",
+            "production_source_tree",
+            "adopted_deployment_sha256",
+            "bootstrap_control_sha256",
+            "adopted_prerequisites_sha256",
+            "plan_sha256",
+            "source_successor_impact_sha256",
+            "source_trust_sha256",
+            "production_repository_transition",
+            "production_repository_transition_sha256",
+            "delivery_gate",
+            "delivery_gate_sha256",
+            "fixed_files",
+            "fixed_files_sha256",
+            "changed_files",
+            "changed_files_sha256",
+            "completed_at",
+            "authority_file_sha256",
+            "identity_sha256",
+        }
+        if (
+            not self._is_sha256_digest(successor_digest)
+            or not isinstance(root, dict)
+            or set(root) != {"source_sha", "source_tree", "raw_sha256"}
+            or root.get("raw_sha256")
+            != plan.get("adopted_git_permissions_sha256")
+            or not isinstance(compact, dict)
+            or set(compact) != compact_fields
+            or not _has_exact_schema_version(compact, 1)
+            or compact.get("authority_kind")
+            != SOURCE_SUCCESSOR_AUTHORITY_KIND
+            or compact.get("authority_file_sha256") != successor_digest
+            or compact.get("predecessor_authority_sha256")
+            != root.get("raw_sha256")
+            or compact.get("predecessor_source_sha")
+            != root.get("source_sha")
+            or compact.get("predecessor_source_tree")
+            != root.get("source_tree")
+            or compact.get("target_source_sha") != target.get("source_sha")
+            or compact.get("target_source_tree")
+            != target.get("source_tree")
+            or compact.get("delivery_gate") != plan.get("delivery_gate")
+            or compact.get("delivery_gate_sha256")
+            != plan.get("delivery_gate_sha256")
+            or compact.get("adopted_deployment_sha256")
+            != plan.get("adopted_deployment_sha256")
+            or compact.get("bootstrap_control_sha256")
+            != plan.get("bootstrap_control_sha256")
+            or compact.get("adopted_prerequisites_sha256")
+            != plan.get("adopted_prerequisites_sha256")
+            or compact.get("production_repository_transition_sha256")
+            != _canonical_digest(
+                compact.get("production_repository_transition")
+            )
+        ):
+            raise PrerequisiteError(
+                "unit permission hardening transaction is invalid"
+            )
+        normalized_files = self._source_successor_file_records(files)
+        compact_identity = compact.get("identity_sha256")
+        compact_body = dict(compact)
+        compact_body.pop("identity_sha256", None)
+        production = plan.get("production_source")
+        if not isinstance(production, dict):
+            raise PrerequisiteError(
+                "unit permission hardening transaction is invalid"
+            )
+        repository_transition = (
+            self._validate_source_successor_repository_transition(
+                compact.get("production_repository_transition"),
+                production_sha=str(production.get("source_sha", "")),
+                production_tree=str(production.get("source_tree", "")),
+                target_sha=str(target.get("source_sha", "")),
+                target_tree=str(target.get("source_tree", "")),
+                baseline_trust_sha256=str(
+                    compact.get("source_trust_sha256", "")
+                ),
+            )
+        )
+        transition_logical_refs = {
+            str(record["name"]): str(record["object_sha"])
+            for record in repository_transition["logical_refs"]
+        }
+        if (
+            files != normalized_files
+            or compact.get("fixed_files") != normalized_files
+            or compact.get("fixed_files_sha256")
+            != _canonical_digest(normalized_files)
+            or compact.get("changed_files")
+            != list(SOURCE_SUCCESSOR_ALLOWED_CHANGED_BLOBS)
+            or compact.get("changed_files_sha256")
+            != _canonical_digest(
+                list(SOURCE_SUCCESSOR_ALLOWED_CHANGED_BLOBS)
+            )
+            or not self._is_sha256_digest(compact_identity)
+            or compact_identity != _canonical_digest(compact_body)
+            or not self._is_sha256_digest(
+                compact.get("source_trust_sha256")
+            )
+            or _parse_canonical_utc_timestamp(compact.get("completed_at"))
+            is None
+            or compact.get("production_source_sha")
+            != production.get("source_sha")
+            or compact.get("production_source_tree")
+            != production.get("source_tree")
+            or transition_logical_refs.get(
+                SOURCE_SUCCESSOR_DEPLOY_REMOTE_REF
+            )
+            != root.get("source_sha")
+        ):
+            raise PrerequisiteError(
+                "unit permission hardening transaction is invalid"
+            )
+
+    def _validate_unit_transaction_document(
+        self,
+        document: dict[str, object],
+        operation_id: str,
+    ) -> dict[str, object]:
+        """Validate one already-read journal without reopening its path."""
+
         fields = {
             "schema_version",
             "status",
@@ -6592,18 +8287,25 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             "completed_at",
             "aborted_at",
         }
+        schema_version = document.get("schema_version")
+        plan = document.get("plan")
+        plan_schema = (
+            plan.get("schema_version") if isinstance(plan, dict) else None
+        )
         if (
             set(document) != fields
-            or not _has_exact_schema_version(document, 1)
+            or type(schema_version) is not int
+            or schema_version not in {1, 2}
+            or type(plan_schema) is not int
+            or plan_schema != schema_version
             or document.get("operation_id") != operation_id
             or document.get("status")
             not in {"applying", "completed", "aborted"}
             or document.get("phase") not in UNIT_PERMISSION_TRANSACTION_PHASES
-            or not isinstance(document.get("plan"), dict)
-            or document.get("plan_sha256")
-            != _canonical_digest(document["plan"])
+            or not isinstance(plan, dict)
+            or document.get("plan_sha256") != _canonical_digest(plan)
             or document.get("unit_permission_impact_sha256")
-            != document["plan"].get("unit_permission_impact_sha256")
+            != plan.get("unit_permission_impact_sha256")
             or (
                 document["status"] == "completed"
                 and document["phase"] != "completed"
@@ -6620,6 +8322,10 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             raise PrerequisiteError(
                 "unit permission hardening transaction is invalid"
             )
+        self._validate_unit_journal_successor_schema(
+            plan,
+            schema_version,
+        )
         checkpoint = document.get("replacement_checkpoint")
         if checkpoint is not None and checkpoint not in {
             "backup-create-intent",
@@ -6645,14 +8351,37 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
                 "unit permission journal evidence is invalid"
             )
         source_trust = document.get("source_trust_sha256")
-        if source_trust is not None and (
-            not isinstance(source_trust, str)
-            or re.fullmatch(r"sha256:[0-9a-f]{64}", source_trust) is None
+        if source_trust is not None and not self._is_sha256_digest(
+            source_trust
         ):
             raise PrerequisiteError(
                 "unit permission source trust digest is invalid"
             )
         return document
+
+    def _load_unit_transaction(
+        self,
+        operation_id: str,
+    ) -> dict[str, object] | None:
+        operation_id = _require_unit_permission_operation_id(operation_id)
+        directory_fd = self._unit_transaction_directory_fd(create=False)
+        if directory_fd is None:
+            return None
+        try:
+            name = f"{operation_id}.json"
+            if not _entry_exists_at(directory_fd, name):
+                return None
+            document = _load_json_at(
+                directory_fd,
+                name,
+                maximum_bytes=UNIT_PERMISSION_JSON_MAX_BYTES,
+            )
+        finally:
+            os.close(directory_fd)
+        return self._validate_unit_transaction_document(
+            document,
+            operation_id,
+        )
 
     def _write_unit_transaction(self, document: dict[str, object]) -> None:
         if not self._pinned_directories:
@@ -6722,8 +8451,13 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             )
         )
         backup = authority.get("backup")
+        schema_version = authority.get("schema_version")
         if (
-            not _has_exact_schema_version(authority, 1)
+            type(schema_version) is not int
+            or schema_version not in {1, 2}
+            or not _has_exact_schema_version(
+                authority.get("plan"), schema_version
+            )
             or not _has_exact_schema_version(backup, 1)
             or not _has_exact_schema_version(
                 backup.get("owner") if isinstance(backup, dict) else None,
@@ -6795,10 +8529,15 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
                     name,
                     maximum_bytes=UNIT_PERMISSION_JSON_MAX_BYTES,
                 )
-                if not _has_exact_schema_version(document, 1):
+                try:
+                    document = self._validate_unit_transaction_document(
+                        document,
+                        other,
+                    )
+                except PrerequisiteError as exc:
                     raise PrerequisiteError(
                         "unit permission transaction inventory is invalid"
-                    )
+                    ) from exc
                 if (
                     other != operation_id
                     and document.get("status") == "applying"
@@ -6975,31 +8714,14 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
         *,
         durable: bool,
     ) -> list[dict[str, object]]:
-        expected_fields = {
-            "schema_version",
-            "authority_kind",
-            "operation_id",
-            "source_sha",
-            "source_tree",
-            "source_readiness",
-            "source_readiness_sha256",
-            "delivery_gate",
-            "delivery_gate_sha256",
-            "adopted_deployment_sha256",
-            "bootstrap_control_sha256",
-            "adopted_prerequisites_sha256",
-            "adopted_prerequisites_plan_sha256",
-            "production_source",
-            "adopted_git_permissions_sha256",
-            "git_permission_successor",
-            "units",
-            "authority_publication",
-            "unit_permission_impact_sha256",
-            "mutations",
-        }
+        schema_version = plan.get("schema_version")
+        if type(schema_version) is not int or schema_version not in {1, 2}:
+            raise PrerequisiteError(
+                "unit permission hardening plan schema changed"
+            )
+        expected_fields = self._unit_plan_schema_fields(schema_version)
         if (
             set(plan) != expected_fields
-            or not _has_exact_schema_version(plan, 1)
             or plan.get("authority_kind") != UNIT_PERMISSION_AUTHORITY_KIND
             or plan.get("operation_id") != operation_id
             or plan.get("source_sha") != source_sha
@@ -7023,31 +8745,63 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             raise PrerequisiteError(
                 "unit permission delivery authority is invalid"
             )
+        source_tree = _validate_source_checkout(self.source_root, source_sha)
+        context = self._unit_adoption_context(
+            source_sha=source_sha,
+            source_tree=source_tree,
+        )
         if durable:
-            source_tree, readiness, delivery = self._sealed_source_authority(
+            verified_tree, readiness, delivery = self._sealed_source_authority(
                 source_sha,
                 sealed_readiness=plan.get("source_readiness"),
                 sealed_delivery_gate=sealed_delivery,
             )
         else:
-            source_tree, readiness, delivery = self._source_authority(
+            verified_tree, readiness, delivery = self._source_authority(
                 source_sha,
                 sealed_delivery_gate=dict(sealed_delivery),
             )
-        context = self._unit_adoption_context(
-            source_sha=source_sha,
-            source_tree=source_tree,
-        )
         successor = plan.get("git_permission_successor")
+        successor_delivery = None
+        successor_source_trust = None
+        if isinstance(context.get("git_permission_successor"), dict):
+            compact_source = context["git_permission_successor"].get(
+                "source_successor_authority"
+            )
+            if isinstance(compact_source, dict):
+                successor_delivery = compact_source.get("delivery_gate")
+                successor_source_trust = compact_source.get(
+                    "source_trust_sha256"
+                )
+        production_source_trust = (
+            self._production_source_trust(plan)
+            if schema_version == 2
+            else None
+        )
         if (
-            plan.get("source_tree") != source_tree
+            verified_tree != source_tree
+            or plan.get("source_tree") != source_tree
             or plan.get("source_readiness") != readiness
             or plan.get("source_readiness_sha256")
             != _canonical_digest(readiness)
             or plan.get("delivery_gate") != delivery
             or plan.get("delivery_gate_sha256")
             != _canonical_digest(delivery)
-            or not _has_exact_schema_version(successor, 1)
+            or not _has_exact_schema_version(successor, schema_version)
+            or (
+                schema_version == 2
+                and "adopted_git_permission_source_successor_sha256"
+                not in context
+            )
+            or (schema_version == 2 and successor_delivery != delivery)
+            or (
+                schema_version == 2
+                and successor_source_trust != production_source_trust
+            )
+            or (
+                schema_version == 1
+                and self._source_successor_lineage_entries()
+            )
             or any(plan.get(field) != value for field, value in context.items())
         ):
             raise PrerequisiteError(
@@ -8470,8 +10224,14 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             raise PrerequisiteError(
                 "unit permission authority evidence is incomplete"
             )
-        return {
-            "schema_version": 1,
+        schema_version = int(plan["schema_version"])
+        root_successor = (
+            successor["root_authority"]
+            if schema_version == 2
+            else successor["authority"]
+        )
+        authority: dict[str, object] = {
+            "schema_version": schema_version,
             "status": "completed",
             "authority_kind": UNIT_PERMISSION_AUTHORITY_KIND,
             "operation_id": transaction["operation_id"],
@@ -8491,10 +10251,10 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             "adopted_git_permissions_sha256": plan[
                 "adopted_git_permissions_sha256"
             ],
-            "adopted_git_permission_source_sha": successor["authority"][
+            "adopted_git_permission_source_sha": root_successor[
                 "source_sha"
             ],
-            "adopted_git_permission_source_tree": successor["authority"][
+            "adopted_git_permission_source_tree": root_successor[
                 "source_tree"
             ],
             "plan_sha256": transaction["plan_sha256"],
@@ -8511,6 +10271,39 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             "plan": plan,
             "completed_at": transaction["completed_at"],
         }
+        if schema_version == 2:
+            authority[
+                "adopted_git_permission_source_successor_sha256"
+            ] = plan[
+                "adopted_git_permission_source_successor_sha256"
+            ]
+        return authority
+
+    @staticmethod
+    def _unit_source_successor_trust_digest(
+        plan: dict[str, object],
+    ) -> str | None:
+        if plan.get("schema_version") != 2:
+            return None
+        successor = plan.get("git_permission_successor")
+        compact = (
+            successor.get("source_successor_authority")
+            if isinstance(successor, dict)
+            else None
+        )
+        digest = (
+            compact.get("source_trust_sha256")
+            if isinstance(compact, dict)
+            else None
+        )
+        if (
+            not isinstance(digest, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+        ):
+            raise PrerequisiteError(
+                "unit source successor trust digest is invalid"
+            )
+        return digest
 
     def _revalidate_unit_commit_evidence(
         self,
@@ -8525,10 +10318,17 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             durable=True,
         )
         evidence = self._validate_final_units(plan, transaction)
+        source_trust = self._production_source_trust(plan)
+        successor_source_trust = self._unit_source_successor_trust_digest(
+            plan
+        )
         if (
             evidence != transaction.get("unit_evidence")
-            or self._production_source_trust(plan)
-            != transaction.get("source_trust_sha256")
+            or source_trust != transaction.get("source_trust_sha256")
+            or (
+                successor_source_trust is not None
+                and source_trust != successor_source_trust
+            )
         ):
             raise PrerequisiteError(
                 "unit permission commit evidence changed"
@@ -8594,7 +10394,7 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
                 self._assert_backup_operation_absent(operation_id)
                 self._assert_staging_operation_absent(operation_id)
                 transaction = {
-                    "schema_version": 1,
+                    "schema_version": locked_plan["schema_version"],
                     "status": "applying",
                     "phase": "intent",
                     "operation_id": operation_id,
@@ -8746,9 +10546,18 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
                     raise PrerequisiteError(
                         "unit permission evidence changed before source verification"
                     )
-                transaction["source_trust_sha256"] = (
-                    self._production_source_trust(plan)
+                source_trust = self._production_source_trust(plan)
+                successor_source_trust = (
+                    self._unit_source_successor_trust_digest(plan)
                 )
+                if (
+                    successor_source_trust is not None
+                    and source_trust != successor_source_trust
+                ):
+                    raise PrerequisiteError(
+                        "production source differs from successor authority"
+                    )
+                transaction["source_trust_sha256"] = source_trust
                 transaction["phase"] = "source-verified"
                 self._write_unit_transaction(transaction)
                 self.checkpoint("unit-permission-source-verified")
