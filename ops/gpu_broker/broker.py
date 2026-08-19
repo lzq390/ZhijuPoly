@@ -525,10 +525,15 @@ class HostGpuBroker:
                 self._next_wait_sequence += 1
                 self._waiters[stable_request_id] = waiter
                 self._persist_locked()
+            admission_attempt_pending = True
             try:
                 while True:
                     self._require_healthy_locked()
-                    self._reconcile_locked()
+                    self._reconcile_locked(
+                        preserve_expired_waiter_request_id=(
+                            stable_request_id if admission_attempt_pending else None
+                        )
+                    )
                     if self._waiters.get(stable_request_id) != waiter:
                         recovered = next(
                             (
@@ -580,6 +585,7 @@ class HostGpuBroker:
                                     )
                             self._condition.notify_all()
                             return lease
+                    admission_attempt_pending = False
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise BrokerError(
@@ -1466,9 +1472,15 @@ class HostGpuBroker:
             raise BrokerError("lease_owner_mismatch", "lease belongs to another process")
         return lease
 
-    def _reconcile_locked(self) -> None:
+    def _reconcile_locked(
+        self,
+        *,
+        preserve_expired_waiter_request_id: str | None = None,
+    ) -> None:
         changed = False
-        if self._expire_waiters_locked():
+        if self._expire_waiters_locked(
+            preserve_expired_request_id=preserve_expired_waiter_request_id
+        ):
             changed = True
         now = self._now()
         for lease_id, lease in list(self._leases.items()):
@@ -1495,7 +1507,11 @@ class HostGpuBroker:
             self._persist_locked()
             self._condition.notify_all()
 
-    def _expire_waiters_locked(self) -> bool:
+    def _expire_waiters_locked(
+        self,
+        *,
+        preserve_expired_request_id: str | None = None,
+    ) -> bool:
         changed = False
         now = self._now()
         for request_id, waiter in list(self._waiters.items()):
@@ -1504,7 +1520,12 @@ class HostGpuBroker:
                 process_start_ticks=waiter.owner_process_start_ticks,
                 boot_id=waiter.owner_boot_id,
             )
-            if waiter.expires_at <= now or not self._process_alive(owner):
+            owner_alive = self._process_alive(owner)
+            expired = (
+                waiter.expires_at <= now
+                and request_id != preserve_expired_request_id
+            )
+            if expired or not owner_alive:
                 self._waiters.pop(request_id, None)
                 changed = True
         return changed
