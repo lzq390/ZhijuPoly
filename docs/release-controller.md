@@ -130,16 +130,153 @@ Instead it deliberately produces the unchanged schema-v1 hardened marker at
 controller's generic verifier. The new target controller independently
 requires that marker and the adopted wrapper authority to bind each other and
 seals the compact permission projection together with the unit-permission
-authority in the schema-v3
-prerequisite target binding. Schema-v2 remains read compatibility for
-historical descriptor provenance only; a new raw-adoption descriptor cannot
-omit the unit authority. The controller repeats the full check during formal
-plan, prepare/resume, and apply pre-switch. Do not invoke
+authority in the historical schema-v3 prerequisite target binding.
+Schema-v2/schema-v3 remain read compatibility for historical descriptor
+provenance only; a new source-successor raw-adoption descriptor uses schema-v4
+and cannot omit any authority layer. The controller repeats the full check
+during formal plan, prepare/resume, and apply pre-switch. Do not invoke
 `git_source_trust.takeover_repository_permissions` directly, run
 `install_legacy_takeover_prerequisites.py`, synthesize the marker, or use
 manual `chmod`; none of those paths creates this authority.
 
+This successor merge is control-chain-only. Until the separately reviewed
+git-snapshot `plan`/`apply`/`restore` transaction and the
+installed `prepare` snapshot-authority gate
+are merged on the final protected-main target, this is a hard stop: operators
+must not run source-successor `apply`, unit-permission `apply`,
+or formal installed `prepare`.
+A source-successor `plan` may be used only for zero-write validation; its
+reviewed output must be discarded whenever protected `main` changes.
+Neither an operator waiver nor a manually copied `.git` directory satisfies
+this gate.
+
+The follow-up must cover every first-deployment Git mutation, from the first
+fetch through source switch and rollback. Any failed path that
+returns to the predecessor or begins a new operation must
+restore the entire verified pre-prepare `.git` snapshot before proceeding.
+Resetting `HEAD` or deleting individual refs is not sufficient to re-establish
+the sealed B/F/P state.
+
+Freeze protected `main` before starting the source-successor `plan`, and keep
+it frozen—with no merge, push, force-update, or branch automation—
+until the first deployment has durably written current-state v3. If `main`
+advances before any durable successor intent, discard the reviewed plan and
+create a fresh plan for the new tip; if the transaction is still abortable,
+use the confirmed abort before replanning. Once
+`authority-commit-intent` or the create-once authority is `completed`, any
+`main` advance is a permanent stop for this first-deployment path:
+do not publish a second successor authority or change the sealed target. Use a
+separately reviewed compatibility-recovery procedure.
+
+The commands below are future-state instructions, not current production
+authorization. Use them only after the snapshot transaction and installed
+gate have merged on the final target and the hard stop above is lifted.
+
+If the final reviewed first-deployment target changes a blob governed by that
+immutable root, publish the fixed source-successor authority with the separate
+standard-library-only tool before hardening the Worker unit:
+
+```bash
+source_successor_operation_id=adopt-git-successor-<utc-timestamp>
+
+./scripts/adopt_git_permission_source_successor.py plan \
+  --sha <full-main-sha> \
+  --operation-id "$source_successor_operation_id"
+
+./scripts/adopt_git_permission_source_successor.py apply \
+  --sha <full-main-sha> \
+  --operation-id "$source_successor_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-source-successor-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+The candidate bootstrap, Git-trust, and bridge CI-contract files are data, not
+publisher code. Only the frozen bootstrap and Git-trust verifiers from the old
+root authority execute; their required CI jobs are literal-sealed before the
+target check. The target `scripts/bridge_deploy_core.py` blob must remain
+byte-identical. The fixed 13-file manifest contains exactly the ten
+prerequisite install source paths plus `scripts/bootstrap_pull_deploy.py`,
+`scripts/git_source_trust.py`, and `scripts/bridge_deploy_core.py`; it is never
+populated by discovery. It seals Git type/mode/blob/content identity for every
+record, and the changed set must be exactly
+`scripts/bootstrap_pull_deploy.py` plus `scripts/git_source_trust.py`.
+
+The old completed journal's `source_trust_sha256` and the newly observed
+`production_source_trust_sha256` become
+`predecessor_source_trust_sha256` and `production_source_trust_sha256` in the
+successor plan; they are separate evidence and must not be compared for
+equality. Each must match its own exact evidence, even when a post-adoption
+remote tracking ref changed without changing production HEAD, tree, or
+worktree content.
+
+The successor authority also seals the only permitted repository transition.
+`B` is the adopted baseline: local `main` and
+`refs/remotes/nexpoly-deploy/main` are direct commit refs, the deploy ref names
+the predecessor authority, and no prepared ref exists. `F` is the fully
+materialized target with the deploy ref at the exact target and no prepared
+ref. `P(operation)` is `F` plus exactly
+`refs/nexpoly/prepared/<operation>=<target>`. A first plan accepts only `B` or
+`F`; target prepare, resume, and pre-switch validation accept only the current
+`P(operation)`. An abort may leave the harmless empty `refs/nexpoly` namespace,
+so a later plan may resume from `F`, but it may not retain another operation's
+prepared ref.
+
+The authority binds the stable checkout/config/index projection, exact
+baseline logical and raw refs, baseline auxiliary Git metadata, all baseline
+semantic objects, the exact target-reachable closure, and their expected set
+union. Post-fetch verification requires that semantic union exactly—neither a
+missing baseline dangling object nor an injected valid object is accepted.
+Physical object storage is limited to canonical loose objects, pack/index/rev
+sidecars, and supported commit-graph paths. Any `.lock`, `tmp_pack_*`, partial
+pack sidecar, noncanonical object path, packed-ref drift, symref substitution,
+or unexpected auxiliary file fails closed. `FETCH_HEAD` must be the one exact
+protected-main SSH fetch record. An existing deploy reflog must retain its
+exact sealed prefix; at most the exact single fast-forward append is accepted.
+The descriptor then seals the complete post-fetch trust, semantic, physical
+object-storage, logical/raw-ref, and auxiliary digests, and every resume or
+pre-switch proof must reproduce them byte-for-byte.
+
+A network failure may be retried with the same operation only when the
+repository proves as clean `B`, `F`, or the current `P(operation)` and no lock
+or temporary object remains. A host power loss during the old controller's
+fetch has a stricter stop condition: a broken ref, failed strict `fsck`, lock,
+temporary pack, truncated `FETCH_HEAD`, or non-prefix reflog change is not
+self-healed by another prepare, because the old controller rechecks repository
+identity before refetching. Do not delete individual files or rewrite refs by
+hand. Keep traffic unchanged, stop the release, and restore the entire
+`.git` directory from a separately verified pre-prepare owner-private snapshot
+or use a separately reviewed recovery procedure; then re-run plan/prepare with
+a new operation ID unless the original operation is independently proved to be
+the exact surviving `P(operation)`.
+
+The zero-write plan and separately confirmed source-successor impact bind the
+old raw authority/marker, adoption/bootstrap/prerequisite bytes, target
+SHA/tree, ancestry, full workflow run/attempt, fixed manifest, and create-once
+namespace. Apply writes only
+`state/adopted-git-permission-source-successor-transactions/<operation-id>.json`
+and the fixed mode-`0600`
+`state/adopted-git-permission-source-successor.json`; it does not alter source,
+permissions, units, services, containers, PostgreSQL, or credentials. Its
+journal advances `intent` → `predecessor-verified` → `source-verified` →
+`authority-commit-intent` → `completed`. Commit intent is forward-only. Before
+that boundary, abort requires the same two confirmations:
+
+```bash
+./scripts/adopt_git_permission_source_successor.py abort \
+  --sha <full-main-sha> \
+  --operation-id "$source_successor_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-source-successor-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+The controller permanently validates the complete old-root → source-successor
+→ unit-authority chain. Missing, malformed, partial, or changed successor
+lineage is fail-closed and never falls back to schema-v1 byte identity.
+
 The last one-time predecessor transaction hardens the adopted Worker unit:
+
+The Worker-unit commands remain prohibited until the snapshot hard stop is
+lifted.
 
 ```bash
 unit_permission_operation_id=adopt-unit-permission-<utc-timestamp>
@@ -163,9 +300,10 @@ the read-only inventory may update atime and is not a physically zero-write
 observation. The parent
 directory's identity, ownership, mode, and link count remain exact; only its
 reported size may grow as a filesystem allocation side effect of this
-transaction's own temporary entry. A completed
-Git-permission source may be an ancestor of this target only under a fixed-blob
-byte-identity proof. Apply atomically exchanges a newly created `0600` MD unit
+transaction's own temporary entry. A completed source-successor authority must
+target this unit transaction's exact source SHA/tree. The plan independently
+binds both old and new raw authorities. Apply atomically exchanges a newly
+created `0600` MD unit
 inode for the legacy `0664` inode, keeps a private operation-owned backup, and
 treats the already-`0600` DFT unit as an exact no-op CAS. It invokes only a
 user-manager daemon reload: neither Worker is stopped or restarted, and both
@@ -193,6 +331,30 @@ residue is an exactly validated `operation-archive-intent` prepare-abort with
 no descriptor/ready authority and no live ref or handoff; every other prepared
 state remains fail-closed.
 
+For this source-successor-bearing raw adoption, the unit plan, journal, and
+final `state/adopted-unit-permissions.json` authority must all use schema v2;
+schema v1 remains historical read compatibility only. The resulting raw
+adoption must emit descriptor v4 and, after a successful deployment,
+current-state v3. Descriptor schema v4 consumes the raw old-root, raw
+source-successor, its completed journal, the schema-v2 Worker-unit authority,
+that unit authority's completed journal, and the digest of the complete unit
+transaction inventory. The inventory must contain exactly one completed
+journal; any other entries must be valid terminal no-mutation aborts. A
+projected authority, a schema-v1 unit authority, a nonterminal journal, or an
+unsealed transaction entry cannot satisfy that chain.
+
+Current-state v3 treats `adoption_successor_lineage` as a permanent
+five-anchor schema-v2 record: `source_successor_authority_sha256`,
+`source_successor_completed_journal_sha256`, and
+`unit_permission_authority_sha256`,
+`unit_permission_completed_journal_sha256`, and
+`unit_permission_transaction_inventory_sha256`. Historical current-state v3
+records may omit this record or carry the legacy schema-v1 three-anchor form;
+a descriptor-v4 takeover preserves those three values while upgrading the
+record to schema v2. After that upgrade, once written, all five anchors are
+permanent: every later current-state v3 must preserve their exact values, and
+deletion or replacement fails closed.
+
 The same exact source then runs
 `provision_mutable_data_audit_role.py --plan/--apply`. Formal Pull `plan` and
 `prepare` are forbidden until the prerequisite, permission, and role
@@ -207,6 +369,10 @@ function grants and security-definer execution are absent. Apply separately
 confirms the reviewed impact of revoking PUBLIC execution from the eight
 large-object mutators. No secret or plaintext password is a command argument
 or audit value.
+
+The ordinary deployment commands remain prohibited until the installed
+snapshot-authority gate is merged and its required snapshot authority is
+complete.
 
 ## Commands
 
@@ -231,9 +397,11 @@ for the one-time prerequisite, permission, and role transactions, run only the
 read-only plan directly:
 
 ```bash
+deploy_operation_id=deploy-<utc-timestamp>
+
 /usr/bin/python3 -I -B ./scripts/pull_deploy_controller.py plan \
   --sha <full-main-sha> \
-  --operation-id <id>
+  --operation-id "$deploy_operation_id"
 ```
 
 The target planner accepts raw adoption only when the active MD slot, active
@@ -251,11 +419,11 @@ byte-identical, and equal to its sealed authority digest. The direct plan proves
 this from the exact private target clone and emits a deterministic
 `adopted_prerequisite_target_binding` containing the mode, authority and target
 SHA/tree, blob-inventory digest, sealed authority readiness digest, and target
-source-trust/readiness projection digest. For a new raw adoption this becomes
-a schema-v3 binding containing both immutable Git- and unit-permission
-authorities and their exact raw evidence digests. Schema-v2 is accepted only
-when revalidating historical descriptor provenance; it is not emitted for a
-new raw-adoption deployment. A
+source-trust/readiness projection digest. For a new source-successor raw
+adoption this becomes a schema-v4 binding containing the immutable root Git,
+source-successor, and unit-permission authorities with their exact raw evidence
+digests. Schema-v2/schema-v3 are accepted only when revalidating historical
+descriptor provenance; neither is emitted for a new raw-adoption deployment. A
 descriptor-v4 record
 that contains `adopted_deployment` must contain this binding; a descriptor
 without adopted deployment must not contain it.
@@ -268,7 +436,15 @@ adopted descriptor is present, stop for explicit compatibility handling; do
 not infer, retrofit, or silently omit the binding.
 
 Continue with the installed `nexpoly-pull-deploy prepare`; never run a mutating
-or recovery verb from the checkout. `prepare` independently reproves the
+or recovery verb from the checkout:
+
+```bash
+nexpoly-pull-deploy prepare \
+  --sha <full-main-sha> \
+  --operation-id "$deploy_operation_id"
+```
+
+`prepare` independently reproves the
 ancestry and every old/target blob from the strictly trusted production
 repository after fetching the target. It also reads both the adopted permission
 wrapper and schema-compatible marker from production and recomputes their raw
@@ -357,7 +533,25 @@ The migration evidence fixes `lock_timeout=30s` and
 The controller dynamically validates this report with the manifest-sealed
 target control release and refuses `apply` if the report is absent, stale, or
 has different authority. Exact commands and confirmation fields are in
-[deployment.md](deployment.md).
+[deployment.md](deployment.md). The fixed ordinary sequence next runs the
+read-only rehearsal plan and its separately confirmed apply:
+
+```bash
+./scripts/production_postgres_rehearsal.py \
+  --sha <full-main-sha> \
+  --operation-id "$deploy_operation_id" \
+  --plan
+
+./scripts/production_postgres_rehearsal.py \
+  --sha <full-main-sha> \
+  --operation-id "$deploy_operation_id" \
+  --apply \
+  --confirm-descriptor-sha256 sha256:<reviewed-descriptor-digest> \
+  --confirm-source-system-identifier <reviewed-decimal-system-identifier> \
+  --confirm-source-ledger-sha256 sha256:<reviewed-ledger-digest> \
+  --confirm-source-property-records 615159 \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest>
+```
 
 ## Apply state machine
 
@@ -367,6 +561,12 @@ then obtains the non-blocking deployment lock and records a crash marker before
 the first runtime mutation. Ordinary descriptor-v4 deployment does not reopen
 admission inside `apply`. Its durable path continues through two explicit
 `accept` calls:
+
+```bash
+nexpoly-pull-deploy apply \
+  --sha <full-main-sha> \
+  --operation-id "$deploy_operation_id"
+```
 
 ```text
 prepared -> rehearsal-bound -> drained -> database-backed-up

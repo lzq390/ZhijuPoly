@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -17,6 +18,15 @@ RELEASE_INPUT_PATH = REPOSITORY_ROOT / "release-input.json"
 DEPLOYMENT_DOC_PATH = REPOSITORY_ROOT / "docs" / "deployment.md"
 RELEASE_CONTROLLER_DOC_PATH = (
     REPOSITORY_ROOT / "docs" / "release-controller.md"
+)
+SOURCE_SUCCESSOR_PATH = (
+    REPOSITORY_ROOT / "scripts" / "adopt_git_permission_source_successor.py"
+)
+ADOPT_RUNTIME_PREREQUISITES_PATH = (
+    REPOSITORY_ROOT / "scripts" / "adopt_runtime_prerequisites.py"
+)
+PULL_DEPLOY_CONTROLLER_PATH = (
+    REPOSITORY_ROOT / "scripts" / "pull_deploy_controller.py"
 )
 LEGACY_REMOTE_RELEASE_PATH = REPOSITORY_ROOT / "scripts" / "ci" / "remote_release.sh"
 EXACT_B_BRIDGE_PATH = REPOSITORY_ROOT / "scripts" / "ci" / "test_exact_b_bridge.sh"
@@ -63,6 +73,154 @@ EXPECTED_POSTGRES_AUDIT_IMAGES = (
     "57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
     "docker.io/library/postgres@sha256:"
     "9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+)
+EXPECTED_SOURCE_SUCCESSOR_MANIFEST = (
+    "ops/config/bootstrap-quiesce.example",
+    "ops/config/bootstrap-status.example",
+    "ops/config/bootstrap-resume-unchanged.example",
+    "ops/config/bootstrap-rollback.example",
+    "ops/config/bootstrap-active-jobs-probe.example",
+    "ops/config/bootstrap-legacy-runtime-status.example",
+    "ops/config/bootstrap-legacy-runtime-resume-unchanged.example",
+    "ops/config/bootstrap-legacy-runtime-restore.example",
+    "ops/config/deployment-mutable-data-audit.example",
+    "ops/config/mutable-data-audit.pg_service.conf.example",
+    "scripts/bootstrap_pull_deploy.py",
+    "scripts/git_source_trust.py",
+    "scripts/bridge_deploy_core.py",
+)
+EXPECTED_SOURCE_SUCCESSOR_CHANGED_PATHS = (
+    "scripts/bootstrap_pull_deploy.py",
+    "scripts/git_source_trust.py",
+)
+EXPECTED_ADOPTION_SUCCESSOR_LINEAGE_FIELDS = {
+    "schema_version",
+    "source_successor_authority_sha256",
+    "source_successor_completed_journal_sha256",
+    "unit_permission_authority_sha256",
+    "unit_permission_completed_journal_sha256",
+    "unit_permission_transaction_inventory_sha256",
+}
+ORDINARY_DEPLOYMENT_COMMANDS = (
+    "/usr/bin/python3 -I -B ./scripts/pull_deploy_controller.py plan \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$deploy_operation_id"',
+    "nexpoly-pull-deploy prepare \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$deploy_operation_id"',
+    "./scripts/production_postgres_rehearsal.py \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$deploy_operation_id" \\\n'
+    "  --plan",
+    "./scripts/production_postgres_rehearsal.py \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$deploy_operation_id" \\\n'
+    "  --apply \\\n"
+    "  --confirm-descriptor-sha256 sha256:<reviewed-descriptor-digest> \\\n"
+    "  --confirm-source-system-identifier "
+    "<reviewed-decimal-system-identifier> \\\n"
+    "  --confirm-source-ledger-sha256 sha256:<reviewed-ledger-digest> \\\n"
+    "  --confirm-source-property-records 615159 \\\n"
+    "  --confirm-plan-sha256 sha256:<reviewed-plan-digest>",
+    "nexpoly-pull-deploy apply \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$deploy_operation_id"',
+)
+SOURCE_SUCCESSOR_PLAN_COMMAND = (
+    "./scripts/adopt_git_permission_source_successor.py plan \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$source_successor_operation_id"'
+)
+SOURCE_SUCCESSOR_APPLY_COMMAND = (
+    "./scripts/adopt_git_permission_source_successor.py apply \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$source_successor_operation_id" \\\n'
+    "  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \\\n"
+    "  --confirm-source-successor-impact-sha256 "
+    "sha256:<reviewed-impact-digest>"
+)
+SOURCE_SUCCESSOR_MAIN_FREEZE_MARKERS = (
+    "This successor merge is control-chain-only",
+    "git-snapshot `plan`/`apply`/`restore` transaction",
+    "installed `prepare` snapshot-authority gate",
+    "must not run source-successor `apply`, unit-permission `apply`",
+    "formal installed `prepare`",
+    "A source-successor `plan` may be used only for zero-write validation",
+    "discarded whenever protected `main` changes",
+    "Neither an operator waiver nor a manually copied `.git` directory",
+    "cover every first-deployment Git mutation",
+    "returns to the predecessor or begins a new operation",
+    "restore the entire verified pre-prepare `.git` snapshot",
+    "Resetting `HEAD` or deleting individual refs is not sufficient",
+    "Freeze protected `main` before starting the source-successor `plan`",
+    "until the first deployment has durably written current-state v3",
+    "before any durable successor intent, discard the reviewed plan",
+    "`authority-commit-intent` or the create-once authority is `completed`",
+    "do not publish a second successor authority or change the sealed target",
+    "separately reviewed compatibility-recovery procedure",
+)
+CONTROL_CHAIN_ONLY_COMMAND_MARKERS = (
+    "The commands below are future-state instructions, not current production",
+    "the hard stop above is lifted",
+    "The Worker-unit commands remain prohibited until the snapshot hard stop is",
+    "The ordinary deployment commands remain prohibited until the installed",
+    "its required snapshot authority",
+)
+UNIT_PERMISSION_PLAN_COMMAND = (
+    "./scripts/adopt_runtime_prerequisites.py unit-permission-plan \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$unit_permission_operation_id"'
+)
+UNIT_PERMISSION_APPLY_COMMAND = (
+    "./scripts/adopt_runtime_prerequisites.py unit-permission-apply \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$unit_permission_operation_id" \\\n'
+    "  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \\\n"
+    "  --confirm-unit-permission-impact-sha256 "
+    "sha256:<reviewed-impact-digest>"
+)
+UNIT_PERMISSION_ABORT_COMMAND = (
+    "./scripts/adopt_runtime_prerequisites.py unit-permission-abort \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$unit_permission_operation_id" \\\n'
+    "  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \\\n"
+    "  --confirm-unit-permission-impact-sha256 "
+    "sha256:<reviewed-impact-digest>"
+)
+MUTABLE_ROLE_PLAN_COMMAND = (
+    "./scripts/provision_mutable_data_audit_role.py \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$role_operation_id" \\\n'
+    "  --plan"
+)
+MUTABLE_ROLE_APPLY_COMMAND = (
+    "./scripts/provision_mutable_data_audit_role.py \\\n"
+    "  --sha <full-main-sha> \\\n"
+    '  --operation-id "$role_operation_id" \\\n'
+    "  --apply \\\n"
+    "  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \\\n"
+    "  --confirm-public-lo-acl-sha256 "
+    "sha256:<reviewed-public-lo-impact-digest>"
+)
+SUCCESSOR_AUTHORITY_COMMANDS = (
+    SOURCE_SUCCESSOR_PLAN_COMMAND,
+    SOURCE_SUCCESSOR_APPLY_COMMAND,
+    UNIT_PERMISSION_PLAN_COMMAND,
+    UNIT_PERMISSION_APPLY_COMMAND,
+)
+DEPLOYMENT_SUCCESSOR_FIRST_DEPLOYMENT_COMMANDS = (
+    *SUCCESSOR_AUTHORITY_COMMANDS,
+    MUTABLE_ROLE_PLAN_COMMAND,
+    MUTABLE_ROLE_APPLY_COMMAND,
+    *ORDINARY_DEPLOYMENT_COMMANDS,
+)
+CONTROLLER_MUTABLE_ROLE_MARKER = (
+    "provision_mutable_data_audit_role.py --plan/--apply"
+)
+CONTROLLER_SUCCESSOR_FIRST_DEPLOYMENT_COMMANDS = (
+    *SUCCESSOR_AUTHORITY_COMMANDS,
+    CONTROLLER_MUTABLE_ROLE_MARKER,
+    *ORDINARY_DEPLOYMENT_COMMANDS,
 )
 EXPECTED_B_SHA = "82a69ddb42bcd5c4666b5bf038d02414bccc6dde"
 EXPECTED_B_TREE = "44e4b4c398b7b84abdeb40bc02b885569aba4d8b"
@@ -753,6 +911,35 @@ def validate_complete_history_checkouts(
         )
 
 
+def validate_script_tests_budget(
+    ci_text: str,
+    failures: list[str],
+) -> None:
+    body = workflow_job_body(ci_text, "script-tests", failures)
+    if body is None:
+        return
+    if body.count("    timeout-minutes: 40\n") != 1:
+        failures.append(
+            "script-tests must retain its reviewed 40-minute fault-injection "
+            "test budget"
+        )
+    protected_tests = (
+        "test_adopt_git_permission_source_successor.py",
+        "test_adopt_runtime_prerequisites.py",
+        "test_production_repository_transition.py",
+        "test_pull_deploy_controller.py",
+        "test_validate_workflows.py",
+    )
+    excluded = [
+        name for name in protected_tests if f"! -name '{name}'" in body
+    ]
+    if excluded:
+        failures.append(
+            "script-tests must not exclude successor deployment contract tests: "
+            + ", ".join(excluded)
+        )
+
+
 def validate_gpu_session_compose_policy(
     ci_text: str,
     failures: list[str],
@@ -1212,6 +1399,591 @@ def validate_deployment_asset_pin(failures: list[str]) -> None:
         )
 
 
+def _parse_contract_source(
+    source_text: str,
+    label: str,
+    failures: list[str],
+) -> ast.Module | None:
+    try:
+        return ast.parse(source_text, filename=label)
+    except (SyntaxError, ValueError) as exc:
+        failures.append(f"{label} contract source cannot be parsed: {exc}")
+        return None
+
+
+def _literal_module_assignments(module: ast.Module) -> dict[str, object]:
+    assignments: dict[str, object] = {}
+    for statement in module.body:
+        name: str | None = None
+        value: ast.expr | None = None
+        if (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+        ):
+            name = statement.targets[0].id
+            value = statement.value
+        elif isinstance(statement, ast.AnnAssign) and isinstance(
+            statement.target, ast.Name
+        ):
+            name = statement.target.id
+            value = statement.value
+        if name is None or value is None:
+            continue
+        try:
+            assignments[name] = ast.literal_eval(value)
+        except (ValueError, TypeError, SyntaxError):
+            continue
+    return assignments
+
+
+def _module_assignment_expressions(module: ast.Module) -> dict[str, ast.expr]:
+    expressions: dict[str, ast.expr] = {}
+    for statement in module.body:
+        if (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+        ):
+            expressions[statement.targets[0].id] = statement.value
+        elif (
+            isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and statement.value is not None
+        ):
+            expressions[statement.target.id] = statement.value
+    return expressions
+
+
+def _safe_contract_assignment(
+    module: ast.Module,
+    name: str,
+) -> object | None:
+    """Evaluate only literals, tuple concatenation, and record[0] tuples."""
+
+    expressions = _module_assignment_expressions(module)
+    cache: dict[str, object] = {}
+    resolving: set[str] = set()
+
+    def evaluate(expression: ast.expr) -> object:
+        try:
+            return ast.literal_eval(expression)
+        except (ValueError, TypeError, SyntaxError):
+            pass
+        if isinstance(expression, ast.Name):
+            reference = expression.id
+            if reference in cache:
+                return cache[reference]
+            if reference in resolving or reference not in expressions:
+                raise ValueError("unsafe or cyclic contract assignment")
+            resolving.add(reference)
+            try:
+                value = evaluate(expressions[reference])
+            finally:
+                resolving.remove(reference)
+            cache[reference] = value
+            return value
+        if isinstance(expression, ast.BinOp) and isinstance(
+            expression.op, ast.Add
+        ):
+            left = evaluate(expression.left)
+            right = evaluate(expression.right)
+            if not isinstance(left, tuple) or not isinstance(right, tuple):
+                raise ValueError("contract concatenation is not a tuple")
+            return left + right
+        if (
+            isinstance(expression, ast.Call)
+            and isinstance(expression.func, ast.Name)
+            and expression.func.id == "tuple"
+            and len(expression.args) == 1
+            and not expression.keywords
+            and isinstance(expression.args[0], ast.GeneratorExp)
+        ):
+            generator = expression.args[0]
+            if (
+                len(generator.generators) != 1
+                or generator.generators[0].is_async
+                or generator.generators[0].ifs
+                or not isinstance(generator.generators[0].target, ast.Name)
+                or not isinstance(generator.elt, ast.Subscript)
+                or not isinstance(generator.elt.value, ast.Name)
+                or generator.elt.value.id
+                != generator.generators[0].target.id
+                or not isinstance(generator.elt.slice, ast.Constant)
+                or generator.elt.slice.value != 0
+            ):
+                raise ValueError("contract generator is not record[0]")
+            records = evaluate(generator.generators[0].iter)
+            if not isinstance(records, tuple):
+                raise ValueError("contract records are not a tuple")
+            result: list[str] = []
+            for record in records:
+                if (
+                    not isinstance(record, tuple)
+                    or not record
+                    or not isinstance(record[0], str)
+                ):
+                    raise ValueError("contract record path is invalid")
+                result.append(record[0])
+            return tuple(result)
+        raise ValueError("contract assignment uses an unsafe expression")
+
+    if name not in expressions:
+        return None
+    try:
+        return evaluate(expressions[name])
+    except ValueError:
+        return None
+
+
+def _named_function(
+    module: ast.Module,
+    name: str,
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    for node in ast.walk(module):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+            node.name == name
+        ):
+            return node
+    return None
+
+
+def _parser_choices(
+    module: ast.Module,
+    function_name: str,
+    argument_name: str,
+) -> tuple[str, ...] | None:
+    function = _named_function(module, function_name)
+    if function is None:
+        return None
+    for node in ast.walk(function):
+        if (
+            not isinstance(node, ast.Call)
+            or not isinstance(node.func, ast.Attribute)
+            or node.func.attr != "add_argument"
+            or not node.args
+            or not isinstance(node.args[0], ast.Constant)
+            or node.args[0].value != argument_name
+        ):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != "choices":
+                continue
+            try:
+                choices = ast.literal_eval(keyword.value)
+            except (ValueError, TypeError, SyntaxError):
+                return None
+            if (
+                isinstance(choices, tuple)
+                and all(isinstance(choice, str) for choice in choices)
+            ):
+                return choices
+    return None
+
+
+def _function_string_literals(
+    module: ast.Module,
+    function_name: str,
+) -> set[str]:
+    function = _named_function(module, function_name)
+    if function is None:
+        return set()
+    return {
+        node.value
+        for node in ast.walk(function)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+
+def _parser_has_literal_loop(
+    module: ast.Module,
+    function_name: str,
+    expected: tuple[str, ...],
+) -> bool:
+    function = _named_function(module, function_name)
+    if function is None:
+        return False
+    for node in ast.walk(function):
+        if not isinstance(node, ast.For):
+            continue
+        try:
+            value = ast.literal_eval(node.iter)
+        except (ValueError, TypeError, SyntaxError):
+            continue
+        if value == expected:
+            return True
+    return False
+
+
+def _is_named_subscript(
+    node: ast.AST,
+    container: str,
+    key: str,
+) -> bool:
+    return (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == container
+        and isinstance(node.slice, ast.Constant)
+        and node.slice.value == key
+    )
+
+
+def _unit_schema_contract_is_v2(module: ast.Module) -> bool:
+    plan_function = _named_function(module, "_unit_source_plan")
+    authority_function = _named_function(module, "_unit_authority")
+    if plan_function is None or authority_function is None:
+        return False
+    conditional_schema = False
+    for node in ast.walk(plan_function):
+        if (
+            not isinstance(node, ast.Assign)
+            or len(node.targets) != 1
+            or not isinstance(node.targets[0], ast.Name)
+            or node.targets[0].id != "schema_version"
+            or not isinstance(node.value, ast.IfExp)
+        ):
+            continue
+        test = node.value.test
+        conditional_schema = (
+            isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Constant)
+            and test.left.value
+            == "adopted_git_permission_source_successor_sha256"
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.In)
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Name)
+            and test.comparators[0].id == "context"
+            and isinstance(node.value.body, ast.Constant)
+            and node.value.body.value == 2
+            and isinstance(node.value.orelse, ast.Constant)
+            and node.value.orelse.value == 1
+        )
+        if conditional_schema:
+            break
+    authority_propagates_plan_schema = False
+    for node in ast.walk(authority_function):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "schema_version"
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "int"
+            and len(node.value.args) == 1
+            and _is_named_subscript(
+                node.value.args[0], "plan", "schema_version"
+            )
+        ):
+            authority_propagates_plan_schema = True
+            break
+    return conditional_schema and authority_propagates_plan_schema
+
+
+def _controller_requires_v2_unit_lineage(module: ast.Module) -> bool:
+    function = _named_function(
+        module,
+        "_current_adoption_successor_lineage",
+    )
+    if function is None:
+        return False
+    for node in ast.walk(function):
+        if (
+            not isinstance(node, ast.Compare)
+            or len(node.ops) != 1
+            or not isinstance(node.ops[0], ast.NotEq)
+            or len(node.comparators) != 1
+            or not isinstance(node.comparators[0], ast.Constant)
+            or node.comparators[0].value != 2
+            or not isinstance(node.left, ast.Call)
+            or not isinstance(node.left.func, ast.Attribute)
+            or node.left.func.attr != "get"
+            or not isinstance(node.left.func.value, ast.Name)
+            or node.left.func.value.id != "unit"
+            or len(node.left.args) != 1
+            or not isinstance(node.left.args[0], ast.Constant)
+            or node.left.args[0].value != "schema_version"
+        ):
+            continue
+        return True
+    return False
+
+
+def validate_successor_authority_contract_source_text(
+    source_successor_text: str,
+    prerequisites_text: str,
+    controller_text: str,
+    failures: list[str],
+) -> None:
+    """Cross-check fixed successor constants without importing live tools."""
+
+    modules = (
+        _parse_contract_source(
+            source_successor_text,
+            "scripts/adopt_git_permission_source_successor.py",
+            failures,
+        ),
+        _parse_contract_source(
+            prerequisites_text,
+            "scripts/adopt_runtime_prerequisites.py",
+            failures,
+        ),
+        _parse_contract_source(
+            controller_text,
+            "scripts/pull_deploy_controller.py",
+            failures,
+        ),
+    )
+    if any(module is None for module in modules):
+        return
+    successor_module, prerequisites_module, controller_module = modules
+    assert successor_module is not None
+    assert prerequisites_module is not None
+    assert controller_module is not None
+    successor = _literal_module_assignments(successor_module)
+    prerequisites = _literal_module_assignments(prerequisites_module)
+    controller = _literal_module_assignments(controller_module)
+
+    derived_manifests = (
+        successor.get("TRACKED_SOURCE_FILES"),
+        _safe_contract_assignment(
+            prerequisites_module,
+            "UNIT_PERMISSION_SUCCESSOR_V2_BLOBS",
+        ),
+        _safe_contract_assignment(
+            controller_module,
+            "ADOPTED_UNIT_PERMISSION_SUCCESSOR_V2_FILES",
+        ),
+    )
+    if any(
+        manifest != EXPECTED_SOURCE_SUCCESSOR_MANIFEST
+        for manifest in derived_manifests
+    ):
+        failures.append(
+            "source-successor publisher, adopter, and controller must bind "
+            "the same fixed 13-file manifest"
+        )
+    changed_path_sets = (
+        successor.get("CHANGED_PATHS"),
+        prerequisites.get("SOURCE_SUCCESSOR_ALLOWED_CHANGED_BLOBS"),
+        controller.get(
+            "ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_ALLOWED_CHANGED_FILES"
+        ),
+    )
+    if any(
+        changed != EXPECTED_SOURCE_SUCCESSOR_CHANGED_PATHS
+        for changed in changed_path_sets
+    ):
+        failures.append(
+            "source-successor implementations must authorize exactly the "
+            "two fixed changed paths"
+        )
+
+    transition_contracts = (
+        (
+            successor.get("REPOSITORY_TRANSITION_POLICY"),
+            successor.get("DEPLOY_REMOTE_REF"),
+            successor.get("PREPARED_REF_PREFIX"),
+            successor.get("GIT_AUXILIARY_POLICY"),
+            successor.get("GIT_OBJECT_STORAGE_POLICY"),
+        ),
+        (
+            prerequisites.get(
+                "SOURCE_SUCCESSOR_REPOSITORY_TRANSITION_POLICY"
+            ),
+            prerequisites.get("SOURCE_SUCCESSOR_DEPLOY_REMOTE_REF"),
+            prerequisites.get("SOURCE_SUCCESSOR_PREPARED_REF_PREFIX"),
+            prerequisites.get("SOURCE_SUCCESSOR_GIT_AUXILIARY_POLICY"),
+            prerequisites.get(
+                "SOURCE_SUCCESSOR_GIT_OBJECT_STORAGE_POLICY"
+            ),
+        ),
+        (
+            controller.get("PRODUCTION_REPOSITORY_TRANSITION_POLICY"),
+            controller.get("DEPLOY_REMOTE_REF"),
+            controller.get("PREPARED_REF_PREFIX"),
+            controller.get("GIT_AUXILIARY_POLICY"),
+            controller.get("GIT_OBJECT_STORAGE_POLICY"),
+        ),
+    )
+    if len(set(transition_contracts)) != 1:
+        failures.append(
+            "source-successor publisher, adopter, and controller must bind "
+            "the same B/F/P repository, auxiliary, and object-storage policy"
+        )
+
+    provenance = successor.get("EXPECTED_PREDECESSOR_PROVENANCE")
+    predecessor_trust = (
+        provenance.get("predecessor_source_trust_sha256")
+        if isinstance(provenance, dict)
+        else None
+    )
+    production_trust = (
+        provenance.get("production_source_trust_sha256")
+        if isinstance(provenance, dict)
+        else None
+    )
+    if (
+        not isinstance(predecessor_trust, str)
+        or DIGEST.fullmatch(predecessor_trust) is None
+        or not isinstance(production_trust, str)
+        or DIGEST.fullmatch(production_trust) is None
+        or predecessor_trust == production_trust
+    ):
+        failures.append(
+            "source-successor predecessor/current source trust must remain "
+            "two distinct digest proofs"
+        )
+
+    if _parser_choices(
+        successor_module,
+        "_parser",
+        "action",
+    ) != ("plan", "apply", "abort") or not {
+        "--confirm-plan-sha256",
+        "--confirm-source-successor-impact-sha256",
+    }.issubset(_function_string_literals(successor_module, "_parser")):
+        failures.append(
+            "source-successor parser must expose exact plan/apply/abort "
+            "commands and both confirmations"
+        )
+    if not _parser_has_literal_loop(
+        prerequisites_module,
+        "_parser",
+        (
+            "unit-permission-plan",
+            "unit-permission-apply",
+            "unit-permission-abort",
+        ),
+    ) or not {
+        "--confirm-plan-sha256",
+        "--confirm-unit-permission-impact-sha256",
+    }.issubset(_function_string_literals(prerequisites_module, "_parser")):
+        failures.append(
+            "unit successor parser must expose exact plan/apply/abort "
+            "commands and both confirmations"
+        )
+    if not _parser_has_literal_loop(
+        controller_module,
+        "parser",
+        ("plan", "prepare", "apply", "accept"),
+    ):
+        failures.append(
+            "Pull controller parser must retain exact ordinary deployment "
+            "commands"
+        )
+
+    if not _unit_schema_contract_is_v2(prerequisites_module):
+        failures.append(
+            "source-successor unit plan and final authority must use schema v2"
+        )
+    if (
+        controller.get("DESCRIPTOR_SCHEMA_VERSION") != 4
+        or controller.get("CURRENT_STATE_SCHEMA_VERSION") != 3
+    ):
+        failures.append(
+            "ordinary successor deployment must use descriptor v4 and "
+            "current-state v3"
+        )
+    if (
+        controller.get("ADOPTION_SUCCESSOR_LINEAGE_FIELDS")
+        != EXPECTED_ADOPTION_SUCCESSOR_LINEAGE_FIELDS
+    ):
+        failures.append(
+            "current-state successor lineage must contain exactly its five "
+            "permanent raw-authority anchors"
+        )
+    if not _controller_requires_v2_unit_lineage(controller_module):
+        failures.append(
+            "current-state successor lineage must reject a non-v2 unit authority"
+        )
+
+
+def validate_successor_authority_contract_sources(
+    failures: list[str],
+) -> None:
+    try:
+        source_successor_text = SOURCE_SUCCESSOR_PATH.read_text(
+            encoding="utf-8"
+        )
+        prerequisites_text = ADOPT_RUNTIME_PREREQUISITES_PATH.read_text(
+            encoding="utf-8"
+        )
+        controller_text = PULL_DEPLOY_CONTROLLER_PATH.read_text(
+            encoding="utf-8"
+        )
+    except (OSError, UnicodeError) as exc:
+        failures.append(f"successor authority contract source is unavailable: {exc}")
+        return
+    validate_successor_authority_contract_source_text(
+        source_successor_text,
+        prerequisites_text,
+        controller_text,
+        failures,
+    )
+
+
+def _validate_ordered_ordinary_commands(
+    text: str,
+    *,
+    label: str,
+    start_marker: str,
+    end_marker: str,
+    failures: list[str],
+) -> None:
+    start = text.find(start_marker)
+    end = text.find(end_marker, start + len(start_marker))
+    if start < 0 or end < 0:
+        failures.append(
+            f"{label} must isolate the first ordinary deployment sequence"
+        )
+        return
+    section = text[start:end]
+    positions = [section.find(command) for command in ORDINARY_DEPLOYMENT_COMMANDS]
+    if (
+        any(section.count(command) != 1 for command in ORDINARY_DEPLOYMENT_COMMANDS)
+        or positions != sorted(positions)
+        or any(position < 0 for position in positions)
+    ):
+        failures.append(
+            f"{label} must order one exact direct plan, installed prepare, "
+            "rehearsal plan, rehearsal apply, and installed apply sequence"
+        )
+
+
+def _validate_ordered_successor_first_deployment_commands(
+    text: str,
+    *,
+    label: str,
+    start_marker: str,
+    end_marker: str,
+    commands: tuple[str, ...],
+    failures: list[str],
+) -> None:
+    start = text.find(start_marker)
+    end = text.find(end_marker, start + len(start_marker))
+    if start < 0 or end < 0:
+        failures.append(
+            f"{label} must isolate the successor first-deployment sequence"
+        )
+        return
+    section = text[start:end]
+    positions = [section.find(command) for command in commands]
+    if (
+        any(section.count(command) != 1 for command in commands)
+        or positions != sorted(positions)
+        or any(position < 0 for position in positions)
+    ):
+        failures.append(
+            f"{label} must order one exact source-successor plan/apply, "
+            "unit-permission plan/apply, mutable-data role plan/apply, direct "
+            "Pull plan, installed prepare, rehearsal plan/apply, and installed "
+            "apply sequence"
+        )
+
+
 def validate_adopted_permission_documentation_text(
     deployment_text: str,
     controller_text: str,
@@ -1243,6 +2015,21 @@ def validate_adopted_permission_documentation_text(
         return
     controller_section = controller_text[controller_start:controller_end]
 
+    for label, document in (
+        ("docs/deployment.md", deployment_text),
+        ("docs/release-controller.md", controller_text),
+    ):
+        invalid = [
+            marker
+            for marker in CONTROL_CHAIN_ONLY_COMMAND_MARKERS
+            if document.count(marker) != 1
+        ]
+        if invalid:
+            failures.append(
+                f"{label} must mark all mutating command examples as "
+                "future-state only: " + ", ".join(invalid)
+            )
+
     exact_commands = (
         "./scripts/adopt_runtime_prerequisites.py permission-plan \\\n"
         "  --sha <full-main-sha> \\\n"
@@ -1260,11 +2047,31 @@ def validate_adopted_permission_documentation_text(
         "  --confirm-permission-impact-sha256 "
         "sha256:<reviewed-impact-digest>",
     )
+    source_successor_commands = (
+        SOURCE_SUCCESSOR_PLAN_COMMAND,
+        SOURCE_SUCCESSOR_APPLY_COMMAND,
+        "./scripts/adopt_git_permission_source_successor.py abort \\\n"
+        "  --sha <full-main-sha> \\\n"
+        "  --operation-id \"$source_successor_operation_id\" \\\n"
+        "  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \\\n"
+        "  --confirm-source-successor-impact-sha256 "
+        "sha256:<reviewed-impact-digest>",
+    )
+    unit_permission_commands = (
+        UNIT_PERMISSION_PLAN_COMMAND,
+        UNIT_PERMISSION_APPLY_COMMAND,
+        UNIT_PERMISSION_ABORT_COMMAND,
+    )
     for label, section in (
         ("docs/deployment.md", deployment_section),
         ("docs/release-controller.md", controller_section),
     ):
         normalized_section = " ".join(section.split())
+        required_unit_commands = (
+            unit_permission_commands
+            if label == "docs/deployment.md"
+            else unit_permission_commands[:2]
+        )
         if (
             section.count(
                 "permission_operation_id="
@@ -1272,10 +2079,24 @@ def validate_adopted_permission_documentation_text(
             )
             != 1
             or any(section.count(command) != 1 for command in exact_commands)
+            or section.count(
+                "source_successor_operation_id="
+                "adopt-git-successor-<utc-timestamp>"
+            )
+            != 1
+            or any(
+                section.count(command) != 1
+                for command in source_successor_commands
+            )
+            or any(
+                section.count(command) != 1
+                for command in required_unit_commands
+            )
         ):
             failures.append(
-                f"{label} must contain one exact permission-plan/apply/abort "
-                "command sequence"
+                f"{label} must contain one exact permission, source-successor, "
+                "and unit-permission plan/apply command sequence, with the "
+                "deployment runbook also carrying exact abort"
             )
         # The following Worker-unit transaction deliberately uses the same
         # generic plan-confirmation flag.  Count only the Git-permission-
@@ -1286,6 +2107,16 @@ def validate_adopted_permission_documentation_text(
             failures.append(
                 f"{label} permission apply and abort must both require the "
                 "plan and impact confirmations"
+            )
+        if (
+            section.count(
+                "--confirm-source-successor-impact-sha256"
+            )
+            != 2
+        ):
+            failures.append(
+                f"{label} source-successor apply and abort must both require "
+                "the plan and impact confirmations"
             )
         required = (
             "state/adopted-git-permissions.json",
@@ -1315,7 +2146,44 @@ def validate_adopted_permission_documentation_text(
             ".adopted-unit-permissions.json.create-<operation-id>",
             "same-operation weak authority",
             "single-link final authority",
+            "state/adopted-git-permission-source-successor.json",
+            "state/adopted-git-permission-source-successor-transactions/"
+            "<operation-id>.json",
+            "standard-library-only",
+            "bridge_deploy_core.py",
+            "predecessor-verified",
+            "source-successor impact",
+            "old-root → source-successor",
+            "fixed 13-file manifest",
+            "`predecessor_source_trust_sha256`",
+            "`production_source_trust_sha256`",
+            "separate evidence and must not be compared for equality",
+            "source-successor-bearing raw adoption",
+            "`state/adopted-unit-permissions.json` authority must all use "
+            "schema v2",
+            "The resulting raw adoption must emit descriptor v4 and, after "
+            "a successful deployment, current-state v3",
+            "`adoption_successor_lineage`",
+            "`source_successor_authority_sha256`",
+            "`source_successor_completed_journal_sha256`",
+            "`unit_permission_authority_sha256`",
+            "`unit_permission_completed_journal_sha256`",
+            "`unit_permission_transaction_inventory_sha256`",
+            "Historical current-state v3 records may omit",
+            "once written, all five anchors are permanent",
+            "`B` is",
+            "`F`",
+            "`P(operation)`",
+            "`FETCH_HEAD`",
+            "`tmp_pack_*`",
+            "semantic",
+            "object-storage",
+            "power loss",
+            "restore the entire `.git` directory",
+            *SOURCE_SUCCESSOR_MAIN_FREEZE_MARKERS,
         )
+        if label == "docs/release-controller.md":
+            required += ("`unit-permission-abort` and both confirmations",)
         missing = [
             marker for marker in required if marker not in normalized_section
         ]
@@ -1329,6 +2197,43 @@ def validate_adopted_permission_documentation_text(
                 f"{label} current adopted workflow must not execute the "
                 "legacy permission installer"
             )
+
+    _validate_ordered_ordinary_commands(
+        deployment_text,
+        label="docs/deployment.md",
+        start_marker="## Current ordinary deployments",
+        end_marker="## Historical migrations and first takeover",
+        failures=failures,
+    )
+    _validate_ordered_ordinary_commands(
+        controller_text,
+        label="docs/release-controller.md",
+        start_marker=(
+            "There is one compatibility exception before the first ordinary "
+            "deployment"
+        ),
+        end_marker="## Runtime and slot records",
+        failures=failures,
+    )
+    _validate_ordered_successor_first_deployment_commands(
+        deployment_text,
+        label="docs/deployment.md",
+        start_marker="### One-time Git permission source-successor authority",
+        end_marker="## Historical migrations and first takeover",
+        commands=DEPLOYMENT_SUCCESSOR_FIRST_DEPLOYMENT_COMMANDS,
+        failures=failures,
+    )
+    _validate_ordered_successor_first_deployment_commands(
+        controller_text,
+        label="docs/release-controller.md",
+        start_marker=(
+            "If the final reviewed first-deployment target changes a blob "
+            "governed by that"
+        ),
+        end_marker="## Runtime and slot records",
+        commands=CONTROLLER_SUCCESSOR_FIRST_DEPLOYMENT_COMMANDS,
+        failures=failures,
+    )
 
 
 def validate_adopted_permission_documentation(
@@ -1560,6 +2465,7 @@ def main() -> int:
         failures,
     )
     validate_complete_history_checkouts(ci_text, failures)
+    validate_script_tests_budget(ci_text, failures)
     validate_gpu_session_compose_policy(ci_text, failures)
     validate_exact_b_job(ci_text, failures)
     validate_postgres_client_bootstrap(
@@ -1698,6 +2604,7 @@ def main() -> int:
     validate_release_input(failures)
     validate_deployment_asset_pin(failures)
     validate_adopted_permission_documentation(failures)
+    validate_successor_authority_contract_sources(failures)
     validate_exact_b_bridge(failures)
 
     if failures:

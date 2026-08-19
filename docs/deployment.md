@@ -325,11 +325,13 @@ compatible handoff that the already installed controller can verify. The
 permission transaction does not invoke that old controller as a probe. The new
 target controller independently requires the wrapper and marker to bind each
 other, seals the compact permission projection together with the
-unit-permission authority in its schema-v3 adopted-prerequisite target
-binding, and separately revalidates
+unit-permission authority in its historical schema-v3 adopted-prerequisite
+target binding, and separately revalidates
 both authorities at plan, prepare, resume, and apply pre-switch validation.
-Schema-v2 remains read compatibility for historical descriptor provenance
-only; a new raw-adoption descriptor cannot omit the unit authority.
+Schema-v2/schema-v3 remain read compatibility for historical descriptor
+provenance only. Once source-successor lineage exists, a new raw-adoption
+descriptor uses schema-v4 and cannot omit the old root, source-successor, or
+unit authority.
 
 Do not call `git_source_trust.takeover_repository_permissions` directly, run
 `install_legacy_takeover_prerequisites.py`, start the historical takeover, use
@@ -337,14 +339,163 @@ manual `chmod`, or synthesize the legacy marker. Those raw paths do not publish
 the adopted permission authority or its double-confirmed CAS and cannot
 authorize the current production checkout.
 
+### One-time Git permission source-successor authority
+
+This successor merge is control-chain-only. Until the separately reviewed
+git-snapshot `plan`/`apply`/`restore` transaction and the
+installed `prepare` snapshot-authority gate
+are merged on the final protected-main target, this is a hard stop: operators
+must not run source-successor `apply`, unit-permission `apply`,
+or formal installed `prepare`.
+A source-successor `plan` may be used only for zero-write validation; its
+reviewed output must be discarded whenever protected `main` changes.
+Neither an operator waiver nor a manually copied `.git` directory satisfies
+this gate.
+
+The follow-up must cover every first-deployment Git mutation, from the first
+fetch through source switch and rollback. Any failed path that
+returns to the predecessor or begins a new operation must
+restore the entire verified pre-prepare `.git` snapshot before proceeding.
+Resetting `HEAD` or deleting individual refs is not sufficient to re-establish
+the sealed B/F/P state.
+
+Freeze protected `main` before starting the source-successor `plan`, and keep
+it frozen—with no merge, push, force-update, or branch automation—
+until the first deployment has durably written current-state v3. If `main`
+advances before any durable successor intent, discard the reviewed plan and
+create a fresh plan for the new tip; if the transaction is still abortable,
+use the confirmed abort before replanning. Once
+`authority-commit-intent` or the create-once authority is `completed`, any
+`main` advance is a permanent stop for this first-deployment path:
+do not publish a second successor authority or change the sealed target. Use a
+separately reviewed compatibility-recovery procedure.
+
+The commands below are future-state instructions, not current production
+authorization. Use them only after the snapshot transaction and installed
+gate have merged on the final target and the hard stop above is lifted.
+
+If a reviewed first-deployment target changes either control blob governed by
+the immutable adopted Git-permission authority, the byte-identical successor
+rule must not be weakened or bypassed. Publish the single fixed successor
+authority before the Worker-unit transaction:
+
+```bash
+source_successor_operation_id=adopt-git-successor-<utc-timestamp>
+
+./scripts/adopt_git_permission_source_successor.py plan \
+  --sha <full-main-sha> \
+  --operation-id "$source_successor_operation_id"
+
+./scripts/adopt_git_permission_source_successor.py apply \
+  --sha <full-main-sha> \
+  --operation-id "$source_successor_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-source-successor-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+The standalone publisher is standard-library-only. It never imports or
+executes the candidate `bootstrap_pull_deploy.py`, `git_source_trust.py`, or
+`bridge_deploy_core.py`. Instead it loads the bootstrap and Git-trust
+verifiers from the source SHA already sealed by
+`state/adopted-git-permissions.json`, freezes that authority's required CI job
+set, and requires the target bridge CI-contract blob to remain byte-identical.
+Its independent checkout verifier and the frozen verifier must agree on the
+exact clean, private, standalone main checkout, source SHA/tree, and protected
+CI run/attempt.
+
+The predecessor transaction journal's `source_trust_sha256` is historical
+evidence, while `production_source_trust_sha256` is a fresh proof of the still
+unchanged live production source. In the successor plan these are named
+`predecessor_source_trust_sha256` and `production_source_trust_sha256`;
+they are separate evidence and must not be compared for equality. Adoption may
+have added a legitimate remote tracking ref without changing production HEAD,
+tree, or worktree content.
+
+The plan additionally seals a three-state repository transition. `B` is the
+exact adopted baseline with direct-commit local `main`, the direct deploy
+remote at the predecessor authority, and no prepared ref. `F` has the deploy
+remote and exact semantic object union materialized at the target but no
+prepared ref. `P(operation)` is `F` plus the one current operation-owned
+prepared ref. Formal plan accepts only `B` or `F`; target prepare/resume and
+apply pre-switch accept only the exact current `P(operation)`. Empty
+`refs/nexpoly` directories left after an abort are permitted, but another
+operation's ref is not.
+
+The sealed transition covers the stable checkout/config/index projection,
+baseline logical/raw refs and auxiliary metadata, all baseline semantic
+objects, the exact target closure, and the exact expected union. After fetch,
+strict `fsck` and the union proof reject both added valid dangling objects and
+lost baseline objects. Only canonical loose objects, pack/index/rev sidecars,
+and supported commit-graph storage are valid. Any `.lock`, `tmp_pack_*`,
+incomplete sidecar, unexpected ref or object path, symref substitution, or
+packed-ref drift stops the release. `FETCH_HEAD` must be the exact single
+protected-main SSH record. A pre-existing deploy reflog must preserve its
+sealed prefix and may add only the exact fast-forward record. Descriptor v4
+seals the post-fetch full-trust, semantic, physical object-storage,
+logical/raw-ref, and auxiliary digests; resume, already-ready, and pre-switch
+validation compare all of them exactly.
+
+After an ordinary network interruption, retry only if the repository proves as
+clean `B`, `F`, or the original `P(operation)` with no lock or temporary pack.
+A power loss during the old controller's fetch can instead leave a broken ref
+or incomplete object transaction that fails before a retry can refetch. This
+is an explicit stop condition, not permission to remove a lock or repair one
+ref manually. Preserve traffic and services, stop the release, and restore the
+entire `.git` directory from a separately verified owner-private pre-prepare
+snapshot (or follow a separately reviewed recovery procedure). Re-run
+plan/prepare with a new operation ID unless the original `P(operation)` is
+independently proved exact.
+
+The fixed 13-file manifest contains exactly the ten prerequisite install source
+paths plus `scripts/bootstrap_pull_deploy.py`, `scripts/git_source_trust.py`,
+and `scripts/bridge_deploy_core.py`; it is never populated by discovery. It
+seals Git object type, mode, blob ID, and content digest for both predecessor
+and target. The only authorized changed paths are exactly
+`scripts/bootstrap_pull_deploy.py` and `scripts/git_source_trust.py`; every
+other record must be unchanged. Symlinks, submodules, mode drift, another
+changed path, a non-ancestor target, or any old
+authority/marker/adoption drift fails closed.
+
+`plan` is logically zero-write. `apply` holds `state/deploy.lock`, repeats the
+protected-main/CI admission before its first durable intent, and may create
+only its journal plus the fixed, mode-`0600`, create-once authority at
+`state/adopted-git-permission-source-successor.json`. It does not change Git,
+permissions, units, services, containers, PostgreSQL, credentials, or source
+files. The journal at
+`state/adopted-git-permission-source-successor-transactions/<operation-id>.json`
+advances `intent` → `predecessor-verified` → `source-verified` →
+`authority-commit-intent` → `completed`. Once commit intent is durable,
+recovery is forward-only with the same operation, SHA, plan digest, and
+source-successor impact digest.
+
+Before commit intent, the same confirmed operation may be aborted:
+
+```bash
+./scripts/adopt_git_permission_source_successor.py abort \
+  --sha <full-main-sha> \
+  --operation-id "$source_successor_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest> \
+  --confirm-source-successor-impact-sha256 sha256:<reviewed-impact-digest>
+```
+
+The old Git authority and marker remain immutable and are never replaced.
+Deleting, altering, or partially publishing the new fixed authority is a
+permanent lineage sentinel and must never fall back to the old byte-identical
+interpretation. The controller retains the complete old-root →
+source-successor → unit-authority chain.
+
 ### One-time adopted Worker unit permission hardening
+
+The Worker-unit commands remain prohibited until the snapshot hard stop is
+lifted.
 
 Before the first formal Pull plan, run one final independent transaction to
 replace only the legacy mode-`0664` MD user-unit inode with an owner-private
 mode-`0600` inode. DFT is already mode `0600` and is a strict no-op CAS. Run
-the plan from the reviewed successor SHA; the completed Git-permission source
-may be its ancestor only when every fixed control/prerequisite blob is
-byte-identical:
+the plan from the exact source SHA sealed by the source-successor authority.
+The unit plan binds both the immutable root Git authority and the new raw
+source-successor authority; it must not use the historical byte-identical
+fallback when any successor lineage path exists:
 
 ```bash
 unit_permission_operation_id=adopt-unit-permission-<utc-timestamp>
@@ -407,6 +558,30 @@ recomputable digests. A narrowly validated prepare-abort residue at
 `operation-archive-intent` is allowed only when no descriptor or `ready.json`
 exists, its handoff/ref evidence is archived, and the live prepared ref and
 handoff are absent. Any other prepared state blocks this transaction.
+
+For this source-successor-bearing raw adoption, the unit plan, journal, and
+final `state/adopted-unit-permissions.json` authority must all use schema v2;
+schema v1 remains historical read compatibility only. The resulting raw
+adoption must emit descriptor v4 and, after a successful deployment,
+current-state v3. Descriptor schema v4 binds the immutable old root, raw
+source-successor authority, its completed journal, the schema-v2 Worker-unit
+authority, that unit authority's completed journal, and the digest of the
+complete unit transaction inventory. The inventory must contain exactly one
+completed journal; every other entry must be a valid terminal no-mutation
+abort. A projected authority, schema-v1 unit authority, nonterminal journal,
+or unsealed inventory entry is not a substitute.
+
+Current-state v3 treats `adoption_successor_lineage` as a permanent
+five-anchor schema-v2 record: `source_successor_authority_sha256`,
+`source_successor_completed_journal_sha256`, and
+`unit_permission_authority_sha256`,
+`unit_permission_completed_journal_sha256`, and
+`unit_permission_transaction_inventory_sha256`. Historical current-state v3
+records may omit this record or carry the legacy schema-v1 three-anchor form;
+a descriptor-v4 takeover preserves those three values while upgrading the
+record to schema v2. After that upgrade, once written, all five anchors are
+permanent: every later current-state v3 must preserve their exact values, and
+deletion or replacement fails closed.
 
 Next provision the dedicated mutable-data audit login. This step is mandatory
 before formal Pull `plan` or `prepare`. The source-pinned provisioner reads the
@@ -915,12 +1090,17 @@ generations can never be retired or rearmed.
 
 ## Current ordinary deployments
 
+The ordinary deployment commands remain prohibited until the installed
+snapshot-authority gate is merged and its required snapshot authority is
+complete.
+
 The manually adopted production runtime uses descriptor v4 and current-state
-v3 for ordinary deployments. The prerequisite authority, adopted Git
-permission-hardening authority, and exact least-privilege mutable-data audit
-role described above must all be complete before this sequence starts. Every
-attempt uses one unique lowercase operation ID and the full 40-character SHA
-currently at `origin/main`:
+v3 for ordinary deployments. The prerequisite authority, immutable root Git
+permission authority, source-successor authority, schema-v2 Worker-unit
+authority, and exact least-privilege mutable-data audit role described above
+must all be complete before this sequence starts. Every attempt uses one
+unique lowercase operation ID and the full 40-character SHA currently at
+`origin/main`:
 
 ```bash
 deploy_operation_id=deploy-<utc-timestamp>
@@ -942,11 +1122,13 @@ cannot route a pre-prepare `plan` to a target control release that does not
 exist yet, and its adopted `cff408…` controller intentionally rejects an active
 MD slot without a current-state record. The target controller instead validates
 that slot, source, active control, prerequisite source/CI, adoption provenance,
-the immutable adopted permission wrapper, and its schema-compatible hardened
-marker without writing files or changing services. Review
+the immutable old-root → source-successor → unit-permission chain, and its
+schema-compatible hardened marker without writing files or changing services.
+Review
 `authority_kind=manual-runtime-adoption`, the adopted-deployment and
-permission-authority raw digests, the permission marker/evidence/inventory
-digests, and the prerequisite target-binding digest in its output.
+three permission-authority raw digests, the permission
+marker/evidence/inventory digests, and the schema-v4 prerequisite
+target-binding digest in its output.
 
 Do not invoke checkout code directly for `prepare`, `apply`, `accept`,
 `rollback`, or recovery. The installed launcher owns those mutations; its
