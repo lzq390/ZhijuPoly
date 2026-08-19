@@ -71,6 +71,9 @@ SOURCE_SUCCESSOR_TRANSACTION_DIRECTORY = Path(
 SOURCE_SUCCESSOR_AUTHORITY_PATH = Path(
     "state/adopted-git-permission-source-successor.json"
 )
+PRODUCTION_GIT_SNAPSHOT_AUTHORITY_PATH = Path(
+    "state/production-git-snapshot.json"
+)
 SOURCE_SUCCESSOR_AUTHORITY_KIND = (
     "manual-runtime-adoption-git-permission-source-successor"
 )
@@ -6152,6 +6155,7 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             "adopted_deployment_sha256",
             "bootstrap_control_sha256",
             "adopted_prerequisites_sha256",
+            "snapshot_authority_sha256",
             "plan_sha256",
             "source_successor_impact_sha256",
             "files_sha256",
@@ -6179,6 +6183,8 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             "adopted_deployment_sha256",
             "bootstrap_control_sha256",
             "adopted_prerequisites_sha256",
+            "production_git_snapshot",
+            "snapshot_authority_sha256",
             "production_source_trust_sha256",
             "production_repository_transition",
             "production_repository_transition_sha256",
@@ -6201,7 +6207,7 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             set(document) != authority_fields
             or raw_digest
             != _digest(_canonical_bytes(document) + b"\n")
-            or not _has_exact_schema_version(document, 1)
+            or not _has_exact_schema_version(document, 2)
             or document.get("status") != "completed"
             or document.get("authority_kind")
             != SOURCE_SUCCESSOR_AUTHORITY_KIND
@@ -6209,7 +6215,7 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             or SOURCE_SUCCESSOR_OPERATION_RE.fullmatch(operation_id) is None
             or not isinstance(plan, dict)
             or set(plan) != plan_fields
-            or not _has_exact_schema_version(plan, 1)
+            or not _has_exact_schema_version(plan, 2)
             or document.get("plan_sha256") != _canonical_digest(plan)
             or plan.get("operation_id") != operation_id
             or plan.get("authority_kind")
@@ -6240,6 +6246,7 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             "adopted_deployment_sha256",
             "bootstrap_control_sha256",
             "adopted_prerequisites_sha256",
+            "snapshot_authority_sha256",
             "plan_sha256",
             "source_successor_impact_sha256",
             "files_sha256",
@@ -6299,6 +6306,56 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
         ):
             raise PrerequisiteError(
                 "source successor delivery authority is invalid"
+            )
+        snapshot_authority, snapshot_digest = _load_json_with_digest(
+            self.runtime_root / PRODUCTION_GIT_SNAPSHOT_AUTHORITY_PATH,
+            maximum_bytes=SOURCE_SUCCESSOR_JSON_MAX_BYTES,
+        )
+        snapshot_summary = snapshot_authority.get("manifest_summary")
+        snapshot_compact = {
+            "authority_kind": snapshot_authority.get("authority_kind"),
+            "operation_id": snapshot_authority.get("operation_id"),
+            "target_source_sha": snapshot_authority.get(
+                "target_source_sha"
+            ),
+            "target_source_tree": snapshot_authority.get(
+                "target_source_tree"
+            ),
+            "production_source_sha": snapshot_authority.get(
+                "production_source_sha"
+            ),
+            "production_source_tree": snapshot_authority.get(
+                "production_source_tree"
+            ),
+            "manifest_sha256": snapshot_authority.get("manifest_sha256"),
+            "manifest_summary": snapshot_summary,
+            "delivery_gate_sha256": snapshot_authority.get(
+                "delivery_gate_sha256"
+            ),
+            "completed_at": snapshot_authority.get("completed_at"),
+            "authority_sha256": snapshot_digest,
+        }
+        if (
+            snapshot_digest
+            != _digest(_canonical_bytes(snapshot_authority) + b"\n")
+            or snapshot_authority.get("schema_version") != 1
+            or snapshot_authority.get("status") != "completed"
+            or snapshot_authority.get("authority_kind")
+            != "manual-runtime-adoption-production-git-snapshot"
+            or snapshot_authority.get("target_source_sha") != target_sha
+            or snapshot_authority.get("target_source_tree") != target_tree
+            or snapshot_authority.get("production_source_sha")
+            != root_authority.get("production_source_sha")
+            or snapshot_authority.get("production_source_tree")
+            != root_authority.get("production_source_tree")
+            or snapshot_authority.get("delivery_gate") != delivery
+            or not isinstance(snapshot_summary, dict)
+            or plan.get("production_git_snapshot") != snapshot_compact
+            or plan.get("snapshot_authority_sha256") != snapshot_digest
+            or document.get("snapshot_authority_sha256") != snapshot_digest
+        ):
+            raise PrerequisiteError(
+                "source successor production Git snapshot differs"
             )
         publication = self._source_successor_publication_plan(
             operation_id,
@@ -6385,6 +6442,7 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
         expected_impact = {
             "schema_version": 1,
             "policy": SOURCE_SUCCESSOR_IMPACT_POLICY,
+            "snapshot_authority_sha256": snapshot_digest,
             "predecessor_authority_sha256": root_digest,
             "predecessor_marker_sha256": root_authority.get(
                 "permission_marker_sha256"
@@ -6492,12 +6550,16 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             != root_authority.get("bootstrap_control_sha256")
             or document.get("adopted_prerequisites_sha256")
             != root_authority.get("adopted_prerequisites_sha256")
+            or document.get("snapshot_authority_sha256")
+            != snapshot_digest
             or plan.get("adopted_deployment_sha256")
             != document.get("adopted_deployment_sha256")
             or plan.get("bootstrap_control_sha256")
             != document.get("bootstrap_control_sha256")
             or plan.get("adopted_prerequisites_sha256")
             != document.get("adopted_prerequisites_sha256")
+            or plan.get("snapshot_authority_sha256")
+            != document.get("snapshot_authority_sha256")
             or not isinstance(production, dict)
             or production
             != {
@@ -6559,7 +6621,7 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
                         "source successor Git blob differs from its manifest"
                     )
         compact: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "authority_kind": SOURCE_SUCCESSOR_AUTHORITY_KIND,
             "operation_id": operation_id,
             "predecessor_authority_sha256": root_digest,
@@ -6584,6 +6646,9 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             ],
             "adopted_prerequisites_sha256": document[
                 "adopted_prerequisites_sha256"
+            ],
+            "snapshot_authority_sha256": document[
+                "snapshot_authority_sha256"
             ],
             "plan_sha256": document["plan_sha256"],
             "source_successor_impact_sha256": document[
@@ -8153,6 +8218,7 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             "adopted_deployment_sha256",
             "bootstrap_control_sha256",
             "adopted_prerequisites_sha256",
+            "snapshot_authority_sha256",
             "plan_sha256",
             "source_successor_impact_sha256",
             "source_trust_sha256",
@@ -8176,7 +8242,7 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             != plan.get("adopted_git_permissions_sha256")
             or not isinstance(compact, dict)
             or set(compact) != compact_fields
-            or not _has_exact_schema_version(compact, 1)
+            or not _has_exact_schema_version(compact, 2)
             or compact.get("authority_kind")
             != SOURCE_SUCCESSOR_AUTHORITY_KIND
             or compact.get("authority_file_sha256") != successor_digest
@@ -8198,6 +8264,9 @@ class UnitPermissionHardeningInstaller(PermissionHardeningInstaller):
             != plan.get("bootstrap_control_sha256")
             or compact.get("adopted_prerequisites_sha256")
             != plan.get("adopted_prerequisites_sha256")
+            or not self._is_sha256_digest(
+                compact.get("snapshot_authority_sha256")
+            )
             or compact.get("production_repository_transition_sha256")
             != _canonical_digest(
                 compact.get("production_repository_transition")

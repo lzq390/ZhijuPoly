@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import unittest
 
@@ -166,7 +167,7 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
                 )
                 self.assertTrue(failures)
 
-    def test_source_successor_docs_pin_all_five_lineage_anchors(
+    def test_source_successor_docs_pin_all_eight_lineage_anchors(
         self,
     ) -> None:
         for anchor in (
@@ -175,6 +176,9 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
             "`unit_permission_authority_sha256`",
             "`unit_permission_completed_journal_sha256`",
             "`unit_permission_transaction_inventory_sha256`",
+            "`production_git_snapshot_authority_sha256`",
+            "`bootstrap_router_intent_sha256`",
+            "`bootstrap_router_authority_sha256`",
         ):
             with self.subTest(anchor=anchor):
                 changed = RELEASE_CONTROLLER_TEXT.replace(
@@ -198,12 +202,12 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
     ) -> None:
         mutations = (
             (
-                "Historical current-state v3\nrecords may omit",
-                "Historical current-state v3\nrecords must invent",
+                "Historical current-state v3 records may\nomit",
+                "Historical current-state v3 records must\ninvent",
             ),
             (
-                "once written, all five anchors are\npermanent",
-                "all five anchors may later be\nremoved",
+                "once written, all eight\nanchors are permanent",
+                "all eight anchors may later be\nremoved",
             ),
         )
         for old, new in mutations:
@@ -283,7 +287,7 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
                 )
                 self.assertTrue(
                     any(
-                        "must order one exact source-successor plan/apply"
+                        "must order one exact snapshot"
                         in failure
                         for failure in failures
                     ),
@@ -299,12 +303,15 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         ):
             for marker in policy.SOURCE_SUCCESSOR_MAIN_FREEZE_MARKERS:
                 with self.subTest(document=label, marker=marker):
-                    self.assertEqual(original.count(marker), 1)
-                    changed = original.replace(
-                        marker,
-                        "removed-source-successor-main-freeze-contract",
-                        1,
+                    marker_pattern = r"\s+".join(
+                        re.escape(token) for token in marker.split()
                     )
+                    changed, replacements = re.subn(
+                        marker_pattern,
+                        "removed-source-successor-main-freeze-contract",
+                        original,
+                    )
+                    self.assertGreaterEqual(replacements, 1)
                     failures: list[str] = []
                     policy.validate_adopted_permission_documentation_text(
                         changed if label == "deployment" else DEPLOYMENT_TEXT,
@@ -379,7 +386,7 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
                     failures,
                 )
                 self.assertTrue(
-                    any("mutable-data role plan/apply" in failure for failure in failures),
+                    any("must order one exact snapshot" in failure for failure in failures),
                     failures,
                 )
 
@@ -531,12 +538,14 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
                 '    "schema_version",\n'
                 '    "source_successor_authority_sha256",\n'
                 '    "removed_completed_journal_anchor",\n',
-                "five permanent raw-authority anchors",
+                "eight permanent raw-authority anchors",
             ),
             (
-                '    "unit_permission_transaction_inventory_sha256",\n',
-                '    "removed_unit_transaction_inventory_anchor",\n',
-                "five permanent raw-authority anchors",
+                '    "unit_permission_transaction_inventory_sha256",\n'
+                '    "production_git_snapshot_authority_sha256",\n',
+                '    "removed_unit_transaction_inventory_anchor",\n'
+                '    "production_git_snapshot_authority_sha256",\n',
+                "eight permanent raw-authority anchors",
             ),
             (
                 'if unit is None or unit.get("schema_version") != 2:',

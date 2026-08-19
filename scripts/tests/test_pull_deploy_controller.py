@@ -545,7 +545,7 @@ def adopted_git_permission_source_successor_fixture(
             )
         )
     binding: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "authority_kind": (
             CONTROLLER.ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_AUTHORITY_KIND
         ),
@@ -565,6 +565,7 @@ def adopted_git_permission_source_successor_fixture(
         "adopted_prerequisites_sha256": root[
             "adopted_prerequisites_sha256"
         ],
+        "snapshot_authority_sha256": "sha256:" + "5" * 64,
         "plan_sha256": "sha256:" + "1" * 64,
         "source_successor_impact_sha256": "sha256:" + "2" * 64,
         "source_trust_sha256": source_trust_sha256,
@@ -2777,6 +2778,37 @@ class FixtureController(CONTROLLER.PullDeployController):
             return json.loads(json.dumps(fixture))
         return super()._unit_permission_takeover(**_kwargs)
 
+    def _bootstrap_router_successor_takeover(  # type: ignore[no-untyped-def]
+        self,
+        *,
+        source_successor,
+        unit_permission,
+    ):
+        if hasattr(self, "_fixture_bootstrap_router_successor"):
+            fixture = self._fixture_bootstrap_router_successor
+            return (
+                json.loads(json.dumps(fixture))
+                if fixture is not None
+                else None
+            )
+        if source_successor is None or unit_permission is None:
+            return None
+        return {
+            "target_source_sha": source_successor["target_source_sha"],
+            "target_source_tree": source_successor["target_source_tree"],
+            "production_git_snapshot_authority_sha256": source_successor[
+                "snapshot_authority_sha256"
+            ],
+            "source_successor_authority_sha256": source_successor[
+                "authority_file_sha256"
+            ],
+            "unit_permission_authority_sha256": unit_permission[
+                "authority_file_sha256"
+            ],
+            "bootstrap_router_intent_sha256": "sha256:" + "6" * 64,
+            "bootstrap_router_authority_sha256": "sha256:" + "7" * 64,
+        }
+
     def _production_source_trust_digest(
         self,
         *,
@@ -2857,9 +2889,10 @@ class FixtureController(CONTROLLER.PullDeployController):
     ) -> dict[str, object] | None:
         previous = descriptor.get("previous_deployment")
         binding = descriptor.get("adopted_prerequisite_target_binding")
-        v4_binding = (
+        successor_binding = (
             binding
-            if isinstance(binding, dict) and binding.get("schema_version") == 4
+            if isinstance(binding, dict)
+            and binding.get("schema_version") in {4, 5}
             else None
         )
         previous_lineage = (
@@ -2869,34 +2902,52 @@ class FixtureController(CONTROLLER.PullDeployController):
             else None
         )
         if previous_lineage is not None and not (
-            previous_lineage.get("schema_version") == 1
-            and v4_binding is not None
+            previous_lineage.get("schema_version")
+            < (3 if successor_binding.get("schema_version") == 5 else 2)
+            if successor_binding is not None
+            else False
         ):
             return json.loads(json.dumps(previous_lineage))
-        if v4_binding is None:
+        if successor_binding is None:
             return None
-        source_successor = v4_binding[
+        source_successor = successor_binding[
             "git_permission_source_successor_authority"
         ]
-        unit = v4_binding["unit_permission_authority"]
-        return {
-            "schema_version": 2,
+        unit = successor_binding["unit_permission_authority"]
+        lineage = {
+            "schema_version": (
+                3 if successor_binding["schema_version"] == 5 else 2
+            ),
             "source_successor_authority_sha256": source_successor[
                 "authority_file_sha256"
             ],
             "source_successor_completed_journal_sha256": (
-                v4_binding["source_successor_completed_journal_sha256"]
+                successor_binding[
+                    "source_successor_completed_journal_sha256"
+                ]
             ),
             "unit_permission_authority_sha256": unit[
                 "authority_file_sha256"
             ],
-            "unit_permission_completed_journal_sha256": v4_binding[
+            "unit_permission_completed_journal_sha256": successor_binding[
                 "unit_permission_completed_journal_sha256"
             ],
-            "unit_permission_transaction_inventory_sha256": v4_binding[
+            "unit_permission_transaction_inventory_sha256": successor_binding[
                 "unit_permission_transaction_inventory_sha256"
             ],
         }
+        if successor_binding["schema_version"] == 5:
+            lineage.update(
+                {
+                    field: successor_binding[field]
+                    for field in (
+                        "production_git_snapshot_authority_sha256",
+                        "bootstrap_router_intent_sha256",
+                        "bootstrap_router_authority_sha256",
+                    )
+                }
+            )
+        return lineage
 
     def repository_identity(
         self, *, require_ssh_origin: bool = False
@@ -3022,6 +3073,22 @@ class FixtureController(CONTROLLER.PullDeployController):
                 for record in source_successor["fixed_files"]
             }
             source_is_ancestor = self.prerequisite_is_ancestor
+        bootstrap_router_successor = (
+            self._bootstrap_router_successor_takeover(
+                source_successor=source_successor,
+                unit_permission=unit_permission,
+            )
+            if source_successor is not None
+            else None
+        )
+        if (
+            source_successor is not None
+            and source_successor.get("schema_version") == 2
+            and bootstrap_router_successor is None
+        ):
+            raise CONTROLLER.PullDeployError(
+                "first source-successor deployment lacks bootstrap-router authority"
+            )
         return self._build_adopted_prerequisite_target_binding(
             authority,
             target_sha=target_sha,
@@ -3063,6 +3130,7 @@ class FixtureController(CONTROLLER.PullDeployController):
             unit_permission_transaction_inventory_sha256=(
                 unit_inventory_digest
             ),
+            bootstrap_router_successor=bootstrap_router_successor,
             unit_permission_is_ancestor=unit_is_ancestor,
             unit_permission_authority_file_digests=(
                 unit_authority_digests
@@ -19174,6 +19242,99 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             / CONTROLLER.ADOPTED_PREREQUISITES_RELATIVE_PATH
         )
         bootstrap = CONTROLLER.load_private_json(bootstrap_path)
+        snapshot_operation = "snapshot-git-controller-fixture-001"
+        snapshot_root = (
+            controller.runtime_root
+            / "backups/production-git"
+            / snapshot_operation
+        )
+        snapshot_backup = snapshot_root / "git"
+        snapshot_backup.mkdir(parents=True, mode=0o700)
+        snapshot_root.chmod(0o700)
+        snapshot_manifest = {
+            "schema_version": 1,
+            "policy": "nexpoly-production-git-raw-manifest-v1",
+            "root_mode": "0700",
+            "records": [],
+            "records_sha256": CONTROLLER.sha256_bytes(
+                CONTROLLER.canonical_json_bytes([]) + b"\n"
+            ),
+            "file_count": 0,
+            "directory_count": 0,
+            "total_file_bytes": 0,
+        }
+        snapshot_manifest_path = snapshot_root / "MANIFEST.json"
+        CONTROLLER.atomic_json(snapshot_manifest_path, snapshot_manifest)
+        snapshot_manifest_digest = CONTROLLER.sha256_file(
+            snapshot_manifest_path
+        )
+        snapshot_summary = {
+            "records_sha256": snapshot_manifest["records_sha256"],
+            "file_count": 0,
+            "directory_count": 0,
+            "total_file_bytes": 0,
+        }
+        snapshot_authority = {
+            "schema_version": 1,
+            "status": "completed",
+            "authority_kind": (
+                "manual-runtime-adoption-production-git-snapshot"
+            ),
+            "policy": "nexpoly-production-git-golden-snapshot-v1",
+            "operation_id": snapshot_operation,
+            "target_source_sha": TARGET_SHA,
+            "target_source_tree": TARGET_TREE,
+            "production_source_sha": adopted["source_sha"],
+            "production_source_tree": adopted["source_tree"],
+            "production_git_dir": str(controller.production_root / ".git"),
+            "backup_git_dir": str(snapshot_backup),
+            "manifest_path": str(snapshot_manifest_path),
+            "manifest_sha256": snapshot_manifest_digest,
+            "manifest_summary": snapshot_summary,
+            "fsck": {
+                "schema_version": 1,
+                "policy": "git-fsck-strict-full-no-reflogs-v1",
+                "exit_code": 0,
+                "stdout_sha256": "sha256:" + "6" * 64,
+                "stderr_sha256": "sha256:" + "7" * 64,
+                "stdout_lines": 0,
+                "stderr_lines": 0,
+            },
+            "delivery_gate": bootstrap["delivery_gate"],
+            "delivery_gate_sha256": CONTROLLER.sha256_bytes(
+                CONTROLLER.canonical_json_bytes(
+                    bootstrap["delivery_gate"]
+                )
+                + b"\n"
+            ),
+            "plan_sha256": "sha256:" + "8" * 64,
+            "snapshot_impact_sha256": "sha256:" + "9" * 64,
+            "copy_policy": (
+                "descriptor-relative-read-write-no-link-no-reflink-v1"
+            ),
+            "completed_at": "2026-08-14T00:00:00Z",
+        }
+        snapshot_path = (
+            controller.runtime_root
+            / CONTROLLER.PRODUCTION_GIT_SNAPSHOT_RELATIVE_PATH
+        )
+        CONTROLLER.atomic_json(snapshot_path, snapshot_authority)
+        snapshot_digest = CONTROLLER.sha256_file(snapshot_path)
+        snapshot_compact = {
+            "authority_kind": snapshot_authority["authority_kind"],
+            "operation_id": snapshot_operation,
+            "target_source_sha": TARGET_SHA,
+            "target_source_tree": TARGET_TREE,
+            "production_source_sha": adopted["source_sha"],
+            "production_source_tree": adopted["source_tree"],
+            "manifest_sha256": snapshot_manifest_digest,
+            "manifest_summary": snapshot_summary,
+            "delivery_gate_sha256": snapshot_authority[
+                "delivery_gate_sha256"
+            ],
+            "completed_at": snapshot_authority["completed_at"],
+            "authority_sha256": snapshot_digest,
+        }
         files_fixture = adopted_git_permission_source_successor_fixture(
             root,
             target_sha=TARGET_SHA,
@@ -19318,6 +19479,7 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             "policy": (
                 "nexpoly-adopted-git-permission-source-successor-impact-v1"
             ),
+            "snapshot_authority_sha256": snapshot_digest,
             "predecessor_authority_sha256": root[
                 "authority_file_sha256"
             ],
@@ -19344,7 +19506,7 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             "mutations": mutations,
         }
         plan = {
-            "schema_version": 1,
+            "schema_version": 2,
             "authority_kind": (
                 CONTROLLER.ADOPTED_GIT_PERMISSION_SOURCE_SUCCESSOR_AUTHORITY_KIND
             ),
@@ -19371,6 +19533,8 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             "adopted_prerequisites_sha256": root_binding[
                 "adopted_prerequisites_sha256"
             ],
+            "production_git_snapshot": snapshot_compact,
+            "snapshot_authority_sha256": snapshot_digest,
             "production_source": {
                 "source_sha": adopted["source_sha"],
                 "source_tree": adopted["source_tree"],
@@ -19399,7 +19563,7 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             "mutations": mutations,
         }
         authority = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "completed",
             "authority_kind": plan["authority_kind"],
             "policy": plan["policy"],
@@ -19423,6 +19587,7 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             "adopted_prerequisites_sha256": plan[
                 "adopted_prerequisites_sha256"
             ],
+            "snapshot_authority_sha256": snapshot_digest,
             "plan_sha256": CONTROLLER.canonical_json_digest(plan),
             "source_successor_impact_sha256": plan[
                 "source_successor_impact_sha256"
@@ -20177,6 +20342,70 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
                 ):
                     CONTROLLER.validate_descriptor(changed)
 
+    def test_v5_router_authority_is_required_before_read_only_plan(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller._fixture_bootstrap_router_successor = None  # type: ignore[attr-defined]
+        before = CONTROLLER.directory_inventory_digest(
+            controller.runtime_root
+        )
+        with self.assertRaisesRegex(
+            CONTROLLER.PullDeployError,
+            "lacks bootstrap-router authority",
+        ):
+            controller.plan(
+                target_sha=TARGET_SHA,
+                operation_id=OPERATION_ID,
+            )
+        self.assertEqual(
+            CONTROLLER.directory_inventory_digest(controller.runtime_root),
+            before,
+        )
+
+    def test_v5_router_anchors_are_exactly_carried_into_current_state(
+        self,
+    ) -> None:
+        controller = self.controller()
+        adopted = self._seed_adopted_authority(controller)
+        controller._revalidate_adopted_runtime = (  # type: ignore[method-assign]
+            lambda observed: self.assertEqual(observed, adopted)
+        )
+        controller.prepare(target_sha=TARGET_SHA, operation_id=OPERATION_ID)
+        descriptor = CONTROLLER.load_private_json(
+            controller.prepared_root / OPERATION_ID / "descriptor.json"
+        )
+        state = controller.apply(
+            target_sha=TARGET_SHA,
+            operation_id=OPERATION_ID,
+        )
+        binding = descriptor["adopted_prerequisite_target_binding"]
+        lineage = state["adoption_successor_lineage"]
+        self.assertEqual(binding["schema_version"], 5)
+        self.assertEqual(lineage["schema_version"], 3)
+        for field in (
+            "production_git_snapshot_authority_sha256",
+            "bootstrap_router_intent_sha256",
+            "bootstrap_router_authority_sha256",
+        ):
+            self.assertEqual(lineage[field], binding[field])
+            changed_state = json.loads(json.dumps(state))
+            changed_state["adoption_successor_lineage"][field] = (
+                "sha256:" + "f" * 64
+            )
+            with self.assertRaisesRegex(
+                CONTROLLER.PullDeployError,
+                "successor lineage differs from descriptor authority",
+            ):
+                CONTROLLER.validate_current_state_adoption_lineage(
+                    changed_state,
+                    descriptor=descriptor,
+                )
+
     def test_v4_binding_closes_materialization_to_transition(self) -> None:
         controller = self.controller()
         adopted = self._seed_adopted_authority(controller)
@@ -20839,6 +21068,9 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
         binding.pop("source_successor_completed_journal_sha256")
         binding.pop("unit_permission_completed_journal_sha256")
         binding.pop("unit_permission_transaction_inventory_sha256")
+        binding.pop("production_git_snapshot_authority_sha256")
+        binding.pop("bootstrap_router_intent_sha256")
+        binding.pop("bootstrap_router_authority_sha256")
         binding["unit_permission_authority"] = (
             adopted_unit_permission_binding_fixture(
                 controller._fixture_git_permission_takeover,  # type: ignore[attr-defined]
@@ -21535,7 +21767,7 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             target_sha=TARGET_SHA, operation_id=OPERATION_ID
         )
         binding = plan["adopted_prerequisite_target_binding"]
-        self.assertEqual(binding["schema_version"], 4)
+        self.assertEqual(binding["schema_version"], 5)
         self.assertEqual(
             binding["git_permission_authority"]["authority_file_sha256"],
             combined["authority_file_sha256"],
@@ -21545,6 +21777,20 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
                 "adopted_git_permissions_sha256"
             ],
             combined["authority_file_sha256"],
+        )
+        self.assertEqual(
+            binding["production_git_snapshot_authority_sha256"],
+            binding["git_permission_source_successor_authority"][
+                "snapshot_authority_sha256"
+            ],
+        )
+        self.assertEqual(
+            binding["bootstrap_router_intent_sha256"],
+            "sha256:" + "6" * 64,
+        )
+        self.assertEqual(
+            binding["bootstrap_router_authority_sha256"],
+            "sha256:" + "7" * 64,
         )
 
     def test_adopted_git_permission_descriptor_replay_rejects_wrapper_drift(
@@ -21849,7 +22095,7 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             "adopted_prerequisite_target_binding"
         ]
         successor_lineage = state["adoption_successor_lineage"]
-        self.assertEqual(successor_lineage["schema_version"], 2)
+        self.assertEqual(successor_lineage["schema_version"], 3)
         self.assertEqual(
             successor_lineage["source_successor_authority_sha256"],
             successor_binding[
@@ -21862,6 +22108,14 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
                 "authority_file_sha256"
             ],
         )
+        for field in (
+            "production_git_snapshot_authority_sha256",
+            "bootstrap_router_intent_sha256",
+            "bootstrap_router_authority_sha256",
+        ):
+            self.assertEqual(
+                successor_lineage[field], successor_binding[field]
+            )
         self.assertEqual(
             successor_lineage[
                 "unit_permission_completed_journal_sha256"
@@ -21886,6 +22140,9 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
             not in {
                 "unit_permission_completed_journal_sha256",
                 "unit_permission_transaction_inventory_sha256",
+                "production_git_snapshot_authority_sha256",
+                "bootstrap_router_intent_sha256",
+                "bootstrap_router_authority_sha256",
             }
         }
         historical_previous["adoption_successor_lineage"][
@@ -22766,6 +23023,11 @@ class AdoptedFirstDeploymentTests(PullDeployTestCase):
         historical_binding.pop(
             "unit_permission_transaction_inventory_sha256"
         )
+        historical_binding.pop(
+            "production_git_snapshot_authority_sha256"
+        )
+        historical_binding.pop("bootstrap_router_intent_sha256")
+        historical_binding.pop("bootstrap_router_authority_sha256")
         historical_permission = historical_binding[
             "git_permission_authority"
         ]
