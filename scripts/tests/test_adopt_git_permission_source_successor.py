@@ -674,10 +674,7 @@ class SourceSuccessorPublisherTests(unittest.TestCase):
         _write_private(refs / "heads/main", head_payload)
         _make_private(refs)
         root_directory_names = next(os.walk(refs))[1]
-        self.assertLess(
-            root_directory_names.index("remotes"),
-            root_directory_names.index("heads"),
-        )
+        self.assertEqual(set(root_directory_names), {"heads", "remotes"})
 
         _records, trust_order = SUCCESSOR._raw_ref_inventory(
             self.fixture.production
@@ -2788,15 +2785,29 @@ class SourceSuccessorPublisherTests(unittest.TestCase):
             if swapped:
                 state.rmdir()
                 held.rename(state)
-        with self.assertRaisesRegex(
-            SUCCESSOR.SuccessorError, "forbids injected trust seams"
-        ):
-            SUCCESSOR.SourceSuccessorPublisher(
-                source_root=self.fixture.source,
-                production_root=SUCCESSOR.PRODUCTION_ROOT,
-                runtime_root=SUCCESSOR.RUNTIME_ROOT,
-                delivery_gate_probe=self.fixture.probe,
-            )
+        with tempfile.TemporaryDirectory() as temporary:
+            fixed_root = Path(temporary)
+            fixed_root.chmod(0o700)
+            fixed_production = fixed_root / "production"
+            fixed_runtime = fixed_root / "runtime"
+            fixed_production.mkdir(mode=0o700)
+            fixed_runtime.mkdir(mode=0o700)
+            with (
+                mock.patch.object(
+                    SUCCESSOR, "PRODUCTION_ROOT", fixed_production
+                ),
+                mock.patch.object(SUCCESSOR, "RUNTIME_ROOT", fixed_runtime),
+                self.assertRaisesRegex(
+                    SUCCESSOR.SuccessorError,
+                    "forbids injected trust seams",
+                ),
+            ):
+                SUCCESSOR.SourceSuccessorPublisher(
+                    source_root=self.fixture.source,
+                    production_root=fixed_production,
+                    runtime_root=fixed_runtime,
+                    delivery_gate_probe=self.fixture.probe,
+                )
 
     def test_commit_intent_root_swaps_precede_authority_publication(
         self,
@@ -3158,16 +3169,25 @@ class SourceSuccessorPublisherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             root.chmod(0o700)
-            (root / "rootfs").symlink_to(Path("/"), target_is_directory=True)
-            production_alias = root / "rootfs" / SUCCESSOR.PRODUCTION_ROOT.relative_to(
-                "/"
+            fixed_production = root / "production"
+            fixed_runtime = root / "runtime"
+            fixed_production.mkdir(mode=0o700)
+            fixed_runtime.mkdir(mode=0o700)
+            production_alias = root / "production-alias"
+            runtime_alias = root / "runtime-alias"
+            production_alias.symlink_to(
+                fixed_production, target_is_directory=True
             )
-            runtime_alias = root / "rootfs" / SUCCESSOR.RUNTIME_ROOT.relative_to(
-                "/"
-            )
-            with self.assertRaisesRegex(
-                SUCCESSOR.SuccessorError,
-                "forbids injected trust seams",
+            runtime_alias.symlink_to(fixed_runtime, target_is_directory=True)
+            with (
+                mock.patch.object(
+                    SUCCESSOR, "PRODUCTION_ROOT", fixed_production
+                ),
+                mock.patch.object(SUCCESSOR, "RUNTIME_ROOT", fixed_runtime),
+                self.assertRaisesRegex(
+                    SUCCESSOR.SuccessorError,
+                    "forbids injected trust seams",
+                ),
             ):
                 SUCCESSOR.SourceSuccessorPublisher(
                     source_root=self.fixture.source,

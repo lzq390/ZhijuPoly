@@ -4880,6 +4880,10 @@ class AdoptRuntimePrerequisiteTests(unittest.TestCase):
             reference,
             self.production_sha,
         )
+        prepared_ref = self.production / ".git" / reference
+        prepared_ref.chmod(0o600)
+        prepared_ref.parent.chmod(0o700)
+        prepared_ref.parent.parent.chmod(0o700)
         with self.assertRaisesRegex(
             ADOPTER.PrerequisiteError, "prepared Git ref remains"
         ):
