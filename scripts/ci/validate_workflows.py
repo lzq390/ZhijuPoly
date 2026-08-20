@@ -1027,11 +1027,16 @@ def validate_openscience_release_policy(
         'commands.add_parser("rollback")',
         "run_browser_probe(name)",
         "run_browser_probe(LIVE_CONTAINER)",
+        "LIVE_HEALTH_ATTEMPTS = 60",
         "OpenScience .env changed during candidate verification",
         "OpenScience release failed and was rolled back",
     ):
         if marker not in release_controller:
             failures.append(f"OpenScience release controller is missing: {marker}")
+    if release_controller.count("wait_container_healthy(LIVE_CONTAINER)") != 2:
+        failures.append(
+            "OpenScience release controller must wait for both live switch and rollback health"
+        )
 
     package_lock_text = payloads.get(OPENSCIENCE_PACKAGE_LOCK_PATH)
     if package_lock_text is not None:

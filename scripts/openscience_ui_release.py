@@ -28,6 +28,7 @@ SERVICE = "openscience-ui"
 LIVE_CONTAINER = "openscience-ui-poc-openscience-ui-1"
 CANARY_PORT = 19011
 NETWORK = "openscience-poc"
+LIVE_HEALTH_ATTEMPTS = 60
 PLAYWRIGHT_IMAGE = (
     "mcr.microsoft.com/playwright@sha256:"
     "c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac"
@@ -444,6 +445,31 @@ def wait_http(url: str, *, expected: str | None = None) -> None:
     raise ReleaseError(f"OpenScience HTTP probe failed for {url}: {last_error[:500]}")
 
 
+def wait_container_healthy(container: str, *, attempts: int = LIVE_HEALTH_ATTEMPTS) -> None:
+    if attempts < 1:
+        raise ReleaseError("OpenScience health wait attempts must be positive")
+    last_state = "container state was not read"
+    for attempt in range(attempts):
+        document = docker_inspect(container)
+        state = document.get("State", {})
+        health = state.get("Health", {}).get("Status")
+        running = state.get("Running")
+        status = state.get("Status")
+        error = state.get("Error")
+        last_state = (
+            f"status={status!r}, running={running!r}, health={health!r}, "
+            f"error={error!r}"
+        )
+        if running is True and health == "healthy":
+            return
+        if attempt + 1 < attempts:
+            time.sleep(1)
+    raise ReleaseError(
+        f"OpenScience container did not become healthy after {attempts} attempts: "
+        f"{last_state}"
+    )
+
+
 def run_browser_probe(container: str) -> None:
     verifier = REPOSITORY_ROOT / "scripts" / "ci" / "test_openscience_bridge_browser.sh"
     require_private_regular(verifier, executable=True)
@@ -490,6 +516,7 @@ def run_canary(plan: dict[str, Any]) -> None:
 
 
 def verify_live_candidate(plan: dict[str, Any]) -> None:
+    wait_container_healthy(LIVE_CONTAINER)
     live = live_identity()
     if live["image_id"] != plan["candidate"]["id"]:
         raise ReleaseError("live OpenScience container did not switch to the candidate image")
@@ -532,6 +559,7 @@ def restore_previous(
         or raw_health != "healthy"
     ):
         compose_up(deployment_dir)
+    wait_container_healthy(LIVE_CONTAINER)
     live = live_identity()
     if live["image_id"] != plan["current"]["image_id"]:
         raise ReleaseError("OpenScience rollback did not restore the previous image ID")

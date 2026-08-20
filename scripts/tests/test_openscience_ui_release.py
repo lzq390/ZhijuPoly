@@ -91,6 +91,7 @@ class OpenScienceUIReleaseTests(unittest.TestCase):
             with (
                 mock.patch.object(release, "docker_inspect", return_value=unhealthy),
                 mock.patch.object(release, "compose_up") as compose_up,
+                mock.patch.object(release, "wait_container_healthy") as wait_healthy,
                 mock.patch.object(release, "live_identity", return_value=restored),
                 mock.patch.object(release, "wait_http"),
             ):
@@ -101,6 +102,51 @@ class OpenScienceUIReleaseTests(unittest.TestCase):
                 )
             self.assertEqual((deployment / ".env").read_bytes(), previous)
             compose_up.assert_called_once_with(deployment)
+            wait_healthy.assert_called_once_with(release.LIVE_CONTAINER)
+
+    def test_live_health_wait_allows_a_normal_starting_transition(self) -> None:
+        starting = {
+            "State": {
+                "Status": "running",
+                "Running": True,
+                "Health": {"Status": "starting"},
+                "Error": "",
+            }
+        }
+        healthy = {
+            "State": {
+                "Status": "running",
+                "Running": True,
+                "Health": {"Status": "healthy"},
+                "Error": "",
+            }
+        }
+        with (
+            mock.patch.object(release, "docker_inspect", side_effect=[starting, healthy]),
+            mock.patch.object(release.time, "sleep") as sleep,
+        ):
+            release.wait_container_healthy(release.LIVE_CONTAINER, attempts=2)
+        sleep.assert_called_once_with(1)
+
+    def test_live_health_wait_is_bounded_and_reports_the_last_state(self) -> None:
+        unhealthy = {
+            "State": {
+                "Status": "running",
+                "Running": True,
+                "Health": {"Status": "unhealthy"},
+                "Error": "probe failed",
+            }
+        }
+        with (
+            mock.patch.object(release, "docker_inspect", return_value=unhealthy),
+            mock.patch.object(release.time, "sleep") as sleep,
+        ):
+            with self.assertRaisesRegex(
+                release.ReleaseError,
+                "did not become healthy.*health='unhealthy'.*probe failed",
+            ):
+                release.wait_container_healthy(release.LIVE_CONTAINER, attempts=2)
+        sleep.assert_called_once_with(1)
 
     def test_live_identity_rejects_resource_policy_drift(self) -> None:
         document = {
