@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -53,6 +55,92 @@ class OpenScienceUIReleaseTests(unittest.TestCase):
         self.assertIsNone(release.OPERATION_ID.fullmatch("openscience-../../tmp"))
         with self.assertRaisesRegex(release.ReleaseError, "operation ID is invalid"):
             release.validate_operation_id("../../tmp")
+
+    def test_apply_persists_a_completed_terminal_journal(self) -> None:
+        operation_id = "openscience-20260820t060000z"
+        target_sha = "a" * 40
+        candidate = "ghcr.io/lzq390/openscience-ui@sha256:" + "b" * 64
+        original_env = b"OPENSCIENCE_UI_IMAGE=openscience-ui-poc:legacy\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            deployment = root / "deployment"
+            state_root = root / "state"
+            deployment.mkdir()
+            env_path = deployment / ".env"
+            compose_path = deployment / "docker-compose.yml"
+            env_path.write_bytes(original_env)
+            compose_path.write_text("services: {}\n", encoding="utf-8")
+            plan = {
+                "schema_version": 1,
+                "operation_id": operation_id,
+                "target_sha": target_sha,
+                "candidate": {"reference": candidate},
+                "deployment": {
+                    "directory": str(deployment.resolve()),
+                    "compose_sha256": release.file_sha256(compose_path),
+                    "env_sha256": "sha256:"
+                    + hashlib.sha256(original_env).hexdigest(),
+                },
+            }
+            plan_sha256 = release.digest(plan)
+            arguments = SimpleNamespace(
+                operation_id=operation_id,
+                state_root=state_root,
+                deployment_dir=deployment,
+                image=candidate,
+                sha=target_sha,
+                confirm_plan_sha256=plan_sha256,
+            )
+            with (
+                mock.patch.object(release, "build_plan", return_value=plan),
+                mock.patch.object(release, "run_canary"),
+                mock.patch.object(release, "compose_up"),
+                mock.patch.object(release, "verify_live_candidate"),
+            ):
+                result = release.apply_release(arguments)
+
+            self.assertEqual(result["phase"], "completed")
+            journal = json.loads(
+                (state_root / operation_id / "journal.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(journal["phase"], "completed")
+            self.assertEqual(journal["plan_sha256"], plan_sha256)
+            self.assertEqual(release.parse_env_image(env_path.read_bytes()), candidate)
+
+    def test_explicit_rollback_persists_a_terminal_journal(self) -> None:
+        operation_id = "openscience-20260820t060100z"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            deployment = root / "deployment"
+            state_root = root / "state"
+            operation = state_root / operation_id
+            deployment.mkdir()
+            operation.mkdir(parents=True)
+            plan = {"deployment": {"directory": str(deployment.resolve())}}
+            plan_sha256 = release.digest(plan)
+            release.write_json(operation / "plan.json", plan)
+            release.write_json(
+                operation / "journal.json",
+                {"schema_version": 1, "phase": "completed"},
+            )
+            arguments = SimpleNamespace(
+                operation_id=operation_id,
+                state_root=state_root,
+                deployment_dir=deployment,
+                confirm_plan_sha256=plan_sha256,
+            )
+            with mock.patch.object(release, "restore_previous") as restore_previous:
+                result = release.rollback_release(arguments)
+
+            self.assertEqual(result["phase"], "rolled-back")
+            restore_previous.assert_called_once()
+            journal = json.loads(
+                (operation / "journal.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(journal["phase"], "rolled-back")
+            self.assertEqual(journal["plan_sha256"], plan_sha256)
 
     def test_unhealthy_candidate_is_recreated_from_the_previous_image(self) -> None:
         previous = b"OPENSCIENCE_UI_IMAGE=openscience-ui-poc:legacy\n"

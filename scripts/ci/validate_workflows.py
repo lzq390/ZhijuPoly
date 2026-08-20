@@ -1028,6 +1028,8 @@ def validate_openscience_release_policy(
         "run_browser_probe(name)",
         "run_browser_probe(LIVE_CONTAINER)",
         "LIVE_HEALTH_ATTEMPTS = 60",
+        'return {"phase": "completed", **result}',
+        'return {"phase": "rolled-back", **result}',
         "OpenScience .env changed during candidate verification",
         "OpenScience release failed and was rolled back",
     ):
