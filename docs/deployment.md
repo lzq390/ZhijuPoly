@@ -152,10 +152,12 @@ npm ci --ignore-scripts --prefix ops/openscience-ui-overlay
 the same-network Backend proxy, then runs a real Chromium bridge probe for both
 trusted parents plus rejected Origin/referrer/namespace/version/source cases.
 It atomically replaces only the image assignment and recreates only the
-OpenScience UI service, then repeats the browser probe against the live
-container. Any failed switch automatically restores the exact previous `.env`
-payload and image. A completed switch can be explicitly reverted with the same
-reviewed plan digest:
+OpenScience UI service, waits through the bounded container
+`starting`-to-`healthy` transition, then repeats the browser probe against the
+live container. Rollback applies the same bounded health wait after restoring
+the prior service. Any failed switch automatically restores the exact previous
+`.env` payload and image. A completed switch can be explicitly reverted with
+the same reviewed plan digest:
 
 ```bash
 ./scripts/openscience_ui_release.py rollback \
