@@ -43,7 +43,7 @@ test("the governed constants pin the deployed bridge contract", () => {
   assert.match(BASE_BUNDLE_SHA256, /^[0-9a-f]{64}$/)
   assert.equal(
     PATCHED_STATIC_TREE_SHA256,
-    "3810ec7d6428a960c14b305d5925a22dd03769c9ab36c091a7a387b7b82e3969",
+    "32f45b16e585ef348b4a83a9763412476568ec1781aecb5be69ebd7d7f3c54fd",
   )
   assert.equal(
     TRUSTED_PARENT_POLICY_SHA256,

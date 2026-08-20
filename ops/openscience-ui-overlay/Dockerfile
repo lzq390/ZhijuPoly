@@ -22,7 +22,7 @@ LABEL org.opencontainers.image.source="$SOURCE_URL" \
       com.nexpoly.openscience.base-image-id="sha256:e7d25a1b6d515daec641c8de9c98265f275991eee2396dc578ce9c2fcfdeb197" \
       com.nexpoly.openscience.base-manifest="$OPENSCIENCE_BASE_MANIFEST" \
       com.nexpoly.openscience.base-static-tree="sha256:b942ea5aac61ed7568327e40a3193b3c35c12380f05234775f122b6a2b98bc9d" \
-      com.nexpoly.openscience.derived-static-tree="sha256:3810ec7d6428a960c14b305d5925a22dd03769c9ab36c091a7a387b7b82e3969" \
+      com.nexpoly.openscience.derived-static-tree="sha256:32f45b16e585ef348b4a83a9763412476568ec1781aecb5be69ebd7d7f3c54fd" \
       com.nexpoly.openscience.parent-origins="http://114.214.255.154:9000,http://114.214.255.154:9001" \
       com.nexpoly.openscience.parent-policy-sha256="sha256:955ae6f5f3d0710dcaacc0906f6326a4ba99321a0e47fc928c198c8967dd0042"
 

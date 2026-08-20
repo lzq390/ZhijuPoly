@@ -16,6 +16,10 @@ const NAMESPACE = "openscience.zhijupoly"
 const VERSION = 1
 const PROXY_PORT = 9080
 const REVIEWED_PORTS = new Set(["9000", "9001", "9002", "9011"])
+const PROXY_REQUESTS = []
+const BASE_ENTRY_PATH = "/assets/index-B2eNxQLj.js"
+const PATCHED_ENTRY_PATH = "/assets/index-nexpoly-3e4638285546.js"
+const PATCHED_ENTRY_URL = `${CHILD_ORIGIN}${PATCHED_ENTRY_PATH}`
 
 const PROJECTS_REQUEST = { namespace: NAMESPACE, version: VERSION, type: "projects.request" }
 const SESSIONS_REQUEST = {
@@ -107,6 +111,7 @@ function startChildProxy() {
 
 function startBrowserProxy() {
   const server = http.createServer((request, response) => {
+    PROXY_REQUESTS.push(request.url ?? "")
     let target
     try {
       target = new URL(request.url ?? "")
@@ -157,34 +162,93 @@ function listen(server, port) {
 async function openParent(browser, origin, path = "/") {
   const context = await browser.newContext()
   const page = await context.newPage()
+  const diagnostics = []
+  page.on("console", (message) => {
+    if (message.type() === "error" || message.type() === "warning") {
+      diagnostics.push(`console.${message.type()}: ${message.text()}`)
+    }
+  })
+  page.on("pageerror", (error) => diagnostics.push(`pageerror: ${error.message}`))
+  page.on("requestfailed", (request) => {
+    diagnostics.push(`requestfailed: ${request.url()} ${request.failure()?.errorText ?? "unknown"}`)
+  })
   await page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" })
   await page.waitForFunction(() => window.probe?.loaded === true)
   await page.waitForTimeout(750)
+  assert.ok(PROXY_REQUESTS.includes(`${origin}${path}`), `${origin}${path} bypassed the local proxy`)
+  assert.ok(PROXY_REQUESTS.includes(`${CHILD_ORIGIN}/`), `${CHILD_ORIGIN}/ bypassed the local proxy`)
+  const childFrame = page.frames().find((frame) => frame.url().startsWith(`${CHILD_ORIGIN}/`))
+  assert.ok(childFrame, `${origin}${path} did not load the OpenScience child frame`)
+  const childEntry = await childFrame.evaluate(() => ({
+    importMaps: Array.from(document.querySelectorAll('script[type="importmap"]')).map(
+      (element) => element.textContent ?? "",
+    ),
+    moduleSources: Array.from(document.querySelectorAll('script[type="module"][src]')).map(
+      (element) => element.src,
+    ),
+  }))
+  assert.deepEqual(childEntry.moduleSources, [PATCHED_ENTRY_URL])
+  assert.equal(childEntry.importMaps.length, 1)
+  assert.deepEqual(JSON.parse(childEntry.importMaps[0]), {
+    imports: { [BASE_ENTRY_PATH]: PATCHED_ENTRY_PATH },
+  })
   await page.evaluate(() => {
     window.probe.messages = []
     window.probe.sourceMessages = []
   })
-  return { context, page }
+  return { context, diagnostics, page }
 }
 
 async function expectSnapshots(browser, origin) {
-  const { context, page } = await openParent(browser, origin)
+  const { context, diagnostics, page } = await openParent(browser, origin)
   try {
     await page.evaluate(
       ([projects, sessions]) => {
-        window.probe.send(projects)
-        window.probe.send(sessions)
+        const requestSnapshots = () => {
+          window.probe.send(projects)
+          window.probe.send(sessions)
+        }
+        requestSnapshots()
+        window.probe.requestTimer = window.setInterval(requestSnapshots, 1_000)
       },
       [PROJECTS_REQUEST, SESSIONS_REQUEST],
     )
-    await page.waitForFunction(
-      () => {
-        const types = new Set(window.probe.messages.map((message) => message.data?.type))
-        return types.has("projects.snapshot") && types.has("general.sessions.snapshot")
-      },
-      undefined,
-      { timeout: 10_000 },
-    )
+    try {
+      await page.waitForFunction(
+        () => {
+          const types = new Set(window.probe.messages.map((message) => message.data?.type))
+          return types.has("projects.snapshot") && types.has("general.sessions.snapshot")
+        },
+        undefined,
+        { timeout: 45_000 },
+      )
+    } catch (error) {
+      const observedTypes = await page.evaluate(() =>
+        window.probe.messages.map((message) => message.data?.type ?? "unknown"),
+      )
+      const childFrame = page
+        .frames()
+        .find((frame) => frame.url().startsWith(`${CHILD_ORIGIN}/`))
+      const childState = childFrame
+        ? await childFrame.evaluate(() => ({
+            bodyText: document.body?.innerText.slice(0, 500) ?? "",
+            embedded: window.parent !== window,
+            readyState: document.readyState,
+            referrer: document.referrer,
+            url: window.location.href,
+          }))
+        : { missing: true }
+      throw new Error(
+        `${origin} did not return both bridge snapshots; ` +
+          `observed=${JSON.stringify(observedTypes)}; ` +
+          `child=${JSON.stringify(childState)}; ` +
+          `diagnostics=${JSON.stringify(diagnostics.slice(-20))}; ` +
+          `proxyRequests=${JSON.stringify(PROXY_REQUESTS.slice(-30))}`,
+        { cause: error },
+      )
+    } finally {
+      await page.evaluate(() => window.clearInterval(window.probe.requestTimer))
+    }
     const messages = await page.evaluate(() => window.probe.messages)
     for (const type of ["projects.snapshot", "general.sessions.snapshot"]) {
       const message = messages.find((candidate) => candidate.data?.type === type)
@@ -245,7 +309,7 @@ async function main() {
     browser = await chromium.launch({
       headless: true,
       proxy: { server: `http://127.0.0.1:${PROXY_PORT}` },
-      args: ["--no-sandbox"],
+      args: ["--no-sandbox", "--proxy-bypass-list=<-loopback>"],
     })
     for (const origin of TRUSTED_PARENT_ORIGINS) await expectSnapshots(browser, origin)
     await expectNoSnapshot(browser, REJECTED_PARENT_ORIGIN)
@@ -257,7 +321,6 @@ async function main() {
       ],
     })
     await expectWrongSourceRejected(browser)
-    process.stdout.write("OpenScience browser bridge policy verified\n")
   } finally {
     if (browser) await browser.close()
     await Promise.all(
@@ -272,7 +335,13 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`)
-  process.exitCode = 1
-})
+main().then(
+  () => {
+    process.stdout.write("OpenScience browser bridge policy verified\n")
+    process.exit(0)
+  },
+  (error) => {
+    process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`)
+    process.exit(1)
+  },
+)

@@ -15,9 +15,9 @@ BASE_IMAGE_ID="sha256:e7d25a1b6d515daec641c8de9c98265f275991eee2396dc578ce9c2fcf
 BASE_INDEX="index.html"
 BASE_BUNDLE="assets/index-B2eNxQLj.js"
 PATCHED_BUNDLE="assets/index-nexpoly-3e4638285546.js"
-PATCHED_INDEX_SHA256="8415959c1d06bbcc71d2531031b1d74e7dbfab93c20297cda8f59cbcc10c669a"
+PATCHED_INDEX_SHA256="cadf4874a517094efb1b50b02ea30c271c6e540f1eb0bdb1b5cff437c95ff383"
 PATCHED_BUNDLE_SHA256="3e46382855462c8064f4c4cea1a417fd15ada4a03de60b5fa7ca0c2fb5962e4a"
-PATCHED_STATIC_TREE_SHA256="3810ec7d6428a960c14b305d5925a22dd03769c9ab36c091a7a387b7b82e3969"
+PATCHED_STATIC_TREE_SHA256="32f45b16e585ef348b4a83a9763412476568ec1781aecb5be69ebd7d7f3c54fd"
 PARENT_POLICY_SHA256="955ae6f5f3d0710dcaacc0906f6326a4ba99321a0e47fc928c198c8967dd0042"
 OLD_RESOLVER='function mf(e,t){if(t)return ZM(e)}'
 NEW_RESOLVER='function mf(e,t){if(!t)return;const n=ZM(document.referrer);return n&&["http://114.214.255.154:9000","http://114.214.255.154:9001"].includes(n)?n:void 0}'
@@ -123,7 +123,11 @@ diff -u "$STAGING/base-rootfs-sha256" "$STAGING/candidate-rootfs-sha256"
 test "$(grep -Fao "$OLD_RESOLVER" "$STAGING/candidate/$PATCHED_BUNDLE" | wc -l)" -eq 0
 test "$(grep -Fao "$NEW_RESOLVER" "$STAGING/candidate/$PATCHED_BUNDLE" | wc -l)" -eq 1
 test "$(grep -Fao "$OLD_CALL" "$STAGING/candidate/$PATCHED_BUNDLE" | wc -l)" -eq 2
-test "$(grep -Fao "/$PATCHED_BUNDLE" "$STAGING/candidate/$BASE_INDEX" | wc -l)" -eq 1
+IMPORT_MAP='<script type="importmap">{"imports":{"/assets/index-B2eNxQLj.js":"/assets/index-nexpoly-3e4638285546.js"}}</script>'
+test "$(grep -Fao "$IMPORT_MAP" "$STAGING/candidate/$BASE_INDEX" | wc -l)" -eq 1
+test "$(grep -Fao "/$BASE_BUNDLE" "$STAGING/candidate/$BASE_INDEX" | wc -l)" -eq 1
+test "$(grep -Fao "/$PATCHED_BUNDLE" "$STAGING/candidate/$BASE_INDEX" | wc -l)" -eq 2
+test "$(grep -R -F -l "index-B2eNxQLj.js" "$STAGING/candidate/assets" | wc -l)" -eq 20
 
 docker start "$CANDIDATE_CONTAINER" >/dev/null
 for _ in {1..30}; do
