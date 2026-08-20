@@ -705,6 +705,39 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
             failures,
         )
 
+    def test_openscience_jobs_are_structurally_governed(self) -> None:
+        failures: list[str] = []
+        policy.validate_openscience_release_policy(CI_TEXT, failures)
+        self.assertEqual(failures, [])
+
+        changed = CI_TEXT.replace(
+            "      - name: Verify both trusted parents and rejected browser bridge cases\n",
+            "      - name: Browser bridge verification removed\n",
+            1,
+        )
+        failures = []
+        policy.validate_openscience_release_policy(changed, failures)
+        self.assertTrue(
+            any(
+                "openscience-overlay must retain the exact reviewed step sequence"
+                in failure
+                for failure in failures
+            ),
+            failures,
+        )
+
+    def test_openscience_release_cannot_publish_on_pull_requests(self) -> None:
+        changed = CI_TEXT.replace(
+            "github.event_name == 'push'",
+            "github.event_name != 'schedule'",
+        )
+        failures: list[str] = []
+        policy.validate_openscience_release_policy(changed, failures)
+        self.assertTrue(
+            any("openscience-release job is missing" in failure for failure in failures),
+            failures,
+        )
+
     def test_postgres_client_bootstrap_is_fast_and_bounded(self) -> None:
         failures: list[str] = []
         policy.validate_postgres_client_bootstrap(

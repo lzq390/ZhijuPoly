@@ -6,9 +6,15 @@ SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -P "$SCRIPT_DIR/../.." && pwd -P)"
 IMAGE_TAG="${FRONTEND_PERMISSION_IMAGE_TAG:-nexpoly-frontend-permission-smoke:local}"
 CONTAINER_NAME="${FRONTEND_PERMISSION_CONTAINER_NAME:-nexpoly-frontend-permission-smoke-$$}"
+EXPECTED_WORKSPACE_URL="${FRONTEND_EXPECTED_WORKSPACE_URL:-}"
 STAGING="$(mktemp -d)"
 INDEX_FILE="$STAGING/index.html"
 ASSET_FILE="$STAGING/main.js"
+
+if [[ -n "$EXPECTED_WORKSPACE_URL" && "$EXPECTED_WORKSPACE_URL" != "http://114.214.255.154:9011/" ]]; then
+  echo "frontend image smoke accepts only the reviewed production OpenScience URL" >&2
+  exit 2
+fi
 
 cleanup() {
   docker rm --force "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -28,6 +34,7 @@ docker build \
   --file "$STAGING/frontend/Dockerfile" \
   --tag "$IMAGE_TAG" \
   --build-arg "SOURCE_REVISION=$(git -C "$REPO_ROOT" rev-parse HEAD)" \
+  --build-arg "VITE_AGENT_WORKSPACE_URL=$EXPECTED_WORKSPACE_URL" \
   "$STAGING"
 
 docker run --rm --add-host backend:127.0.0.1 "$IMAGE_TAG" nginx -t
@@ -68,9 +75,13 @@ docker exec "$CONTAINER_NAME" sh -eu -c \
   "wget -qO- 'http://127.0.0.1$ASSET_PATH'" >"$ASSET_FILE"
 grep -a -q "3Dmol" "$ASSET_FILE"
 grep -a -q "正在同步" "$ASSET_FILE"
-if grep -a -Eq '127\.0\.0\.1:(4454|9011)|localhost:(4454|9011)' "$ASSET_FILE"; then
-  echo "unconfigured frontend image contains an active loopback OpenScience URL" >&2
-  exit 1
+if [[ -n "$EXPECTED_WORKSPACE_URL" ]]; then
+  test "$(grep -aFo "$EXPECTED_WORKSPACE_URL" "$ASSET_FILE" | wc -l)" -ge 1
+else
+  if grep -a -Eq '127\.0\.0\.1:(4454|9011)|localhost:(4454|9011)' "$ASSET_FILE"; then
+    echo "unconfigured frontend image contains an active loopback OpenScience URL" >&2
+    exit 1
+  fi
 fi
 docker exec "$CONTAINER_NAME" sh -eu -c '
   worker_count="$(ps -o user,comm | awk '"'"'$1 != "root" && $2 == "nginx" { count += 1 } END { print count + 0 }'"'"')"
