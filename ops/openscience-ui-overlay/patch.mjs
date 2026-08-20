@@ -10,7 +10,7 @@ export const BASE_BUNDLE_RELATIVE_PATH = "assets/index-B2eNxQLj.js"
 export const BASE_INDEX_SHA256 = "30c4ff024456fba5ad397fe6d17ede57427c6c7fe189e27d5488c7009452c9ff"
 export const BASE_BUNDLE_SHA256 = "6b4c7264c00e1c83a6d8fe610b2da4fe4c61c86d7a2626e2cdc2f4a1849f3cf2"
 export const BASE_STATIC_TREE_SHA256 = "b942ea5aac61ed7568327e40a3193b3c35c12380f05234775f122b6a2b98bc9d"
-export const PATCHED_STATIC_TREE_SHA256 = "3810ec7d6428a960c14b305d5925a22dd03769c9ab36c091a7a387b7b82e3969"
+export const PATCHED_STATIC_TREE_SHA256 = "32f45b16e585ef348b4a83a9763412476568ec1781aecb5be69ebd7d7f3c54fd"
 
 export const OLD_RESOLVER = "function mf(e,t){if(t)return ZM(e)}"
 export const OLD_CALL = 'mf("http://114.214.255.154:9001",i!==window)'
@@ -77,8 +77,25 @@ export function rewriteIndex(source, newBundleName) {
   }
   const oldReference = `/${BASE_BUNDLE_RELATIVE_PATH}`
   const newReference = `/assets/${newBundleName}`
-  const rewritten = replaceExactly(source, oldReference, newReference, 1, "index bundle reference")
-  if (countOccurrences(rewritten, oldReference) !== 0 || countOccurrences(rewritten, newReference) !== 1) {
+  const oldEntry = `<script type="module" crossorigin src="${oldReference}"></script>`
+  const importMap =
+    `<script type="importmap">` +
+    JSON.stringify({ imports: { [oldReference]: newReference } }) +
+    `</script>`
+  const newEntry = `${importMap}\n    <script type="module" crossorigin src="${newReference}"></script>`
+  if (countOccurrences(source, oldReference) !== 1) {
+    throw new Error("base index bundle reference count differs")
+  }
+  if (countOccurrences(source, '<script type="importmap">') !== 0) {
+    throw new Error("base index unexpectedly contains an import map")
+  }
+  const rewritten = replaceExactly(source, oldEntry, newEntry, 1, "index module entry")
+  if (
+    countOccurrences(rewritten, oldReference) !== 1 ||
+    countOccurrences(rewritten, newReference) !== 2 ||
+    countOccurrences(rewritten, importMap) !== 1 ||
+    rewritten.indexOf(importMap) > rewritten.indexOf(newEntry.split("\n")[1])
+  ) {
     throw new Error("index bundle reference rewrite is not exact")
   }
   return rewritten

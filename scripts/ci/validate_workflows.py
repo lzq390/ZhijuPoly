@@ -950,7 +950,7 @@ def validate_openscience_release_policy(
         "sha256:955ae6f5f3d0710dcaacc0906f6326a4ba99321a0e47fc928c198c8967dd0042"
     )
     derived_tree = (
-        "sha256:3810ec7d6428a960c14b305d5925a22dd03769c9ab36c091a7a387b7b82e3969"
+        "sha256:32f45b16e585ef348b4a83a9763412476568ec1781aecb5be69ebd7d7f3c54fd"
     )
     dockerfile_markers = (
         f"ghcr.io/lzq390/nexpoly-web@{base_digest}",
@@ -976,6 +976,7 @@ def validate_openscience_release_policy(
         "PATCHED_STATIC_TREE_SHA256",
         "OLD_RESOLVER",
         "OLD_CALL",
+        '<script type="importmap">',
         "document.referrer",
         "http://114.214.255.154:9000",
         "http://114.214.255.154:9001",
@@ -998,6 +999,7 @@ def validate_openscience_release_policy(
         "sendFromSibling",
         "startBrowserProxy",
         "REVIEWED_PORTS",
+        "PATCHED_ENTRY_PATH",
     ):
         if marker not in browser:
             failures.append(f"OpenScience browser probe is missing: {marker}")
@@ -1012,6 +1014,8 @@ def validate_openscience_release_policy(
             failures.append(f"OpenScience image assertion is missing: {marker}")
     for marker in (
         "mcr.microsoft.com/playwright@sha256:",
+        "BROWSER_CONTAINER",
+        "/usr/bin/timeout --signal=TERM --kill-after=10s 180s",
         "--network \"container:$CANDIDATE_CONTAINER\"",
         "node ./browser_probe.mjs",
     ):

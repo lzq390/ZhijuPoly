@@ -5,10 +5,14 @@ was running on 2026-08-20. The base had no source or revision labels, so the
 overlay deliberately patches only its already-deployed NexPoly bridge resolver.
 
 The effective static tree is allowed to differ only by replacing
-`assets/index-B2eNxQLj.js` with a cache-busted patched bundle and updating the
-single reference in `index.html`. The resolver selects the actual parent from
-`document.referrer` and accepts only the production and development NexPoly
-origins. It never uses a wildcard target origin.
+`assets/index-B2eNxQLj.js` with a cache-busted patched bundle and updating
+`index.html`. Upstream lazy chunks import the original entry URL, so the index
+also installs an exact import map from that URL to the new content-addressed
+entry before the first module script. This preserves the untouched upstream
+chunk graph without executing or trusting a cached copy of the old entry. The
+resolver selects the actual parent from `document.referrer` and accepts only
+the production and development NexPoly origins. It never uses a wildcard
+target origin.
 
 The image labels bind both the baseline and derived static-tree manifests, the
 baseline manifest/config identity, the two explicit parent Origins, and the
