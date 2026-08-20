@@ -63,6 +63,18 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:9011/", frontend_env + dev_env)
         self.assertNotIn("4454", dockerfile + compose + dev_compose + frontend_env + dev_env)
 
+    def test_release_web_image_activates_the_reviewed_openscience_workspace(self) -> None:
+        workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        production_url = "VITE_AGENT_WORKSPACE_URL=http://114.214.255.154:9011/"
+        self.assertEqual(workflow.count(production_url), 1)
+        self.assertIn('grep -aFq "http://114.214.255.154:9011/" "$web_asset"', workflow)
+        self.assertIn(
+            "FRONTEND_EXPECTED_WORKSPACE_URL: http://114.214.255.154:9011/",
+            workflow,
+        )
+
     def test_blank_ci_database_and_production_takeover_use_distinct_migration_modes(self) -> None:
         workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"

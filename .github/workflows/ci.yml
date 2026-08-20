@@ -324,6 +324,11 @@ jobs:
         run: npm run build
       - name: Verify restrictive static-source permissions in the nginx image
         run: scripts/ci/test_frontend_image_permissions.sh
+      - name: Verify the production OpenScience URL in the nginx image
+        env:
+          FRONTEND_EXPECTED_WORKSPACE_URL: http://114.214.255.154:9011/
+          FRONTEND_PERMISSION_IMAGE_TAG: nexpoly-frontend-production-workspace-smoke:local
+        run: scripts/ci/test_frontend_image_permissions.sh
 
   worker-tests:
     name: Monomer-MD Worker tests
@@ -583,6 +588,56 @@ jobs:
       - name: Run real B-schema through F/0013, F/0014 and F/0015 transition smoke
         run: scripts/ci/test_exact_b_bridge.sh
 
+  openscience-overlay:
+    name: Governed OpenScience UI overlay
+    needs: resolve-sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Install the pinned browser probe package
+        run: npm ci --ignore-scripts --prefix ops/openscience-ui-overlay
+      - name: Run deterministic overlay patch tests
+        run: node --test ops/openscience-ui-overlay/test_patch.mjs
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the governed overlay without publishing
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
+          github-token: ${{ github.token }}
+          file: ops/openscience-ui-overlay/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: nexpoly-ci-openscience-ui:sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          build-args: |
+            SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
+            VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          cache-from: type=gha,scope=ci-openscience-ui-overlay-v1
+          cache-to: type=gha,mode=max,scope=ci-openscience-ui-overlay-v1
+          provenance: false
+      - name: Verify the governed overlay image
+        run: |
+          scripts/ci/test_openscience_overlay_image.sh \
+            nexpoly-ci-openscience-ui:sha-${{ needs.resolve-sha.outputs.candidate_sha }} \
+            "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Verify both trusted parents and rejected browser bridge cases
+        run: |
+          scripts/ci/test_openscience_bridge_browser.sh \
+            nexpoly-ci-openscience-ui:sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+
   ci-gate:
     name: ci-gate
     if: always()
@@ -599,6 +654,7 @@ jobs:
       - image-build
       - bridge-validation
       - exact-b-bridge
+      - openscience-overlay
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -744,6 +800,7 @@ jobs:
             SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}
             SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
             VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+            VITE_AGENT_WORKSPACE_URL=http://114.214.255.154:9011/
           cache-from: type=gha,scope=release-web-${{ hashFiles('frontend/package-lock.json') }}
           cache-to: type=gha,mode=max,scope=release-web-${{ hashFiles('frontend/package-lock.json') }}
           provenance: false
@@ -767,10 +824,11 @@ jobs:
           backend="${network}-backend"
           web="${network}-web"
           web_html="/tmp/${network}.html"
+          web_asset="/tmp/${network}.js"
           cleanup() {
             docker rm -f "$web" "$backend" "$postgres" >/dev/null 2>&1 || true
             docker network rm "$network" >/dev/null 2>&1 || true
-            rm -f "$web_html"
+            rm -f "$web_html" "$web_asset"
           }
           trap cleanup EXIT
           docker network create "$network"
@@ -808,7 +866,8 @@ jobs:
           curl --fail --silent --show-error http://127.0.0.1:18080/ -o "$web_html"
           asset_path="$(grep -Eo '(src|href)="/assets/[^"?]+' "$web_html" | head -n1 | cut -d'"' -f2)"
           [[ "$asset_path" == /assets/* ]]
-          curl --fail --silent --show-error "http://127.0.0.1:18080${asset_path}" >/dev/null
+          curl --fail --silent --show-error "http://127.0.0.1:18080${asset_path}" -o "$web_asset"
+          grep -aFq "http://114.214.255.154:9011/" "$web_asset"
       - name: Seal published SHA tags to reviewed digests
         env:
           RELEASE_COMMIT: ${{ needs.resolve-sha.outputs.candidate_sha }}
@@ -835,3 +894,71 @@ jobs:
             "$EXPECTED_BACKEND_DIGEST"
           test "$(resolve_remote_digest "$web_tag")" = \
             "$EXPECTED_WEB_DIGEST"
+
+  openscience-release:
+    name: Publish and verify immutable OpenScience UI
+    if: >-
+      !cancelled() &&
+      needs.ci-gate.result == 'success' &&
+      github.event_name == 'push'
+    needs: [resolve-sha, ci-gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out release SHA
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Assert immutable checkout
+        run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to private GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: openscience
+        name: Build and push OpenScience UI once
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: "https://github.com/lzq390/ZhijuPoly.git#${{ needs.resolve-sha.outputs.candidate_sha }}"
+          github-token: ${{ github.token }}
+          file: ops/openscience-ui-overlay/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/lzq390/openscience-ui:sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.resolve-sha.outputs.candidate_sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          build-args: |
+            SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
+            VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+          cache-from: type=gha,scope=release-openscience-ui-overlay-v1
+          cache-to: type=gha,mode=max,scope=release-openscience-ui-overlay-v1
+          provenance: false
+      - name: Verify the exact published OpenScience UI digest
+        env:
+          OPENSCIENCE_IMAGE: ghcr.io/lzq390/openscience-ui@${{ steps.openscience.outputs.digest }}
+        run: |
+          scripts/ci/test_openscience_overlay_image.sh \
+            "$OPENSCIENCE_IMAGE" \
+            "${{ needs.resolve-sha.outputs.candidate_sha }}"
+      - name: Seal the published OpenScience SHA tag
+        env:
+          RELEASE_COMMIT: ${{ needs.resolve-sha.outputs.candidate_sha }}
+          EXPECTED_OPENSCIENCE_DIGEST: ${{ steps.openscience.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_OPENSCIENCE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image_tag="ghcr.io/lzq390/openscience-ui:sha-${RELEASE_COMMIT}"
+          remote_digest="sha256:$(docker buildx imagetools inspect --raw "$image_tag" | sha256sum | awk '{print $1}')"
+          test "$remote_digest" = "$EXPECTED_OPENSCIENCE_DIGEST"

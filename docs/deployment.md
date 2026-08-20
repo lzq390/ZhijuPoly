@@ -97,30 +97,74 @@ The production Git remote uses a dedicated read-only deploy identity and a
 pinned host key. Personal credential helpers are not permitted. The source
 checkout and its Git metadata must not be group- or world-writable.
 
-### OpenScience workspace reservation
+### OpenScience workspace release
 
 OpenScience is an independently deployed frontend and is not a service in the
-NexPoly production Compose project. Port `9011` is reserved for its future
-browser-facing endpoint.
+NexPoly production Compose project. Its browser-facing endpoint remains
+`http://114.214.255.154:9011/`; both the production NexPoly parent on `9000`
+and the development parent on `9001` use that same child endpoint.
 
 `VITE_AGENT_WORKSPACE_URL` is a frontend build-time value. When it is empty,
 the immutable Web image renders the "正在同步" placeholder without mounting an
 iframe or sending bridge messages. Changing the URL requires building and
 publishing a new Web image; setting the variable only in a running container or
-production Compose environment cannot change an existing Vite bundle.
+production Compose environment cannot change an existing Vite bundle. The
+production Web release workflow builds the exact `9011` endpoint into the
+image; generic and local builds still default to an empty value.
 
 `http://127.0.0.1:9011/` is valid only when the browser also runs on the server
 or when both the NexPoly and OpenScience ports are forwarded over SSH. A remote
-browser must use a browser-reachable address. The planned endpoint for the
-current server is `http://114.214.255.154:9011/`, but it is intentionally not
-built into the current placeholder image.
+browser must use the browser-reachable address above.
 
-Before a later activation, recheck port ownership, make the OpenScience service
-reachable on `9011`, and review its iframe and exact parent-Origin policy. The
-current NexPoly development entry is `http://114.214.255.154:9001/`; the
-different child port is still a separate Origin. If NexPoly moves to HTTPS, an
-HTTP iframe on `9011` will be blocked as mixed content and OpenScience must gain
-an HTTPS endpoint before activation.
+The governed OpenScience overlay is published separately as
+`ghcr.io/lzq390/openscience-ui:sha-<full-main-sha>`. Its exact deployed base
+manifest, static tree, bridge resolver, two call sites, cache-busted asset and
+OCI labels are fail-closed CI contracts. The resolver derives the actual parent
+from `document.referrer`, accepts only the exact `9000` and `9001` HTTP Origins,
+and never uses a wildcard postMessage target.
+
+Use the source-pinned release transaction instead of editing the external
+Compose `.env` or recreating the container by hand. `plan` pulls and validates
+the candidate digest without changing the live service. Install the lockfile-
+exact, script-only Playwright package first; its browsers come exclusively from
+the digest-pinned container recorded in the plan. Review the returned plan
+digest, then repeat it exactly for `apply`:
+
+```bash
+openscience_operation_id=openscience-<utc-timestamp>
+openscience_image=ghcr.io/lzq390/openscience-ui@sha256:<reviewed-digest>
+
+npm ci --ignore-scripts --prefix ops/openscience-ui-overlay
+
+./scripts/openscience_ui_release.py plan \
+  --sha <full-main-sha> \
+  --image "$openscience_image" \
+  --operation-id "$openscience_operation_id"
+
+./scripts/openscience_ui_release.py apply \
+  --sha <full-main-sha> \
+  --image "$openscience_image" \
+  --operation-id "$openscience_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest>
+```
+
+`apply` starts an isolated candidate on loopback `19011`, checks UI health and
+the same-network Backend proxy, then runs a real Chromium bridge probe for both
+trusted parents plus rejected Origin/referrer/namespace/version/source cases.
+It atomically replaces only the image assignment and recreates only the
+OpenScience UI service, then repeats the browser probe against the live
+container. Any failed switch automatically restores the exact previous `.env`
+payload and image. A completed switch can be explicitly reverted with the same
+reviewed plan digest:
+
+```bash
+./scripts/openscience_ui_release.py rollback \
+  --operation-id "$openscience_operation_id" \
+  --confirm-plan-sha256 sha256:<reviewed-plan-digest>
+```
+
+If NexPoly moves to HTTPS, an HTTP iframe on `9011` will be blocked as mixed
+content and OpenScience must gain an HTTPS endpoint before activation.
 
 ### Development tunnel proxy
 

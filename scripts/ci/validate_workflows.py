@@ -37,6 +37,27 @@ BACKEND_IMAGE_ASSERTION_PATH = (
 POSTGRES_CLIENT_BOOTSTRAP_PATH = (
     REPOSITORY_ROOT / "scripts" / "ci" / "ensure_postgresql_16_client.sh"
 )
+OPENSCIENCE_DOCKERFILE_PATH = (
+    REPOSITORY_ROOT / "ops" / "openscience-ui-overlay" / "Dockerfile"
+)
+OPENSCIENCE_PATCH_PATH = (
+    REPOSITORY_ROOT / "ops" / "openscience-ui-overlay" / "patch.mjs"
+)
+OPENSCIENCE_PACKAGE_LOCK_PATH = (
+    REPOSITORY_ROOT / "ops" / "openscience-ui-overlay" / "package-lock.json"
+)
+OPENSCIENCE_BROWSER_PROBE_PATH = (
+    REPOSITORY_ROOT / "ops" / "openscience-ui-overlay" / "browser_probe.mjs"
+)
+OPENSCIENCE_IMAGE_ASSERTION_PATH = (
+    REPOSITORY_ROOT / "scripts" / "ci" / "test_openscience_overlay_image.sh"
+)
+OPENSCIENCE_BROWSER_ASSERTION_PATH = (
+    REPOSITORY_ROOT / "scripts" / "ci" / "test_openscience_bridge_browser.sh"
+)
+OPENSCIENCE_RELEASE_CONTROLLER_PATH = (
+    REPOSITORY_ROOT / "scripts" / "openscience_ui_release.py"
+)
 
 PINNED_ACTION = re.compile(
     r"^\s*-?\s*uses:\s*[^\s@]+@([0-9a-f]{40})(?:\s*#.*)?$"
@@ -520,6 +541,7 @@ RELEASE_WEB_BUILD_STEP_LINES = (
     "            SOURCE_REVISION=${{ needs.resolve-sha.outputs.candidate_sha }}",
     "            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}",
     "            VERSION=sha-${{ needs.resolve-sha.outputs.candidate_sha }}",
+    "            VITE_AGENT_WORKSPACE_URL=http://114.214.255.154:9011/",
     (
         "          cache-from: type=gha,scope=release-web-"
         "${{ hashFiles('frontend/package-lock.json') }}"
@@ -585,6 +607,26 @@ RELEASE_STEP_HEADERS = (
     "      - name: Record immutable image references",
     "      - name: Smoke the exact published image digests",
     "      - name: Seal published SHA tags to reviewed digests",
+)
+OPENSCIENCE_OVERLAY_STEP_HEADERS = (
+    "      - name: Check out candidate",
+    "      - name: Assert immutable checkout",
+    "      - name: Set up Node.js",
+    "      - name: Install the pinned browser probe package",
+    "      - name: Run deterministic overlay patch tests",
+    "      - name: Set up Buildx",
+    "      - name: Build the governed overlay without publishing",
+    "      - name: Verify the governed overlay image",
+    "      - name: Verify both trusted parents and rejected browser bridge cases",
+)
+OPENSCIENCE_RELEASE_STEP_HEADERS = (
+    "      - name: Check out release SHA",
+    "      - name: Assert immutable checkout",
+    "      - name: Set up Buildx",
+    "      - name: Log in to private GHCR",
+    "      - id: openscience",
+    "      - name: Verify the exact published OpenScience UI digest",
+    "      - name: Seal the published OpenScience SHA tag",
 )
 BACKEND_DOCKERFILE_IDENTITY_LINES = (
     'ARG SOURCE_REVISION="unknown"',
@@ -861,6 +903,203 @@ def validate_backend_image_identity_policy(
                         "release SHA-tag digest seal must resolve both published "
                         "tags and match the reviewed action digests"
                     )
+
+
+def validate_openscience_release_policy(
+    ci_text: str,
+    failures: list[str],
+) -> None:
+    file_modes = {
+        OPENSCIENCE_DOCKERFILE_PATH: 0o644,
+        OPENSCIENCE_PATCH_PATH: 0o755,
+        OPENSCIENCE_PACKAGE_LOCK_PATH: 0o644,
+        OPENSCIENCE_BROWSER_PROBE_PATH: 0o755,
+        OPENSCIENCE_IMAGE_ASSERTION_PATH: 0o755,
+        OPENSCIENCE_BROWSER_ASSERTION_PATH: 0o755,
+        OPENSCIENCE_RELEASE_CONTROLLER_PATH: 0o755,
+    }
+    payloads: dict[Path, str] = {}
+    for path, expected_mode in file_modes.items():
+        if path.is_symlink() or not path.is_file():
+            failures.append(
+                f"OpenScience release control is missing or unsafe: "
+                f"{path.relative_to(REPOSITORY_ROOT)}"
+            )
+            continue
+        actual_mode = stat.S_IMODE(path.stat().st_mode)
+        if actual_mode != expected_mode:
+            failures.append(
+                f"{path.relative_to(REPOSITORY_ROOT)} must use mode "
+                f"{expected_mode:04o}"
+            )
+        try:
+            payloads[path] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            failures.append(f"OpenScience release control cannot be read: {exc}")
+
+    dockerfile = payloads.get(OPENSCIENCE_DOCKERFILE_PATH, "")
+    patch = payloads.get(OPENSCIENCE_PATCH_PATH, "")
+    browser = payloads.get(OPENSCIENCE_BROWSER_PROBE_PATH, "")
+    image_assertion = payloads.get(OPENSCIENCE_IMAGE_ASSERTION_PATH, "")
+    browser_assertion = payloads.get(OPENSCIENCE_BROWSER_ASSERTION_PATH, "")
+    release_controller = payloads.get(OPENSCIENCE_RELEASE_CONTROLLER_PATH, "")
+    base_digest = (
+        "sha256:e7d25a1b6d515daec641c8de9c98265f275991eee2396dc578ce9c2fcfdeb197"
+    )
+    parent_policy = (
+        "sha256:955ae6f5f3d0710dcaacc0906f6326a4ba99321a0e47fc928c198c8967dd0042"
+    )
+    derived_tree = (
+        "sha256:3810ec7d6428a960c14b305d5925a22dd03769c9ab36c091a7a387b7b82e3969"
+    )
+    dockerfile_markers = (
+        f"ghcr.io/lzq390/nexpoly-web@{base_digest}",
+        "FROM ${OPENSCIENCE_BASE_IMAGE} AS openscience-base",
+        "FROM node:22-bookworm-slim@sha256:",
+        "FROM ${OPENSCIENCE_BASE_IMAGE}",
+        f'com.nexpoly.openscience.derived-static-tree="{derived_tree}"',
+        f'com.nexpoly.openscience.parent-policy-sha256="{parent_policy}"',
+        'USER root',
+        'USER nginx',
+    )
+    for marker in dockerfile_markers:
+        if marker not in dockerfile:
+            failures.append(f"OpenScience Dockerfile is missing: {marker}")
+    if dockerfile.count("FROM ${OPENSCIENCE_BASE_IMAGE}") != 2:
+        failures.append("OpenScience Dockerfile must use the exact base manifest twice")
+    if ":latest" in dockerfile or "provenance: true" in dockerfile:
+        failures.append("OpenScience Dockerfile contains a mutable image control")
+
+    patch_markers = (
+        "BASE_BUNDLE_SHA256",
+        "BASE_STATIC_TREE_SHA256",
+        "PATCHED_STATIC_TREE_SHA256",
+        "OLD_RESOLVER",
+        "OLD_CALL",
+        "document.referrer",
+        "http://114.214.255.154:9000",
+        "http://114.214.255.154:9001",
+        derived_tree.removeprefix("sha256:"),
+        parent_policy.removeprefix("sha256:"),
+        'replaceExactly(source, OLD_RESOLVER, NEW_RESOLVER, 1, "bridge resolver")',
+        "OpenScience trusted-parent call count differs",
+    )
+    for marker in patch_markers:
+        if marker not in patch:
+            failures.append(f"OpenScience deterministic patch is missing: {marker}")
+    if '"*"' in patch or "'*'" in patch:
+        failures.append("OpenScience deterministic patch must not contain a wildcard Origin")
+
+    for marker in (
+        "projects.snapshot",
+        "general.sessions.snapshot",
+        "other.namespace",
+        "no-referrer",
+        "sendFromSibling",
+        "startBrowserProxy",
+        "REVIEWED_PORTS",
+    ):
+        if marker not in browser:
+            failures.append(f"OpenScience browser probe is missing: {marker}")
+    for marker in (
+        base_digest,
+        derived_tree.removeprefix("sha256:"),
+        parent_policy.removeprefix("sha256:"),
+        "docker export",
+        "base-rootfs-metadata",
+    ):
+        if marker not in image_assertion:
+            failures.append(f"OpenScience image assertion is missing: {marker}")
+    for marker in (
+        "mcr.microsoft.com/playwright@sha256:",
+        "--network \"container:$CANDIDATE_CONTAINER\"",
+        "node ./browser_probe.mjs",
+    ):
+        if marker not in browser_assertion:
+            failures.append(f"OpenScience browser assertion is missing: {marker}")
+    for marker in (
+        'commands.add_parser("plan")',
+        'commands.add_parser("apply")',
+        'commands.add_parser("rollback")',
+        "run_browser_probe(name)",
+        "run_browser_probe(LIVE_CONTAINER)",
+        "OpenScience .env changed during candidate verification",
+        "OpenScience release failed and was rolled back",
+    ):
+        if marker not in release_controller:
+            failures.append(f"OpenScience release controller is missing: {marker}")
+
+    package_lock_text = payloads.get(OPENSCIENCE_PACKAGE_LOCK_PATH)
+    if package_lock_text is not None:
+        try:
+            package_lock = json.loads(package_lock_text)
+            packages = package_lock.get("packages", {})
+            root = packages.get("", {})
+            playwright = packages.get("node_modules/playwright", {})
+            playwright_core = packages.get("node_modules/playwright-core", {})
+            if (
+                package_lock.get("lockfileVersion") != 3
+                or root.get("dependencies", {}).get("playwright") != "1.62.1"
+                or playwright.get("version") != "1.62.1"
+                or playwright_core.get("version") != "1.62.1"
+                or not isinstance(playwright.get("integrity"), str)
+                or not isinstance(playwright_core.get("integrity"), str)
+            ):
+                failures.append("OpenScience Playwright package lock is not exact")
+        except json.JSONDecodeError as exc:
+            failures.append(f"OpenScience Playwright package lock is invalid: {exc}")
+
+    jobs = (
+        ("openscience-overlay", OPENSCIENCE_OVERLAY_STEP_HEADERS),
+        ("openscience-release", OPENSCIENCE_RELEASE_STEP_HEADERS),
+    )
+    for job_name, expected_headers in jobs:
+        body = workflow_job_body(ci_text, job_name, failures)
+        if body is None:
+            continue
+        steps = workflow_step_blocks(body)
+        actual_headers = tuple(
+            step.splitlines()[0] for step in steps if step.splitlines()
+        )
+        if actual_headers != expected_headers:
+            failures.append(
+                f"{job_name} must retain the exact reviewed step sequence"
+            )
+        if "continue-on-error:" in body or "pull_request_target" in body:
+            failures.append(f"{job_name} contains a fail-open execution control")
+
+    overlay_job = workflow_job_body(ci_text, "openscience-overlay", failures)
+    if overlay_job is not None:
+        for marker in (
+            "    needs: resolve-sha",
+            "    timeout-minutes: 30",
+            "npm ci --ignore-scripts --prefix ops/openscience-ui-overlay",
+            "push: false",
+            "load: true",
+            "provenance: false",
+            "scripts/ci/test_openscience_overlay_image.sh",
+            "scripts/ci/test_openscience_bridge_browser.sh",
+        ):
+            if marker not in overlay_job:
+                failures.append(f"openscience-overlay job is missing: {marker}")
+    release_job = workflow_job_body(ci_text, "openscience-release", failures)
+    if release_job is not None:
+        for marker in (
+            "needs.ci-gate.result == 'success'",
+            "github.event_name == 'push'",
+            "    needs: [resolve-sha, ci-gate]",
+            "      packages: write",
+            "push: true",
+            "provenance: false",
+            "ghcr.io/lzq390/openscience-ui:sha-",
+            "ghcr.io/lzq390/openscience-ui@${{ steps.openscience.outputs.digest }}",
+            'test "$remote_digest" = "$EXPECTED_OPENSCIENCE_DIGEST"',
+        ):
+            if marker not in release_job:
+                failures.append(f"openscience-release job is missing: {marker}")
+    gate_job = workflow_job_body(ci_text, "ci-gate", failures)
+    if gate_job is not None and gate_job.count("      - openscience-overlay") != 1:
+        failures.append("ci-gate must require the governed OpenScience overlay job")
 
 
 def validate_backend_dockerfile_identity_policy(
@@ -2547,6 +2786,7 @@ def main() -> int:
         failures,
     )
     validate_backend_image_identity_policy(ci_text, failures)
+    validate_openscience_release_policy(ci_text, failures)
     validate_backend_dockerfile_identity_policy(
         backend_dockerfile_text,
         failures,
@@ -2585,8 +2825,10 @@ def main() -> int:
         if forbidden in ci_text:
             failures.append(f"ci.yml contains forbidden legacy/implicit control: {forbidden}")
 
-    if ci_text.count("push: true") != 2:
-        failures.append("ci.yml must push exactly the Backend and Web SHA images")
+    if ci_text.count("push: true") != 3:
+        failures.append(
+            "ci.yml must push exactly the Backend, Web, and OpenScience UI SHA images"
+        )
     if ci_text.count("ghcr.io/lzq390/nexpoly-backend:sha-") != 2:
         failures.append(
             "ci.yml must publish and finally seal one immutable Backend SHA tag"
@@ -2595,18 +2837,22 @@ def main() -> int:
         failures.append(
             "ci.yml must publish and finally seal one immutable Web SHA tag"
         )
+    if ci_text.count("ghcr.io/lzq390/openscience-ui:sha-") != 2:
+        failures.append(
+            "ci.yml must publish and finally seal one immutable OpenScience UI SHA tag"
+        )
     if ci_text.count(
         "org.opencontainers.image.revision=${{ needs.resolve-sha.outputs.candidate_sha }}"
-    ) != 2:
-        failures.append("both published images must bind the immutable source revision label")
+    ) != 3:
+        failures.append("all published images must bind the immutable source revision label")
     if ci_text.count(
         "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}"
-    ) != 2:
-        failures.append("both published images must bind the repository source label")
+    ) != 3:
+        failures.append("all published images must bind the repository source label")
     if ci_text.count(
         "org.opencontainers.image.version=sha-${{ needs.resolve-sha.outputs.candidate_sha }}"
-    ) != 2:
-        failures.append("both published images must bind the immutable SHA version label")
+    ) != 3:
+        failures.append("all published images must bind the immutable SHA version label")
     if ci_text.count("uses: actions/checkout@") != ci_text.count("Assert immutable checkout"):
         failures.append("every checkout must be followed by an immutable SHA assertion")
     if ci_text.count("uses: actions/checkout@") != ci_text.count("persist-credentials: false"):
