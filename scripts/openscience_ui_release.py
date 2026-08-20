@@ -640,14 +640,13 @@ def apply_release(arguments: argparse.Namespace) -> dict[str, Any]:
             verify_live_candidate(plan)
             result = {
                 "schema_version": 1,
-                "phase": "completed",
                 "operation_id": arguments.operation_id,
                 "plan_sha256": plan_sha256,
                 "target_sha": arguments.sha,
                 "candidate_image": arguments.image,
             }
             update_journal(operation_dir, "completed", **result)
-            return result
+            return {"phase": "completed", **result}
         except Exception as exc:
             update_journal(operation_dir, "rollback-intent", error=str(exc)[:500])
             if env_mutated:
@@ -700,12 +699,11 @@ def rollback_release(arguments: argparse.Namespace) -> dict[str, Any]:
         )
         result = {
             "schema_version": 1,
-            "phase": "rolled-back",
             "operation_id": arguments.operation_id,
             "plan_sha256": digest(plan),
         }
         update_journal(operation_dir, "rolled-back", **result)
-        return result
+        return {"phase": "rolled-back", **result}
 
 
 def parser() -> argparse.ArgumentParser:
