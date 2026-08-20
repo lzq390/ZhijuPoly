@@ -414,7 +414,9 @@ separately reviewed compatibility-recovery procedure.
 
 First create the independent whole-directory golden snapshot. `plan` is
 logically zero-write. `apply` copies every `.git` byte without hard links or
-reflinks, runs strict `git fsck`, and publishes the create-once
+reflinks, preserves the sealed owner-private Git file modes (`0400` for
+immutable objects, `0600` for mutable metadata, and `0700` only where already
+executable), runs strict `git fsck`, and publishes the create-once
 `state/production-git-snapshot.json` authority:
 
 ```bash
