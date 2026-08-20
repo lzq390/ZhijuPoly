@@ -58,6 +58,10 @@ FIEMAP_EXTENT_FORMAT = "=QQQQQIIII"
 FIEMAP_HEADER_SIZE = struct.calcsize(FIEMAP_HEADER_FORMAT)
 FIEMAP_EXTENT_SIZE = struct.calcsize(FIEMAP_EXTENT_FORMAT)
 FIEMAP_BATCH_EXTENTS = 256
+PRIVATE_GIT_FILE_MODES = frozenset({0o400, 0o600, 0o700})
+PRIVATE_GIT_FILE_MODE_STRINGS = frozenset(
+    format(mode, "04o") for mode in PRIVATE_GIT_FILE_MODES
+)
 
 
 class SnapshotError(RuntimeError):
@@ -228,7 +232,7 @@ def _read_regular_file_at(
         if (
             not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.geteuid()
-            or stat.S_IMODE(before.st_mode) not in {0o600, 0o700}
+            or stat.S_IMODE(before.st_mode) not in PRIVATE_GIT_FILE_MODES
             or before.st_nlink != 1
             or before.st_size < 0
             or before.st_size > MAX_FILE_BYTES
@@ -305,7 +309,7 @@ def _hash_regular_file_at(
         if (
             not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.geteuid()
-            or stat.S_IMODE(before.st_mode) not in {0o600, 0o700}
+            or stat.S_IMODE(before.st_mode) not in PRIVATE_GIT_FILE_MODES
             or before.st_nlink != 1
             or before.st_size < 0
             or before.st_size > MAX_FILE_BYTES
@@ -557,7 +561,7 @@ def validate_manifest(document: object) -> dict[str, object]:
         elif record.get("kind") == "file":
             if (
                 set(record) != {"path", "kind", "mode", "size", "sha256"}
-                or record.get("mode") not in {"0600", "0700"}
+                or record.get("mode") not in PRIVATE_GIT_FILE_MODE_STRINGS
                 or isinstance(record.get("size"), bool)
                 or not isinstance(record.get("size"), int)
                 or record["size"] < 0
@@ -875,7 +879,7 @@ def _remove_private_tree(path: Path) -> None:
         elif stat.S_ISREG(metadata.st_mode):
             if (
                 metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(metadata.st_mode) not in {0o600, 0o700}
+                or stat.S_IMODE(metadata.st_mode) not in PRIVATE_GIT_FILE_MODES
                 or metadata.st_nlink != 1
             ):
                 raise SnapshotError(f"partial snapshot file is unsafe: {relative}")

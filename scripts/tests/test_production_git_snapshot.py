@@ -176,6 +176,26 @@ class ProductionGitSnapshotTests(unittest.TestCase):
         self.assertEqual(journal["phase"], "completed")
         self.assertEqual(journal["completed_at"], authority["completed_at"])
 
+    def test_owner_read_only_git_objects_are_preserved(self) -> None:
+        object_file = next(
+            path
+            for path in (self.production / ".git/objects").rglob("*")
+            if path.is_file()
+        )
+        object_file.chmod(0o400)
+        relative = object_file.relative_to(self.production / ".git").as_posix()
+        manifest = SNAPSHOT.scan_git_directory(self.production / ".git")
+        records = {record["path"]: record for record in manifest["records"]}
+        self.assertEqual(records[relative]["mode"], "0400")
+
+        manager = self._manager()
+        planned = self._plan(manager)
+        with mock.patch.object(SNAPSHOT, "_fiemap_has_shared_extents", return_value=False):
+            authority = self._apply(manager, planned)
+        copied = Path(authority["backup_git_dir"]) / relative
+        self.assertEqual(copied.stat().st_mode & 0o777, 0o400)
+        self.assertEqual(copied.read_bytes(), object_file.read_bytes())
+
     def test_verifier_rejects_snapshot_content_drift(self) -> None:
         manager = self._manager()
         planned = self._plan(manager)
@@ -277,7 +297,7 @@ class ProductionGitSnapshotTests(unittest.TestCase):
             staging.mkdir(mode=0o700)
             partial = staging / "partial"
             partial.write_bytes(b"interrupted copy")
-            partial.chmod(0o600)
+            partial.chmod(0o400)
             authority = self._apply(manager, planned)
 
         self.assertFalse(staging.exists())
