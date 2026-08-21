@@ -36,9 +36,15 @@ vi.mock("../services/api", async () => {
 });
 
 function localResponse(payload: KnowledgeSearchRequest): KnowledgeSearchResponse {
+  const groups = payload.groups?.length
+    ? payload.groups
+    : payload.terms?.length
+      ? payload.terms.map((term) => ({ terms: [term] }))
+      : [{ terms: [payload.query] }];
   return {
     query: payload.query,
-    terms: payload.terms?.length ? payload.terms : [payload.query],
+    groups,
+    terms: groups.flatMap((group) => group.terms),
     page: payload.page || 1,
     page_size: payload.page_size || 20,
     query_time_ms: 474.2,
@@ -147,12 +153,55 @@ afterEach(() => {
 });
 
 describe("KnowledgeSearch", () => {
+  it("解析符号化 AND/OR、展示实时预览并阻止不完整表达式", async () => {
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    });
+    render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    const input = screen.getByRole("searchbox", { name: "本地知识库检索词" });
+
+    fireEvent.change(input, {
+      target: { value: "polyimide；NMP | N-methyl-2-pyrrolidone" }
+    });
+
+    const preview = screen.getByLabelText(
+      "检索逻辑：polyimide；NMP | N-methyl-2-pyrrolidone"
+    );
+    expect(within(preview).getByText("AND")).not.toBeNull();
+    expect(within(preview).getByText("OR")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "运行检索" }));
+    await waitFor(() => expect(apiMocks.searchKnowledge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "polyimide；NMP | N-methyl-2-pyrrolidone",
+        groups: [
+          { terms: ["polyimide"] },
+          { terms: ["NMP", "N-methyl-2-pyrrolidone"] }
+        ]
+      }),
+      expect.any(AbortSignal)
+    ));
+    fireEvent.click(await screen.findByRole("button", { name: "复制检索词" }));
+    expect(writeText).toHaveBeenCalledWith("polyimide；NMP | N-methyl-2-pyrrolidone");
+
+    fireEvent.change(input, { target: { value: "polyimide；" } });
+    expect(screen.getByRole("alert").textContent).toContain("逻辑符号前后必须有完整关键词");
+    expect((screen.getByRole("button", { name: "运行检索" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("保留深链自动检索、分页设置和完整溯源详情", async () => {
     render(<KnowledgeSearch onBackHome={vi.fn()} initialQuery="polyimide" initialTerms={["polyimide"]} />);
 
     expect((await screen.findAllByText("聚酰亚胺的合成方法")).length).toBeGreaterThanOrEqual(1);
     expect(apiMocks.searchKnowledge).toHaveBeenCalledWith(
-      expect.objectContaining({ query: "polyimide", page: 1, page_size: 20, terms: ["polyimide"] }),
+      expect.objectContaining({
+        query: "polyimide",
+        page: 1,
+        page_size: 20,
+        groups: [{ terms: ["polyimide"] }]
+      }),
       expect.any(AbortSignal)
     );
     expect(screen.getByRole("dialog", { name: "知识记录详情" })).not.toBeNull();

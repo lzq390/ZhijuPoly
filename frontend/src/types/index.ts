@@ -902,11 +902,16 @@ export type SmilesLookupResponse = {
   results: SmilesLookupResult[];
 };
 
+export type KnowledgeSearchGroup = {
+  terms: string[];
+};
+
 export type KnowledgeSearchRequest = {
   query: string;
   top_k: number;
   page?: number;
   page_size?: number;
+  groups?: KnowledgeSearchGroup[];
   terms?: string[];
 };
 
@@ -935,6 +940,7 @@ export type KnowledgeDocumentResult = {
 
 export type KnowledgeSearchResponse = {
   query: string;
+  groups: KnowledgeSearchGroup[];
   terms: string[];
   page: number;
   page_size: number;
@@ -945,6 +951,7 @@ export type KnowledgeSearchResponse = {
 
 export type KnowledgeNavigationRequest = {
   query: string;
+  groups?: KnowledgeSearchGroup[];
   terms?: string[];
 };
 

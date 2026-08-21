@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { normalizeKnowledgeSearchGroups } from "../lib/knowledgeSearchExpression";
 import { searchKnowledge } from "../services/api";
-import type { KnowledgeSearchResponse } from "../types";
+import type { KnowledgeSearchGroup, KnowledgeSearchResponse } from "../types";
 
 type KnowledgeSearchState = {
   isLoading: boolean;
@@ -28,7 +29,7 @@ export function useKnowledgeSearch() {
   const submit = useCallback(async (
     query: string,
     topK: number,
-    terms?: string[],
+    groups?: KnowledgeSearchGroup[],
     page = 1,
     pageSize?: number
   ): Promise<KnowledgeSearchResponse | null> => {
@@ -45,20 +46,14 @@ export function useKnowledgeSearch() {
     });
 
     try {
-      const cleanedTerms = terms
-        ?.map((term) => term.trim())
-        .filter(
-          (term, index, values) =>
-            term.length > 0 &&
-            values.findIndex((value) => value.toLocaleLowerCase() === term.toLocaleLowerCase()) === index
-        );
+      const cleanedGroups = normalizeKnowledgeSearchGroups(groups ?? []);
       const data = await searchKnowledge(
         {
           query,
           top_k: topK,
           page,
           ...(pageSize ? { page_size: pageSize } : {}),
-          ...(cleanedTerms?.length ? { terms: cleanedTerms } : {})
+          ...(cleanedGroups.length ? { groups: cleanedGroups } : {})
         },
         controller.signal
       );

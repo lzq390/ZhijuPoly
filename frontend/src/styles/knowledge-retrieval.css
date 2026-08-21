@@ -621,6 +621,104 @@
   height: 16px;
 }
 
+.ks-expression-help {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.ks-expression-guidance {
+  color: #6f849b;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.ks-expression-preview {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: #4a647f;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.ks-expression-preview > small {
+  margin-right: 2px;
+  color: #7f93a8;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.ks-expression-segment,
+.ks-expression-group,
+.ks-expression-term,
+.ks-expression-error {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.ks-expression-segment,
+.ks-expression-term {
+  max-width: 100%;
+}
+
+.ks-expression-term > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ks-expression-group {
+  max-width: 100%;
+  flex-wrap: wrap;
+  padding: 4px 7px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 7px;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.ks-expression-group > i {
+  color: #7c9bc5;
+  font-style: normal;
+}
+
+.ks-expression-segment > b,
+.ks-expression-term > b {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.ks-expression-segment > b.is-and {
+  color: #0f766e;
+}
+
+.ks-expression-term > b.is-or {
+  color: #7c3aed;
+}
+
+.ks-expression-error {
+  color: #b42318;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.ks-expression-error svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.ks-expression-help.is-error .ks-expression-guidance {
+  color: #9f4a43;
+}
+
 .ks-meta-row {
   display: flex;
   flex-wrap: wrap;

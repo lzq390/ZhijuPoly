@@ -119,8 +119,8 @@ function CandidateCard({
     }
     setShowKnowledge(false);
     onOpenKnowledge({
-      query: normalizedTerms.join(" OR "),
-      terms: normalizedTerms
+      query: normalizedTerms.join("；"),
+      groups: normalizedTerms.map((term) => ({ terms: [term] }))
     });
   }
 

@@ -5,13 +5,20 @@ from time import perf_counter
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from app.models import KnowledgeDocumentResult, KnowledgeSearchRequest, KnowledgeSearchResponse
+from app.models import (
+    KnowledgeDocumentResult,
+    KnowledgeSearchGroup,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResponse,
+)
 from app.postgres_database import PostgresUnavailableError
 from app.services.knowledge_search import (
+    KnowledgeSearchExpressionError,
     best_abstract_snippet_query,
     build_abstract_snippet,
+    flatten_search_groups,
     get_knowledge_match_metadata,
-    normalize_search_terms,
+    normalize_search_groups,
 )
 from app.services.postgres_knowledge_search import search_knowledge_documents_postgres
 
@@ -34,7 +41,16 @@ def _search_knowledge_sync(
 ) -> KnowledgeSearchResponse:
     started_at = perf_counter()
     settings = app.state.settings
-    search_terms = normalize_search_terms(request_body.query, request_body.terms)
+    try:
+        _, expanded_groups = normalize_search_groups(
+            request_body.query,
+            groups=[group.terms for group in request_body.groups] or None,
+            terms=request_body.terms or None,
+        )
+    except KnowledgeSearchExpressionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    search_terms = flatten_search_groups(expanded_groups)
     page_size = request_body.page_size or request_body.top_k
     offset = (request_body.page - 1) * page_size
 
@@ -45,10 +61,9 @@ def _search_knowledge_sync(
         with app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
             total, rows = search_knowledge_documents_postgres(
                 connection,
-                request_body.query,
+                expanded_groups,
                 top_k=page_size,
                 offset=offset,
-                terms=search_terms,
             )
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
@@ -87,6 +102,7 @@ def _search_knowledge_sync(
 
     return KnowledgeSearchResponse(
         query=request_body.query,
+        groups=[KnowledgeSearchGroup(terms=group) for group in expanded_groups],
         terms=search_terms,
         page=request_body.page,
         page_size=page_size,

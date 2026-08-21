@@ -4,8 +4,12 @@ import re
 from typing import Any
 
 
-OR_QUERY_SEPARATOR = re.compile(r"\s+OR\s+", re.IGNORECASE)
-IUPAC_TOKEN_SEPARATOR = re.compile(r"[\s,;:/()\[\]{}]+")
+TEXT_AND_OPERATOR = re.compile(r"(^|\s)AND(?=\s|$)", re.IGNORECASE)
+TEXT_OR_OPERATOR = re.compile(r"(^|\s)OR(?=\s|$)", re.IGNORECASE)
+# Spaces and commas are part of a user-entered search term. Only structural
+# punctuation may produce implicit IUPAC candidates; logical alternatives must
+# otherwise be written explicitly with `|` / `OR`.
+IUPAC_TOKEN_SEPARATOR = re.compile(r"[;:/()\[\]{}]+")
 LEADING_LOCANT = re.compile(r"^\d+(?:,\d+)*(?:-\d+)*-+")
 GENERIC_IUPAC_TOKENS = {
     "acid",
@@ -20,6 +24,7 @@ GENERIC_IUPAC_TOKENS = {
     "with",
 }
 MAX_EXPANDED_TERMS = 24
+MAX_RAW_TERMS = 10
 
 SEARCH_FIELDS = (
     ("polymer_iupac", "Polymer", 8),
@@ -35,17 +40,70 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _fallback_query_terms(query: str) -> list[str]:
-    parts = [part.strip() for part in OR_QUERY_SEPARATOR.split(query.strip())]
-    if len(parts) > 1 and all(parts):
-        return parts
-    return [query]
+class KnowledgeSearchExpressionError(ValueError):
+    pass
+
+
+def _replace_text_operator(value: str, pattern: re.Pattern[str], symbol: str) -> str:
+    return pattern.sub(lambda match: f"{match.group(1)}{symbol}", value)
+
+
+def _normalize_group_terms(terms: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        value = term.strip()
+        if not value:
+            raise KnowledgeSearchExpressionError("logic operators must have terms on both sides")
+
+        key = value.casefold()
+        if key in seen:
+            continue
+
+        seen.add(key)
+        normalized.append(value)
+
+    if not normalized:
+        raise KnowledgeSearchExpressionError("knowledge search groups must contain at least one term")
+    return normalized
+
+
+def _deduplicate_search_groups(groups: list[list[str]]) -> list[list[str]]:
+    normalized: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for group in groups:
+        signature = tuple(sorted(term.casefold() for term in group))
+        if signature in seen:
+            continue
+        seen.add(signature)
+        normalized.append(group)
+    return normalized
+
+
+def parse_search_groups(query: str) -> list[list[str]]:
+    value = query.strip()
+    if not value:
+        raise KnowledgeSearchExpressionError("knowledge search query must not be empty")
+
+    symbolized = _replace_text_operator(value, TEXT_AND_OPERATOR, ";")
+    symbolized = _replace_text_operator(symbolized, TEXT_OR_OPERATOR, "|")
+    symbolized = symbolized.replace("；", ";").replace("｜", "|")
+
+    groups: list[list[str]] = []
+    for raw_group in symbolized.split(";"):
+        if not raw_group.strip():
+            raise KnowledgeSearchExpressionError("logic operators must have terms on both sides")
+        groups.append(_normalize_group_terms(raw_group.split("|")))
+
+    if sum(len(group) for group in groups) > MAX_RAW_TERMS:
+        raise KnowledgeSearchExpressionError(f"knowledge search supports at most {MAX_RAW_TERMS} terms")
+    return _deduplicate_search_groups(groups)
 
 
 def _iter_iupac_fragments(term: str) -> list[str]:
     fragments: list[str] = []
     for token in IUPAC_TOKEN_SEPARATOR.split(term):
-        value = token.strip("()[]{}\"'.,;:-")
+        value = token.strip().strip("()[]{}\"'.,;:-")
         if (
             len(value) < 4
             or value.casefold() in GENERIC_IUPAC_TOKENS
@@ -67,27 +125,64 @@ def _iter_iupac_fragments(term: str) -> list[str]:
     return fragments
 
 
-def normalize_search_terms(query: str, terms: list[str] | None = None) -> list[str]:
-    normalized: list[str] = []
+def normalize_search_groups(
+    query: str,
+    groups: list[list[str]] | None = None,
+    terms: list[str] | None = None,
+) -> tuple[list[list[str]], list[list[str]]]:
+    if groups and terms:
+        raise KnowledgeSearchExpressionError("groups and terms cannot be provided together")
+
+    if groups:
+        normalized_groups = [_normalize_group_terms(group) for group in groups]
+    elif terms:
+        normalized_groups = [_normalize_group_terms([term]) for term in terms]
+    else:
+        normalized_groups = parse_search_groups(query)
+
+    if sum(len(group) for group in normalized_groups) > MAX_RAW_TERMS:
+        raise KnowledgeSearchExpressionError(f"knowledge search supports at most {MAX_RAW_TERMS} terms")
+    raw_groups = _deduplicate_search_groups(normalized_groups)
+
+    expanded_groups: list[list[str]] = []
+    expanded_count = 0
+    for group in raw_groups:
+        expanded: list[str] = []
+        seen: set[str] = set()
+        for term in group:
+            for candidate in [term, *_iter_iupac_fragments(term)]:
+                key = candidate.casefold()
+                if key in seen:
+                    continue
+
+                seen.add(key)
+                expanded.append(candidate)
+                expanded_count += 1
+                if expanded_count > MAX_EXPANDED_TERMS:
+                    raise KnowledgeSearchExpressionError(
+                        f"knowledge search expands to more than {MAX_EXPANDED_TERMS} terms"
+                    )
+        expanded_groups.append(expanded)
+
+    return raw_groups, expanded_groups
+
+
+def flatten_search_groups(groups: list[list[str]]) -> list[str]:
+    flattened: list[str] = []
     seen: set[str] = set()
-
-    source_terms = terms if terms else _fallback_query_terms(query)
-    for term in source_terms:
-        value = term.strip()
-        if not value:
-            continue
-
-        for candidate in [value, *_iter_iupac_fragments(value)]:
-            key = candidate.casefold()
+    for group in groups:
+        for term in group:
+            key = term.casefold()
             if key in seen:
                 continue
-
             seen.add(key)
-            normalized.append(candidate)
-            if len(normalized) >= MAX_EXPANDED_TERMS:
-                return normalized
+            flattened.append(term)
+    return flattened
 
-    return normalized
+
+def normalize_search_terms(query: str, terms: list[str] | None = None) -> list[str]:
+    _, expanded_groups = normalize_search_groups(query, terms=terms)
+    return flatten_search_groups(expanded_groups)
 
 
 def build_abstract_snippet(abstract: str, query: str, context_size: int = 130) -> str:

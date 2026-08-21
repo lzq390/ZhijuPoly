@@ -40,6 +40,10 @@ import { useQuery } from "./hooks/useQuery";
 import { standardizeSmiles } from "./services/api";
 import { getMonomerDftJobIdFromSearch, getMonomerDftPath } from "./lib/monomerDftRouting";
 import {
+  normalizeKnowledgeSearchGroups,
+  serializeKnowledgeSearchGroups
+} from "./lib/knowledgeSearchExpression";
+import {
   createOpenScienceProjectBridge,
   type OpenScienceProjectsSnapshot
 } from "./lib/openScienceProjectBridge";
@@ -289,6 +293,12 @@ function getKnowledgeTermsFromSearch(search: string) {
   return normalizeKnowledgeTerms(new URLSearchParams(search).getAll("term"));
 }
 
+function getKnowledgeQueryFromSearch(search: string) {
+  const terms = getKnowledgeTermsFromSearch(search);
+  if (terms.length) return terms.join("；");
+  return new URLSearchParams(search).get("q") ?? "";
+}
+
 export default function App() {
   const [activeModule, setActiveModule] = useState<ActiveModule>(() => getInitialRoute().module);
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<DatasetKey | null>(() => getInitialRoute().datasetKey);
@@ -303,7 +313,7 @@ export default function App() {
     if (typeof window === "undefined") {
       return "";
     }
-    return new URLSearchParams(window.location.search).get("q") ?? "";
+    return getKnowledgeQueryFromSearch(window.location.search);
   });
   const [knowledgeInitialTerms, setKnowledgeInitialTerms] = useState(() => {
     if (typeof window === "undefined") {
@@ -457,7 +467,7 @@ export default function App() {
         window.history.replaceState(route, "", DATABASE_FILTER_ROUTE);
       }
       if (route.module === "knowledge") {
-        setKnowledgeInitialQuery(new URLSearchParams(window.location.search).get("q") ?? "");
+        setKnowledgeInitialQuery(getKnowledgeQueryFromSearch(window.location.search));
         setKnowledgeInitialTerms(getKnowledgeTermsFromSearch(window.location.search));
       }
       if (route.module === "monomerDft") {
@@ -469,6 +479,20 @@ export default function App() {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
+
+  useEffect(() => {
+    if (activeModule !== "knowledge" || knowledgeInitialTerms.length === 0) return;
+    const canonicalQuery = knowledgeInitialTerms.join("；");
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get("q") === canonicalQuery) return;
+    searchParams.set("q", canonicalQuery);
+    window.history.replaceState(
+      { module: "knowledge", datasetKey: null } satisfies AppRoute,
+      "",
+      `/knowledge?${searchParams.toString()}`
+    );
+    setKnowledgeInitialQuery(canonicalQuery);
+  }, [activeModule, knowledgeInitialTerms]);
 
   function openExplorer() {
     navigate({ module: "explorer", datasetKey: null });
@@ -537,8 +561,13 @@ export default function App() {
 
   function openKnowledge(input?: KnowledgeNavigationInput) {
     const rawQuery = typeof input === "string" ? input : input?.query;
-    const trimmedQuery = rawQuery?.trim() ?? "";
-    const terms = typeof input === "string" ? [] : normalizeKnowledgeTerms(input?.terms);
+    const groups = typeof input === "string" ? [] : normalizeKnowledgeSearchGroups(input?.groups ?? []);
+    const terms = typeof input === "string" || groups.length ? [] : normalizeKnowledgeTerms(input?.terms);
+    const trimmedQuery = groups.length
+      ? serializeKnowledgeSearchGroups(groups)
+      : terms.length
+        ? terms.join("；")
+        : (rawQuery?.trim() ?? "");
     const route = { module: "knowledge", datasetKey: null } satisfies AppRoute;
     const searchParams = new URLSearchParams();
 

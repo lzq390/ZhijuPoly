@@ -703,6 +703,36 @@ class DatabaseAnalyticsResponse(BaseModel):
     datasets: dict[str, Any] = Field(default_factory=dict)
 
 
+class KnowledgeSearchGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    # Request validation limits raw user input to 10 terms. Response groups may
+    # contain the expanded execution candidates, whose aggregate limit is 24.
+    terms: list[str] = Field(min_length=1, max_length=24)
+
+    @field_validator("terms")
+    @classmethod
+    def validate_terms(cls, terms: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+
+        for term in terms:
+            value = term.strip()
+            if not value:
+                raise ValueError("knowledge search terms must not be empty")
+
+            key = value.casefold()
+            if key in seen:
+                continue
+
+            seen.add(key)
+            normalized.append(value)
+
+        if not normalized:
+            raise ValueError("knowledge search groups must contain at least one term")
+        return normalized
+
+
 class KnowledgeSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -710,6 +740,7 @@ class KnowledgeSearchRequest(BaseModel):
     top_k: int = Field(default=25, ge=1, le=100)
     page: int = Field(default=1, ge=1)
     page_size: int | None = Field(default=None, ge=1, le=100)
+    groups: list[KnowledgeSearchGroup] = Field(default_factory=list, max_length=10)
     terms: list[str] = Field(default_factory=list, max_length=10)
 
     @field_validator("terms")
@@ -721,7 +752,7 @@ class KnowledgeSearchRequest(BaseModel):
         for term in terms:
             value = term.strip()
             if not value:
-                continue
+                raise ValueError("knowledge search terms must not be empty")
 
             key = value.casefold()
             if key in seen:
@@ -731,6 +762,16 @@ class KnowledgeSearchRequest(BaseModel):
             normalized.append(value)
 
         return normalized
+
+    @model_validator(mode="after")
+    def validate_group_input(self) -> "KnowledgeSearchRequest":
+        if self.groups and self.terms:
+            raise ValueError("groups and terms cannot be provided together")
+
+        raw_term_count = sum(len(group.terms) for group in self.groups)
+        if raw_term_count > 10:
+            raise ValueError("knowledge search supports at most 10 terms")
+        return self
 
 
 class KnowledgeDocumentResult(BaseModel):
@@ -762,6 +803,7 @@ class KnowledgeSearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str
+    groups: list[KnowledgeSearchGroup] = Field(default_factory=list)
     terms: list[str] = Field(default_factory=list)
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=25, ge=1)

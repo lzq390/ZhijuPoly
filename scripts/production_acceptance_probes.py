@@ -746,8 +746,15 @@ def run_read_only_api_probes(
         timeout=30.0,
     )
     results = knowledge.get("results")
+    knowledge_groups = knowledge.get("groups")
     _require(
         knowledge.get("query") == knowledge_query
+        and isinstance(knowledge_groups, list)
+        and len(knowledge_groups) == 1
+        and isinstance(knowledge_groups[0], dict)
+        and isinstance(knowledge_groups[0].get("terms"), list)
+        and bool(knowledge_groups[0]["terms"])
+        and knowledge_groups[0]["terms"][0] == knowledge_query
         and isinstance(knowledge.get("total"), int)
         and knowledge["total"] > 0
         and isinstance(results, list)
@@ -774,6 +781,7 @@ def run_read_only_api_probes(
             "query": knowledge_query,
             "total": knowledge["total"],
             "returned": len(results),
+            "group_count": len(knowledge_groups),
             "knowledge_ids": knowledge_ids,
             "response_projection_sha256": _digest(
                 {"total": knowledge["total"], "knowledge_ids": knowledge_ids}

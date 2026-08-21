@@ -88,8 +88,8 @@ describe("ReverseDesignResults drawer content", () => {
 
     expect(screen.getByText("IUPAC A 1")).toBeTruthy();
     expect(onOpenKnowledge).toHaveBeenCalledWith({
-      query: "IUPAC A 1 OR IUPAC B 1",
-      terms: ["IUPAC A 1", "IUPAC B 1"]
+      query: "IUPAC A 1；IUPAC B 1",
+      groups: [{ terms: ["IUPAC A 1"] }, { terms: ["IUPAC B 1"] }]
     });
   });
 });
