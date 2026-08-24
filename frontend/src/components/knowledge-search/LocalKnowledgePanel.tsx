@@ -18,7 +18,13 @@ import {
 } from "lucide-react";
 import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useKnowledgeSearch } from "../../hooks/useKnowledgeSearch";
-import type { KnowledgeDocumentResult } from "../../types";
+import {
+  knowledgeSearchGroupsFromTerms,
+  normalizeKnowledgeSearchGroups,
+  parseKnowledgeSearchExpression,
+  serializeKnowledgeSearchGroups
+} from "../../lib/knowledgeSearchExpression";
+import type { KnowledgeDocumentResult, KnowledgeSearchGroup } from "../../types";
 import { KnowledgeDetailDrawer, type KnowledgeDrawerTab } from "./KnowledgeDetailDrawer";
 
 type LocalKnowledgePanelProps = {
@@ -28,6 +34,11 @@ type LocalKnowledgePanelProps = {
 };
 
 const PAGE_SIZES = [20, 50, 100] as const;
+
+type SubmittedExpression = {
+  query: string;
+  groups: KnowledgeSearchGroup[];
+};
 
 function normalizeTerms(terms: string[]) {
   const values: string[] = [];
@@ -195,8 +206,11 @@ function ResultSkeletons() {
 
 export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], modeNavigation }: LocalKnowledgePanelProps) {
   const searchState = useKnowledgeSearch();
-  const [query, setQuery] = useState(initialQuery);
-  const [activeTerms, setActiveTerms] = useState<string[]>(() => normalizeTerms(initialTerms));
+  const [query, setQuery] = useState(() => {
+    const groups = knowledgeSearchGroupsFromTerms(initialTerms);
+    return groups.length ? serializeKnowledgeSearchGroups(groups) : initialQuery;
+  });
+  const [submittedExpression, setSubmittedExpression] = useState<SubmittedExpression | null>(null);
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZES)[number]>(20);
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -205,39 +219,53 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
   const selectedRecord = searchState.data?.results.find((record) => record.knowledge_id === selectedId) ?? null;
   const initialTermsKey = initialTerms.join("\u0000");
   const totalPages = Math.max(1, Math.ceil((searchState.data?.total ?? 0) / pageSize));
+  const parsedExpression = useMemo(() => parseKnowledgeSearchExpression(query), [query]);
   const highlightTerms = searchState.data?.terms.length
     ? searchState.data.terms
-    : activeTerms.length
-      ? activeTerms
-      : [searchState.data?.query || query];
+    : submittedExpression?.groups.flatMap((group) => group.terms) ?? [searchState.data?.query || query];
 
-  async function executeSearch(nextQuery: string, nextPage: number, nextPageSize: number, terms = activeTerms) {
-    const normalizedQuery = nextQuery.trim() || terms.join(" OR ");
-    if (!normalizedQuery) return;
+  async function executeSearch(
+    nextQuery: string,
+    nextPage: number,
+    nextPageSize: number,
+    suppliedGroups?: KnowledgeSearchGroup[]
+  ) {
+    const parsed = suppliedGroups
+      ? { groups: normalizeKnowledgeSearchGroups(suppliedGroups), error: null }
+      : parseKnowledgeSearchExpression(nextQuery);
+    if (parsed.error || parsed.groups.length === 0) return;
+    const normalizedQuery = nextQuery.trim() || serializeKnowledgeSearchGroups(parsed.groups);
+    const expression = { query: normalizedQuery, groups: parsed.groups };
+    setSubmittedExpression(expression);
     setPage(nextPage);
     setSelectedId(null);
     setDrawerOpen(false);
-    const response = await searchState.submit(normalizedQuery, nextPageSize, terms, nextPage, nextPageSize);
+    const response = await searchState.submit(
+      normalizedQuery,
+      nextPageSize,
+      expression.groups,
+      nextPage,
+      nextPageSize
+    );
     if (!response?.results.length) return;
     setSelectedId(response.results[0].knowledge_id);
     if (isDesktopViewport()) setDrawerOpen(true);
   }
 
   useEffect(() => {
-    const terms = normalizeTerms(initialTerms);
-    const nextQuery = initialQuery.trim() || terms.join(" OR ");
+    const groups = knowledgeSearchGroupsFromTerms(initialTerms);
+    const nextQuery = groups.length ? serializeKnowledgeSearchGroups(groups) : initialQuery.trim();
     if (!nextQuery) return;
     setQuery(nextQuery);
-    setActiveTerms(terms);
-    void executeSearch(nextQuery, 1, 20, terms);
+    void executeSearch(nextQuery, 1, 20, groups.length ? groups : undefined);
     // Initial route parameters are the trigger; executeSearch intentionally reads no mutable form state here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQuery, initialTermsKey]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!query.trim() || searchState.isLoading) return;
-    await executeSearch(query, 1, pageSize);
+    if (!query.trim() || parsedExpression.error || parsedExpression.groups.length === 0 || searchState.isLoading) return;
+    await executeSearch(query, 1, pageSize, parsedExpression.groups);
   }
 
   async function handlePageSizeChange(value: number) {
@@ -247,7 +275,11 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
     setPageSize(nextPageSize);
     setPage(1);
     if (searchState.data || searchState.error) {
-      await executeSearch(query, 1, nextPageSize);
+      const expression = submittedExpression ?? {
+        query,
+        groups: parsedExpression.groups
+      };
+      await executeSearch(expression.query, 1, nextPageSize, expression.groups);
     }
   }
 
@@ -288,12 +320,11 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
                     <input
                       type="search"
                       value={query}
-                      onChange={(event) => {
-                        setQuery(event.target.value);
-                        setActiveTerms([]);
-                      }}
-                      placeholder="例如 polyimide、IUPAC 名称或配方术语"
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder="例如 polyimide；NMP | N-methyl-2-pyrrolidone"
                       aria-label="本地知识库检索词"
+                      aria-describedby="local-knowledge-expression-help"
+                      aria-invalid={Boolean(query.trim() && parsedExpression.error)}
                       autoComplete="off"
                     />
                   </span>
@@ -309,15 +340,57 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
                     {PAGE_SIZES.map((size) => <option key={size} value={size}>{size} 条</option>)}
                   </select>
                 </label>
-                <button className="ks-button is-primary" type="submit" disabled={!query.trim() || searchState.isLoading}>
+                <button
+                  className="ks-button is-primary"
+                  type="submit"
+                  disabled={
+                    !query.trim() ||
+                    Boolean(parsedExpression.error) ||
+                    parsedExpression.groups.length === 0 ||
+                    searchState.isLoading
+                  }
+                >
                   {searchState.isLoading ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <Search aria-hidden="true" />}
                   运行检索
                 </button>
               </form>
 
+              <div
+                id="local-knowledge-expression-help"
+                className={`ks-expression-help${parsedExpression.error ? " is-error" : ""}`}
+              >
+                <span className="ks-expression-guidance">多个条件用“；”分隔，同义词用“|”分隔</span>
+                {query.trim() && parsedExpression.error ? (
+                  <span className="ks-expression-error" role="alert"><AlertTriangle aria-hidden="true" />{parsedExpression.error}</span>
+                ) : null}
+                {query.trim() && !parsedExpression.error && parsedExpression.groups.length ? (
+                  <span
+                    className="ks-expression-preview"
+                    aria-label={`检索逻辑：${serializeKnowledgeSearchGroups(parsedExpression.groups)}`}
+                  >
+                    <small>逻辑预览</small>
+                    {parsedExpression.groups.map((group, groupIndex) => (
+                      <span className="ks-expression-segment" key={`query-group-${groupIndex}`}>
+                        {groupIndex > 0 ? <b className="is-and">AND</b> : null}
+                        <span className="ks-expression-group">
+                          <i aria-hidden="true">[</i>
+                          {group.terms.map((term, termIndex) => (
+                            <span className="ks-expression-term" key={`${term}-${termIndex}`}>
+                              {termIndex > 0 ? <b className="is-or">OR</b> : null}
+                              <span>{term}</span>
+                            </span>
+                          ))}
+                          <i aria-hidden="true">]</i>
+                        </span>
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
+              </div>
+
               <div className="ks-meta-row">
                 <span>范围：Polymer / Formulation / 中英文标题 / Claim / Abstract</span>
-                <span>排序：命中术语数 → 字段权重 → 记录 ID</span>
+                <span>排序：全部条件命中 → 字段相关性 → 记录 ID</span>
               </div>
             </div>
           </section>
@@ -343,7 +416,14 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
                   <span><AlertTriangle aria-hidden="true" /></span>
                   <h3>本地知识库暂时不可用</h3>
                   <p>{searchState.error}</p>
-                  <button className="ks-button" type="button" onClick={() => void executeSearch(query, page, pageSize)}>
+                  <button
+                    className="ks-button"
+                    type="button"
+                    onClick={() => {
+                      const expression = submittedExpression ?? { query, groups: parsedExpression.groups };
+                      void executeSearch(expression.query, page, pageSize, expression.groups);
+                    }}
+                  >
                     <RefreshCw aria-hidden="true" />重试检索
                   </button>
                 </div>
@@ -410,10 +490,30 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
                   <div className="ks-pagination">
                     <span>第 {page} / {totalPages.toLocaleString("zh-CN")} 页 · 共 {searchState.data.total.toLocaleString("zh-CN")} 条</span>
                     <div>
-                      <button className="ks-button" type="button" disabled={page <= 1 || searchState.isLoading} onClick={() => void executeSearch(query, page - 1, pageSize)}>
+                      <button
+                        className="ks-button"
+                        type="button"
+                        disabled={page <= 1 || searchState.isLoading || !submittedExpression}
+                        onClick={() => submittedExpression && void executeSearch(
+                          submittedExpression.query,
+                          page - 1,
+                          pageSize,
+                          submittedExpression.groups
+                        )}
+                      >
                         <ChevronLeft aria-hidden="true" />上一页
                       </button>
-                      <button className="ks-button" type="button" disabled={page >= totalPages || searchState.isLoading} onClick={() => void executeSearch(query, page + 1, pageSize)}>
+                      <button
+                        className="ks-button"
+                        type="button"
+                        disabled={page >= totalPages || searchState.isLoading || !submittedExpression}
+                        onClick={() => submittedExpression && void executeSearch(
+                          submittedExpression.query,
+                          page + 1,
+                          pageSize,
+                          submittedExpression.groups
+                        )}
+                      >
                         下一页<ChevronRight aria-hidden="true" />
                       </button>
                     </div>

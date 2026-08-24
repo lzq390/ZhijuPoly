@@ -248,8 +248,10 @@ class ReadAndFrontendClient(FakeClient):
             assert body == {"smiles": "*CC*"}
             return 200, {}, {"structure_svg": "<?xml version='1.0'?><svg></svg>"}
         if method == "POST" and path == "/api/v1/knowledge/search":
+            groups = body.get("groups") or [{"terms": [body["query"]]}]
             return 200, {}, {
-                "query": "polyimide",
+                "query": body["query"],
+                "groups": groups,
                 "total": 1,
                 "results": [{"knowledge_id": 42, "abstract": "must not be sealed"}],
             }
@@ -435,6 +437,7 @@ class ProductionAcceptanceProbeTests(unittest.TestCase):
         )
         frontend = PROBES.run_frontend_probe(client)
         self.assertEqual(api["property_histogram"]["total_records"], 615159)
+        self.assertEqual(api["knowledge"]["group_count"], 1)
         self.assertNotIn("must not be sealed", json.dumps(api))
         self.assertEqual(len(frontend["assets"]), 2)
         self.assertIn("/monomer-dft", frontend["routes"])

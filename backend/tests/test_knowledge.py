@@ -7,15 +7,17 @@ from threading import get_ident
 from xml.sax.saxutils import escape
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import ValidationError
 from starlette.requests import Request
 
 from app.database import sqlite_connection
 from app.import_knowledge import import_knowledge_directory_to_sqlite, import_knowledge_zip_to_sqlite
-from app.models import KnowledgeSearchRequest
+from app.models import KnowledgeSearchGroup, KnowledgeSearchRequest
 from app.postgres_database import postgres_connection
 from app.routers import knowledge as knowledge_routes
 from app.routers.knowledge import search_knowledge
+from app.services.knowledge_search import KnowledgeSearchExpressionError, normalize_search_groups, parse_search_groups
 from app.services.postgres_knowledge_search import _build_search_sql_parts
 
 
@@ -136,13 +138,85 @@ def write_knowledge_zip(path: Path) -> None:
 
 
 def test_postgres_knowledge_search_keeps_indexed_columns_bare() -> None:
-    sql_parts = _build_search_sql_parts(["epoxy"])
+    sql_parts = _build_search_sql_parts([["epoxy"]])
     generated_sql = " ".join(part for part in sql_parts if isinstance(part, str))
 
     assert "COALESCE" not in generated_sql
     assert "polymer_iupac ILIKE" in generated_sql
     assert "formulation ILIKE" in generated_sql
     assert "abstract ILIKE" in generated_sql
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("polyimide;NMP", [["polyimide"], ["NMP"]]),
+        ("polyimide；NMP", [["polyimide"], ["NMP"]]),
+        ("NMP|N-methyl-2-pyrrolidone；polyimide", [["NMP", "N-methyl-2-pyrrolidone"], ["polyimide"]]),
+        (
+            "NMP｜N-methyl-2-pyrrolidone AND thermal stability",
+            [["NMP", "N-methyl-2-pyrrolidone"], ["thermal stability"]],
+        ),
+        ("epoxy or resin and coating", [["epoxy", "resin"], ["coating"]]),
+        ("thermal stability", [["thermal stability"]]),
+        ("Epoxy|epoxy;NMP", [["Epoxy"], ["NMP"]]),
+        ("Epoxy;epoxy;NMP", [["Epoxy"], ["NMP"]]),
+        ("A|B;b|a;C", [["A", "B"], ["C"]]),
+    ],
+)
+def test_parse_knowledge_search_groups(query: str, expected: list[list[str]]) -> None:
+    assert parse_search_groups(query) == expected
+
+
+@pytest.mark.parametrize("query", [";epoxy", "epoxy；", "epoxy||resin", "epoxy OR OR resin", "epoxy;;resin"])
+def test_parse_knowledge_search_groups_rejects_empty_conditions(query: str) -> None:
+    with pytest.raises(KnowledgeSearchExpressionError, match="terms on both sides"):
+        parse_search_groups(query)
+
+
+def test_parse_knowledge_search_groups_rejects_more_than_ten_terms() -> None:
+    with pytest.raises(KnowledgeSearchExpressionError, match="at most 10 terms"):
+        parse_search_groups("；".join(f"term-{index}" for index in range(11)))
+
+
+def test_normalize_knowledge_search_groups_rejects_more_than_twenty_four_expansions() -> None:
+    groups = [[f"fragment{index}/segment{index}/portion{index}"] for index in range(7)]
+    with pytest.raises(KnowledgeSearchExpressionError, match="more than 24 terms"):
+        normalize_search_groups("ignored", groups=groups)
+
+
+def test_normalize_knowledge_search_groups_deduplicates_equivalent_groups() -> None:
+    raw_groups, expanded_groups = normalize_search_groups(
+        "ignored",
+        groups=[["Epoxy"], ["epoxy"], ["NMP", "solvent"], ["SOLVENT", "nmp"]],
+    )
+
+    assert raw_groups == [["Epoxy"], ["NMP", "solvent"]]
+    assert expanded_groups == [["Epoxy"], ["NMP", "solvent"]]
+
+
+def test_knowledge_search_request_rejects_mixed_or_empty_structured_input() -> None:
+    with pytest.raises(ValidationError, match="groups and terms cannot be provided together"):
+        KnowledgeSearchRequest(
+            query="epoxy；NMP",
+            groups=[{"terms": ["epoxy"]}],
+            terms=["NMP"],
+        )
+
+    with pytest.raises(ValidationError, match="terms must not be empty"):
+        KnowledgeSearchRequest(query="epoxy", groups=[{"terms": [""]}])
+
+    execution_candidates = [f"candidate-{index}" for index in range(11)]
+    assert KnowledgeSearchGroup(terms=execution_candidates).terms == execution_candidates
+    with pytest.raises(ValidationError, match="at most 10 terms"):
+        KnowledgeSearchRequest(query="expanded group", groups=[{"terms": execution_candidates}])
+
+
+def test_postgres_knowledge_search_ands_groups_and_scores_aliases_once_per_field() -> None:
+    where_sql, _, score_sql, _ = _build_search_sql_parts([["NMP", "N-methyl-2-pyrrolidone"], ["polyimide"]])
+
+    assert ") AND (" in where_sql
+    assert score_sql.count("THEN 8 ELSE 0 END") == 2
 
 
 def test_import_knowledge_zip_to_sqlite_and_searches_abstract(tmp_path: Path) -> None:
@@ -321,6 +395,18 @@ async def test_search_knowledge_api_returns_matches_from_abstract(test_app: Fast
 
 
 @pytest.mark.asyncio
+async def test_search_knowledge_api_rejects_incomplete_boolean_expression(test_app: FastAPI) -> None:
+    with pytest.raises(HTTPException) as raised:
+        await search_knowledge(
+            KnowledgeSearchRequest(query="epoxy；", top_k=5),
+            make_request(test_app),
+        )
+
+    assert raised.value.status_code == 422
+    assert raised.value.detail == "logic operators must have terms on both sides"
+
+
+@pytest.mark.asyncio
 async def test_search_knowledge_runs_synchronous_work_off_event_loop(
     test_app: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
@@ -362,6 +448,11 @@ async def test_search_knowledge_api_matches_structured_terms_across_fields(test_
                 "title_en": "Single abstract hit",
                 "abstract": "Only ethanol is mentioned in this abstract.",
             },
+            {
+                "title_en": "Alias formulation",
+                "abstract": "This record uses an alternative solvent name.",
+                "formulation": "ethyl alcohol : propane",
+            },
         ],
     )
 
@@ -371,14 +462,12 @@ async def test_search_knowledge_api_matches_structured_terms_across_fields(test_
     )
 
     assert response.query == "monomer pair"
+    assert [group.terms for group in response.groups] == [["ethanol"], ["propane"]]
     assert response.terms == ["ethanol", "propane"]
-    assert response.total == 2
+    assert response.total == 1
     assert response.results[0].title_en == "Pair formulation"
     assert response.results[0].matched_terms == ["ethanol", "propane"]
     assert response.results[0].matched_fields == ["Formulation"]
-    assert response.results[1].title_en == "Single abstract hit"
-    assert response.results[1].matched_terms == ["ethanol"]
-    assert response.results[1].matched_fields == ["Abstract"]
 
     fallback_response = await search_knowledge(
         KnowledgeSearchRequest(query="ethanol OR propane", top_k=5),
@@ -386,12 +475,63 @@ async def test_search_knowledge_api_matches_structured_terms_across_fields(test_
     )
 
     assert fallback_response.terms == ["ethanol", "propane"]
-    assert fallback_response.total == 2
+    assert [group.terms for group in fallback_response.groups] == [["ethanol", "propane"]]
+    assert fallback_response.total == 3
     assert fallback_response.results[0].title_en == "Pair formulation"
+
+    symbol_response = await search_knowledge(
+        KnowledgeSearchRequest(query="ethanol；propane", top_k=5),
+        make_request(test_app),
+    )
+
+    assert [group.terms for group in symbol_response.groups] == [["ethanol"], ["propane"]]
+    assert symbol_response.total == 1
+
+    grouped_response = await search_knowledge(
+        KnowledgeSearchRequest(
+            query="ethanol | ethyl alcohol；propane",
+            groups=[{"terms": ["ethanol", "ethyl alcohol"]}, {"terms": ["propane"]}],
+            top_k=5,
+        ),
+        make_request(test_app),
+    )
+
+    assert grouped_response.total == 2
+    assert {result.title_en for result in grouped_response.results} == {"Pair formulation", "Alias formulation"}
 
 
 @pytest.mark.asyncio
-async def test_search_knowledge_api_expands_iupac_terms_for_partial_group_matches(test_app: FastAPI) -> None:
+async def test_search_knowledge_api_keeps_space_delimited_phrases_intact(test_app: FastAPI) -> None:
+    _insert_knowledge_documents(
+        test_app,
+        [
+            {
+                "title_en": "Exact phrase",
+                "abstract": "The resulting polymer has excellent thermal stability.",
+            },
+            {
+                "title_en": "Thermal only",
+                "abstract": "The thermal conductivity was measured after curing.",
+            },
+            {
+                "title_en": "Stability only",
+                "abstract": "The storage stability was measured at room temperature.",
+            },
+        ],
+    )
+
+    response = await search_knowledge(
+        KnowledgeSearchRequest(query="thermal stability", top_k=5),
+        make_request(test_app),
+    )
+
+    assert response.terms == ["thermal stability"]
+    assert response.total == 1
+    assert [result.title_en for result in response.results] == ["Exact phrase"]
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_api_expands_iupac_leading_locant_variant(test_app: FastAPI) -> None:
     _insert_knowledge_documents(
         test_app,
         [
@@ -401,34 +541,32 @@ async def test_search_knowledge_api_expands_iupac_terms_for_partial_group_matche
                 "formulation": "",
             },
             {
-                "title_en": "Aminobenzoate paper",
+                "title_en": "Locant-free paper",
                 "abstract": "The formulation uses an aromatic ester.",
-                "formulation": "4-aminobenzoate derivative",
+                "formulation": "Aminophenyl derivative",
             },
         ],
     )
 
     response = await search_knowledge(
-        KnowledgeSearchRequest(query="monomer", terms=["4-Aminophenyl 4-aminobenzoate"], top_k=5),
+        KnowledgeSearchRequest(query="monomer", terms=["4-Aminophenyl"], top_k=5),
         make_request(test_app),
     )
 
     assert response.terms == [
-        "4-Aminophenyl 4-aminobenzoate",
         "4-Aminophenyl",
         "Aminophenyl",
-        "4-aminobenzoate",
-        "aminobenzoate",
     ]
+    assert [group.terms for group in response.groups] == [["4-Aminophenyl", "Aminophenyl"]]
     assert response.total == 2
     results_by_title = {result.title_en: result for result in response.results}
-    assert set(results_by_title) == {"Aminophenyl paper", "Aminobenzoate paper"}
+    assert set(results_by_title) == {"Aminophenyl paper", "Locant-free paper"}
     assert results_by_title["Aminophenyl paper"].matched_terms == ["4-Aminophenyl", "Aminophenyl"]
-    assert results_by_title["Aminobenzoate paper"].matched_terms == ["4-aminobenzoate", "aminobenzoate"]
+    assert results_by_title["Locant-free paper"].matched_terms == ["Aminophenyl"]
 
 
 @pytest.mark.asyncio
-async def test_search_knowledge_api_ranks_more_matched_fragments_first(test_app: FastAPI) -> None:
+async def test_search_knowledge_api_does_not_double_score_group_fragments(test_app: FastAPI) -> None:
     _insert_knowledge_documents(
         test_app,
         [
@@ -446,13 +584,13 @@ async def test_search_knowledge_api_ranks_more_matched_fragments_first(test_app:
     )
 
     response = await search_knowledge(
-        KnowledgeSearchRequest(query="monomer", terms=["benzophenone aminobenzoate"], top_k=5),
+        KnowledgeSearchRequest(query="monomer", terms=["benzophenone/aminobenzoate"], top_k=5),
         make_request(test_app),
     )
 
     assert [result.title_en for result in response.results] == [
-        "Two fragments in abstract",
         "One fragment in polymer",
+        "Two fragments in abstract",
     ]
 
 

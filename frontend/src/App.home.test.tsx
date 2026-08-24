@@ -91,6 +91,32 @@ describe("智聚万物首页", () => {
     expect(screen.getByTestId("database-filter-page")).not.toBeNull();
   });
 
+  it("将旧知识检索重复 term 深链规范化为 AND 分组", async () => {
+    window.history.replaceState({}, "", "/knowledge?q=epoxy+OR+NMP&term=epoxy&term=NMP");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      query: "epoxy；NMP",
+      groups: [{ terms: ["epoxy"] }, { terms: ["NMP"] }],
+      terms: ["epoxy", "NMP"],
+      page: 1,
+      page_size: 20,
+      query_time_ms: 1,
+      total: 0,
+      results: []
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    render(<App />);
+
+    expect((screen.getByRole("searchbox", { name: "本地知识库检索词" }) as HTMLInputElement).value).toBe("epoxy；NMP");
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("q")).toBe("epoxy；NMP"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const request = fetchMock.mock.calls.find(([url]) => String(url).includes("/knowledge/search"));
+    expect(request).toBeDefined();
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual(expect.objectContaining({
+      query: "epoxy；NMP",
+      groups: [{ terms: ["epoxy"] }, { terms: ["NMP"] }]
+    }));
+  });
+
   it("未配置工作台时只显示同步占位且不挂载 iframe", () => {
     // unstubAllEnvs restores the process value, which may be configured in dev.
     vi.stubEnv("VITE_AGENT_WORKSPACE_URL", undefined);

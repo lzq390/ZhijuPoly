@@ -10,7 +10,16 @@ const apiMocks = vi.hoisted(() => ({ searchKnowledge: vi.fn() }));
 vi.mock("../services/api", () => ({ searchKnowledge: apiMocks.searchKnowledge }));
 
 function response(query: string): KnowledgeSearchResponse {
-  return { query, terms: [query], page: 1, page_size: 20, query_time_ms: 10, total: 0, results: [] };
+  return {
+    query,
+    groups: [{ terms: [query] }],
+    terms: [query],
+    page: 1,
+    page_size: 20,
+    query_time_ms: 10,
+    total: 0,
+    results: []
+  };
 }
 
 function deferred<T>() {
@@ -61,5 +70,29 @@ describe("useKnowledgeSearch", () => {
     expect(signal.aborted).toBe(true);
     pending.resolve(response("polyimide"));
     await submission;
+  });
+
+  it("清理分组后发送结构化 AND/OR 查询", async () => {
+    apiMocks.searchKnowledge.mockResolvedValue(response("polyimide；NMP | solvent"));
+    const { result } = renderHook(() => useKnowledgeSearch());
+
+    await act(async () => {
+      await result.current.submit(
+        "polyimide；NMP | solvent",
+        20,
+        [{ terms: [" polyimide "] }, { terms: ["NMP", "nmp", " solvent "] }],
+        1,
+        20
+      );
+    });
+
+    expect(apiMocks.searchKnowledge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groups: [{ terms: ["polyimide"] }, { terms: ["NMP", "solvent"] }],
+        page: 1,
+        page_size: 20
+      }),
+      expect.any(AbortSignal)
+    );
   });
 });
