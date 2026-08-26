@@ -34,7 +34,7 @@ x-dev-backend-env: &dev-backend-env
   APP_POSTGRES_DSN: postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev
   PI_POSTGRES_DSN: postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev
   LAB_DATA_POSTGRES_DSN: postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev
-  ALLOWED_ORIGINS: "${NEXPOLY_DEV_ALLOWED_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173}"
+  ALLOWED_ORIGINS: "${NEXPOLY_DEV_ALLOWED_ORIGINS:-http://localhost:9001,http://127.0.0.1:9001}"
   MONOMER_MD_SUBMIT_ENABLED: "false"
   MONOMER_MD_WORKER_BASE_URL: "http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock"
   MONOMER_MD_WORKER_TIMEOUT_SECONDS: "30"
@@ -225,7 +225,7 @@ services:
       - ./backend/tests/fixtures:/app/backend/tests/fixtures:ro
       - nexpoly_dev_frontend_node_modules:/app/frontend/node_modules
     ports:
-      - "${NEXPOLY_DEV_FRONTEND_BIND_ADDRESS:-127.0.0.1}:${NEXPOLY_DEV_FRONTEND_PORT:-15173}:5173"
+      - "${NEXPOLY_DEV_FRONTEND_BIND_ADDRESS:-127.0.0.1}:${NEXPOLY_DEV_FRONTEND_PORT:-9001}:5173"
     command: ["sh", "-lc", "npm ci && npm run dev -- --host 0.0.0.0 --port 5173"]
     depends_on:
       backend:
@@ -236,6 +236,13 @@ services:
       - prod-nginx-disabled-in-dev
     ports: !override
       - "127.0.0.1:${NEXPOLY_DEV_NGINX_PORT:-19000}:80"
+
+networks:
+  default:
+    ipam:
+      config: !override
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1
 
 volumes:
   nexpoly_dev_postgres_data:

@@ -884,7 +884,7 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
         controls = (
             (
                 'NEXPOLY_DEV_FRONTEND_PORT: "9001"',
-                'NEXPOLY_DEV_FRONTEND_PORT: "15173"',
+                'NEXPOLY_DEV_FRONTEND_PORT: "9002"',
                 "fixed 9001 development frontend port",
             ),
             (

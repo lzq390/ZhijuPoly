@@ -156,7 +156,7 @@ class ComposeWorkerRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             default["services"]["backend"]["environment"]["ALLOWED_ORIGINS"],
-            "http://localhost:15173,http://127.0.0.1:15173",
+            "http://localhost:9001,http://127.0.0.1:9001",
         )
         self.assertEqual(
             exposed["services"]["frontend-dev"]["ports"][0]["host_ip"],

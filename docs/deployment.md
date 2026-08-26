@@ -210,6 +210,35 @@ the firewall must admit only their corresponding bridge subnets; never bind
 this unauthenticated development proxy to `0.0.0.0` or the server's public
 address.
 
+The production and development Compose networks pin those contracts to
+`172.27.0.0/16` (`172.27.0.1`) and `172.28.0.0/16` (`172.28.0.1`). The host
+firewall rules match each reviewed source subnet to its corresponding gateway,
+not Docker's generated `br-<network-id>` interface name. These addresses are
+literal security contracts, not environment overrides; changing them requires
+one reviewed update to the Compose networks, socket listeners, firewall helper,
+tests, and this document.
+
+The first adoption on an existing Compose project changes the managed default
+network definition. A partial `compose up` cannot replace that network while
+other services still own endpoints. For development, first stop any GPU session,
+then use `./scripts/dev_server_gpu.sh down` followed by
+`./scripts/dev_server_gpu.sh up` during a maintenance window. Production must
+perform the equivalent complete project stop and recreation only through its
+approved maintenance workflow; routine pull deployment must not attempt the
+one-time migration. New installations create the pinned network directly.
+
+Install or reconcile the root-managed firewall rule after updating these assets
+with:
+
+```text
+sudo ./scripts/install_tunnel_proxy_firewall.sh
+```
+
+The installer first stops the currently loaded firewall service so its legacy
+`ExecStop` removes interface-bound rules, then installs the stable-address
+drop-in and verifies the complete replacement chain. The existing socket keeps
+requiring the same firewall service, so boot ordering remains unchanged.
+
 This is a development-only facility. If the upstream loopback tunnel is absent,
 online model extraction may fail while Backend health and all non-model APIs
 remain available. Production must use an independently governed outbound proxy
