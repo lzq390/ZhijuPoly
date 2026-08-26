@@ -26,6 +26,8 @@ type ReverseDesignResultsProps = {
   job?: ReverseDesignTgJobStatusResponse | null;
   submittedRequest: ReverseDesignTgRequest | null;
   onOpenKnowledge: (request: KnowledgeNavigationRequest) => void;
+  page?: number;
+  onPageChange?: (page: number) => void;
 };
 
 const RESULTS_PAGE_SIZE = 5;
@@ -256,19 +258,23 @@ export function ReverseDesignResults({
   isLoading = false,
   job,
   submittedRequest,
-  onOpenKnowledge
+  onOpenKnowledge,
+  page,
+  onPageChange
 }: ReverseDesignResultsProps) {
-  const [page, setPage] = useState(1);
+  const [internalPage, setInternalPage] = useState(1);
+  const activePage = page ?? internalPage;
+  const changePage = onPageChange ?? setInternalPage;
   const total = data?.results.length ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / RESULTS_PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
+  const currentPage = Math.min(activePage, totalPages);
   const start = (currentPage - 1) * RESULTS_PAGE_SIZE;
   const end = Math.min(start + RESULTS_PAGE_SIZE, total);
   const results = data?.results.slice(start, end) ?? [];
 
   useEffect(() => {
-    setPage(1);
-  }, [data]);
+    if (page === undefined) setInternalPage(1);
+  }, [data, page]);
 
   if (error) {
     return (
@@ -351,7 +357,7 @@ export function ReverseDesignResults({
         start={start}
         end={end}
         total={total}
-        onChange={(nextPage) => setPage(Math.min(Math.max(1, nextPage), totalPages))}
+        onChange={(nextPage) => changePage(Math.min(Math.max(1, nextPage), totalPages))}
       />
       <div className="tg-candidate-list">
         {results.map((candidate) => (
@@ -368,7 +374,7 @@ export function ReverseDesignResults({
         start={start}
         end={end}
         total={total}
-        onChange={(nextPage) => setPage(Math.min(Math.max(1, nextPage), totalPages))}
+        onChange={(nextPage) => changePage(Math.min(Math.max(1, nextPage), totalPages))}
       />
     </div>
   );

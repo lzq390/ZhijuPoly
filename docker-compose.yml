@@ -166,5 +166,13 @@ services:
       backend:
         condition: service_healthy
 
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.27.0.0/16
+          gateway: 172.27.0.1
+
 volumes:
   app_postgres_data:

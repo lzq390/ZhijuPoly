@@ -5,6 +5,15 @@ declare global {
     ketcher?: {
       getSmiles: () => Promise<string>;
       getMolfile?: () => Promise<string>;
+      getKet?: () => Promise<string>;
+      generateImage?: (
+        data: string,
+        options: {
+          outputFormat: "png";
+          backgroundColor: string;
+          "image-resolution": number;
+        }
+      ) => Promise<Blob>;
       setMolecule?: (molecule: string) => Promise<void>;
       clear?: () => Promise<void>;
     };

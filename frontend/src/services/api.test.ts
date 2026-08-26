@@ -12,9 +12,59 @@ import {
   fetchPolytaoJob,
   fetchPolytaoStatus,
   fetchStructure2D,
+  fetchTgAssistantGuide,
+  fetchTgAssistantStatus,
   recoverDevGpuSession,
   searchPropertyFilterRecords
 } from "./api";
+
+describe("Tg assistant metadata API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("loads status and the versioned guide without caching", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        enabled: false,
+        configured: true,
+        image: {
+          supported: true,
+          max_files: 2,
+          max_canvas_snapshots: 1,
+          max_user_upload_files: 1,
+          max_bytes: 5 * 1024 * 1024,
+          max_total_bytes: 10 * 1024 * 1024,
+          accepted_mime_types: ["image/png", "image/jpeg", "image/webp"]
+        }
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        module: "reverseDesign",
+        version: 3,
+        language: "zh-CN",
+        defaults: {},
+        sections: []
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await fetchTgAssistantStatus(controller.signal);
+    await fetchTgAssistantGuide(controller.signal);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/assistant/tg/status", {
+      cache: "no-store",
+      signal: controller.signal
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/assistant/tg/guide", {
+      cache: "no-store",
+      signal: controller.signal
+    });
+  });
+});
 
 describe("database analysis API", () => {
   afterEach(() => vi.unstubAllGlobals());

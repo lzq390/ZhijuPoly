@@ -37,6 +37,7 @@ import { StructureWorkbenchPage } from "./components/StructureWorkbenchPage";
 import { useKetcher } from "./hooks/useKetcher";
 import { usePredict } from "./hooks/usePredict";
 import { useQuery } from "./hooks/useQuery";
+import { useTgAssistant } from "./hooks/useTgAssistant";
 import { standardizeSmiles } from "./services/api";
 import { getMonomerDftJobIdFromSearch, getMonomerDftPath } from "./lib/monomerDftRouting";
 import {
@@ -328,6 +329,7 @@ export default function App() {
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher();
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const predict = usePredict();
+  const tgAssistant = useTgAssistant();
   const [selectedProperties, setSelectedProperties] = useState<PredictableProperty[]>([]);
   const agentWorkspaceIframeRef = useRef<HTMLIFrameElement | null>(null);
   const [agentWorkspaceFrameUrl, setAgentWorkspaceFrameUrl] = useState(agentWorkspaceUrl);
@@ -1035,6 +1037,7 @@ export default function App() {
           <ReverseDesignPage
             structure={structureWorkspace}
             onOpenKnowledge={openKnowledge}
+            assistant={tgAssistant}
           />
         </div>
       ) : null}

@@ -100,7 +100,7 @@ export NEXPOLY_GPU_STATE_ROOT="$ROOT_DIR/.runtime/gpu-resource"
 DEV_BACKEND_IMAGE="nexpoly-dev-backend:latest"
 DEV_PYPI_INDEX_URL="${NEXPOLY_DEV_PYPI_INDEX_URL:-https://pypi.org/simple}"
 DEV_PYPI_MIRROR_URL="${NEXPOLY_DEV_PYPI_MIRROR_URL:-https://mirrors.ustc.edu.cn/pypi/simple}"
-FRONTEND_URL="http://127.0.0.1:${NEXPOLY_DEV_FRONTEND_PORT:-15173}"
+FRONTEND_URL="http://127.0.0.1:${NEXPOLY_DEV_FRONTEND_PORT:-9001}"
 BACKEND_URL="http://127.0.0.1:${NEXPOLY_DEV_BACKEND_PORT:-18000}"
 WORKER_ENABLED="${MONOMER_MD_DEV_WORKER_ENABLED:-true}"
 WORKER_SOCKET_DIR="${MONOMER_MD_DEV_WORKER_SOCKET_DIR:-$ROOT_DIR/.runtime/monomer-md-worker-socket}"
@@ -2831,7 +2831,7 @@ case "${1:-up}" in
     ;;
   tunnel)
     : "${NEXPOLY_DEV_SSH_HOST:?Set NEXPOLY_DEV_SSH_HOST for tunnel output}"
-    echo "ssh -N -L ${NEXPOLY_DEV_FRONTEND_PORT:-15173}:127.0.0.1:${NEXPOLY_DEV_FRONTEND_PORT:-15173} -L 9011:127.0.0.1:9011 ${NEXPOLY_DEV_SSH_USER:-$USER}@$NEXPOLY_DEV_SSH_HOST"
+    echo "ssh -N -L ${NEXPOLY_DEV_FRONTEND_PORT:-9001}:127.0.0.1:${NEXPOLY_DEV_FRONTEND_PORT:-9001} -L 9011:127.0.0.1:9011 ${NEXPOLY_DEV_SSH_USER:-$USER}@$NEXPOLY_DEV_SSH_HOST"
     ;;
   *)
     echo "usage: $0 {up|stop|down|ps|logs|preflight|refresh-data|contract-migrate|smoke|worker-base-identity|worker-venv|worker-up|worker-stop|worker-status|gpu-session-up|gpu-session-status|gpu-session-down|test-backend|build-frontend|check-frontend|cleanup-legacy-builder|tunnel}" >&2

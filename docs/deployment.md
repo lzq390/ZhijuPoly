@@ -170,12 +170,34 @@ content and OpenScience must gain an HTTPS endpoint before activation.
 
 ### Development tunnel proxy
 
-Online knowledge model extraction can use the optional
-`ONLINE_KNOWLEDGE_PROXY_URL` setting. It configures only that OpenAI-compatible
-client: the client disables inherited proxy variables, literature discovery
-remains direct, and the proxy URL is never returned by the default-config API.
-An empty value keeps direct access. The URL must be an absolute HTTP(S) URL
-without credentials, path, query, or fragment.
+All OpenAI-compatible clients use the optional `AI_PROXY_URL` setting: online
+knowledge extraction, the generic assistant, and the Tg reverse-design
+assistant. The clients disable inherited proxy variables, literature discovery
+remains direct, and the proxy URL is never returned by a frontend API. An empty
+value keeps direct access. The URL must be an absolute HTTP(S) URL without
+credentials, path, query, or fragment. `ONLINE_KNOWLEDGE_PROXY_URL` remains a
+fallback for one release when `AI_PROXY_URL` is empty and emits a deprecation
+warning; `AI_PROXY_URL` always wins when both are present.
+
+The Tg reverse-design assistant is separately gated by
+`TG_ASSISTANT_ENABLED` (default `false`) and requires all of
+`TG_ASSISTANT_API_KEY`, `TG_ASSISTANT_BASE_URL`, and `TG_ASSISTANT_MODEL`.
+The default model ID is `gpt-5.6-terra`; keep the Base URL configurable and
+canary both text and image requests against the installed provider before
+enabling the feature. `TG_ASSISTANT_IMAGE_MAX_BYTES` defaults to `5242880`.
+`TG_ASSISTANT_REASONING_EFFORT` defaults to `medium`, and
+`TG_ASSISTANT_TRANSPORT` defaults to `auto` (Responses API first, with a
+cached Chat Completions compatibility fallback only for explicitly unsupported
+Responses endpoints).
+Incomplete Tg configuration does not fall back to generic-assistant or online
+knowledge credentials. `/api/v1/assistant/tg/status` reports enabled/configured
+booleans plus the two-source image capability contract (one canvas snapshot and
+one user image; PNG, JPEG, WebP; 5 MiB each and 10 MiB total by default), while
+the versioned guide remains available even when the model feature is disabled.
+The multipart TG image endpoint sends an in-memory Base64
+data URL directly to the configured model and never invokes the local OCSR
+pipeline. Keep provider credentials in the owner-private application
+environment file at mode `0600`.
 
 For the current development server, each container uses port `17892` on its
 own approved Docker bridge gateway (for example,
@@ -187,6 +209,36 @@ proxy. The relay must listen only on the exact Docker gateway addresses and
 the firewall must admit only their corresponding bridge subnets; never bind
 this unauthenticated development proxy to `0.0.0.0` or the server's public
 address.
+
+The production and development Compose networks pin those contracts to
+`172.27.0.0/16` (`172.27.0.1`) and `172.28.0.0/16` (`172.28.0.1`). The host
+firewall rules match each reviewed source subnet to its corresponding gateway,
+not Docker's generated `br-<network-id>` interface name. These addresses are
+literal security contracts, not environment overrides; changing them requires
+one reviewed update to the Compose networks, socket listeners, firewall helper,
+tests, and this document.
+
+The first adoption on an existing Compose project changes the managed default
+network definition. A partial `compose up` cannot replace that network while
+other services still own endpoints. For development, first stop any GPU session,
+then use `./scripts/dev_server_gpu.sh down` followed by
+`./scripts/dev_server_gpu.sh up` during a maintenance window. Production must
+perform the equivalent complete project stop and recreation only through its
+approved maintenance workflow; routine pull deployment must not attempt the
+one-time migration. New installations create the pinned network directly.
+
+Install or reconcile the root-managed firewall rule after updating these assets
+with:
+
+```text
+sudo ./scripts/install_tunnel_proxy_firewall.sh
+```
+
+The installer first stops the listener socket, then stops the currently loaded
+firewall service so its legacy `ExecStop` removes interface-bound rules without
+leaving an unfiltered listener. It then installs the stable-address drop-in and
+verifies the complete replacement chain. The existing socket keeps requiring
+the same firewall service, so boot ordering remains unchanged.
 
 This is a development-only facility. If the upstream loopback tunnel is absent,
 online model extraction may fail while Backend health and all non-model APIs

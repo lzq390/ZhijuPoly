@@ -255,6 +255,32 @@ class ReadAndFrontendClient(FakeClient):
                 "total": 1,
                 "results": [{"knowledge_id": 42, "abstract": "must not be sealed"}],
             }
+        if method == "GET" and path == "/api/v1/assistant/tg/status":
+            return 200, {}, {
+                "enabled": False,
+                "configured": True,
+                "image": {
+                    "supported": True,
+                    "max_files": 2,
+                    "max_canvas_snapshots": 1,
+                    "max_user_upload_files": 1,
+                    "max_bytes": 5242880,
+                    "max_total_bytes": 10485760,
+                    "accepted_mime_types": ["image/png", "image/jpeg", "image/webp"],
+                },
+            }
+        if method == "GET" and path == "/api/v1/assistant/tg/guide":
+            return 200, {}, {
+                "module": "reverseDesign",
+                "version": 3,
+                "language": "zh-CN",
+                "defaults": {
+                    "target_tg": 450.0,
+                    "similarity_threshold": 0.7,
+                    "candidate_size": 200,
+                },
+                "sections": [{"id": "purpose", "title": "模块用途", "content": ["guide"]}],
+            }
         if method == "GET" and path == "/health":
             return 200, {"Content-Type": "application/json"}, {"status": "ok"}
         if method == "GET" and path in {"/assets/app.js", "/assets/app.css"}:
@@ -266,6 +292,7 @@ class ReadAndFrontendClient(FakeClient):
             "/database",
             "/database-filter",
             "/knowledge",
+            "/reverse-design",
             "/monomer-dft",
             "/monomer-md-simulation",
         }:
@@ -438,8 +465,10 @@ class ProductionAcceptanceProbeTests(unittest.TestCase):
         frontend = PROBES.run_frontend_probe(client)
         self.assertEqual(api["property_histogram"]["total_records"], 615159)
         self.assertEqual(api["knowledge"]["group_count"], 1)
+        self.assertEqual(api["tg_assistant"]["guide_version"], 3)
         self.assertNotIn("must not be sealed", json.dumps(api))
         self.assertEqual(len(frontend["assets"]), 2)
+        self.assertIn("/reverse-design", frontend["routes"])
         self.assertIn("/monomer-dft", frontend["routes"])
 
     def test_loopback_and_private_evidence_are_fail_closed(self) -> None:

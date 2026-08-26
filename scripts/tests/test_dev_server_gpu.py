@@ -457,8 +457,8 @@ gpu_session_up
         tunnel_branch = source[tunnel_start:source.index("  *)", tunnel_start)]
 
         self.assertIn(
-            "-L ${NEXPOLY_DEV_FRONTEND_PORT:-15173}:127.0.0.1:"
-            "${NEXPOLY_DEV_FRONTEND_PORT:-15173}",
+            "-L ${NEXPOLY_DEV_FRONTEND_PORT:-9001}:127.0.0.1:"
+            "${NEXPOLY_DEV_FRONTEND_PORT:-9001}",
             tunnel_branch,
         )
         self.assertIn("-L 9011:127.0.0.1:9011", tunnel_branch)

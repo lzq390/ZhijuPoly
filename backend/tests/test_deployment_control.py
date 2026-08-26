@@ -444,7 +444,14 @@ def test_drain_state_read_is_offloaded_from_the_event_loop(postgres_dsn: str, mo
     assert offloaded_calls[0][0] is deployment_drain_middleware._read_drain_state
 
 
-def test_streaming_write_remains_active_until_the_final_response_body() -> None:
+@pytest.mark.parametrize(
+    "stream_path",
+    [
+        "/api/v1/assistant/chat/stream",
+        "/api/v1/assistant/tg/chat/stream",
+    ],
+)
+def test_streaming_write_remains_active_until_the_final_response_body(stream_path: str) -> None:
     app = FastAPI()
     app.state.settings = SimpleNamespace(deployment_drain_enabled=False)
     _install_zero_activity_components(app)
@@ -497,8 +504,8 @@ def test_streaming_write_remains_active_until_the_final_response_body() -> None:
             "http_version": "1.1",
             "method": "POST",
             "scheme": "http",
-            "path": "/api/v1/assistant/chat/stream",
-            "raw_path": b"/api/v1/assistant/chat/stream",
+            "path": stream_path,
+            "raw_path": stream_path.encode("ascii"),
             "query_string": b"",
             "headers": [],
             "client": ("testclient", 50000),

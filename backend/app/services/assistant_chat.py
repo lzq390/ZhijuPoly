@@ -7,9 +7,8 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
-from openai import OpenAI
-
 from app.models import AssistantChatMessage, AssistantModuleContext
+from app.services.ai_client import clean_ai_provider_error, create_openai_client
 
 
 class AssistantChatConfigError(RuntimeError):
@@ -59,9 +58,12 @@ def complete_assistant_intent(
     api_key: str,
     base_url: str,
     model: str,
+    proxy_url: str = "",
 ) -> dict[str, Any]:
     validate_assistant_model_access(api_key=api_key, base_url=base_url, model=model)
-    client = OpenAI(api_key=api_key, base_url=base_url.rstrip("/"))
+    client = create_openai_client(
+        api_key=api_key, base_url=base_url, proxy_url=proxy_url, timeout_seconds=90.0
+    )
 
     try:
         response = client.chat.completions.create(
@@ -91,7 +93,9 @@ def complete_assistant_intent(
     except AssistantChatModelError:
         raise
     except Exception as exc:
-        raise AssistantChatModelError(str(exc)) from exc
+        raise AssistantChatModelError(clean_ai_provider_error(exc)) from exc
+    finally:
+        client.close()
 
 
 def stream_assistant_chat(
@@ -102,9 +106,12 @@ def stream_assistant_chat(
     api_key: str,
     base_url: str,
     model: str,
+    proxy_url: str = "",
 ) -> Iterable[str]:
     validate_assistant_model_access(api_key=api_key, base_url=base_url, model=model)
-    client = OpenAI(api_key=api_key, base_url=base_url.rstrip("/"))
+    client = create_openai_client(
+        api_key=api_key, base_url=base_url, proxy_url=proxy_url, timeout_seconds=90.0
+    )
 
     try:
         stream = client.chat.completions.create(
@@ -127,7 +134,9 @@ def stream_assistant_chat(
     except AssistantChatConfigError:
         raise
     except Exception as exc:
-        raise AssistantChatModelError(str(exc)) from exc
+        raise AssistantChatModelError(clean_ai_provider_error(exc)) from exc
+    finally:
+        client.close()
 
 
 def stream_assistant_image_chat(
@@ -140,12 +149,15 @@ def stream_assistant_image_chat(
     api_key: str,
     base_url: str,
     model: str,
+    proxy_url: str = "",
 ) -> Iterable[str]:
     validate_assistant_model_access(api_key=api_key, base_url=base_url, model=model)
     if not messages or messages[-1].role != "user":
         raise AssistantChatModelError("latest assistant image chat message must be from the user")
 
-    client = OpenAI(api_key=api_key, base_url=base_url.rstrip("/"))
+    client = create_openai_client(
+        api_key=api_key, base_url=base_url, proxy_url=proxy_url, timeout_seconds=90.0
+    )
     image_data_url = f"data:{content_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
     prior_messages = [{"role": message.role, "content": message.content} for message in messages[:-1]]
     latest_message = messages[-1]
@@ -183,7 +195,9 @@ def stream_assistant_image_chat(
     except AssistantChatConfigError:
         raise
     except Exception as exc:
-        raise AssistantChatModelError(str(exc)) from exc
+        raise AssistantChatModelError(clean_ai_provider_error(exc)) from exc
+    finally:
+        client.close()
 
 
 def stream_assistant_skill_summary(
@@ -196,9 +210,12 @@ def stream_assistant_skill_summary(
     api_key: str,
     base_url: str,
     model: str,
+    proxy_url: str = "",
 ) -> Iterable[str]:
     validate_assistant_model_access(api_key=api_key, base_url=base_url, model=model)
-    client = OpenAI(api_key=api_key, base_url=base_url.rstrip("/"))
+    client = create_openai_client(
+        api_key=api_key, base_url=base_url, proxy_url=proxy_url, timeout_seconds=90.0
+    )
 
     try:
         stream = client.chat.completions.create(
@@ -232,7 +249,9 @@ def stream_assistant_skill_summary(
     except AssistantChatConfigError:
         raise
     except Exception as exc:
-        raise AssistantChatModelError(str(exc)) from exc
+        raise AssistantChatModelError(clean_ai_provider_error(exc)) from exc
+    finally:
+        client.close()
 
 
 def complete_prediction_property_resolution(
@@ -243,9 +262,12 @@ def complete_prediction_property_resolution(
     api_key: str,
     base_url: str,
     model: str,
+    proxy_url: str = "",
 ) -> dict[str, Any]:
     validate_assistant_model_access(api_key=api_key, base_url=base_url, model=model)
-    client = OpenAI(api_key=api_key, base_url=base_url.rstrip("/"))
+    client = create_openai_client(
+        api_key=api_key, base_url=base_url, proxy_url=proxy_url, timeout_seconds=90.0
+    )
 
     try:
         response = client.chat.completions.create(
@@ -274,7 +296,9 @@ def complete_prediction_property_resolution(
     except AssistantChatModelError:
         raise
     except Exception as exc:
-        raise AssistantChatModelError(str(exc)) from exc
+        raise AssistantChatModelError(clean_ai_provider_error(exc)) from exc
+    finally:
+        client.close()
 
 
 def build_prediction_property_resolution_prompt(

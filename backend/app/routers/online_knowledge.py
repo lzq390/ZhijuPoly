@@ -40,6 +40,7 @@ from app.services.online_knowledge.search_service import (
     run_online_knowledge_search,
     validate_model_access,
 )
+from app.services.ai_client import clean_ai_provider_error
 
 
 router = APIRouter(prefix="/api/v1/online-knowledge", tags=["online-knowledge"])
@@ -330,7 +331,4 @@ def _public_job_error_message(exc: Exception) -> str:
 
 
 def _safe_provider_error_detail(detail: str) -> str:
-    text = " ".join(detail.split())
-    if not text:
-        return "Check the API key, Base URL, model, and provider access."
-    return text[:500]
+    return clean_ai_provider_error(OnlineKnowledgeModelError(detail))

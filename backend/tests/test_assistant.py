@@ -435,7 +435,8 @@ def test_assistant_image_chat_stream_emits_model_error_event(tmp_path: Path, mon
 
     assert response.status_code == 200
     assert "event: error" in response.text
-    assert "vision model unavailable" in response.text
+    assert "AI provider request failed" in response.text
+    assert "vision model unavailable" not in response.text
 
 
 def test_assistant_chat_requires_latest_user_message(tmp_path: Path) -> None:
@@ -468,7 +469,17 @@ def test_assistant_chat_ignores_stream_chunks_without_delta_content(monkeypatch)
             assert base_url == "https://example.test/v1"
             self.chat = SimpleNamespace(completions=FakeCompletions())
 
-    monkeypatch.setattr(assistant_chat_service, "OpenAI", FakeOpenAI)
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        assistant_chat_service,
+        "create_openai_client",
+        lambda *, api_key, base_url, **_kwargs: FakeOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+        ),
+    )
 
     tokens = list(
         assistant_chat_service.stream_assistant_chat(
@@ -498,7 +509,17 @@ def test_assistant_image_chat_sends_multimodal_latest_message(monkeypatch) -> No
             assert base_url == "https://example.test/v1"
             self.chat = SimpleNamespace(completions=FakeCompletions())
 
-    monkeypatch.setattr(assistant_chat_service, "OpenAI", FakeOpenAI)
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        assistant_chat_service,
+        "create_openai_client",
+        lambda *, api_key, base_url, **_kwargs: FakeOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+        ),
+    )
 
     tokens = list(
         assistant_chat_service.stream_assistant_image_chat(
