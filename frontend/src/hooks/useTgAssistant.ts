@@ -336,8 +336,20 @@ export function useTgAssistant() {
   const metadataLoadedRef = useRef(false);
   const controllerRef = useRef<AbortController | null>(null);
   const imageFilesRef = useRef(new Map<string, File>());
+  const imagePreviewUrlsRef = useRef(new Map<string, string>());
   const stopRequestedRef = useRef(false);
   const adapterRef = useRef<TgAssistantPageAdapter | null>(null);
+
+  const releaseImagePreview = useCallback((userItemId: string) => {
+    const previewUrl = imagePreviewUrlsRef.current.get(userItemId);
+    if (!previewUrl) return;
+    imagePreviewUrlsRef.current.delete(userItemId);
+    try {
+      URL.revokeObjectURL(previewUrl);
+    } catch {
+      // The in-memory preview is optional; attachment delivery and retry remain available.
+    }
+  }, []);
 
   const updateItems = useCallback((updater: (current: TgAssistantItem[]) => TgAssistantItem[]) => {
     const next = trimItems(updater(itemsRef.current));
@@ -347,9 +359,12 @@ export function useTgAssistant() {
     for (const userItemId of imageFilesRef.current.keys()) {
       if (!retainedImageIds.has(userItemId)) imageFilesRef.current.delete(userItemId);
     }
+    for (const userItemId of imagePreviewUrlsRef.current.keys()) {
+      if (!retainedImageIds.has(userItemId)) releaseImagePreview(userItemId);
+    }
     itemsRef.current = next;
     setItems(next);
-  }, []);
+  }, [releaseImagePreview]);
 
   useEffect(() => {
     try {
@@ -371,7 +386,10 @@ export function useTgAssistant() {
   useEffect(() => () => {
     controllerRef.current?.abort();
     imageFilesRef.current.clear();
-  }, []);
+    for (const userItemId of imagePreviewUrlsRef.current.keys()) {
+      releaseImagePreview(userItemId);
+    }
+  }, [releaseImagePreview]);
 
   const loadMetadata = useCallback(async () => {
     if (metadataLoadedRef.current || metadataLoading) return;
@@ -750,10 +768,21 @@ export function useTgAssistant() {
       status: "done",
       ...(image ? { image: { name: image.name, size: image.size, type: image.type } } : {})
     };
-    if (image) imageFilesRef.current.set(userItem.id, image);
+    if (image) {
+      imageFilesRef.current.set(userItem.id, image);
+      try {
+        imagePreviewUrlsRef.current.set(userItem.id, URL.createObjectURL(image));
+      } catch {
+        // Keep the attachment usable even when this browser cannot create a preview URL.
+      }
+    }
     await runRequest(userItem, attachContext, true, image);
     return true;
   }, [runRequest]);
+
+  const getImagePreviewUrl = useCallback((userItemId: string) => (
+    imagePreviewUrlsRef.current.get(userItemId) ?? null
+  ), []);
 
   const retry = useCallback(async (assistantItemId: string, attachContext: boolean) => {
     const assistant = itemsRef.current.find(
@@ -793,6 +822,9 @@ export function useTgAssistant() {
     setIsStreaming(false);
     itemsRef.current = [];
     imageFilesRef.current.clear();
+    for (const userItemId of imagePreviewUrlsRef.current.keys()) {
+      releaseImagePreview(userItemId);
+    }
     setItems([]);
     try {
       sessionStorage.removeItem(SESSION_KEY);
@@ -800,7 +832,7 @@ export function useTgAssistant() {
     } catch {
       setStorageWarning("本标签页的 AI 对话无法持久化。");
     }
-  }, []);
+  }, [releaseImagePreview]);
 
   const rejectAction = useCallback((itemId: string) => {
     updateItems((current) => current.map((item) => item.kind === "action" && item.id === itemId
@@ -855,6 +887,7 @@ export function useTgAssistant() {
     addDivider,
     registerAdapter,
     send,
+    getImagePreviewUrl,
     retry,
     stop,
     newConversation,

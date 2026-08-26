@@ -211,12 +211,22 @@ function MessageBubble({
   attachContext: boolean;
   assistant: TgAssistantSession;
 }) {
+  const imagePreviewUrl = item.image ? assistant.getImagePreviewUrl(item.id) : null;
   return (
     <article className={`tg-assistant-message is-${item.role}`}>
       <span>{item.role === "user" ? "你" : "AI"}</span>
       <div>
         {item.image ? (
-          <small className="tg-assistant-message-image"><Image />{item.image.name}</small>
+          <figure className="tg-assistant-message-image">
+            {imagePreviewUrl ? (
+              <img src={imagePreviewUrl} alt={`上传的图片：${item.image.name}`} />
+            ) : (
+              <span className="tg-assistant-message-image-unavailable" role="img" aria-label="图片预览已失效">
+                <Image /><em>图片预览已失效</em>
+              </span>
+            )}
+            <figcaption title={item.image.name}>{item.image.name}</figcaption>
+          </figure>
         ) : null}
         {item.content ? <SafeMarkdown content={item.content} /> : null}
         {item.status === "understanding" ? (

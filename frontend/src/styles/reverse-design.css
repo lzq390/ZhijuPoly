@@ -714,21 +714,62 @@
 }
 
 .tg-assistant-message-image {
-  display: inline-flex;
+  display: grid;
+  width: min(220px, 100%);
   max-width: 100%;
-  align-items: center;
-  gap: 5px;
-  margin-bottom: 4px;
+  min-width: 0;
+  gap: 4px;
+  justify-items: end;
+  margin: 0 0 6px auto;
+  overflow: hidden;
+}
+
+.tg-assistant-message-image img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 200px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  background: #ffffff;
+  object-fit: contain;
+  box-sizing: border-box;
+}
+
+.tg-assistant-message-image figcaption {
+  width: 100%;
+  min-width: 0;
   overflow: hidden;
   color: #64748b;
+  font-size: 10px;
+  line-height: 1.35;
+  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tg-assistant-message-image svg {
-  width: 13px;
-  height: 13px;
-  flex: none;
+.tg-assistant-message-image-unavailable {
+  display: flex;
+  width: 100%;
+  min-height: 82px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed rgba(148, 163, 184, 0.45);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.65);
+  color: #94a3b8;
+  box-sizing: border-box;
+}
+
+.tg-assistant-message-image-unavailable svg {
+  width: 16px;
+  height: 16px;
+}
+
+.tg-assistant-message-image-unavailable em {
+  font-size: 10px;
+  font-style: normal;
 }
 
 .tg-assistant-structure-change dd {

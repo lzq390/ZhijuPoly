@@ -73,6 +73,14 @@ function adapter(overrides: Partial<TgAssistantPageAdapter> = {}): TgAssistantPa
 beforeEach(() => {
   window.sessionStorage.clear();
   window.localStorage.clear();
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: vi.fn(() => "blob:conversation-preview")
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: vi.fn()
+  });
   mocks.stream.mockReset();
   mocks.status.mockReset().mockResolvedValue({
     enabled: true,
@@ -234,9 +242,18 @@ describe("useTgAssistant session and request lifecycle", () => {
     });
 
     expect(mocks.stream.mock.calls[0][3]).toEqual({ userImage: file });
+    const userItem = result.current.items.find(
+      (item) => item.kind === "message" && item.role === "user"
+    );
+    expect(userItem).toBeTruthy();
+    expect(result.current.getImagePreviewUrl(userItem!.id)).toBe("blob:conversation-preview");
     const stored = window.sessionStorage.getItem(SESSION_KEY) || "";
     expect(stored).toContain("structure.png");
     expect(stored).not.toContain("private-binary-content");
+    expect(stored).not.toContain("blob:conversation-preview");
+
+    act(() => result.current.newConversation());
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:conversation-preview");
   });
 
   it("captures a canvas image with context, sends two sources, and stores only stage summaries", async () => {
