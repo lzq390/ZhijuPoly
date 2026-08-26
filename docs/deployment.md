@@ -234,10 +234,11 @@ with:
 sudo ./scripts/install_tunnel_proxy_firewall.sh
 ```
 
-The installer first stops the currently loaded firewall service so its legacy
-`ExecStop` removes interface-bound rules, then installs the stable-address
-drop-in and verifies the complete replacement chain. The existing socket keeps
-requiring the same firewall service, so boot ordering remains unchanged.
+The installer first stops the listener socket, then stops the currently loaded
+firewall service so its legacy `ExecStop` removes interface-bound rules without
+leaving an unfiltered listener. It then installs the stable-address drop-in and
+verifies the complete replacement chain. The existing socket keeps requiring
+the same firewall service, so boot ordering remains unchanged.
 
 This is a development-only facility. If the upstream loopback tunnel is absent,
 online model extraction may fail while Backend health and all non-model APIs

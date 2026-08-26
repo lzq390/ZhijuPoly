@@ -131,21 +131,92 @@ class TunnelProxyFirewallTests(unittest.TestCase):
         runner.jumps = 2
         self.assertFalse(firewall.rules_are_active(runner))
 
-    def test_real_rule_parser_preserves_quoted_comment_arguments(self) -> None:
+    def test_real_rule_parser_normalizes_canonical_iptables_output(self) -> None:
         runner = firewall.Iptables(Path("/fixture/iptables"))
         output = "\n".join(
             (
                 f"-N {firewall.CHAIN}",
-                f'-A {firewall.CHAIN} -p tcp -s 172.27.0.0/16 '
-                '-d 172.27.0.1 --dport 17892 -m comment '
+                f'-A {firewall.CHAIN} -s 172.27.0.0/16 '
+                '-d 172.27.0.1/32 -p tcp -m tcp --dport 17892 -m comment '
                 '--comment "nexpoly tunnel proxy production" -j ACCEPT',
             )
         )
         with mock.patch.object(runner, "run", return_value=Result(stdout=output)):
+            listed = runner.listed_rules(firewall.CHAIN)
+            self.assertIsNotNone(listed)
             self.assertEqual(
-                runner.listed_rules(firewall.CHAIN),
-                (firewall._accept_rule(firewall.NETWORKS[0]),),
+                firewall._normalize_rule(listed[0]),
+                firewall._normalize_rule(firewall._accept_rule(firewall.NETWORKS[0])),
             )
+
+    def test_status_accepts_canonical_iptables_rule_rendering(self) -> None:
+        canonical_rules = []
+        for contract in firewall.NETWORKS:
+            canonical_rules.append(
+                (
+                    "-s",
+                    contract.subnet,
+                    "-d",
+                    f"{contract.gateway}/32",
+                    "-p",
+                    "tcp",
+                    "-m",
+                    "tcp",
+                    "--dport",
+                    str(firewall.PORT),
+                    "-m",
+                    "comment",
+                    "--comment",
+                    f"nexpoly tunnel proxy {contract.name}",
+                    "-j",
+                    "ACCEPT",
+                )
+            )
+        for contract in firewall.NETWORKS:
+            canonical_rules.append(
+                (
+                    "-d",
+                    f"{contract.gateway}/32",
+                    "-p",
+                    "tcp",
+                    "-m",
+                    "tcp",
+                    "--dport",
+                    str(firewall.PORT),
+                    "-m",
+                    "comment",
+                    "--comment",
+                    f"nexpoly tunnel proxy reject {contract.name}",
+                    "-j",
+                    "REJECT",
+                    "--reject-with",
+                    "tcp-reset",
+                )
+            )
+        canonical_rules.append(("-j", "RETURN"))
+
+        runner = mock.Mock()
+        runner.chain_exists.return_value = True
+        runner.input_jump_count.return_value = 1
+        runner.listed_rules.return_value = tuple(canonical_rules)
+        self.assertTrue(firewall.rules_are_active(runner))
+
+    def test_input_jump_count_accepts_implicit_tcp_module(self) -> None:
+        runner = firewall.Iptables(Path("/fixture/iptables"))
+        output = "\n".join(
+            (
+                "-P INPUT ACCEPT",
+                f"-A INPUT -p tcp -m tcp --dport {firewall.PORT} "
+                f"-j {firewall.CHAIN}",
+            )
+        )
+        with mock.patch.object(runner, "run", return_value=Result(stdout=output)):
+            self.assertEqual(runner.input_jump_count(), 1)
+
+    def test_rule_normalizer_rejects_unknown_matches(self) -> None:
+        self.assertIsNone(
+            firewall._normalize_rule(("-p", "tcp", "--sport", "1234", "-j", "ACCEPT"))
+        )
 
     def test_cli_refuses_non_root_execution(self) -> None:
         with mock.patch.object(firewall.os, "geteuid", return_value=1001):

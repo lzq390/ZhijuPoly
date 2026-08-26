@@ -977,7 +977,9 @@ export function useTgStructureCanvas({
     } catch {
       return {
         smiles: sharedSmiles,
-        canvasDirty: false,
+        // Fail closed: when Ketcher cannot be read we cannot prove that its
+        // canvas still matches the shared SMILES used to ground an AI action.
+        canvasDirty: true,
         editorReady: isEditorReady,
         viewMode: isFlipped ? "3d" : "2d",
         busy: isBusy,

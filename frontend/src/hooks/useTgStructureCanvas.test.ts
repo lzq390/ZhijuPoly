@@ -362,4 +362,25 @@ describe("Tg structure canvas wildcard protection", () => {
     await expect(result.current.peekCanvasState()).resolves.toMatchObject({ canvasDirty: false });
     expect(apiMocks.standardizeSmiles).toHaveBeenCalledTimes(2);
   });
+
+  it("marks the canvas dirty when Ketcher state cannot be read", async () => {
+    const ketcher = { getSmiles: vi.fn().mockRejectedValue(new Error("iframe unavailable")) };
+    const frameWindow = { ketcher, Event, dispatchEvent: vi.fn(), scrollTo: vi.fn() };
+    const structure = {
+      smiles: "CCO",
+      setSmiles: vi.fn(),
+      iframeRef: { current: { contentWindow: frameWindow } },
+      setIsReady: vi.fn(),
+      getCurrentSmiles: vi.fn().mockResolvedValue("CCO")
+    } as unknown as StructureWorkspaceContext;
+    const { result } = renderHook(() => useTgStructureCanvas({
+      structure,
+      onStructureChanged: vi.fn()
+    }));
+
+    await expect(result.current.peekCanvasState()).resolves.toMatchObject({
+      smiles: "CCO",
+      canvasDirty: true
+    });
+  });
 });

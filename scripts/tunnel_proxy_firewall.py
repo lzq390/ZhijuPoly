@@ -31,6 +31,26 @@ class NetworkContract:
     gateway: str
 
 
+@dataclass(frozen=True)
+class RuleSpec:
+    """Semantic representation of the iptables options used by this service.
+
+    ``iptables -S`` renders equivalent rules differently from the arguments
+    used to create them: it reorders matches, expands host addresses to /32,
+    and inserts the protocol match module. Comparing the raw token sequences
+    would therefore report a healthy ruleset as incomplete.
+    """
+
+    protocol: str | None = None
+    source: str | None = None
+    destination: str | None = None
+    destination_port: int | None = None
+    modules: tuple[str, ...] = ()
+    comment: str | None = None
+    jump: str | None = None
+    reject_with: str | None = None
+
+
 NETWORKS = (
     NetworkContract("production", "172.27.0.0/16", "172.27.0.1"),
     NetworkContract("development", "172.28.0.0/16", "172.28.0.1"),
@@ -98,6 +118,85 @@ def _reject_rule(contract: NetworkContract) -> tuple[str, ...]:
     )
 
 
+def _normalize_rule(rule: Sequence[str]) -> RuleSpec | None:
+    """Parse a listed or expected rule without depending on token ordering."""
+
+    value_options = {
+        "-p": "protocol",
+        "-s": "source",
+        "-d": "destination",
+        "--dport": "destination_port",
+        "--comment": "comment",
+        "-j": "jump",
+        "--reject-with": "reject_with",
+    }
+    values: dict[str, str] = {}
+    modules: set[str] = set()
+    index = 0
+    while index < len(rule):
+        option = rule[index]
+        if index + 1 >= len(rule):
+            return None
+        value = rule[index + 1]
+        if option == "-m":
+            if value in modules:
+                return None
+            modules.add(value)
+        elif option in value_options:
+            field = value_options[option]
+            if field in values:
+                return None
+            values[field] = value
+        else:
+            return None
+        index += 2
+
+    protocol = values.get("protocol")
+    # ``-m tcp`` is implicit in ``-p tcp --dport`` and is emitted by
+    # iptables when rules are listed, even when it was omitted on insertion.
+    if protocol is not None:
+        modules.discard(protocol)
+
+    def normalize_network(field: str) -> str | None:
+        value = values.get(field)
+        if value is None:
+            return None
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            return None
+        if not isinstance(network, ipaddress.IPv4Network):
+            return None
+        return str(network)
+
+    source = normalize_network("source")
+    destination = normalize_network("destination")
+    if ("source" in values and source is None) or (
+        "destination" in values and destination is None
+    ):
+        return None
+
+    destination_port: int | None = None
+    if "destination_port" in values:
+        try:
+            destination_port = int(values["destination_port"])
+        except ValueError:
+            return None
+        if not 1 <= destination_port <= 65535:
+            return None
+
+    return RuleSpec(
+        protocol=protocol,
+        source=source,
+        destination=destination,
+        destination_port=destination_port,
+        modules=tuple(sorted(modules)),
+        comment=values.get("comment"),
+        jump=values.get("jump"),
+        reject_with=values.get("reject_with"),
+    )
+
+
 class Iptables:
     def __init__(self, binary: Path = IPTABLES) -> None:
         self.binary = binary
@@ -152,7 +251,8 @@ class Iptables:
         rules = self.listed_rules("INPUT")
         if rules is None:
             return -1
-        return sum(rule == _jump_rule() for rule in rules)
+        expected = _normalize_rule(_jump_rule())
+        return sum(_normalize_rule(rule) == expected for rule in rules)
 
 
 def apply_rules(iptables: Iptables) -> None:
@@ -187,7 +287,12 @@ def rules_are_active(iptables: Iptables) -> bool:
         *[_reject_rule(contract) for contract in NETWORKS],
         ("-j", "RETURN"),
     )
-    return iptables.listed_rules(CHAIN) == expected
+    listed = iptables.listed_rules(CHAIN)
+    if listed is None:
+        return False
+    normalized_listed = tuple(_normalize_rule(rule) for rule in listed)
+    normalized_expected = tuple(_normalize_rule(rule) for rule in expected)
+    return None not in normalized_listed and normalized_listed == normalized_expected
 
 
 def _require_root() -> None:
