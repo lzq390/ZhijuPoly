@@ -1182,6 +1182,113 @@ export type ReverseDesignTgJobStatusResponse = {
   result: ReverseDesignTgResponse | null;
 };
 
+export type TgAssistantStatusResponse = {
+  enabled: boolean;
+  configured: boolean;
+  image: {
+    supported: true;
+    max_files: 2;
+    max_canvas_snapshots: 1;
+    max_user_upload_files: 1;
+    max_bytes: number;
+    max_total_bytes: number;
+    accepted_mime_types: Array<"image/png" | "image/jpeg" | "image/webp">;
+  };
+};
+
+export type TgAssistantGuideSection = {
+  id: string;
+  title: string;
+  content: string[];
+};
+
+export type TgAssistantGuideResponse = {
+  module: "reverseDesign";
+  version: 3;
+  language: "zh-CN";
+  defaults: Record<string, number>;
+  sections: TgAssistantGuideSection[];
+};
+
+export type TgAssistantCandidateContext = {
+  rank: number;
+  polymer_smiles: string | null;
+  monomer_a_smiles: string | null;
+  monomer_b_smiles: string | null;
+  monomer_a_iupac: string | null;
+  monomer_b_iupac: string | null;
+  tg_value: number;
+  tg_difference: number;
+  similarity_score: number;
+};
+
+export type TgAssistantPageContext = {
+  type: "tg_reverse_design";
+  version: 1;
+  captured_at: string;
+  action_context_revision: string;
+  structure: {
+    smiles: string | null;
+    canvas_dirty: boolean;
+    editor_ready: boolean;
+    view_mode: "2d" | "3d";
+    busy: boolean;
+  };
+  draft_parameters: {
+    target_tg: number | null;
+    similarity_threshold: number | null;
+    candidate_size: number | null;
+  };
+  submitted_request: {
+    smiles: string;
+    target_tg: number;
+    similarity_threshold: number;
+    candidate_size: number;
+  } | null;
+  parameters_dirty: boolean;
+  validation_error: {
+    field: "target_tg" | "similarity_threshold" | "candidate_size" | "structure";
+    message: string;
+  } | null;
+  job: {
+    status: ReverseDesignJobStatus;
+    scanned_rows: number;
+    matched_count: number;
+    current_tg_radius: number | null;
+    best_similarity_score: number | null;
+    message: string | null;
+  } | null;
+  result_view: {
+    total: number;
+    page: number;
+    page_size: 5;
+    drawer_open: boolean;
+    visible_candidates: TgAssistantCandidateContext[];
+  } | null;
+  error: string | null;
+};
+
+export type TgAssistantSetParametersOperation = {
+  type: "set_parameters";
+  parameters: Partial<{
+    target_tg: number;
+    similarity_threshold: number;
+    candidate_size: number;
+  }>;
+};
+
+export type TgAssistantRunSearchOperation = { type: "run_search" };
+export type TgAssistantSetStructureOperation = { type: "set_structure"; smiles: string };
+export type TgAssistantOperation =
+  | TgAssistantSetParametersOperation
+  | TgAssistantRunSearchOperation
+  | TgAssistantSetStructureOperation;
+
+export type TgAssistantStreamRequest = {
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  page_context?: TgAssistantPageContext;
+};
+
 export type ConditionalGenerationTgRequest = {
   smiles: string;
   delta_tg: number;

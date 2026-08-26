@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import logging
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
@@ -16,6 +17,8 @@ except ImportError:  # pragma: no cover - keeps local import scripts usable befo
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = PROJECT_ROOT / "backend"
 DEFAULT_ENV_FILE = BACKEND_DIR / ".env"
+logger = logging.getLogger(__name__)
+_legacy_proxy_warning_emitted = False
 
 
 def _first_non_blank(*values: str | None, default: str = "") -> str:
@@ -74,13 +77,13 @@ def _normalize_http_proxy_url(name: str, value: str) -> str:
         raise ValueError(f"{name} must be an absolute HTTP(S) URL")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError(f"{name} must not contain a username or password")
-    if parsed.path or parsed.params or parsed.query or parsed.fragment:
+    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
         raise ValueError(f"{name} must not contain a path, query, or fragment")
     try:
         parsed.port
     except ValueError as exc:
         raise ValueError(f"{name} must contain a valid port") from exc
-    return normalized
+    return normalized.rstrip("/")
 
 
 class Settings:
@@ -146,10 +149,18 @@ class Settings:
         online_knowledge_model: str | None = None,
         online_knowledge_max_papers: int | None = None,
         online_knowledge_proxy_url: str | None = None,
+        ai_proxy_url: str | None = None,
         assistant_api_key: str | None = None,
         assistant_base_url: str | None = None,
         assistant_model: str | None = None,
         assistant_image_max_bytes: int | None = None,
+        tg_assistant_enabled: bool | None = None,
+        tg_assistant_api_key: str | None = None,
+        tg_assistant_base_url: str | None = None,
+        tg_assistant_model: str | None = None,
+        tg_assistant_image_max_bytes: int | None = None,
+        tg_assistant_reasoning_effort: str | None = None,
+        tg_assistant_transport: str | None = None,
         ocsr_enabled: bool | None = None,
         ocsr_model_dir: str | None = None,
         ocsr_device: str | None = None,
@@ -582,6 +593,12 @@ class Settings:
                 "ONLINE_KNOWLEDGE_PROXY_URL",
                 env_values.get("ONLINE_KNOWLEDGE_PROXY_URL", ""),
             )
+        raw_ai_proxy_url = ai_proxy_url
+        if raw_ai_proxy_url is None:
+            raw_ai_proxy_url = os.getenv(
+                "AI_PROXY_URL",
+                env_values.get("AI_PROXY_URL", ""),
+            )
         raw_assistant_api_key = _first_non_blank(
             assistant_api_key,
             os.getenv("ASSISTANT_API_KEY"),
@@ -608,6 +625,48 @@ class Settings:
                 str(env_values.get("ASSISTANT_IMAGE_MAX_BYTES", "5242880")),
             )
         )
+        raw_tg_assistant_enabled: bool | str = tg_assistant_enabled
+        if raw_tg_assistant_enabled is None:
+            raw_tg_assistant_enabled = os.getenv(
+                "TG_ASSISTANT_ENABLED",
+                str(env_values.get("TG_ASSISTANT_ENABLED", "false")),
+            )
+        raw_tg_assistant_api_key = (
+            tg_assistant_api_key
+            if tg_assistant_api_key is not None
+            else os.getenv("TG_ASSISTANT_API_KEY", env_values.get("TG_ASSISTANT_API_KEY", ""))
+        )
+        raw_tg_assistant_base_url = (
+            tg_assistant_base_url
+            if tg_assistant_base_url is not None
+            else os.getenv("TG_ASSISTANT_BASE_URL", env_values.get("TG_ASSISTANT_BASE_URL", ""))
+        )
+        raw_tg_assistant_model = _first_non_blank(
+            tg_assistant_model,
+            os.getenv("TG_ASSISTANT_MODEL"),
+            env_values.get("TG_ASSISTANT_MODEL"),
+            default="gpt-5.6-terra",
+        )
+        raw_tg_assistant_image_max_bytes = (
+            str(tg_assistant_image_max_bytes)
+            if tg_assistant_image_max_bytes is not None
+            else os.getenv(
+                "TG_ASSISTANT_IMAGE_MAX_BYTES",
+                str(env_values.get("TG_ASSISTANT_IMAGE_MAX_BYTES", "5242880")),
+            )
+        )
+        raw_tg_assistant_reasoning_effort = _first_non_blank(
+            tg_assistant_reasoning_effort,
+            os.getenv("TG_ASSISTANT_REASONING_EFFORT"),
+            env_values.get("TG_ASSISTANT_REASONING_EFFORT"),
+            default="medium",
+        ).strip().lower()
+        raw_tg_assistant_transport = _first_non_blank(
+            tg_assistant_transport,
+            os.getenv("TG_ASSISTANT_TRANSPORT"),
+            env_values.get("TG_ASSISTANT_TRANSPORT"),
+            default="auto",
+        ).strip().lower()
         raw_ocsr_model_dir = ocsr_model_dir
         if raw_ocsr_model_dir is None:
             raw_ocsr_model_dir = (
@@ -991,14 +1050,47 @@ class Settings:
         self.online_knowledge_base_url = raw_online_knowledge_base_url.strip()
         self.online_knowledge_model = raw_online_knowledge_model.strip()
         self.online_knowledge_max_papers = min(2000, max(1, int(raw_online_knowledge_max_papers)))
-        self.online_knowledge_proxy_url = _normalize_http_proxy_url(
-            "ONLINE_KNOWLEDGE_PROXY_URL",
-            raw_online_knowledge_proxy_url,
-        )
+        selected_proxy_url = raw_ai_proxy_url.strip() or raw_online_knowledge_proxy_url.strip()
+        selected_proxy_name = "AI_PROXY_URL" if raw_ai_proxy_url.strip() else "ONLINE_KNOWLEDGE_PROXY_URL"
+        self.ai_proxy_url = _normalize_http_proxy_url(selected_proxy_name, selected_proxy_url)
+        self.online_knowledge_proxy_url = self.ai_proxy_url
+        global _legacy_proxy_warning_emitted
+        if (
+            not raw_ai_proxy_url.strip()
+            and raw_online_knowledge_proxy_url.strip()
+            and not _legacy_proxy_warning_emitted
+        ):
+            logger.warning(
+                "ONLINE_KNOWLEDGE_PROXY_URL is deprecated; use AI_PROXY_URL. "
+                "Legacy fallback will be removed after one release."
+            )
+            _legacy_proxy_warning_emitted = True
         self.assistant_api_key = raw_assistant_api_key.strip()
         self.assistant_base_url = raw_assistant_base_url.strip()
         self.assistant_model = raw_assistant_model.strip()
         self.assistant_image_max_bytes = max(1, int(raw_assistant_image_max_bytes))
+        self.tg_assistant_enabled = _strict_bool("TG_ASSISTANT_ENABLED", raw_tg_assistant_enabled)
+        self.tg_assistant_api_key = raw_tg_assistant_api_key.strip()
+        self.tg_assistant_base_url = raw_tg_assistant_base_url.strip()
+        self.tg_assistant_model = raw_tg_assistant_model.strip()
+        self.tg_assistant_image_max_bytes = int(raw_tg_assistant_image_max_bytes)
+        if not 1 <= self.tg_assistant_image_max_bytes <= 5 * 1024 * 1024:
+            raise ValueError(
+                "TG_ASSISTANT_IMAGE_MAX_BYTES must be between 1 and 5242880"
+            )
+        if raw_tg_assistant_reasoning_effort not in {
+            "none", "low", "medium", "high", "xhigh", "max"
+        }:
+            raise ValueError(
+                "TG_ASSISTANT_REASONING_EFFORT must be one of "
+                "none, low, medium, high, xhigh, or max"
+            )
+        if raw_tg_assistant_transport not in {"auto", "responses", "chat_completions"}:
+            raise ValueError(
+                "TG_ASSISTANT_TRANSPORT must be auto, responses, or chat_completions"
+            )
+        self.tg_assistant_reasoning_effort = raw_tg_assistant_reasoning_effort
+        self.tg_assistant_transport = raw_tg_assistant_transport
         self.ocsr_enabled = bool(raw_ocsr_enabled)
         self.ocsr_model_dir = _resolve_from_root(raw_ocsr_model_dir)
         self.ocsr_device = raw_ocsr_device.strip().lower()

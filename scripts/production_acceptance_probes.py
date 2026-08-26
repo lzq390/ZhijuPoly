@@ -765,6 +765,43 @@ def run_read_only_api_probes(
         item.get("knowledge_id") for item in results if isinstance(item, dict)
     ]
     _require(all(isinstance(value, int) for value in knowledge_ids), "knowledge IDs are invalid")
+
+    _, tg_assistant_status = _json_request(
+        client,
+        "GET",
+        "/api/v1/assistant/tg/status",
+        timeout=30.0,
+    )
+    _require(
+        isinstance(tg_assistant_status.get("enabled"), bool)
+        and isinstance(tg_assistant_status.get("configured"), bool)
+        and isinstance(tg_assistant_status.get("image"), dict)
+        and tg_assistant_status["image"].get("supported") is True
+        and tg_assistant_status["image"].get("max_files") == 2
+        and tg_assistant_status["image"].get("max_canvas_snapshots") == 1
+        and tg_assistant_status["image"].get("max_user_upload_files") == 1
+        and isinstance(tg_assistant_status["image"].get("max_bytes"), int)
+        and tg_assistant_status["image"].get("max_total_bytes")
+        == 2 * tg_assistant_status["image"].get("max_bytes")
+        and tg_assistant_status["image"].get("accepted_mime_types")
+        == ["image/png", "image/jpeg", "image/webp"],
+        "Tg assistant status contract is invalid",
+    )
+    _, tg_assistant_guide = _json_request(
+        client,
+        "GET",
+        "/api/v1/assistant/tg/guide",
+        timeout=30.0,
+    )
+    guide_sections = tg_assistant_guide.get("sections")
+    _require(
+        tg_assistant_guide.get("module") == "reverseDesign"
+        and tg_assistant_guide.get("version") == 3
+        and tg_assistant_guide.get("language") == "zh-CN"
+        and isinstance(guide_sections, list)
+        and bool(guide_sections),
+        "Tg assistant guide contract is invalid",
+    )
     return {
         "status": "passed",
         "property_histogram": {
@@ -786,6 +823,12 @@ def run_read_only_api_probes(
             "response_projection_sha256": _digest(
                 {"total": knowledge["total"], "knowledge_ids": knowledge_ids}
             ),
+        },
+        "tg_assistant": {
+            "enabled": tg_assistant_status["enabled"],
+            "configured": tg_assistant_status["configured"],
+            "guide_version": tg_assistant_guide["version"],
+            "guide_section_count": len(guide_sections),
         },
     }
 
@@ -821,7 +864,15 @@ def run_frontend_probe(client: LoopbackClient) -> dict[str, Any]:
                 "sha256": "sha256:" + hashlib.sha256(body).hexdigest(),
             }
         )
-    routes = ["/structure-workbench", "/database", "/database-filter", "/knowledge", "/monomer-dft", "/monomer-md-simulation"]
+    routes = [
+        "/structure-workbench",
+        "/database",
+        "/database-filter",
+        "/knowledge",
+        "/reverse-design",
+        "/monomer-dft",
+        "/monomer-md-simulation",
+    ]
     route_evidence: list[str] = []
     for route in routes:
         route_status, _route_headers, route_raw = client.request("GET", route)

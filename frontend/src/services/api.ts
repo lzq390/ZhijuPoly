@@ -78,7 +78,9 @@ import type {
   StructureImageRecognitionResponse,
   SmilesQueryRequest,
   SmilesQueryResponse,
-  StructurePropertyBrowseResponse
+  StructurePropertyBrowseResponse,
+  TgAssistantGuideResponse,
+  TgAssistantStatusResponse
 } from "../types";
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
@@ -593,6 +595,14 @@ export function createReverseDesignTgJob(
 
 export function fetchReverseDesignTgJob(jobId: string, signal?: AbortSignal): Promise<ReverseDesignTgJobStatusResponse> {
   return getJSON(`/reverse-design/tg/jobs/${encodeURIComponent(jobId)}`, { signal });
+}
+
+export function fetchTgAssistantStatus(signal?: AbortSignal): Promise<TgAssistantStatusResponse> {
+  return getJSON("/assistant/tg/status", { cache: "no-store", signal });
+}
+
+export function fetchTgAssistantGuide(signal?: AbortSignal): Promise<TgAssistantGuideResponse> {
+  return getJSON("/assistant/tg/guide", { cache: "no-store", signal });
 }
 
 export function createConditionalGenerationTgJob(

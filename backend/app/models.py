@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Any, Literal
 
@@ -849,6 +850,350 @@ class AssistantChatStreamRequest(BaseModel):
         if self.messages[-1].role != "user":
             raise ValueError("latest assistant chat message must be from the user")
         return self
+
+
+TgReverseDesignJobStatus = Literal[
+    "pending",
+    "running",
+    "found_enough",
+    "exhausted",
+    "failed",
+    "cancelled",
+]
+
+
+class TgAssistantStructureContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    smiles: str | None = Field(default=None, max_length=8000)
+    canvas_dirty: bool
+    editor_ready: bool
+    view_mode: Literal["2d", "3d"]
+    busy: bool
+
+    @field_validator("canvas_dirty", "editor_ready", "busy", mode="before")
+    @classmethod
+    def require_boolean(cls, value: object) -> object:
+        if not isinstance(value, bool):
+            raise ValueError("Tg assistant structure flags must be booleans")
+        return value
+
+
+class TgAssistantParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_tg: float | None
+    similarity_threshold: float | None = Field(ge=0.0, le=1.0)
+    candidate_size: int | None = Field(ge=1, le=200)
+
+    @field_validator("target_tg", "similarity_threshold", mode="before")
+    @classmethod
+    def require_optional_json_number(cls, value: object) -> object:
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+            raise ValueError("Tg assistant parameters must be JSON numbers or null")
+        return value
+
+    @field_validator("candidate_size", mode="before")
+    @classmethod
+    def require_optional_integer(cls, value: object) -> object:
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ValueError("candidate_size must be a JSON integer or null")
+        return value
+
+    @model_validator(mode="after")
+    def require_finite_values(self) -> "TgAssistantParameters":
+        for value in (self.target_tg, self.similarity_threshold):
+            if value is not None and not math.isfinite(value):
+                raise ValueError("Tg assistant parameter values must be finite")
+        return self
+
+
+class TgAssistantSubmittedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    smiles: str = Field(min_length=1, max_length=8000)
+    target_tg: float
+    similarity_threshold: float = Field(ge=0.0, le=1.0)
+    candidate_size: int = Field(ge=1, le=200)
+
+    @field_validator("target_tg", "similarity_threshold", mode="before")
+    @classmethod
+    def require_json_number(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("submitted Tg parameters must be JSON numbers")
+        return value
+
+    @field_validator("candidate_size", mode="before")
+    @classmethod
+    def require_integer(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("submitted candidate_size must be a JSON integer")
+        return value
+
+    @model_validator(mode="after")
+    def require_finite_values(self) -> "TgAssistantSubmittedRequest":
+        if not math.isfinite(self.target_tg) or not math.isfinite(self.similarity_threshold):
+            raise ValueError("submitted Tg assistant parameter values must be finite")
+        return self
+
+
+class TgAssistantValidationError(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    field: Literal["target_tg", "similarity_threshold", "candidate_size", "structure"]
+    message: str = Field(min_length=1, max_length=300)
+
+
+class TgAssistantJobContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    status: TgReverseDesignJobStatus
+    scanned_rows: int = Field(ge=0)
+    matched_count: int = Field(ge=0)
+    current_tg_radius: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
+    best_similarity_score: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
+    message: str | None = Field(default=None, max_length=500)
+
+    @field_validator("scanned_rows", "matched_count", mode="before")
+    @classmethod
+    def require_integer(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("Tg job counters must be JSON integers")
+        return value
+
+    @field_validator("current_tg_radius", "best_similarity_score", mode="before")
+    @classmethod
+    def require_optional_json_number(cls, value: object) -> object:
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+            raise ValueError("Tg job metrics must be JSON numbers or null")
+        return value
+
+
+class TgAssistantCandidateContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    rank: int = Field(ge=1)
+    polymer_smiles: str | None = Field(default=None, max_length=8000)
+    monomer_a_smiles: str | None = Field(default=None, max_length=4000)
+    monomer_b_smiles: str | None = Field(default=None, max_length=4000)
+    monomer_a_iupac: str | None = Field(default=None, max_length=2000)
+    monomer_b_iupac: str | None = Field(default=None, max_length=2000)
+    tg_value: float = Field(allow_inf_nan=False)
+    tg_difference: float = Field(ge=0.0, allow_inf_nan=False)
+    similarity_score: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+    @field_validator("rank", mode="before")
+    @classmethod
+    def require_rank_integer(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("candidate rank must be a JSON integer")
+        return value
+
+    @field_validator("tg_value", "tg_difference", "similarity_score", mode="before")
+    @classmethod
+    def require_json_number(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("candidate metrics must be JSON numbers")
+        return value
+
+
+class TgAssistantResultView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: Literal[5] = 5
+    drawer_open: bool
+    visible_candidates: list[TgAssistantCandidateContext] = Field(default_factory=list, max_length=5)
+
+    @field_validator("total", "page", "page_size", mode="before")
+    @classmethod
+    def require_integer(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("Tg result counters must be JSON integers")
+        return value
+
+    @field_validator("drawer_open", mode="before")
+    @classmethod
+    def require_boolean(cls, value: object) -> object:
+        if not isinstance(value, bool):
+            raise ValueError("drawer_open must be a boolean")
+        return value
+
+    @model_validator(mode="after")
+    def require_consistent_visible_count(self) -> "TgAssistantResultView":
+        if len(self.visible_candidates) > self.total:
+            raise ValueError("visible_candidates cannot exceed the total result count")
+        return self
+
+
+class TgAssistantPageContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    type: Literal["tg_reverse_design"]
+    version: Literal[1]
+    captured_at: datetime
+    action_context_revision: str = Field(min_length=1, max_length=64)
+    structure: TgAssistantStructureContext
+    draft_parameters: TgAssistantParameters
+    submitted_request: TgAssistantSubmittedRequest | None = None
+    parameters_dirty: bool
+    validation_error: TgAssistantValidationError | None = None
+    job: TgAssistantJobContext | None = None
+    result_view: TgAssistantResultView | None = None
+    error: str | None = Field(default=None, max_length=500)
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def require_version_integer(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("Tg assistant context version must be a JSON integer")
+        return value
+
+    @field_validator("captured_at", mode="before")
+    @classmethod
+    def require_iso_timestamp(cls, value: object) -> object:
+        if not isinstance(value, str):
+            raise ValueError("captured_at must be an ISO-8601 string")
+        return value
+
+    @field_validator("parameters_dirty", mode="before")
+    @classmethod
+    def require_boolean(cls, value: object) -> object:
+        if not isinstance(value, bool):
+            raise ValueError("parameters_dirty must be a boolean")
+        return value
+
+    @model_validator(mode="after")
+    def require_submitted_request_for_search_state(self) -> "TgAssistantPageContext":
+        if (self.job is not None or self.result_view is not None) and self.submitted_request is None:
+            raise ValueError("submitted_request is required when job or result_view is present")
+        parameter_values = {
+            "target_tg": self.draft_parameters.target_tg,
+            "similarity_threshold": self.draft_parameters.similarity_threshold,
+            "candidate_size": self.draft_parameters.candidate_size,
+        }
+        missing_parameters = {key for key, value in parameter_values.items() if value is None}
+        if missing_parameters:
+            if self.validation_error is None or self.validation_error.field not in missing_parameters:
+                raise ValueError("a sanitized invalid parameter requires its matching validation_error")
+        if (
+            self.validation_error is not None
+            and self.validation_error.field in parameter_values
+            and parameter_values[self.validation_error.field] is not None
+        ):
+            raise ValueError("an invalid parameter value must be omitted from the Tg assistant context")
+        return self
+
+
+class TgAssistantChatStreamRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    messages: list[AssistantChatMessage] = Field(min_length=1, max_length=30)
+    page_context: TgAssistantPageContext | None = None
+
+    @model_validator(mode="after")
+    def require_latest_user_message(self) -> "TgAssistantChatStreamRequest":
+        if self.messages[-1].role != "user":
+            raise ValueError("latest Tg assistant chat message must be from the user")
+        return self
+
+
+class TgSetParametersOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["set_parameters"]
+    parameters: dict[Literal["target_tg", "similarity_threshold", "candidate_size"], float | int]
+
+    @field_validator("parameters", mode="before")
+    @classmethod
+    def validate_parameter_patch(cls, value: object) -> object:
+        if not isinstance(value, dict) or not value:
+            raise ValueError("set_parameters requires a non-empty parameter patch")
+        allowed = {"target_tg", "similarity_threshold", "candidate_size"}
+        if any(key not in allowed for key in value):
+            raise ValueError("set_parameters contains an unknown parameter")
+        for key, item in value.items():
+            if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(float(item)):
+                raise ValueError(f"{key} must be a finite JSON number")
+            if key == "candidate_size" and (not isinstance(item, int) or not 1 <= item <= 200):
+                raise ValueError("candidate_size must be an integer from 1 to 200")
+            if key == "similarity_threshold" and not 0 <= float(item) <= 1:
+                raise ValueError("similarity_threshold must be between 0 and 1")
+        return value
+
+
+class TgRunSearchOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["run_search"]
+
+
+class TgSetStructureOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    type: Literal["set_structure"]
+    smiles: str = Field(min_length=1, max_length=8000)
+
+
+TgAssistantOperation = TgSetParametersOperation | TgRunSearchOperation | TgSetStructureOperation
+
+
+class TgActionProposalDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    operations: list[TgAssistantOperation] = Field(min_length=1, max_length=2)
+    message: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_operation_order(self) -> "TgActionProposalDraft":
+        operation_types = [operation.type for operation in self.operations]
+        if operation_types not in (
+            ["set_parameters"],
+            ["run_search"],
+            ["set_parameters", "run_search"],
+            ["set_structure"],
+        ):
+            raise ValueError("invalid Tg assistant operation combination")
+        return self
+
+
+class TgAssistantImageCapability(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    supported: Literal[True] = True
+    max_files: Literal[2] = 2
+    max_canvas_snapshots: Literal[1] = 1
+    max_user_upload_files: Literal[1] = 1
+    max_bytes: int = Field(ge=1)
+    max_total_bytes: int = Field(ge=1)
+    accepted_mime_types: list[Literal["image/png", "image/jpeg", "image/webp"]]
+
+
+class TgAssistantStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    configured: bool
+    image: TgAssistantImageCapability
+
+
+class TgAssistantGuideSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: str
+    title: str
+    content: list[str]
+
+
+class TgAssistantGuideResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    module: Literal["reverseDesign"]
+    version: Literal[3]
+    language: Literal["zh-CN"]
+    defaults: dict[str, float | int]
+    sections: list[TgAssistantGuideSection]
 
 OnlineKnowledgeMode = Literal["synthesis", "property"]
 

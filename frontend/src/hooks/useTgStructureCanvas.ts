@@ -9,14 +9,38 @@ type KetcherSnapshot = {
   molfile: string;
 };
 
+type CanvasImageCache = {
+  sourceKey: string;
+  blob: Blob;
+};
+
+const TG_CANVAS_IMAGE_MAX_DIMENSION = 1600;
+const TG_CANVAS_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const TG_CANVAS_RENDER_TIMEOUT_MS = 8000;
+const TG_CANVAS_KET_STABILITY_TIMEOUT_MS = 640;
+const TG_CANVAS_KET_RETRY_INTERVAL_MS = 80;
+
 type SyncOptions = {
   preserveExisting?: boolean;
   quiet?: boolean;
 };
 
+type CanvasMutationOptions = {
+  isCurrent?: () => boolean;
+};
+
 type UseTgStructureCanvasOptions = {
   structure: StructureWorkspaceContext;
   onStructureChanged: () => void;
+};
+
+export type TgCanvasPeekState = {
+  smiles: string;
+  canvasDirty: boolean;
+  editorReady: boolean;
+  viewMode: "2d" | "3d";
+  busy: boolean;
+  revisionKey: string;
 };
 
 export function wildcardCount(value: string) {
@@ -30,6 +54,212 @@ export function shouldAdoptEditorSmiles(sourceSmiles: string, editorSmiles: stri
   }
   const sourceWildcardCount = wildcardCount(sourceSmiles);
   return sourceWildcardCount === 0 || wildcardCount(normalizedEditor) >= sourceWildcardCount;
+}
+
+export function isProtectedCanvasConsistent(sourceSmiles: string, editorSmiles: string) {
+  const source = sourceSmiles.trim();
+  const editor = editorSmiles.trim();
+  if (source === editor) return true;
+  if (!source || !editor || wildcardCount(source) === 0) return false;
+  return source.replace(/\*/g, "").trim() === editor;
+}
+
+export function stripKetcherSelectedFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripKetcherSelectedFields);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== "selected")
+      .map(([key, nested]) => [key, stripKetcherSelectedFields(nested)])
+  );
+}
+
+export function isEmptyKetcherDocument(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const root = (value as Record<string, unknown>).root;
+  if (!root || typeof root !== "object" || Array.isArray(root)) return false;
+  const record = root as Record<string, unknown>;
+  const collections = [record.nodes, record.connections];
+  return collections.every((collection) => !Array.isArray(collection) || collection.length === 0);
+}
+
+function parseKetcherDocument(value: string): unknown | null {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function molfileHasAtoms(value: string) {
+  if (!value) return false;
+  const v3000Count = value.match(/M\s+V30\s+COUNTS\s+(\d+)/i);
+  if (v3000Count) return Number.parseInt(v3000Count[1], 10) > 0;
+  const v2000CountsLine = value
+    .replace(/\r/g, "")
+    .split("\n")
+    .find((line) => /\bV2000\b/i.test(line));
+  if (!v2000CountsLine) return false;
+  const atomCount = Number.parseInt(v2000CountsLine.slice(0, 3).trim(), 10);
+  return Number.isFinite(atomCount) && atomCount > 0;
+}
+
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
+
+export async function adoptKetcherPng(value: unknown): Promise<Blob> {
+  if (!value || typeof value !== "object") {
+    throw new Error("Ketcher 未生成有效的画板图片。");
+  }
+  const candidate = value as {
+    size?: unknown;
+    type?: unknown;
+    arrayBuffer?: unknown;
+  };
+  if (
+    typeof candidate.size !== "number" ||
+    !Number.isFinite(candidate.size) ||
+    candidate.size <= 0 ||
+    typeof candidate.arrayBuffer !== "function"
+  ) {
+    throw new Error("Ketcher 未生成有效的画板图片。");
+  }
+  if (candidate.type !== undefined && candidate.type !== "" && candidate.type !== "image/png") {
+    throw new Error("Ketcher 返回了非 PNG 画板图片。");
+  }
+  const buffer = await (candidate.arrayBuffer as () => Promise<ArrayBuffer>).call(value);
+  const bytes = new Uint8Array(buffer);
+  if (
+    bytes.byteLength !== candidate.size ||
+    PNG_SIGNATURE.some((expected, index) => bytes[index] !== expected)
+  ) {
+    throw new Error("Ketcher 返回的画板 PNG 已损坏。");
+  }
+  // Ketcher lives in an iframe, so its Blob belongs to a different JavaScript
+  // realm and fails `instanceof window.Blob` in the React parent page. Rebuild
+  // it here to give downstream browser APIs a parent-realm Blob.
+  return new Blob([bytes], { type: "image/png" });
+}
+
+function abortError() {
+  return new DOMException("画板图片捕获已取消。", "AbortError");
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<T> {
+  if (signal?.aborted) throw abortError();
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      signal?.removeEventListener("abort", handleAbort);
+    };
+    const resolveOnce = (value: T) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const rejectOnce = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const timeout = window.setTimeout(
+      () => rejectOnce(new Error("画板图片生成超时。")),
+      timeoutMs
+    );
+    const handleAbort = () => rejectOnce(abortError());
+    signal?.addEventListener("abort", handleAbort, { once: true });
+    promise.then(resolveOnce, rejectOnce);
+  });
+}
+
+async function decodeCanvasImage(blob: Blob) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bitmap = await createImageBitmap(blob);
+      return {
+        source: bitmap as CanvasImageSource,
+        width: bitmap.width,
+        height: bitmap.height,
+        dispose: () => bitmap.close()
+      };
+    } catch {
+      // Older WebViews may expose createImageBitmap but reject Blob decoding.
+      // The object-URL path below provides the same bounded rasterization.
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const image = new Image();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("画板图片解码失败。"));
+      image.src = url;
+    });
+    return {
+      source: image as CanvasImageSource,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+      dispose: () => URL.revokeObjectURL(url)
+    };
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  }
+}
+
+function canvasToPngBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("浏览器无法编码画板图片。"));
+    }, "image/png");
+  });
+}
+
+export async function normalizeTgCanvasImage(
+  sourceBlob: Blob,
+  maxDimension = TG_CANVAS_IMAGE_MAX_DIMENSION,
+  maxBytes = TG_CANVAS_IMAGE_MAX_BYTES
+) {
+  const decoded = await decodeCanvasImage(sourceBlob);
+  try {
+    if (!decoded.width || !decoded.height) throw new Error("画板图片尺寸无效。");
+    let scale = Math.min(1, (maxDimension - 128) / Math.max(decoded.width, decoded.height));
+    let latest: Blob | null = null;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const contentWidth = Math.max(1, Math.round(decoded.width * scale));
+      const contentHeight = Math.max(1, Math.round(decoded.height * scale));
+      const padding = Math.min(64, Math.max(24, Math.round(Math.max(contentWidth, contentHeight) * 0.05)));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.min(maxDimension, contentWidth + padding * 2);
+      canvas.height = Math.min(maxDimension, contentHeight + padding * 2);
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("浏览器无法规范化画板图片。");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      const drawWidth = Math.min(contentWidth, canvas.width - padding * 2);
+      const drawHeight = Math.min(contentHeight, canvas.height - padding * 2);
+      context.drawImage(
+        decoded.source,
+        Math.round((canvas.width - drawWidth) / 2),
+        Math.round((canvas.height - drawHeight) / 2),
+        drawWidth,
+        drawHeight
+      );
+      latest = await canvasToPngBlob(canvas);
+      if (latest.size <= maxBytes) return latest;
+      scale *= 0.8;
+    }
+    throw new Error(`画板图片超过 ${Math.round(maxBytes / 1024 / 1024)} MiB。`);
+  } finally {
+    decoded.dispose();
+  }
 }
 
 function getEditorLoadCandidates(sourceSmiles: string) {
@@ -49,6 +279,8 @@ export function useTgStructureCanvas({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const smilesRef = useRef(structure.smiles);
   const importAbortRef = useRef<AbortController | null>(null);
+  const canvasImageCacheRef = useRef<CanvasImageCache | null>(null);
+  const canonicalSmilesCacheRef = useRef(new Map<string, Promise<string | null>>());
   const [isEditorReady, setIsEditorReady] = useState(false);
   const [isFlipped, setIsFlipped] = useState(false);
   const [isFlipping, setIsFlipping] = useState(false);
@@ -62,6 +294,11 @@ export function useTgStructureCanvas({
   useEffect(() => {
     smilesRef.current = structure.smiles;
   }, [structure.smiles]);
+
+  useEffect(() => () => {
+    canvasImageCacheRef.current = null;
+    canonicalSmilesCacheRef.current.clear();
+  }, []);
 
   function getKetcher() {
     return structure.iframeRef.current?.contentWindow?.ketcher;
@@ -135,9 +372,26 @@ export function useTgStructureCanvas({
     smilesRef.current = normalized;
     structure.setSmiles(normalized);
     if (changed && notify) {
+      canvasImageCacheRef.current = null;
       onStructureChanged();
     }
     return normalized;
+  }
+
+  function canonicalizeSmiles(value: string): Promise<string | null> {
+    const normalized = value.trim();
+    if (!normalized) return Promise.resolve("");
+    const cached = canonicalSmilesCacheRef.current.get(normalized);
+    if (cached) return cached;
+    const pending = standardizeSmiles({ smiles: normalized })
+      .then((result) => result.standardized_smiles.trim())
+      .catch(() => null);
+    canonicalSmilesCacheRef.current.set(normalized, pending);
+    if (canonicalSmilesCacheRef.current.size > 24) {
+      const oldest = canonicalSmilesCacheRef.current.keys().next().value;
+      if (typeof oldest === "string") canonicalSmilesCacheRef.current.delete(oldest);
+    }
+    return pending;
   }
 
   async function captureEditorSnapshot(ketcher: KetcherApi): Promise<KetcherSnapshot> {
@@ -358,15 +612,23 @@ export function useTgStructureCanvas({
     }
   }
 
-  async function clearCanvas() {
+  async function clearCanvas(options: CanvasMutationOptions = {}) {
     const ketcher = getKetcher();
     if (!ketcher) {
       setFeedback("结构编辑器尚未就绪。");
       return false;
     }
+    if (options.isCurrent && !options.isCurrent()) return false;
+    const previousFlipped = isFlipped;
+    const previousSnapshot = await captureEditorSnapshot(ketcher);
     setIsClearing(true);
     try {
       await clearEditor(ketcher);
+      if (options.isCurrent && !options.isCurrent()) {
+        await restoreEditorSnapshot(ketcher, previousSnapshot);
+        setIsFlipped(previousFlipped);
+        return false;
+      }
       applySmiles("");
       setIsFlipped(false);
       structure.setIsReady(true);
@@ -381,12 +643,13 @@ export function useTgStructureCanvas({
     }
   }
 
-  async function loadStructure(sourceSmiles: string) {
+  async function loadStructure(sourceSmiles: string, options: CanvasMutationOptions = {}) {
     const normalizedSource = sourceSmiles.trim();
     if (!normalizedSource) {
       setFeedback("没有可加载的结构。");
       return false;
     }
+    if (options.isCurrent && !options.isCurrent()) return false;
 
     const ketcher = await waitForKetcher();
     if (!ketcher) {
@@ -404,6 +667,7 @@ export function useTgStructureCanvas({
       let editorSmiles = "";
       let lastError: unknown = null;
       for (const candidate of getEditorLoadCandidates(normalizedSource)) {
+        if (options.isCurrent && !options.isCurrent()) break;
         try {
           editorSmiles = await writeImageStructure(ketcher, candidate);
           break;
@@ -415,6 +679,11 @@ export function useTgStructureCanvas({
         throw lastError instanceof Error
           ? lastError
           : new Error("Ketcher 未接受待加载结构。");
+      }
+      if (options.isCurrent && !options.isCurrent()) {
+        await restoreEditorSnapshot(ketcher, previousSnapshot);
+        setIsFlipped(previousFlipped);
+        return false;
       }
 
       const nextSmiles = shouldAdoptEditorSmiles(normalizedSource, editorSmiles)
@@ -552,13 +821,173 @@ export function useTgStructureCanvas({
       return reliableSmiles;
     } catch (error) {
       console.error("Failed to standardize Tg search SMILES", error);
-      setFeedback("SMILES 标准化失败，已使用当前可靠结构继续搜索。");
-      return synchronized;
+      setFeedback("SMILES 标准化失败，搜索未提交。请检查结构有效性后重试。");
+      return "";
     }
   }
 
-  async function copySmiles() {
-    const value = smilesRef.current.trim();
+  async function captureCanvasImage(signal?: AbortSignal): Promise<Blob | null> {
+    const ketcher = getKetcher();
+    if (!ketcher || typeof ketcher.getKet !== "function" || typeof ketcher.generateImage !== "function") {
+      throw new Error("画板图片接口尚未就绪，AI 将使用 SMILES 作为兜底。请稍后可重试。");
+    }
+    try {
+      let sourceKet = await withTimeout(ketcher.getKet(), TG_CANVAS_RENDER_TIMEOUT_MS, signal);
+      if (signal?.aborted) throw abortError();
+      let parsed = parseKetcherDocument(sourceKet);
+      let renderSource = sourceKet;
+      let sourceKey = `ket:${sourceKet}`;
+      if (parsed && isEmptyKetcherDocument(parsed)) {
+        let editorSmiles = "";
+        try {
+          editorSmiles = await withTimeout(
+            readEditorSmiles(ketcher),
+            TG_CANVAS_RENDER_TIMEOUT_MS,
+            signal
+          );
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") throw error;
+        }
+        const sharedSmiles = smilesRef.current.trim();
+        if (!editorSmiles && !sharedSmiles) {
+          canvasImageCacheRef.current = null;
+          return null;
+        }
+
+        // Ketcher may expose the new SMILES a few frames before getKet() has
+        // committed its nodes. Retry briefly so an immediate AI request does
+        // not mistake a populated editor for an empty canvas.
+        const retryDeadline = Date.now() + TG_CANVAS_KET_STABILITY_TIMEOUT_MS;
+        while (Date.now() < retryDeadline && parsed && isEmptyKetcherDocument(parsed)) {
+          const remaining = retryDeadline - Date.now();
+          await withTimeout(
+            delay(Math.min(TG_CANVAS_KET_RETRY_INTERVAL_MS, remaining)),
+            Math.min(TG_CANVAS_KET_RETRY_INTERVAL_MS, remaining) + 100,
+            signal
+          );
+          try {
+            sourceKet = await withTimeout(
+              ketcher.getKet(),
+              Math.max(1, retryDeadline - Date.now()),
+              signal
+            );
+            parsed = parseKetcherDocument(sourceKet);
+          } catch (error) {
+            if (error instanceof DOMException && error.name === "AbortError") throw error;
+            break;
+          }
+        }
+
+        if (parsed && isEmptyKetcherDocument(parsed)) {
+          let molfile = "";
+          try {
+            molfile = await withTimeout(
+              readEditorMolfile(ketcher),
+              TG_CANVAS_RENDER_TIMEOUT_MS,
+              signal
+            );
+          } catch (error) {
+            if (error instanceof DOMException && error.name === "AbortError") throw error;
+          }
+          if (!molfileHasAtoms(molfile)) {
+            throw new Error("画板结构尚未完成图像提交，请稍后重试。");
+          }
+          // Molfile remains local and is only handed back to Ketcher's image
+          // renderer. The multipart request still receives PNG bytes only.
+          renderSource = molfile;
+          sourceKey = `molfile:${molfile}`;
+          parsed = null;
+        }
+      }
+      const cleanedKet = parsed
+        ? JSON.stringify(stripKetcherSelectedFields(parsed))
+        : renderSource;
+      if (parsed) sourceKey = `ket:${cleanedKet}`;
+      const cached = canvasImageCacheRef.current;
+      if (cached?.sourceKey === sourceKey) return cached.blob;
+      const rendered = await withTimeout(
+        ketcher.generateImage(cleanedKet, {
+          outputFormat: "png",
+          backgroundColor: "255, 255, 255",
+          "image-resolution": 144
+        }),
+        TG_CANVAS_RENDER_TIMEOUT_MS,
+        signal
+      );
+      const parentRealmPng = await withTimeout(
+        adoptKetcherPng(rendered),
+        TG_CANVAS_RENDER_TIMEOUT_MS,
+        signal
+      );
+      const normalized = await withTimeout(
+        normalizeTgCanvasImage(parentRealmPng),
+        TG_CANVAS_RENDER_TIMEOUT_MS,
+        signal
+      );
+      canvasImageCacheRef.current = { sourceKey, blob: normalized };
+      return normalized;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      console.error("Failed to capture Tg canvas image", error);
+      setFeedback("画板快照生成失败，本轮 AI 将使用 SMILES 兜底；可稍后重试。");
+      throw error instanceof Error ? error : new Error("画板快照生成失败。");
+    }
+  }
+
+  async function peekCanvasState(): Promise<TgCanvasPeekState> {
+    const sharedSmiles = smilesRef.current.trim();
+    const ketcher = getKetcher();
+    if (!ketcher) {
+      return {
+        smiles: sharedSmiles,
+        canvasDirty: false,
+        editorReady: false,
+        viewMode: isFlipped ? "3d" : "2d",
+        busy: isBusy,
+        revisionKey: JSON.stringify([sharedSmiles, null, false, isFlipped, isBusy])
+      };
+    }
+    try {
+      const editorSmiles = await readEditorSmiles(ketcher);
+      let canvasConsistent = isProtectedCanvasConsistent(sharedSmiles, editorSmiles);
+      let sharedIdentity = sharedSmiles;
+      let editorIdentity = editorSmiles;
+      if (!canvasConsistent && sharedSmiles && editorSmiles) {
+        const [canonicalShared, canonicalEditor] = await Promise.all([
+          canonicalizeSmiles(sharedSmiles),
+          canonicalizeSmiles(editorSmiles)
+        ]);
+        if (canonicalShared !== null) sharedIdentity = canonicalShared;
+        if (canonicalEditor !== null) editorIdentity = canonicalEditor;
+        canvasConsistent = canonicalShared !== null && canonicalShared === canonicalEditor;
+      }
+      const reliableSmiles = editorSmiles
+        ? shouldAdoptEditorSmiles(sharedSmiles, editorSmiles)
+          ? editorSmiles
+          : sharedSmiles || editorSmiles
+        : sharedSmiles;
+      return {
+        smiles: reliableSmiles,
+        canvasDirty: !canvasConsistent,
+        editorReady: isEditorReady,
+        viewMode: isFlipped ? "3d" : "2d",
+        busy: isBusy,
+        revisionKey: JSON.stringify([sharedIdentity, editorIdentity, isEditorReady, isFlipped, isBusy])
+      };
+    } catch {
+      return {
+        smiles: sharedSmiles,
+        canvasDirty: false,
+        editorReady: isEditorReady,
+        viewMode: isFlipped ? "3d" : "2d",
+        busy: isBusy,
+        revisionKey: JSON.stringify([sharedSmiles, "read-error", isEditorReady, isFlipped, isBusy])
+      };
+    }
+  }
+
+  async function copySmiles(sourceValue?: string) {
+    const value = (sourceValue ?? smilesRef.current).trim();
     if (!value) {
       return;
     }
@@ -600,6 +1029,8 @@ export function useTgStructureCanvas({
     importImageFile,
     syncSmilesFromCanvas,
     toggle3D,
+    peekCanvasState,
+    captureCanvasImage,
     resolveSmilesForSearch,
     copySmiles
   };

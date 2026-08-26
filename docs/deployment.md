@@ -170,12 +170,34 @@ content and OpenScience must gain an HTTPS endpoint before activation.
 
 ### Development tunnel proxy
 
-Online knowledge model extraction can use the optional
-`ONLINE_KNOWLEDGE_PROXY_URL` setting. It configures only that OpenAI-compatible
-client: the client disables inherited proxy variables, literature discovery
-remains direct, and the proxy URL is never returned by the default-config API.
-An empty value keeps direct access. The URL must be an absolute HTTP(S) URL
-without credentials, path, query, or fragment.
+All OpenAI-compatible clients use the optional `AI_PROXY_URL` setting: online
+knowledge extraction, the generic assistant, and the Tg reverse-design
+assistant. The clients disable inherited proxy variables, literature discovery
+remains direct, and the proxy URL is never returned by a frontend API. An empty
+value keeps direct access. The URL must be an absolute HTTP(S) URL without
+credentials, path, query, or fragment. `ONLINE_KNOWLEDGE_PROXY_URL` remains a
+fallback for one release when `AI_PROXY_URL` is empty and emits a deprecation
+warning; `AI_PROXY_URL` always wins when both are present.
+
+The Tg reverse-design assistant is separately gated by
+`TG_ASSISTANT_ENABLED` (default `false`) and requires all of
+`TG_ASSISTANT_API_KEY`, `TG_ASSISTANT_BASE_URL`, and `TG_ASSISTANT_MODEL`.
+The default model ID is `gpt-5.6-terra`; keep the Base URL configurable and
+canary both text and image requests against the installed provider before
+enabling the feature. `TG_ASSISTANT_IMAGE_MAX_BYTES` defaults to `5242880`.
+`TG_ASSISTANT_REASONING_EFFORT` defaults to `medium`, and
+`TG_ASSISTANT_TRANSPORT` defaults to `auto` (Responses API first, with a
+cached Chat Completions compatibility fallback only for explicitly unsupported
+Responses endpoints).
+Incomplete Tg configuration does not fall back to generic-assistant or online
+knowledge credentials. `/api/v1/assistant/tg/status` reports enabled/configured
+booleans plus the two-source image capability contract (one canvas snapshot and
+one user image; PNG, JPEG, WebP; 5 MiB each and 10 MiB total by default), while
+the versioned guide remains available even when the model feature is disabled.
+The multipart TG image endpoint sends an in-memory Base64
+data URL directly to the configured model and never invokes the local OCSR
+pipeline. Keep provider credentials in the owner-private application
+environment file at mode `0600`.
 
 For the current development server, each container uses port `17892` on its
 own approved Docker bridge gateway (for example,

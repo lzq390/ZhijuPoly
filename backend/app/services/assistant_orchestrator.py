@@ -51,6 +51,7 @@ def stream_assistant_events(
     model: str,
     model_enabled: bool,
     model_dir: Path,
+    proxy_url: str = "",
     iupac_match_finder: IupacMatchFinder | None = None,
 ) -> Iterable[AssistantStreamEvent]:
     normalized_messages, input_clarification = _normalize_iupac_structure_input(
@@ -77,6 +78,7 @@ def stream_assistant_events(
         api_key=api_key,
         base_url=base_url,
         model=model,
+        proxy_url=proxy_url,
     )
 
     decision_type = str(decision.get("type") or "chat").strip()
@@ -97,6 +99,7 @@ def stream_assistant_events(
             api_key=api_key,
             base_url=base_url,
             model=model,
+            proxy_url=proxy_url,
         )
         return
 
@@ -125,6 +128,7 @@ def stream_assistant_events(
                 api_key=api_key,
                 base_url=base_url,
                 model=model,
+                proxy_url=proxy_url,
             )
             raw_arguments = arguments.model_dump()
         call_id = uuid4().hex
@@ -198,6 +202,7 @@ def stream_assistant_events(
                 api_key=api_key,
                 base_url=base_url,
                 model=model,
+                proxy_url=proxy_url,
             )
             for token in token_stream:
                 summary_tokens.append(token)
@@ -394,6 +399,7 @@ def _stream_plain_chat(
     api_key: str,
     base_url: str,
     model: str,
+    proxy_url: str = "",
 ) -> Iterable[AssistantStreamEvent]:
     full_message: list[str] = []
     for token in assistant_chat.stream_assistant_chat(
@@ -403,6 +409,7 @@ def _stream_plain_chat(
         api_key=api_key,
         base_url=base_url,
         model=model,
+        proxy_url=proxy_url,
     ):
         full_message.append(token)
         yield AssistantStreamEvent("token", {"content": token})
