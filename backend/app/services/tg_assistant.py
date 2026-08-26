@@ -353,6 +353,11 @@ Rules:
 - Use navigation only when the user explicitly asks to open the parameters or results panel.
 - Use action_proposal only when the latest user explicitly asks to set/adopt parameters, draw/load/replace a structure, or run/re-run search. Never claim execution.
 - Use set_structure only when the latest user explicitly asks to draw, load, or replace a structure on the canvas. Merely asking to analyze an attached image is chat.
+- Resolve references such as “这个结构”, “刚才建议的结构”, “上一个模型”, and “按刚才的参数”
+  from the conversation history.
+- Judge the latest request semantically. A word such as “建议” inside a historical reference does not make
+  an otherwise explicit command a request for advice. For example, “刚才你建议的结构，放到画板里” is an
+  action request, while “你建议把它放到画板吗？” is chat.
 - Legal operations are set_structure alone, set_parameters alone, run_search alone, or set_parameters followed by run_search.
 - When an image is attached and the user explicitly asks to draw its structure, inspect the image and provide one best candidate SMILES in a standalone set_structure proposal. If uncertain, clarify instead.
 - A current-canvas image is the primary evidence for visual structure analysis. The snapshot SMILES is a fallback and remains authoritative only for search/action validation.
@@ -1005,154 +1010,12 @@ def _stream_model_answer(
     return "".join(output_parts)
 
 
-def _is_non_action_question(text: str) -> bool:
-    normalized = text.casefold()
-    question_markers = ("吗", "么", "是否", "要不要", "应该", "建议", "哪组", "哪个", "如何", "?", "？", "should", "would", "which")
-    command_markers = (
-        "请把", "请将", "请设置", "请修改", "请调整", "请提高", "请降低", "请搜索",
-        "请运行搜索", "请重新搜索", "帮我", "直接", "立即", "现在就",
-        "采用", "应用", "执行", "开始", "please", "go ahead", "do it",
-    )
-    return any(marker in normalized for marker in question_markers) and not any(
-        marker in normalized for marker in command_markers
-    )
-
-
-def _has_explicit_parameter_change_intent(text: str) -> bool:
-    if _is_non_action_question(text):
-        return False
-    normalized = text.casefold()
-    return any(
-        keyword in normalized
-        for keyword in (
-            "设置", "修改", "调整", "改成", "改为", "调为", "调到", "设为", "换成",
-            "采用", "应用", "提高", "降低", "上调", "下调", "增加", "减少", "放宽", "收紧",
-            "set", "change", "adjust", "apply", "increase", "decrease", "raise", "reduce",
-        )
-    )
-
-
-def _has_explicit_search_intent(text: str) -> bool:
-    if _is_non_action_question(text):
-        return False
-    normalized = " ".join(text.casefold().split())
-    return any(
-        phrase in normalized
-        for phrase in (
-            "运行搜索", "开始搜索", "发起搜索", "执行搜索", "重新搜索", "重搜", "搜一下",
-            "帮我搜索", "立即搜索", "现在搜索", "run search", "start search", "search again",
-            "rerun search", "search now",
-        )
-    )
-
-
-def _has_explicit_structure_intent(text: str) -> bool:
-    if _is_non_action_question(text):
-        return False
-    normalized = " ".join(text.casefold().split())
-    return any(
-        phrase in normalized
-        for phrase in (
-            "画到画板",
-            "画入画板",
-            "绘制到画板",
-            "绘制在画板",
-            "加载到画板",
-            "载入画板",
-            "写入画板",
-            "放到画板",
-            "替换当前画板",
-            "替换当前结构",
-            "把这个结构画",
-            "把该结构画",
-            "将这个结构画",
-            "将该结构画",
-            "draw on the canvas",
-            "draw it on the canvas",
-            "load into the canvas",
-            "put it on the canvas",
-            "replace the current structure",
-            "set the structure",
-        )
-    )
-
-
-def _has_explicit_target_tg_intent(text: str) -> bool:
-    normalized = "".join(text.casefold().split())
-    if (
-        "目标tg" in normalized
-        or "目标温度" in normalized
-        or "玻璃化转变温度" in normalized
-        or "targettg" in normalized
-        or "target_tg" in normalized
-    ):
-        return True
-    return any(
-        marker in normalized
-        for marker in (
-            "把tg", "设置tg", "修改tg", "调整tg", "tg改", "tg设", "tg调",
-            "settg", "changetg", "adjusttg",
-        )
-    )
-
-
-def _has_explicit_parameter_reference(text: str, parameter: str) -> bool:
-    normalized = text.casefold()
-    if parameter == "target_tg":
-        return _has_explicit_target_tg_intent(text)
-    if parameter == "similarity_threshold":
-        return any(
-            keyword in normalized
-            for keyword in ("相似度", "阈值", "similarity", "threshold", "similarity_threshold")
-        )
-    if parameter == "candidate_size":
-        return any(
-            keyword in normalized
-            for keyword in ("候选数量", "候选数", "candidate count", "candidate size", "candidate_size")
-        )
-    return False
-
-
-def _has_explicit_parameter_value_or_direction(text: str, parameter: str) -> bool:
-    normalized = "".join(text.casefold().split())
-    aliases = {
-        "target_tg": ("目标tg", "tg", "玻璃化转变温度", "targettg", "target_tg"),
-        "similarity_threshold": ("相似度阈值", "相似度", "阈值", "similarity", "threshold"),
-        "candidate_size": ("候选数量", "候选数", "candidatecount", "candidatesize", "candidate_size"),
-    }.get(parameter, ())
-    direction_markers = (
-        "提高", "降低", "调高", "调低", "上调", "下调", "增加", "减少", "增大", "减小",
-        "加大", "放宽", "收紧", "更高", "更低", "多一些", "少一些",
-        "higher", "lower", "increase", "decrease", "raise", "reduce", "loosen", "tighten",
-    )
-    number_pattern = re.compile(r"(?<![a-z_])[-+]?(?:\d+(?:\.\d*)?|\.\d+)")
-    for alias in aliases:
-        start = normalized.find(alias)
-        while start >= 0:
-            window = normalized[max(0, start - 24): start + len(alias) + 24]
-            if number_pattern.search(window) or any(marker in window for marker in direction_markers):
-                return True
-            start = normalized.find(alias, start + len(alias))
-    return False
-
-
-def _has_explicit_navigation_intent(text: str, target: str) -> bool:
-    normalized = text.casefold()
-    verbs = ("打开", "查看", "展开", "跳转", "进入", "带我去", "open", "show", "view", "go to")
-    nouns = (
-        ("参数", "设置", "parameters", "settings")
-        if target == "parameters"
-        else ("结果", "候选", "results", "candidates")
-    )
-    return any(verb in normalized for verb in verbs) and any(noun in normalized for noun in nouns)
-
-
-def _semantic_action_error(
+def _action_safety_error(
     *,
     draft: TgActionProposalDraft,
     context: TgAssistantPageContext,
-    latest_user_message: str,
 ) -> str | None:
+    """Validate execution safety without reclassifying the user's intent."""
     if context.job and context.job.status in {"pending", "running"}:
         return "当前搜索仍在进行，本次只提供进度说明，不生成修改或重复搜索操作。"
 
@@ -1168,8 +1031,6 @@ def _semantic_action_error(
             structure_operation = operation
 
     if structure_operation is not None:
-        if not _has_explicit_structure_intent(latest_user_message):
-            return "需要您明确提出绘制、加载或替换画板结构后，我才能生成确认操作。"
         if context.structure.busy:
             return "结构画布仍在处理，请完成当前操作后再替换结构。"
         if not context.structure.editor_ready:
@@ -1191,19 +1052,6 @@ def _semantic_action_error(
         ]
         return None
 
-    if patch and not _has_explicit_parameter_change_intent(latest_user_message):
-        return "需要您明确提出修改或采用参数后，我才能生成确认操作。"
-    if wants_search and not _has_explicit_search_intent(latest_user_message):
-        return "需要您明确提出运行或重新搜索后，我才能生成确认操作。"
-
-    for parameter in patch:
-        if not _has_explicit_parameter_reference(latest_user_message, parameter):
-            if parameter == "target_tg":
-                return "只有明确提出修改目标 Tg 时，助手才会更改该值。"
-            return "请明确指出希望修改的参数及数值或方向。"
-        if not _has_explicit_parameter_value_or_direction(latest_user_message, parameter):
-            return "请明确给出要采用的参数数值，或说明希望提高还是降低。"
-
     current = context.draft_parameters.model_dump()
     if patch and all(current.get(key) == value for key, value in patch.items()):
         return "当前参数已经是您要求的值，无需再次应用。"
@@ -1223,6 +1071,8 @@ def _semantic_action_error(
             return "结构画布仍在处理，请完成当前操作后再搜索。"
         if not context.structure.editor_ready:
             return "结构编辑器尚未就绪，暂时无法运行搜索。"
+        if context.structure.canvas_dirty:
+            return "当前 SMILES 输入尚未同步，请先完成或修正输入后再搜索。"
         if not context.structure.smiles:
             return "请先在画布中绘制或导入结构，再运行搜索。"
     return None
@@ -1246,14 +1096,16 @@ def _validated_decision(
     if any(key not in allowed_keys for key in decision):
         logger.warning("Tg assistant returned a decision with unknown fields")
         if decision_type in {"navigation", "action_proposal"}:
-            return "clarify", {"message": "本次页面操作建议未通过安全校验，请重新明确您的请求。"}
+            return "clarify", {"message": "本次页面操作建议格式不符合安全协议，未生成操作。"}
         return "chat", {}
     if decision_type in {"navigation", "action_proposal"}:
         if context is None:
             return "chat", {}
+        # Evidence binds a proposal to the latest user turn. Its semantics were
+        # already decided by the intent model and are intentionally not parsed here.
         evidence = decision.get("evidence")
         if not isinstance(evidence, str) or not evidence or evidence not in latest_user_message:
-            return "clarify", {"message": "请明确说明希望打开的面板或要执行的参数/搜索操作。"}
+            return "clarify", {"message": "本次页面操作建议缺少可验证的本轮请求依据，未生成操作。"}
     if decision_type == "clarify":
         raw_message = decision.get("message")
         if raw_message is not None and not isinstance(raw_message, str):
@@ -1267,8 +1119,6 @@ def _validated_decision(
         raw_message = decision.get("message")
         if raw_message is not None and not isinstance(raw_message, str):
             return "chat", {}
-        if not _has_explicit_navigation_intent(latest_user_message, target):
-            return "clarify", {"message": "请明确说明要打开搜索参数还是候选结果面板。"}
         if target == "results" and (context.result_view is None or context.result_view.total <= 0):
             return "clarify", {"message": "当前还没有可打开的候选结果。"}
         return "navigation", {
@@ -1284,11 +1134,10 @@ def _validated_decision(
             )
         except ValidationError:
             logger.warning("Tg assistant returned an invalid action proposal")
-            return "clarify", {"message": "本次操作建议未通过安全校验，请明确要绘制的结构、采用的参数或搜索动作。"}
-        error = _semantic_action_error(
+            return "clarify", {"message": "本次页面操作建议包含无效字段或数值，未生成操作。"}
+        error = _action_safety_error(
             draft=draft,
             context=context,
-            latest_user_message=latest_user_message,
         )
         if error:
             return "clarify", {"message": error}
