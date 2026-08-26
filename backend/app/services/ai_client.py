@@ -5,6 +5,18 @@ from typing import Any
 from openai import DefaultHttpxClient, OpenAI
 
 
+_CLEAN_PROVIDER_ERRORS = frozenset(
+    {
+        "AI provider authentication or access was rejected.",
+        "AI provider capacity or quota is temporarily unavailable.",
+        "AI provider request timed out.",
+        "AI provider is temporarily unavailable.",
+        "AI provider network connection failed.",
+        "AI provider request failed.",
+    }
+)
+
+
 def create_openai_client(
     *,
     api_key: str,
@@ -29,6 +41,9 @@ def create_openai_client(
 def clean_ai_provider_error(error: BaseException) -> str:
     """Map provider failures to stable text without leaking URLs or response bodies."""
 
+    normalized_message = " ".join(str(error).split())
+    if normalized_message in _CLEAN_PROVIDER_ERRORS:
+        return normalized_message
     status_code = getattr(error, "status_code", None)
     name = type(error).__name__.casefold()
     if status_code in {401, 403} or "authentication" in name or "permission" in name:

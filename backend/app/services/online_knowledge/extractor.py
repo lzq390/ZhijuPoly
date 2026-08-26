@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from openai import DefaultHttpxClient, OpenAI
+from app.services.ai_client import clean_ai_provider_error, create_openai_client
 
 
 Paper = dict[str, Any]
@@ -21,13 +21,10 @@ class PolymerExtractor:
         model_name: str,
         proxy_url: str = "",
     ) -> None:
-        http_client_options: dict[str, Any] = {"trust_env": False}
-        if proxy_url:
-            http_client_options["proxy"] = proxy_url
-        self.client = OpenAI(
+        self.client = create_openai_client(
             api_key=api_key,
-            base_url=base_url.rstrip("/"),
-            http_client=DefaultHttpxClient(**http_client_options),
+            base_url=base_url,
+            proxy_url=proxy_url,
         )
         self.model_name = model_name
         self.results: list[ExtractionResult] = []
@@ -153,7 +150,7 @@ Return only valid JSON. No markdown."""
             failed_result: ExtractionResult = {
                 "paper_id": paper_id,
                 "title": title,
-                "error": str(exc),
+                "error": clean_ai_provider_error(exc),
             }
             if mode == "property":
                 failed_result.update({"has_polymer": False, "data_points": []})

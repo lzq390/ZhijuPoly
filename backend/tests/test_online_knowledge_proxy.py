@@ -10,6 +10,7 @@ import app.config as config_module
 from app.config import Settings, _normalize_http_proxy_url
 from app.models import OnlineKnowledgeSearchRequest
 from app.routers import online_knowledge as online_routes
+from app.services import ai_client
 from app.services.online_knowledge import extractor as extractor_module
 from app.services.online_knowledge import search_service
 
@@ -79,8 +80,8 @@ def test_polymer_extractor_uses_only_explicit_proxy_and_ignores_environment(
         def close(self) -> None:
             closed.append(True)
 
-    monkeypatch.setattr(extractor_module, "DefaultHttpxClient", fake_http_client)
-    monkeypatch.setattr(extractor_module, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(ai_client, "DefaultHttpxClient", fake_http_client)
+    monkeypatch.setattr(ai_client, "OpenAI", FakeOpenAI)
     monkeypatch.setenv("HTTPS_PROXY", "http://must-not-be-inherited.example.test:9999")
 
     configured = extractor_module.PolymerExtractor(
@@ -233,3 +234,28 @@ def test_default_config_response_does_not_expose_proxy() -> None:
         "max_papers": 20,
         "has_server_api_key": True,
     }
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "AI provider authentication or access was rejected.",
+        "AI provider capacity or quota is temporarily unavailable.",
+        "AI provider request timed out.",
+        "AI provider is temporarily unavailable.",
+        "AI provider network connection failed.",
+        "AI provider request failed.",
+    ],
+)
+def test_online_job_preserves_only_shared_clean_provider_errors(detail: str) -> None:
+    assert online_routes._safe_provider_error_detail(detail) == detail
+
+
+def test_online_job_redacts_untrusted_provider_error_detail() -> None:
+    detail = "401 from https://provider.example/v1 using secret-key"
+
+    cleaned = online_routes._safe_provider_error_detail(detail)
+
+    assert cleaned == "AI provider request failed."
+    assert "provider.example" not in cleaned
+    assert "secret-key" not in cleaned
