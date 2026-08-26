@@ -920,6 +920,39 @@ def test_validated_action_downgrades_only_unsafe_noop_busy_and_missing_structure
 
 
 @pytest.mark.parametrize(
+    "operations",
+    [
+        [{"type": "run_search"}],
+        [
+            {
+                "type": "set_parameters",
+                "parameters": {"similarity_threshold": 0.65},
+            },
+            {"type": "run_search"},
+        ],
+    ],
+)
+def test_validated_search_action_rejects_an_unsynchronized_canvas(
+    operations: list[dict[str, object]],
+) -> None:
+    context_payload = _context_payload()
+    context_payload["structure"].update({"canvas_dirty": True})
+
+    decision_type, payload = _validated_decision(
+        {
+            "type": "action_proposal",
+            "evidence": "搜索",
+            "operations": operations,
+        },
+        context=_context(context_payload),
+        latest_user_message="请搜索",
+    )
+
+    assert decision_type == "clarify"
+    assert "尚未同步" in payload["message"]
+
+
+@pytest.mark.parametrize(
     ("decision", "message"),
     [
         (

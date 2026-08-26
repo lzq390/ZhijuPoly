@@ -1071,6 +1071,8 @@ def _action_safety_error(
             return "结构画布仍在处理，请完成当前操作后再搜索。"
         if not context.structure.editor_ready:
             return "结构编辑器尚未就绪，暂时无法运行搜索。"
+        if context.structure.canvas_dirty:
+            return "当前 SMILES 输入尚未同步，请先完成或修正输入后再搜索。"
         if not context.structure.smiles:
             return "请先在画布中绘制或导入结构，再运行搜索。"
     return None
