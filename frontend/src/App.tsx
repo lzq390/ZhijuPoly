@@ -728,7 +728,9 @@ export default function App() {
   ];
   const moduleGroups: AppShellModuleGroup[] = [
     {
-      title: "材料发现 Discover",
+      id: "discover",
+      label: "材料发现",
+      secondaryLabel: "Discover",
       items: [
         {
           id: "knowledge",
@@ -787,7 +789,9 @@ export default function App() {
       ]
     },
     {
-      title: "材料设计 Build",
+      id: "build",
+      label: "材料设计",
+      secondaryLabel: "Build",
       items: [
         {
           id: "monomerPolymerization",
@@ -837,7 +841,9 @@ export default function App() {
       ]
     },
     {
-      title: "实验优化 Optimize",
+      id: "optimize",
+      label: "实验优化",
+      secondaryLabel: "Optimize",
       items: [
         {
           id: "reverseDesign",
@@ -860,8 +866,11 @@ export default function App() {
       ]
     },
     {
-      title: "数据管理 Data",
-      items: []
+      id: "data",
+      label: "数据管理",
+      secondaryLabel: "Data",
+      items: [],
+      emptyLabel: "暂无模块"
     }
   ];
   const isFullBleedModule =
