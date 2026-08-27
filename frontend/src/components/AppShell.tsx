@@ -40,8 +40,33 @@ type AppShellProps = {
   onOpenGeneralSession: (sessionID: string) => void;
   onRenameGeneralSession: (sessionID: string, title: string) => void;
   onDeleteGeneralSession: (sessionID: string) => void;
+  beforeNavigate?: () => Promise<void | boolean>;
   children: ReactNode;
 };
+
+const BEFORE_NAVIGATE_TIMEOUT_MS = 1500;
+
+function waitForNavigationGuard(beforeNavigate: () => Promise<void | boolean>) {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let timeout: number | null = null;
+    const finish = (shouldNavigate = true) => {
+      if (settled) return;
+      settled = true;
+      if (timeout !== null) window.clearTimeout(timeout);
+      resolve(shouldNavigate);
+    };
+    let guard: Promise<void | boolean>;
+    try {
+      guard = beforeNavigate();
+    } catch {
+      finish();
+      return;
+    }
+    timeout = window.setTimeout(() => finish(true), BEFORE_NAVIGATE_TIMEOUT_MS);
+    guard.then((result) => finish(result !== false), () => finish(true));
+  });
+}
 
 type MobileSidebarDrawerProps = {
   open: boolean;
@@ -135,6 +160,7 @@ export function AppShell({
   onOpenGeneralSession,
   onRenameGeneralSession,
   onDeleteGeneralSession,
+  beforeNavigate,
   children
 }: AppShellProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -142,6 +168,7 @@ export function AppShell({
   const [generalSessionQuery, setGeneralSessionQuery] = useState("");
   const mobileMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const mobileCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const navigationPendingRef = useRef(false);
   const gpuSessionControl = useDevGpuSessionControl(DEV_GPU_SESSION_CONTROL_ENABLED);
 
   const isHome = activeModule === "home";
@@ -237,8 +264,23 @@ export function AppShell({
   }, []);
 
   function handleNavigate(action: () => void) {
-    action();
     closeMobileMenu(false);
+    if (!beforeNavigate) {
+      action();
+      return;
+    }
+    if (navigationPendingRef.current) {
+      return;
+    }
+
+    navigationPendingRef.current = true;
+    void waitForNavigationGuard(beforeNavigate).then((shouldNavigate) => {
+      try {
+        if (shouldNavigate) action();
+      } finally {
+        navigationPendingRef.current = false;
+      }
+    });
   }
 
   function handleToggleGroup(groupId: AppShellModuleGroup["id"]) {

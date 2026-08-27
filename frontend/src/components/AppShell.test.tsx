@@ -144,6 +144,7 @@ function renderShell(
     onOpenGeneralSession?: (sessionID: string) => void;
     onRenameGeneralSession?: (sessionID: string, title: string) => void;
     onDeleteGeneralSession?: (sessionID: string) => void;
+    beforeNavigate?: () => Promise<void | boolean>;
   }
 ) {
   return render(
@@ -169,6 +170,7 @@ function renderShell(
       onOpenGeneralSession={options?.onOpenGeneralSession ?? vi.fn()}
       onRenameGeneralSession={options?.onRenameGeneralSession ?? vi.fn()}
       onDeleteGeneralSession={options?.onDeleteGeneralSession ?? vi.fn()}
+      beforeNavigate={options?.beforeNavigate}
     >
       <div>页面内容</div>
     </AppShell>
@@ -750,5 +752,69 @@ describe("AppShell 侧边栏", () => {
     expect(projectTitle?.classList.contains("np-sidebar-list-item__title")).toBe(true);
     expect(sessionTitle?.textContent).toBe(longSessionTitle);
     expect(sessionTitle?.getAttribute("title")).toBe(longSessionTitle);
+  });
+
+  it("导航守卫完成后只执行一次目标动作，并忽略等待中的重复激活", async () => {
+    let resolveGuard: (() => void) | null = null;
+    const beforeNavigate = vi.fn(
+      () => new Promise<void>((resolve) => { resolveGuard = resolve; })
+    );
+    const moduleGroups = createModuleGroups();
+    const targetAction = vi.fn();
+    moduleGroups[0]!.items[1]!.onClick = targetAction;
+    renderShell("structureWorkbench", { moduleGroups, beforeNavigate });
+
+    fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
+    const target = screen.getByRole("button", { name: "数据库查询" });
+    fireEvent.click(target);
+    fireEvent.click(target);
+
+    expect(beforeNavigate).toHaveBeenCalledTimes(1);
+    expect(targetAction).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveGuard?.();
+      await Promise.resolve();
+    });
+    expect(targetAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("导航守卫失败时仍执行原动作", async () => {
+    const moduleGroups = createModuleGroups();
+    const targetAction = vi.fn();
+    moduleGroups[0]!.items[1]!.onClick = targetAction;
+    renderShell("structureWorkbench", {
+      moduleGroups,
+      beforeNavigate: vi.fn().mockRejectedValue(new Error("sync failed"))
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
+    fireEvent.click(screen.getByRole("button", { name: "数据库查询" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(targetAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("导航守卫超过 1.5 秒后使用最后状态继续执行原动作", async () => {
+    vi.useFakeTimers();
+    try {
+      const moduleGroups = createModuleGroups();
+      const targetAction = vi.fn();
+      moduleGroups[0]!.items[1]!.onClick = targetAction;
+      renderShell("structureWorkbench", {
+        moduleGroups,
+        beforeNavigate: vi.fn(() => new Promise<void>(() => undefined))
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
+      fireEvent.click(screen.getByRole("button", { name: "数据库查询" }));
+      expect(targetAction).not.toHaveBeenCalled();
+      await act(async () => {
+        vi.advanceTimersByTime(1500);
+        await Promise.resolve();
+      });
+      expect(targetAction).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

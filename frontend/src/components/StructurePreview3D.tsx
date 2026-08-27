@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 const D3MOL_SRC = "/vendor/3Dmol-min.js";
 const structureCache = new Map<string, { molblock: string; capped_smiles: string }>();
 const CACHE_MAX = 50;
+type ThreeDMolViewer = ReturnType<NonNullable<Window["$3Dmol"]>["createViewer"]>;
+let scriptLoadPromise: Promise<void> | null = null;
 
 function setCacheEntry(key: string, value: { molblock: string; capped_smiles: string }) {
   if (structureCache.size >= CACHE_MAX) {
@@ -16,20 +18,37 @@ function setCacheEntry(key: string, value: { molblock: string; capped_smiles: st
 }
 
 function loadScriptOnce(src: string, id: string): Promise<void> {
-  return new Promise((resolve, reject) => {
+  if (window.$3Dmol) {
+    return Promise.resolve();
+  }
+  const currentScript = document.getElementById(id) as HTMLScriptElement | null;
+  if (
+    scriptLoadPromise &&
+    (!currentScript || currentScript.dataset.loaded === "true")
+  ) {
+    currentScript?.remove();
+    scriptLoadPromise = null;
+  }
+  if (scriptLoadPromise) {
+    return scriptLoadPromise;
+  }
+
+  scriptLoadPromise = new Promise<void>((resolve, reject) => {
     const existing = document.getElementById(id) as HTMLScriptElement | null;
     if (existing) {
-      if (
-        (existing as HTMLScriptElement & { dataset: { loaded?: string } }).dataset.loaded ===
-        "true"
-      ) {
+      if (existing.dataset.loaded === "true") {
         resolve();
         return;
       }
       existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener("error", () => reject(new Error(`3D 依赖加载失败：${src}`)), {
-        once: true
-      });
+      existing.addEventListener(
+        "error",
+        () => {
+          existing.remove();
+          reject(new Error(`3D 依赖加载失败：${src}`));
+        },
+        { once: true }
+      );
       return;
     }
 
@@ -41,9 +60,17 @@ function loadScriptOnce(src: string, id: string): Promise<void> {
       script.dataset.loaded = "true";
       resolve();
     };
-    script.onerror = () => reject(new Error(`3D 依赖加载失败：${src}`));
+    script.onerror = () => {
+      script.remove();
+      reject(new Error(`3D 依赖加载失败：${src}`));
+    };
     document.head.appendChild(script);
+  }).catch((error) => {
+    scriptLoadPromise = null;
+    throw error;
   });
+
+  return scriptLoadPromise!;
 }
 
 type StructurePreview3DProps = {
@@ -68,21 +95,34 @@ export function StructurePreview3D({
   backgroundColor = "#ffffff"
 }: StructurePreview3DProps) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
+  const viewerInstanceRef = useRef<ThreeDMolViewer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [retryRevision, setRetryRevision] = useState(0);
+
+  useEffect(() => {
+    return () => {
+      viewerInstanceRef.current?.clear();
+      viewerInstanceRef.current?.render();
+      viewerInstanceRef.current = null;
+      if (viewerRef.current) viewerRef.current.innerHTML = "";
+    };
+  }, []);
 
   useEffect(() => {
     const source = smiles.trim();
     if (!source) {
       setIsLoading(false);
       setError("暂无可预览结构");
-      if (viewerRef.current) {
-        viewerRef.current.innerHTML = "";
-      }
+      viewerInstanceRef.current?.clear();
+      viewerInstanceRef.current?.render();
       return;
     }
 
     let cancelled = false;
+    const controller = new AbortController();
+    viewerInstanceRef.current?.clear();
+    viewerInstanceRef.current?.render();
 
     async function renderStructure() {
       setIsLoading(true);
@@ -96,7 +136,10 @@ export function StructurePreview3D({
 
         let payload = structureCache.get(source);
         if (!payload) {
-          payload = await fetchStructure3D(source);
+          payload = await fetchStructure3D(source, controller.signal);
+          if (controller.signal.aborted) {
+            return;
+          }
           setCacheEntry(source, payload);
         }
 
@@ -104,10 +147,15 @@ export function StructurePreview3D({
           return;
         }
 
-        viewerRef.current.innerHTML = "";
-        const viewer = window.$3Dmol.createViewer(viewerRef.current, {
-          backgroundColor
-        });
+        let viewer = viewerInstanceRef.current;
+        if (viewer) {
+          viewer.clear();
+          viewer.setBackgroundColor(backgroundColor);
+        } else {
+          viewerRef.current.innerHTML = "";
+          viewer = window.$3Dmol.createViewer(viewerRef.current, { backgroundColor });
+          viewerInstanceRef.current = viewer;
+        }
         viewer.addModel(payload.molblock, "mol");
         if (visualStyle === "polished-atoms") {
           const glossyBond = { radius: 0.15, color: "0x8b95a5", opacity: 0.96 };
@@ -134,7 +182,7 @@ export function StructurePreview3D({
         viewer.zoomTo();
         viewer.render();
       } catch (nextError) {
-        if (!cancelled) {
+        if (!cancelled && !controller.signal.aborted) {
           setError(nextError instanceof Error ? nextError.message : "3D 渲染失败");
         }
       } finally {
@@ -148,8 +196,9 @@ export function StructurePreview3D({
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [backgroundColor, smiles, visualStyle]);
+  }, [backgroundColor, retryRevision, smiles, visualStyle]);
 
   const previewFrame = (
     <div
@@ -171,7 +220,16 @@ export function StructurePreview3D({
       {error ? (
         <div className="absolute inset-0 flex items-center justify-center p-6">
           <div className="max-w-[85%] rounded-2xl border border-slate-200 bg-white px-5 py-4 text-center text-sm font-medium leading-6 text-slate-700 shadow-sm">
-            {error}
+            <p>{error}</p>
+            {smiles.trim() ? (
+              <button
+                type="button"
+                className="mt-3 rounded-md border border-blue-200 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+                onClick={() => setRetryRevision((current) => current + 1)}
+              >
+                重新加载 3D
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}

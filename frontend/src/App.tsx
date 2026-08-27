@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Atom,
@@ -33,7 +33,10 @@ import { MonomerPolymerizationPage } from "./components/MonomerPolymerizationPag
 import { PolytaoGenerationPage } from "./components/PolytaoGenerationPage";
 import { ReverseDesignPage } from "./components/ReverseDesignPage";
 import { PolymerExplorerDesktopPage } from "./components/PolymerExplorerDesktopPage";
-import { StructureWorkbenchPage } from "./components/StructureWorkbenchPage";
+import {
+  StructureWorkbenchPage,
+  type StructureWorkbenchHandle
+} from "./components/StructureWorkbenchPage";
 import { useKetcher } from "./hooks/useKetcher";
 import { usePredict } from "./hooks/usePredict";
 import { useQuery } from "./hooks/useQuery";
@@ -89,6 +92,7 @@ const POLYTAO_ROUTE = "/polytao-generation";
 const LEGACY_POLYTAO_ROUTE = "/conditional-generation/polytao";
 const DATABASE_FILTER_ROUTE = "/database-filter";
 const LEGACY_DATABASE_FILTER_ROUTE = "/database/property-filter";
+const STRUCTURE_NAVIGATION_SYNC_TIMEOUT_MS = 1500;
 
 const datasetPathByKey: Record<DatasetKey, string> = {
   process: "/database/process",
@@ -326,6 +330,12 @@ export default function App() {
   const [hasMountedStructureWorkbench, setHasMountedStructureWorkbench] = useState(
     () => getInitialRoute().module === "structureWorkbench"
   );
+  const activeModuleRef = useRef(activeModule);
+  activeModuleRef.current = activeModule;
+  const structureWorkbenchRef = useRef<StructureWorkbenchHandle | null>(null);
+  const structureNavigationSyncRef = useRef<Promise<void> | null>(null);
+  const structureNavigationIntentRef = useRef(0);
+  const popstateRevisionRef = useRef(0);
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher();
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const predict = usePredict();
@@ -409,6 +419,40 @@ export default function App() {
     getCurrentSmiles
   };
 
+  const syncStructureBeforeNavigation = useCallback(() => {
+    if (structureNavigationSyncRef.current) {
+      return structureNavigationSyncRef.current;
+    }
+
+    const task = structureWorkbenchRef.current?.syncBeforeLeave() ?? Promise.resolve();
+    const guarded = new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        resolve();
+      };
+      const timeout = window.setTimeout(finish, STRUCTURE_NAVIGATION_SYNC_TIMEOUT_MS);
+      task.then(finish, finish);
+    });
+    const tracked = guarded.finally(() => {
+      if (structureNavigationSyncRef.current === tracked) {
+        structureNavigationSyncRef.current = null;
+      }
+    });
+    structureNavigationSyncRef.current = tracked;
+    return tracked;
+  }, []);
+
+  const beforeStructureShellNavigation = useCallback(() => {
+    const intent = structureNavigationIntentRef.current + 1;
+    structureNavigationIntentRef.current = intent;
+    return syncStructureBeforeNavigation().then(
+      () => structureNavigationIntentRef.current === intent
+    );
+  }, [syncStructureBeforeNavigation]);
+
   useEffect(() => {
     if (typeof window === "undefined" || !("scrollRestoration" in window.history)) {
       return;
@@ -462,25 +506,40 @@ export default function App() {
 
   useEffect(() => {
     function handlePopState() {
+      structureNavigationIntentRef.current += 1;
       const route = routeFromPath(window.location.pathname);
-      if (normalizePath(window.location.pathname) === LEGACY_POLYTAO_ROUTE) {
-        window.history.replaceState(route, "", POLYTAO_ROUTE);
-      } else if (normalizePath(window.location.pathname) === LEGACY_DATABASE_FILTER_ROUTE) {
-        window.history.replaceState(route, "", DATABASE_FILTER_ROUTE);
+      const pathname = window.location.pathname;
+      const search = window.location.search;
+      const revision = popstateRevisionRef.current + 1;
+      popstateRevisionRef.current = revision;
+
+      const applyLatestRoute = () => {
+        if (popstateRevisionRef.current !== revision) return;
+        if (normalizePath(pathname) === LEGACY_POLYTAO_ROUTE) {
+          window.history.replaceState(route, "", POLYTAO_ROUTE);
+        } else if (normalizePath(pathname) === LEGACY_DATABASE_FILTER_ROUTE) {
+          window.history.replaceState(route, "", DATABASE_FILTER_ROUTE);
+        }
+        if (route.module === "knowledge") {
+          setKnowledgeInitialQuery(getKnowledgeQueryFromSearch(search));
+          setKnowledgeInitialTerms(getKnowledgeTermsFromSearch(search));
+        }
+        if (route.module === "monomerDft") {
+          setMonomerDftJobId(getMonomerDftJobIdFromSearch(search));
+        }
+        applyRoute(route);
+      };
+
+      if (activeModuleRef.current === "structureWorkbench") {
+        void syncStructureBeforeNavigation().then(applyLatestRoute);
+      } else {
+        applyLatestRoute();
       }
-      if (route.module === "knowledge") {
-        setKnowledgeInitialQuery(getKnowledgeQueryFromSearch(window.location.search));
-        setKnowledgeInitialTerms(getKnowledgeTermsFromSearch(window.location.search));
-      }
-      if (route.module === "monomerDft") {
-        setMonomerDftJobId(getMonomerDftJobIdFromSearch(window.location.search));
-      }
-      applyRoute(route);
     }
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
+  }, [syncStructureBeforeNavigation]);
 
   useEffect(() => {
     if (activeModule !== "knowledge" || knowledgeInitialTerms.length === 0) return;
@@ -927,6 +986,9 @@ export default function App() {
       onOpenGeneralSession={openGeneralSession}
       onRenameGeneralSession={(sessionID, title) => generalSessionBridge.renameSession(sessionID, title)}
       onDeleteGeneralSession={(sessionID) => generalSessionBridge.deleteSession(sessionID)}
+      beforeNavigate={
+        activeModule === "structureWorkbench" ? beforeStructureShellNavigation : undefined
+      }
     >
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
         <AgentWorkspaceHomePage
@@ -960,8 +1022,8 @@ export default function App() {
           aria-hidden={activeModule !== "structureWorkbench"}
         >
           <StructureWorkbenchPage
+            ref={structureWorkbenchRef}
             structure={structureWorkspace}
-            onBackHome={() => navigate({ module: "home", datasetKey: null })}
             onOpenModule={openModuleById}
           />
         </div>

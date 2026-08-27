@@ -281,7 +281,10 @@ export function useTgStructureCanvas({
   const importAbortRef = useRef<AbortController | null>(null);
   const canvasImageCacheRef = useRef<CanvasImageCache | null>(null);
   const canonicalSmilesCacheRef = useRef(new Map<string, Promise<string | null>>());
+  const flipTimerRef = useRef<number | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
   const [isEditorReady, setIsEditorReady] = useState(false);
+  const [editorLoadRevision, setEditorLoadRevision] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [isFlipping, setIsFlipping] = useState(false);
   const [isImportingImage, setIsImportingImage] = useState(false);
@@ -298,6 +301,8 @@ export function useTgStructureCanvas({
   useEffect(() => () => {
     canvasImageCacheRef.current = null;
     canonicalSmilesCacheRef.current.clear();
+    if (flipTimerRef.current !== null) window.clearTimeout(flipTimerRef.current);
+    if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
   }, []);
 
   function getKetcher() {
@@ -317,6 +322,7 @@ export function useTgStructureCanvas({
   function handleEditorLoad() {
     setIsEditorReady(false);
     structure.setIsReady(false);
+    setEditorLoadRevision((current) => current + 1);
   }
 
   async function waitForKetcherCommit() {
@@ -553,7 +559,7 @@ export function useTgStructureCanvas({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [isEditorReady, structure.iframeRef, structure.setIsReady]);
+  }, [editorLoadRevision, isEditorReady, structure.iframeRef, structure.setIsReady]);
 
   useEffect(() => {
     return () => {
@@ -615,6 +621,12 @@ export function useTgStructureCanvas({
   async function clearCanvas(options: CanvasMutationOptions = {}) {
     const ketcher = getKetcher();
     if (!ketcher) {
+      if (!structure.iframeRef.current) {
+        applySmiles("");
+        setIsFlipped(false);
+        setFeedback("共享 SMILES 已清空。");
+        return true;
+      }
       setFeedback("结构编辑器尚未就绪。");
       return false;
     }
@@ -716,6 +728,36 @@ export function useTgStructureCanvas({
     }
   }
 
+  async function applyTextStructure(sourceSmiles: string) {
+    const normalizedSource = sourceSmiles.trim();
+    if (!normalizedSource) {
+      throw new Error("请输入要应用的 SMILES。");
+    }
+
+    const result = await standardizeSmiles({ smiles: normalizedSource });
+    const standardized = result.standardized_smiles.trim();
+    const reliableSmiles = shouldAdoptEditorSmiles(normalizedSource, standardized)
+      ? standardized
+      : normalizedSource;
+
+    if (!structure.iframeRef.current) {
+      setIsFlipped(false);
+      applySmiles(reliableSmiles);
+      setFeedback(
+        reliableSmiles === standardized
+          ? "结构已标准化并应用。"
+          : "结构已应用，并保留聚合物端基。"
+      );
+      return { applied: true, smiles: reliableSmiles };
+    }
+
+    const applied = await loadStructure(reliableSmiles);
+    return {
+      applied,
+      smiles: smilesRef.current.trim()
+    };
+  }
+
   async function importImageFile(file: File) {
     if (!file.type.startsWith("image/")) {
       setFeedback("请选择图片文件。");
@@ -789,7 +831,9 @@ export function useTgStructureCanvas({
     setIsFlipping(true);
     try {
       if (!isFlipped) {
-        const nextSmiles = await syncSmilesFromCanvas({ preserveExisting: true });
+        const nextSmiles = getKetcher()
+          ? await syncSmilesFromCanvas({ preserveExisting: true })
+          : smilesRef.current.trim();
         if (!nextSmiles) {
           setFeedback("请先绘制或导入聚合物结构。");
           return false;
@@ -798,7 +842,11 @@ export function useTgStructureCanvas({
       setIsFlipped((current) => !current);
       return true;
     } finally {
-      window.setTimeout(() => setIsFlipping(false), 620);
+      if (flipTimerRef.current !== null) window.clearTimeout(flipTimerRef.current);
+      flipTimerRef.current = window.setTimeout(() => {
+        flipTimerRef.current = null;
+        setIsFlipping(false);
+      }, 180);
     }
   }
 
@@ -1001,7 +1049,11 @@ export function useTgStructureCanvas({
       setCopyState("failed");
       setFeedback("复制失败，请手动选择 SMILES。");
     } finally {
-      window.setTimeout(() => setCopyState("idle"), 1200);
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = window.setTimeout(() => {
+        copyTimerRef.current = null;
+        setCopyState("idle");
+      }, 1200);
     }
   }
 
@@ -1027,6 +1079,7 @@ export function useTgStructureCanvas({
     setFeedback,
     copyState,
     loadStructure,
+    applyTextStructure,
     clearCanvas,
     importImageFile,
     syncSmilesFromCanvas,

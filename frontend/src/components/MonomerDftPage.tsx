@@ -39,7 +39,7 @@ import type {
   MonomerDftProperty,
   StructureWorkspaceContext
 } from "../types";
-import { CurrentStructurePanel } from "./StructureWorkbenchPage";
+import { CurrentStructurePanel } from "./CurrentStructurePanel";
 import { MonomerDftResults } from "./MonomerDftResults";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";

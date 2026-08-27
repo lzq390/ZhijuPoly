@@ -656,9 +656,10 @@ export function fetchPolytaoJob(jobId: string): Promise<PolytaoJobStatusResponse
 }
 
 export function fetchStructure3D(
-  smiles: string
+  smiles: string,
+  signal?: AbortSignal
 ): Promise<{ molblock: string; capped_smiles: string; format: "mol" }> {
-  return postJSON("/structure/3d", { smiles });
+  return postJSON("/structure/3d", { smiles }, signal);
 }
 
 export function fetchStructure2D(smiles: string, signal?: AbortSignal): Promise<Structure2DResponse> {
@@ -676,9 +677,10 @@ export function recognizeStructureImage(file: File, signal?: AbortSignal): Promi
 }
 
 export function predictMonomerPrecursors(
-  payload: MonomerRetrosynthesisRequest
+  payload: MonomerRetrosynthesisRequest,
+  signal?: AbortSignal
 ): Promise<MonomerRetrosynthesisResponse> {
-  return postJSON("/monomer-retrosynthesis", payload);
+  return postJSON("/monomer-retrosynthesis", payload, signal);
 }
 
 export function fetchMonomerPolymerizationStatus(): Promise<MonomerPolymerizationStatusResponse> {

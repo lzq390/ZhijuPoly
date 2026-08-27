@@ -12,11 +12,70 @@ import {
   fetchPolytaoJob,
   fetchPolytaoStatus,
   fetchStructure2D,
+  fetchStructure3D,
   fetchTgAssistantGuide,
   fetchTgAssistantStatus,
+  predictMonomerPrecursors,
   recoverDevGpuSession,
   searchPropertyFilterRecords
 } from "./api";
+
+describe("structure workbench request contracts", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("forwards AbortSignal to 3D generation without changing its body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      molblock: "mol",
+      capped_smiles: "CC",
+      format: "mol"
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await fetchStructure3D("*CC*", controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/structure/3d", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ smiles: "*CC*" }),
+      signal: controller.signal
+    });
+  });
+
+  it("forwards AbortSignal to retrosynthesis without changing its payload", async () => {
+    const response = {
+      input_smiles: "CC",
+      canonical_smiles: "CC",
+      target_role: "auto",
+      inferred_target_role: "other",
+      query_time_ms: 1,
+      total: 0,
+      candidates: []
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const payload = {
+      smiles: "CC",
+      target_role: "auto" as const,
+      num_beams: 5,
+      num_return_sequences: 3,
+      max_new_tokens: 128
+    };
+
+    await predictMonomerPrecursors(payload, controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/monomer-retrosynthesis", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+  });
+});
 
 describe("Tg assistant metadata API", () => {
   afterEach(() => vi.unstubAllGlobals());
