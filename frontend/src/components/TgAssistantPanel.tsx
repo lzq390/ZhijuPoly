@@ -212,17 +212,27 @@ function MessageBubble({
   assistant: TgAssistantSession;
 }) {
   const imagePreviewUrl = item.image ? assistant.getImagePreviewUrl(item.id) : null;
+  const imagePreviewRestoring = item.image ? assistant.isImagePreviewRestoring(item.id) : false;
+  const [imagePreviewFailed, setImagePreviewFailed] = useState(false);
+  useEffect(() => setImagePreviewFailed(false), [imagePreviewUrl]);
+  const showImagePreview = Boolean(imagePreviewUrl) && !imagePreviewFailed;
+  const unavailableLabel = imagePreviewRestoring ? "正在恢复图片预览" : "图片预览已失效";
   return (
     <article className={`tg-assistant-message is-${item.role}`}>
       <span>{item.role === "user" ? "你" : "AI"}</span>
       <div>
         {item.image ? (
           <figure className="tg-assistant-message-image">
-            {imagePreviewUrl ? (
-              <img src={imagePreviewUrl} alt={`上传的图片：${item.image.name}`} />
+            {showImagePreview ? (
+              <img
+                src={imagePreviewUrl ?? undefined}
+                alt={`上传的图片：${item.image.name}`}
+                onError={() => setImagePreviewFailed(true)}
+              />
             ) : (
-              <span className="tg-assistant-message-image-unavailable" role="img" aria-label="图片预览已失效">
-                <Image /><em>图片预览已失效</em>
+              <span className="tg-assistant-message-image-unavailable" role="img" aria-label={unavailableLabel}>
+                {imagePreviewRestoring ? <LoaderCircle className="animate-spin" /> : <Image />}
+                <em>{unavailableLabel}</em>
               </span>
             )}
             <figcaption title={item.image.name}>{item.image.name}</figcaption>

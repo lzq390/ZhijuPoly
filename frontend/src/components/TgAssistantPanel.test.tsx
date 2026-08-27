@@ -39,6 +39,7 @@ function assistantSession(overrides: Partial<TgAssistantSession> = {}): TgAssist
     registerAdapter: vi.fn(() => vi.fn()),
     send: vi.fn().mockResolvedValue(true),
     getImagePreviewUrl: vi.fn(() => null),
+    isImagePreviewRestoring: vi.fn(() => false),
     retry: vi.fn(),
     stop: vi.fn(),
     newConversation: vi.fn(),
@@ -273,6 +274,42 @@ describe("TgAssistantPanel", () => {
     expect(preview.getAttribute("src")).toBe("blob:conversation-preview");
     expect(screen.getByText("structure.png").tagName).toBe("FIGCAPTION");
     expect(getImagePreviewUrl).toHaveBeenCalledWith("image-user");
+  });
+
+  it("falls back cleanly when a live conversation thumbnail cannot be decoded", () => {
+    renderPanel(assistantSession({
+      getImagePreviewUrl: vi.fn(() => "blob:broken-preview"),
+      items: [{
+        kind: "message",
+        id: "broken-image-user",
+        role: "user",
+        content: "分析图片",
+        image: { name: "broken.png", size: 128, type: "image/png" },
+        createdAt: "2026-08-24T00:00:00.000Z",
+        status: "done"
+      }]
+    }));
+
+    fireEvent.error(screen.getByRole("img", { name: "上传的图片：broken.png" }));
+    expect(screen.getByRole("img", { name: "图片预览已失效" })).toBeTruthy();
+  });
+
+  it("shows a restoring state while a persisted thumbnail is loading", () => {
+    renderPanel(assistantSession({
+      isImagePreviewRestoring: vi.fn(() => true),
+      items: [{
+        kind: "message",
+        id: "restoring-image-user",
+        role: "user",
+        content: "分析图片",
+        image: { name: "restoring.png", size: 128, type: "image/png" },
+        createdAt: "2026-08-24T00:00:00.000Z",
+        status: "done"
+      }]
+    }));
+
+    expect(screen.getByRole("img", { name: "正在恢复图片预览" })).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "图片预览已失效" })).toBeNull();
   });
 
   it("shows an explicit placeholder for persisted image metadata after the binary is gone", () => {

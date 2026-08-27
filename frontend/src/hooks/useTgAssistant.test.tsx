@@ -12,7 +12,12 @@ import {
 const mocks = vi.hoisted(() => ({
   stream: vi.fn(),
   status: vi.fn(),
-  guide: vi.fn()
+  guide: vi.fn(),
+  previewSave: vi.fn(),
+  previewLoad: vi.fn(),
+  previewDelete: vi.fn(),
+  previewClear: vi.fn(),
+  previewPrune: vi.fn()
 }));
 
 vi.mock("../services/api", () => ({
@@ -24,8 +29,17 @@ vi.mock("../services/tgAssistantStream", () => ({
   streamTgAssistant: mocks.stream
 }));
 
+vi.mock("../services/tgAssistantImagePreviews", () => ({
+  saveTgAssistantImagePreview: mocks.previewSave,
+  loadTgAssistantImagePreview: mocks.previewLoad,
+  deleteTgAssistantImagePreview: mocks.previewDelete,
+  clearTgAssistantImagePreviews: mocks.previewClear,
+  pruneExpiredTgAssistantImagePreviews: mocks.previewPrune
+}));
+
 const SESSION_KEY = "nexpoly.assistant.tg.session.v2";
 const LEGACY_SESSION_KEY = "nexpoly.assistant.tg.session.v1";
+const IMAGE_PREVIEW_SESSION_KEY = "nexpoly.assistant.tg.image-preview-session.v1";
 
 function pageContext(revision = "revision-1"): TgAssistantPageContext {
   return {
@@ -81,6 +95,11 @@ beforeEach(() => {
     configurable: true,
     value: vi.fn()
   });
+  mocks.previewSave.mockReset().mockResolvedValue(undefined);
+  mocks.previewLoad.mockReset().mockResolvedValue(null);
+  mocks.previewDelete.mockReset().mockResolvedValue(undefined);
+  mocks.previewClear.mockReset().mockResolvedValue(undefined);
+  mocks.previewPrune.mockReset().mockResolvedValue(undefined);
   mocks.stream.mockReset();
   mocks.status.mockReset().mockResolvedValue({
     enabled: true,
@@ -233,8 +252,9 @@ describe("useTgAssistant session and request lifecycle", () => {
     ]);
   });
 
-  it("routes one image through multipart without persisting its binary bytes", async () => {
+  it("routes one image through multipart without putting binary bytes in sessionStorage", async () => {
     const file = new File(["private-binary-content"], "structure.png", { type: "image/png" });
+    window.sessionStorage.setItem(IMAGE_PREVIEW_SESSION_KEY, "preview-session-1");
     const { result } = renderHook(() => useTgAssistant());
 
     await act(async () => {
@@ -247,6 +267,7 @@ describe("useTgAssistant session and request lifecycle", () => {
     );
     expect(userItem).toBeTruthy();
     expect(result.current.getImagePreviewUrl(userItem!.id)).toBe("blob:conversation-preview");
+    expect(mocks.previewSave).toHaveBeenCalledWith("preview-session-1", userItem!.id, file);
     const stored = window.sessionStorage.getItem(SESSION_KEY) || "";
     expect(stored).toContain("structure.png");
     expect(stored).not.toContain("private-binary-content");
@@ -254,6 +275,72 @@ describe("useTgAssistant session and request lifecycle", () => {
 
     act(() => result.current.newConversation());
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:conversation-preview");
+    await waitFor(() => expect(mocks.previewClear).toHaveBeenCalledWith("preview-session-1"));
+  });
+
+  it("restores a persisted thumbnail after refresh without restoring the original file", async () => {
+    const thumbnail = new Blob(["persisted-thumbnail"], { type: "image/webp" });
+    window.sessionStorage.setItem(IMAGE_PREVIEW_SESSION_KEY, "preview-session-restored");
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+      version: 2,
+      items: [{
+        kind: "message",
+        id: "restored-image-user",
+        role: "user",
+        content: "分析图片",
+        image: { name: "restored.png", size: 1024, type: "image/png" },
+        createdAt: "2026-08-24T00:00:00.000Z",
+        status: "done"
+      }]
+    }));
+    mocks.previewLoad.mockResolvedValue(thumbnail);
+
+    const { result } = renderHook(() => useTgAssistant());
+
+    expect(result.current.isImagePreviewRestoring("restored-image-user")).toBe(true);
+    await waitFor(() => {
+      expect(result.current.getImagePreviewUrl("restored-image-user")).toBe("blob:conversation-preview");
+    });
+    expect(result.current.isImagePreviewRestoring("restored-image-user")).toBe(false);
+    expect(mocks.previewLoad).toHaveBeenCalledWith("preview-session-restored", "restored-image-user");
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
+  it("deletes a stored thumbnail when its message falls out of retained history", async () => {
+    window.sessionStorage.setItem(IMAGE_PREVIEW_SESSION_KEY, "preview-session-trimmed");
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+      version: 2,
+      items: [
+        {
+          kind: "message",
+          id: "old-image-user",
+          role: "user",
+          content: "旧图片",
+          image: { name: "old.png", size: 100, type: "image/png" },
+          createdAt: "2026-08-24T00:00:00.000Z",
+          status: "done"
+        },
+        ...Array.from({ length: 29 }, (_, index) => ({
+          kind: "message",
+          id: `history-${index}`,
+          role: index % 2 === 0 ? "assistant" : "user",
+          content: `历史 ${index}`,
+          createdAt: "2026-08-24T00:00:00.000Z",
+          status: "done"
+        }))
+      ]
+    }));
+    const { result } = renderHook(() => useTgAssistant());
+
+    await act(async () => {
+      await result.current.send("新问题", false);
+    });
+
+    await waitFor(() => expect(mocks.previewDelete).toHaveBeenCalledWith(
+      "preview-session-trimmed",
+      "old-image-user"
+    ));
+    expect(result.current.items.some((item) => item.id === "old-image-user")).toBe(false);
   });
 
   it("captures a canvas image with context, sends two sources, and stores only stage summaries", async () => {

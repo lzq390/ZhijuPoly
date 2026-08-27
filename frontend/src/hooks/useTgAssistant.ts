@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchTgAssistantGuide, fetchTgAssistantStatus } from "../services/api";
+import {
+  clearTgAssistantImagePreviews,
+  deleteTgAssistantImagePreview,
+  loadTgAssistantImagePreview,
+  pruneExpiredTgAssistantImagePreviews,
+  saveTgAssistantImagePreview
+} from "../services/tgAssistantImagePreviews";
 import { streamTgAssistant, type TgAssistantSseEvent } from "../services/tgAssistantStream";
 import type {
   TgAssistantGuideResponse,
@@ -11,10 +18,27 @@ import type {
 const SESSION_KEY = "nexpoly.assistant.tg.session.v2";
 const LEGACY_SESSION_KEY = "nexpoly.assistant.tg.session.v1";
 const CONSENT_KEY = "nexpoly.assistant.tg.page-context-consent.v1";
+const IMAGE_PREVIEW_SESSION_KEY = "nexpoly.assistant.tg.image-preview-session.v1";
 const MAX_STORED_SESSION_CHARACTERS = 512 * 1024;
 
 function id() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function newImagePreviewSessionId() {
+  return `tg-preview-${id()}`;
+}
+
+function loadImagePreviewSessionId() {
+  try {
+    const existing = sessionStorage.getItem(IMAGE_PREVIEW_SESSION_KEY)?.trim();
+    if (existing) return existing;
+    const created = newImagePreviewSessionId();
+    sessionStorage.setItem(IMAGE_PREVIEW_SESSION_KEY, created);
+    return created;
+  } catch {
+    return newImagePreviewSessionId();
+  }
 }
 
 export type TgAssistantMessageItem = {
@@ -324,6 +348,7 @@ function loadConsent(): "unknown" | "granted" | "denied" {
 
 export function useTgAssistant() {
   const [initial] = useState(loadSession);
+  const [initialImagePreviewSessionId] = useState(loadImagePreviewSessionId);
   const [items, setItems] = useState<TgAssistantItem[]>(initial.items);
   const itemsRef = useRef(items);
   const [storageWarning, setStorageWarning] = useState<string | null>(initial.warning);
@@ -333,12 +358,22 @@ export function useTgAssistant() {
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [metadataError, setMetadataError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [restoringImagePreviewIds, setRestoringImagePreviewIds] = useState(() => new Set(
+    initial.items.flatMap((item) => item.kind === "message" && item.role === "user" && item.image ? [item.id] : [])
+  ));
+  const [, setImagePreviewRevision] = useState(0);
   const metadataLoadedRef = useRef(false);
   const controllerRef = useRef<AbortController | null>(null);
   const imageFilesRef = useRef(new Map<string, File>());
   const imagePreviewUrlsRef = useRef(new Map<string, string>());
+  const imagePreviewSessionIdRef = useRef(initialImagePreviewSessionId);
+  const imagePreviewPersistenceRef = useRef(new Map<string, { sessionId: string; promise: Promise<void> }>());
   const stopRequestedRef = useRef(false);
   const adapterRef = useRef<TgAssistantPageAdapter | null>(null);
+
+  const reportImagePreviewStorageError = useCallback(() => {
+    setStorageWarning((current) => current ?? "图片缩略图无法持久化，刷新后可能需要重新上传图片。");
+  }, []);
 
   const releaseImagePreview = useCallback((userItemId: string) => {
     const previewUrl = imagePreviewUrlsRef.current.get(userItemId);
@@ -351,7 +386,21 @@ export function useTgAssistant() {
     }
   }, []);
 
+  const deleteStoredImagePreview = useCallback((userItemId: string) => {
+    const sessionId = imagePreviewSessionIdRef.current;
+    const pending = imagePreviewPersistenceRef.current.get(userItemId);
+    const waitForSave = pending?.sessionId === sessionId
+      ? pending.promise
+      : Promise.resolve();
+    void waitForSave
+      .then(() => deleteTgAssistantImagePreview(sessionId, userItemId))
+      .catch(reportImagePreviewStorageError);
+  }, [reportImagePreviewStorageError]);
+
   const updateItems = useCallback((updater: (current: TgAssistantItem[]) => TgAssistantItem[]) => {
+    const previousImageIds = new Set(itemsRef.current.flatMap((item) =>
+      item.kind === "message" && item.role === "user" && item.image ? [item.id] : []
+    ));
     const next = trimItems(updater(itemsRef.current));
     const retainedImageIds = new Set(next.flatMap((item) =>
       item.kind === "message" && item.role === "user" && item.image ? [item.id] : []
@@ -362,9 +411,12 @@ export function useTgAssistant() {
     for (const userItemId of imagePreviewUrlsRef.current.keys()) {
       if (!retainedImageIds.has(userItemId)) releaseImagePreview(userItemId);
     }
+    for (const userItemId of previousImageIds) {
+      if (!retainedImageIds.has(userItemId)) deleteStoredImagePreview(userItemId);
+    }
     itemsRef.current = next;
     setItems(next);
-  }, [releaseImagePreview]);
+  }, [deleteStoredImagePreview, releaseImagePreview]);
 
   useEffect(() => {
     try {
@@ -390,6 +442,49 @@ export function useTgAssistant() {
       releaseImagePreview(userItemId);
     }
   }, [releaseImagePreview]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const sessionId = imagePreviewSessionIdRef.current;
+    const messageIds = Array.from(restoringImagePreviewIds);
+
+    void pruneExpiredTgAssistantImagePreviews().catch(reportImagePreviewStorageError);
+    if (messageIds.length === 0) return () => { cancelled = true; };
+
+    void Promise.allSettled(messageIds.map(async (messageId) => ({
+      messageId,
+      thumbnail: await loadTgAssistantImagePreview(sessionId, messageId)
+    }))).then((results) => {
+      if (cancelled) return;
+      let changed = false;
+      let failed = false;
+      for (const result of results) {
+        if (result.status === "rejected") {
+          failed = true;
+          continue;
+        }
+        const { messageId, thumbnail } = result.value;
+        const stillRetained = itemsRef.current.some((item) => (
+          item.kind === "message" && item.role === "user" && item.id === messageId && Boolean(item.image)
+        ));
+        if (!thumbnail || !stillRetained) continue;
+        try {
+          releaseImagePreview(messageId);
+          imagePreviewUrlsRef.current.set(messageId, URL.createObjectURL(thumbnail));
+          changed = true;
+        } catch {
+          failed = true;
+        }
+      }
+      setRestoringImagePreviewIds(new Set());
+      if (changed) setImagePreviewRevision((current) => current + 1);
+      if (failed) reportImagePreviewStorageError();
+    });
+
+    return () => { cancelled = true; };
+    // The restore set is intentionally captured once for the session loaded at mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [releaseImagePreview, reportImagePreviewStorageError]);
 
   const loadMetadata = useCallback(async () => {
     if (metadataLoadedRef.current || metadataLoading) return;
@@ -775,14 +870,26 @@ export function useTgAssistant() {
       } catch {
         // Keep the attachment usable even when this browser cannot create a preview URL.
       }
+      const sessionId = imagePreviewSessionIdRef.current;
+      const persistence = saveTgAssistantImagePreview(sessionId, userItem.id, image)
+        .catch(reportImagePreviewStorageError);
+      imagePreviewPersistenceRef.current.set(userItem.id, { sessionId, promise: persistence });
+      void persistence.finally(() => {
+        const current = imagePreviewPersistenceRef.current.get(userItem.id);
+        if (current?.promise === persistence) imagePreviewPersistenceRef.current.delete(userItem.id);
+      });
     }
     await runRequest(userItem, attachContext, true, image);
     return true;
-  }, [runRequest]);
+  }, [reportImagePreviewStorageError, runRequest]);
 
   const getImagePreviewUrl = useCallback((userItemId: string) => (
     imagePreviewUrlsRef.current.get(userItemId) ?? null
   ), []);
+
+  const isImagePreviewRestoring = useCallback((userItemId: string) => (
+    restoringImagePreviewIds.has(userItemId)
+  ), [restoringImagePreviewIds]);
 
   const retry = useCallback(async (assistantItemId: string, attachContext: boolean) => {
     const assistant = itemsRef.current.find(
@@ -817,6 +924,20 @@ export function useTgAssistant() {
   }, []);
 
   const newConversation = useCallback(() => {
+    const previousPreviewSessionId = imagePreviewSessionIdRef.current;
+    const pendingPreviewWrites = Array.from(imagePreviewPersistenceRef.current.values())
+      .filter((entry) => entry.sessionId === previousPreviewSessionId)
+      .map((entry) => entry.promise);
+    const nextPreviewSessionId = newImagePreviewSessionId();
+    imagePreviewSessionIdRef.current = nextPreviewSessionId;
+    try {
+      sessionStorage.setItem(IMAGE_PREVIEW_SESSION_KEY, nextPreviewSessionId);
+    } catch {
+      reportImagePreviewStorageError();
+    }
+    void Promise.allSettled(pendingPreviewWrites)
+      .then(() => clearTgAssistantImagePreviews(previousPreviewSessionId))
+      .catch(reportImagePreviewStorageError);
     controllerRef.current?.abort();
     controllerRef.current = null;
     setIsStreaming(false);
@@ -825,6 +946,7 @@ export function useTgAssistant() {
     for (const userItemId of imagePreviewUrlsRef.current.keys()) {
       releaseImagePreview(userItemId);
     }
+    setRestoringImagePreviewIds(new Set());
     setItems([]);
     try {
       sessionStorage.removeItem(SESSION_KEY);
@@ -832,7 +954,7 @@ export function useTgAssistant() {
     } catch {
       setStorageWarning("本标签页的 AI 对话无法持久化。");
     }
-  }, [releaseImagePreview]);
+  }, [releaseImagePreview, reportImagePreviewStorageError]);
 
   const rejectAction = useCallback((itemId: string) => {
     updateItems((current) => current.map((item) => item.kind === "action" && item.id === itemId
@@ -888,6 +1010,7 @@ export function useTgAssistant() {
     registerAdapter,
     send,
     getImagePreviewUrl,
+    isImagePreviewRestoring,
     retry,
     stop,
     newConversation,
