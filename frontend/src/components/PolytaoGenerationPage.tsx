@@ -112,7 +112,46 @@ const DESCRIPTOR_GROUPS: DescriptorGroup[] = [
 
 const DRAWER_MIN_WIDTH = 320;
 const DRAWER_MAX_WIDTH = 560;
-const DRAWER_DEFAULT_WIDTH = 430;
+const DRAWER_DEFAULT_WIDTH = 380;
+const DRAWER_KEYBOARD_STEP = 16;
+const DRAWER_INLINE_MIN_WIDTH = 1160;
+const TWO_K_MEDIA_QUERY = "(min-width: 2000px) and (min-height: 1120px)";
+
+const TWO_K_DRAWER_MIN_WIDTH = 480;
+const TWO_K_DRAWER_MAX_WIDTH = 720;
+const TWO_K_DRAWER_DEFAULT_WIDTH = 540;
+const TWO_K_DRAWER_KEYBOARD_STEP = 24;
+
+type DrawerMode = "inline" | "overlay";
+
+type DrawerProfile = {
+  min: number;
+  max: number;
+  defaultWidth: number;
+  keyboardStep: number;
+};
+
+const STANDARD_DRAWER_PROFILE: DrawerProfile = {
+  min: DRAWER_MIN_WIDTH,
+  max: DRAWER_MAX_WIDTH,
+  defaultWidth: DRAWER_DEFAULT_WIDTH,
+  keyboardStep: DRAWER_KEYBOARD_STEP
+};
+
+const TWO_K_DRAWER_PROFILE: DrawerProfile = {
+  min: TWO_K_DRAWER_MIN_WIDTH,
+  max: TWO_K_DRAWER_MAX_WIDTH,
+  defaultWidth: TWO_K_DRAWER_DEFAULT_WIDTH,
+  keyboardStep: TWO_K_DRAWER_KEYBOARD_STEP
+};
+
+function isTwoKViewport() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(TWO_K_MEDIA_QUERY).matches
+  );
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -211,21 +250,32 @@ export function PolytaoGenerationPage({
   const [isDescriptorLoading, setIsDescriptorLoading] = useState(false);
   const [descriptorSource, setDescriptorSource] = useState<DescriptorSource>("empty");
   const [parameterOpen, setParameterOpen] = useState(false);
+  const [referenceOpen, setReferenceOpen] = useState(false);
   const [structureFlipped, setStructureFlipped] = useState(false);
   const [referenceSmilesExpanded, setReferenceSmilesExpanded] = useState(false);
   const [referenceSvg, setReferenceSvg] = useState<string | null>(null);
   const [referenceSvgError, setReferenceSvgError] = useState<string | null>(null);
   const [isReferenceSvgLoading, setIsReferenceSvgLoading] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(true);
-  const [drawerWidth, setDrawerWidth] = useState(DRAWER_DEFAULT_WIDTH);
+  const [hasGenerationAttempt, setHasGenerationAttempt] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<DrawerMode>("inline");
+  const [isTwoK, setIsTwoK] = useState(isTwoKViewport);
+  const [drawerWidth, setDrawerWidth] = useState(() =>
+    isTwoKViewport() ? TWO_K_DRAWER_DEFAULT_WIDTH : DRAWER_DEFAULT_WIDTH
+  );
   const [isDrawerResizing, setIsDrawerResizing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const pageRef = useRef<HTMLDivElement | null>(null);
   const parameterAnchorRef = useRef<HTMLDivElement | null>(null);
   const parameterButtonRef = useRef<HTMLButtonElement | null>(null);
   const drawerCloseRef = useRef<HTMLButtonElement | null>(null);
   const drawerReopenRef = useRef<HTMLButtonElement | null>(null);
+  const drawerRef = useRef<HTMLElement | null>(null);
+  const drawerReturnFocusRef = useRef<HTMLElement | null>(null);
   const drawerResizeCleanupRef = useRef<(() => void) | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+  const drawerProfile = isTwoK ? TWO_K_DRAWER_PROFILE : STANDARD_DRAWER_PROFILE;
+  const previousDrawerProfileRef = useRef<DrawerProfile>(drawerProfile);
   const hasStructure = structure.smiles.trim().length > 0;
   const filledCount = useMemo(
     () => filledDescriptorCount(polytao.request.descriptors),
@@ -291,13 +341,69 @@ export function PolytaoGenerationPage({
   }, []);
 
   useEffect(() => {
-    const smiles = structure.smiles.trim();
+    if (typeof window.matchMedia !== "function") {
+      return;
+    }
+    const query = window.matchMedia(TWO_K_MEDIA_QUERY);
+    const update = () => setIsTwoK(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    const previousProfile = previousDrawerProfileRef.current;
+    if (previousProfile === drawerProfile) {
+      return;
+    }
+    setDrawerWidth((currentWidth) => {
+      const ratio = clamp(
+        (currentWidth - previousProfile.min) / (previousProfile.max - previousProfile.min),
+        0,
+        1
+      );
+      return Math.round(drawerProfile.min + ratio * (drawerProfile.max - drawerProfile.min));
+    });
+    previousDrawerProfileRef.current = drawerProfile;
+  }, [drawerProfile]);
+
+  useEffect(() => {
+    const page = pageRef.current;
+    if (!page) {
+      return;
+    }
+
+    const updateMode = (width: number) => {
+      if (width > 0) {
+        setDrawerMode(width >= DRAWER_INLINE_MIN_WIDTH ? "inline" : "overlay");
+      }
+    };
+    const measure = () => updateMode(page.getBoundingClientRect().width);
+    measure();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      updateMode(entries[0]?.contentRect.width ?? 0);
+    });
+    observer.observe(page);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     setStructureFlipped(false);
     setReferenceSmilesExpanded(false);
     setReferenceSvg(null);
     setReferenceSvgError(null);
-    if (!smiles) {
-      setIsReferenceSvgLoading(false);
+    setIsReferenceSvgLoading(false);
+  }, [structure.smiles]);
+
+  useEffect(() => {
+    const smiles = structure.smiles.trim();
+    if (!referenceOpen || !smiles || referenceSvg) {
       return;
     }
 
@@ -321,7 +427,7 @@ export function PolytaoGenerationPage({
       });
 
     return () => controller.abort();
-  }, [structure.smiles]);
+  }, [referenceOpen, referenceSvg, structure.smiles]);
 
   const closeParameterPanel = useCallback((restoreFocus = false) => {
     setParameterOpen(false);
@@ -346,16 +452,49 @@ export function PolytaoGenerationPage({
 
   const closeDrawer = useCallback(() => {
     setDrawerOpen(false);
-    window.requestAnimationFrame(() => drawerReopenRef.current?.focus());
+    window.requestAnimationFrame(() => {
+      const returnTarget = drawerReturnFocusRef.current;
+      if (returnTarget?.isConnected) {
+        returnTarget.focus();
+      } else {
+        drawerReopenRef.current?.focus();
+      }
+    });
   }, []);
 
   const openDrawer = useCallback(() => {
+    drawerReturnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : drawerReopenRef.current;
     setDrawerOpen(true);
-    window.requestAnimationFrame(() => drawerCloseRef.current?.focus());
   }, []);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
+      if (
+        event.key === "Tab" &&
+        drawerOpen &&
+        drawerMode === "overlay" &&
+        drawerRef.current
+      ) {
+        const focusable = Array.from(
+          drawerRef.current.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+        if (focusable.length === 0) {
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && (document.activeElement === first || !drawerRef.current.contains(document.activeElement))) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || !drawerRef.current.contains(document.activeElement))) {
+          event.preventDefault();
+          first.focus();
+        }
+        return;
+      }
       if (event.key !== "Escape") {
         return;
       }
@@ -369,7 +508,7 @@ export function PolytaoGenerationPage({
     };
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [closeDrawer, closeParameterPanel, drawerOpen, parameterOpen]);
+  }, [closeDrawer, closeParameterPanel, drawerMode, drawerOpen, parameterOpen]);
 
   function updateRequest(partial: Partial<PolytaoGenerationRequest>) {
     polytao.setRequest({
@@ -408,6 +547,7 @@ export function PolytaoGenerationPage({
       showToast("已从参考结构提取 15 项描述符");
     } catch (error) {
       setDescriptorError(error instanceof Error ? error.message : "PolyTAO 描述符计算失败。");
+      setReferenceOpen(true);
     } finally {
       setIsDescriptorLoading(false);
     }
@@ -433,6 +573,8 @@ export function PolytaoGenerationPage({
     }
 
     setParameterOpen(false);
+    drawerReturnFocusRef.current = parameterButtonRef.current;
+    setHasGenerationAttempt(true);
     setDrawerOpen(true);
     await polytao.submit({
       ...polytao.request,
@@ -450,7 +592,7 @@ export function PolytaoGenerationPage({
     document.body.style.userSelect = "none";
 
     const handleMove = (moveEvent: PointerEvent) => {
-      setDrawerWidth(clamp(startWidth + startX - moveEvent.clientX, DRAWER_MIN_WIDTH, DRAWER_MAX_WIDTH));
+      setDrawerWidth(clamp(startWidth + startX - moveEvent.clientX, drawerProfile.min, drawerProfile.max));
     };
     const cleanupResize = () => {
       document.body.style.userSelect = previousUserSelect;
@@ -473,18 +615,18 @@ export function PolytaoGenerationPage({
   function handleDrawerResizeKey(event: React.KeyboardEvent<HTMLDivElement>) {
     let nextWidth = drawerWidth;
     if (event.key === "ArrowLeft") {
-      nextWidth += 16;
+      nextWidth += drawerProfile.keyboardStep;
     } else if (event.key === "ArrowRight") {
-      nextWidth -= 16;
+      nextWidth -= drawerProfile.keyboardStep;
     } else if (event.key === "Home") {
-      nextWidth = DRAWER_MIN_WIDTH;
+      nextWidth = drawerProfile.min;
     } else if (event.key === "End") {
-      nextWidth = DRAWER_MAX_WIDTH;
+      nextWidth = drawerProfile.max;
     } else {
       return;
     }
     event.preventDefault();
-    setDrawerWidth(clamp(nextWidth, DRAWER_MIN_WIDTH, DRAWER_MAX_WIDTH));
+    setDrawerWidth(clamp(nextWidth, drawerProfile.min, drawerProfile.max));
   }
 
   const pageStyle = {
@@ -493,27 +635,31 @@ export function PolytaoGenerationPage({
 
   return (
     <div
-      className={`polytao-page${drawerOpen ? " is-drawer-open" : ""}`}
+      ref={pageRef}
+      className={`polytao-page is-drawer-${drawerMode}${drawerOpen ? " is-drawer-open" : ""}`}
       style={pageStyle}
     >
-      <div className="polytao-page-heading">
-        <div className="polytao-page-heading-left">
+      <div
+        className="polytao-page-scroll"
+        inert={drawerOpen && drawerMode === "overlay"}
+      >
+        <header className="polytao-page-heading">
           <h1>聚合物生成</h1>
-          <span className="polytao-model-label">
-            <Sparkles />
-            PolyTAO · 15 项 RDKit 描述符
-          </span>
-        </div>
-        <div className="polytao-module-toolbar">
-          <span className={`polytao-status-chip ${runtime.className}`}>
-            <i />
-            <span>{runtime.label}</span>
-          </span>
-        </div>
-      </div>
+        </header>
 
-      <main className="polytao-workbench-shell">
-        <section className="polytao-generation-surface" aria-labelledby="polytao-generation-title">
+        <main className="polytao-workbench-shell">
+          <div className="polytao-module-toolbar" aria-label="PolyTAO 模块状态">
+            <span className="polytao-model-label">
+              <Sparkles />
+              PolyTAO · 15 项 RDKit 描述符
+            </span>
+            <span className={`polytao-status-chip ${runtime.className}`}>
+              <i />
+              <span>{runtime.label}</span>
+            </span>
+          </div>
+
+          <section className="polytao-generation-surface" aria-labelledby="polytao-generation-title">
           <header className="polytao-surface-header">
             <div className="polytao-surface-heading">
               <span className="polytao-surface-mark"><Sparkles /></span>
@@ -556,7 +702,10 @@ export function PolytaoGenerationPage({
             </div>
           </header>
 
-          <section className="polytao-condition-section" aria-labelledby="polytao-source-title">
+          <section
+            className={`polytao-condition-section polytao-reference-section${referenceOpen ? " is-open" : ""}`}
+            aria-labelledby="polytao-source-title"
+          >
             <div className="polytao-section-heading">
               <div className="polytao-section-title">
                 <span className="polytao-section-number">01</span>
@@ -566,115 +715,138 @@ export function PolytaoGenerationPage({
                 </div>
               </div>
               <button
-                className="polytao-small-button polytao-structure-view-toggle"
+                className="polytao-reference-toggle"
                 type="button"
-                aria-pressed={structureFlipped}
-                aria-controls="polytao-structure-flip"
-                disabled={!hasStructure}
-                onClick={() => setStructureFlipped((flipped) => !flipped)}
+                aria-expanded={referenceOpen}
+                aria-controls="polytao-reference-content"
+                onClick={() => setReferenceOpen((open) => !open)}
               >
-                {structureFlipped ? <RotateCcw /> : <Box />}
-                {structureFlipped ? "返回 2D" : "查看 3D"}
+                <span className={`polytao-reference-status${hasStructure ? " is-set" : ""}`}>
+                  {hasStructure ? <Link2 /> : <CircleAlert />}
+                  {hasStructure ? "已设置 · 共享结构" : "未设置"}
+                </span>
+                <span className="polytao-reference-toggle-action">
+                  {referenceOpen ? "收起" : "展开"}
+                  <ChevronDown />
+                </span>
               </button>
             </div>
 
-            <div className="polytao-structure-source">
-              <div
-                id="polytao-structure-flip"
-                className={`polytao-structure-flip${structureFlipped ? " is-flipped" : ""}`}
-              >
-                <div className="polytao-structure-flip-inner">
-                  <div className="polytao-structure-face polytao-structure-face-front">
-                    <span className="polytao-structure-face-label">2D 结构</span>
-                    <div className="polytao-structure-canvas" aria-label="共享聚合物重复单元二维结构">
-                      <ReferenceStructure2D
-                        hasStructure={hasStructure}
-                        svg={referenceSvg}
-                        isLoading={isReferenceSvgLoading}
-                        error={referenceSvgError}
-                      />
-                    </div>
-                  </div>
-                  <div className="polytao-structure-face polytao-structure-face-back">
-                    <span className="polytao-structure-face-label">3D 构象</span>
-                    <div className="polytao-structure-3d-canvas" aria-label="共享结构三维构象">
-                      {structureFlipped && hasStructure ? (
-                        <StructurePreview3D
-                          smiles={structure.smiles}
-                          variant="bare"
-                          visualStyle="polished-atoms"
-                          backgroundColor="#07111f"
-                          className="polytao-reference-3d"
-                          previewClassName="polytao-reference-3d-preview"
-                        />
-                      ) : null}
-                      <span className="polytao-structure-3d-hint">拖动旋转 · 滚轮缩放</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="polytao-source-detail">
-                <div className={`polytao-smiles-disclosure${referenceSmilesExpanded ? " is-open" : ""}`}>
+            {referenceOpen ? (
+              <div className="polytao-reference-content" id="polytao-reference-content">
+                <div className="polytao-reference-content-toolbar">
                   <button
-                    className="polytao-smiles-toggle"
+                    className="polytao-small-button polytao-structure-view-toggle"
                     type="button"
-                    aria-expanded={referenceSmilesExpanded}
-                    aria-controls="polytao-reference-smiles-content"
+                    aria-pressed={structureFlipped}
+                    aria-controls="polytao-structure-flip"
                     disabled={!hasStructure}
-                    onClick={() => setReferenceSmilesExpanded((expanded) => !expanded)}
+                    onClick={() => setStructureFlipped((flipped) => !flipped)}
                   >
-                    <span className="polytao-field-eyebrow">共享结构 SMILES</span>
-                    <span className="polytao-smiles-toggle-action">
-                      {hasStructure ? (referenceSmilesExpanded ? "收起" : "展开") : "未设置"}
-                      <ChevronDown />
-                    </span>
+                    {structureFlipped ? <RotateCcw /> : <Box />}
+                    {structureFlipped ? "返回 2D" : "查看 3D"}
                   </button>
-                  {referenceSmilesExpanded && hasStructure ? (
-                    <div className="polytao-smiles-content" id="polytao-reference-smiles-content">
-                      <span className="polytao-smiles-value">{structure.smiles}</span>
+                </div>
+
+                <div className="polytao-structure-source">
+                  <div
+                    id="polytao-structure-flip"
+                    className={`polytao-structure-flip${structureFlipped ? " is-flipped" : ""}`}
+                  >
+                    <div className="polytao-structure-flip-inner">
+                      <div className="polytao-structure-face polytao-structure-face-front">
+                        <span className="polytao-structure-face-label">2D 结构</span>
+                        <div className="polytao-structure-canvas" aria-label="共享聚合物重复单元二维结构">
+                          <ReferenceStructure2D
+                            hasStructure={hasStructure}
+                            svg={referenceSvg}
+                            isLoading={isReferenceSvgLoading}
+                            error={referenceSvgError}
+                          />
+                        </div>
+                      </div>
+                      <div className="polytao-structure-face polytao-structure-face-back">
+                        <span className="polytao-structure-face-label">3D 构象</span>
+                        <div className="polytao-structure-3d-canvas" aria-label="共享结构三维构象">
+                          {structureFlipped && hasStructure ? (
+                            <StructurePreview3D
+                              smiles={structure.smiles}
+                              variant="bare"
+                              visualStyle="polished-atoms"
+                              backgroundColor="#07111f"
+                              className="polytao-reference-3d"
+                              previewClassName="polytao-reference-3d-preview"
+                            />
+                          ) : null}
+                          <span className="polytao-structure-3d-hint">拖动旋转 · 滚轮缩放</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="polytao-source-detail">
+                    <div className={`polytao-smiles-disclosure${referenceSmilesExpanded ? " is-open" : ""}`}>
                       <button
-                        className="polytao-copy-inline"
+                        className="polytao-smiles-toggle"
                         type="button"
-                        aria-label="复制共享结构 SMILES"
-                        onClick={() => {
-                          void copyText(structure.smiles, "共享结构 SMILES 已复制");
-                        }}
+                        aria-expanded={referenceSmilesExpanded}
+                        aria-controls="polytao-reference-smiles-content"
+                        disabled={!hasStructure}
+                        onClick={() => setReferenceSmilesExpanded((expanded) => !expanded)}
                       >
-                        <Copy />
+                        <span className="polytao-field-eyebrow">共享结构 SMILES</span>
+                        <span className="polytao-smiles-toggle-action">
+                          {hasStructure ? (referenceSmilesExpanded ? "收起" : "展开") : "未设置"}
+                          <ChevronDown />
+                        </span>
+                      </button>
+                      {referenceSmilesExpanded && hasStructure ? (
+                        <div className="polytao-smiles-content" id="polytao-reference-smiles-content">
+                          <span className="polytao-smiles-value">{structure.smiles}</span>
+                          <button
+                            className="polytao-copy-inline"
+                            type="button"
+                            aria-label="复制共享结构 SMILES"
+                            onClick={() => {
+                              void copyText(structure.smiles, "共享结构 SMILES 已复制");
+                            }}
+                          >
+                            <Copy />
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="polytao-semantic-note">
+                      <Info />
+                      <span>
+                        <strong>参考结构不是生成骨架。</strong> PolyTAO 只读取由它计算出的分子特征，生成结果不会复刻或保留该结构。
+                      </span>
+                    </div>
+                    <div className="polytao-source-actions">
+                      <button className="polytao-secondary-button" type="button" onClick={onEditStructure}>
+                        <Edit3 />
+                        编辑结构
+                      </button>
+                      <button
+                        className="polytao-secondary-button"
+                        type="button"
+                        onClick={() => void handleDescriptorPrefill()}
+                        disabled={isDescriptorLoading || !hasStructure}
+                      >
+                        {isDescriptorLoading ? <LoaderCircle className="polytao-spinner" /> : <Wand2 />}
+                        提取描述符
                       </button>
                     </div>
-                  ) : null}
-                </div>
-                <div className="polytao-semantic-note">
-                  <Info />
-                  <span>
-                    <strong>参考结构不是生成骨架。</strong> PolyTAO 只读取由它计算出的分子特征，生成结果不会复刻或保留该结构。
-                  </span>
-                </div>
-                <div className="polytao-source-actions">
-                  <button className="polytao-secondary-button" type="button" onClick={onEditStructure}>
-                    <Edit3 />
-                    编辑结构
-                  </button>
-                  <button
-                    className="polytao-secondary-button"
-                    type="button"
-                    onClick={() => void handleDescriptorPrefill()}
-                    disabled={isDescriptorLoading || !hasStructure}
-                  >
-                    {isDescriptorLoading ? <LoaderCircle className="polytao-spinner" /> : <Wand2 />}
-                    提取描述符
-                  </button>
-                </div>
-                {descriptorError ? (
-                  <div className="polytao-inline-error" role="alert">
-                    <CircleAlert />
-                    <span>{descriptorError}</span>
+                    {descriptorError ? (
+                      <div className="polytao-inline-error" role="alert">
+                        <CircleAlert />
+                        <span>{descriptorError}</span>
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
+                </div>
               </div>
-            </div>
+            ) : null}
           </section>
 
           <section className="polytao-condition-section" aria-labelledby="polytao-descriptor-title">
@@ -714,32 +886,38 @@ export function PolytaoGenerationPage({
               ))}
             </div>
           </section>
-        </section>
-      </main>
+          </section>
+        </main>
+      </div>
 
-      <ResultsDrawer
-        open={drawerOpen}
-        width={drawerWidth}
-        isResizing={isDrawerResizing}
-        data={polytao.data}
-        job={polytao.job}
-        error={polytao.error}
-        isLoading={polytao.isLoading}
-        runtimeDisplayState={runtimeDisplayState}
-        status={polytao.serviceStatus}
-        requestedCount={polytao.request.candidate_count}
-        closeButtonRef={drawerCloseRef}
-        reopenButtonRef={drawerReopenRef}
-        onClose={closeDrawer}
-        onOpen={openDrawer}
-        onRetry={() => void handleSubmit()}
-        onRefreshRuntime={() => void polytao.refreshStatus()}
-        onResizeStart={beginDrawerResize}
-        onResizeKeyDown={handleDrawerResizeKey}
-        onCopy={(value) => {
-          void copyText(value, "候选 SMILES 已复制");
-        }}
-      />
+      {hasGenerationAttempt ? (
+        <ResultsDrawer
+          open={drawerOpen}
+          mode={drawerMode}
+          width={drawerWidth}
+          profile={drawerProfile}
+          isResizing={isDrawerResizing}
+          data={polytao.data}
+          job={polytao.job}
+          error={polytao.error}
+          isLoading={polytao.isLoading}
+          runtimeDisplayState={runtimeDisplayState}
+          status={polytao.serviceStatus}
+          requestedCount={polytao.request.candidate_count}
+          drawerRef={drawerRef}
+          closeButtonRef={drawerCloseRef}
+          reopenButtonRef={drawerReopenRef}
+          onClose={closeDrawer}
+          onOpen={openDrawer}
+          onRetry={() => void handleSubmit()}
+          onRefreshRuntime={() => void polytao.refreshStatus()}
+          onResizeStart={beginDrawerResize}
+          onResizeKeyDown={handleDrawerResizeKey}
+          onCopy={(value) => {
+            void copyText(value, "候选 SMILES 已复制");
+          }}
+        />
+      ) : null}
 
       <div className={`polytao-toast${toastMessage ? " is-visible" : ""}`} role="status" aria-live="polite">
         <Check />
@@ -996,7 +1174,9 @@ function SamplingField({
 
 type ResultsDrawerProps = {
   open: boolean;
+  mode: DrawerMode;
   width: number;
+  profile: DrawerProfile;
   isResizing: boolean;
   data: PolytaoGenerationResponse | null;
   job: PolytaoJobStatusResponse | null;
@@ -1005,6 +1185,7 @@ type ResultsDrawerProps = {
   runtimeDisplayState: PolytaoRuntimeDisplayState;
   status: PolytaoStatusResponse | null;
   requestedCount: number;
+  drawerRef: RefObject<HTMLElement | null>;
   closeButtonRef: RefObject<HTMLButtonElement | null>;
   reopenButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
@@ -1018,7 +1199,9 @@ type ResultsDrawerProps = {
 
 function ResultsDrawer({
   open,
+  mode,
   width,
+  profile,
   isResizing,
   data,
   job,
@@ -1027,6 +1210,7 @@ function ResultsDrawer({
   runtimeDisplayState,
   status,
   requestedCount,
+  drawerRef,
   closeButtonRef,
   reopenButtonRef,
   onClose,
@@ -1037,6 +1221,13 @@ function ResultsDrawer({
   onResizeKeyDown,
   onCopy
 }: ResultsDrawerProps) {
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+  }, [closeButtonRef, open]);
+
   const completedWithoutData = job?.status === "completed" && !data;
   const runtimeUnavailable =
     runtimeDisplayState === "disabled" ||
@@ -1058,11 +1249,11 @@ function ResultsDrawer({
   return (
     <>
       <button
-        className={`polytao-drawer-backdrop${open ? " is-open" : ""}`}
+        className={`polytao-drawer-backdrop${mode === "overlay" ? " is-overlay" : ""}${open ? " is-open" : ""}`}
         type="button"
         aria-label="关闭聚合物生成结果"
-        aria-hidden={!open}
-        tabIndex={open ? 0 : -1}
+        aria-hidden={!open || mode !== "overlay"}
+        tabIndex={-1}
         onClick={onClose}
       />
       <button
@@ -1078,25 +1269,28 @@ function ResultsDrawer({
         <PanelRightOpen />
       </button>
       <aside
-        className={`polytao-detail-drawer${open ? " is-open" : ""}`}
+        ref={drawerRef}
+        className={`polytao-detail-drawer is-${mode}${open ? " is-open" : ""}`}
         role="dialog"
-        aria-modal="false"
+        aria-modal={mode === "overlay"}
         aria-labelledby="polytao-drawer-title"
         aria-hidden={!open}
         inert={!open}
       >
-        <div
-          className={`polytao-drawer-resizer${isResizing ? " is-dragging" : ""}`}
-          role="separator"
-          tabIndex={open ? 0 : -1}
-          aria-label="调整聚合物生成结果侧栏宽度"
-          aria-orientation="vertical"
-          aria-valuemin={DRAWER_MIN_WIDTH}
-          aria-valuemax={DRAWER_MAX_WIDTH}
-          aria-valuenow={Math.round(width)}
-          onPointerDown={onResizeStart}
-          onKeyDown={onResizeKeyDown}
-        />
+        {mode === "inline" ? (
+          <div
+            className={`polytao-drawer-resizer${isResizing ? " is-dragging" : ""}`}
+            role="separator"
+            tabIndex={open ? 0 : -1}
+            aria-label="调整聚合物生成结果侧栏宽度"
+            aria-orientation="vertical"
+            aria-valuemin={profile.min}
+            aria-valuemax={profile.max}
+            aria-valuenow={Math.round(width)}
+            onPointerDown={onResizeStart}
+            onKeyDown={onResizeKeyDown}
+          />
+        ) : null}
         <header className="polytao-drawer-header">
           <div className="polytao-drawer-heading">
             <span className="polytao-drawer-mark"><Sparkles /></span>

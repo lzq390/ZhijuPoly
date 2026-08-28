@@ -2041,3 +2041,1229 @@
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Knowledge retrieval / database filtering aligned workspace ------------ */
+
+.polytao-page {
+  --polytao-bg-app: #edf3f9;
+  --polytao-bg-soft: #f7faff;
+  --polytao-primary: #2563eb;
+  --polytao-primary-strong: #1d4ed8;
+  --polytao-cyan: #0891b2;
+  --polytao-success: #10b981;
+  --polytao-success-soft: #ecfdf5;
+  --polytao-warning: #d89212;
+  --polytao-warning-soft: #fffbeb;
+  --polytao-danger: #ef4444;
+  --polytao-danger-soft: #fef2f2;
+  --polytao-ink: #0b1f3a;
+  --polytao-muted: #58708d;
+  --polytao-faint: #8da1b8;
+  --polytao-border: rgba(51, 83, 126, 0.17);
+  --polytao-border-strong: rgba(51, 83, 126, 0.25);
+  --polytao-shadow-sm: 0 5px 15px rgba(30, 64, 175, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.88);
+  --polytao-shadow-md: 0 22px 58px rgba(30, 64, 175, 0.09), 0 2px 8px rgba(15, 23, 42, 0.035), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  container: polytao-page / inline-size;
+  overflow: hidden;
+  padding: 0;
+  color: var(--polytao-ink);
+  background-color: var(--polytao-bg-app);
+  background-image:
+    radial-gradient(circle at 15% 5%, rgba(59, 130, 246, 0.12), transparent 31%),
+    radial-gradient(circle at 92% 88%, rgba(6, 182, 212, 0.075), transparent 34%),
+    linear-gradient(rgba(37, 99, 235, 0.032) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.032) 1px, transparent 1px),
+    linear-gradient(155deg, #f3f7fb 0%, #edf3f9 46%, #eef5f8 100%);
+  background-repeat: no-repeat, no-repeat, repeat, repeat, no-repeat;
+  background-size: auto, auto, 32px 32px, 32px 32px, auto;
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.5;
+  transition: none;
+}
+
+.polytao-page.is-drawer-open {
+  padding-right: 0;
+}
+
+.polytao-page-scroll {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 24px 24px 92px;
+  scrollbar-color: #c4d1df transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  transition: padding-right 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.polytao-page.is-drawer-inline.is-drawer-open > .polytao-page-scroll {
+  padding-right: calc(var(--polytao-drawer-width) + 24px);
+}
+
+.polytao-page.is-drawer-open .polytao-page-heading {
+  right: auto;
+}
+
+.polytao-page button:focus-visible,
+.polytao-page input:focus-visible,
+.polytao-page [tabindex]:focus-visible {
+  outline-color: rgba(37, 99, 235, 0.72);
+}
+
+.polytao-page svg {
+  width: 16px;
+  height: 16px;
+}
+
+.polytao-page-heading {
+  position: relative;
+  z-index: 25;
+  top: auto;
+  right: auto;
+  left: auto;
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  margin: 0 0 8px;
+}
+
+.polytao-page-heading h1 {
+  margin: 0;
+  color: #0b1f3a;
+  font-family: var(--font-heading);
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 30px;
+  letter-spacing: -0.02em;
+}
+
+.polytao-workbench-shell {
+  width: min(100%, 1040px);
+  margin: 0 auto;
+}
+
+.polytao-module-toolbar {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.polytao-module-toolbar::before {
+  width: min(180px, 22vw);
+  height: 1px;
+  margin-right: auto;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0), rgba(59, 130, 246, 0.32), rgba(34, 211, 238, 0.5));
+  content: "";
+}
+
+.polytao-model-label,
+.polytao-status-chip {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid rgba(71, 100, 143, 0.21);
+  border-radius: 6px;
+  color: #506780;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: var(--polytao-shadow-sm);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  backdrop-filter: blur(12px);
+}
+
+.polytao-model-label svg {
+  width: 14px;
+  height: 14px;
+  color: var(--polytao-cyan);
+}
+
+.polytao-status-chip i {
+  width: 6px;
+  height: 6px;
+}
+
+.polytao-generation-surface {
+  container: polytao-surface / inline-size;
+  overflow: visible;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: var(--polytao-shadow-md);
+}
+
+.polytao-generation-surface::before {
+  z-index: 2;
+  top: -1px;
+  right: 18px;
+  left: 18px;
+  height: 2px;
+  border-radius: 0 0 999px 999px;
+  background: linear-gradient(90deg, transparent, #3b82f6 34%, #22d3ee 68%, transparent);
+  box-shadow: none;
+  opacity: 0.8;
+}
+
+.polytao-surface-header {
+  min-height: 82px;
+  gap: 18px;
+  padding: 15px 18px;
+  border-bottom-color: rgba(37, 99, 235, 0.105);
+  border-radius: 14px 14px 0 0;
+  background: linear-gradient(110deg, rgba(255, 255, 255, 0.99) 10%, rgba(239, 246, 255, 0.75) 72%, rgba(236, 254, 255, 0.54) 118%);
+}
+
+.polytao-surface-heading {
+  gap: 12px;
+}
+
+.polytao-surface-mark,
+.polytao-drawer-mark {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: linear-gradient(145deg, #1d4ed8 0%, #3b82f6 58%, #06b6d4 135%);
+  box-shadow: 0 9px 20px rgba(37, 99, 235, 0.21), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.polytao-surface-mark svg,
+.polytao-drawer-mark svg {
+  width: 19px;
+  height: 19px;
+}
+
+.polytao-surface-copy h2 {
+  color: #0b1f3a;
+  font-size: 18px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.polytao-surface-copy p {
+  margin-top: 4px;
+  color: #617792;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.polytao-surface-actions {
+  gap: 8px;
+}
+
+.polytao-source-chip,
+.polytao-parameter-trigger,
+.polytao-quiet-button,
+.polytao-secondary-button,
+.polytao-small-button {
+  min-height: 36px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.polytao-source-chip {
+  padding: 0 11px;
+  border-color: rgba(8, 145, 178, 0.22);
+  color: #087a91;
+  background: #effcfe;
+}
+
+.polytao-source-chip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.polytao-secondary-button,
+.polytao-quiet-button {
+  padding: 0 12px;
+}
+
+.polytao-small-button {
+  padding: 0 10px;
+}
+
+.polytao-icon-button {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+}
+
+.polytao-parameter-panel {
+  width: min(460px, calc(100vw - 32px));
+  border-color: var(--polytao-border-strong);
+  border-radius: 12px;
+}
+
+.polytao-parameter-panel-head {
+  min-height: 60px;
+  padding: 10px 12px 10px 16px;
+}
+
+.polytao-parameter-panel-title h3 {
+  color: var(--polytao-ink);
+  font-size: 16px;
+}
+
+.polytao-parameter-panel-title p,
+.polytao-run-readiness,
+.polytao-progress-message {
+  color: var(--polytao-muted);
+  font-size: 12px;
+}
+
+.polytao-sampling-grid {
+  gap: 12px;
+  padding: 16px 16px 6px;
+}
+
+.polytao-sampling-label > span:first-child,
+.polytao-run-readiness strong {
+  font-size: 13px;
+}
+
+.polytao-range-hint {
+  font-size: 10px;
+}
+
+.polytao-generation-action-row {
+  margin: 10px 16px 16px;
+  padding-top: 14px;
+}
+
+.polytao-primary-button {
+  min-width: 168px;
+  height: 44px;
+  border-color: var(--polytao-primary);
+  border-radius: 7px;
+  background: linear-gradient(135deg, #2563eb, #0891b2);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.2);
+  font-size: 14px;
+}
+
+.polytao-condition-section {
+  padding: 18px;
+}
+
+.polytao-condition-section + .polytao-condition-section {
+  border-top-color: rgba(37, 99, 235, 0.105);
+}
+
+.polytao-section-heading {
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.polytao-reference-section:not(.is-open) .polytao-section-heading {
+  margin-bottom: 0;
+}
+
+.polytao-section-title {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.polytao-section-number {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+.polytao-section-title h3 {
+  color: #102a46;
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.polytao-section-title p {
+  margin-top: 3px;
+  color: #6c819a;
+  font-size: 13px;
+}
+
+.polytao-reference-toggle {
+  display: inline-flex;
+  min-height: 36px;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border: 1px solid var(--polytao-border);
+  border-radius: 6px;
+  color: var(--polytao-muted);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: var(--polytao-shadow-sm);
+  cursor: pointer;
+}
+
+.polytao-reference-toggle:hover {
+  border-color: rgba(37, 99, 235, 0.38);
+  background: #fff;
+}
+
+.polytao-reference-status,
+.polytao-reference-toggle-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.polytao-reference-status {
+  color: #7a8ca2;
+}
+
+.polytao-reference-status.is-set {
+  color: #087a91;
+}
+
+.polytao-reference-status svg,
+.polytao-reference-toggle-action svg {
+  width: 14px;
+  height: 14px;
+}
+
+.polytao-reference-toggle-action {
+  padding-left: 10px;
+  border-left: 1px solid var(--polytao-border);
+  color: #526a84;
+}
+
+.polytao-reference-toggle-action svg {
+  transition: transform 180ms ease;
+}
+
+.polytao-reference-toggle[aria-expanded="true"] .polytao-reference-toggle-action svg {
+  transform: rotate(180deg);
+}
+
+.polytao-reference-content {
+  min-width: 0;
+}
+
+.polytao-reference-content-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 8px;
+}
+
+.polytao-structure-source {
+  grid-template-columns: minmax(0, 1.04fr) minmax(0, 0.96fr);
+  gap: 16px;
+}
+
+.polytao-structure-flip,
+.polytao-structure-canvas {
+  min-height: 250px;
+}
+
+.polytao-structure-face,
+.polytao-structure-canvas {
+  border-radius: 10px;
+}
+
+.polytao-reference-svg {
+  height: 216px;
+}
+
+.polytao-reference-svg-image {
+  max-height: 216px !important;
+}
+
+.polytao-reference-placeholder {
+  font-size: 13px;
+}
+
+.polytao-source-detail {
+  min-height: 250px;
+  gap: 12px;
+}
+
+.polytao-smiles-toggle {
+  min-height: 44px;
+}
+
+.polytao-field-eyebrow,
+.polytao-smiles-toggle-action {
+  font-size: 11px;
+}
+
+.polytao-smiles-value {
+  font-size: 13px;
+}
+
+.polytao-semantic-note {
+  padding: 11px 12px;
+  border-color: rgba(8, 145, 178, 0.22);
+  color: #36556c;
+  background: #f0fbff;
+  font-size: 13px;
+}
+
+.polytao-inline-error {
+  padding: 10px 11px;
+  font-size: 13px;
+}
+
+.polytao-descriptor-tools {
+  gap: 8px;
+}
+
+.polytao-completion-chip {
+  min-height: 36px;
+  padding: 0 11px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.polytao-descriptor-grid {
+  gap: 10px;
+}
+
+.polytao-descriptor-group {
+  grid-template-columns: 162px minmax(0, 1fr);
+  gap: 14px;
+  padding: 12px;
+  border-color: rgba(51, 83, 126, 0.16);
+  border-radius: 11px;
+  background: linear-gradient(90deg, #f4f8fd 0, #f9fbfe 162px, #fff 162px);
+  box-shadow: 0 5px 18px rgba(30, 64, 175, 0.035), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.polytao-descriptor-group-head {
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 9px;
+}
+
+.polytao-descriptor-group-index {
+  width: 26px;
+  height: 26px;
+  font-size: 10px;
+}
+
+.polytao-descriptor-group:nth-child(3) .polytao-descriptor-group-index {
+  color: #087a91;
+  border-color: #a5f3fc;
+  background: #ecfeff;
+}
+
+.polytao-descriptor-group h4 {
+  font-size: 14px;
+}
+
+.polytao-descriptor-group-title p {
+  color: var(--polytao-faint);
+  font-size: 11px;
+}
+
+.polytao-group-progress {
+  font-size: 11px;
+}
+
+.polytao-group-progress.is-incomplete {
+  color: #98600a;
+  background: var(--polytao-warning-soft);
+}
+
+.polytao-descriptor-fields {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.polytao-descriptor-label {
+  color: #3e536b;
+  font-size: 13px;
+}
+
+.polytao-descriptor-key {
+  min-height: 16px;
+  font-size: 10px;
+}
+
+.polytao-number-input {
+  height: 44px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-color: var(--polytao-border-strong);
+  border-radius: 7px;
+  color: #102a46;
+  font-size: 14px;
+}
+
+.polytao-number-input:focus {
+  border-color: var(--polytao-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.polytao-drawer-backdrop {
+  position: absolute;
+  background: rgba(11, 31, 58, 0.32);
+  backdrop-filter: blur(2px);
+}
+
+.polytao-drawer-backdrop.is-overlay.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.polytao-detail-drawer {
+  position: absolute;
+  width: var(--polytao-drawer-width);
+  border-left-color: rgba(51, 83, 126, 0.2);
+  color: var(--polytao-ink);
+  background: linear-gradient(180deg, #f8fbfe, #fafcff 58%, #f3f7fb);
+  box-shadow: -18px 0 48px rgba(51, 83, 126, 0.14);
+}
+
+.polytao-detail-drawer.is-inline {
+  top: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.polytao-detail-drawer.is-overlay {
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
+  width: min(var(--polytao-drawer-width), calc(100% - 16px));
+  border: 1px solid var(--polytao-border);
+  border-radius: 14px;
+  overflow: hidden;
+  transform: translateY(12px) scale(0.985);
+}
+
+.polytao-detail-drawer.is-overlay.is-open {
+  transform: none;
+}
+
+.polytao-drawer-header {
+  min-height: 82px;
+  padding: 12px 14px 12px 16px;
+  border-bottom-color: rgba(37, 99, 235, 0.12);
+  background: linear-gradient(110deg, rgba(255, 255, 255, 0.98) 8%, rgba(239, 246, 255, 0.8) 72%, rgba(236, 254, 255, 0.6) 118%);
+}
+
+.polytao-drawer-mark {
+  width: 42px;
+  height: 42px;
+}
+
+.polytao-drawer-copy h2 {
+  color: #0b1f3a;
+  font-size: 18px;
+}
+
+.polytao-drawer-eyebrow {
+  font-size: 9px;
+}
+
+.polytao-drawer-copy p {
+  color: #617792;
+  font-size: 10px;
+}
+
+.polytao-drawer-body {
+  padding: 12px;
+}
+
+.polytao-drawer-result-card {
+  border-color: rgba(51, 83, 126, 0.18);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(30, 64, 175, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.polytao-drawer-result-card::before {
+  right: 14px;
+  left: 14px;
+  background: linear-gradient(90deg, transparent, #3b82f6 34%, #22d3ee 68%, transparent);
+}
+
+.polytao-candidate-visual::after {
+  display: none;
+  animation: none;
+}
+
+.polytao-candidate-identity strong,
+.polytao-state-panel p,
+.polytao-progress-stage,
+.polytao-progress-percent {
+  font-size: 13px;
+}
+
+.polytao-candidate-identity small,
+.polytao-score-meter span,
+.polytao-drawer-footer {
+  font-size: 10px;
+}
+
+.polytao-candidate-visual {
+  height: 180px;
+  border-radius: 10px;
+}
+
+.polytao-candidate-svg {
+  height: 168px;
+}
+
+.polytao-candidate-svg-image {
+  max-height: 168px !important;
+}
+
+.polytao-result-smiles-toggle > span:first-child,
+.polytao-result-smiles-toggle > span:last-child {
+  font-size: 11px;
+}
+
+.polytao-drawer-result-smiles code {
+  font-size: 12px;
+}
+
+.polytao-state-panel,
+.polytao-progress-card {
+  border-radius: 11px;
+}
+
+.polytao-state-panel h3 {
+  font-size: 16px;
+}
+
+.polytao-drawer-reopen {
+  position: absolute;
+  border-radius: 10px;
+  visibility: hidden;
+  transform: translateY(-50%) scale(0.9);
+}
+
+.polytao-drawer-reopen.is-visible {
+  visibility: visible;
+  transform: translateY(-50%);
+}
+
+.polytao-toast {
+  position: absolute;
+  min-height: 40px;
+  font-size: 13px;
+}
+
+@container polytao-surface (max-width: 820px) {
+  .polytao-structure-source {
+    grid-template-columns: 1fr;
+  }
+
+  .polytao-source-detail {
+    min-height: 0;
+  }
+
+  .polytao-descriptor-group {
+    grid-template-columns: 1fr;
+    background: #fbfdff;
+  }
+
+  .polytao-descriptor-group-head {
+    align-items: center;
+  }
+
+  .polytao-descriptor-fields {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container polytao-surface (max-width: 640px) {
+  .polytao-surface-header,
+  .polytao-section-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .polytao-surface-actions,
+  .polytao-descriptor-tools {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .polytao-descriptor-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .polytao-reference-toggle {
+    margin-left: 36px;
+  }
+}
+
+@container polytao-surface (max-width: 440px) {
+  .polytao-surface-actions {
+    width: 100%;
+  }
+
+  .polytao-source-chip {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .polytao-parameter-anchor {
+    margin-left: auto;
+  }
+
+  .polytao-parameter-panel {
+    position: fixed;
+    top: 70px;
+    right: 10px;
+    left: 10px;
+    width: auto;
+    max-height: calc(100vh - 90px);
+    max-height: calc(100dvh - 90px);
+    overflow-y: auto;
+    transform-origin: top center;
+  }
+
+  .polytao-sampling-grid,
+  .polytao-descriptor-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .polytao-sampling-field:last-child {
+    grid-column: auto;
+  }
+
+  .polytao-generation-action-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .polytao-primary-button {
+    width: 100%;
+  }
+
+  .polytao-reference-toggle {
+    width: 100%;
+    margin-left: 0;
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 700px) {
+  .polytao-page-scroll {
+    padding: 18px 14px 88px;
+  }
+
+  .polytao-page-heading {
+    min-height: 30px;
+    margin-bottom: 10px;
+  }
+
+  .polytao-page-heading h1 {
+    font-size: 20px;
+  }
+
+  .polytao-module-toolbar {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .polytao-module-toolbar::before {
+    display: none;
+  }
+
+  .polytao-model-label,
+  .polytao-status-chip {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .polytao-detail-drawer.is-overlay {
+    max-height: calc(100vh - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+
+  .polytao-drawer-reopen {
+    top: auto;
+    right: 12px;
+    bottom: 12px;
+    transform: scale(0.9);
+  }
+
+  .polytao-drawer-reopen.is-visible {
+    transform: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .polytao-page-scroll {
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .polytao-surface-header,
+  .polytao-condition-section {
+    padding: 14px;
+  }
+
+  .polytao-surface-copy p {
+    max-width: none;
+    font-size: 12px;
+    white-space: normal;
+  }
+
+  .polytao-drawer-header {
+    min-height: 70px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .polytao-page {
+    background-size: auto, auto, 48px 48px, 48px 48px, auto;
+    font-size: 18px;
+  }
+
+  .polytao-page-scroll {
+    padding: 36px 36px 120px;
+  }
+
+  .polytao-page.is-drawer-inline.is-drawer-open > .polytao-page-scroll {
+    padding-right: calc(var(--polytao-drawer-width) + 36px);
+  }
+
+  .polytao-page-heading {
+    min-height: 40px;
+    margin-bottom: 14px;
+  }
+
+  .polytao-page-heading h1 {
+    font-size: 28px;
+    line-height: 40px;
+  }
+
+  .polytao-workbench-shell {
+    width: min(100%, 1560px);
+  }
+
+  .polytao-module-toolbar {
+    min-height: 54px;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .polytao-module-toolbar::before {
+    width: 270px;
+  }
+
+  .polytao-model-label,
+  .polytao-status-chip {
+    min-height: 54px;
+    gap: 10px;
+    padding: 0 16px;
+    border-radius: 9px;
+    font-size: 16px;
+  }
+
+  .polytao-model-label svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .polytao-generation-surface {
+    border-radius: 20px;
+  }
+
+  .polytao-generation-surface::before {
+    right: 28px;
+    left: 28px;
+    height: 3px;
+  }
+
+  .polytao-surface-header {
+    min-height: 110px;
+    gap: 26px;
+    padding: 22px 26px;
+    border-radius: 20px 20px 0 0;
+  }
+
+  .polytao-surface-mark,
+  .polytao-drawer-mark {
+    width: 56px;
+    height: 56px;
+    border-radius: 13px;
+  }
+
+  .polytao-surface-mark svg,
+  .polytao-drawer-mark svg {
+    width: 27px;
+    height: 27px;
+  }
+
+  .polytao-surface-copy h2 {
+    font-size: 24px;
+  }
+
+  .polytao-surface-copy p {
+    margin-top: 6px;
+    font-size: 17px;
+  }
+
+  .polytao-source-chip,
+  .polytao-parameter-trigger,
+  .polytao-quiet-button,
+  .polytao-secondary-button,
+  .polytao-small-button,
+  .polytao-icon-button,
+  .polytao-completion-chip,
+  .polytao-reference-toggle {
+    min-height: 54px;
+    border-radius: 9px;
+    font-size: 16px;
+  }
+
+  .polytao-icon-button {
+    width: 54px;
+    height: 54px;
+  }
+
+  .polytao-condition-section {
+    padding: 26px;
+  }
+
+  .polytao-section-heading {
+    gap: 22px;
+    margin-bottom: 20px;
+  }
+
+  .polytao-section-number {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    font-size: 14px;
+  }
+
+  .polytao-section-title {
+    gap: 14px;
+  }
+
+  .polytao-section-title h3 {
+    font-size: 20px;
+  }
+
+  .polytao-section-title p,
+  .polytao-reference-status,
+  .polytao-reference-toggle-action {
+    font-size: 16px;
+  }
+
+  .polytao-reference-content-toolbar {
+    margin-bottom: 12px;
+  }
+
+  .polytao-structure-source {
+    gap: 24px;
+  }
+
+  .polytao-structure-flip,
+  .polytao-structure-canvas {
+    min-height: 375px;
+  }
+
+  .polytao-reference-svg {
+    height: 324px;
+  }
+
+  .polytao-reference-svg-image {
+    max-height: 324px !important;
+  }
+
+  .polytao-source-detail {
+    min-height: 375px;
+    gap: 16px;
+  }
+
+  .polytao-smiles-toggle,
+  .polytao-number-input,
+  .polytao-primary-button {
+    min-height: 60px;
+    height: 60px;
+  }
+
+  .polytao-smiles-value,
+  .polytao-semantic-note,
+  .polytao-inline-error,
+  .polytao-descriptor-label,
+  .polytao-number-input {
+    font-size: 16px;
+  }
+
+  .polytao-field-eyebrow,
+  .polytao-smiles-toggle-action,
+  .polytao-descriptor-key,
+  .polytao-descriptor-group-title p,
+  .polytao-group-progress {
+    font-size: 13px;
+  }
+
+  .polytao-descriptor-grid {
+    gap: 14px;
+  }
+
+  .polytao-descriptor-group {
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 20px;
+    padding: 18px;
+    border-radius: 16px;
+    background: linear-gradient(90deg, #f4f8fd 0, #f9fbfe 220px, #fff 220px);
+  }
+
+  .polytao-descriptor-group-head {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .polytao-descriptor-group-index {
+    width: 34px;
+    height: 34px;
+    font-size: 13px;
+  }
+
+  .polytao-descriptor-group h4 {
+    font-size: 18px;
+  }
+
+  .polytao-descriptor-fields {
+    gap: 14px;
+  }
+
+  .polytao-parameter-panel {
+    width: 600px;
+    border-radius: 16px;
+  }
+
+  .polytao-parameter-panel-head {
+    min-height: 78px;
+    padding: 12px 16px 12px 20px;
+  }
+
+  .polytao-parameter-panel-title h3,
+  .polytao-state-panel h3 {
+    font-size: 20px;
+  }
+
+  .polytao-parameter-panel-title p,
+  .polytao-sampling-label > span:first-child,
+  .polytao-run-readiness,
+  .polytao-run-readiness strong {
+    font-size: 15px;
+  }
+
+  .polytao-sampling-grid {
+    gap: 16px;
+    padding: 20px 20px 8px;
+  }
+
+  .polytao-generation-action-row {
+    margin: 14px 20px 20px;
+    padding-top: 18px;
+  }
+
+  .polytao-detail-drawer {
+    font-size: 18px;
+  }
+
+  .polytao-drawer-header {
+    min-height: 110px;
+    padding: 18px 20px 18px 22px;
+  }
+
+  .polytao-drawer-copy h2 {
+    font-size: 24px;
+  }
+
+  .polytao-drawer-eyebrow,
+  .polytao-drawer-copy p,
+  .polytao-candidate-identity small,
+  .polytao-score-meter span,
+  .polytao-drawer-footer {
+    font-size: 13px;
+  }
+
+  .polytao-drawer-body {
+    padding: 18px;
+  }
+
+  .polytao-drawer-results-list {
+    gap: 18px;
+  }
+
+  .polytao-drawer-result-card {
+    border-radius: 17px;
+  }
+
+  .polytao-candidate-number {
+    width: 44px;
+    height: 44px;
+    font-size: 15px;
+  }
+
+  .polytao-candidate-identity strong,
+  .polytao-score-meter strong,
+  .polytao-state-panel p,
+  .polytao-progress-stage,
+  .polytao-progress-percent {
+    font-size: 16px;
+  }
+
+  .polytao-candidate-visual {
+    height: 270px;
+    margin: 15px 18px 0;
+    border-radius: 14px;
+    background-size: 30px 30px, 30px 30px, auto, auto;
+  }
+
+  .polytao-candidate-svg {
+    height: 252px;
+  }
+
+  .polytao-candidate-svg-image {
+    max-height: 252px !important;
+  }
+
+  .polytao-result-smiles-toggle > span:first-child,
+  .polytao-result-smiles-toggle > span:last-child,
+  .polytao-drawer-result-smiles code {
+    font-size: 14px;
+  }
+
+  .polytao-drawer-reopen {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+  }
+
+  .polytao-drawer-footer {
+    min-height: 64px;
+    padding: 12px 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .polytao-page-scroll,
+  .polytao-detail-drawer,
+  .polytao-drawer-backdrop,
+  .polytao-drawer-reopen,
+  .polytao-structure-flip-inner,
+  .polytao-reference-toggle-action svg,
+  .polytao-result-smiles-toggle svg,
+  .polytao-progress-fill {
+    transition: none !important;
+  }
+}
