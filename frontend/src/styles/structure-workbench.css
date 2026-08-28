@@ -13,6 +13,8 @@
   --np-sw-border: rgba(51, 83, 126, 0.18);
   --np-sw-input-border: rgba(71, 100, 143, 0.24);
   --np-sw-shadow: 0 12px 34px rgba(26, 52, 88, 0.1);
+  --np-sw-layout-max-width: min(1760px, 112.5vh, calc(150vh - 366px));
+  --np-sw-drawer-effective-width: var(--np-sw-drawer-width, 380px);
   position: relative;
   container: np-sw-workbench / inline-size;
   width: 100%;
@@ -88,7 +90,7 @@
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  width: min(100%, 1040px);
+  width: min(100%, var(--np-sw-layout-max-width));
   height: 100%;
   min-height: 0;
   margin: 0 auto;
@@ -267,7 +269,8 @@
 .np-structure-workbench .np-sw-canvas-stage {
   position: relative;
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  aspect-ratio: 3 / 2;
   min-height: 360px;
   overflow: hidden;
   border: 1px solid rgba(51, 83, 126, 0.17);
@@ -1224,7 +1227,7 @@
   right: 0;
   display: flex;
   flex-direction: column;
-  width: min(var(--np-sw-drawer-width), calc(100% - 24px));
+  width: min(var(--np-sw-drawer-effective-width), calc(100% - 24px));
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -1503,15 +1506,15 @@
   }
 
   .np-structure-workbench .np-sw-layout.has-open-drawer {
-    width: min(100%, calc(1040px + var(--np-sw-drawer-width, 380px) + 12px));
-    grid-template-columns: minmax(0, 1040px) var(--np-sw-drawer-width, 380px);
+    width: min(100%, calc(var(--np-sw-layout-max-width) + var(--np-sw-drawer-effective-width) + 12px));
+    grid-template-columns: minmax(0, var(--np-sw-layout-max-width)) var(--np-sw-drawer-effective-width);
     gap: 12px;
   }
 
   .np-structure-workbench .np-sw-drawer-layer.is-open {
     position: relative;
     inset: auto;
-    width: var(--np-sw-drawer-width, 380px);
+    width: var(--np-sw-drawer-effective-width);
     min-width: 0;
     height: 100%;
   }
@@ -1532,6 +1535,12 @@
   .np-structure-workbench .np-sw-page {
     padding-right: 18px;
     padding-left: 18px;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1023px) {
+  .np-structure-workbench {
+    --np-sw-layout-max-width: min(1760px, calc(112.5vh - 63px), calc(150vh - 450px));
   }
 }
 
@@ -1712,6 +1721,561 @@
 
   .np-structure-workbench .np-sw-module-tile:nth-child(n + 3) {
     border-top: 1px solid rgba(51, 83, 126, 0.11);
+  }
+}
+
+/* Native 2K-density pass: scale workbench chrome and the embedded editor together. */
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-structure-workbench {
+    --np-sw-drawer-effective-width: calc(var(--np-sw-drawer-width, 380px) + 128px);
+    --np-sw-ketcher-scale: 1.15;
+    --np-sw-ketcher-viewport-size: 86.956522%;
+    font-size: 20px;
+  }
+
+  .np-structure-workbench .np-sw-page-title {
+    top: 34px;
+    left: 26px;
+    font-size: 30px;
+    line-height: 42px;
+  }
+
+  .np-structure-workbench .np-sw-surface {
+    gap: 21px;
+  }
+
+  .np-structure-workbench .np-sw-commandbar {
+    flex-basis: 45px;
+    min-height: 45px;
+  }
+
+  .np-structure-workbench .np-sw-toolbar {
+    gap: 12px;
+  }
+
+  .np-structure-workbench .np-sw-tool {
+    min-height: 45px;
+    gap: 9px;
+    padding: 0 18px;
+    border-radius: 9px;
+    font-size: 18px;
+  }
+
+  .np-structure-workbench .np-sw-tool--icon {
+    width: 45px;
+    min-width: 45px;
+    padding: 0;
+  }
+
+  .np-structure-workbench .np-sw-toolbar-separator {
+    height: 27px;
+    margin: 0 3px;
+  }
+
+  .np-structure-workbench .np-sw-tool svg,
+  .np-structure-workbench .np-sw-secondary-button svg,
+  .np-structure-workbench .np-sw-primary-button svg {
+    width: 21px;
+    height: 21px;
+  }
+
+  .np-structure-workbench .np-sw-canvas-stage,
+  .np-structure-workbench .np-sw-smiles,
+  .np-structure-workbench .np-sw-popover,
+  .np-structure-workbench .np-sw-drawer {
+    border-radius: 20px;
+  }
+
+  .np-structure-workbench .np-sw-canvas-stage::before,
+  .np-structure-workbench .np-sw-smiles::before,
+  .np-structure-workbench .np-sw-popover::before,
+  .np-structure-workbench .np-sw-drawer::before {
+    right: 27px;
+    left: 27px;
+    height: 3px;
+  }
+
+  .np-structure-workbench .np-sw-editor__layer--2d {
+    overflow: hidden;
+  }
+
+  .np-structure-workbench .np-sw-editor iframe {
+    width: var(--np-sw-ketcher-viewport-size);
+    height: var(--np-sw-ketcher-viewport-size);
+    min-height: 0;
+    transform: scale(var(--np-sw-ketcher-scale));
+    transform-origin: top left;
+  }
+
+  .np-structure-workbench .np-sw-preview-3d__frame .text-sm {
+    font-size: 18px;
+  }
+
+  .np-structure-workbench .np-sw-preview-3d__frame .text-xs {
+    font-size: 16px;
+  }
+
+  .np-structure-workbench .np-sw-preview-3d__frame svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .np-structure-workbench .np-sw-smiles {
+    min-height: 123px;
+  }
+
+  .np-structure-workbench .np-sw-smiles > label {
+    top: 16px;
+    left: 20px;
+    font-size: 15px;
+  }
+
+  .np-structure-workbench .np-sw-smiles > textarea {
+    min-height: 121px;
+    padding: 43px 68px 16px 20px;
+    font-size: 18px;
+  }
+
+  .np-structure-workbench .np-sw-smiles > button {
+    top: 15px;
+    right: 15px;
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+  }
+
+  .np-structure-workbench .np-sw-smiles > button svg {
+    width: 21px;
+    height: 21px;
+  }
+
+  .np-structure-workbench .np-sw-smiles > p {
+    right: 15px;
+    bottom: 8px;
+    max-width: calc(100% - 42px);
+    font-size: 13.5px;
+  }
+
+  .np-structure-workbench .np-sw-icon-button {
+    width: 51px;
+    min-width: 51px;
+    height: 51px;
+  }
+
+  .np-structure-workbench .np-sw-icon-button svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .np-structure-workbench .np-sw-primary-button,
+  .np-structure-workbench .np-sw-secondary-button {
+    min-height: 57px;
+    gap: 10px;
+    padding: 0 21px;
+    font-size: 18px;
+  }
+
+  .np-structure-workbench .np-sw-popover {
+    top: 57px;
+    max-height: min(960px, calc(100vh - 170px));
+  }
+
+  .np-structure-workbench .np-sw-popover--modules {
+    width: min(720px, calc(100% - 48px));
+  }
+
+  .np-structure-workbench .np-sw-popover--assistant {
+    width: min(555px, calc(100% - 48px));
+  }
+
+  .np-structure-workbench .np-sw-popover__header,
+  .np-structure-workbench .np-sw-drawer__header {
+    min-height: 93px;
+    gap: 18px;
+    padding: 16px 20px;
+  }
+
+  .np-structure-workbench .np-sw-popover--modules .np-sw-popover__header h2 {
+    font-size: 24px;
+    line-height: 32px;
+  }
+
+  .np-structure-workbench .np-sw-popover--modules .np-sw-popover__header small {
+    font-size: 14px;
+    line-height: 22px;
+  }
+
+  .np-structure-workbench .np-sw-popover__header h2,
+  .np-structure-workbench .np-sw-drawer__header h2 {
+    font-size: 21px;
+  }
+
+  .np-structure-workbench .np-sw-popover__header small,
+  .np-structure-workbench .np-sw-drawer__header p {
+    font-size: 15px;
+  }
+
+  .np-structure-workbench .np-sw-popover__mark,
+  .np-structure-workbench .np-sw-drawer__header > div > span:first-child {
+    flex-basis: 48px;
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+  }
+
+  .np-structure-workbench .np-sw-popover__mark svg,
+  .np-structure-workbench .np-sw-drawer__header > div > span:first-child svg {
+    width: 23px;
+    height: 23px;
+  }
+
+  .np-structure-workbench .np-sw-popover__actions {
+    gap: 8px;
+  }
+
+  .np-structure-workbench .np-sw-module-view {
+    padding: 21px;
+    background-size: 36px 36px, 36px 36px, auto;
+  }
+
+  .np-structure-workbench .np-sw-module-count {
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+
+  .np-structure-workbench .np-sw-module-count span {
+    font-size: 15px;
+  }
+
+  .np-structure-workbench .np-sw-module-grid {
+    border-radius: 15px;
+  }
+
+  .np-structure-workbench .np-sw-module-tile {
+    min-height: 141px;
+    gap: 12px;
+    padding: 17px;
+  }
+
+  .np-structure-workbench .np-sw-module-tile__icon {
+    width: 45px;
+    height: 45px;
+    border-radius: 12px;
+  }
+
+  .np-structure-workbench .np-sw-module-tile__icon svg {
+    width: 23px;
+    height: 23px;
+  }
+
+  .np-structure-workbench .np-sw-module-tile strong {
+    font-size: 19px;
+  }
+
+  .np-structure-workbench .np-sw-local-dot {
+    top: 12px;
+    right: 12px;
+    width: 9px;
+    height: 9px;
+  }
+
+  .np-structure-workbench .np-sw-module-legend {
+    gap: 9px;
+    margin-top: 18px;
+    padding-top: 15px;
+  }
+
+  .np-structure-workbench .np-sw-module-legend span {
+    min-height: 33px;
+    gap: 8px;
+    padding: 4px 12px;
+    font-size: 13.5px;
+  }
+
+  .np-structure-workbench .np-sw-retro-parameters {
+    padding: 20px;
+  }
+
+  .np-structure-workbench .np-sw-retro-intro {
+    gap: 15px;
+    margin-bottom: 20px;
+    padding: 15px;
+  }
+
+  .np-structure-workbench .np-sw-retro-intro > span {
+    flex-basis: 45px;
+    width: 45px;
+    height: 45px;
+  }
+
+  .np-structure-workbench .np-sw-retro-intro svg {
+    width: 23px;
+    height: 23px;
+  }
+
+  .np-structure-workbench .np-sw-retro-intro strong {
+    font-size: 18px;
+  }
+
+  .np-structure-workbench .np-sw-retro-intro p {
+    font-size: 15px;
+  }
+
+  .np-structure-workbench .np-sw-field {
+    gap: 8px;
+    font-size: 16px;
+  }
+
+  .np-structure-workbench .np-sw-field textarea {
+    min-height: 108px;
+    padding: 12px 14px;
+    font-size: 16px;
+  }
+
+  .np-structure-workbench .np-sw-field input,
+  .np-structure-workbench .np-sw-field select {
+    height: 57px;
+    padding: 0 14px;
+    font-size: 16px;
+  }
+
+  .np-structure-workbench .np-sw-field-row {
+    gap: 14px;
+    margin-top: 15px;
+  }
+
+  .np-structure-workbench .np-sw-field__error {
+    min-height: 22px;
+    font-size: 13.5px;
+  }
+
+  .np-structure-workbench .np-sw-retro-actions {
+    gap: 11px;
+    margin-top: 9px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-body {
+    padding: 18px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-context span,
+  .np-structure-workbench .np-sw-result-badge {
+    min-height: 36px;
+    padding: 5px 12px;
+    font-size: 14px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-welcome {
+    padding: 38px 8px 27px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-welcome > span {
+    width: 63px;
+    height: 63px;
+    border-radius: 18px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-welcome svg {
+    width: 29px;
+    height: 29px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-welcome h3 {
+    margin-top: 18px;
+    font-size: 24px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-welcome p {
+    margin-top: 10px;
+    font-size: 15px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-suggestions {
+    gap: 9px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-suggestions button {
+    gap: 12px;
+    padding: 14px 15px;
+    font-size: 15px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-suggestions svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-composer {
+    padding: 15px 18px 18px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-composer textarea {
+    min-height: 102px;
+    padding: 12px 14px;
+    font-size: 16px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-composer small {
+    font-size: 13.5px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-composer button {
+    flex-basis: 46px;
+    width: 46px;
+    height: 46px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-composer button svg {
+    width: 21px;
+    height: 21px;
+  }
+
+  .np-structure-workbench .np-sw-drawer__body {
+    padding: 20px;
+  }
+
+  .np-structure-workbench .np-sw-result-state {
+    min-height: 420px;
+    gap: 12px;
+    padding: 36px;
+  }
+
+  .np-structure-workbench .np-sw-result-state > span {
+    width: 66px;
+    height: 66px;
+    border-radius: 18px;
+  }
+
+  .np-structure-workbench .np-sw-result-state svg {
+    width: 29px;
+    height: 29px;
+  }
+
+  .np-structure-workbench .np-sw-result-state strong {
+    font-size: 21px;
+  }
+
+  .np-structure-workbench .np-sw-result-state p {
+    max-width: 435px;
+    font-size: 16px;
+  }
+
+  .np-structure-workbench .np-sw-retro-results {
+    gap: 15px;
+  }
+
+  .np-structure-workbench .np-sw-result-summary {
+    gap: 12px;
+  }
+
+  .np-structure-workbench .np-sw-result-summary > div,
+  .np-structure-workbench .np-sw-target-card,
+  .np-structure-workbench .np-sw-candidate-card {
+    border-radius: 14px;
+  }
+
+  .np-structure-workbench .np-sw-result-summary > div,
+  .np-structure-workbench .np-sw-target-card,
+  .np-structure-workbench .np-sw-reactant {
+    padding: 15px;
+  }
+
+  .np-structure-workbench .np-sw-result-summary span,
+  .np-structure-workbench .np-sw-target-card span,
+  .np-structure-workbench .np-sw-reactant span {
+    font-size: 13.5px;
+  }
+
+  .np-structure-workbench .np-sw-result-summary strong {
+    font-size: 19px;
+  }
+
+  .np-structure-workbench .np-sw-target-card code,
+  .np-structure-workbench .np-sw-reactant code {
+    font-size: 15px;
+  }
+
+  .np-structure-workbench .np-sw-candidate-card > header {
+    gap: 12px;
+    padding: 17px;
+  }
+
+  .np-structure-workbench .np-sw-candidate-card h3 {
+    font-size: 18px;
+  }
+
+  .np-structure-workbench .np-sw-candidate-pager {
+    gap: 6px;
+  }
+
+  .np-structure-workbench .np-sw-candidate-pager button {
+    width: 39px;
+    height: 39px;
+    border-radius: 9px;
+  }
+
+  .np-structure-workbench .np-sw-candidate-pager svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .np-structure-workbench .np-sw-candidate-pager span {
+    min-width: 42px;
+    font-size: 14px;
+  }
+
+  .np-structure-workbench .np-sw-reactant-list {
+    gap: 11px;
+    padding: 15px;
+  }
+
+  .np-structure-workbench .np-sw-drawer-reopen {
+    right: 18px;
+    bottom: 18px;
+    min-height: 51px;
+    gap: 9px;
+    padding: 0 17px;
+    font-size: 15px;
+  }
+
+  .np-structure-workbench .np-sw-drawer-reopen svg {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1200px) {
+  .np-structure-workbench {
+    --np-sw-ketcher-scale: 1.25;
+    --np-sw-ketcher-viewport-size: 80%;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1280px) {
+  .np-structure-workbench {
+    --np-sw-ketcher-scale: 1.35;
+    --np-sw-ketcher-viewport-size: 74.074074%;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1340px) {
+  .np-structure-workbench {
+    --np-sw-ketcher-scale: 1.4;
+    --np-sw-ketcher-viewport-size: 71.428571%;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1380px) {
+  .np-structure-workbench {
+    --np-sw-ketcher-scale: 1.45;
+    --np-sw-ketcher-viewport-size: 68.965517%;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1420px) {
+  .np-structure-workbench {
+    --np-sw-ketcher-scale: 1.5;
+    --np-sw-ketcher-viewport-size: 66.666667%;
   }
 }
 
