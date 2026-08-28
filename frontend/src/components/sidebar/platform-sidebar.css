@@ -1011,18 +1011,26 @@
 }
 
 @media (min-width: 2000px) and (min-height: 1120px) {
+  .np-app-shell {
+    --np-sidebar-2k-brand-size: clamp(20px, 0.86vw, 22px);
+    --np-sidebar-2k-category-size: clamp(18px, 0.75vw, 19px);
+    --np-sidebar-2k-body-size: clamp(16px, 0.67vw, 17px);
+    --np-sidebar-2k-caption-size: clamp(11px, 0.47vw, 12px);
+    --np-sidebar-2k-row-height: clamp(48px, 2vw, 51px);
+  }
+
   .np-sidebar-desktop {
-    width: 360px;
+    width: clamp(360px, 15vw, 392px);
   }
 
   .np-sidebar {
-    padding: 10px 11px;
+    padding: clamp(10px, 0.45vw, 12px) clamp(11px, 0.48vw, 13px);
   }
 
   .np-sidebar__brand {
-    min-height: 63px;
-    gap: 10px;
-    padding: 3px 5px 10px;
+    min-height: clamp(63px, 2.7vw, 69px);
+    gap: clamp(10px, 0.45vw, 12px);
+    padding: 3px 5px clamp(10px, 0.45vw, 12px);
   }
 
   .np-sidebar__brand-link {
@@ -1046,15 +1054,15 @@
   }
 
   .np-sidebar__brand-mark {
-    width: 43px;
-    height: 43px;
-    border-radius: 13px;
+    width: clamp(43px, 1.8vw, 46px);
+    height: clamp(43px, 1.8vw, 46px);
+    border-radius: clamp(13px, 0.55vw, 14px);
     box-shadow: 0 8px 20px rgba(37, 99, 235, 0.23);
   }
 
   .np-sidebar__brand-mark svg {
-    width: 21px;
-    height: 21px;
+    width: clamp(21px, 0.9vw, 23px);
+    height: clamp(21px, 0.9vw, 23px);
   }
 
   .np-sidebar__brand-copy {
@@ -1062,13 +1070,13 @@
   }
 
   .np-sidebar__brand-name {
-    font-size: 20px;
-    line-height: 25px;
+    font-size: var(--np-sidebar-2k-brand-size);
+    line-height: 1.25;
   }
 
   .np-sidebar__brand-subtitle {
-    font-size: 11px;
-    line-height: 15px;
+    font-size: var(--np-sidebar-2k-caption-size);
+    line-height: 1.35;
   }
 
   .np-sidebar__brand-actions,
@@ -1077,8 +1085,8 @@
   }
 
   .np-sidebar__brand-actions > .group > button {
-    width: 45px;
-    height: 45px;
+    width: clamp(45px, 1.88vw, 48px);
+    height: clamp(45px, 1.88vw, 48px);
     border-radius: 15px;
   }
 
@@ -1128,7 +1136,7 @@
   }
 
   .np-sidebar-group__trigger {
-    min-height: 48px;
+    min-height: var(--np-sidebar-2k-row-height);
     gap: 10px;
     padding: 8px 10px;
     border-radius: 10px;
@@ -1139,13 +1147,13 @@
   }
 
   .np-sidebar-group__label {
-    font-size: 18px;
-    line-height: 24px;
+    font-size: var(--np-sidebar-2k-category-size);
+    line-height: 1.35;
   }
 
   .np-sidebar-group__secondary {
-    font-size: 11px;
-    line-height: 16px;
+    font-size: var(--np-sidebar-2k-caption-size);
+    line-height: 1.4;
   }
 
   .np-sidebar-group__chevron,
@@ -1155,7 +1163,7 @@
   }
 
   .np-sidebar-group__empty {
-    font-size: 13px;
+    font-size: clamp(13px, 0.55vw, 14px);
   }
 
   .np-sidebar-group__items {
@@ -1163,26 +1171,26 @@
   }
 
   .np-sidebar-module {
-    height: 48px;
+    height: var(--np-sidebar-2k-row-height);
     gap: 10px;
     padding: 5px 9px;
     border-radius: 10px;
   }
 
   .np-sidebar-module__icon {
-    width: 35px;
-    height: 35px;
+    width: clamp(35px, 1.45vw, 37px);
+    height: clamp(35px, 1.45vw, 37px);
     border-radius: 9px;
   }
 
   .np-sidebar-module__icon svg {
-    width: 19px;
-    height: 19px;
+    width: clamp(19px, 0.8vw, 20px);
+    height: clamp(19px, 0.8vw, 20px);
   }
 
   .np-sidebar-module__label {
-    font-size: 16px;
-    line-height: 23px;
+    font-size: var(--np-sidebar-2k-body-size);
+    line-height: 1.42;
   }
 
   .np-sidebar-section {
@@ -1190,7 +1198,7 @@
   }
 
   .np-sidebar-section__header {
-    min-height: 45px;
+    min-height: clamp(45px, 1.9vw, 49px);
     gap: 8px;
     padding: 3px 6px;
     border-radius: 10px;
@@ -1208,20 +1216,20 @@
   }
 
   .np-sidebar-section__title-button h2 {
-    font-size: 16px;
-    line-height: 23px;
+    font-size: var(--np-sidebar-2k-body-size);
+    line-height: 1.42;
   }
 
   .np-sidebar-section__count {
     min-width: 23px;
     padding: 0 4px;
-    font-size: 14px;
-    line-height: 25px;
+    font-size: clamp(14px, 0.59vw, 15px);
+    line-height: clamp(25px, 1.06vw, 27px);
   }
 
   .np-sidebar__icon-button {
-    width: 40px;
-    height: 40px;
+    width: clamp(40px, 1.68vw, 43px);
+    height: clamp(40px, 1.68vw, 43px);
     border-radius: 10px;
   }
 
@@ -1250,12 +1258,12 @@
   }
 
   .np-sidebar-search-action {
-    height: 43px;
+    height: clamp(43px, 1.8vw, 46px);
     gap: 10px;
     padding: 0 11px;
     margin-bottom: 3px;
     border-radius: 10px;
-    font-size: 16px;
+    font-size: var(--np-sidebar-2k-body-size);
   }
 
   .np-sidebar-search-action svg {
@@ -1265,7 +1273,7 @@
 
   .np-sidebar-empty {
     padding: 10px 11px;
-    font-size: 15px;
+    font-size: clamp(15px, 0.63vw, 16px);
     line-height: 21px;
   }
 
@@ -1274,7 +1282,7 @@
   }
 
   .np-sidebar-list-item {
-    min-height: 50px;
+    min-height: clamp(50px, 2.08vw, 53px);
     border-radius: 10px;
   }
 
@@ -1285,8 +1293,8 @@
   }
 
   .np-sidebar-list-item__title {
-    font-size: 16px;
-    line-height: 23px;
+    font-size: var(--np-sidebar-2k-body-size);
+    line-height: 1.42;
   }
 
   .np-sidebar-list-item__action {
@@ -1316,12 +1324,12 @@
   }
 
   .np-sidebar-project__path {
-    font-size: 12px;
-    line-height: 18px;
+    font-size: var(--np-sidebar-2k-caption-size);
+    line-height: 1.5;
   }
 
   .np-sidebar-session {
-    min-height: 53px;
+    min-height: clamp(53px, 2.2vw, 56px);
   }
 
   .np-sidebar-session__main,
@@ -1340,11 +1348,11 @@
   }
 
   .np-sidebar-session__editor input {
-    height: 35px;
+    height: clamp(35px, 1.48vw, 38px);
     padding: 0 9px;
     border-radius: 8px;
     box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.09);
-    font-size: 16px;
+    font-size: var(--np-sidebar-2k-body-size);
   }
 
   .np-sidebar-search {
@@ -1352,17 +1360,17 @@
   }
 
   .np-sidebar-search > svg {
-    top: 13px;
+    top: clamp(13px, 0.54vw, 14px);
     left: 11px;
     width: 18px;
     height: 18px;
   }
 
   .np-sidebar-search input {
-    height: 43px;
+    height: clamp(43px, 1.8vw, 46px);
     padding: 0 38px;
     border-radius: 10px;
-    font-size: 16px;
+    font-size: var(--np-sidebar-2k-body-size);
   }
 
   .np-sidebar-search input:focus {
@@ -1383,18 +1391,18 @@
   }
 
   .np-sidebar-project-menu {
-    width: 220px;
+    width: clamp(220px, 9.3vw, 238px);
     padding: 6px;
     border-radius: 13px;
     box-shadow: 0 20px 50px rgba(11, 31, 58, 0.19);
   }
 
   .np-sidebar-project-menu button {
-    min-height: 45px;
+    min-height: clamp(45px, 1.88vw, 48px);
     gap: 10px;
     padding: 0 11px;
     border-radius: 9px;
-    font-size: 16px;
+    font-size: clamp(16px, 0.67vw, 17px);
   }
 
   .np-sidebar-project-menu button svg {
