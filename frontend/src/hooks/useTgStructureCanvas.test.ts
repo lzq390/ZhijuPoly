@@ -383,4 +383,68 @@ describe("Tg structure canvas wildcard protection", () => {
       canvasDirty: true
     });
   });
+
+  it("在文本模式标准化并应用结构，同时保留聚合物端基", async () => {
+    const structure = {
+      smiles: "",
+      setSmiles: vi.fn(),
+      iframeRef: { current: null },
+      setIsReady: vi.fn(),
+      getCurrentSmiles: vi.fn().mockResolvedValue("")
+    } as StructureWorkspaceContext;
+    apiMocks.standardizeSmiles.mockResolvedValue({
+      input_smiles: "*CC*",
+      standardized_smiles: "CC"
+    });
+    const onStructureChanged = vi.fn();
+    const { result } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged }));
+
+    await expect(result.current.applyTextStructure(" *CC* ")).resolves.toEqual({
+      applied: true,
+      smiles: "*CC*"
+    });
+    expect(structure.setSmiles).toHaveBeenCalledWith("*CC*");
+    expect(onStructureChanged).toHaveBeenCalledOnce();
+  });
+
+  it("文本模式清空共享结构而不要求编辑器存在", async () => {
+    const structure = {
+      smiles: "CC",
+      setSmiles: vi.fn(),
+      iframeRef: { current: null },
+      setIsReady: vi.fn(),
+      getCurrentSmiles: vi.fn().mockResolvedValue("CC")
+    } as StructureWorkspaceContext;
+    const { result } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+
+    await expect(result.current.clearCanvas()).resolves.toBe(true);
+    expect(structure.setSmiles).toHaveBeenCalledWith("");
+  });
+
+  it("延迟挂载 iframe 后重新启动就绪检测并恢复共享结构", async () => {
+    const iframeRef: StructureWorkspaceContext["iframeRef"] = { current: null };
+    const structure = {
+      smiles: "CC",
+      setSmiles: vi.fn(),
+      iframeRef,
+      setIsReady: vi.fn(),
+      getCurrentSmiles: vi.fn().mockResolvedValue("CC")
+    } as StructureWorkspaceContext;
+    const setMolecule = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+
+    iframeRef.current = {
+      contentWindow: {
+        ketcher: { getSmiles: vi.fn().mockResolvedValue(""), setMolecule },
+        Event,
+        dispatchEvent: vi.fn(),
+        scrollTo: vi.fn()
+      }
+    } as unknown as HTMLIFrameElement;
+    await act(async () => result.current.handleEditorLoad());
+
+    await vi.waitFor(() => expect(result.current.isEditorReady).toBe(true));
+    expect(setMolecule).toHaveBeenCalledWith("CC");
+    expect(structure.setIsReady).toHaveBeenCalledWith(true);
+  });
 });
