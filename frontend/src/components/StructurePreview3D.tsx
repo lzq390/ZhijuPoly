@@ -211,7 +211,7 @@ export function StructurePreview3D({
       <div ref={viewerRef} className={cn("absolute inset-0", viewerClassName)} />
       {isLoading ? (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
+          <div className="np-sw-preview-3d__status np-sw-preview-3d__status--loading inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
             <Sparkles className="h-4 w-4 text-teal-600" />
             正在生成 3D 结构...
           </div>
@@ -219,12 +219,12 @@ export function StructurePreview3D({
       ) : null}
       {error ? (
         <div className="absolute inset-0 flex items-center justify-center p-6">
-          <div className="max-w-[85%] rounded-2xl border border-slate-200 bg-white px-5 py-4 text-center text-sm font-medium leading-6 text-slate-700 shadow-sm">
+          <div className="np-sw-preview-3d__status np-sw-preview-3d__status--error max-w-[85%] rounded-2xl border border-slate-200 bg-white px-5 py-4 text-center text-sm font-medium leading-6 text-slate-700 shadow-sm">
             <p>{error}</p>
             {smiles.trim() ? (
               <button
                 type="button"
-                className="mt-3 rounded-md border border-blue-200 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+                className="np-sw-preview-3d__retry mt-3 rounded-md border border-blue-200 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"
                 onClick={() => setRetryRevision((current) => current + 1)}
               >
                 重新加载 3D

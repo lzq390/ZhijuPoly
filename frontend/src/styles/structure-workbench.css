@@ -13,8 +13,13 @@
   --np-sw-border: rgba(51, 83, 126, 0.18);
   --np-sw-input-border: rgba(71, 100, 143, 0.24);
   --np-sw-shadow: 0 12px 34px rgba(26, 52, 88, 0.1);
+  --np-sw-grid-size: 32px;
+  --np-sw-grid-line: rgba(37, 99, 235, 0.032);
+  --np-sw-ambient-blue: rgba(59, 130, 246, 0.13);
+  --np-sw-ambient-cyan: rgba(6, 182, 212, 0.08);
   --np-sw-layout-max-width: min(1760px, 112.5vh, calc(150vh - 366px));
   --np-sw-drawer-effective-width: var(--np-sw-drawer-width, 380px);
+  --np-sw-drawer-gap: 12px;
   position: relative;
   container: np-sw-workbench / inline-size;
   width: 100%;
@@ -24,12 +29,12 @@
   color: var(--np-sw-ink);
   background-color: var(--np-sw-bg);
   background-image:
-    linear-gradient(rgba(37, 99, 235, 0.032) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(37, 99, 235, 0.032) 1px, transparent 1px),
-    radial-gradient(circle at 12% 0%, rgba(59, 130, 246, 0.13), transparent 29%),
-    radial-gradient(circle at 95% 88%, rgba(6, 182, 212, 0.08), transparent 32%),
+    linear-gradient(var(--np-sw-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--np-sw-grid-line) 1px, transparent 1px),
+    radial-gradient(circle at 12% 0%, var(--np-sw-ambient-blue), transparent 29%),
+    radial-gradient(circle at 95% 88%, var(--np-sw-ambient-cyan), transparent 32%),
     linear-gradient(155deg, #f3f7fb 0%, #edf3f9 48%, #eef5f8 100%);
-  background-size: 32px 32px, 32px 32px, auto, auto, auto;
+  background-size: var(--np-sw-grid-size) var(--np-sw-grid-size), var(--np-sw-grid-size) var(--np-sw-grid-size), auto, auto, auto;
   font-family: var(--font-body);
   font-size: 16px;
   line-height: 1.5;
@@ -1506,9 +1511,9 @@
   }
 
   .np-structure-workbench .np-sw-layout.has-open-drawer {
-    width: min(100%, calc(var(--np-sw-layout-max-width) + var(--np-sw-drawer-effective-width) + 12px));
+    width: min(100%, calc(var(--np-sw-layout-max-width) + var(--np-sw-drawer-effective-width) + var(--np-sw-drawer-gap)));
     grid-template-columns: minmax(0, var(--np-sw-layout-max-width)) var(--np-sw-drawer-effective-width);
-    gap: 12px;
+    gap: var(--np-sw-drawer-gap);
   }
 
   .np-structure-workbench .np-sw-drawer-layer.is-open {
@@ -1727,10 +1732,30 @@
 /* Native 2K-density pass: scale workbench chrome and the embedded editor together. */
 @media (min-width: 2000px) and (min-height: 1120px) {
   .np-structure-workbench {
+    --np-sw-shadow: 0 18px 51px rgba(26, 52, 88, 0.11);
+    --np-sw-grid-size: 48px;
+    --np-sw-grid-line: rgba(37, 99, 235, 0.038);
+    --np-sw-ambient-blue: rgba(59, 130, 246, 0.16);
+    --np-sw-ambient-cyan: rgba(6, 182, 212, 0.105);
     --np-sw-drawer-effective-width: calc(var(--np-sw-drawer-width, 380px) + 128px);
+    --np-sw-drawer-gap: 18px;
     --np-sw-ketcher-scale: 1.15;
     --np-sw-ketcher-viewport-size: 86.956522%;
     font-size: 20px;
+  }
+
+  .np-structure-workbench button:focus-visible,
+  .np-structure-workbench textarea:focus-visible,
+  .np-structure-workbench input:focus-visible,
+  .np-structure-workbench select:focus-visible,
+  .np-structure-workbench [role="separator"]:focus-visible {
+    outline-width: 3px;
+    outline-offset: 3px;
+  }
+
+  .np-structure-workbench .np-sw-page.has-open-drawer {
+    padding-right: 36px;
+    padding-left: 36px;
   }
 
   .np-structure-workbench .np-sw-page-title {
@@ -1761,6 +1786,34 @@
     font-size: 18px;
   }
 
+  .np-structure-workbench .np-sw-tool,
+  .np-structure-workbench .np-sw-secondary-button,
+  .np-structure-workbench .np-sw-primary-button,
+  .np-structure-workbench .np-sw-icon-button {
+    border-radius: 10px;
+    box-shadow: 0 2px 3px rgba(15, 23, 42, 0.045);
+  }
+
+  .np-structure-workbench .np-sw-tool:hover:not(:disabled),
+  .np-structure-workbench .np-sw-secondary-button:hover:not(:disabled),
+  .np-structure-workbench .np-sw-icon-button:hover:not(:disabled) {
+    box-shadow: 0 5px 15px rgba(37, 99, 235, 0.1);
+  }
+
+  .np-structure-workbench .np-sw-tool.is-active {
+    box-shadow: 0 5px 15px rgba(37, 99, 235, 0.11), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+
+  .np-structure-workbench .np-sw-tool.is-primary,
+  .np-structure-workbench .np-sw-primary-button {
+    box-shadow: 0 8px 21px rgba(37, 99, 235, 0.2);
+  }
+
+  .np-structure-workbench .np-sw-tool.is-primary:hover:not(:disabled),
+  .np-structure-workbench .np-sw-primary-button:hover:not(:disabled) {
+    box-shadow: 0 9px 24px rgba(37, 99, 235, 0.24);
+  }
+
   .np-structure-workbench .np-sw-tool--icon {
     width: 45px;
     min-width: 45px;
@@ -1784,6 +1837,23 @@
   .np-structure-workbench .np-sw-popover,
   .np-structure-workbench .np-sw-drawer {
     border-radius: 20px;
+  }
+
+  .np-structure-workbench .np-sw-canvas-stage,
+  .np-structure-workbench .np-sw-smiles {
+    box-shadow: 0 12px 42px rgba(25, 55, 92, 0.075), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  }
+
+  .np-structure-workbench .np-sw-canvas-stage {
+    perspective: 2400px;
+  }
+
+  .np-structure-workbench .np-sw-popover {
+    box-shadow: 0 27px 72px rgba(15, 36, 63, 0.17), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  }
+
+  .np-structure-workbench .np-sw-drawer {
+    box-shadow: -27px 0 72px rgba(15, 36, 63, 0.16);
   }
 
   .np-structure-workbench .np-sw-canvas-stage::before,
@@ -1818,6 +1888,23 @@
   .np-structure-workbench .np-sw-preview-3d__frame svg {
     width: 22px;
     height: 22px;
+  }
+
+  .np-structure-workbench .np-sw-preview-3d__status--loading {
+    gap: 12px;
+    padding: 12px 24px;
+  }
+
+  .np-structure-workbench .np-sw-preview-3d__status--error {
+    padding: 24px 30px;
+    border-radius: 24px;
+    line-height: 36px;
+  }
+
+  .np-structure-workbench .np-sw-preview-3d__retry {
+    margin-top: 18px;
+    padding: 9px 18px;
+    border-radius: 9px;
   }
 
   .np-structure-workbench .np-sw-smiles {
@@ -1895,6 +1982,16 @@
     padding: 16px 20px;
   }
 
+  .np-structure-workbench .np-sw-popover__header > div,
+  .np-structure-workbench .np-sw-drawer__header > div {
+    gap: 14px;
+  }
+
+  .np-structure-workbench .np-sw-popover__header small,
+  .np-structure-workbench .np-sw-drawer__header p {
+    margin-top: 3px;
+  }
+
   .np-structure-workbench .np-sw-popover--modules .np-sw-popover__header h2 {
     font-size: 24px;
     line-height: 32px;
@@ -1947,14 +2044,29 @@
     font-size: 15px;
   }
 
+  .np-structure-workbench .np-sw-module-count::after {
+    height: 2px;
+  }
+
   .np-structure-workbench .np-sw-module-grid {
     border-radius: 15px;
+  }
+
+  .np-structure-workbench .np-sw-module-grid:focus-within {
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.06);
   }
 
   .np-structure-workbench .np-sw-module-tile {
     min-height: 141px;
     gap: 12px;
     padding: 17px;
+  }
+
+  .np-structure-workbench .np-sw-module-tile::after {
+    right: 17px;
+    left: 17px;
+    height: 3px;
+    border-radius: 3px 3px 0 0;
   }
 
   .np-structure-workbench .np-sw-module-tile__icon {
@@ -1968,6 +2080,11 @@
     height: 23px;
   }
 
+  .np-structure-workbench .np-sw-module-tile:hover:not(:disabled) .np-sw-module-tile__icon,
+  .np-structure-workbench .np-sw-module-tile:focus-visible .np-sw-module-tile__icon {
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08), 0 8px 21px rgba(37, 99, 235, 0.18);
+  }
+
   .np-structure-workbench .np-sw-module-tile strong {
     font-size: 19px;
   }
@@ -1977,6 +2094,7 @@
     right: 12px;
     width: 9px;
     height: 9px;
+    box-shadow: 0 0 0 4px #ecfdf5;
   }
 
   .np-structure-workbench .np-sw-module-legend {
@@ -1989,7 +2107,13 @@
     min-height: 33px;
     gap: 8px;
     padding: 4px 12px;
+    border-radius: 9px;
     font-size: 13.5px;
+  }
+
+  .np-structure-workbench .np-sw-module-legend span::before {
+    width: 8px;
+    height: 8px;
   }
 
   .np-structure-workbench .np-sw-retro-parameters {
@@ -2000,12 +2124,14 @@
     gap: 15px;
     margin-bottom: 20px;
     padding: 15px;
+    border-radius: 12px;
   }
 
   .np-structure-workbench .np-sw-retro-intro > span {
     flex-basis: 45px;
     width: 45px;
     height: 45px;
+    border-radius: 11px;
   }
 
   .np-structure-workbench .np-sw-retro-intro svg {
@@ -2039,6 +2165,20 @@
     font-size: 16px;
   }
 
+  .np-structure-workbench .np-sw-field textarea,
+  .np-structure-workbench .np-sw-field input,
+  .np-structure-workbench .np-sw-field select,
+  .np-structure-workbench .np-sw-assistant-composer textarea {
+    border-radius: 10px;
+  }
+
+  .np-structure-workbench .np-sw-field textarea:focus,
+  .np-structure-workbench .np-sw-field input:focus,
+  .np-structure-workbench .np-sw-field select:focus,
+  .np-structure-workbench .np-sw-assistant-composer textarea:focus {
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.09);
+  }
+
   .np-structure-workbench .np-sw-field-row {
     gap: 14px;
     margin-top: 15px;
@@ -2063,6 +2203,10 @@
     min-height: 36px;
     padding: 5px 12px;
     font-size: 14px;
+  }
+
+  .np-structure-workbench .np-sw-assistant-context {
+    gap: 8px;
   }
 
   .np-structure-workbench .np-sw-assistant-welcome {
@@ -2097,6 +2241,7 @@
   .np-structure-workbench .np-sw-assistant-suggestions button {
     gap: 12px;
     padding: 14px 15px;
+    border-radius: 11px;
     font-size: 15px;
   }
 
@@ -2119,10 +2264,16 @@
     font-size: 13.5px;
   }
 
+  .np-structure-workbench .np-sw-assistant-composer > div {
+    gap: 12px;
+    margin-top: 9px;
+  }
+
   .np-structure-workbench .np-sw-assistant-composer button {
     flex-basis: 46px;
     width: 46px;
     height: 46px;
+    border-radius: 12px;
   }
 
   .np-structure-workbench .np-sw-assistant-composer button svg {
@@ -2132,6 +2283,21 @@
 
   .np-structure-workbench .np-sw-drawer__body {
     padding: 20px;
+  }
+
+  .np-structure-workbench .np-sw-drawer-backdrop {
+    backdrop-filter: blur(2.25px);
+  }
+
+  .np-structure-workbench .np-sw-drawer__resizer {
+    left: -8px;
+    width: 15px;
+  }
+
+  .np-structure-workbench .np-sw-drawer__resizer::after {
+    left: 6px;
+    width: 3px;
+    height: 63px;
   }
 
   .np-structure-workbench .np-sw-result-state {
@@ -2144,6 +2310,7 @@
     width: 66px;
     height: 66px;
     border-radius: 18px;
+    margin-bottom: 6px;
   }
 
   .np-structure-workbench .np-sw-result-state svg {
@@ -2157,6 +2324,7 @@
 
   .np-structure-workbench .np-sw-result-state p {
     max-width: 435px;
+    margin-bottom: 12px;
     font-size: 16px;
   }
 
@@ -2187,12 +2355,19 @@
   }
 
   .np-structure-workbench .np-sw-result-summary strong {
+    margin-top: 5px;
     font-size: 19px;
   }
 
   .np-structure-workbench .np-sw-target-card code,
   .np-structure-workbench .np-sw-reactant code {
+    margin-top: 6px;
     font-size: 15px;
+  }
+
+  .np-structure-workbench .np-sw-target-card,
+  .np-structure-workbench .np-sw-reactant {
+    gap: 12px;
   }
 
   .np-structure-workbench .np-sw-candidate-card > header {
@@ -2201,6 +2376,7 @@
   }
 
   .np-structure-workbench .np-sw-candidate-card h3 {
+    margin-top: 10px;
     font-size: 18px;
   }
 
@@ -2227,6 +2403,10 @@
   .np-structure-workbench .np-sw-reactant-list {
     gap: 11px;
     padding: 15px;
+  }
+
+  .np-structure-workbench .np-sw-reactant {
+    border-radius: 11px;
   }
 
   .np-structure-workbench .np-sw-drawer-reopen {
