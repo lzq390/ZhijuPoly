@@ -37,7 +37,6 @@ type WorkbenchModule = {
   id: StructureWorkbenchModuleId | "retrosynthesis";
   name: string;
   shortName: string;
-  description: string;
   icon: LucideIcon;
   relationship: ModuleRelationship;
   builtIn?: boolean;
@@ -48,7 +47,6 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
     id: "databaseQuery",
     name: "数据库查询",
     shortName: "数据库查询",
-    description: "使用当前画板结构检索数据库记录。",
     icon: Database,
     relationship: "direct"
   },
@@ -56,7 +54,6 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
     id: "explorer",
     name: "聚合物性能探索",
     shortName: "性能探索",
-    description: "继续完成相似匹配、3D 与性能预测。",
     icon: Atom,
     relationship: "direct"
   },
@@ -64,7 +61,6 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
     id: "monomerDft",
     name: "单体 DFT（AIMNet2）",
     shortName: "单体 DFT",
-    description: "将共享结构带入量化计算任务。",
     icon: Orbit,
     relationship: "shared"
   },
@@ -72,7 +68,6 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
     id: "monomerPolymerization",
     name: "单体正向聚合",
     shortName: "正向聚合",
-    description: "使用共享单体启动规则聚合。",
     icon: FlaskConical,
     relationship: "shared"
   },
@@ -80,7 +75,6 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
     id: "reverseDesign",
     name: "Tg 逆向设计",
     shortName: "Tg 逆向",
-    description: "将当前画板交给 Tg 逆向设计。",
     icon: Sparkles,
     relationship: "direct"
   },
@@ -88,7 +82,6 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
     id: "conditionalGeneration",
     name: "条件聚合物生成",
     shortName: "条件生成",
-    description: "将共享结构作为条件生成上下文。",
     icon: Microscope,
     relationship: "shared"
   },
@@ -96,7 +89,6 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
     id: "polytaoGeneration",
     name: "聚合物生成",
     shortName: "聚合物生成",
-    description: "结构可作为生成任务的可选参考。",
     icon: Sparkles,
     relationship: "optional"
   },
@@ -104,7 +96,6 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
     id: "retrosynthesis",
     name: "单体逆合成反推",
     shortName: "单体反推",
-    description: "在工作台内运行并查看前体候选。",
     icon: Route,
     relationship: "local",
     builtIn: true
@@ -252,6 +243,7 @@ export function StructureUtilityPanels({
 
         {modulePanelView === "grid" ? (
           <div className="np-sw-module-view">
+            <div className="np-sw-module-count"><span>8 项功能</span></div>
             <div className="np-sw-module-grid" aria-label="使用共享结构的功能模块">
               {WORKBENCH_MODULES.map((module) => {
                 const Icon = module.icon;
@@ -260,7 +252,7 @@ export function StructureUtilityPanels({
                   <button
                     key={module.id}
                     type="button"
-                    className="np-sw-module-command"
+                    className={`np-sw-module-tile is-${module.relationship}`}
                     aria-label={module.builtIn ? `设置${module.name}参数` : `打开${module.name}`}
                     disabled={Boolean(openingModuleId)}
                     onClick={() => {
@@ -271,19 +263,21 @@ export function StructureUtilityPanels({
                       }
                     }}
                   >
-                    <span className={`np-sw-module-command__icon is-${module.relationship}`}>
+                    {module.builtIn ? <i className="np-sw-local-dot" aria-hidden="true" /> : null}
+                    <span className="np-sw-module-tile__icon">
                       {isOpening ? <LoaderCircle className="np-sw-spin" /> : <Icon />}
                     </span>
-                    <span>
-                      <strong>{module.shortName}</strong>
-                      <small>{module.description}</small>
-                    </span>
-                    <em className={`is-${module.relationship}`}>
-                      {RELATIONSHIP_LABEL[module.relationship]}
-                    </em>
+                    <strong>{module.shortName}</strong>
                   </button>
                 );
               })}
+            </div>
+            <div className="np-sw-module-legend" aria-label="模块与画板关系图例">
+              {(Object.entries(RELATIONSHIP_LABEL) as [ModuleRelationship, string][]).map(
+                ([relationship, label]) => (
+                  <span key={relationship} className={`is-${relationship}`}>{label}</span>
+                )
+              )}
             </div>
           </div>
         ) : (

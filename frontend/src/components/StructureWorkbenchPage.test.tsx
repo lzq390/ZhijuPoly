@@ -11,8 +11,8 @@ import {
 } from "./StructureWorkbenchPage";
 
 const mocks = vi.hoisted(() => ({
+  canvasState: { isFlipped: false },
   loadStructure: vi.fn(),
-  applyTextStructure: vi.fn(),
   clearCanvas: vi.fn(),
   importImageFile: vi.fn(),
   syncSmilesFromCanvas: vi.fn(),
@@ -20,8 +20,7 @@ const mocks = vi.hoisted(() => ({
   copySmiles: vi.fn(),
   handleEditorLoad: vi.fn(),
   setFeedback: vi.fn(),
-  predictMonomerPrecursors: vi.fn(),
-  fetchStructure2D: vi.fn()
+  predictMonomerPrecursors: vi.fn()
 }));
 
 vi.mock("../hooks/useTgStructureCanvas", () => ({
@@ -29,7 +28,7 @@ vi.mock("../hooks/useTgStructureCanvas", () => ({
     fileInputRef: { current: null },
     handleEditorLoad: mocks.handleEditorLoad,
     isEditorReady: true,
-    isFlipped: false,
+    isFlipped: mocks.canvasState.isFlipped,
     isFlipping: false,
     isImportingImage: false,
     isLoadingStructure: false,
@@ -40,7 +39,6 @@ vi.mock("../hooks/useTgStructureCanvas", () => ({
     setFeedback: mocks.setFeedback,
     copyState: "idle",
     loadStructure: mocks.loadStructure,
-    applyTextStructure: mocks.applyTextStructure,
     clearCanvas: mocks.clearCanvas,
     importImageFile: mocks.importImageFile,
     syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
@@ -50,8 +48,7 @@ vi.mock("../hooks/useTgStructureCanvas", () => ({
 }));
 
 vi.mock("../services/api", () => ({
-  predictMonomerPrecursors: mocks.predictMonomerPrecursors,
-  fetchStructure2D: mocks.fetchStructure2D
+  predictMonomerPrecursors: mocks.predictMonomerPrecursors
 }));
 
 vi.mock("./StructurePreview3D", () => ({
@@ -98,18 +95,17 @@ function renderPage(structure = makeStructure(), onOpenModule = vi.fn()) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.canvasState.isFlipped = false;
   mobileMatches = false;
   installMatchMedia();
   mocks.loadStructure.mockResolvedValue(true);
-  mocks.applyTextStructure.mockImplementation(async (value: string) => ({
-    applied: true,
-    smiles: value.trim()
-  }));
   mocks.clearCanvas.mockResolvedValue(true);
   mocks.importImageFile.mockResolvedValue(true);
   mocks.syncSmilesFromCanvas.mockResolvedValue("*CC*");
-  mocks.toggle3D.mockResolvedValue(true);
-  mocks.fetchStructure2D.mockResolvedValue({ structure_svg: "<svg />" });
+  mocks.toggle3D.mockImplementation(async () => {
+    mocks.canvasState.isFlipped = true;
+    return true;
+  });
 });
 
 afterEach(() => cleanup());
@@ -123,53 +119,51 @@ describe("StructureWorkbenchPage", () => {
     expect(screen.getByRole("heading", { name: "结构工作台" })).toBeTruthy();
     expect(screen.queryByTestId("structure-preview-3d")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "加载示例" }));
+    fireEvent.click(screen.getByRole("button", { name: "加载结构" }));
     await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledWith(REVERSE_DESIGN_DEMO_SMILES));
 
     fireEvent.load(screen.getByTitle("结构工作台结构编辑器"));
     expect(mocks.handleEditorLoad).toHaveBeenCalledOnce();
 
-    fireEvent.click(screen.getByRole("button", { name: "3D 构象" }));
+    fireEvent.click(screen.getByRole("button", { name: "3D构象" }));
     await waitFor(() => expect(mocks.toggle3D).toHaveBeenCalledOnce());
     expect(screen.getByTestId("structure-preview-3d").textContent).toBe("*CC*");
+    expect(view.container.querySelector(".np-sw-editor")?.classList.contains("is-flipped")).toBe(true);
+    expect(screen.getByRole("button", { name: "2D画布" }).getAttribute("aria-pressed")).toBe("true");
+    expect(view.container.querySelector(".np-sw-editor__layer--2d")?.hasAttribute("inert")).toBe(true);
+    expect(view.container.querySelector(".np-sw-editor__layer--3d")?.hasAttribute("inert")).toBe(false);
   });
 
-  it("SMILES 输入只修改草稿，显式应用后才调用画布能力", async () => {
-    const { structure } = renderPage();
-    const input = screen.getByLabelText("结构 SMILES 草稿");
+  it("严格保留原版只读 SMILES 胶囊和复制行为", () => {
+    renderPage();
+    const output = screen.getByLabelText("当前共享 SMILES，只读") as HTMLTextAreaElement;
 
-    fireEvent.change(input, { target: { value: "  *CO*  " } });
-    expect(structure.setSmiles).not.toHaveBeenCalled();
-    expect(screen.getByText("有未应用修改")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "应用结构" }));
-    await waitFor(() => expect(mocks.applyTextStructure).toHaveBeenCalledWith("*CO*"));
-    expect(screen.getByText("与共享结构同步")).toBeTruthy();
+    expect(output.readOnly).toBe(true);
+    expect(output.value).toBe("*CC*");
+    fireEvent.click(screen.getByRole("button", { name: "复制共享 SMILES" }));
+    expect(mocks.copySmiles).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "应用结构" })).toBeNull();
   });
 
-  it("标准化失败只显示内联错误，不覆盖共享结构", async () => {
-    mocks.applyTextStructure.mockRejectedValueOnce(new Error("SMILES 无法解析"));
-    const { structure } = renderPage();
-    fireEvent.change(screen.getByLabelText("结构 SMILES 草稿"), { target: { value: "invalid(" } });
-    fireEvent.click(screen.getByRole("button", { name: "应用结构" }));
-
-    expect(await screen.findByText("SMILES 无法解析")).toBeTruthy();
-    expect(structure.setSmiles).not.toHaveBeenCalled();
-    expect((screen.getByLabelText("结构 SMILES 草稿") as HTMLTextAreaElement).value).toBe("invalid(");
-  });
-
-  it("有未应用草稿时保留输入，并可显式采用最新共享结构", async () => {
+  it("共享结构变化直接反映到原版只读胶囊", () => {
     const structure = makeStructure("CC");
     const view = render(<StructureWorkbenchPage structure={structure} onOpenModule={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText("结构 SMILES 草稿"), { target: { value: "draft-value" } });
+    expect((screen.getByLabelText("当前共享 SMILES，只读") as HTMLTextAreaElement).value).toBe("CC");
 
     view.rerender(
       <StructureWorkbenchPage structure={{ ...structure, smiles: "NN" }} onOpenModule={vi.fn()} />
     );
-    expect((screen.getByLabelText("结构 SMILES 草稿") as HTMLTextAreaElement).value).toBe("draft-value");
-    const adoptLatest = await screen.findByRole("button", { name: "使用最新共享结构" });
-    fireEvent.click(adoptLatest);
-    expect((screen.getByLabelText("结构 SMILES 草稿") as HTMLTextAreaElement).value).toBe("NN");
+    expect((screen.getByLabelText("当前共享 SMILES，只读") as HTMLTextAreaElement).value).toBe("NN");
+  });
+
+  it("默认页面不再展示原版没有的说明和状态组件", () => {
+    renderPage();
+
+    expect(screen.queryByText("统一管理结构输入、二维编辑、三维预览与下游科研任务")).toBeNull();
+    expect(screen.queryByLabelText("工作台状态")).toBeNull();
+    expect(screen.queryByText("文本优先模式")).toBeNull();
+    expect(screen.getByRole("button", { name: "清空画布" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "生成SMILES" }).classList.contains("is-primary")).toBe(true);
   });
 
   it("外部功能先同步一次再导航，内置反推不导航", async () => {
@@ -216,20 +210,13 @@ describe("StructureWorkbenchPage", () => {
     expect(mocks.predictMonomerPrecursors).not.toHaveBeenCalled();
   });
 
-  it("手机默认不挂载 Ketcher，展开后折叠不会重建 iframe", async () => {
+  it("手机与桌面一样直接挂载原版 Ketcher 工作区", () => {
     mobileMatches = true;
     installMatchMedia();
     renderPage();
 
-    expect(screen.queryByTitle("结构工作台结构编辑器")).toBeNull();
-    expect(screen.getByText("文本优先模式")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "打开绘图画布" }));
-    const iframe = await screen.findByTitle("结构工作台结构编辑器");
-
-    fireEvent.click(screen.getByRole("button", { name: "收起画布" }));
-    expect(screen.getByTitle("结构工作台结构编辑器")).toBe(iframe);
-    fireEvent.click(screen.getByRole("button", { name: "展开画布" }));
-    expect(screen.getByTitle("结构工作台结构编辑器")).toBe(iframe);
+    expect(screen.getByTitle("结构工作台结构编辑器")).toBeTruthy();
+    expect(screen.queryByText("文本优先模式")).toBeNull();
   });
 
   it("反推保持固定 payload，并把 AbortSignal 传给请求", async () => {

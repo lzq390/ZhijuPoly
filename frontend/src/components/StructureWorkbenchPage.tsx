@@ -1,4 +1,3 @@
-import { Atom, CircleCheck, LoaderCircle, PenLine } from "lucide-react";
 import {
   forwardRef,
   useCallback,
@@ -6,11 +5,12 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent
 } from "react";
 import { REVERSE_DESIGN_DEMO_SMILES } from "../constants/reverseDesignDefaults";
 import { useTgStructureCanvas } from "../hooks/useTgStructureCanvas";
-import { fetchStructure2D, predictMonomerPrecursors } from "../services/api";
+import { predictMonomerPrecursors } from "../services/api";
 import type {
   MonomerRetrosynthesisResponse,
   MonomerRetrosynthesisTargetRole,
@@ -41,13 +41,6 @@ type StructureWorkbenchPageProps = {
 };
 
 const DEFAULT_RETROSYNTHESIS_MONOMER_SMILES = "C=C(C)C(=O)OC";
-const MOBILE_TEXT_MODE_QUERY = "(max-width: 767px)";
-
-function viewportUsesTextMode() {
-  return typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia(MOBILE_TEXT_MODE_QUERY).matches;
-}
 
 function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
@@ -68,21 +61,7 @@ export const StructureWorkbenchPage = forwardRef<
   const [assistantInput, setAssistantInput] = useState("");
   const [assistantNotice, setAssistantNotice] = useState<string | null>(null);
 
-  const initialSharedSmiles = structure.smiles.trim();
-  const draftBaseRef = useRef(initialSharedSmiles);
-  const [smilesDraft, setSmilesDraft] = useState(initialSharedSmiles);
-  const [isDraftDirty, setIsDraftDirty] = useState(false);
-  const [draftError, setDraftError] = useState<string | null>(null);
-  const [hasSharedConflict, setHasSharedConflict] = useState(false);
-  const [isApplyingDraft, setIsApplyingDraft] = useState(false);
-
-  const [isMobile, setIsMobile] = useState(viewportUsesTextMode);
-  const [hasMountedEditor, setHasMountedEditor] = useState(() => !viewportUsesTextMode());
-  const [isCanvasExpanded, setIsCanvasExpanded] = useState(() => !viewportUsesTextMode());
   const [hasActivated3D, setHasActivated3D] = useState(false);
-  const [previewSvg, setPreviewSvg] = useState<string | null>(null);
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const [retroSmiles, setRetroSmiles] = useState(DEFAULT_RETROSYNTHESIS_MONOMER_SMILES);
   const [retroTargetRole, setRetroTargetRole] = useState<MonomerRetrosynthesisTargetRole>("auto");
@@ -119,76 +98,7 @@ export const StructureWorkbenchPage = forwardRef<
     parsedRetroReturnCount <= 10
       ? null
       : "候选数必须是 1–10 的整数。";
-  const operationBusy = canvas.isBusy || isApplyingDraft || Boolean(openingModuleId);
-
-  const acceptSharedStructure = useCallback((value: string) => {
-    const normalized = value.trim();
-    draftBaseRef.current = normalized;
-    setSmilesDraft(normalized);
-    setIsDraftDirty(false);
-    setHasSharedConflict(false);
-    setDraftError(null);
-  }, []);
-
-  useEffect(() => {
-    const nextSharedSmiles = structure.smiles.trim();
-    if (!isDraftDirty) {
-      draftBaseRef.current = nextSharedSmiles;
-      setSmilesDraft(nextSharedSmiles);
-      setHasSharedConflict(false);
-      return;
-    }
-    if (nextSharedSmiles !== draftBaseRef.current) {
-      setHasSharedConflict(true);
-    }
-  }, [isDraftDirty, structure.smiles]);
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia(MOBILE_TEXT_MODE_QUERY);
-    const handleChange = (event: MediaQueryListEvent) => setIsMobile(event.matches);
-    setIsMobile(media.matches);
-    media.addEventListener("change", handleChange);
-    return () => media.removeEventListener("change", handleChange);
-  }, []);
-
-  useEffect(() => {
-    if (!isMobile) {
-      setHasMountedEditor(true);
-      setIsCanvasExpanded(true);
-    }
-  }, [isMobile]);
-
-  useEffect(() => {
-    const shouldLoadPreview = isMobile && (!hasMountedEditor || !isCanvasExpanded);
-    const source = structure.smiles.trim();
-    if (!shouldLoadPreview || !source) {
-      if (!source) {
-        setPreviewSvg(null);
-        setPreviewError(null);
-        setIsPreviewLoading(false);
-      }
-      return;
-    }
-
-    const controller = new AbortController();
-    setIsPreviewLoading(true);
-    setPreviewError(null);
-    void fetchStructure2D(source, controller.signal)
-      .then((result) => {
-        if (!controller.signal.aborted) setPreviewSvg(result.structure_svg);
-      })
-      .catch((error) => {
-        if (!controller.signal.aborted) {
-          setPreviewSvg(null);
-          setPreviewError(errorMessage(error, "二维摘要生成失败"));
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setIsPreviewLoading(false);
-      });
-    return () => controller.abort();
-  }, [hasMountedEditor, isCanvasExpanded, isMobile, structure.smiles]);
+  const operationBusy = canvas.isBusy || Boolean(openingModuleId);
 
   useEffect(() => {
     return () => {
@@ -206,12 +116,10 @@ export const StructureWorkbenchPage = forwardRef<
     forwardedRef,
     () => ({
       async syncBeforeLeave() {
-        if (hasMountedEditor) {
-          await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
-        }
+        await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
       }
     }),
-    [canvas, hasMountedEditor]
+    [canvas]
   );
 
   const restorePanelFocus = useCallback((panel: Exclude<StructureUtilityPanel, null>) => {
@@ -281,60 +189,20 @@ export const StructureWorkbenchPage = forwardRef<
     return () => window.cancelAnimationFrame(frame);
   }, [modulePanelView, openPanel]);
 
-  async function applyDraftValue(source: string) {
-    const normalized = source.trim();
-    if (!normalized) {
-      setDraftError("请输入要应用的 SMILES。");
-      return false;
-    }
-    setIsApplyingDraft(true);
-    setDraftError(null);
-    try {
-      const result = await canvas.applyTextStructure(normalized);
-      if (!result.applied) {
-        setDraftError(canvas.feedback || "结构未能应用，请检查画布状态后重试。");
-        return false;
-      }
-      acceptSharedStructure(result.smiles);
-      return true;
-    } catch (error) {
-      setDraftError(errorMessage(error, "SMILES 标准化失败，请检查结构后重试。"));
-      return false;
-    } finally {
-      setIsApplyingDraft(false);
-    }
-  }
-
   async function loadExample() {
-    setSmilesDraft(REVERSE_DESIGN_DEMO_SMILES);
-    setIsDraftDirty(true);
-    if (!hasMountedEditor) {
-      await applyDraftValue(REVERSE_DESIGN_DEMO_SMILES);
-      return;
-    }
-    const loaded = await canvas.loadStructure(REVERSE_DESIGN_DEMO_SMILES);
-    if (loaded) {
-      const synchronized = await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
-      acceptSharedStructure(synchronized);
-    }
+    await canvas.loadStructure(REVERSE_DESIGN_DEMO_SMILES);
   }
 
   async function importImage(file: File) {
-    const imported = await canvas.importImageFile(file);
-    if (imported) {
-      const synchronized = await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
-      acceptSharedStructure(synchronized);
-    }
+    await canvas.importImageFile(file);
   }
 
   async function clearStructure() {
-    const cleared = await canvas.clearCanvas();
-    if (cleared) acceptSharedStructure("");
+    await canvas.clearCanvas();
   }
 
   async function syncFromCanvas() {
-    const synchronized = await canvas.syncSmilesFromCanvas();
-    acceptSharedStructure(synchronized);
+    await canvas.syncSmilesFromCanvas();
   }
 
   async function toggle3D() {
@@ -348,9 +216,7 @@ export const StructureWorkbenchPage = forwardRef<
     setSelectedModuleName(shortName);
     setOpeningModuleId(id);
     try {
-      if (hasMountedEditor) {
-        await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
-      }
+      await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
     } finally {
       setOpeningModuleId(null);
       closePanel(false);
@@ -359,11 +225,12 @@ export const StructureWorkbenchPage = forwardRef<
   }
 
   async function useCurrentStructureForRetrosynthesis() {
-    const currentSmiles = hasMountedEditor
-      ? await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true })
-      : structure.smiles.trim();
+    const currentSmiles = await canvas.syncSmilesFromCanvas({
+      preserveExisting: true,
+      quiet: true
+    });
     if (!currentSmiles) {
-      canvas.setFeedback("当前结构为空，请先绘制、导入或应用结构。");
+      canvas.setFeedback("当前结构为空，请先绘制、导入或加载结构。");
       return;
     }
     setRetroSmiles(currentSmiles);
@@ -436,73 +303,35 @@ export const StructureWorkbenchPage = forwardRef<
     setAssistantNotice(null);
   }
 
-  const editorStatus = !hasMountedEditor
-    ? "文本模式"
-    : canvas.isEditorReady
-      ? "编辑器就绪"
-      : "编辑器加载中";
+  const workbenchStyle = {
+    "--np-sw-drawer-width": `${drawerWidth}px`
+  } as CSSProperties;
 
   return (
-    <div className="np-structure-workbench" data-module="structure-workbench">
-      <div className="np-sw-page">
-        <header className="np-sw-page-header">
-          <div>
-            <span className="np-sw-page-header__mark" aria-hidden="true"><Atom /></span>
-            <span>
-              <h1>结构工作台</h1>
-              <p>统一管理结构输入、二维编辑、三维预览与下游科研任务</p>
-            </span>
-          </div>
-          <div className="np-sw-page-status" aria-label="工作台状态">
-            <span className={canvas.isEditorReady ? "is-ready" : ""}>
-              {canvas.isEditorReady ? <CircleCheck /> : hasMountedEditor ? <LoaderCircle className="np-sw-spin" /> : <PenLine />}
-              {editorStatus}
-            </span>
-            <span className={structure.smiles.trim() ? "is-ready" : ""}>
-              <i aria-hidden="true" />
-              {structure.smiles.trim() ? "共享结构已应用" : "无共享结构"}
-            </span>
-          </div>
-        </header>
+    <div
+      className="np-structure-workbench"
+      data-module="structure-workbench"
+      style={workbenchStyle}
+    >
+      <div className={`np-sw-page${isDrawerOpen ? " has-open-drawer" : ""}`}>
+        <h1 className="np-sw-page-title">结构工作台</h1>
 
         <div className={`np-sw-layout${isDrawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
             <StructureCanvasSurface
               structure={structure}
               canvas={canvas}
-              draft={smilesDraft}
-              draftDirty={isDraftDirty}
-              draftError={draftError}
-              hasSharedConflict={hasSharedConflict}
-              isMobile={isMobile}
-              hasMountedEditor={hasMountedEditor}
-              isCanvasExpanded={isCanvasExpanded}
               hasActivated3D={hasActivated3D}
-              previewSvg={previewSvg}
-              isPreviewLoading={isPreviewLoading}
-              previewError={previewError}
               openPanel={openPanel}
               moduleButtonRef={moduleButtonRef}
               assistantButtonRef={assistantButtonRef}
               operationBusy={operationBusy}
-              onDraftChange={(value) => {
-                setSmilesDraft(value);
-                setIsDraftDirty(value.trim() !== draftBaseRef.current);
-                setDraftError(null);
-              }}
-              onApplyDraft={() => void applyDraftValue(smilesDraft)}
-              onUseLatestShared={() => acceptSharedStructure(structure.smiles)}
               onLoadExample={() => void loadExample()}
               onImportFile={(file) => void importImage(file)}
               onClear={() => void clearStructure()}
               onSync={() => void syncFromCanvas()}
               onToggle3D={() => void toggle3D()}
               onTogglePanel={togglePanel}
-              onOpenCanvas={() => {
-                setHasMountedEditor(true);
-                setIsCanvasExpanded(true);
-              }}
-              onCollapseCanvas={() => setIsCanvasExpanded(false)}
             />
 
             <StructureUtilityPanels

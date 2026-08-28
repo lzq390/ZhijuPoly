@@ -1,12 +1,11 @@
 import {
   Atom,
+  Box,
   Check,
   Copy,
   Eraser,
   ImagePlus,
   LoaderCircle,
-  Orbit,
-  PanelTopOpen,
   RefreshCcw,
   SlidersHorizontal,
   Sparkles
@@ -22,32 +21,17 @@ export type StructureUtilityPanel = "modules" | "assistant" | null;
 type StructureCanvasSurfaceProps = {
   structure: StructureWorkspaceContext;
   canvas: StructureCanvasController;
-  draft: string;
-  draftDirty: boolean;
-  draftError: string | null;
-  hasSharedConflict: boolean;
-  isMobile: boolean;
-  hasMountedEditor: boolean;
-  isCanvasExpanded: boolean;
   hasActivated3D: boolean;
-  previewSvg: string | null;
-  isPreviewLoading: boolean;
-  previewError: string | null;
   openPanel: StructureUtilityPanel;
   moduleButtonRef: RefObject<HTMLButtonElement | null>;
   assistantButtonRef: RefObject<HTMLButtonElement | null>;
   operationBusy: boolean;
-  onDraftChange: (value: string) => void;
-  onApplyDraft: () => void;
-  onUseLatestShared: () => void;
   onLoadExample: () => void;
   onImportFile: (file: File) => void;
   onClear: () => void;
   onSync: () => void;
   onToggle3D: () => void;
   onTogglePanel: (panel: Exclude<StructureUtilityPanel, null>) => void;
-  onOpenCanvas: () => void;
-  onCollapseCanvas: () => void;
 };
 
 function ToolButton({
@@ -58,6 +42,8 @@ function ToolButton({
   active = false,
   disabled = false,
   danger = false,
+  primary = false,
+  iconOnly = false,
   buttonRef,
   controls,
   onClick
@@ -69,6 +55,8 @@ function ToolButton({
   active?: boolean;
   disabled?: boolean;
   danger?: boolean;
+  primary?: boolean;
+  iconOnly?: boolean;
   buttonRef?: RefObject<HTMLButtonElement | null>;
   controls?: string;
   onClick: () => void;
@@ -77,101 +65,39 @@ function ToolButton({
     <button
       ref={buttonRef}
       type="button"
-      className={`np-sw-tool${active ? " is-active" : ""}${danger ? " is-danger" : ""}`}
+      className={`np-sw-tool${active ? " is-active" : ""}${danger ? " is-danger" : ""}${primary ? " is-primary" : ""}${iconOnly ? " np-sw-tool--icon" : ""}`}
       data-workbench-tool={tool}
       aria-label={label}
       title={label}
+      aria-pressed={tool === "3d" ? active : undefined}
       aria-expanded={controls ? active : undefined}
       aria-controls={controls}
       disabled={disabled}
       onClick={onClick}
     >
       {busy ? <LoaderCircle className="np-sw-spin" aria-hidden="true" /> : icon}
-      <span>{label}</span>
+      {iconOnly ? null : <span>{label}</span>}
     </button>
-  );
-}
-
-function TextPreview({
-  svg,
-  loading,
-  error,
-  hasStructure,
-  onOpenCanvas
-}: {
-  svg: string | null;
-  loading: boolean;
-  error: string | null;
-  hasStructure: boolean;
-  onOpenCanvas: () => void;
-}) {
-  return (
-    <div className="np-sw-text-preview" aria-label="二维结构摘要">
-      <div className="np-sw-text-preview__visual">
-        {loading ? (
-          <span className="np-sw-text-preview__state">
-            <LoaderCircle className="np-sw-spin" /> 正在生成 2D 摘要
-          </span>
-        ) : svg ? (
-          <img
-            src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`}
-            alt="当前共享结构的二维摘要"
-          />
-        ) : (
-          <span className="np-sw-text-preview__empty">
-            <Atom aria-hidden="true" />
-            {error || (hasStructure ? "暂时无法生成二维摘要" : "应用 SMILES 后显示二维摘要")}
-          </span>
-        )}
-      </div>
-      <div className="np-sw-text-preview__copy">
-        <strong>文本优先模式</strong>
-        <p>可直接应用 SMILES；需要精细编辑时再打开绘图画布。</p>
-        <button type="button" className="np-sw-secondary-button" onClick={onOpenCanvas}>
-          <PanelTopOpen aria-hidden="true" />
-          打开绘图画布
-        </button>
-      </div>
-    </div>
   );
 }
 
 export function StructureCanvasSurface({
   structure,
   canvas,
-  draft,
-  draftDirty,
-  draftError,
-  hasSharedConflict,
-  isMobile,
-  hasMountedEditor,
-  isCanvasExpanded,
   hasActivated3D,
-  previewSvg,
-  isPreviewLoading,
-  previewError,
   openPanel,
   moduleButtonRef,
   assistantButtonRef,
   operationBusy,
-  onDraftChange,
-  onApplyDraft,
-  onUseLatestShared,
   onLoadExample,
   onImportFile,
   onClear,
   onSync,
   onToggle3D,
-  onTogglePanel,
-  onOpenCanvas,
-  onCollapseCanvas
+  onTogglePanel
 }: StructureCanvasSurfaceProps) {
-  const showEditor = !isMobile || isCanvasExpanded;
-  const hasStructure = Boolean(structure.smiles.trim());
-
   return (
     <section className="np-sw-surface" aria-label="结构编辑工作区">
-      <div className="np-sw-accent" aria-hidden="true" />
       <input
         ref={canvas.fileInputRef}
         className="np-sw-visually-hidden"
@@ -185,10 +111,9 @@ export function StructureCanvasSurface({
       />
 
       <header className="np-sw-commandbar" aria-label="结构工作台工具栏">
-        <div className="np-sw-tool-group">
-          <span>结构来源</span>
+        <div className="np-sw-toolbar">
           <ToolButton
-            label="加载示例"
+            label="加载结构"
             tool="load"
             busy={canvas.isLoadingStructure}
             icon={<Atom aria-hidden="true" />}
@@ -200,60 +125,43 @@ export function StructureCanvasSurface({
             tool="import"
             busy={canvas.isImportingImage}
             icon={<ImagePlus aria-hidden="true" />}
-            disabled={operationBusy || !hasMountedEditor}
+            disabled={operationBusy}
             onClick={() => canvas.fileInputRef.current?.click()}
           />
-        </div>
-
-        <div className="np-sw-tool-group">
-          <span>画布操作</span>
           <ToolButton
-            label="清空"
+            label="清空画布"
             tool="clear"
             busy={canvas.isClearing}
             icon={<Eraser aria-hidden="true" />}
-            disabled={operationBusy || (hasMountedEditor && !canvas.isEditorReady)}
+            disabled={operationBusy || !canvas.isEditorReady}
             danger
             onClick={onClear}
           />
           <ToolButton
-            label="生成 SMILES"
+            label="生成SMILES"
             tool="sync"
             busy={canvas.isSyncing}
             icon={<RefreshCcw aria-hidden="true" />}
-            disabled={operationBusy || !hasMountedEditor || !canvas.isEditorReady}
+            disabled={operationBusy || !canvas.isEditorReady}
+            primary
             onClick={onSync}
           />
-        </div>
-
-        <div className="np-sw-tool-group">
-          <span>视图</span>
           <ToolButton
-            label={canvas.isFlipped ? "返回 2D" : "3D 构象"}
+            label={canvas.isFlipped ? "2D画布" : "3D构象"}
             tool="3d"
             busy={canvas.isFlipping}
-            icon={<Orbit aria-hidden="true" />}
-            disabled={operationBusy || !hasMountedEditor || !hasStructure}
+            icon={<Box aria-hidden="true" />}
+            disabled={operationBusy || !canvas.isEditorReady}
             active={canvas.isFlipped}
             onClick={onToggle3D}
           />
-          {isMobile && hasMountedEditor ? (
-            <ToolButton
-              label={isCanvasExpanded ? "收起画布" : "展开画布"}
-              tool="canvas"
-              icon={<PanelTopOpen aria-hidden="true" />}
-              onClick={isCanvasExpanded ? onCollapseCanvas : onOpenCanvas}
-            />
-          ) : null}
-        </div>
-
-        <div className="np-sw-tool-group np-sw-tool-group--utility">
-          <span>扩展功能</span>
+          <span className="np-sw-toolbar-separator" aria-hidden="true" />
           <ToolButton
             label="功能参数"
             tool="modules"
             icon={<SlidersHorizontal aria-hidden="true" />}
             active={openPanel === "modules"}
+            iconOnly
             buttonRef={moduleButtonRef}
             controls="structure-module-panel"
             onClick={() => onTogglePanel("modules")}
@@ -263,6 +171,7 @@ export function StructureCanvasSurface({
             tool="assistant"
             icon={<Sparkles aria-hidden="true" />}
             active={openPanel === "assistant"}
+            iconOnly
             buttonRef={assistantButtonRef}
             controls="structure-assistant-panel"
             onClick={() => onTogglePanel("assistant")}
@@ -271,95 +180,56 @@ export function StructureCanvasSurface({
       </header>
 
       <div className="np-sw-canvas-stage">
-        {!hasMountedEditor ? (
-          <TextPreview
-            svg={previewSvg}
-            loading={isPreviewLoading}
-            error={previewError}
-            hasStructure={hasStructure}
-            onOpenCanvas={onOpenCanvas}
-          />
-        ) : (
-          <div className={`np-sw-editor${showEditor ? "" : " is-collapsed"}`}>
+        <div className={`np-sw-editor${canvas.isFlipped ? " is-flipped" : ""}`}>
+          <div
+            className={`np-sw-editor__layer np-sw-editor__layer--2d${canvas.isFlipped ? " is-hidden" : " is-visible"}`}
+            aria-hidden={canvas.isFlipped}
+            inert={canvas.isFlipped}
+          >
+            <iframe
+              ref={structure.iframeRef}
+              title="结构工作台结构编辑器"
+              src="/ketcher/index.html"
+              onLoad={canvas.handleEditorLoad}
+            />
+          </div>
+          {hasActivated3D ? (
             <div
-              className={`np-sw-editor__layer np-sw-editor__layer--2d${canvas.isFlipped ? " is-hidden" : " is-visible"}`}
-              aria-hidden={canvas.isFlipped}
+              className={`np-sw-editor__layer np-sw-editor__layer--3d${canvas.isFlipped ? " is-visible" : " is-hidden"}`}
+              aria-hidden={!canvas.isFlipped}
+              inert={!canvas.isFlipped}
             >
-              <iframe
-                ref={structure.iframeRef}
-                title="结构工作台结构编辑器"
-                src="/ketcher/index.html"
-                onLoad={canvas.handleEditorLoad}
+              <StructurePreview3D
+                smiles={structure.smiles}
+                variant="bare"
+                visualStyle="polished-atoms"
+                className="np-sw-preview-3d"
+                previewClassName="np-sw-preview-3d__frame"
               />
             </div>
-            {hasActivated3D ? (
-              <div
-                className={`np-sw-editor__layer np-sw-editor__layer--3d${canvas.isFlipped ? " is-visible" : " is-hidden"}`}
-                aria-hidden={!canvas.isFlipped}
-              >
-                <StructurePreview3D
-                  smiles={structure.smiles}
-                  variant="bare"
-                  visualStyle="polished-atoms"
-                  className="np-sw-preview-3d"
-                  previewClassName="np-sw-preview-3d__frame"
-                />
-              </div>
-            ) : null}
-          </div>
-        )}
+          ) : null}
+        </div>
       </div>
 
       <footer className="np-sw-smiles" aria-labelledby="np-sw-smiles-label">
-        <div className="np-sw-smiles__heading">
-          <div>
-            <label id="np-sw-smiles-label" htmlFor="np-sw-smiles-input">SMILES</label>
-            <span>{draftDirty ? "有未应用修改" : "与共享结构同步"}</span>
-          </div>
-          <span className={`np-sw-structure-state${hasStructure ? " is-ready" : ""}`}>
-            <i aria-hidden="true" />
-            {hasStructure ? "共享结构已就绪" : "尚未应用结构"}
-          </span>
-        </div>
-        <div className={`np-sw-smiles__editor${draftError ? " is-invalid" : ""}`}>
-          <textarea
-            id="np-sw-smiles-input"
-            rows={2}
-            value={draft}
-            onChange={(event) => onDraftChange(event.currentTarget.value)}
-            placeholder="输入聚合物或单体 SMILES，确认后显式应用到共享结构。"
-            spellCheck={false}
-            aria-label="结构 SMILES 草稿"
-            aria-describedby="np-sw-smiles-feedback"
-          />
-          <button
-            type="button"
-            className="np-sw-icon-button"
-            onClick={() => void canvas.copySmiles(draft)}
-            disabled={!draft.trim()}
-            aria-label="复制 SMILES 草稿"
-            title="复制 SMILES 草稿"
-          >
-            {canvas.copyState === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-          </button>
-          <button
-            type="button"
-            className="np-sw-primary-button"
-            onClick={onApplyDraft}
-            disabled={operationBusy || !draft.trim()}
-          >
-            {canvas.isLoadingStructure ? <LoaderCircle className="np-sw-spin" /> : <Sparkles />}
-            应用结构
-          </button>
-        </div>
-        <div id="np-sw-smiles-feedback" className="np-sw-smiles__feedback" aria-live="polite">
-          <span className={draftError ? "is-error" : ""}>{draftError || canvas.feedback}</span>
-          {hasSharedConflict ? (
-            <button type="button" onClick={onUseLatestShared}>
-              使用最新共享结构
-            </button>
-          ) : null}
-        </div>
+        <label id="np-sw-smiles-label">SMILES</label>
+        <textarea
+          rows={2}
+          readOnly
+          value={structure.smiles}
+          placeholder="在上方 Ketcher 画布绘制结构后，点击“生成SMILES”。"
+          aria-label="当前共享 SMILES，只读"
+        />
+        <button
+          type="button"
+          onClick={() => void canvas.copySmiles()}
+          disabled={!structure.smiles.trim()}
+          aria-label="复制共享 SMILES"
+          title="复制共享 SMILES"
+        >
+          {canvas.copyState === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+        </button>
+        {canvas.feedback ? <p role="status" aria-live="polite">{canvas.feedback}</p> : null}
       </footer>
     </section>
   );
