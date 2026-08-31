@@ -6,9 +6,7 @@ import {
   Eraser,
   ImagePlus,
   LoaderCircle,
-  RefreshCcw,
-  SlidersHorizontal,
-  Sparkles
+  RefreshCcw
 } from "lucide-react";
 import type { ReactNode, RefObject } from "react";
 import type { useTgStructureCanvas } from "../../hooks/useTgStructureCanvas";
@@ -17,21 +15,30 @@ import { StructurePreview3D } from "../StructurePreview3D";
 
 export type StructureCanvasController = ReturnType<typeof useTgStructureCanvas>;
 export type StructureUtilityPanel = "modules" | "assistant" | null;
+export type StructureCanvasUtilityAction = {
+  id: string;
+  label: string;
+  icon: ReactNode;
+  active?: boolean;
+  busy?: boolean;
+  disabled?: boolean;
+  controls?: string;
+  buttonRef?: RefObject<HTMLButtonElement | null>;
+  onClick: () => void;
+};
 
 type StructureCanvasSurfaceProps = {
   structure: StructureWorkspaceContext;
   canvas: StructureCanvasController;
   hasActivated3D: boolean;
-  openPanel: StructureUtilityPanel;
-  moduleButtonRef: RefObject<HTMLButtonElement | null>;
-  assistantButtonRef: RefObject<HTMLButtonElement | null>;
   operationBusy: boolean;
-  onLoadExample: () => void;
-  onImportFile: (file: File) => void;
-  onClear: () => void;
-  onSync: () => void;
-  onToggle3D: () => void;
-  onTogglePanel: (panel: Exclude<StructureUtilityPanel, null>) => void;
+  editorTitle?: string;
+  utilityActions?: readonly StructureCanvasUtilityAction[];
+  onLoadExample: () => void | Promise<unknown>;
+  onImportFile: (file: File) => void | Promise<unknown>;
+  onClear: () => void | Promise<unknown>;
+  onSync: () => void | Promise<unknown>;
+  onToggle3D: () => void | Promise<unknown>;
 };
 
 function ToolButton({
@@ -85,17 +92,32 @@ export function StructureCanvasSurface({
   structure,
   canvas,
   hasActivated3D,
-  openPanel,
-  moduleButtonRef,
-  assistantButtonRef,
   operationBusy,
+  editorTitle = "结构工作台结构编辑器",
+  utilityActions = [],
   onLoadExample,
   onImportFile,
   onClear,
   onSync,
-  onToggle3D,
-  onTogglePanel
+  onToggle3D
 }: StructureCanvasSurfaceProps) {
+  async function runCanvasMutation(action: () => void | Promise<unknown>) {
+    await canvas.cancelSmilesDraftSync();
+    try {
+      await action();
+    } finally {
+      canvas.adoptCanvasSmiles();
+    }
+  }
+
+  const smilesStatus = canvas.smilesDraftError || (
+    canvas.smilesDraftState === "pending"
+      ? "等待输入完成后自动同步…"
+      : canvas.smilesDraftState === "syncing"
+        ? "正在校验并同步到画板…"
+        : canvas.feedback
+  );
+
   return (
     <section className="np-sw-surface" aria-label="结构编辑工作区">
       <input
@@ -106,7 +128,7 @@ export function StructureCanvasSurface({
         aria-label="导入结构图片"
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
-          if (file) onImportFile(file);
+          if (file) void runCanvasMutation(() => onImportFile(file));
         }}
       />
 
@@ -118,7 +140,7 @@ export function StructureCanvasSurface({
             busy={canvas.isLoadingStructure}
             icon={<Atom aria-hidden="true" />}
             disabled={operationBusy}
-            onClick={onLoadExample}
+            onClick={() => void runCanvasMutation(onLoadExample)}
           />
           <ToolButton
             label="导入图片"
@@ -135,7 +157,7 @@ export function StructureCanvasSurface({
             icon={<Eraser aria-hidden="true" />}
             disabled={operationBusy || !canvas.isEditorReady}
             danger
-            onClick={onClear}
+            onClick={() => void runCanvasMutation(onClear)}
           />
           <ToolButton
             label="生成SMILES"
@@ -144,38 +166,33 @@ export function StructureCanvasSurface({
             icon={<RefreshCcw aria-hidden="true" />}
             disabled={operationBusy || !canvas.isEditorReady}
             primary
-            onClick={onSync}
+            onClick={() => void runCanvasMutation(onSync)}
           />
           <ToolButton
             label={canvas.isFlipped ? "2D画布" : "3D构象"}
             tool="3d"
             busy={canvas.isFlipping}
             icon={<Box aria-hidden="true" />}
-            disabled={operationBusy || !canvas.isEditorReady}
+            disabled={operationBusy || canvas.smilesDraftState !== "synced" || !canvas.isEditorReady}
             active={canvas.isFlipped}
             onClick={onToggle3D}
           />
-          <span className="np-sw-toolbar-separator" aria-hidden="true" />
-          <ToolButton
-            label="功能参数"
-            tool="modules"
-            icon={<SlidersHorizontal aria-hidden="true" />}
-            active={openPanel === "modules"}
-            iconOnly
-            buttonRef={moduleButtonRef}
-            controls="structure-module-panel"
-            onClick={() => onTogglePanel("modules")}
-          />
-          <ToolButton
-            label="AI 助手"
-            tool="assistant"
-            icon={<Sparkles aria-hidden="true" />}
-            active={openPanel === "assistant"}
-            iconOnly
-            buttonRef={assistantButtonRef}
-            controls="structure-assistant-panel"
-            onClick={() => onTogglePanel("assistant")}
-          />
+          {utilityActions.length ? <span className="np-sw-toolbar-separator" aria-hidden="true" /> : null}
+          {utilityActions.map((action) => (
+            <ToolButton
+              key={action.id}
+              label={action.label}
+              tool={action.id}
+              icon={action.icon}
+              active={Boolean(action.active)}
+              busy={Boolean(action.busy)}
+              disabled={Boolean(action.disabled)}
+              iconOnly
+              buttonRef={action.buttonRef}
+              controls={action.controls}
+              onClick={action.onClick}
+            />
+          ))}
         </div>
       </header>
 
@@ -188,7 +205,7 @@ export function StructureCanvasSurface({
           >
             <iframe
               ref={structure.iframeRef}
-              title="结构工作台结构编辑器"
+              title={editorTitle}
               src="/ketcher/index.html"
               onLoad={canvas.handleEditorLoad}
             />
@@ -215,21 +232,32 @@ export function StructureCanvasSurface({
         <label id="np-sw-smiles-label">SMILES</label>
         <textarea
           rows={2}
-          readOnly
-          value={structure.smiles}
-          placeholder="在上方 Ketcher 画布绘制结构后，点击“生成SMILES”。"
-          aria-label="当前共享 SMILES，只读"
+          value={canvas.smilesDraft}
+          maxLength={8000}
+          spellCheck={false}
+          aria-invalid={canvas.smilesDraftState === "error"}
+          onChange={(event) => canvas.updateSmilesDraft(event.currentTarget.value)}
+          placeholder="输入 SMILES 后将自动校验并同步到上方画板。"
+          aria-label="SMILES 输入，自动同步到画板"
         />
         <button
           type="button"
-          onClick={() => void canvas.copySmiles()}
-          disabled={!structure.smiles.trim()}
-          aria-label="复制共享 SMILES"
-          title="复制共享 SMILES"
+          onClick={() => void canvas.copySmiles(canvas.smilesDraft)}
+          disabled={!canvas.smilesDraft.trim()}
+          aria-label="复制当前 SMILES 输入"
+          title="复制当前 SMILES 输入"
         >
           {canvas.copyState === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
         </button>
-        {canvas.feedback ? <p role="status" aria-live="polite">{canvas.feedback}</p> : null}
+        {smilesStatus ? (
+          <p
+            className={canvas.smilesDraftState === "error" ? "is-error" : ""}
+            role={canvas.smilesDraftState === "error" ? "alert" : "status"}
+            aria-live="polite"
+          >
+            {smilesStatus}
+          </p>
+        ) : null}
       </footer>
     </section>
   );

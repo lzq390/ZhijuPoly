@@ -28,7 +28,7 @@ const POLL_INTERVAL_MS = 1400;
 const POLL_MAX_FAILURES = 3;
 const STATUS_POLL_INTERVAL_MS = 5000;
 const TERMINAL_STATUSES = new Set<PolytaoJobStatus>(["completed", "failed", "cancelled"]);
-const EXPIRED_JOB_MESSAGE = "Backend restarted or the job expired. Please resubmit.";
+const EXPIRED_JOB_MESSAGE = "后端服务已重启或生成任务已过期，请重新提交。";
 
 export type PolytaoRuntimeDisplayState =
   | "checking"
@@ -123,9 +123,9 @@ function delay(ms: number) {
 
 function jobErrorMessage(job: PolytaoJobStatusResponse) {
   if (job.status === "cancelled") {
-    return job.progress_message ?? "PolyTAO generation was cancelled.";
+    return job.progress_message || "PolyTAO 生成任务已取消。";
   }
-  return job.error_message ?? job.progress_message ?? "PolyTAO generation failed.";
+  return job.error_message || job.progress_message || "PolyTAO 生成任务执行失败。";
 }
 
 function cloneRequest(request: PolytaoGenerationRequest): PolytaoGenerationRequest {
@@ -177,7 +177,7 @@ export function usePolytaoGeneration() {
         ...current,
         serviceStatus: null,
         isStatusLoading: false,
-        statusError: error instanceof Error ? error.message : "Failed to check PolyTAO service."
+        statusError: error instanceof Error ? error.message : "检查 PolyTAO 服务状态失败。"
       }));
     }
   }, []);
@@ -235,7 +235,7 @@ export function usePolytaoGeneration() {
           setState((current) => ({
             ...current,
             isLoading: false,
-            error: error instanceof Error ? error.message : "Failed to refresh PolyTAO job status."
+            error: error instanceof Error ? error.message : "刷新 PolyTAO 任务状态失败。"
           }));
           return;
         }
@@ -285,7 +285,7 @@ export function usePolytaoGeneration() {
           attempts: 0,
           progress_percent: 0,
           progress_stage: createdJob.status,
-          progress_message: "Submitted to PolyTAO backend runtime.",
+          progress_message: "任务已提交至 PolyTAO 后端运行时。",
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           started_at: null,
@@ -306,7 +306,7 @@ export function usePolytaoGeneration() {
       setState((current) => ({
         ...current,
         isLoading: false,
-        error: error instanceof Error ? error.message : "Failed to submit PolyTAO generation."
+        error: error instanceof Error ? error.message : "提交 PolyTAO 生成任务失败。"
       }));
       void refreshStatus();
     }

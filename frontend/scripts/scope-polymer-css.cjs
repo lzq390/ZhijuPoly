@@ -147,7 +147,6 @@ const footer = `
 .polymer-desktop-page .polymer-result-svg img { width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; }
 .polymer-desktop-page .polymer-result-smiles-fallback { padding: 12px; color: var(--color-text-secondary); font-family: Consolas, monospace; font-size: 11px; line-height: 1.45; word-break: break-all; text-align: center; }
 .polymer-desktop-page #analysis-panel .similarity-grid { grid-template-columns: 1fr; gap: 12px; }
-.polymer-desktop-page #analysis-panel .prediction-grid-wrapper { grid-template-columns: 1fr; }
 .polymer-desktop-page .btn-close-analysis { width: 28px; height: 28px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all var(--transition-normal); }
 .polymer-desktop-page .btn-close-analysis:hover { background-color: var(--color-bg-hover); color: var(--color-text-primary); }
 .polymer-desktop-page #btn-toggle-3d { height: 30px !important; min-width: 92px !important; padding: 0 12px !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; gap: 6px !important; white-space: nowrap !important; line-height: 1 !important; border-radius: 6px !important; flex-shrink: 0 !important; }

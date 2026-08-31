@@ -234,6 +234,32 @@ describe("KnowledgeSearch", () => {
     ));
   });
 
+  it("在 2K 视口使用放大的详情抽屉范围和键盘步进", async () => {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === "(min-width: 2000px) and (min-height: 1120px)",
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }))
+    });
+
+    render(<KnowledgeSearch onBackHome={vi.fn()} initialQuery="polyimide" />);
+
+    const resizer = await screen.findByRole("separator", { name: "调整详情抽屉宽度" });
+    expect(resizer.getAttribute("aria-valuemin")).toBe("480");
+    expect(resizer.getAttribute("aria-valuemax")).toBe("720");
+    expect(resizer.getAttribute("aria-valuenow")).toBe("540");
+
+    fireEvent.keyDown(resizer, { key: "ArrowLeft" });
+    expect(resizer.getAttribute("aria-valuenow")).toBe("564");
+  });
+
   it("在线面板首次访问才加载，并在模式切换后保留表单状态", async () => {
     render(<KnowledgeSearch onBackHome={vi.fn()} />);
     expect(apiMocks.fetchConfig).not.toHaveBeenCalled();

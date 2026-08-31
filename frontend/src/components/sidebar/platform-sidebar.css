@@ -1,3 +1,9 @@
+@property --np-scrollbar-thumb-color {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: rgba(88, 112, 141, 0);
+}
+
 .np-app-shell {
   --np-sidebar-bg: #f7f9fc;
   --np-sidebar-workspace: #edf3f9;
@@ -16,6 +22,45 @@
   overflow: hidden;
   color: var(--np-sidebar-text);
   background: var(--np-sidebar-workspace);
+}
+
+/* Platform-wide auto-hiding scrollbars. Keeping the gutter width stable avoids
+   content shifts while the thumb fades in and out. */
+:where(.np-app-shell, .np-app-shell *) {
+  --np-scrollbar-thumb-color: rgba(88, 112, 141, 0);
+  scrollbar-color: var(--np-scrollbar-thumb-color) transparent !important;
+  scrollbar-width: thin !important;
+}
+
+:where(.np-app-shell, .np-app-shell *)::-webkit-scrollbar {
+  display: block !important;
+  width: 7px !important;
+  height: 7px !important;
+  background-color: transparent !important;
+}
+
+:where(.np-app-shell, .np-app-shell *)::-webkit-scrollbar-track,
+:where(.np-app-shell, .np-app-shell *)::-webkit-scrollbar-corner,
+:where(.np-app-shell, .np-app-shell *)::-webkit-scrollbar-button {
+  background-color: transparent !important;
+}
+
+:where(.np-app-shell, .np-app-shell *)::-webkit-scrollbar-button {
+  width: 0 !important;
+  height: 0 !important;
+}
+
+:where(.np-app-shell, .np-app-shell *)::-webkit-scrollbar-thumb {
+  min-width: 36px;
+  min-height: 36px;
+  border: 2px solid transparent !important;
+  border-radius: 999px !important;
+  background-color: var(--np-scrollbar-thumb-color) !important;
+  background-clip: padding-box !important;
+}
+
+:where(.np-app-shell[data-scrollbar-active], .np-app-shell [data-scrollbar-active]) {
+  --np-scrollbar-thumb-color: rgba(88, 112, 141, 0.5);
 }
 
 .np-app-shell__body {

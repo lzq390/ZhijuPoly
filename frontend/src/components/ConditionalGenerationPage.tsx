@@ -172,6 +172,15 @@ export function ConditionalGenerationPage({ structure }: ConditionalGenerationPa
     });
   }
 
+  async function runCanvasMutation(action: () => void | Promise<unknown>) {
+    await canvas.cancelSmilesDraftSync();
+    try {
+      await action();
+    } finally {
+      canvas.adoptCanvasSmiles();
+    }
+  }
+
   function restorePanelFocus(panel: Exclude<OpenPanel, null>) {
     const target =
       panel === "parameters" ? parameterButtonRef.current : assistantButtonRef.current;
@@ -401,7 +410,7 @@ export function ConditionalGenerationPage({ structure }: ConditionalGenerationPa
               onChange={(event) => {
                 const file = event.currentTarget.files?.[0];
                 if (file) {
-                  void canvas.importImageFile(file);
+                  void runCanvasMutation(() => canvas.importImageFile(file));
                 }
               }}
             />
@@ -420,7 +429,7 @@ export function ConditionalGenerationPage({ structure }: ConditionalGenerationPa
                 type="button"
                 className="btn btn--outline btn--sm tg-tool-button"
                 id="btn-clear-canvas"
-                onClick={() => void canvas.clearCanvas()}
+                onClick={() => void runCanvasMutation(() => canvas.clearCanvas())}
                 disabled={operationBusy || !canvas.isEditorReady}
               >
                 {canvas.isClearing ? <LoaderCircle className="animate-spin" /> : <Eraser />}
@@ -430,7 +439,7 @@ export function ConditionalGenerationPage({ structure }: ConditionalGenerationPa
                 type="button"
                 className="btn btn--outline btn--sm tg-tool-button"
                 id="btn-sync-canvas"
-                onClick={() => void canvas.syncSmilesFromCanvas()}
+                onClick={() => void runCanvasMutation(() => canvas.syncSmilesFromCanvas())}
                 disabled={operationBusy || !canvas.isEditorReady}
               >
                 {canvas.isSyncing ? <LoaderCircle className="animate-spin" /> : <RefreshCcw />}
@@ -441,7 +450,7 @@ export function ConditionalGenerationPage({ structure }: ConditionalGenerationPa
                 className={`btn btn--outline btn--sm tg-tool-button${canvas.isFlipped ? " active" : ""}`}
                 id="btn-toggle-3d"
                 onClick={() => void canvas.toggle3D()}
-                disabled={operationBusy || !canvas.isEditorReady}
+                disabled={operationBusy || canvas.smilesDraftState !== "synced" || !canvas.isEditorReady}
               >
                 {canvas.isFlipping ? <LoaderCircle className="animate-spin" /> : <Box />}
                 {canvas.isFlipped ? "2D画布" : "3D构象"}
@@ -735,22 +744,33 @@ export function ConditionalGenerationPage({ structure }: ConditionalGenerationPa
             <label id="cg-smiles-label">SMILES</label>
             <textarea
               rows={2}
-              readOnly
-              value={structure.smiles}
-              placeholder="在上方 Ketcher 画布绘制种子结构后，点击“生成SMILES”。"
-              aria-label="当前共享 SMILES，只读"
+              value={canvas.smilesDraft}
+              maxLength={8000}
+              spellCheck={false}
+              aria-invalid={canvas.smilesDraftState === "error"}
+              onChange={(event) => canvas.updateSmilesDraft(event.currentTarget.value)}
+              placeholder="输入 SMILES 后将自动校验并同步到上方画板。"
+              aria-label="SMILES 输入，自动同步到画板"
             />
             <button
               type="button"
-              onClick={() => void canvas.copySmiles()}
-              disabled={!structure.smiles.trim()}
-              aria-label="复制共享 SMILES"
-              title="复制共享 SMILES"
+              onClick={() => void canvas.copySmiles(canvas.smilesDraft)}
+              disabled={!canvas.smilesDraft.trim()}
+              aria-label="复制当前 SMILES 输入"
+              title="复制当前 SMILES 输入"
             >
               {canvas.copyState === "copied" ? <Check /> : <Copy />}
             </button>
-            <p role="status" aria-live="polite">
-              {canvas.feedback || "聚合物连接点保持为 *；仅 3D 空间预览时封氢。"}
+            <p
+              className={canvas.smilesDraftState === "error" ? "is-error" : ""}
+              role={canvas.smilesDraftState === "error" ? "alert" : "status"}
+              aria-live="polite"
+            >
+              {canvas.smilesDraftError || (canvas.smilesDraftState === "pending"
+                ? "等待输入完成后自动同步…"
+                : canvas.smilesDraftState === "syncing"
+                  ? "正在校验并同步到画板…"
+                  : canvas.feedback || "聚合物连接点保持为 *；仅 3D 空间预览时封氢。")}
             </p>
           </section>
         </div>

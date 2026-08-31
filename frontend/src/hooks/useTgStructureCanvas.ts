@@ -19,6 +19,8 @@ const TG_CANVAS_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const TG_CANVAS_RENDER_TIMEOUT_MS = 8000;
 const TG_CANVAS_KET_STABILITY_TIMEOUT_MS = 640;
 const TG_CANVAS_KET_RETRY_INTERVAL_MS = 80;
+const TG_SMILES_DRAFT_DEBOUNCE_MS = 500;
+const TG_SMILES_DRAFT_MAX_LENGTH = 8000;
 
 type SyncOptions = {
   preserveExisting?: boolean;
@@ -27,6 +29,13 @@ type SyncOptions = {
 
 type CanvasMutationOptions = {
   isCurrent?: () => boolean;
+};
+
+export type TgSmilesDraftState = "synced" | "pending" | "syncing" | "error";
+
+type SmilesDraftSyncTask = {
+  revision: number;
+  value: string;
 };
 
 type UseTgStructureCanvasOptions = {
@@ -283,6 +292,15 @@ export function useTgStructureCanvas({
   const canonicalSmilesCacheRef = useRef(new Map<string, Promise<string | null>>());
   const flipTimerRef = useRef<number | null>(null);
   const copyTimerRef = useRef<number | null>(null);
+  const smilesDraftRef = useRef(structure.smiles);
+  const smilesDraftRevisionRef = useRef(0);
+  const smilesDraftTimerRef = useRef<number | null>(null);
+  const smilesDraftQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const latestSmilesDraftSyncRef = useRef<{
+    revision: number;
+    promise: Promise<boolean>;
+  } | null>(null);
+  const activeSmilesDraftRevisionRef = useRef<number | null>(null);
   const [isEditorReady, setIsEditorReady] = useState(false);
   const [editorLoadRevision, setEditorLoadRevision] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
@@ -293,9 +311,26 @@ export function useTgStructureCanvas({
   const [isSyncing, setIsSyncing] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [smilesDraft, setSmilesDraft] = useState(structure.smiles);
+  const [smilesDraftState, setSmilesDraftState] = useState<TgSmilesDraftState>("synced");
+  const [smilesDraftError, setSmilesDraftError] = useState<string | null>(null);
 
   useEffect(() => {
+    const isActiveDraftUpdate =
+      activeSmilesDraftRevisionRef.current !== null &&
+      structure.smiles === smilesRef.current;
     smilesRef.current = structure.smiles;
+    if (isActiveDraftUpdate) return;
+    if (structure.smiles === smilesDraftRef.current && smilesDraftState === "synced") return;
+    if (smilesDraftTimerRef.current !== null) {
+      window.clearTimeout(smilesDraftTimerRef.current);
+      smilesDraftTimerRef.current = null;
+    }
+    smilesDraftRevisionRef.current += 1;
+    smilesDraftRef.current = structure.smiles;
+    setSmilesDraft(structure.smiles);
+    setSmilesDraftState("synced");
+    setSmilesDraftError(null);
   }, [structure.smiles]);
 
   useEffect(() => () => {
@@ -303,6 +338,8 @@ export function useTgStructureCanvas({
     canonicalSmilesCacheRef.current.clear();
     if (flipTimerRef.current !== null) window.clearTimeout(flipTimerRef.current);
     if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+    if (smilesDraftTimerRef.current !== null) window.clearTimeout(smilesDraftTimerRef.current);
+    smilesDraftRevisionRef.current += 1;
   }, []);
 
   function getKetcher() {
@@ -728,19 +765,31 @@ export function useTgStructureCanvas({
     }
   }
 
-  async function applyTextStructure(sourceSmiles: string) {
+  async function applyTextStructure(
+    sourceSmiles: string,
+    options: CanvasMutationOptions = {}
+  ) {
     const normalizedSource = sourceSmiles.trim();
     if (!normalizedSource) {
       throw new Error("请输入要应用的 SMILES。");
     }
+    if (options.isCurrent && !options.isCurrent()) {
+      return { applied: false, smiles: smilesRef.current.trim() };
+    }
 
     const result = await standardizeSmiles({ smiles: normalizedSource });
+    if (options.isCurrent && !options.isCurrent()) {
+      return { applied: false, smiles: smilesRef.current.trim() };
+    }
     const standardized = result.standardized_smiles.trim();
     const reliableSmiles = shouldAdoptEditorSmiles(normalizedSource, standardized)
       ? standardized
       : normalizedSource;
 
     if (!structure.iframeRef.current) {
+      if (options.isCurrent && !options.isCurrent()) {
+        return { applied: false, smiles: smilesRef.current.trim() };
+      }
       setIsFlipped(false);
       applySmiles(reliableSmiles);
       setFeedback(
@@ -751,11 +800,147 @@ export function useTgStructureCanvas({
       return { applied: true, smiles: reliableSmiles };
     }
 
-    const applied = await loadStructure(reliableSmiles);
+    const applied = await loadStructure(reliableSmiles, options);
     return {
       applied,
       smiles: smilesRef.current.trim()
     };
+  }
+
+  async function runSmilesDraftSync(task: SmilesDraftSyncTask) {
+    const isCurrent = () => task.revision === smilesDraftRevisionRef.current;
+    if (!isCurrent()) return false;
+
+    activeSmilesDraftRevisionRef.current = task.revision;
+    setSmilesDraftState("syncing");
+    setSmilesDraftError(null);
+    try {
+      let applied = false;
+      if (!task.value.trim()) {
+        applied = await clearCanvas({ isCurrent });
+      } else {
+        try {
+          const result = await applyTextStructure(task.value, { isCurrent });
+          applied = result.applied;
+        } catch (error) {
+          if (!isCurrent()) return false;
+          console.error("Failed to standardize editable structure SMILES", error);
+          setSmilesDraftState("error");
+          setSmilesDraftError("SMILES 无效或尚未完整，原画板未修改。");
+          return false;
+        }
+      }
+
+      if (!isCurrent()) return false;
+      if (!applied) {
+        setSmilesDraftState("error");
+        setSmilesDraftError("结构未能同步到画板，请检查 SMILES 或编辑器状态。");
+        return false;
+      }
+
+      const nextValue = smilesRef.current.trim();
+      smilesDraftRef.current = nextValue;
+      setSmilesDraft(nextValue);
+      setSmilesDraftState("synced");
+      setSmilesDraftError(null);
+      return true;
+    } finally {
+      if (activeSmilesDraftRevisionRef.current === task.revision) {
+        activeSmilesDraftRevisionRef.current = null;
+      }
+    }
+  }
+
+  function enqueueSmilesDraftSync(task: SmilesDraftSyncTask) {
+    const latest = latestSmilesDraftSyncRef.current;
+    if (latest?.revision === task.revision) return latest.promise;
+
+    const promise = smilesDraftQueueRef.current.then(
+      () => runSmilesDraftSync(task),
+      () => runSmilesDraftSync(task)
+    );
+    smilesDraftQueueRef.current = promise.then(
+      () => undefined,
+      () => undefined
+    );
+    latestSmilesDraftSyncRef.current = { revision: task.revision, promise };
+    void promise.then(
+      () => {
+        if (latestSmilesDraftSyncRef.current?.promise === promise) {
+          latestSmilesDraftSyncRef.current = null;
+        }
+      },
+      () => {
+        if (latestSmilesDraftSyncRef.current?.promise === promise) {
+          latestSmilesDraftSyncRef.current = null;
+        }
+      }
+    );
+    return promise;
+  }
+
+  function updateSmilesDraft(nextValue: string) {
+    if (nextValue.length > TG_SMILES_DRAFT_MAX_LENGTH) return;
+    if (smilesDraftTimerRef.current !== null) {
+      window.clearTimeout(smilesDraftTimerRef.current);
+      smilesDraftTimerRef.current = null;
+    }
+
+    const revision = smilesDraftRevisionRef.current + 1;
+    smilesDraftRevisionRef.current = revision;
+    smilesDraftRef.current = nextValue;
+    setSmilesDraft(nextValue);
+    setSmilesDraftError(null);
+    if (nextValue.trim() === smilesRef.current.trim()) {
+      setSmilesDraftState("synced");
+      return;
+    }
+
+    setSmilesDraftState("pending");
+    smilesDraftTimerRef.current = window.setTimeout(() => {
+      smilesDraftTimerRef.current = null;
+      void enqueueSmilesDraftSync({ revision, value: nextValue });
+    }, TG_SMILES_DRAFT_DEBOUNCE_MS);
+  }
+
+  async function flushSmilesDraft() {
+    if (smilesDraftTimerRef.current !== null) {
+      window.clearTimeout(smilesDraftTimerRef.current);
+      smilesDraftTimerRef.current = null;
+    }
+    const revision = smilesDraftRevisionRef.current;
+    const latest = latestSmilesDraftSyncRef.current;
+    if (latest?.revision === revision) return latest.promise;
+    if (smilesDraftRef.current.trim() === smilesRef.current.trim()) {
+      await smilesDraftQueueRef.current;
+      if (revision !== smilesDraftRevisionRef.current) return false;
+      setSmilesDraftState("synced");
+      setSmilesDraftError(null);
+      return true;
+    }
+    return enqueueSmilesDraftSync({ revision, value: smilesDraftRef.current });
+  }
+
+  async function cancelSmilesDraftSync() {
+    if (smilesDraftTimerRef.current !== null) {
+      window.clearTimeout(smilesDraftTimerRef.current);
+      smilesDraftTimerRef.current = null;
+    }
+    smilesDraftRevisionRef.current += 1;
+    await smilesDraftQueueRef.current;
+    const nextValue = smilesRef.current.trim();
+    smilesDraftRef.current = nextValue;
+    setSmilesDraft(nextValue);
+    setSmilesDraftState("synced");
+    setSmilesDraftError(null);
+  }
+
+  function adoptCanvasSmiles() {
+    const nextValue = smilesRef.current.trim();
+    smilesDraftRef.current = nextValue;
+    setSmilesDraft(nextValue);
+    setSmilesDraftState("synced");
+    setSmilesDraftError(null);
   }
 
   async function importImageFile(file: File) {
@@ -828,6 +1013,10 @@ export function useTgStructureCanvas({
     if (isFlipping || isImportingImage || isClearing || isSyncing) {
       return false;
     }
+    if (!(await flushSmilesDraft())) {
+      setFeedback("请先修正当前 SMILES，再切换 3D 构象。");
+      return false;
+    }
     setIsFlipping(true);
     try {
       if (!isFlipped) {
@@ -851,6 +1040,10 @@ export function useTgStructureCanvas({
   }
 
   async function resolveSmilesForSearch() {
+    if (!(await flushSmilesDraft())) {
+      setFeedback("请先修正当前 SMILES，再提交任务。");
+      return "";
+    }
     const synchronized = await syncSmilesFromCanvas({
       preserveExisting: true,
       quiet: true
@@ -869,7 +1062,7 @@ export function useTgStructureCanvas({
       return reliableSmiles;
     } catch (error) {
       console.error("Failed to standardize Tg search SMILES", error);
-      setFeedback("SMILES 标准化失败，搜索未提交。请检查结构有效性后重试。");
+      setFeedback("SMILES 标准化失败，任务未提交。请检查结构有效性后重试。");
       return "";
     }
   }
@@ -1062,7 +1255,8 @@ export function useTgStructureCanvas({
     isLoadingStructure ||
     isClearing ||
     isSyncing ||
-    isFlipping;
+    isFlipping ||
+    smilesDraftState === "syncing";
 
   return {
     fileInputRef,
@@ -1078,6 +1272,13 @@ export function useTgStructureCanvas({
     feedback,
     setFeedback,
     copyState,
+    smilesDraft,
+    smilesDraftState,
+    smilesDraftError,
+    updateSmilesDraft,
+    flushSmilesDraft,
+    cancelSmilesDraftSync,
+    adoptCanvasSmiles,
     loadStructure,
     applyTextStructure,
     clearCanvas,

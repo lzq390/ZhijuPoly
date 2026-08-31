@@ -24,6 +24,7 @@ import { DatabaseFilterPage } from "./components/DatabaseFilterPage";
 import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
 import { ExperimentWorkflowDemoPage } from "./components/ExperimentWorkflowDemoPage";
 import { HighThroughputWorkflowDemoPage } from "./components/HighThroughputWorkflowDemoPage";
+import { HomopolymerPropertyPredictionPage } from "./components/HomopolymerPropertyPredictionPage";
 import { KnowledgeSearch } from "./components/KnowledgeSearch";
 import { LabDataPage, type LabDataView } from "./components/LabDataPage";
 import { MdSimulationDemoPage } from "./components/MdSimulationDemoPage";
@@ -32,13 +33,12 @@ import { MonomerDftPage } from "./components/MonomerDftPage";
 import { MonomerPolymerizationPage } from "./components/MonomerPolymerizationPage";
 import { PolytaoGenerationPage } from "./components/PolytaoGenerationPage";
 import { ReverseDesignPage } from "./components/ReverseDesignPage";
-import { PolymerExplorerDesktopPage } from "./components/PolymerExplorerDesktopPage";
+import { PolymerSimilarityExplorerPage } from "./components/PolymerSimilarityExplorerPage";
 import {
   StructureWorkbenchPage,
-  type StructureWorkbenchHandle
+  type StructureCanvasOwnerHandle
 } from "./components/StructureWorkbenchPage";
 import { useKetcher } from "./hooks/useKetcher";
-import { usePredict } from "./hooks/usePredict";
 import { useQuery } from "./hooks/useQuery";
 import { useTgAssistant } from "./hooks/useTgAssistant";
 import { standardizeSmiles } from "./services/api";
@@ -57,13 +57,13 @@ import {
 } from "./lib/openScienceGeneralSessionBridge";
 import {
   type KnowledgeNavigationRequest,
-  type PredictableProperty,
   type StructureWorkspaceContext
 } from "./types";
 
 type ActiveModule =
   | "home"
   | "structureWorkbench"
+  | "homopolymerPrediction"
   | "explorer"
   | "mdSimulationDemo"
   | "monomerMdSimulation"
@@ -89,6 +89,7 @@ type AppRoute = {
 type KnowledgeNavigationInput = string | KnowledgeNavigationRequest;
 type AgentWorkspaceView = "general" | "projects" | "project";
 const POLYTAO_ROUTE = "/polytao-generation";
+const HOMOPOLYMER_PREDICTION_ROUTE = "/homopolymer-property-prediction";
 const LEGACY_POLYTAO_ROUTE = "/conditional-generation/polytao";
 const DATABASE_FILTER_ROUTE = "/database-filter";
 const LEGACY_DATABASE_FILTER_ROUTE = "/database/property-filter";
@@ -116,6 +117,10 @@ function routeFromPath(pathname: string): AppRoute {
 
   if (path === "/structure-workbench") {
     return { module: "structureWorkbench", datasetKey: null };
+  }
+
+  if (path === HOMOPOLYMER_PREDICTION_ROUTE) {
+    return { module: "homopolymerPrediction", datasetKey: null };
   }
 
   if (path === "/explorer") {
@@ -193,6 +198,10 @@ function routeFromPath(pathname: string): AppRoute {
 function pathFromRoute(route: AppRoute) {
   if (route.module === "structureWorkbench") {
     return "/structure-workbench";
+  }
+
+  if (route.module === "homopolymerPrediction") {
+    return HOMOPOLYMER_PREDICTION_ROUTE;
   }
 
   if (route.module === "explorer") {
@@ -332,15 +341,13 @@ export default function App() {
   );
   const activeModuleRef = useRef(activeModule);
   activeModuleRef.current = activeModule;
-  const structureWorkbenchRef = useRef<StructureWorkbenchHandle | null>(null);
+  const structureCanvasOwnerRef = useRef<StructureCanvasOwnerHandle | null>(null);
   const structureNavigationSyncRef = useRef<Promise<void> | null>(null);
   const structureNavigationIntentRef = useRef(0);
   const popstateRevisionRef = useRef(0);
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher();
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
-  const predict = usePredict();
   const tgAssistant = useTgAssistant();
-  const [selectedProperties, setSelectedProperties] = useState<PredictableProperty[]>([]);
   const agentWorkspaceIframeRef = useRef<HTMLIFrameElement | null>(null);
   const [agentWorkspaceFrameUrl, setAgentWorkspaceFrameUrl] = useState(agentWorkspaceUrl);
   const [agentWorkspaceReloadKey, setAgentWorkspaceReloadKey] = useState(0);
@@ -424,7 +431,7 @@ export default function App() {
       return structureNavigationSyncRef.current;
     }
 
-    const task = structureWorkbenchRef.current?.syncBeforeLeave() ?? Promise.resolve();
+    const task = structureCanvasOwnerRef.current?.syncBeforeLeave() ?? Promise.resolve();
     const guarded = new Promise<void>((resolve) => {
       let settled = false;
       const finish = () => {
@@ -445,7 +452,7 @@ export default function App() {
     return tracked;
   }, []);
 
-  const beforeStructureShellNavigation = useCallback(() => {
+  const beforeStructureCanvasNavigation = useCallback(() => {
     const intent = structureNavigationIntentRef.current + 1;
     structureNavigationIntentRef.current = intent;
     return syncStructureBeforeNavigation().then(
@@ -530,7 +537,11 @@ export default function App() {
         applyRoute(route);
       };
 
-      if (activeModuleRef.current === "structureWorkbench") {
+      if (
+        activeModuleRef.current === "structureWorkbench" ||
+        activeModuleRef.current === "homopolymerPrediction" ||
+        activeModuleRef.current === "explorer"
+      ) {
         void syncStructureBeforeNavigation().then(applyLatestRoute);
       } else {
         applyLatestRoute();
@@ -561,6 +572,10 @@ export default function App() {
 
   function openStructureWorkbench() {
     navigate({ module: "structureWorkbench", datasetKey: null });
+  }
+
+  function openHomopolymerPrediction() {
+    navigate({ module: "homopolymerPrediction", datasetKey: null });
   }
 
   function openMdSimulationDemo() {
@@ -664,6 +679,9 @@ export default function App() {
     switch (moduleId) {
       case "structureWorkbench":
         openStructureWorkbench();
+        break;
+      case "homopolymerPrediction":
+        openHomopolymerPrediction();
         break;
       case "labData":
         openLabData("collect");
@@ -811,8 +829,8 @@ export default function App() {
         },
         {
           id: "explorer",
-          label: "聚合物性能探索",
-          description: "编辑结构、相似匹配、3D 预览和性能预测。",
+          label: "聚合物相似性探索",
+          description: "在共享结构画板中运行结构相似或性能相似检索。",
           route: "/explorer",
           icon: <Atom className="h-4 w-4" />,
           isActive: activeModule === "explorer",
@@ -852,6 +870,15 @@ export default function App() {
       label: "材料设计",
       secondaryLabel: "Build",
       items: [
+        {
+          id: "homopolymerPrediction",
+          label: "均聚物性质预测",
+          description: "在共享结构画板中预测九项热学、力学与气体渗透性质。",
+          route: HOMOPOLYMER_PREDICTION_ROUTE,
+          icon: <BarChart3 className="h-4 w-4" />,
+          isActive: activeModule === "homopolymerPrediction",
+          onClick: openHomopolymerPrediction
+        },
         {
           id: "monomerPolymerization",
           label: "单体正向聚合",
@@ -934,6 +961,7 @@ export default function App() {
   ];
   const isFullBleedModule =
     activeModule === "explorer" ||
+    activeModule === "homopolymerPrediction" ||
     activeModule === "databaseQuery" ||
     activeModule === "databaseFilter" ||
     activeModule === "database" ||
@@ -954,6 +982,7 @@ export default function App() {
     (activeModule === "knowledge" && preserveReverseDesignForKnowledge);
   const shouldKeepStructureWorkbenchMounted =
     hasMountedStructureWorkbench &&
+    activeModule !== "homopolymerPrediction" &&
     activeModule !== "explorer" &&
     activeModule !== "databaseQuery" &&
     !isTgKetcherOwner;
@@ -987,7 +1016,11 @@ export default function App() {
       onRenameGeneralSession={(sessionID, title) => generalSessionBridge.renameSession(sessionID, title)}
       onDeleteGeneralSession={(sessionID) => generalSessionBridge.deleteSession(sessionID)}
       beforeNavigate={
-        activeModule === "structureWorkbench" ? beforeStructureShellNavigation : undefined
+        activeModule === "structureWorkbench" ||
+        activeModule === "homopolymerPrediction" ||
+        activeModule === "explorer"
+          ? beforeStructureCanvasNavigation
+          : undefined
       }
     >
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
@@ -1022,11 +1055,18 @@ export default function App() {
           aria-hidden={activeModule !== "structureWorkbench"}
         >
           <StructureWorkbenchPage
-            ref={structureWorkbenchRef}
+            ref={structureCanvasOwnerRef}
             structure={structureWorkspace}
             onOpenModule={openModuleById}
           />
         </div>
+      ) : null}
+
+      {activeModule === "homopolymerPrediction" ? (
+        <HomopolymerPropertyPredictionPage
+          ref={structureCanvasOwnerRef}
+          structure={structureWorkspace}
+        />
       ) : null}
 
       {activeModule === "database" ? (
@@ -1096,7 +1136,6 @@ export default function App() {
         <MonomerPolymerizationPage
           structure={structureWorkspace}
           onEditStructure={openStructureWorkbench}
-          onBackHome={() => navigate({ module: "home", datasetKey: null })}
         />
       ) : null}
 
@@ -1114,21 +1153,15 @@ export default function App() {
       ) : null}
 
       {activeModule === "explorer" ? (
-        <PolymerExplorerDesktopPage
-          smiles={smiles}
-          setSmiles={setSmiles}
-          iframeRef={iframeRef}
-          setIsReady={setIsReady}
-          getCurrentSmiles={getCurrentSmiles}
+        <PolymerSimilarityExplorerPage
+          ref={structureCanvasOwnerRef}
+          structure={structureWorkspace}
           request={request}
           setRequest={setRequest}
           isQueryLoading={isLoading}
           queryError={error}
           queryData={data}
           submitQuery={submit}
-          predict={predict}
-          selectedProperties={selectedProperties}
-          setSelectedProperties={setSelectedProperties}
         />
       ) : null}
     </AppShell>

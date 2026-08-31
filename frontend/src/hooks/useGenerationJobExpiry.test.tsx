@@ -31,7 +31,8 @@ vi.mock("../services/api", () => ({
   }
 }));
 
-const EXPIRED_MESSAGE = "Backend restarted or the job expired. Please resubmit.";
+const CONDITIONAL_EXPIRED_MESSAGE = "Backend restarted or the job expired. Please resubmit.";
+const POLYTAO_EXPIRED_MESSAGE = "后端服务已重启或生成任务已过期，请重新提交。";
 
 const readyPolytaoStatus: PolytaoStatusResponse = {
   enabled: true,
@@ -145,7 +146,7 @@ describe("in-memory generation job expiry", () => {
     expect(state.job?.job_id).toBe("conditional.instance.job");
     expect(state.job?.status).toBe("pending");
     expect(state.isLoading).toBe(false);
-    expect(state.error).toBe(EXPIRED_MESSAGE);
+    expect(state.error).toBe(CONDITIONAL_EXPIRED_MESSAGE);
 
     act(() => renderer!.unmount());
   });
@@ -190,7 +191,7 @@ describe("in-memory generation job expiry", () => {
     expect(state.job?.job_id).toBe("polytao.instance.job");
     expect(state.job?.status).toBe("pending");
     expect(state.isLoading).toBe(false);
-    expect(state.error).toBe(EXPIRED_MESSAGE);
+    expect(state.error).toBe(POLYTAO_EXPIRED_MESSAGE);
 
     act(() => renderer!.unmount());
   });

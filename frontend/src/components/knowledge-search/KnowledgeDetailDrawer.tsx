@@ -29,16 +29,82 @@ type KnowledgeDetailDrawerProps = {
   reopenLabel?: string;
   verticalReopen?: boolean;
   showReopen?: boolean;
+  widthProfile: KnowledgeDrawerWidthProfile;
   onWidthChange: (width: number) => void;
   onClose: () => void;
   onOpen: () => void;
 };
 
-const MIN_DRAWER_WIDTH = 320;
-const MAX_DRAWER_WIDTH = 560;
+type KnowledgeDrawerWidthProfile = {
+  min: number;
+  max: number;
+  defaultWidth: number;
+  keyboardStep: number;
+  keyboardLargeStep: number;
+};
+
+const TWO_K_MEDIA_QUERY = "(min-width: 2000px) and (min-height: 1120px)";
+
+const STANDARD_DRAWER_PROFILE: KnowledgeDrawerWidthProfile = {
+  min: 320,
+  max: 560,
+  defaultWidth: 380,
+  keyboardStep: 10,
+  keyboardLargeStep: 40
+};
+
+const TWO_K_DRAWER_PROFILE: KnowledgeDrawerWidthProfile = {
+  min: 480,
+  max: 720,
+  defaultWidth: 540,
+  keyboardStep: 24,
+  keyboardLargeStep: 72
+};
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function isTwoKViewport() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(TWO_K_MEDIA_QUERY).matches
+  );
+}
+
+export function useKnowledgeDrawerSizing() {
+  const [isTwoK, setIsTwoK] = useState(isTwoKViewport);
+  const [drawerWidth, setDrawerWidth] = useState(() =>
+    isTwoKViewport() ? TWO_K_DRAWER_PROFILE.defaultWidth : STANDARD_DRAWER_PROFILE.defaultWidth
+  );
+  const widthProfile = isTwoK ? TWO_K_DRAWER_PROFILE : STANDARD_DRAWER_PROFILE;
+  const previousProfileRef = useRef(widthProfile);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(TWO_K_MEDIA_QUERY);
+    const update = () => setIsTwoK(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    const previousProfile = previousProfileRef.current;
+    if (previousProfile === widthProfile) return;
+    setDrawerWidth((currentWidth) => {
+      const ratio = clamp(
+        (currentWidth - previousProfile.min) / (previousProfile.max - previousProfile.min),
+        0,
+        1
+      );
+      return Math.round(widthProfile.min + ratio * (widthProfile.max - widthProfile.min));
+    });
+    previousProfileRef.current = widthProfile;
+  }, [widthProfile]);
+
+  return { drawerWidth, setDrawerWidth, widthProfile };
 }
 
 function useMobileDrawer() {
@@ -75,6 +141,7 @@ export function KnowledgeDetailDrawer({
   reopenLabel = "重新打开详情",
   verticalReopen = false,
   showReopen = true,
+  widthProfile,
   onWidthChange,
   onClose,
   onOpen
@@ -145,8 +212,8 @@ export function KnowledgeDetailDrawer({
       onWidthChange(
         clamp(
           dragState.current.startWidth + dragState.current.startX - event.clientX,
-          MIN_DRAWER_WIDTH,
-          MAX_DRAWER_WIDTH
+          widthProfile.min,
+          widthProfile.max
         )
       );
     }
@@ -164,7 +231,7 @@ export function KnowledgeDetailDrawer({
       window.removeEventListener("pointerup", stopResize);
       window.removeEventListener("pointercancel", stopResize);
     };
-  }, [onWidthChange, resizing]);
+  }, [onWidthChange, resizing, widthProfile]);
 
   function startResize(event: ReactPointerEvent<HTMLDivElement>) {
     if (mobile) return;
@@ -176,9 +243,9 @@ export function KnowledgeDetailDrawer({
   function resizeWithKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
-    const step = event.shiftKey ? 40 : 10;
+    const step = event.shiftKey ? widthProfile.keyboardLargeStep : widthProfile.keyboardStep;
     onWidthChange(
-      clamp(width + (event.key === "ArrowLeft" ? step : -step), MIN_DRAWER_WIDTH, MAX_DRAWER_WIDTH)
+      clamp(width + (event.key === "ArrowLeft" ? step : -step), widthProfile.min, widthProfile.max)
     );
   }
 
@@ -239,8 +306,8 @@ export function KnowledgeDetailDrawer({
           tabIndex={open && !mobile ? 0 : -1}
           aria-label="调整详情抽屉宽度"
           aria-orientation="vertical"
-          aria-valuemin={MIN_DRAWER_WIDTH}
-          aria-valuemax={MAX_DRAWER_WIDTH}
+          aria-valuemin={widthProfile.min}
+          aria-valuemax={widthProfile.max}
           aria-valuenow={Math.round(width)}
           onPointerDown={startResize}
           onKeyDown={resizeWithKeyboard}

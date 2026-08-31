@@ -104,6 +104,9 @@ async function errorMessageFromResponse(response: Response): Promise<string> {
   if (typeof data?.detail === "string") {
     return data.detail;
   }
+  if (typeof data?.message === "string") {
+    return data.message;
+  }
   if (Array.isArray(data?.detail)) {
     return `Request validation failed with status ${response.status}`;
   }
@@ -165,8 +168,8 @@ export function lookupSmilesInDatabase(payload: SmilesLookupRequest): Promise<Sm
   return postJSON("/database-browser/smiles-lookup", payload);
 }
 
-export function predictSmiles(payload: PredictRequest): Promise<PredictResponse> {
-  return postJSON("/predict", payload);
+export function predictSmiles(payload: PredictRequest, signal?: AbortSignal): Promise<PredictResponse> {
+  return postJSON("/predict", payload, signal);
 }
 
 export function fetchMdDemoDefaults(): Promise<MdDemoDefaultsResponse> {
@@ -683,14 +686,17 @@ export function predictMonomerPrecursors(
   return postJSON("/monomer-retrosynthesis", payload, signal);
 }
 
-export function fetchMonomerPolymerizationStatus(): Promise<MonomerPolymerizationStatusResponse> {
-  return getJSON("/monomer-polymerization/status");
+export function fetchMonomerPolymerizationStatus(
+  signal?: AbortSignal
+): Promise<MonomerPolymerizationStatusResponse> {
+  return getJSON("/monomer-polymerization/status", { cache: "no-store", signal });
 }
 
 export function runMonomerPolymerization(
-  payload: MonomerPolymerizationRequest
+  payload: MonomerPolymerizationRequest,
+  signal?: AbortSignal
 ): Promise<MonomerPolymerizationResponse> {
-  return postJSON("/monomer-polymerization", payload);
+  return postJSON("/monomer-polymerization", payload, signal);
 }
 
 export function fetchDftPcaSample(limit = 200, signal?: AbortSignal): Promise<DftPcaSampleResponse> {

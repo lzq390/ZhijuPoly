@@ -45,6 +45,11 @@ type AppShellProps = {
 };
 
 const BEFORE_NAVIGATE_TIMEOUT_MS = 1500;
+const SCROLLBAR_HIDE_DELAY_MS = 700;
+const SCROLLBAR_FADE_IN_MS = 160;
+const SCROLLBAR_FADE_OUT_MS = 240;
+const SCROLLBAR_HIDDEN_THUMB_COLOR = "rgba(88, 112, 141, 0)";
+const SCROLLBAR_ACTIVE_THUMB_COLOR = "rgba(88, 112, 141, 0.5)";
 
 function waitForNavigationGuard(beforeNavigate: () => Promise<void | boolean>) {
   return new Promise<boolean>((resolve) => {
@@ -169,23 +174,31 @@ export function AppShell({
   const mobileMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const mobileCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const navigationPendingRef = useRef(false);
+  const appShellRef = useRef<HTMLDivElement | null>(null);
+  const scrollbarHideTimersRef = useRef<Map<HTMLElement, number>>(new Map());
+  const scrollbarAnimationsRef = useRef<Map<HTMLElement, Animation>>(new Map());
   const gpuSessionControl = useDevGpuSessionControl(DEV_GPU_SESSION_CONTROL_ENABLED);
 
   const isHome = activeModule === "home";
   const isReverseDesignWorkbench = activeModule === "reverseDesign";
   const isConditionalGenerationWorkbench = activeModule === "conditionalGeneration";
   const isStructureWorkbench = activeModule === "structureWorkbench";
+  const isHomopolymerPredictionWorkbench = activeModule === "homopolymerPrediction";
+  const isMonomerPolymerizationWorkbench = activeModule === "monomerPolymerization";
+  const isSimilarityExplorerWorkbench = activeModule === "explorer";
   const isDatabaseFilterWorkbench = activeModule === "databaseFilter";
   const isDatabaseAnalysisWorkbench = activeModule === "database";
   const isKnowledgeWorkbench = activeModule === "knowledge";
   const isPolytaoWorkbench = activeModule === "polytaoGeneration";
   const isResearchWorkbench =
-    activeModule === "explorer" ||
+    isSimilarityExplorerWorkbench ||
     activeModule === "databaseQuery" ||
     isDatabaseFilterWorkbench ||
     isDatabaseAnalysisWorkbench ||
     isKnowledgeWorkbench ||
     isPolytaoWorkbench ||
+    isHomopolymerPredictionWorkbench ||
+    isMonomerPolymerizationWorkbench ||
     isStructureWorkbench ||
     isReverseDesignWorkbench ||
     isConditionalGenerationWorkbench;
@@ -263,6 +276,95 @@ export function AppShell({
     return () => desktopMedia.removeEventListener("change", handleViewportChange);
   }, []);
 
+  useEffect(() => {
+    const appShell = appShellRef.current;
+    if (!appShell) return;
+
+    const scrollbarHideTimers = scrollbarHideTimersRef.current;
+    const scrollbarAnimations = scrollbarAnimationsRef.current;
+
+    function setScrollbarVisible(scrollRegion: HTMLElement, visible: boolean) {
+      const currentColor = window
+        .getComputedStyle(scrollRegion)
+        .getPropertyValue("--np-scrollbar-thumb-color")
+        .trim();
+      const previousAnimation = scrollbarAnimations.get(scrollRegion);
+      if (previousAnimation) {
+        scrollbarAnimations.delete(scrollRegion);
+        previousAnimation.cancel();
+      }
+
+      if (visible) {
+        scrollRegion.setAttribute("data-scrollbar-active", "true");
+      } else {
+        scrollRegion.removeAttribute("data-scrollbar-active");
+      }
+
+      if (typeof scrollRegion.animate !== "function") return;
+      const targetColor = visible
+        ? SCROLLBAR_ACTIVE_THUMB_COLOR
+        : SCROLLBAR_HIDDEN_THUMB_COLOR;
+      const startColor = currentColor && currentColor !== "auto"
+        ? currentColor
+        : visible
+          ? SCROLLBAR_HIDDEN_THUMB_COLOR
+          : SCROLLBAR_ACTIVE_THUMB_COLOR;
+      if (startColor === targetColor) return;
+
+      try {
+        const animation = scrollRegion.animate(
+          [
+            { "--np-scrollbar-thumb-color": startColor },
+            { "--np-scrollbar-thumb-color": targetColor }
+          ],
+          {
+            duration: visible ? SCROLLBAR_FADE_IN_MS : SCROLLBAR_FADE_OUT_MS,
+            easing: visible ? "ease-out" : "ease-in",
+            fill: "both"
+          }
+        );
+        scrollbarAnimations.set(scrollRegion, animation);
+        animation.onfinish = () => {
+          if (scrollbarAnimations.get(scrollRegion) !== animation) return;
+          scrollbarAnimations.delete(scrollRegion);
+          animation.cancel();
+        };
+      } catch {
+        // The data attribute still provides an immediate fallback in browsers
+        // that expose Web Animations but cannot animate registered custom properties.
+      }
+    }
+
+    function handleScroll(event: Event) {
+      const scrollRegion = event.target;
+      if (!(scrollRegion instanceof HTMLElement)) return;
+
+      if (!scrollRegion.hasAttribute("data-scrollbar-active")) {
+        setScrollbarVisible(scrollRegion, true);
+      }
+      const previousTimer = scrollbarHideTimers.get(scrollRegion);
+      if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+
+      const nextTimer = window.setTimeout(() => {
+        setScrollbarVisible(scrollRegion, false);
+        scrollbarHideTimers.delete(scrollRegion);
+      }, SCROLLBAR_HIDE_DELAY_MS);
+      scrollbarHideTimers.set(scrollRegion, nextTimer);
+    }
+
+    appShell.addEventListener("scroll", handleScroll, { capture: true, passive: true });
+    return () => {
+      appShell.removeEventListener("scroll", handleScroll, true);
+      scrollbarHideTimers.forEach((timer, scrollRegion) => {
+        window.clearTimeout(timer);
+        scrollRegion.removeAttribute("data-scrollbar-active");
+      });
+      scrollbarHideTimers.clear();
+      scrollbarAnimations.forEach((animation) => animation.cancel());
+      scrollbarAnimations.clear();
+    };
+  }, []);
+
   function handleNavigate(action: () => void) {
     closeMobileMenu(false);
     if (!beforeNavigate) {
@@ -328,7 +430,7 @@ export function AppShell({
   };
 
   return (
-    <div className="np-app-shell">
+    <div ref={appShellRef} className="np-app-shell">
       <aside className="np-sidebar-desktop" aria-label="平台侧边栏">
         <PlatformSidebar {...sharedSidebarProps} gpuStatusId="gpu-session-status-desktop" />
       </aside>
@@ -361,6 +463,9 @@ export function AppShell({
                     isReverseDesignWorkbench ||
                     isConditionalGenerationWorkbench ||
                     isStructureWorkbench ||
+                    isHomopolymerPredictionWorkbench ||
+                    isMonomerPolymerizationWorkbench ||
+                    isSimilarityExplorerWorkbench ||
                     isDatabaseFilterWorkbench ||
                     isDatabaseAnalysisWorkbench ||
                     isKnowledgeWorkbench ||

@@ -844,7 +844,10 @@ export function DatabaseQueryPage({ structure }: DatabaseQueryPageProps) {
                       <textarea
                         className="smiles-textarea database-query-smiles-textarea"
                         value={smiles}
-                        placeholder="输入聚合物 SMILES（例如 *CC*、CCO），或在上方画布绘制后点击生成SMILES"
+                        maxLength={8000}
+                        spellCheck={false}
+                        aria-label="SMILES 输入，自动同步到画板"
+                        placeholder="输入聚合物 SMILES（例如 *CC*、CCO）后将自动同步到上方画板"
                         onChange={(event) => updateSmiles(event.target.value)}
                       />
 

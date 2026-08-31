@@ -19,6 +19,10 @@ const mocks = vi.hoisted(() => ({
   syncSmilesFromCanvas: vi.fn(),
   toggle3D: vi.fn(),
   copySmiles: vi.fn(),
+  updateSmilesDraft: vi.fn(),
+  flushSmilesDraft: vi.fn(),
+  cancelSmilesDraftSync: vi.fn(),
+  adoptCanvasSmiles: vi.fn(),
   handleEditorLoad: vi.fn(),
   data: null as ConditionalGenerationTgResponse | null
 }));
@@ -64,7 +68,7 @@ vi.mock("../hooks/useTgStructureCanvas", async () => {
   );
   return {
     ...actual,
-    useTgStructureCanvas: () => ({
+    useTgStructureCanvas: ({ structure }: { structure: { smiles: string } }) => ({
       fileInputRef: { current: null },
       handleEditorLoad: mocks.handleEditorLoad,
       isEditorReady: true,
@@ -78,6 +82,13 @@ vi.mock("../hooks/useTgStructureCanvas", async () => {
       feedback: null,
       setFeedback: vi.fn(),
       copyState: "idle",
+      smilesDraft: structure.smiles,
+      smilesDraftState: "synced",
+      smilesDraftError: null,
+      updateSmilesDraft: mocks.updateSmilesDraft,
+      flushSmilesDraft: mocks.flushSmilesDraft,
+      cancelSmilesDraftSync: mocks.cancelSmilesDraftSync,
+      adoptCanvasSmiles: mocks.adoptCanvasSmiles,
       clearCanvas: mocks.clearCanvas,
       importImageFile: mocks.importImageFile,
       syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
@@ -108,6 +119,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.data = null;
   mocks.resolveSmilesForSearch.mockResolvedValue("*CC*");
+  mocks.flushSmilesDraft.mockResolvedValue(true);
+  mocks.cancelSmilesDraftSync.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -139,24 +152,35 @@ describe("ConditionalGenerationPage Tg workbench reuse", () => {
     expect(mocks.handleEditorLoad).toHaveBeenCalledOnce();
   });
 
-  it("wires the shared Tg canvas toolbar actions to the same controls", () => {
+  it("wires the shared Tg canvas toolbar actions to the same controls", async () => {
     render(<ConditionalGenerationPage structure={makeStructure()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "清空画布" }));
+    await waitFor(() => expect(mocks.clearCanvas).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole("button", { name: "生成SMILES" }));
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole("button", { name: "3D构象" }));
-    fireEvent.click(screen.getByRole("button", { name: "复制共享 SMILES" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制当前 SMILES 输入" }));
 
-    expect(mocks.clearCanvas).toHaveBeenCalledOnce();
-    expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledOnce();
     expect(mocks.toggle3D).toHaveBeenCalledOnce();
-    expect(mocks.copySmiles).toHaveBeenCalledOnce();
+    expect(mocks.copySmiles).toHaveBeenCalledWith("*CC*");
+    expect(mocks.cancelSmilesDraftSync).toHaveBeenCalledTimes(2);
+    expect(mocks.adoptCanvasSmiles).toHaveBeenCalledTimes(2);
 
     const structureImage = new File(["image"], "seed.png", { type: "image/png" });
     fireEvent.change(screen.getByLabelText("导入结构图片"), {
       target: { files: [structureImage] }
     });
-    expect(mocks.importImageFile).toHaveBeenCalledWith(structureImage);
+    await waitFor(() => expect(mocks.importImageFile).toHaveBeenCalledWith(structureImage));
+  });
+
+  it("允许从下方 SMILES 输入同步种子结构到画板", () => {
+    render(<ConditionalGenerationPage structure={makeStructure()} />);
+    const input = screen.getByLabelText("SMILES 输入，自动同步到画板") as HTMLTextAreaElement;
+
+    expect(input.readOnly).toBe(false);
+    fireEvent.change(input, { target: { value: "*CO*" } });
+    expect(mocks.updateSmilesDraft).toHaveBeenCalledWith("*CO*");
   });
 
   it("keeps parameter and assistant panels exclusive and submits from the parameter flyout", async () => {

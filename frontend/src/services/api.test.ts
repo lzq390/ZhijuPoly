@@ -6,6 +6,7 @@ import {
   fetchDatabaseAnalytics,
   fetchDatabaseDatasetSummary,
   fetchDevGpuSessionStatus,
+  fetchMonomerPolymerizationStatus,
   fetchMonomerMdJobs,
   fetchPropertyFilterHistogram,
   fetchPropertyFilterOptions,
@@ -15,8 +16,10 @@ import {
   fetchStructure3D,
   fetchTgAssistantGuide,
   fetchTgAssistantStatus,
+  predictSmiles,
   predictMonomerPrecursors,
   recoverDevGpuSession,
+  runMonomerPolymerization,
   searchPropertyFilterRecords
 } from "./api";
 
@@ -69,6 +72,77 @@ describe("structure workbench request contracts", () => {
     await predictMonomerPrecursors(payload, controller.signal);
 
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/monomer-retrosynthesis", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+  });
+
+  it("forwards AbortSignal to property prediction and keeps backend messages", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ predictions: {}, query_time_ms: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    ).mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: "模型暂不可用" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const payload = {
+      smiles: "*CC*",
+      properties: ["Glass transition temperature" as const]
+    };
+
+    await predictSmiles(payload, controller.signal);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/predict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    await expect(predictSmiles(payload)).rejects.toMatchObject({ message: "模型暂不可用" });
+  });
+
+  it("forwards AbortSignal through both monomer polymerization calls without changing the payload", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        enabled: true,
+        available: true,
+        default_target_class: "polyether",
+        available_target_classes: ["polyether"],
+        max_results_limit: 20,
+        message: "ready"
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        input_monomers: [],
+        target_class: "polyether",
+        query_time_ms: 1,
+        total: 0,
+        results: [],
+        warnings: []
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const payload = {
+      monomer_a_smiles: "CCO",
+      monomer_b_smiles: null,
+      target_class: "polyether" as const,
+      max_results: 5
+    };
+
+    await fetchMonomerPolymerizationStatus(controller.signal);
+    await runMonomerPolymerization(payload, controller.signal);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/monomer-polymerization/status", {
+      cache: "no-store",
+      signal: controller.signal
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/monomer-polymerization", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
