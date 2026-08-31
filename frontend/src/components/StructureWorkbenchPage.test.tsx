@@ -18,13 +18,17 @@ const mocks = vi.hoisted(() => ({
   syncSmilesFromCanvas: vi.fn(),
   toggle3D: vi.fn(),
   copySmiles: vi.fn(),
+  updateSmilesDraft: vi.fn(),
+  flushSmilesDraft: vi.fn(),
+  cancelSmilesDraftSync: vi.fn(),
+  adoptCanvasSmiles: vi.fn(),
   handleEditorLoad: vi.fn(),
   setFeedback: vi.fn(),
   predictMonomerPrecursors: vi.fn()
 }));
 
 vi.mock("../hooks/useTgStructureCanvas", () => ({
-  useTgStructureCanvas: () => ({
+  useTgStructureCanvas: ({ structure }: { structure: { smiles: string } }) => ({
     fileInputRef: { current: null },
     handleEditorLoad: mocks.handleEditorLoad,
     isEditorReady: true,
@@ -38,6 +42,13 @@ vi.mock("../hooks/useTgStructureCanvas", () => ({
     feedback: null,
     setFeedback: mocks.setFeedback,
     copyState: "idle",
+    smilesDraft: structure.smiles,
+    smilesDraftState: "synced",
+    smilesDraftError: null,
+    updateSmilesDraft: mocks.updateSmilesDraft,
+    flushSmilesDraft: mocks.flushSmilesDraft,
+    cancelSmilesDraftSync: mocks.cancelSmilesDraftSync,
+    adoptCanvasSmiles: mocks.adoptCanvasSmiles,
     loadStructure: mocks.loadStructure,
     clearCanvas: mocks.clearCanvas,
     importImageFile: mocks.importImageFile,
@@ -106,6 +117,8 @@ beforeEach(() => {
     mocks.canvasState.isFlipped = true;
     return true;
   });
+  mocks.flushSmilesDraft.mockResolvedValue(true);
+  mocks.cancelSmilesDraftSync.mockResolvedValue(undefined);
 });
 
 afterEach(() => cleanup());
@@ -134,26 +147,28 @@ describe("StructureWorkbenchPage", () => {
     expect(view.container.querySelector(".np-sw-editor__layer--3d")?.hasAttribute("inert")).toBe(false);
   });
 
-  it("严格保留原版只读 SMILES 胶囊和复制行为", () => {
+  it("允许编辑 SMILES，并触发自动同步队列与复制行为", () => {
     renderPage();
-    const output = screen.getByLabelText("当前共享 SMILES，只读") as HTMLTextAreaElement;
+    const input = screen.getByLabelText("SMILES 输入，自动同步到画板") as HTMLTextAreaElement;
 
-    expect(output.readOnly).toBe(true);
-    expect(output.value).toBe("*CC*");
-    fireEvent.click(screen.getByRole("button", { name: "复制共享 SMILES" }));
-    expect(mocks.copySmiles).toHaveBeenCalledOnce();
+    expect(input.readOnly).toBe(false);
+    expect(input.value).toBe("*CC*");
+    fireEvent.change(input, { target: { value: "*CO*" } });
+    expect(mocks.updateSmilesDraft).toHaveBeenCalledWith("*CO*");
+    fireEvent.click(screen.getByRole("button", { name: "复制当前 SMILES 输入" }));
+    expect(mocks.copySmiles).toHaveBeenCalledWith("*CC*");
     expect(screen.queryByRole("button", { name: "应用结构" })).toBeNull();
   });
 
-  it("共享结构变化直接反映到原版只读胶囊", () => {
+  it("共享结构变化直接反映到可编辑 SMILES 输入框", () => {
     const structure = makeStructure("CC");
     const view = render(<StructureWorkbenchPage structure={structure} onOpenModule={vi.fn()} />);
-    expect((screen.getByLabelText("当前共享 SMILES，只读") as HTMLTextAreaElement).value).toBe("CC");
+    expect((screen.getByLabelText("SMILES 输入，自动同步到画板") as HTMLTextAreaElement).value).toBe("CC");
 
     view.rerender(
       <StructureWorkbenchPage structure={{ ...structure, smiles: "NN" }} onOpenModule={vi.fn()} />
     );
-    expect((screen.getByLabelText("当前共享 SMILES，只读") as HTMLTextAreaElement).value).toBe("NN");
+    expect((screen.getByLabelText("SMILES 输入，自动同步到画板") as HTMLTextAreaElement).value).toBe("NN");
   });
 
   it("默认页面不再展示原版没有的说明和状态组件", () => {

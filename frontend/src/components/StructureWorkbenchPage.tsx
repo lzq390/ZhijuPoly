@@ -119,6 +119,7 @@ export const StructureWorkbenchPage = forwardRef<
     forwardedRef,
     () => ({
       async syncBeforeLeave() {
+        if (!(await canvas.flushSmilesDraft())) return;
         await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
       }
     }),
@@ -219,15 +220,17 @@ export const StructureWorkbenchPage = forwardRef<
     setSelectedModuleName(shortName);
     setOpeningModuleId(id);
     try {
+      if (!(await canvas.flushSmilesDraft())) return;
       await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
     } finally {
       setOpeningModuleId(null);
-      closePanel(false);
-      onOpenModule(id);
     }
+    closePanel(false);
+    onOpenModule(id);
   }
 
   async function useCurrentStructureForRetrosynthesis() {
+    if (!(await canvas.flushSmilesDraft())) return;
     const currentSmiles = await canvas.syncSmilesFromCanvas({
       preserveExisting: true,
       quiet: true
@@ -346,11 +349,11 @@ export const StructureWorkbenchPage = forwardRef<
                   onClick: () => togglePanel("assistant")
                 }
               ]}
-              onLoadExample={() => void loadExample()}
-              onImportFile={(file) => void importImage(file)}
-              onClear={() => void clearStructure()}
-              onSync={() => void syncFromCanvas()}
-              onToggle3D={() => void toggle3D()}
+              onLoadExample={loadExample}
+              onImportFile={importImage}
+              onClear={clearStructure}
+              onSync={syncFromCanvas}
+              onToggle3D={toggle3D}
             />
 
             <StructureUtilityPanels

@@ -24,6 +24,13 @@ vi.mock("./hooks/useTgStructureCanvas", () => ({
     feedback: null,
     setFeedback: vi.fn(),
     copyState: "idle",
+    smilesDraft: "",
+    smilesDraftState: "synced",
+    smilesDraftError: null,
+    updateSmilesDraft: vi.fn(),
+    flushSmilesDraft: vi.fn().mockResolvedValue(true),
+    cancelSmilesDraftSync: vi.fn().mockResolvedValue(undefined),
+    adoptCanvasSmiles: vi.fn(),
     loadStructure: vi.fn().mockResolvedValue(true),
     applyTextStructure: vi.fn().mockImplementation(async (value: string) => ({ applied: true, smiles: value })),
     clearCanvas: vi.fn().mockResolvedValue(true),
@@ -153,7 +160,7 @@ describe("App 结构工作台挂载与导航", () => {
     window.history.pushState({}, "", "/knowledge");
     fireEvent(window, new PopStateEvent("popstate"));
     expect(screen.queryByTestId("knowledge")).toBeNull();
-    expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1));
 
     deferred.resolve?.();
     await screen.findByTestId("knowledge");
@@ -172,7 +179,7 @@ describe("App 结构工作台挂载与导航", () => {
     fireEvent.click(target);
     fireEvent.click(target);
     expect(screen.queryByTestId("database-filter")).toBeNull();
-    expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1));
 
     deferred.resolve?.();
     await screen.findByTestId("database-filter");
@@ -190,7 +197,7 @@ describe("App 结构工作台挂载与导航", () => {
     fireEvent(window, new PopStateEvent("popstate"));
     window.history.pushState({}, "", "/knowledge");
     fireEvent(window, new PopStateEvent("popstate"));
-    expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1));
 
     deferred.resolve?.();
     await screen.findByTestId("knowledge");
@@ -209,7 +216,7 @@ describe("App 结构工作台挂载与导航", () => {
     window.history.pushState({}, "", "/knowledge");
     fireEvent(window, new PopStateEvent("popstate"));
     expect(screen.queryByTestId("knowledge")).toBeNull();
-    expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1));
 
     deferred.resolve?.();
     await screen.findByTestId("knowledge");

@@ -121,6 +121,7 @@ export const PolymerSimilarityExplorerPage = forwardRef<
     forwardedRef,
     () => ({
       async syncBeforeLeave() {
+        if (!(await canvas.flushSmilesDraft())) return;
         await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
       }
     }),
@@ -219,11 +220,11 @@ export const PolymerSimilarityExplorerPage = forwardRef<
                   onClick: () => setParametersOpen((current) => !current)
                 }
               ]}
-              onLoadExample={() => void canvas.loadStructure(SIMILARITY_EXAMPLE_SMILES)}
-              onImportFile={(file) => void canvas.importImageFile(file)}
-              onClear={() => void canvas.clearCanvas()}
-              onSync={() => void canvas.syncSmilesFromCanvas()}
-              onToggle3D={() => void toggle3D()}
+              onLoadExample={() => canvas.loadStructure(SIMILARITY_EXAMPLE_SMILES)}
+              onImportFile={(file) => canvas.importImageFile(file)}
+              onClear={() => canvas.clearCanvas()}
+              onSync={() => canvas.syncSmilesFromCanvas()}
+              onToggle3D={toggle3D}
             />
 
             <SimilarityExplorerParameters

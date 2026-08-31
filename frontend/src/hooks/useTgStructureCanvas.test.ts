@@ -29,6 +29,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -405,6 +406,120 @@ describe("Tg structure canvas wildcard protection", () => {
     });
     expect(structure.setSmiles).toHaveBeenCalledWith("*CC*");
     expect(onStructureChanged).toHaveBeenCalledOnce();
+  });
+
+  it("将可编辑 SMILES 防抖校验后写入 Ketcher 画板", async () => {
+    let editorSmiles = "*CC*";
+    const clear = vi.fn(async () => {
+      editorSmiles = "";
+    });
+    const setMolecule = vi.fn(async (value: string) => {
+      editorSmiles = value;
+    });
+    const ketcher = {
+      clear,
+      setMolecule,
+      getSmiles: vi.fn(async () => editorSmiles),
+      getMolfile: vi.fn().mockResolvedValue("old-molfile")
+    };
+    const structure = {
+      smiles: "*CC*",
+      setSmiles: vi.fn(),
+      iframeRef: {
+        current: {
+          contentWindow: { ketcher, Event, dispatchEvent: vi.fn(), scrollTo: vi.fn() }
+        }
+      },
+      setIsReady: vi.fn(),
+      getCurrentSmiles: vi.fn().mockResolvedValue("*CC*")
+    } as unknown as StructureWorkspaceContext;
+    const onStructureChanged = vi.fn();
+    const { result } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged }));
+
+    act(() => result.current.updateSmilesDraft("*CO*"));
+    expect(result.current.smilesDraftState).toBe("pending");
+    expect(apiMocks.standardizeSmiles).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => expect(result.current.smilesDraftState).toBe("synced"), {
+      timeout: 2000
+    });
+
+    expect(apiMocks.standardizeSmiles).toHaveBeenCalledWith({ smiles: "*CO*" });
+    expect(clear).toHaveBeenCalledOnce();
+    expect(setMolecule).toHaveBeenCalledWith("*CO*");
+    expect(structure.setSmiles).toHaveBeenCalledWith("*CO*");
+    expect(onStructureChanged).toHaveBeenCalledOnce();
+    expect(result.current.smilesDraft).toBe("*CO*");
+    expect(result.current.smilesDraftState).toBe("synced");
+  });
+
+  it("无效 SMILES 保留原画板并显示可恢复错误", async () => {
+    const structure = {
+      smiles: "*CC*",
+      setSmiles: vi.fn(),
+      iframeRef: { current: null },
+      setIsReady: vi.fn(),
+      getCurrentSmiles: vi.fn().mockResolvedValue("*CC*")
+    } as StructureWorkspaceContext;
+    apiMocks.standardizeSmiles.mockRejectedValue(new Error("invalid smiles"));
+    const { result } = renderHook(() => useTgStructureCanvas({
+      structure,
+      onStructureChanged: vi.fn()
+    }));
+
+    act(() => result.current.updateSmilesDraft("*C("));
+    let applied = true;
+    await act(async () => {
+      applied = await result.current.flushSmilesDraft();
+    });
+
+    expect(applied).toBe(false);
+    expect(structure.setSmiles).not.toHaveBeenCalled();
+    expect(result.current.smilesDraft).toBe("*C(");
+    expect(result.current.smilesDraftState).toBe("error");
+    expect(result.current.smilesDraftError).toContain("原画板未修改");
+  });
+
+  it("忽略已失效的文本校验结果，只应用最后一次输入", async () => {
+    let resolveFirst: ((value: { input_smiles: string; standardized_smiles: string }) => void) | null = null;
+    apiMocks.standardizeSmiles
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirst = resolve;
+      }))
+      .mockResolvedValueOnce({ input_smiles: "*CN*", standardized_smiles: "*CN*" });
+    const structure = {
+      smiles: "*CC*",
+      setSmiles: vi.fn(),
+      iframeRef: { current: null },
+      setIsReady: vi.fn(),
+      getCurrentSmiles: vi.fn().mockResolvedValue("*CC*")
+    } as StructureWorkspaceContext;
+    const { result } = renderHook(() => useTgStructureCanvas({
+      structure,
+      onStructureChanged: vi.fn()
+    }));
+
+    act(() => result.current.updateSmilesDraft("*CO*"));
+    let firstSync: Promise<boolean> | null = null;
+    act(() => {
+      firstSync = result.current.flushSmilesDraft();
+    });
+    await vi.waitFor(() => expect(apiMocks.standardizeSmiles).toHaveBeenCalledTimes(1));
+
+    act(() => result.current.updateSmilesDraft("*CN*"));
+    let secondSync: Promise<boolean> | null = null;
+    act(() => {
+      secondSync = result.current.flushSmilesDraft();
+    });
+    act(() => resolveFirst?.({ input_smiles: "*CO*", standardized_smiles: "*CO*" }));
+
+    await act(async () => {
+      expect(await firstSync).toBe(false);
+      expect(await secondSync).toBe(true);
+    });
+    expect(structure.setSmiles).toHaveBeenCalledTimes(1);
+    expect(structure.setSmiles).toHaveBeenCalledWith("*CN*");
+    expect(result.current.smilesDraft).toBe("*CN*");
   });
 
   it("文本模式清空共享结构而不要求编辑器存在", async () => {

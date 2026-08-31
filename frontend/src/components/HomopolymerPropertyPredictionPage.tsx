@@ -103,6 +103,7 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
     forwardedRef,
     () => ({
       async syncBeforeLeave() {
+        if (!(await canvas.flushSmilesDraft())) return;
         await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
       }
     }),
@@ -175,11 +176,11 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
                   onClick: () => setParametersOpen((current) => !current)
                 }
               ]}
-              onLoadExample={() => void canvas.loadStructure(HOMOPOLYMER_EXAMPLE_SMILES)}
-              onImportFile={(file) => void canvas.importImageFile(file)}
-              onClear={() => void canvas.clearCanvas()}
-              onSync={() => void canvas.syncSmilesFromCanvas()}
-              onToggle3D={() => void toggle3D()}
+              onLoadExample={() => canvas.loadStructure(HOMOPOLYMER_EXAMPLE_SMILES)}
+              onImportFile={(file) => canvas.importImageFile(file)}
+              onClear={() => canvas.clearCanvas()}
+              onSync={() => canvas.syncSmilesFromCanvas()}
+              onToggle3D={toggle3D}
             />
 
             <HomopolymerPredictionParameters

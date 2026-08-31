@@ -20,11 +20,15 @@ const mocks = vi.hoisted(() => ({
   resolveSmilesForSearch: vi.fn(),
   toggle3D: vi.fn(),
   copySmiles: vi.fn(),
+  updateSmilesDraft: vi.fn(),
+  flushSmilesDraft: vi.fn(),
+  cancelSmilesDraftSync: vi.fn(),
+  adoptCanvasSmiles: vi.fn(),
   handleEditorLoad: vi.fn()
 }));
 
 vi.mock("../hooks/useTgStructureCanvas", () => ({
-  useTgStructureCanvas: () => ({
+  useTgStructureCanvas: ({ structure }: { structure: { smiles: string } }) => ({
     fileInputRef: { current: null },
     handleEditorLoad: mocks.handleEditorLoad,
     isEditorReady: true,
@@ -38,6 +42,13 @@ vi.mock("../hooks/useTgStructureCanvas", () => ({
     feedback: null,
     setFeedback: vi.fn(),
     copyState: "idle",
+    smilesDraft: structure.smiles,
+    smilesDraftState: "synced",
+    smilesDraftError: null,
+    updateSmilesDraft: mocks.updateSmilesDraft,
+    flushSmilesDraft: mocks.flushSmilesDraft,
+    cancelSmilesDraftSync: mocks.cancelSmilesDraftSync,
+    adoptCanvasSmiles: mocks.adoptCanvasSmiles,
     loadStructure: mocks.loadStructure,
     clearCanvas: mocks.clearCanvas,
     importImageFile: mocks.importImageFile,
@@ -140,6 +151,8 @@ beforeEach(() => {
   mocks.syncSmilesFromCanvas.mockResolvedValue("*CC*");
   mocks.resolveSmilesForSearch.mockResolvedValue("*CC*");
   mocks.toggle3D.mockResolvedValue(true);
+  mocks.flushSmilesDraft.mockResolvedValue(true);
+  mocks.cancelSmilesDraftSync.mockResolvedValue(undefined);
 });
 
 afterEach(() => cleanup());
