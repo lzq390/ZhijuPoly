@@ -33,7 +33,11 @@ import type {
   OnlineKnowledgeSearchResponse,
   OnlineKnowledgeSynthesis
 } from "../../types";
-import { KnowledgeDetailDrawer, type KnowledgeDrawerTab } from "../knowledge-search/KnowledgeDetailDrawer";
+import {
+  KnowledgeDetailDrawer,
+  type KnowledgeDrawerTab,
+  useKnowledgeDrawerSizing
+} from "../knowledge-search/KnowledgeDetailDrawer";
 
 type OnlineKnowledgeSearchPanelProps = {
   initialMaterial?: string;
@@ -261,7 +265,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [drawerView, setDrawerView] = useState<DrawerView>("detail");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerWidth, setDrawerWidth] = useState(380);
+  const { drawerWidth, setDrawerWidth, widthProfile } = useKnowledgeDrawerSizing();
   const [confirmClearHistory, setConfirmClearHistory] = useState(false);
   const previousDataRef = useRef<OnlineKnowledgeSearchResponse | null>(null);
 
@@ -518,6 +522,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
         reopenLabel={drawerView === "history" ? "查看检索历史" : "查看记录详情"}
         verticalReopen={drawerView === "detail"}
         showReopen={drawerView === "history" || detailTabs.length > 0}
+        widthProfile={widthProfile}
         onWidthChange={setDrawerWidth}
         onClose={() => setDrawerOpen(false)}
         onOpen={() => setDrawerOpen(true)}

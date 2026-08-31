@@ -20,7 +20,11 @@ import {
   useRef,
   useState
 } from "react";
-import { KnowledgeDetailDrawer, type KnowledgeDrawerTab } from "./knowledge-search/KnowledgeDetailDrawer";
+import {
+  KnowledgeDetailDrawer,
+  type KnowledgeDrawerTab,
+  useKnowledgeDrawerSizing
+} from "./knowledge-search/KnowledgeDetailDrawer";
 
 const UPLOAD_HISTORY_STORAGE_KEY = "polyprop.pdfSimilarityDemo.uploadHistory";
 const MAX_HISTORY_ITEMS = 12;
@@ -176,7 +180,7 @@ export function PdfSimilarityDemoPanel({ modeNavigation }: PdfSimilarityDemoPane
   const [selectedPaperIndex, setSelectedPaperIndex] = useState<number | null>(null);
   const [drawerView, setDrawerView] = useState<DrawerView>("detail");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerWidth, setDrawerWidth] = useState(380);
+  const { drawerWidth, setDrawerWidth, widthProfile } = useKnowledgeDrawerSizing();
   const [confirmClear, setConfirmClear] = useState(false);
   const activeRecord = historyItems.find((item) => item.id === activeRecordId) ?? null;
   const visiblePapers = status === "success" ? activeRecord?.papers ?? [] : [];
@@ -385,6 +389,7 @@ export function PdfSimilarityDemoPanel({ modeNavigation }: PdfSimilarityDemoPane
         footer={drawerView === "detail" ? <><span><Clock3 aria-hidden="true" />{fileName || "演示 PDF"}</span><span>Static Demo</span></> : undefined}
         reopenLabel={drawerView === "history" ? "查看上传历史" : "查看论文详情"}
         showReopen={drawerView === "history" || detailTabs.length > 0}
+        widthProfile={widthProfile}
         onWidthChange={setDrawerWidth}
         onClose={() => setDrawerOpen(false)}
         onOpen={() => setDrawerOpen(true)}

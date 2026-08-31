@@ -25,7 +25,11 @@ import {
   serializeKnowledgeSearchGroups
 } from "../../lib/knowledgeSearchExpression";
 import type { KnowledgeDocumentResult, KnowledgeSearchGroup } from "../../types";
-import { KnowledgeDetailDrawer, type KnowledgeDrawerTab } from "./KnowledgeDetailDrawer";
+import {
+  KnowledgeDetailDrawer,
+  type KnowledgeDrawerTab,
+  useKnowledgeDrawerSizing
+} from "./KnowledgeDetailDrawer";
 
 type LocalKnowledgePanelProps = {
   initialQuery?: string;
@@ -215,7 +219,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerWidth, setDrawerWidth] = useState(380);
+  const { drawerWidth, setDrawerWidth, widthProfile } = useKnowledgeDrawerSizing();
   const selectedRecord = searchState.data?.results.find((record) => record.knowledge_id === selectedId) ?? null;
   const initialTermsKey = initialTerms.join("\u0000");
   const totalPages = Math.max(1, Math.ceil((searchState.data?.total ?? 0) / pageSize));
@@ -540,6 +544,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
         reopenLabel="查看记录详情"
         verticalReopen
         showReopen={Boolean(selectedRecord)}
+        widthProfile={widthProfile}
         onWidthChange={setDrawerWidth}
         onClose={() => setDrawerOpen(false)}
         onOpen={() => setDrawerOpen(true)}
