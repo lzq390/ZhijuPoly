@@ -773,7 +773,7 @@ export function PolytaoGenerationPage({
                               smiles={structure.smiles}
                               variant="bare"
                               visualStyle="polished-atoms"
-                              backgroundColor="#07111f"
+                              backgroundColor="#f7fbff"
                               className="polytao-reference-3d"
                               previewClassName="polytao-reference-3d-preview"
                             />
@@ -945,6 +945,7 @@ function ReferenceStructure2D({
         alt="共享聚合物重复单元二维结构"
         className="polytao-reference-svg"
         imageClassName="polytao-reference-svg-image"
+        transparentBackground
       />
     );
   }

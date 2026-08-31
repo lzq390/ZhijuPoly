@@ -35,8 +35,10 @@ vi.mock("../services/api", async () => {
 });
 
 vi.mock("./StructurePreview3D", () => ({
-  StructurePreview3D: ({ smiles }: { smiles: string }) => (
-    <div data-testid="structure-preview-3d">{smiles}</div>
+  StructurePreview3D: ({ smiles, backgroundColor }: { smiles: string; backgroundColor?: string }) => (
+    <div data-testid="structure-preview-3d" data-background-color={backgroundColor}>
+      {smiles}
+    </div>
   )
 }));
 
@@ -409,7 +411,9 @@ describe("PolytaoGenerationPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "查看 3D" }));
     expect(screen.getByRole("button", { name: "返回 2D" })).toBeTruthy();
-    expect(screen.getByTestId("structure-preview-3d").textContent).toBe("CCO");
+    const preview3D = screen.getByTestId("structure-preview-3d");
+    expect(preview3D.textContent).toBe("CCO");
+    expect(preview3D.getAttribute("data-background-color")).toBe("#f7fbff");
   });
 
   it("invalidates the cached 2D preview when the shared structure changes", async () => {
