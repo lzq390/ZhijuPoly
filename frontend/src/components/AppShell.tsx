@@ -186,13 +186,14 @@ export function AppShell({
   const isHomopolymerPredictionWorkbench = activeModule === "homopolymerPrediction";
   const isMonomerPolymerizationWorkbench = activeModule === "monomerPolymerization";
   const isSimilarityExplorerWorkbench = activeModule === "explorer";
+  const isDatabaseQueryWorkbench = activeModule === "databaseQuery";
   const isDatabaseFilterWorkbench = activeModule === "databaseFilter";
   const isDatabaseAnalysisWorkbench = activeModule === "database";
   const isKnowledgeWorkbench = activeModule === "knowledge";
   const isPolytaoWorkbench = activeModule === "polytaoGeneration";
   const isResearchWorkbench =
     isSimilarityExplorerWorkbench ||
-    activeModule === "databaseQuery" ||
+    isDatabaseQueryWorkbench ||
     isDatabaseFilterWorkbench ||
     isDatabaseAnalysisWorkbench ||
     isKnowledgeWorkbench ||
@@ -466,6 +467,7 @@ export function AppShell({
                     isHomopolymerPredictionWorkbench ||
                     isMonomerPolymerizationWorkbench ||
                     isSimilarityExplorerWorkbench ||
+                    isDatabaseQueryWorkbench ||
                     isDatabaseFilterWorkbench ||
                     isDatabaseAnalysisWorkbench ||
                     isKnowledgeWorkbench ||

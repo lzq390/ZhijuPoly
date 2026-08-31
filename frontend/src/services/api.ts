@@ -164,8 +164,11 @@ export function recoverDevGpuSession(signal?: AbortSignal): Promise<DevGpuSessio
   return postJSON("/dev-gpu-session/recover", {}, signal);
 }
 
-export function lookupSmilesInDatabase(payload: SmilesLookupRequest): Promise<SmilesLookupResponse> {
-  return postJSON("/database-browser/smiles-lookup", payload);
+export function lookupSmilesInDatabase(
+  payload: SmilesLookupRequest,
+  signal?: AbortSignal
+): Promise<SmilesLookupResponse> {
+  return postJSON("/database-browser/smiles-lookup", payload, signal);
 }
 
 export function predictSmiles(payload: PredictRequest, signal?: AbortSignal): Promise<PredictResponse> {

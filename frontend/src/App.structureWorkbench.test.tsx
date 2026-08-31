@@ -48,9 +48,6 @@ vi.mock("./components/StructurePreview3D", () => ({
 vi.mock("./components/DatabaseFilterPage", () => ({
   DatabaseFilterPage: () => <div data-testid="database-filter">数据库筛选</div>
 }));
-vi.mock("./components/DatabaseQueryPage", () => ({
-  DatabaseQueryPage: () => <div data-testid="database-query">数据库查询</div>
-}));
 vi.mock("./components/KnowledgeSearch", () => ({
   KnowledgeSearch: () => <div data-testid="knowledge">知识检索</div>
 }));
@@ -116,8 +113,10 @@ describe("App 结构工作台挂载与导航", () => {
 
     openDiscoverGroup();
     fireEvent.click(screen.getByRole("button", { name: "数据库查询" }));
-    await screen.findByTestId("database-query");
+    await screen.findByRole("heading", { name: "数据库查询" });
     expect(structureIframe(view.container)).toBeNull();
+    expect(screen.getByTitle("数据库查询结构编辑器")).toBeTruthy();
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "结构工作台" }));
     await waitFor(() => expect(structureIframe(view.container)).not.toBeNull());
@@ -212,6 +211,27 @@ describe("App 结构工作台挂载与导航", () => {
     window.history.replaceState({}, "", "/homopolymer-property-prediction");
     render(<App />);
     expect(await screen.findByRole("heading", { name: "均聚物性质预测" })).toBeTruthy();
+
+    window.history.pushState({}, "", "/knowledge");
+    fireEvent(window, new PopStateEvent("popstate"));
+    expect(screen.queryByTestId("knowledge")).toBeNull();
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1));
+
+    deferred.resolve?.();
+    await screen.findByTestId("knowledge");
+  });
+
+  it("数据库查询深链使用单一共享 Ketcher，并在 popstate 前同步画板", async () => {
+    const deferred: { resolve?: () => void } = {};
+    mocks.syncSmilesFromCanvas.mockReturnValue(new Promise<string>((resolve) => {
+      deferred.resolve = () => resolve("*CC*");
+    }));
+    window.history.replaceState({}, "", "/database-query");
+    const view = render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "数据库查询" })).toBeTruthy();
+    expect(screen.getByTitle("数据库查询结构编辑器")).toBeTruthy();
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
 
     window.history.pushState({}, "", "/knowledge");
     fireEvent(window, new PopStateEvent("popstate"));

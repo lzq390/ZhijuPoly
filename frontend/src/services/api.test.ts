@@ -16,6 +16,7 @@ import {
   fetchStructure3D,
   fetchTgAssistantGuide,
   fetchTgAssistantStatus,
+  lookupSmilesInDatabase,
   predictSmiles,
   predictMonomerPrecursors,
   recoverDevGpuSession,
@@ -106,6 +107,34 @@ describe("structure workbench request contracts", () => {
       signal: controller.signal
     });
     await expect(predictSmiles(payload)).rejects.toMatchObject({ message: "模型暂不可用" });
+  });
+
+  it("forwards AbortSignal to the exact database lookup without changing its payload", async () => {
+    const response = {
+      query_smiles: "*CC*",
+      canonical_smiles: "*CC*",
+      table: "polymers",
+      exists: false,
+      total: 0,
+      query_time_ms: 1,
+      results: []
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const payload = { smiles: "*CC*", table: "polymers" as const };
+
+    await lookupSmilesInDatabase(payload, controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/database-browser/smiles-lookup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
   });
 
   it("forwards AbortSignal through both monomer polymerization calls without changing the payload", async () => {

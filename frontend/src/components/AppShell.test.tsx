@@ -265,6 +265,16 @@ describe("AppShell 侧边栏", () => {
     expect(main?.firstElementChild?.classList.contains("h-full")).toBe(true);
   });
 
+  it("数据库查询使用无内边距的满高工作台容器", () => {
+    const view = renderShell("databaseQuery");
+    const main = view.container.querySelector("main");
+
+    expect(main?.classList.contains("overflow-hidden")).toBe(true);
+    expect(main?.classList.contains("p-0")).toBe(true);
+    expect(main?.classList.contains("px-4")).toBe(false);
+    expect(main?.firstElementChild?.classList.contains("h-full")).toBe(true);
+  });
+
   it("单体正向聚合使用无内边距的满高工作台容器", () => {
     const view = renderShell("monomerPolymerization");
     const main = view.container.querySelector("main");

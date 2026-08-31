@@ -540,7 +540,8 @@ export default function App() {
       if (
         activeModuleRef.current === "structureWorkbench" ||
         activeModuleRef.current === "homopolymerPrediction" ||
-        activeModuleRef.current === "explorer"
+        activeModuleRef.current === "explorer" ||
+        activeModuleRef.current === "databaseQuery"
       ) {
         void syncStructureBeforeNavigation().then(applyLatestRoute);
       } else {
@@ -1018,7 +1019,8 @@ export default function App() {
       beforeNavigate={
         activeModule === "structureWorkbench" ||
         activeModule === "homopolymerPrediction" ||
-        activeModule === "explorer"
+        activeModule === "explorer" ||
+        activeModule === "databaseQuery"
           ? beforeStructureCanvasNavigation
           : undefined
       }
@@ -1041,9 +1043,8 @@ export default function App() {
 
       {activeModule === "databaseQuery" ? (
         <DatabaseQueryPage
+          ref={structureCanvasOwnerRef}
           structure={structureWorkspace}
-          onEditStructure={openStructureWorkbench}
-          onBackHome={() => navigate({ module: "home", datasetKey: null })}
         />
       ) : null}
 
