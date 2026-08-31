@@ -2,7 +2,7 @@
 
 项目：ZhijuPoly / PolyProp Web 平台
 更新时间：2026-06-26
-规范来源：当前 React 平台 UI，以“聚合物性能探索”作为高密度科研工作台的参考模块。
+规范来源：当前 React 平台 UI，以结构工作台及“聚合物相似性探索”作为高密度科研工作台参考模块。
 使用规则：优先查看 `design-system/polyprop/pages/[page-name].md`。页面级规范优先于本 Master 文件；没有页面级规范时，遵循本文件。
 
 ---

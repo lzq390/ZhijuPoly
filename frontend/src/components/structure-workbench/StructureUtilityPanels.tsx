@@ -61,8 +61,8 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
   },
   {
     id: "explorer",
-    name: "聚合物性能探索",
-    shortName: "性能探索",
+    name: "聚合物相似性探索",
+    shortName: "相似探索",
     icon: Atom,
     relationship: "direct"
   },

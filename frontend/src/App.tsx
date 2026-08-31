@@ -33,7 +33,7 @@ import { MonomerDftPage } from "./components/MonomerDftPage";
 import { MonomerPolymerizationPage } from "./components/MonomerPolymerizationPage";
 import { PolytaoGenerationPage } from "./components/PolytaoGenerationPage";
 import { ReverseDesignPage } from "./components/ReverseDesignPage";
-import { PolymerExplorerDesktopPage } from "./components/PolymerExplorerDesktopPage";
+import { PolymerSimilarityExplorerPage } from "./components/PolymerSimilarityExplorerPage";
 import {
   StructureWorkbenchPage,
   type StructureCanvasOwnerHandle
@@ -539,7 +539,8 @@ export default function App() {
 
       if (
         activeModuleRef.current === "structureWorkbench" ||
-        activeModuleRef.current === "homopolymerPrediction"
+        activeModuleRef.current === "homopolymerPrediction" ||
+        activeModuleRef.current === "explorer"
       ) {
         void syncStructureBeforeNavigation().then(applyLatestRoute);
       } else {
@@ -828,8 +829,8 @@ export default function App() {
         },
         {
           id: "explorer",
-          label: "聚合物性能探索",
-          description: "编辑结构、运行结构或性能相似匹配并预览 3D 构象。",
+          label: "聚合物相似性探索",
+          description: "在共享结构画板中运行结构相似或性能相似检索。",
           route: "/explorer",
           icon: <Atom className="h-4 w-4" />,
           isActive: activeModule === "explorer",
@@ -1015,7 +1016,9 @@ export default function App() {
       onRenameGeneralSession={(sessionID, title) => generalSessionBridge.renameSession(sessionID, title)}
       onDeleteGeneralSession={(sessionID) => generalSessionBridge.deleteSession(sessionID)}
       beforeNavigate={
-        activeModule === "structureWorkbench" || activeModule === "homopolymerPrediction"
+        activeModule === "structureWorkbench" ||
+        activeModule === "homopolymerPrediction" ||
+        activeModule === "explorer"
           ? beforeStructureCanvasNavigation
           : undefined
       }
@@ -1151,12 +1154,9 @@ export default function App() {
       ) : null}
 
       {activeModule === "explorer" ? (
-        <PolymerExplorerDesktopPage
-          smiles={smiles}
-          setSmiles={setSmiles}
-          iframeRef={iframeRef}
-          setIsReady={setIsReady}
-          getCurrentSmiles={getCurrentSmiles}
+        <PolymerSimilarityExplorerPage
+          ref={structureCanvasOwnerRef}
+          structure={structureWorkspace}
           request={request}
           setRequest={setRequest}
           isQueryLoading={isLoading}

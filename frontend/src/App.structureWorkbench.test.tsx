@@ -137,6 +137,28 @@ describe("App 结构工作台挂载与导航", () => {
     expect(screen.getByRole("button", { name: "均聚物性质预测" }).getAttribute("aria-current")).toBe("page");
   });
 
+  it("相似性探索深链使用单一共享 Ketcher，并在离页前同步画板", async () => {
+    const deferred: { resolve?: () => void } = {};
+    mocks.syncSmilesFromCanvas.mockReturnValue(new Promise<string>((resolve) => {
+      deferred.resolve = () => resolve("*CC*");
+    }));
+    window.history.replaceState({}, "", "/explorer");
+    const view = render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "聚合物相似性探索" })).toBeTruthy();
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+    expect(screen.getByTitle("聚合物相似性探索结构编辑器")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "聚合物相似性探索" }).getAttribute("aria-current")).toBe("page");
+
+    window.history.pushState({}, "", "/knowledge");
+    fireEvent(window, new PopStateEvent("popstate"));
+    expect(screen.queryByTestId("knowledge")).toBeNull();
+    expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1);
+
+    deferred.resolve?.();
+    await screen.findByTestId("knowledge");
+  });
+
   it("侧栏导航等待同步并对重复激活只执行一次目标跳转", async () => {
     const deferred: { resolve?: () => void } = {};
     mocks.syncSmilesFromCanvas.mockReturnValue(new Promise<string>((resolve) => {
