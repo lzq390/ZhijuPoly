@@ -288,7 +288,8 @@
 .np-structure-workbench .np-sw-canvas-stage::before,
 .np-structure-workbench .np-sw-smiles::before,
 .np-structure-workbench .np-sw-popover::before,
-.np-structure-workbench .np-sw-drawer::before {
+.np-structure-workbench .np-sw-drawer::before,
+.np-structure-workbench .np-sw-accented-surface::before {
   position: absolute;
   z-index: 6;
   top: 0;
@@ -1909,7 +1910,8 @@
   .np-structure-workbench .np-sw-canvas-stage::before,
   .np-structure-workbench .np-sw-smiles::before,
   .np-structure-workbench .np-sw-popover::before,
-  .np-structure-workbench .np-sw-drawer::before {
+  .np-structure-workbench .np-sw-drawer::before,
+  .np-structure-workbench .np-sw-accented-surface::before {
     right: 27px;
     left: 27px;
     height: 3px;

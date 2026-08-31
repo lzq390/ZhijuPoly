@@ -1,610 +1,502 @@
-import { ArrowLeft, Atom, Copy, FlaskConical, Loader2, Play, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
-import { cn } from "../lib/utils";
-import { fetchMonomerPolymerizationStatus, runMonomerPolymerization } from "../services/api";
+import {
+  CheckCircle2,
+  CircleOff,
+  FlaskConical,
+  LoaderCircle,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  TriangleAlert
+} from "lucide-react";
+import {
+  type CSSProperties,
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
+import { useMonomerPolymerization } from "../hooks/useMonomerPolymerization";
 import type {
-  MonomerPolymerizationCandidate,
-  MonomerPolymerizationResponse,
+  MonomerPolymerizationRequest,
   MonomerPolymerizationTargetClass,
-  MonomerPolymerizationStatusResponse,
   StructureWorkspaceContext
 } from "../types";
-import { StructureSvg } from "./StructureSvg";
-import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { Textarea } from "./ui/textarea";
+import "../styles/structure-workbench.css";
+import "../styles/monomer-polymerization.css";
+import {
+  clampInteger,
+  DEFAULT_TARGET_CLASSES,
+  getTargetRequirement,
+  SMIPOLY_POLYIMIDE_FIXTURE,
+  TARGET_CLASS_LABELS
+} from "./monomer-polymerization/config";
+import {
+  MonomerPairEditor,
+  type MonomerSlot
+} from "./monomer-polymerization/MonomerPairEditor";
+import { PolymerClassPicker } from "./monomer-polymerization/PolymerClassPicker";
+import {
+  MonomerPolymerizationDrawer,
+  type MonomerPolymerizationSnapshot
+} from "./monomer-polymerization/MonomerPolymerizationDrawer";
+import {
+  clearMonomerPolymerizationDraft,
+  readMonomerPolymerizationDraft,
+  saveMonomerPolymerizationDraft,
+  type MonomerPolymerizationDraft
+} from "./monomer-polymerization/session";
+
+export { SMIPOLY_POLYIMIDE_FIXTURE };
 
 type MonomerPolymerizationPageProps = {
   structure: StructureWorkspaceContext;
   onEditStructure: () => void;
-  onBackHome: () => void;
 };
 
-const TARGET_CLASS_LABELS: Record<MonomerPolymerizationTargetClass, string> = {
-  polyolefin: "Polyolefin",
-  polyester: "Polyester",
-  polyether: "Polyether",
-  polyamide: "Polyamide",
-  polyimide: "Polyimide",
-  polyurethane: "Polyurethane",
-  polyoxazolidone: "Polyoxazolidone",
-  all: "All classes"
+type FormTouchedState = {
+  A: boolean;
+  B: boolean;
+  maxResults: boolean;
 };
 
-const DEFAULT_TARGET_CLASSES: MonomerPolymerizationTargetClass[] = [
-  "polyimide",
-  "polyester",
-  "polyamide",
-  "polyurethane",
-  "polyether",
-  "polyolefin",
-  "polyoxazolidone",
-  "all"
-];
-
-export const SMIPOLY_POLYIMIDE_FIXTURE = {
-  monomerA: "Nc1ccc(N)cc1",
-  monomerB: "O=C1OC(=O)c2cc3c(cc21)C(=O)OC3=O"
-} as const;
-
-const DEFAULT_TARGET_REQUIREMENTS: Record<
-  MonomerPolymerizationTargetClass,
-  { min_monomers: number; max_monomers: number; monomer_b_required: boolean; note: string }
-> = {
-  polyolefin: {
-    min_monomers: 1,
-    max_monomers: 2,
-    monomer_b_required: false,
-    note: "当前类型允许先提交单体 A；提供单体 B 时会限制为两者共同参与的候选。"
-  },
-  polyester: {
-    min_monomers: 2,
-    max_monomers: 2,
-    monomer_b_required: true,
-    note: "当前类型需要两个互补单体。"
-  },
-  polyether: {
-    min_monomers: 1,
-    max_monomers: 2,
-    monomer_b_required: false,
-    note: "当前类型允许先提交单体 A；提供单体 B 时会限制为两者共同参与的候选。"
-  },
-  polyamide: {
-    min_monomers: 2,
-    max_monomers: 2,
-    monomer_b_required: true,
-    note: "当前类型需要两个互补单体。"
-  },
-  polyimide: {
-    min_monomers: 2,
-    max_monomers: 2,
-    monomer_b_required: true,
-    note: "Polyimide 需要二胺和二酐两个互补单体。"
-  },
-  polyurethane: {
-    min_monomers: 2,
-    max_monomers: 2,
-    monomer_b_required: true,
-    note: "当前类型需要两个互补单体。"
-  },
-  polyoxazolidone: {
-    min_monomers: 1,
-    max_monomers: 2,
-    monomer_b_required: false,
-    note: "当前类型允许先提交单体 A；提供单体 B 时会限制为两者共同参与的候选。"
-  },
-  all: {
-    min_monomers: 1,
-    max_monomers: 2,
-    monomer_b_required: false,
-    note: "All classes 会跨可用规则搜索；单体 B 可选。"
-  }
-};
-
-function clampInteger(value: number, min: number, max: number) {
-  if (!Number.isFinite(value)) {
-    return min;
-  }
-  return Math.min(max, Math.max(min, Math.round(value)));
+const DEFAULT_MAX_RESULTS = 10;
+const NATIVE_2K_QUERY = "(min-width: 2000px) and (min-height: 1120px)";
+function isNative2KViewport() {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia(NATIVE_2K_QUERY).matches
+    : false;
+}
+function defaultForm(sharedSmiles: string): MonomerPolymerizationDraft {
+  return {
+    monomerA: sharedSmiles.trim(),
+    monomerB: "",
+    targetClass: "polyimide",
+    maxResults: DEFAULT_MAX_RESULTS
+  };
 }
 
-function statusTone(status: MonomerPolymerizationStatusResponse | null, error: string | null) {
-  if (error || status?.available === false) {
-    return "border-amber-200 bg-amber-50 text-amber-800";
-  }
-  if (status?.available) {
-    return "border-emerald-200 bg-emerald-50 text-emerald-800";
-  }
-  return "border-slate-200 bg-slate-50 text-slate-600";
-}
-
-function CandidateCard({
-  candidate,
-  copyState,
-  onCopy
-}: {
-  candidate: MonomerPolymerizationCandidate;
-  copyState: "copied" | "failed" | null;
-  onCopy: (value: string, key: string) => void;
-}) {
-  const copyKey = `candidate-${candidate.rank}`;
-  return (
-    <article className="flex min-h-[360px] flex-col overflow-hidden rounded-[14px] border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-950">
-          <Atom className="h-4 w-4 shrink-0 text-teal-600" />
-          <span className="truncate">{candidate.polymer_class}</span>
-        </div>
-        <Badge className="shrink-0 border-slate-200 bg-slate-50 text-slate-700">Rank {candidate.rank}</Badge>
-      </div>
-      <div className="flex min-h-[170px] items-center justify-center border-b border-slate-100 bg-slate-50/80 px-3 py-4">
-        {candidate.structure_svg ? (
-          <StructureSvg
-            svg={candidate.structure_svg}
-            alt={`Polymer candidate rank ${candidate.rank}`}
-            className="w-full"
-            imageClassName="max-h-[160px]"
-          />
-        ) : (
-          <div className="max-h-[150px] overflow-auto rounded-lg border border-dashed border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-5 text-slate-600">
-            {candidate.polymer_smiles}
-          </div>
-        )}
-      </div>
-      <div className="flex flex-1 flex-col gap-3 p-4">
-        <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 font-mono text-xs leading-5 text-slate-800">
-          <div className="max-h-[72px] overflow-auto break-all">{candidate.polymer_smiles}</div>
-        </div>
-        <div className="grid gap-2 text-xs text-slate-600">
-          <div className="flex justify-between gap-3">
-            <span>Reaction</span>
-            <span className="font-semibold text-slate-900">{candidate.reaction_id ?? "--"}</span>
-          </div>
-          <div className="flex justify-between gap-3">
-            <span>Monomer A</span>
-            <span className="max-w-[70%] break-all text-right font-mono text-slate-900">{candidate.monomer_a_smiles}</span>
-          </div>
-          <div className="flex justify-between gap-3">
-            <span>Monomer B</span>
-            <span className="max-w-[70%] break-all text-right font-mono text-slate-900">{candidate.monomer_b_smiles ?? "--"}</span>
-          </div>
-          <div className="flex justify-between gap-3">
-            <span>React set</span>
-            <span className="max-h-[44px] max-w-[70%] overflow-auto break-all text-right font-mono text-slate-900">
-              {candidate.reactset.length ? candidate.reactset.join(" + ") : "--"}
-            </span>
-          </div>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => onCopy(candidate.polymer_smiles, copyKey)}
-          className="mt-auto h-9 rounded-md border-slate-200 bg-white px-3 text-slate-700 shadow-none hover:bg-slate-50"
-        >
-          <Copy className="mr-2 h-4 w-4" />
-          {copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制 SMILES"}
-        </Button>
-      </div>
-    </article>
+function sameSnapshot(
+  snapshot: MonomerPolymerizationSnapshot | null,
+  request: MonomerPolymerizationRequest
+) {
+  return Boolean(
+    snapshot &&
+      snapshot.monomer_a_smiles === request.monomer_a_smiles &&
+      snapshot.monomer_b_smiles === request.monomer_b_smiles &&
+      snapshot.target_class === request.target_class &&
+      snapshot.max_results === request.max_results
   );
 }
 
 export function MonomerPolymerizationPage({
   structure,
-  onEditStructure,
-  onBackHome
+  onEditStructure
 }: MonomerPolymerizationPageProps) {
-  const [monomerA, setMonomerA] = useState(structure.smiles.trim());
-  const [monomerB, setMonomerB] = useState("");
-  const [targetClass, setTargetClass] = useState<MonomerPolymerizationTargetClass>("polyimide");
-  const [maxResults, setMaxResults] = useState(10);
-  const [status, setStatus] = useState<MonomerPolymerizationStatusResponse | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [data, setData] = useState<MonomerPolymerizationResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isStatusLoading, setIsStatusLoading] = useState(false);
-  const [hasEditedMonomerA, setHasEditedMonomerA] = useState(false);
-  const [copyState, setCopyState] = useState<{ key: string; status: "copied" | "failed" } | null>(null);
+  const [initialForm] = useState<MonomerPolymerizationDraft>(() =>
+    readMonomerPolymerizationDraft() ?? defaultForm(structure.smiles)
+  );
+  const [form, setForm] = useState(initialForm);
+  const [touched, setTouched] = useState<FormTouchedState>({
+    A: false,
+    B: false,
+    maxResults: false
+  });
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [hasAttempt, setHasAttempt] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [native2K, setNative2K] = useState(isNative2KViewport);
+  const [drawerWidth, setDrawerWidth] = useState(() => isNative2KViewport() ? 540 : 380);
+  const [snapshot, setSnapshot] = useState<MonomerPolymerizationSnapshot | null>(null);
+  const [editorRevision, setEditorRevision] = useState(0);
+  const persistDraftRef = useRef(false);
+  const formRef = useRef(form);
+  formRef.current = form;
+  const polymerization = useMonomerPolymerization();
+
+  const updateForm = useCallback((update: Partial<MonomerPolymerizationDraft>) => {
+    persistDraftRef.current = true;
+    setForm((current) => ({ ...current, ...update }));
+  }, []);
 
   useEffect(() => {
-    const nextSmiles = structure.smiles.trim();
-    if (!hasEditedMonomerA && nextSmiles) {
-      setMonomerA(nextSmiles);
-      setData(null);
-    }
-  }, [hasEditedMonomerA, structure.smiles]);
-
-  async function refreshStatus() {
-    setIsStatusLoading(true);
-    try {
-      const nextStatus = await fetchMonomerPolymerizationStatus();
-      setStatus(nextStatus);
-      setStatusError(null);
-      if (!nextStatus.available_target_classes.includes(targetClass)) {
-        setTargetClass(nextStatus.default_target_class);
-        setData(null);
-        setError(null);
-      }
-      setMaxResults((value) => clampInteger(value, 1, nextStatus.max_results_limit));
-    } catch (statusFetchError) {
-      setStatus(null);
-      setStatusError(statusFetchError instanceof Error ? statusFetchError.message : "无法读取 SMiPoly 服务状态。");
-    } finally {
-      setIsStatusLoading(false);
-    }
-  }
+    if (persistDraftRef.current) saveMonomerPolymerizationDraft(form);
+  }, [form]);
 
   useEffect(() => {
-    void refreshStatus();
+    return () => {
+      if (persistDraftRef.current) saveMonomerPolymerizationDraft(formRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(NATIVE_2K_QUERY);
+    const handleChange = (event: MediaQueryListEvent) => {
+      setNative2K(event.matches);
+      setDrawerWidth((current) => event.matches
+        ? Math.min(720, Math.max(480, current === 380 ? 540 : current))
+        : Math.min(560, Math.max(320, current))
+      );
+    };
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
   }, []);
 
   const targetOptions = useMemo(() => {
-    const available = status?.available_target_classes?.length ? status.available_target_classes : DEFAULT_TARGET_CLASSES;
-    return DEFAULT_TARGET_CLASSES.filter((target) => available.includes(target));
-  }, [status]);
+    const available = polymerization.status?.available_target_classes;
+    if (!available?.length) return DEFAULT_TARGET_CLASSES;
+    const filtered = DEFAULT_TARGET_CLASSES.filter((target) => available.includes(target));
+    return filtered.length ? filtered : DEFAULT_TARGET_CLASSES;
+  }, [polymerization.status]);
 
-  const serviceUnavailable = status?.enabled === false || status?.available === false;
-  const maxResultsLimit = status?.max_results_limit ?? 20;
-  const localTargetRequirement = DEFAULT_TARGET_REQUIREMENTS[targetClass];
-  const remoteTargetRequirement = status?.target_requirements?.[targetClass];
-  const targetRequirement = {
-    ...localTargetRequirement,
-    ...remoteTargetRequirement
-  };
-  const targetRequirementNote =
-    remoteTargetRequirement?.monomer_b_required === localTargetRequirement.monomer_b_required
-      ? localTargetRequirement.note
-      : remoteTargetRequirement?.note ?? localTargetRequirement.note;
-  const isMonomerBRequired = targetRequirement.monomer_b_required;
-  const isMissingRequiredMonomerB =
-    isMonomerBRequired && monomerA.trim().length > 0 && monomerB.trim().length === 0;
-  const monomerBHintId = "monomer-b-requirement-note";
-  const monomerBMissingId = "monomer-b-required-missing";
-  const canSubmit =
-    !isLoading &&
-    !serviceUnavailable &&
-    monomerA.trim().length > 0 &&
-    !isMissingRequiredMonomerB;
+  const maxResultsLimit = Math.max(1, polymerization.status?.max_results_limit ?? 20);
 
-  async function syncSharedStructure() {
-    setSyncError(null);
+  useEffect(() => {
+    const status = polymerization.status;
+    if (!status) return;
+    setForm((current) => {
+      const nextTarget = targetOptions.includes(current.targetClass)
+        ? current.targetClass
+        : targetOptions.includes(status.default_target_class)
+          ? status.default_target_class
+          : targetOptions[0];
+      const nextMaxResults = clampInteger(current.maxResults, 1, maxResultsLimit);
+      if (nextTarget === current.targetClass && nextMaxResults === current.maxResults) return current;
+      return { ...current, targetClass: nextTarget, maxResults: nextMaxResults };
+    });
+  }, [maxResultsLimit, polymerization.status, targetOptions]);
+
+  const targetRequirement = getTargetRequirement(form.targetClass, polymerization.status);
+  const targetPickerOptions = useMemo(() => targetOptions.map((target) => {
+    const requirement = getTargetRequirement(target, polymerization.status);
+    const monomerCount = requirement.min_monomers === requirement.max_monomers
+      ? `${requirement.min_monomers} 个单体`
+      : `${requirement.min_monomers}–${requirement.max_monomers} 个单体`;
+    return {
+      value: target,
+      label: TARGET_CLASS_LABELS[target],
+      monomerCount,
+      monomerBRequired: requirement.monomer_b_required
+    };
+  }), [polymerization.status, targetOptions]);
+  const targetMonomerCount = targetRequirement.min_monomers === targetRequirement.max_monomers
+    ? `${targetRequirement.min_monomers} 个单体`
+    : `${targetRequirement.min_monomers}–${targetRequirement.max_monomers} 个单体`;
+  const monomerAValue = form.monomerA.trim();
+  const monomerBValue = form.monomerB.trim();
+  const monomerAHasDummyAtom = monomerAValue.includes("*");
+  const monomerBHasDummyAtom = monomerBValue.includes("*");
+  const showMonomerARequired = (touched.A || submitAttempted) && !monomerAValue;
+  const showMonomerBRequired =
+    (touched.B || submitAttempted) && targetRequirement.monomer_b_required && !monomerBValue;
+  const monomerAError = showMonomerARequired
+    ? "请输入单体 A 的 SMILES。"
+    : monomerAHasDummyAtom
+      ? "普通单体 SMILES 不应包含 * 连接点。"
+      : null;
+  const monomerBError = showMonomerBRequired
+    ? `${TARGET_CLASS_LABELS[form.targetClass]} 需要单体 B。`
+    : monomerBHasDummyAtom
+      ? "普通单体 SMILES 不应包含 * 连接点。"
+      : null;
+  const maxResultsValid =
+    Number.isInteger(form.maxResults) && form.maxResults >= 1 && form.maxResults <= maxResultsLimit;
+  const maxResultsError = (touched.maxResults || submitAttempted) && !maxResultsValid
+    ? `返回数量需为 1–${maxResultsLimit} 的整数。`
+    : null;
+  const serviceReady = Boolean(
+    !polymerization.statusLoading &&
+      polymerization.status?.enabled &&
+      polymerization.status.available
+  );
+  const inputValid = Boolean(
+    monomerAValue &&
+      !monomerAHasDummyAtom &&
+      (!targetRequirement.monomer_b_required || monomerBValue) &&
+      !monomerBHasDummyAtom &&
+      maxResultsValid
+  );
+  const canSubmit = serviceReady && inputValid && !polymerization.runLoading;
+
+  const currentRequest = useMemo<MonomerPolymerizationRequest>(() => ({
+    monomer_a_smiles: monomerAValue,
+    monomer_b_smiles: monomerBValue || null,
+    target_class: form.targetClass,
+    max_results: form.maxResults
+  }), [form.maxResults, form.targetClass, monomerAValue, monomerBValue]);
+  const stale = hasAttempt && !sameSnapshot(snapshot, currentRequest);
+
+  const getSharedSmiles = useCallback(async () => {
     let sharedSmiles = structure.smiles.trim();
     try {
-      const editorSmiles = (await structure.getCurrentSmiles()).trim();
-      if (editorSmiles) {
-        sharedSmiles = editorSmiles;
-      }
-    } catch (syncFailure) {
-      console.warn("Failed to read current structure from workbench", syncFailure);
+      const currentSmiles = (await structure.getCurrentSmiles()).trim();
+      if (currentSmiles) sharedSmiles = currentSmiles;
+    } catch (error) {
+      console.warn("Failed to read current structure from workbench", error);
     }
     if (!sharedSmiles) {
-      setSyncError("共享结构为空，请先在结构工作台绘制或输入单体。");
-      return;
+      throw new Error("共享结构为空，请先在结构工作台绘制或输入单体。");
     }
-    setMonomerA(sharedSmiles);
-    setHasEditedMonomerA(true);
-    setData(null);
-    setError(null);
+    return sharedSmiles;
+  }, [structure]);
+
+  function touchSlot(slot: MonomerSlot) {
+    setTouched((current) => ({ ...current, [slot]: true }));
   }
 
-  async function submitPolymerization(event: FormEvent<HTMLFormElement>) {
+  function editSharedStructure() {
+    persistDraftRef.current = true;
+    saveMonomerPolymerizationDraft(formRef.current);
+    onEditStructure();
+  }
+
+  function submitPolymerization(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(null);
-    setSyncError(null);
-
-    if (!monomerA.trim()) {
-      setError("请输入单体 A 的 SMILES。");
-      return;
-    }
-    if (isMonomerBRequired && !monomerB.trim()) {
-      setError(`${TARGET_CLASS_LABELS[targetClass]} 需要单体 B，请输入互补单体 SMILES。`);
-      return;
-    }
-    if (serviceUnavailable) {
-      setError(status?.message ?? "SMiPoly 服务当前不可用。");
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const result = await runMonomerPolymerization({
-        monomer_a_smiles: monomerA.trim(),
-        monomer_b_smiles: monomerB.trim() || null,
-        target_class: targetClass,
-        max_results: clampInteger(maxResults, 1, maxResultsLimit)
-      });
-      setData(result);
-    } catch (runError) {
-      setData(null);
-      setError(runError instanceof Error ? runError.message : "单体正向聚合失败。");
-    } finally {
-      setIsLoading(false);
-    }
+    setSubmitAttempted(true);
+    if (!canSubmit) return;
+    const request: MonomerPolymerizationRequest = {
+      monomer_a_smiles: monomerAValue,
+      monomer_b_smiles: monomerBValue || null,
+      target_class: form.targetClass,
+      max_results: form.maxResults
+    };
+    persistDraftRef.current = true;
+    saveMonomerPolymerizationDraft(formRef.current);
+    setSnapshot(request);
+    setHasAttempt(true);
+    setDrawerOpen(true);
+    void polymerization.run(request);
   }
 
-  async function copyText(value: string, key: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopyState({ key, status: "copied" });
-    } catch {
-      setCopyState({ key, status: "failed" });
-    } finally {
-      window.setTimeout(() => setCopyState(null), 1300);
-    }
+  function clearResults() {
+    polymerization.clearResults();
+    setSnapshot(null);
+    setHasAttempt(false);
+    setDrawerOpen(false);
   }
+
+  function resetForm() {
+    const resetTarget: MonomerPolymerizationTargetClass = targetOptions.includes("polyimide")
+      ? "polyimide"
+      : polymerization.status && targetOptions.includes(polymerization.status.default_target_class)
+        ? polymerization.status.default_target_class
+        : targetOptions[0];
+    persistDraftRef.current = false;
+    clearMonomerPolymerizationDraft();
+    polymerization.clearResults();
+    setForm({
+      monomerA: structure.smiles.trim(),
+      monomerB: "",
+      targetClass: resetTarget,
+      maxResults: Math.min(DEFAULT_MAX_RESULTS, maxResultsLimit)
+    });
+    setTouched({ A: false, B: false, maxResults: false });
+    setSubmitAttempted(false);
+    setSnapshot(null);
+    setHasAttempt(false);
+    setDrawerOpen(false);
+    setEditorRevision((current) => current + 1);
+  }
+
+  const serviceState = polymerization.statusLoading
+    ? "loading"
+    : polymerization.statusError
+      ? "error"
+      : polymerization.status?.enabled && polymerization.status.available
+        ? "ready"
+        : "unavailable";
+  const serviceLabel = serviceState === "loading"
+    ? "检查中"
+    : serviceState === "ready"
+      ? "可用"
+      : serviceState === "error"
+        ? "检查失败"
+        : "不可用";
+  const drawerSizing = native2K
+    ? { minWidth: 480, maxWidth: 720, keyboardStep: 24 }
+    : { minWidth: 320, maxWidth: 560, keyboardStep: 16 };
+  const workbenchStyle = { "--np-sw-drawer-width": `${drawerWidth}px` } as CSSProperties;
 
   return (
-    <div className="min-h-full bg-[#f1f5f9] text-slate-950">
-      <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-4">
-        <nav className="flex flex-col gap-3 rounded-[14px] border border-slate-200 bg-white px-4 py-3 shadow-sm md:flex-row md:items-center md:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onBackHome}
-              className="h-9 shrink-0 rounded-md border-slate-200 bg-white px-3 text-slate-700 shadow-none hover:border-slate-300 hover:bg-slate-50"
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              返回
-            </Button>
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold uppercase text-slate-400">SMiPoly forward polymerization</div>
-              <div className="truncate text-base font-semibold text-slate-950">单体正向聚合</div>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className={cn("inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-medium", statusTone(status, statusError))}>
-              {isStatusLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FlaskConical className="h-3.5 w-3.5" />}
-              {isStatusLoading ? "正在检查服务" : statusError ? "状态检查失败" : serviceUnavailable ? "规则服务不可用" : "规则服务可用"}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void refreshStatus()}
-              className="h-8 rounded-md border-slate-200 bg-white px-2.5 text-xs text-slate-600 shadow-none hover:bg-slate-50"
-            >
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              刷新
-            </Button>
-          </div>
-        </nav>
-
-        <section className="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
-          <form onSubmit={(event) => void submitPolymerization(event)} className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-semibold uppercase text-slate-400">输入</div>
-                <h1 className="mt-1 text-base font-semibold text-slate-950">单次聚合设置</h1>
-              </div>
-              <Badge className="border-sky-200 bg-sky-50 text-sky-700">同步调用</Badge>
-            </div>
-
-            <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
-              规则生成候选，不代表真实可合成性或性质验证。v1 每次最多处理两个用户提交的单体，不执行批量组合。
-            </div>
-
-            <label className="mt-4 block space-y-2">
-              <span className="text-xs font-medium text-slate-600">单体 A SMILES</span>
-              <Textarea
-                value={monomerA}
-                onChange={(event) => {
-                  setMonomerA(event.target.value);
-                  setHasEditedMonomerA(true);
-                  setError(null);
-                  setData(null);
-                }}
-                placeholder={`示例：${SMIPOLY_POLYIMIDE_FIXTURE.monomerA}`}
-                spellCheck={false}
-                className="min-h-[98px] rounded-lg border-slate-200 bg-white font-mono text-[13px] leading-5 text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-sky-200"
-                disabled={isLoading}
-              />
-            </label>
-
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void syncSharedStructure()}
-                disabled={isLoading}
-                className="h-9 rounded-md border-slate-200 bg-white px-3 text-xs text-slate-700 shadow-none hover:bg-slate-50"
+    <div
+      className="np-structure-workbench np-monomer-polymerization"
+      data-module="monomer-polymerization"
+      style={workbenchStyle}
+    >
+      <div className={`np-sw-page np-mp-page${drawerOpen ? " has-open-drawer" : ""}`}>
+        <h1 className="np-sw-page-title">单体正向聚合</h1>
+        <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
+          <main className="np-sw-workspace">
+            <div className="np-mp-scroll-region">
+              <form
+                className="np-mp-surface np-sw-accented-surface"
+                onSubmit={submitPolymerization}
+                noValidate
               >
-                <Atom className="mr-2 h-3.5 w-3.5" />
-                使用共享结构
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={onEditStructure}
-                disabled={isLoading}
-                className="h-9 rounded-md border-slate-200 bg-white px-3 text-xs text-slate-700 shadow-none hover:bg-slate-50"
-              >
-                打开结构工作台
-              </Button>
-            </div>
-            {syncError ? <div className="mt-2 text-xs leading-5 text-red-600">{syncError}</div> : null}
+                <header className="np-mp-surface__header">
+                  <div>
+                    <span>SMIPOLY FORWARD POLYMERIZATION</span>
+                    <h2>由普通单体生成规则候选</h2>
+                    <p>设置目标类别与一至两个单体，候选将在右侧结果抽屉中返回。</p>
+                  </div>
+                  <div className="np-mp-service-status">
+                    <span className={`is-${serviceState}`} role="status">
+                      {serviceState === "loading" ? <LoaderCircle className="np-sw-spin" /> : null}
+                      {serviceState === "ready" ? <CheckCircle2 /> : null}
+                      {serviceState === "unavailable" ? <CircleOff /> : null}
+                      {serviceState === "error" ? <TriangleAlert /> : null}
+                      {serviceLabel}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="刷新 SMiPoly 服务状态"
+                      onClick={() => void polymerization.refreshStatus()}
+                      disabled={polymerization.statusLoading}
+                    >
+                      <RefreshCw aria-hidden="true" />
+                      刷新
+                    </button>
+                  </div>
+                </header>
 
-            <label className="mt-4 block space-y-2">
-              <span className="flex items-center justify-between gap-2 text-xs font-medium text-slate-600">
-                <span>单体 B SMILES</span>
-                <Badge
-                  className={cn(
-                    "shrink-0",
-                    isMonomerBRequired ? "border-amber-200 bg-amber-50 text-amber-700" : "border-slate-200 bg-slate-50 text-slate-500"
-                  )}
-                >
-                  {isMonomerBRequired ? "必填" : "可选"}
-                </Badge>
-              </span>
-              <Textarea
-                value={monomerB}
-                onChange={(event) => {
-                  setMonomerB(event.target.value);
-                  setError(null);
-                  setData(null);
-                }}
-                aria-describedby={
-                  isMissingRequiredMonomerB ? `${monomerBHintId} ${monomerBMissingId}` : monomerBHintId
-                }
-                aria-invalid={isMissingRequiredMonomerB ? true : undefined}
-                placeholder={`示例：${SMIPOLY_POLYIMIDE_FIXTURE.monomerB}`}
-                spellCheck={false}
-                className="min-h-[92px] rounded-lg border-slate-200 bg-white font-mono text-[13px] leading-5 text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-sky-200"
-                disabled={isLoading}
-              />
-              <span
-                id={monomerBHintId}
-                className={cn("block text-xs leading-5", isMonomerBRequired ? "text-amber-700" : "text-slate-500")}
-              >
-                {targetRequirementNote}
-              </span>
-              {isMissingRequiredMonomerB ? (
-                <span
-                  id={monomerBMissingId}
-                  aria-live="polite"
-                  className="block rounded-md border border-amber-100 bg-amber-50 px-2 py-1 text-xs leading-5 text-amber-800"
-                >
-                  {TARGET_CLASS_LABELS[targetClass]} 需要单体 B，请补充互补单体后运行。
-                </span>
-              ) : null}
-            </label>
+                {polymerization.statusError || serviceState === "unavailable" ? (
+                  <div className="np-mp-service-message" role="alert">
+                    <TriangleAlert aria-hidden="true" />
+                    <span>
+                      {polymerization.statusError ?? polymerization.status?.message ?? "SMiPoly 服务当前不可用。"}
+                    </span>
+                  </div>
+                ) : null}
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <label className="block space-y-2">
-                <span className="text-xs font-medium text-slate-600">目标聚合物类型</span>
-                <select
-                  value={targetClass}
-                  onChange={(event) => {
-                    setTargetClass(event.target.value as MonomerPolymerizationTargetClass);
-                    setError(null);
-                    setData(null);
-                  }}
-                  className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200"
-                  disabled={isLoading}
-                >
-                  {targetOptions.map((target) => (
-                    <option key={target} value={target}>
-                      {TARGET_CLASS_LABELS[target]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block space-y-2">
-                <span className="text-xs font-medium text-slate-600">返回数量</span>
-                <Input
-                  type="number"
-                  min={1}
-                  max={maxResultsLimit}
-                  step={1}
-                  value={maxResults}
-                  onChange={(event) => {
-                    setMaxResults(clampInteger(Number(event.target.value), 1, maxResultsLimit));
-                    setData(null);
-                  }}
-                  className="h-10 rounded-md border-slate-200 bg-white text-sm shadow-none focus-visible:ring-sky-200"
-                  disabled={isLoading}
-                />
-              </label>
-            </div>
-
-            {statusError || serviceUnavailable ? (
-              <div className="mt-4 flex gap-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
-                <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-                  {statusError ?? status?.message ?? "SMiPoly 服务当前不可用。"}
-                </span>
-              </div>
-            ) : null}
-            {error ? (
-              <div className="mt-4 flex gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
-                <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 break-words [overflow-wrap:anywhere]">{error}</span>
-              </div>
-            ) : null}
-
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <Button type="submit" disabled={!canSubmit} className="h-10 rounded-md px-4 shadow-none disabled:opacity-[0.45]">
-                {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-                {isLoading ? "运行中" : "运行聚合"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setData(null);
-                  setError(null);
-                  setMonomerB("");
-                }}
-                disabled={isLoading}
-                className="h-10 rounded-md border-slate-200 bg-white px-4 text-slate-700 shadow-none hover:bg-slate-50"
-              >
-                清空结果
-              </Button>
-            </div>
-          </form>
-
-          <div className="grid min-w-0 gap-4">
-            <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <div className="text-[11px] font-semibold uppercase text-slate-400">结果</div>
-                  <h2 className="mt-1 text-base font-semibold text-slate-950">生成候选</h2>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge className="border-slate-200 bg-slate-50 text-slate-700">{data ? `${data.total} 个候选` : "未运行"}</Badge>
-                  <Badge className="border-slate-200 bg-slate-50 text-slate-700">
-                    {data ? `${data.query_time_ms.toFixed(1)} ms` : TARGET_CLASS_LABELS[targetClass]}
-                  </Badge>
-                </div>
-              </div>
-              {data?.warnings.length ? (
-                <div className="mt-4 space-y-2">
-                  {data.warnings.map((warning) => (
-                    <div key={warning} className="flex gap-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
-                      <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                      <span className="min-w-0 break-words [overflow-wrap:anywhere]">{warning}</span>
+                <section className="np-mp-section" aria-labelledby="np-mp-target-title">
+                  <header className="np-mp-section__header">
+                    <span>01</span>
+                    <div>
+                      <h2 id="np-mp-target-title">目标聚合物类型</h2>
+                      <p>服务返回的类别与单体数量要求优先于本地兼容规则。</p>
                     </div>
-                  ))}
-                </div>
-              ) : null}
-            </section>
-
-            {isLoading ? (
-              <section className="flex min-h-[320px] items-center justify-center rounded-[14px] border border-dashed border-slate-200 bg-white text-sm font-medium text-slate-600">
-                <Loader2 className="mr-2 h-5 w-5 animate-spin text-sky-600" />
-                正在调用 SMiPoly 规则生成
-              </section>
-            ) : data && data.results.length > 0 ? (
-              <section className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-                {data.results.map((candidate) => {
-                  const copyKey = `candidate-${candidate.rank}`;
-                  return (
-                    <CandidateCard
-                      key={`${candidate.rank}-${candidate.polymer_smiles}`}
-                      candidate={candidate}
-                      copyState={copyState?.key === copyKey ? copyState.status : null}
-                      onCopy={copyText}
+                  </header>
+                  <div className="np-mp-target-grid">
+                    <PolymerClassPicker
+                      value={form.targetClass}
+                      options={targetPickerOptions}
+                      onChange={(targetClass) => {
+                        updateForm({ targetClass });
+                        setSubmitAttempted(false);
+                      }}
                     />
-                  );
-                })}
-              </section>
-            ) : (
-              <section className="flex min-h-[320px] flex-col items-center justify-center rounded-[14px] border border-dashed border-slate-200 bg-white px-6 py-10 text-center">
-                <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600">
-                  <Sparkles className="h-5 w-5" />
-                </div>
-                <div className="mt-4 text-sm font-semibold text-slate-950">{data ? "本次没有生成候选" : "等待单次聚合运行"}</div>
-                <div className="mt-2 max-w-lg text-sm leading-6 text-slate-500">
-                  {data
-                    ? "可尝试补充第二个互补单体，或切换目标聚合物类型。"
-                    : "输入一个或两个普通单体 SMILES，后端会同步返回少量规则生成候选。"}
-                </div>
-              </section>
-            )}
-          </div>
-        </section>
+                    <div className="np-mp-field np-mp-requirement-summary">
+                      <span>MONOMER REQUIREMENT</span>
+                      <div className="np-mp-requirement-card">
+                        <div className="np-mp-requirement-card__metric">
+                          <span>{targetRequirement.monomer_b_required ? "双单体规则" : "单/双单体规则"}</span>
+                          <strong>{targetMonomerCount}</strong>
+                        </div>
+                        <div className="np-mp-requirement-card__copy">
+                          <span>{targetRequirement.monomer_b_required ? "B 必填" : "B 可选"}</span>
+                          <p>{targetRequirement.note}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="np-mp-section" aria-labelledby="np-mp-monomers-title">
+                  <header className="np-mp-section__header">
+                    <span>02</span>
+                    <div>
+                      <h2 id="np-mp-monomers-title">单体输入</h2>
+                      <p>A/B 为平级输入槽，可分别导入同一全局共享结构并生成独立 2D 预览。</p>
+                    </div>
+                  </header>
+                  <MonomerPairEditor
+                    key={editorRevision}
+                    monomerA={form.monomerA}
+                    monomerB={form.monomerB}
+                    monomerBRequired={targetRequirement.monomer_b_required}
+                    monomerBRequirementNote={targetRequirement.note}
+                    monomerAError={monomerAError}
+                    monomerBError={monomerBError}
+                    onMonomerAChange={(monomerA) => updateForm({ monomerA })}
+                    onMonomerBChange={(monomerB) => updateForm({ monomerB })}
+                    onTouched={touchSlot}
+                    getSharedSmiles={getSharedSmiles}
+                    onEditStructure={editSharedStructure}
+                  />
+                </section>
+
+                <section className="np-mp-section" aria-labelledby="np-mp-settings-title">
+                  <header className="np-mp-section__header">
+                    <span>03</span>
+                    <div>
+                      <h2 id="np-mp-settings-title">运行设置</h2>
+                      <p>同步调用 SMiPoly；总命中数可能大于本次实际返回数。</p>
+                    </div>
+                  </header>
+                  <div className="np-mp-run-grid">
+                    <label className="np-mp-field">
+                      <span>MAX RESULTS</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={maxResultsLimit}
+                        step={1}
+                        value={form.maxResults}
+                        aria-invalid={maxResultsError ? true : undefined}
+                        aria-describedby={maxResultsError ? "np-mp-max-results-error" : "np-mp-max-results-hint"}
+                        onChange={(event) => updateForm({
+                          maxResults: event.target.value === "" ? 0 : Number(event.target.value)
+                        })}
+                        onBlur={() => setTouched((current) => ({ ...current, maxResults: true }))}
+                      />
+                      <small id="np-mp-max-results-hint">服务上限：{maxResultsLimit}</small>
+                      {maxResultsError ? (
+                        <small id="np-mp-max-results-error" className="np-mp-field-error" role="alert">
+                          {maxResultsError}
+                        </small>
+                      ) : null}
+                    </label>
+                    <div className="np-mp-run-note">
+                      <FlaskConical aria-hidden="true" />
+                      <p>规则候选不代表真实可合成性或性质验证；结果需要结合实验条件进一步评估。</p>
+                    </div>
+                  </div>
+
+                  <div className="np-mp-form-actions">
+                    <button type="submit" className="np-sw-primary-button" disabled={!canSubmit}>
+                      {polymerization.runLoading ? <LoaderCircle className="np-sw-spin" /> : <Play />}
+                      {polymerization.runLoading ? "运行中" : "运行聚合"}
+                    </button>
+                    <button type="button" className="np-sw-secondary-button" onClick={resetForm}>
+                      <RotateCcw aria-hidden="true" />
+                      重置表单
+                    </button>
+                  </div>
+                </section>
+              </form>
+            </div>
+          </main>
+
+          <MonomerPolymerizationDrawer
+            open={drawerOpen}
+            hasAttempt={hasAttempt}
+            width={drawerWidth}
+            minWidth={drawerSizing.minWidth}
+            maxWidth={drawerSizing.maxWidth}
+            keyboardStep={drawerSizing.keyboardStep}
+            loading={polymerization.runLoading}
+            error={polymerization.runError}
+            data={polymerization.data}
+            snapshot={snapshot}
+            stale={stale}
+            onWidthChange={setDrawerWidth}
+            onClose={() => setDrawerOpen(false)}
+            onOpen={() => setDrawerOpen(true)}
+            onClear={clearResults}
+          />
+        </div>
       </div>
     </div>
   );

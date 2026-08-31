@@ -1136,7 +1136,6 @@ export default function App() {
         <MonomerPolymerizationPage
           structure={structureWorkspace}
           onEditStructure={openStructureWorkbench}
-          onBackHome={() => navigate({ module: "home", datasetKey: null })}
         />
       ) : null}
 

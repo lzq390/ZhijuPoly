@@ -686,14 +686,17 @@ export function predictMonomerPrecursors(
   return postJSON("/monomer-retrosynthesis", payload, signal);
 }
 
-export function fetchMonomerPolymerizationStatus(): Promise<MonomerPolymerizationStatusResponse> {
-  return getJSON("/monomer-polymerization/status");
+export function fetchMonomerPolymerizationStatus(
+  signal?: AbortSignal
+): Promise<MonomerPolymerizationStatusResponse> {
+  return getJSON("/monomer-polymerization/status", { cache: "no-store", signal });
 }
 
 export function runMonomerPolymerization(
-  payload: MonomerPolymerizationRequest
+  payload: MonomerPolymerizationRequest,
+  signal?: AbortSignal
 ): Promise<MonomerPolymerizationResponse> {
-  return postJSON("/monomer-polymerization", payload);
+  return postJSON("/monomer-polymerization", payload, signal);
 }
 
 export function fetchDftPcaSample(limit = 200, signal?: AbortSignal): Promise<DftPcaSampleResponse> {
