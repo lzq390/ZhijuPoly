@@ -2364,11 +2364,6 @@
   gap: 10px !important;
   flex: 1;
   overflow-y: auto;
-  scrollbar-width: none !important;
-}
-
-.polymer-desktop-page .analysis-panel-body::-webkit-scrollbar {
-  display: none !important;
 }
 
 /* 3D 构象渲染区域 */
@@ -2909,10 +2904,6 @@
   color: var(--color-text-tertiary);
   font-size: 9px;
   font-family: -apple-system, sans-serif;
-}
-
-.polymer-desktop-page .result-smiles-box::-webkit-scrollbar {
-  display: none;
 }
 
 /* 右上角极简复制按钮 */

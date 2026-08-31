@@ -188,6 +188,73 @@ function getProjectButton(directory: string): HTMLButtonElement {
 }
 
 describe("AppShell 侧边栏", () => {
+  it("统一为页面内容区和侧边栏滚动区启用自动显隐状态", () => {
+    const view = renderShell("labData");
+    const main = view.container.querySelector("main");
+    const sidebarScroll = view.container.querySelector(".np-sidebar__scroll");
+    const scheduledCallbacks: Array<() => void> = [];
+    const animateMock = vi.fn(() => {
+      return {
+        cancel: vi.fn(),
+        onfinish: null
+      } as unknown as Animation;
+    });
+    const animateDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "animate");
+    Object.defineProperty(HTMLElement.prototype, "animate", {
+      configurable: true,
+      writable: true,
+      value: animateMock
+    });
+    const timeoutSpy = vi.spyOn(window, "setTimeout").mockImplementation((handler) => {
+      if (typeof handler === "function") scheduledCallbacks.push(() => handler());
+      return scheduledCallbacks.length;
+    });
+
+    try {
+      expect(main).not.toBeNull();
+      expect(sidebarScroll).not.toBeNull();
+      fireEvent.scroll(main as Element);
+      fireEvent.scroll(sidebarScroll as Element);
+
+      expect(main?.getAttribute("data-scrollbar-active")).toBe("true");
+      expect(sidebarScroll?.getAttribute("data-scrollbar-active")).toBe("true");
+      expect(timeoutSpy).toHaveBeenCalledTimes(2);
+      expect(timeoutSpy).toHaveBeenNthCalledWith(1, expect.any(Function), 700);
+      expect(timeoutSpy).toHaveBeenNthCalledWith(2, expect.any(Function), 700);
+      expect(animateMock).toHaveBeenNthCalledWith(
+        1,
+        expect.any(Array),
+        expect.objectContaining({ duration: 160, easing: "ease-out", fill: "both" })
+      );
+      expect(animateMock).toHaveBeenNthCalledWith(
+        2,
+        expect.any(Array),
+        expect.objectContaining({ duration: 160, easing: "ease-out", fill: "both" })
+      );
+
+      act(() => scheduledCallbacks.forEach((callback) => callback()));
+      expect(main?.hasAttribute("data-scrollbar-active")).toBe(false);
+      expect(sidebarScroll?.hasAttribute("data-scrollbar-active")).toBe(false);
+      expect(animateMock).toHaveBeenNthCalledWith(
+        3,
+        expect.any(Array),
+        expect.objectContaining({ duration: 240, easing: "ease-in", fill: "both" })
+      );
+      expect(animateMock).toHaveBeenNthCalledWith(
+        4,
+        expect.any(Array),
+        expect.objectContaining({ duration: 240, easing: "ease-in", fill: "both" })
+      );
+    } finally {
+      view.unmount();
+      if (animateDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "animate", animateDescriptor);
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, "animate");
+      }
+    }
+  });
+
   it("聚合物相似性探索使用无内边距的满高工作台容器", () => {
     const view = renderShell("explorer");
     const main = view.container.querySelector("main");
