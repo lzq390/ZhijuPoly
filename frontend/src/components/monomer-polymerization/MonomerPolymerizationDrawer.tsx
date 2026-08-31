@@ -63,7 +63,7 @@ export function MonomerPolymerizationDrawer({
       ? "运行失败"
       : data
         ? data.results.length
-          ? `${data.results.length} / ${data.total} 个候选已返回`
+          ? `${data.results.length} / ${data.total} 个候选已显示`
           : "未找到候选"
         : "等待运行";
 
@@ -82,7 +82,7 @@ export function MonomerPolymerizationDrawer({
       reopenLabel="展开聚合结果"
       reopenVariant="side-handle"
       closeLabel="关闭正向聚合结果"
-      resizeLabel="调整正向聚合结果抽屉宽度"
+      resizeLabel="调整正向聚合结果面板宽度"
       onWidthChange={onWidthChange}
       onClose={onClose}
       onOpen={onOpen}
@@ -96,11 +96,11 @@ export function MonomerPolymerizationDrawer({
       </div>
 
       {loading ? (
-        <div className="np-mp-loading-results" aria-label="正在调用 SMiPoly 规则生成">
+        <div className="np-mp-loading-results" aria-label="正在生成聚合物候选">
           <div className="np-sw-result-state">
             <span><LoaderCircle className="np-sw-spin" /></span>
             <strong>正在生成聚合物候选</strong>
-            <p>SMiPoly 正在匹配规则并整理候选结构。</p>
+            <p>SMiPoly 正在分析单体并整理候选结构。</p>
           </div>
           <div className="np-mp-skeleton-list" aria-hidden="true">
             <i /><i /><i />
@@ -118,13 +118,13 @@ export function MonomerPolymerizationDrawer({
           {stale ? (
             <div className="np-mp-stale-notice" role="status">
               <CircleAlert aria-hidden="true" />
-              <span>结果对应上次提交的输入；当前参数已发生变化。</span>
+              <span>这些结果基于上一次运行；当前输入已更改。</span>
             </div>
           ) : null}
 
           <div className="np-mp-result-summary">
             <div>
-              <span>返回 / 总命中</span>
+              <span>已显示 / 符合条件</span>
               <strong>{data.results.length} / {data.total}</strong>
             </div>
             <div>
@@ -132,19 +132,19 @@ export function MonomerPolymerizationDrawer({
               <strong>{TARGET_CLASS_LABELS[data.target_class]}</strong>
             </div>
             <div>
-              <span><Clock3 aria-hidden="true" /> 查询耗时</span>
+              <span><Clock3 aria-hidden="true" /> 查找用时</span>
               <strong>{formatQueryTime(data.query_time_ms)}</strong>
             </div>
           </div>
 
-          <section className="np-mp-canonical-inputs" aria-label="后端规范化单体">
-            <h3>后端识别单体</h3>
+          <section className="np-mp-canonical-inputs" aria-label="系统识别的单体">
+            <h3>系统识别的单体</h3>
             {data.input_monomers.map((monomer) => (
               <div key={monomer.role}>
                 <span>{monomer.role === "monomer_a" ? "MONOMER A" : "MONOMER B"}</span>
                 <dl>
-                  <div><dt>原始</dt><dd>{monomer.input_smiles}</dd></div>
-                  <div><dt>Canonical</dt><dd>{monomer.canonical_smiles}</dd></div>
+                  <div><dt>输入值</dt><dd>{monomer.input_smiles}</dd></div>
+                  <div><dt>标准形式</dt><dd>{monomer.canonical_smiles}</dd></div>
                 </dl>
               </div>
             ))}
@@ -191,7 +191,7 @@ export function MonomerPolymerizationDrawer({
         <div className="np-sw-result-state">
           <span><FlaskConical /></span>
           <strong>等待正向聚合</strong>
-          <p>完成输入并运行后，候选会在这里纵向展示。</p>
+          <p>完成输入并运行后，候选会显示在这里。</p>
         </div>
       )}
     </WorkbenchDrawerShell>

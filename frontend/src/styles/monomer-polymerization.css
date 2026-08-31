@@ -4,7 +4,12 @@
 }
 
 .np-monomer-polymerization .np-mp-page {
-  padding: 54px clamp(18px, 4vw, 76px) 24px;
+  padding: 62px clamp(24px, 6vw, 160px) 24px;
+}
+
+.np-monomer-polymerization .np-sw-page-title {
+  top: 22px;
+  left: 20px;
 }
 
 .np-monomer-polymerization .np-mp-scroll-region {
@@ -13,8 +18,26 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 2px 3px 20px;
+  padding: 2px 3px 64px;
   scrollbar-gutter: stable;
+}
+
+.np-monomer-polymerization .np-mp-module-toolbar {
+  display: flex;
+  min-height: 38px;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.np-monomer-polymerization .np-mp-module-toolbar::before {
+  width: min(180px, 22vw);
+  height: 1px;
+  margin-right: auto;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0), rgba(59, 130, 246, 0.32), rgba(34, 211, 238, 0.5));
+  content: "";
 }
 
 .np-monomer-polymerization .np-mp-surface {
@@ -28,40 +51,62 @@
 
 .np-monomer-polymerization .np-mp-surface__header {
   display: flex;
-  align-items: flex-start;
+  min-height: 82px;
+  align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 22px 24px 20px;
+  padding: 15px 18px;
   border-bottom: 1px solid rgba(37, 99, 235, 0.105);
-  background: linear-gradient(180deg, #fff, #fbfdff);
+  background: linear-gradient(110deg, rgba(255, 255, 255, 0.99) 10%, rgba(239, 246, 255, 0.75) 72%, rgba(236, 254, 255, 0.54) 118%);
 }
 
-.np-monomer-polymerization .np-mp-surface__header > div:first-child {
+.np-monomer-polymerization .np-mp-surface-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.np-monomer-polymerization .np-mp-surface-mark {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: #fff;
+  background: linear-gradient(145deg, #1d4ed8 0%, #3b82f6 58%, #06b6d4 135%);
+  box-shadow: 0 9px 20px rgba(37, 99, 235, 0.21), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.np-monomer-polymerization .np-mp-surface-mark svg {
+  width: 19px;
+  height: 19px;
+}
+
+.np-monomer-polymerization .np-mp-surface-copy {
   min-width: 0;
 }
 
-.np-monomer-polymerization .np-mp-surface__header > div:first-child > span {
-  color: var(--np-sw-cyan);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-}
-
 .np-monomer-polymerization .np-mp-surface__header h2 {
-  margin: 5px 0 0;
+  margin: 0;
   color: var(--np-sw-ink);
   font-family: var(--font-heading);
   font-size: 18px;
-  font-weight: 720;
-  line-height: 1.3;
+  font-weight: 750;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
 }
 
 .np-monomer-polymerization .np-mp-surface__header p {
-  margin: 5px 0 0;
-  color: var(--np-sw-muted);
-  font-size: 12px;
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: #617792;
+  font-size: 13px;
   line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .np-monomer-polymerization .np-mp-service-status {
@@ -75,27 +120,38 @@
 .np-monomer-polymerization .np-mp-service-status > button {
   display: inline-flex;
   align-items: center;
-  min-height: 30px;
-  gap: 6px;
-  border: 1px solid rgba(51, 83, 126, 0.16);
-  border-radius: 7px;
-  padding: 0 9px;
-  background: #fff;
-  font-size: 10.5px;
-  font-weight: 700;
+  min-height: 36px;
+  gap: 7px;
+  border: 1px solid rgba(71, 100, 143, 0.21);
+  border-radius: 6px;
+  padding: 0 11px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 5px 15px rgba(30, 64, 175, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  font-weight: 650;
   white-space: nowrap;
+  backdrop-filter: blur(12px);
 }
 
 .np-monomer-polymerization .np-mp-service-status > span svg,
 .np-monomer-polymerization .np-mp-service-status > button svg {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
 }
 
 .np-monomer-polymerization .np-mp-service-status > span.is-ready {
-  border-color: rgba(16, 185, 129, 0.22);
-  color: #047857;
-  background: #ecfdf5;
+  border-color: rgba(71, 100, 143, 0.21);
+  color: #506780;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.np-monomer-polymerization .np-mp-ready-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.11), 0 0 11px rgba(16, 185, 129, 0.38);
 }
 
 .np-monomer-polymerization .np-mp-service-status > span.is-loading {
@@ -1018,19 +1074,19 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 10px;
+  gap: 10px;
+  padding: 11px 12px;
   border-bottom: 1px solid rgba(51, 83, 126, 0.11);
   background: #fbfdff;
 }
 
 .np-monomer-polymerization .np-mp-candidate-card__rank {
-  padding: 3px 6px;
+  padding: 4px 7px;
   border-radius: 999px;
   color: var(--np-sw-blue-strong);
   background: #eff6ff;
   font-family: var(--font-mono);
-  font-size: 8.5px;
+  font-size: 9.5px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -1038,21 +1094,22 @@
 .np-monomer-polymerization .np-mp-candidate-card > header h3 {
   margin: 0;
   color: #183553;
-  font-size: 11.5px;
+  font-size: 13px;
+  font-weight: 700;
   line-height: 1.35;
 }
 
 .np-monomer-polymerization .np-mp-candidate-card > header span {
   display: block;
   margin-top: 2px;
-  color: #8194aa;
+  color: #647e99;
   font-family: var(--font-mono);
-  font-size: 8.5px;
+  font-size: 10px;
 }
 
 .np-monomer-polymerization .np-mp-candidate-card > header > svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   color: var(--np-sw-cyan);
 }
 
@@ -1084,7 +1141,7 @@
 
 .np-monomer-polymerization .np-mp-candidate-card__structure-empty {
   color: #8a9db0;
-  font-size: 10px;
+  font-size: 11.5px;
 }
 
 .np-monomer-polymerization .np-mp-candidate-card__smiles {
@@ -1092,18 +1149,20 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-  padding: 9px 10px;
+  padding: 11px 12px;
 }
 
 .np-monomer-polymerization .np-mp-candidate-card__smiles > div:first-child {
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .np-monomer-polymerization .np-mp-candidate-card__smiles span {
-  color: #7d90a6;
+  color: #607995;
   font-family: var(--font-mono);
-  font-size: 8.5px;
+  font-size: 10px;
   font-weight: 700;
+  letter-spacing: 0.025em;
 }
 
 .np-monomer-polymerization .np-mp-candidate-card__smiles > div:first-child > div {
@@ -1112,8 +1171,8 @@
   margin-top: 4px;
   color: var(--np-sw-ink);
   font-family: var(--font-mono);
-  font-size: 9.5px;
-  line-height: 1.45;
+  font-size: 11.5px;
+  line-height: 1.55;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -1149,40 +1208,52 @@
 }
 
 .np-monomer-polymerization .np-mp-candidate-card__details summary {
-  padding: 8px 10px;
-  color: #607995;
+  padding: 10px 12px;
+  color: #506d8a;
   background: #fbfdff;
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 700;
+  line-height: 1.4;
   cursor: pointer;
+}
+
+.np-monomer-polymerization .np-mp-candidate-card__details summary::marker {
+  color: #7890a8;
+}
+
+.np-monomer-polymerization .np-mp-candidate-card__details summary:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.28);
 }
 
 .np-monomer-polymerization .np-mp-candidate-card__details dl {
   display: grid;
-  gap: 7px;
+  gap: 9px;
   margin: 0;
-  padding: 9px 10px 10px;
+  padding: 11px 12px 12px;
 }
 
 .np-monomer-polymerization .np-mp-candidate-card__details dl > div {
   display: grid;
-  grid-template-columns: 82px minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
 }
 
 .np-monomer-polymerization .np-mp-candidate-card__details dt {
-  color: #8194aa;
-  font-size: 9px;
+  color: #607995;
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.5;
 }
 
 .np-monomer-polymerization .np-mp-candidate-card__details dd {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
-  color: var(--np-sw-ink);
+  color: #213e5b;
   font-family: var(--font-mono);
-  font-size: 9px;
-  line-height: 1.45;
+  font-size: 10.5px;
+  line-height: 1.55;
 }
 
 .np-monomer-polymerization .np-mp-empty-state {
@@ -1223,6 +1294,10 @@
 
   .np-monomer-polymerization .np-mp-service-status {
     justify-content: space-between;
+  }
+
+  .np-monomer-polymerization .np-mp-module-toolbar::before {
+    display: none;
   }
 
   .np-monomer-polymerization .np-mp-target-grid,
@@ -1306,6 +1381,10 @@
     padding-bottom: 18px;
   }
 
+  .np-monomer-polymerization .np-mp-surface__header p {
+    white-space: normal;
+  }
+
   .np-monomer-polymerization .np-mp-section__header p {
     font-size: 10.5px;
   }
@@ -1331,7 +1410,28 @@
   }
 
   .np-monomer-polymerization .np-mp-page {
-    padding: 76px clamp(36px, 4vw, 112px) 36px;
+    padding: 84px 36px 36px;
+  }
+
+  .np-monomer-polymerization .np-sw-page-title {
+    top: 30px;
+    left: 36px;
+    font-size: 28px;
+    line-height: 42px;
+  }
+
+  .np-monomer-polymerization .np-mp-module-toolbar {
+    min-height: 54px;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .np-monomer-polymerization .np-mp-module-toolbar::before {
+    width: min(270px, 22vw);
+  }
+
+  .np-monomer-polymerization .np-mp-scroll-region {
+    padding-bottom: 88px;
   }
 
   .np-monomer-polymerization .np-mp-surface {
@@ -1340,35 +1440,58 @@
   }
 
   .np-monomer-polymerization .np-mp-surface__header {
-    padding: 30px 34px 27px;
+    min-height: 123px;
+    gap: 30px;
+    padding: 22px 27px;
   }
 
-  .np-monomer-polymerization .np-mp-surface__header > div:first-child > span {
-    font-size: 14px;
+  .np-monomer-polymerization .np-mp-surface-heading {
+    gap: 18px;
+  }
+
+  .np-monomer-polymerization .np-mp-surface-mark {
+    width: 60px;
+    height: 60px;
+    border-radius: 14px;
+    box-shadow: 0 13px 30px rgba(37, 99, 235, 0.21), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  }
+
+  .np-monomer-polymerization .np-mp-surface-mark svg {
+    width: 28px;
+    height: 28px;
   }
 
   .np-monomer-polymerization .np-mp-surface__header h2 {
-    margin-top: 7px;
-    font-size: 27px;
+    font-size: 24px;
   }
 
-  .np-monomer-polymerization .np-mp-surface__header p,
+  .np-monomer-polymerization .np-mp-surface__header p {
+    margin-top: 6px;
+    font-size: 17px;
+  }
+
   .np-monomer-polymerization .np-mp-section__header p {
     font-size: 17px;
   }
 
   .np-monomer-polymerization .np-mp-service-status > span,
   .np-monomer-polymerization .np-mp-service-status > button {
-    min-height: 45px;
-    gap: 9px;
-    border-radius: 10px;
-    padding: 0 14px;
-    font-size: 15px;
+    min-height: 54px;
+    gap: 10px;
+    border-radius: 9px;
+    padding: 0 16px;
+    font-size: 18px;
   }
 
   .np-monomer-polymerization .np-mp-service-status svg {
     width: 19px;
     height: 19px;
+  }
+
+  .np-monomer-polymerization .np-mp-ready-dot {
+    width: 8px;
+    height: 8px;
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.11), 0 0 15px rgba(16, 185, 129, 0.38);
   }
 
   .np-monomer-polymerization .np-mp-section {
@@ -1526,6 +1649,92 @@
 
   .np-monomer-polymerization .np-mp-preview__image {
     max-height: 192px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card {
+    border-radius: 12px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card > header {
+    gap: 13px;
+    padding: 14px 15px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__rank {
+    padding: 5px 9px;
+    font-size: 12px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card > header h3 {
+    font-size: 16px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card > header span {
+    margin-top: 3px;
+    font-size: 12.5px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card > header > svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__structure {
+    min-height: 170px;
+    padding: 11px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__structure-image {
+    max-height: 154px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__structure-empty {
+    font-size: 14px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__smiles {
+    gap: 12px;
+    padding: 14px 15px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__smiles span {
+    font-size: 12px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__smiles > div:first-child > div {
+    margin-top: 6px;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__smiles-actions .np-mp-icon-action {
+    width: 34px;
+    min-height: 34px;
+    flex-basis: 34px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__details summary {
+    padding: 12px 15px;
+    font-size: 13.5px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__details dl {
+    gap: 12px;
+    padding: 14px 15px 15px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__details dl > div {
+    grid-template-columns: 112px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__details dt {
+    font-size: 13px;
+  }
+
+  .np-monomer-polymerization .np-mp-candidate-card__details dd {
+    font-size: 13.5px;
+    line-height: 1.6;
   }
 
   .np-monomer-polymerization .np-mp-form-actions {

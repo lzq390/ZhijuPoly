@@ -46,7 +46,7 @@ const EMPTY_PREVIEW: PreviewState = {
 
 function previewErrorMessage(error: unknown) {
   if (error instanceof TypeError) {
-    return "暂时无法连接 2D 结构预览服务。";
+    return "暂时无法生成 2D 预览，请稍后重试。";
   }
   if (error instanceof Error && error.message.trim()) return error.message;
   return "无法生成 2D 结构预览。";
@@ -58,7 +58,7 @@ function MonomerInputSlot({
   required,
   requirementNote,
   error,
-  placeholder,
+  recommendedExample,
   onValueChange,
   onTouched,
   getSharedSmiles
@@ -68,7 +68,7 @@ function MonomerInputSlot({
   required: boolean;
   requirementNote: string;
   error: string | null;
-  placeholder: string;
+  recommendedExample: string;
   onValueChange: (value: string) => void;
   onTouched: () => void;
   getSharedSmiles: () => Promise<string>;
@@ -190,13 +190,31 @@ function MonomerInputSlot({
         <textarea
           id={inputId}
           value={value}
-          placeholder={placeholder}
+          placeholder={`推荐示例：${recommendedExample}`}
           spellCheck={false}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy}
           onChange={(event) => {
             setImportError(null);
             onValueChange(event.target.value);
+          }}
+          onKeyDown={(event) => {
+            if (
+              event.key !== "Enter" ||
+              event.shiftKey ||
+              event.altKey ||
+              event.ctrlKey ||
+              event.metaKey ||
+              event.nativeEvent.isComposing ||
+              value.trim()
+            ) {
+              return;
+            }
+            event.preventDefault();
+            setImportError(null);
+            onValueChange(recommendedExample);
+            onTouched();
+            void loadPreview(recommendedExample);
           }}
           onBlur={() => {
             onTouched();
@@ -265,7 +283,7 @@ function MonomerInputSlot({
             ) : preview.error ? (
               <div className="np-mp-preview__state is-error"><ImageOff /><span>{preview.error}</span></div>
             ) : (
-              <div className="np-mp-preview__state"><Atom /><span>输入 SMILES 后失焦即可预览</span></div>
+              <div className="np-mp-preview__state"><Atom /><span>请先输入 SMILES</span></div>
             )}
           </div>
         </div>
@@ -292,7 +310,7 @@ export function MonomerPairEditor({
       <div className="np-mp-monomer-toolbar">
         <div className="np-mp-ordinary-hint">
           <TriangleAlert aria-hidden="true" />
-          <span>请输入普通单体 SMILES，不使用 <code>*</code> 连接点；化学有效性以后端校验为准。</span>
+          <span>请输入不含 <code>*</code> 连接点的普通单体 SMILES；点击“聚合”后会检查是否有效。</span>
         </div>
         <button type="button" className="np-sw-secondary-button" onClick={onEditStructure}>
           <PencilRuler aria-hidden="true" />
@@ -304,9 +322,9 @@ export function MonomerPairEditor({
           slot="A"
           value={monomerA}
           required
-          requirementNote="聚合检索的主单体。"
+          requirementNote="用于生成候选的主单体。"
           error={monomerAError}
-          placeholder={`示例：${SMIPOLY_POLYIMIDE_FIXTURE.monomerA}`}
+          recommendedExample={SMIPOLY_POLYIMIDE_FIXTURE.monomerA}
           onValueChange={onMonomerAChange}
           onTouched={() => onTouched("A")}
           getSharedSmiles={getSharedSmiles}
@@ -317,7 +335,7 @@ export function MonomerPairEditor({
           required={monomerBRequired}
           requirementNote={monomerBRequirementNote}
           error={monomerBError}
-          placeholder={`示例：${SMIPOLY_POLYIMIDE_FIXTURE.monomerB}`}
+          recommendedExample={SMIPOLY_POLYIMIDE_FIXTURE.monomerB}
           onValueChange={onMonomerBChange}
           onTouched={() => onTouched("B")}
           getSharedSmiles={getSharedSmiles}

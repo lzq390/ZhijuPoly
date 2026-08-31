@@ -45,7 +45,7 @@ export const DEFAULT_TARGET_REQUIREMENTS: Record<
     min_monomers: 1,
     max_monomers: 2,
     monomer_b_required: false,
-    note: "当前类型允许只提交单体 A；填写 B 后仅检索两者共同参与的候选。"
+    note: "当前类型可只填写单体 A；填写 B 后，只显示 A 和 B 共同参与的候选。"
   },
   polyester: {
     min_monomers: 2,
@@ -57,7 +57,7 @@ export const DEFAULT_TARGET_REQUIREMENTS: Record<
     min_monomers: 1,
     max_monomers: 2,
     monomer_b_required: false,
-    note: "当前类型允许只提交单体 A；填写 B 后仅检索两者共同参与的候选。"
+    note: "当前类型可只填写单体 A；填写 B 后，只显示 A 和 B 共同参与的候选。"
   },
   polyamide: {
     min_monomers: 2,
@@ -81,27 +81,27 @@ export const DEFAULT_TARGET_REQUIREMENTS: Record<
     min_monomers: 1,
     max_monomers: 2,
     monomer_b_required: false,
-    note: "当前类型允许只提交单体 A；填写 B 后仅检索两者共同参与的候选。"
+    note: "当前类型可只填写单体 A；填写 B 后，只显示 A 和 B 共同参与的候选。"
   },
   all: {
     min_monomers: 1,
     max_monomers: 2,
     monomer_b_required: false,
-    note: "All classes 会跨可用规则检索，单体 B 可选。"
+    note: "All classes 会在所有可用类型中查找候选，单体 B 可选。"
   }
 };
 
 const REMOTE_REQUIREMENT_TRANSLATIONS: Record<string, string> = {
   "Allows a single submitted monomer for chain-growth rules.":
-    "链增长规则允许只提交单体 A；填写 B 后仅检索两者共同参与的候选。",
+    "链增长类型可只填写单体 A；填写 B 后，只显示 A 和 B 共同参与的候选。",
   "Requires two complementary monomers for the lightweight v1 workflow.":
     "当前类型需要两个互补单体。",
   "Allows a single submitted monomer when SMiPoly has a matching rule.":
-    "存在匹配规则时可只提交单体 A；单体 B 可选。",
+    "存在匹配结果时可只填写单体 A；单体 B 可选。",
   "Requires a diamine and a dianhydride monomer.":
     "Polyimide 需要二胺和二酐两个互补单体。",
   "Allows a single submitted monomer and searches across available rule classes.":
-    "All classes 会跨可用规则检索，单体 B 可选。"
+    "All classes 会在所有可用类型中查找候选，单体 B 可选。"
 };
 
 export function getTargetRequirement(
@@ -119,9 +119,9 @@ export function getTargetRequirement(
 }
 const WARNING_TRANSLATIONS: Record<string, string> = {
   "Single-monomer requests only return polymerizations that do not require another user-provided monomer.":
-    "单体请求只会返回无需另一种用户单体即可完成的聚合规则。",
+    "只填写一个单体时，仅显示不需要另一种单体参与的候选。",
   "Filtered SMiPoly rows that involved automatically added auxiliary molecules outside the submitted monomers.":
-    "已过滤包含自动添加辅助分子、且超出本次提交单体范围的 SMiPoly 记录。",
+    "已忽略需要额外辅助分子的结果，因为这些分子不在本次输入中。",
   "SMiPoly generated no polymer candidates for the supplied monomer(s) and target class.":
     "SMiPoly 未针对当前单体和目标类型生成聚合物候选。"
 };

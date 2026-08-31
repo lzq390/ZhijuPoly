@@ -1,5 +1,4 @@
 import {
-  CheckCircle2,
   CircleOff,
   FlaskConical,
   LoaderCircle,
@@ -310,7 +309,7 @@ export function MonomerPolymerizationPage({
   const serviceLabel = serviceState === "loading"
     ? "检查中"
     : serviceState === "ready"
-      ? "可用"
+      ? "准备就绪"
       : serviceState === "error"
         ? "检查失败"
         : "不可用";
@@ -330,34 +329,39 @@ export function MonomerPolymerizationPage({
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
             <div className="np-mp-scroll-region">
+              <div className="np-mp-module-toolbar" aria-label="单体正向聚合状态">
+                <div className="np-mp-service-status">
+                  <span className={`is-${serviceState}`} role="status">
+                    {serviceState === "loading" ? <LoaderCircle className="np-sw-spin" /> : null}
+                    {serviceState === "ready" ? <i className="np-mp-ready-dot" aria-hidden="true" /> : null}
+                    {serviceState === "unavailable" ? <CircleOff /> : null}
+                    {serviceState === "error" ? <TriangleAlert /> : null}
+                    {serviceLabel}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="重新检查 SMiPoly 是否可用"
+                    onClick={() => void polymerization.refreshStatus()}
+                    disabled={polymerization.statusLoading}
+                  >
+                    <RefreshCw aria-hidden="true" />
+                    刷新
+                  </button>
+                </div>
+              </div>
+
               <form
                 className="np-mp-surface np-sw-accented-surface"
                 onSubmit={submitPolymerization}
                 noValidate
               >
                 <header className="np-mp-surface__header">
-                  <div>
-                    <span>SMIPOLY FORWARD POLYMERIZATION</span>
-                    <h2>由普通单体生成规则候选</h2>
-                    <p>设置目标类别与一至两个单体，候选将在右侧结果抽屉中返回。</p>
-                  </div>
-                  <div className="np-mp-service-status">
-                    <span className={`is-${serviceState}`} role="status">
-                      {serviceState === "loading" ? <LoaderCircle className="np-sw-spin" /> : null}
-                      {serviceState === "ready" ? <CheckCircle2 /> : null}
-                      {serviceState === "unavailable" ? <CircleOff /> : null}
-                      {serviceState === "error" ? <TriangleAlert /> : null}
-                      {serviceLabel}
-                    </span>
-                    <button
-                      type="button"
-                      aria-label="刷新 SMiPoly 服务状态"
-                      onClick={() => void polymerization.refreshStatus()}
-                      disabled={polymerization.statusLoading}
-                    >
-                      <RefreshCw aria-hidden="true" />
-                      刷新
-                    </button>
+                  <div className="np-mp-surface-heading">
+                    <span className="np-mp-surface-mark"><FlaskConical aria-hidden="true" /></span>
+                    <div className="np-mp-surface-copy">
+                      <h2>正向聚合设置</h2>
+                      <p>选择目标类型并填写一至两个单体，生成聚合物候选。</p>
+                    </div>
                   </div>
                 </header>
 
@@ -365,7 +369,11 @@ export function MonomerPolymerizationPage({
                   <div className="np-mp-service-message" role="alert">
                     <TriangleAlert aria-hidden="true" />
                     <span>
-                      {polymerization.statusError ?? polymerization.status?.message ?? "SMiPoly 服务当前不可用。"}
+                      {polymerization.statusError ?? (
+                        polymerization.status?.enabled === false
+                          ? "单体正向聚合功能当前未启用。"
+                          : "SMiPoly 当前不可用，请稍后刷新重试。"
+                      )}
                     </span>
                   </div>
                 ) : null}
@@ -375,7 +383,7 @@ export function MonomerPolymerizationPage({
                     <span>01</span>
                     <div>
                       <h2 id="np-mp-target-title">目标聚合物类型</h2>
-                      <p>服务返回的类别与单体数量要求优先于本地兼容规则。</p>
+                      <p>不同聚合物类型需要的单体数量可能不同。</p>
                     </div>
                   </header>
                   <div className="np-mp-target-grid">
@@ -391,7 +399,7 @@ export function MonomerPolymerizationPage({
                       <span>MONOMER REQUIREMENT</span>
                       <div className="np-mp-requirement-card">
                         <div className="np-mp-requirement-card__metric">
-                          <span>{targetRequirement.monomer_b_required ? "双单体规则" : "单/双单体规则"}</span>
+                          <span>所需单体</span>
                           <strong>{targetMonomerCount}</strong>
                         </div>
                         <div className="np-mp-requirement-card__copy">
@@ -408,7 +416,7 @@ export function MonomerPolymerizationPage({
                     <span>02</span>
                     <div>
                       <h2 id="np-mp-monomers-title">单体输入</h2>
-                      <p>A/B 为平级输入槽，可分别导入同一全局共享结构并生成独立 2D 预览。</p>
+                      <p>分别填写单体 A 和 B，也可以导入共享结构并查看 2D 预览。</p>
                     </div>
                   </header>
                   <MonomerPairEditor
@@ -432,7 +440,7 @@ export function MonomerPolymerizationPage({
                     <span>03</span>
                     <div>
                       <h2 id="np-mp-settings-title">运行设置</h2>
-                      <p>同步调用 SMiPoly；总命中数可能大于本次实际返回数。</p>
+                      <p>设置需要显示的候选数量；符合条件的结果可能更多。</p>
                     </div>
                   </header>
                   <div className="np-mp-run-grid">
@@ -451,7 +459,7 @@ export function MonomerPolymerizationPage({
                         })}
                         onBlur={() => setTouched((current) => ({ ...current, maxResults: true }))}
                       />
-                      <small id="np-mp-max-results-hint">服务上限：{maxResultsLimit}</small>
+                      <small id="np-mp-max-results-hint">最多可返回：{maxResultsLimit}</small>
                       {maxResultsError ? (
                         <small id="np-mp-max-results-error" className="np-mp-field-error" role="alert">
                           {maxResultsError}
@@ -460,18 +468,18 @@ export function MonomerPolymerizationPage({
                     </label>
                     <div className="np-mp-run-note">
                       <FlaskConical aria-hidden="true" />
-                      <p>规则候选不代表真实可合成性或性质验证；结果需要结合实验条件进一步评估。</p>
+                      <p>生成的候选不代表一定可以合成，也不代表相关性质已经得到验证；请结合实验条件进一步评估。</p>
                     </div>
                   </div>
 
                   <div className="np-mp-form-actions">
                     <button type="submit" className="np-sw-primary-button" disabled={!canSubmit}>
                       {polymerization.runLoading ? <LoaderCircle className="np-sw-spin" /> : <Play />}
-                      {polymerization.runLoading ? "运行中" : "运行聚合"}
+                      {polymerization.runLoading ? "聚合中" : "聚合"}
                     </button>
                     <button type="button" className="np-sw-secondary-button" onClick={resetForm}>
                       <RotateCcw aria-hidden="true" />
-                      重置表单
+                      重置
                     </button>
                   </div>
                 </section>

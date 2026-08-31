@@ -126,7 +126,7 @@ describe("useMonomerPolymerization", () => {
     const first = renderHook(() => useMonomerPolymerization());
     await waitFor(() => expect(first.result.current.status).toEqual(status));
     await act(async () => { await first.result.current.run(request); });
-    expect(first.result.current.runError).toBe("单体正向聚合请求失败，请检查网络或稍后重试。");
+    expect(first.result.current.runError).toBe("单体正向聚合失败，请检查网络或稍后重试。");
     first.unmount();
 
     apiMocks.run.mockRejectedValueOnce(new Error("后端 detail"));

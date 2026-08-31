@@ -33,7 +33,7 @@ function messageFromError(error: unknown, fallback: string, networkFallback: str
     return networkFallback;
   }
   if (/not installed|cannot load its rule files/i.test(error.message)) {
-    return "SMiPoly 运行环境未就绪或规则文件无法加载。";
+    return "SMiPoly 尚未准备好，请联系管理员处理。";
   }
   if (/dummy atom|wildcard|attachment point/i.test(error.message)) {
     return "请输入不含 * 连接点的普通单体 SMILES。";
@@ -90,8 +90,8 @@ export function useMonomerPolymerization() {
         statusLoading: false,
         statusError: messageFromError(
           error,
-          "无法读取 SMiPoly 服务状态。",
-          "无法连接 SMiPoly 状态服务，请检查网络后重试。"
+          "无法检查 SMiPoly 是否可用。",
+          "暂时无法连接 SMiPoly，请检查网络后重试。"
         )
       }));
       return null;
@@ -134,7 +134,7 @@ export function useMonomerPolymerization() {
         runError: messageFromError(
           error,
           "单体正向聚合失败，请稍后重试。",
-          "单体正向聚合请求失败，请检查网络或稍后重试。"
+          "单体正向聚合失败，请检查网络或稍后重试。"
         )
       }));
       return null;

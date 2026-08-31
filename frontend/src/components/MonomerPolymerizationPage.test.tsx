@@ -133,17 +133,26 @@ describe("MonomerPolymerizationPage", () => {
   it("使用统一强调工作面样式", () => {
     const view = renderPage();
     const workSurface = view.container.querySelector(".np-mp-surface");
+    const moduleToolbar = view.container.querySelector(".np-mp-module-toolbar");
     expect(workSurface?.classList.contains("np-sw-accented-surface")).toBe(true);
+    expect(moduleToolbar).not.toBeNull();
+    expect(moduleToolbar?.querySelector('[role="status"]')).not.toBeNull();
+    expect(workSurface?.querySelector('[role="status"]')).toBeNull();
+    expect(workSurface?.querySelector(".np-mp-surface-mark svg")).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "正向聚合设置" })).toBeTruthy();
+    expect(screen.queryByText("SMIPOLY FORWARD POLYMERIZATION")).toBeNull();
   });
 
   it("uses remote target requirements, delays the missing-B message, and submits the unchanged contract", async () => {
     renderPage();
     const serviceStatus = await screen.findByRole("status");
-    expect(serviceStatus.textContent).toBe("可用");
+    expect(serviceStatus.textContent).toBe("准备就绪");
     expect(serviceStatus.textContent).not.toContain("SMiPoly");
+    expect(serviceStatus.querySelector(".np-mp-ready-dot")).not.toBeNull();
+    expect(serviceStatus.querySelector("svg")).toBeNull();
 
     const monomerB = screen.getByLabelText("SMILES", { selector: "#monomer-b-smiles" });
-    const submit = screen.getByRole("button", { name: "运行聚合" }) as HTMLButtonElement;
+    const submit = screen.getByRole("button", { name: "聚合" }) as HTMLButtonElement;
     expect(screen.queryByText("Polyimide 需要单体 B。")).toBeNull();
     expect(submit.disabled).toBe(true);
 
@@ -166,18 +175,56 @@ describe("MonomerPolymerizationPage", () => {
     });
     const drawer = await screen.findByRole("dialog", { name: "正向聚合结果" });
     expect(within(drawer).getByText("1 / 4")).toBeTruthy();
-    expect(within(drawer).getByText("已过滤包含自动添加辅助分子、且超出本次提交单体范围的 SMiPoly 记录。")).toBeTruthy();
+    expect(within(drawer).getByText("已忽略需要额外辅助分子的结果，因为这些分子不在本次输入中。")).toBeTruthy();
     expect(within(drawer).getByText(/SMiPoly 信息：/)).toBeTruthy();
-    expect(within(drawer).getByText("Reaction ID 17")).toBeTruthy();
-    const candidatePreview = within(drawer).getByAltText("Rank 1 聚合物候选结构") as HTMLImageElement;
+    expect(within(drawer).getByRole("heading", { name: "Polyimide", level: 3 })).toBeTruthy();
+    expect(within(drawer).getByText("反应 ID 17")).toBeTruthy();
+    expect(within(drawer).getByText("聚合物 SMILES")).toBeTruthy();
+    expect(within(drawer).getByText("单体组合")).toBeTruthy();
+    expect(within(drawer).getByText("反应名称")).toBeTruthy();
+    const candidatePreview = within(drawer).getByAltText("候选 1 的聚合物结构") as HTMLImageElement;
     const candidateSvg = decodeURIComponent(candidatePreview.src.slice(candidatePreview.src.indexOf(",") + 1));
     expect(candidateSvg).not.toContain("<rect");
     expect(candidateSvg).toContain("<path");
   });
 
+  it("fills and previews the recommended example when Enter is pressed in an empty monomer slot", async () => {
+    renderPage(makeStructure(""));
+    await screen.findByText("准备就绪");
+    const monomerA = screen.getByLabelText("SMILES", { selector: "#monomer-a-smiles" }) as HTMLTextAreaElement;
+    const monomerB = screen.getByLabelText("SMILES", { selector: "#monomer-b-smiles" }) as HTMLTextAreaElement;
+
+    expect(monomerA.placeholder).toBe(`推荐示例：${SMIPOLY_POLYIMIDE_FIXTURE.monomerA}`);
+    expect(monomerB.placeholder).toBe(`推荐示例：${SMIPOLY_POLYIMIDE_FIXTURE.monomerB}`);
+    expect(screen.getAllByText("请先输入 SMILES")).toHaveLength(2);
+    expect(screen.queryByText(/失焦/)).toBeNull();
+
+    expect(fireEvent.keyDown(monomerA, { key: "Enter" })).toBe(false);
+    expect(monomerA.value).toBe(SMIPOLY_POLYIMIDE_FIXTURE.monomerA);
+    await waitFor(() => {
+      expect(apiMocks.fetchStructure2D).toHaveBeenCalledWith(
+        SMIPOLY_POLYIMIDE_FIXTURE.monomerA,
+        expect.any(AbortSignal)
+      );
+    });
+
+    expect(fireEvent.keyDown(monomerB, { key: "Enter" })).toBe(false);
+    expect(monomerB.value).toBe(SMIPOLY_POLYIMIDE_FIXTURE.monomerB);
+    await waitFor(() => {
+      expect(apiMocks.fetchStructure2D).toHaveBeenCalledWith(
+        SMIPOLY_POLYIMIDE_FIXTURE.monomerB,
+        expect.any(AbortSignal)
+      );
+    });
+
+    fireEvent.change(monomerA, { target: { value: "CCN" } });
+    expect(fireEvent.keyDown(monomerA, { key: "Enter" })).toBe(true);
+    expect(monomerA.value).toBe("CCN");
+  });
+
   it("keeps monomer B when switching to an optional target and rejects dummy atoms locally", async () => {
     renderPage();
-    await screen.findByText("可用");
+    await screen.findByText("准备就绪");
     const monomerA = screen.getByLabelText("SMILES", { selector: "#monomer-a-smiles" });
     const monomerB = screen.getByLabelText("SMILES", { selector: "#monomer-b-smiles" });
     const target = screen.getByRole("combobox", { name: /POLYMER CLASS/ });
@@ -193,14 +240,14 @@ describe("MonomerPolymerizationPage", () => {
 
     fireEvent.change(monomerA, { target: { value: "*CC*" } });
     expect(screen.getByText("普通单体 SMILES 不应包含 * 连接点。")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "运行聚合" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "聚合" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("imports the shared structure independently into both slots and saves before opening the editor", async () => {
     const structure = makeStructure("CCO");
     const onEditStructure = vi.fn();
     renderPage(structure, onEditStructure);
-    await screen.findByText("可用");
+    await screen.findByText("准备就绪");
     const importButtons = screen.getAllByRole("button", { name: "导入共享结构" });
 
     fireEvent.click(importButtons[1]);
@@ -215,21 +262,21 @@ describe("MonomerPolymerizationPage", () => {
 
   it("marks prior results stale, clears only results, and removes the draft on reset", async () => {
     renderPage();
-    await screen.findByText("可用");
+    await screen.findByText("准备就绪");
     const monomerA = screen.getByLabelText("SMILES", { selector: "#monomer-a-smiles" });
     const monomerB = screen.getByLabelText("SMILES", { selector: "#monomer-b-smiles" });
     fireEvent.change(monomerB, { target: { value: SMIPOLY_POLYIMIDE_FIXTURE.monomerB } });
-    fireEvent.click(screen.getByRole("button", { name: "运行聚合" }));
-    await screen.findByText("Reaction ID 17");
+    fireEvent.click(screen.getByRole("button", { name: "聚合" }));
+    await screen.findByText("反应 ID 17");
 
     fireEvent.change(monomerA, { target: { value: "CCN" } });
-    expect(screen.getByText("结果对应上次提交的输入；当前参数已发生变化。")).toBeTruthy();
+    expect(screen.getByText("这些结果基于上一次运行；当前输入已更改。")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "清空结果" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "正向聚合结果" })).toBeNull());
     expect((monomerA as HTMLTextAreaElement).value).toBe("CCN");
 
     await waitFor(() => expect(window.sessionStorage.getItem(MONOMER_POLYMERIZATION_DRAFT_KEY)).not.toBeNull());
-    fireEvent.click(screen.getByRole("button", { name: "重置表单" }));
+    fireEvent.click(screen.getByRole("button", { name: "重置" }));
     expect(window.sessionStorage.getItem(MONOMER_POLYMERIZATION_DRAFT_KEY)).toBeNull();
     expect((screen.getByLabelText("SMILES", { selector: "#monomer-a-smiles" }) as HTMLTextAreaElement).value)
       .toBe(SMIPOLY_POLYIMIDE_FIXTURE.monomerA);
