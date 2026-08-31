@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   ArrowUp,
   Atom,
+  BarChart3,
   Database,
   FlaskConical,
   Grid2X2,
@@ -23,6 +24,7 @@ import type { StructureUtilityPanel } from "./StructureCanvasSurface";
 
 export type StructureWorkbenchModuleId =
   | "databaseQuery"
+  | "homopolymerPrediction"
   | "explorer"
   | "monomerDft"
   | "monomerPolymerization"
@@ -48,6 +50,13 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
     name: "数据库查询",
     shortName: "数据库查询",
     icon: Database,
+    relationship: "direct"
+  },
+  {
+    id: "homopolymerPrediction",
+    name: "均聚物性质预测",
+    shortName: "性质预测",
+    icon: BarChart3,
     relationship: "direct"
   },
   {
@@ -243,7 +252,7 @@ export function StructureUtilityPanels({
 
         {modulePanelView === "grid" ? (
           <div className="np-sw-module-view">
-            <div className="np-sw-module-count"><span>8 项功能</span></div>
+            <div className="np-sw-module-count"><span>{WORKBENCH_MODULES.length} 项功能</span></div>
             <div className="np-sw-module-grid" aria-label="使用共享结构的功能模块">
               {WORKBENCH_MODULES.map((module) => {
                 const Icon = module.icon;

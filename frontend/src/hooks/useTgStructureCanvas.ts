@@ -869,7 +869,7 @@ export function useTgStructureCanvas({
       return reliableSmiles;
     } catch (error) {
       console.error("Failed to standardize Tg search SMILES", error);
-      setFeedback("SMILES 标准化失败，搜索未提交。请检查结构有效性后重试。");
+      setFeedback("SMILES 标准化失败，任务未提交。请检查结构有效性后重试。");
       return "";
     }
   }

@@ -7,14 +7,10 @@ import {
   Network,
   Route,
   Search,
-  TriangleAlert,
-  X
+  TriangleAlert
 } from "lucide-react";
-import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import type { MonomerRetrosynthesisResponse, MonomerRetrosynthesisTargetRole } from "../../types";
-
-const DRAWER_MIN_WIDTH = 320;
-const DRAWER_MAX_WIDTH = 560;
+import { WorkbenchDrawerShell } from "./WorkbenchDrawerShell";
 
 const TARGET_ROLE_LABEL: Record<MonomerRetrosynthesisTargetRole, string> = {
   auto: "自动",
@@ -22,10 +18,6 @@ const TARGET_ROLE_LABEL: Record<MonomerRetrosynthesisTargetRole, string> = {
   dianhydride: "二酐提示",
   other: "通用单体"
 };
-
-function clamp(value: number) {
-  return Math.min(DRAWER_MAX_WIDTH, Math.max(DRAWER_MIN_WIDTH, value));
-}
 
 type RetrosynthesisDrawerProps = {
   open: boolean;
@@ -56,7 +48,6 @@ export function RetrosynthesisDrawer({
   onOpen,
   onAdjustParameters
 }: RetrosynthesisDrawerProps) {
-  const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const candidates = data?.candidates ?? [];
   const clampedCandidateIndex = candidates.length
     ? Math.min(selectedCandidateIndex, candidates.length - 1)
@@ -73,33 +64,6 @@ export function RetrosynthesisDrawer({
           : "未找到候选"
         : "等待运行";
 
-  useEffect(() => {
-    function handlePointerMove(event: PointerEvent) {
-      const state = resizeStateRef.current;
-      if (!state) return;
-      onWidthChange(clamp(state.startWidth + state.startX - event.clientX));
-    }
-
-    function stopResize() {
-      resizeStateRef.current = null;
-    }
-
-    document.addEventListener("pointermove", handlePointerMove);
-    document.addEventListener("pointerup", stopResize);
-    document.addEventListener("pointercancel", stopResize);
-    return () => {
-      document.removeEventListener("pointermove", handlePointerMove);
-      document.removeEventListener("pointerup", stopResize);
-      document.removeEventListener("pointercancel", stopResize);
-      resizeStateRef.current = null;
-    };
-  }, [onWidthChange]);
-
-  function startResize(event: ReactPointerEvent<HTMLDivElement>) {
-    event.preventDefault();
-    resizeStateRef.current = { startX: event.clientX, startWidth: width };
-  }
-
   function moveCandidate(delta: number) {
     if (!candidates.length) return;
     onSelectedCandidateIndexChange(
@@ -111,59 +75,22 @@ export function RetrosynthesisDrawer({
     if (value) void navigator.clipboard?.writeText(value);
   }
 
-  const style = { "--np-sw-drawer-width": `${width}px` } as CSSProperties;
-
   return (
-    <>
-      <div
-        className={`np-sw-drawer-layer${open ? " is-open" : ""}`}
-        style={style}
-        aria-hidden={!open}
-      >
-        <button
-          type="button"
-          className="np-sw-drawer-backdrop"
-          aria-label="关闭单体反推结果背景"
-          tabIndex={open ? 0 : -1}
-          onClick={onClose}
-        />
-        <aside
-          className="np-sw-drawer"
-          aria-labelledby="structure-retro-results-title"
-          inert={!open}
-        >
-          <div
-            className="np-sw-drawer__resizer"
-            role="separator"
-            tabIndex={open ? 0 : -1}
-            aria-label="调整单体反推结果抽屉宽度"
-            aria-orientation="vertical"
-            aria-valuemin={DRAWER_MIN_WIDTH}
-            aria-valuemax={DRAWER_MAX_WIDTH}
-            aria-valuenow={width}
-            onPointerDown={startResize}
-            onKeyDown={(event) => {
-              if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-              event.preventDefault();
-              const amount = event.shiftKey ? 40 : 16;
-              onWidthChange(
-                clamp(width + (event.key === "ArrowLeft" ? amount : -amount))
-              );
-            }}
-          />
-          <header className="np-sw-drawer__header">
-            <div>
-              <span><MessageSquareText aria-hidden="true" /></span>
-              <div>
-                <h2 id="structure-retro-results-title">单体反推结果</h2>
-                <p>{resultStatus}</p>
-              </div>
-            </div>
-            <button type="button" className="np-sw-icon-button" aria-label="关闭单体反推结果" onClick={onClose}>
-              <X aria-hidden="true" />
-            </button>
-          </header>
-          <div className="np-sw-drawer__body" aria-live="polite">
+    <WorkbenchDrawerShell
+      open={open}
+      hasRun={hasRun}
+      width={width}
+      title="单体反推结果"
+      status={resultStatus}
+      headerIcon={<MessageSquareText aria-hidden="true" />}
+      reopenIcon={<Route aria-hidden="true" />}
+      reopenLabel="展开反推结果"
+      closeLabel="关闭单体反推结果"
+      resizeLabel="调整单体反推结果抽屉宽度"
+      onWidthChange={onWidthChange}
+      onClose={onClose}
+      onOpen={onOpen}
+    >
             {loading ? (
               <div className="np-sw-result-state">
                 <span><LoaderCircle className="np-sw-spin" /></span>
@@ -230,16 +157,6 @@ export function RetrosynthesisDrawer({
                 ) : null}
               </div>
             )}
-          </div>
-        </aside>
-      </div>
-
-      {hasRun && !open ? (
-        <button type="button" className="np-sw-drawer-reopen" onClick={onOpen} aria-label="展开单体反推结果" title="展开单体反推结果">
-          <Route aria-hidden="true" />
-          <span>反推结果</span>
-        </button>
-      ) : null}
-    </>
+    </WorkbenchDrawerShell>
   );
 }

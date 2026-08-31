@@ -15,6 +15,7 @@ import {
   fetchStructure3D,
   fetchTgAssistantGuide,
   fetchTgAssistantStatus,
+  predictSmiles,
   predictMonomerPrecursors,
   recoverDevGpuSession,
   searchPropertyFilterRecords
@@ -74,6 +75,35 @@ describe("structure workbench request contracts", () => {
       body: JSON.stringify(payload),
       signal: controller.signal
     });
+  });
+
+  it("forwards AbortSignal to property prediction and keeps backend messages", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ predictions: {}, query_time_ms: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    ).mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: "模型暂不可用" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const payload = {
+      smiles: "*CC*",
+      properties: ["Glass transition temperature" as const]
+    };
+
+    await predictSmiles(payload, controller.signal);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/predict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    await expect(predictSmiles(payload)).rejects.toMatchObject({ message: "模型暂不可用" });
   });
 });
 

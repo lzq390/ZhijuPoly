@@ -183,6 +183,7 @@ describe("StructureWorkbenchPage", () => {
 
   it.each([
     ["databaseQuery", "打开数据库查询"],
+    ["homopolymerPrediction", "打开均聚物性质预测"],
     ["explorer", "打开聚合物性能探索"],
     ["monomerDft", "打开单体 DFT（AIMNet2）"],
     ["monomerPolymerization", "打开单体正向聚合"],

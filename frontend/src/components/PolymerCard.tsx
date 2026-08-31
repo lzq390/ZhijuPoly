@@ -1,5 +1,6 @@
 import { Atom } from "lucide-react";
-import { PREDICT_PROPERTY_META, type MatchMode, type PolymerResult, type PredictableProperty } from "../types";
+import { PREDICT_PROPERTY_META } from "../constants/predictableProperties";
+import type { MatchMode, PolymerResult, PredictableProperty } from "../types";
 import { StructureSvg } from "./StructureSvg";
 import { Card } from "./ui/card";
 

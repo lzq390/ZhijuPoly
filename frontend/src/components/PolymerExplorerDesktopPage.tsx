@@ -1,5 +1,4 @@
 import {
-  BarChart3,
   Box,
   ChevronDown,
   Copy,
@@ -15,13 +14,14 @@ import {
   X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
+import { DEFAULT_PREDICTABLE_PROPERTY, PREDICT_PROPERTY_CATALOG } from "../constants/predictableProperties";
 import { recognizeStructureImage } from "../services/api";
-import type { PolymerResult, PredictableProperty, PredictResponse, SmilesQueryRequest, SmilesQueryResponse } from "../types";
+import type { PolymerResult, PredictableProperty, SmilesQueryRequest, SmilesQueryResponse } from "../types";
 import { StructurePreview3D } from "./StructurePreview3D";
 import { StructureSvg } from "./StructureSvg";
 import "../styles/polymer-desktop.css";
 
-type ExplorerMode = "similarity" | "property" | "predict";
+type ExplorerMode = "similarity" | "property";
 type SortOrder = "desc" | "asc";
 type KetcherApi = NonNullable<Window["ketcher"]>;
 type KetcherSnapshot = { smiles: string; molfile: string };
@@ -38,35 +38,13 @@ type PolymerExplorerDesktopPageProps = {
   queryError: string | null;
   queryData: SmilesQueryResponse | null;
   submitQuery: (request?: SmilesQueryRequest) => Promise<void>;
-  predict: {
-    isLoading: boolean;
-    error: string | null;
-    data: PredictResponse | null;
-    submit: (request: { smiles: string; properties: PredictableProperty[] }) => Promise<PredictResponse>;
-  };
-  selectedProperties: PredictableProperty[];
-  setSelectedProperties: (properties: PredictableProperty[]) => void;
 };
 
-type PropertyOption = { key: PredictableProperty; label: string; unit: string; shortLabel: string };
-
-const PROPERTY_OPTIONS: PropertyOption[] = [
-  { key: "Glass transition temperature", label: "玻璃化转变温度", unit: "°C", shortLabel: "Tg" },
-  { key: "Melting temperature", label: "熔融温度", unit: "°C", shortLabel: "Tm" },
-  { key: "Thermal decomposition temperature", label: "热分解温度", unit: "°C", shortLabel: "Td" },
-  { key: "Thermal decomposition weight loss", label: "热分解失重率", unit: "%", shortLabel: "Wloss" },
-  { key: "Elongation at break", label: "断裂伸长率", unit: "%", shortLabel: "ε" },
-  { key: "Tensile stress strength at break", label: "断裂拉伸强度", unit: "MPa", shortLabel: "σ" },
-  { key: "O2 Permeability Barrer", label: "O2 渗透率", unit: "Barrer", shortLabel: "PO2" },
-  { key: "Co2 Permeability Barrer", label: "CO2 渗透率", unit: "Barrer", shortLabel: "PCO2" },
-  { key: "H2 Permeability Barrer", label: "H2 渗透率", unit: "Barrer", shortLabel: "PH2" }
-];
-
-const DEFAULT_PROPERTY = PROPERTY_OPTIONS[0].key;
+const PROPERTY_OPTIONS = PREDICT_PROPERTY_CATALOG;
+const DEFAULT_PROPERTY = DEFAULT_PREDICTABLE_PROPERTY;
 const modeConfig: Record<ExplorerMode, { label: string }> = {
   similarity: { label: "结构相似探索" },
-  property: { label: "性能相似探索" },
-  predict: { label: "性能预测探索" }
+  property: { label: "性能相似探索" }
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -78,7 +56,6 @@ function getPropertyOption(key: PredictableProperty | null | undefined) {
 }
 
 function ModeIcon({ mode }: { mode: ExplorerMode }) {
-  if (mode === "predict") return <BarChart3 width={12} height={12} />;
   if (mode === "property") return <SlidersHorizontal width={12} height={12} />;
   return <Search width={12} height={12} />;
 }
@@ -189,26 +166,6 @@ function SimilarityResultCard({ result, mode, selectedProperty }: { result: Poly
   );
 }
 
-function PredictionCards({ data }: { data: PredictResponse }) {
-  const entries = PROPERTY_OPTIONS.filter((property) => data.predictions[property.key] !== undefined).map((property) => ({ ...property, value: data.predictions[property.key] ?? 0 }));
-  if (entries.length === 0) return <ResultsEmptyState title="暂无预测结果" description="服务未返回所选性能的预测值。" />;
-
-  return (
-    <div className="prediction-grid-wrapper">
-      {entries.map((entry) => (
-        <div className="pred-card-v2" key={entry.key}>
-          <div className="pred-card-header"><span className="pred-type-badge">PREDICTION</span><span className="pred-name-label">{entry.label}</span></div>
-          <div className="pred-card-body">
-            <div className="pred-val-line"><span className="pred-number-val">{entry.value.toFixed(2)}</span><span className="pred-unit-capsule">{entry.unit}</span></div>
-            <div className="pred-widget-area"><div className="temp-track-wrapper"><div className="temp-gradient-track" /><div className="temp-pointer" style={{ left: `${clamp(Math.abs(entry.value) % 100, 8, 92)}%` }} /></div></div>
-          </div>
-          <div className="pred-card-footer"><span>模型输出</span><span>{data.query_time_ms.toFixed(1)} ms</span></div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function PolymerExplorerDesktopPage({
   smiles,
   setSmiles,
@@ -220,15 +177,12 @@ export function PolymerExplorerDesktopPage({
   isQueryLoading,
   queryError,
   queryData,
-  submitQuery,
-  predict,
-  selectedProperties,
-  setSelectedProperties
+  submitQuery
 }: PolymerExplorerDesktopPageProps) {
   const [mode, setMode] = useState<ExplorerMode>("similarity");
   const [activeRunMode, setActiveRunMode] = useState<ExplorerMode>("similarity");
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [submenuMode, setSubmenuMode] = useState<"property" | "predict" | null>(null);
+  const [submenuMode, setSubmenuMode] = useState<"property" | null>(null);
   const [selectedProperty, setSelectedProperty] = useState<PredictableProperty>(DEFAULT_PROPERTY);
   const [isFlipped, setIsFlipped] = useState(false);
   const [isFlipping, setIsFlipping] = useState(false);
@@ -244,8 +198,7 @@ export function PolymerExplorerDesktopPage({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const debounceTimerRef = useRef<number | null>(null);
   const hasSmiles = smiles.trim().length > 0;
-  const isRunning = isQueryLoading || predict.isLoading || isImportingImage || isSyncing || isClearing;
-  const predictProperties = selectedProperties.length > 0 ? selectedProperties : [DEFAULT_PROPERTY];
+  const isRunning = isQueryLoading || isImportingImage || isSyncing || isClearing;
   const activeProperty = getPropertyOption(selectedProperty);
 
   useEffect(() => {
@@ -641,14 +594,6 @@ export function PolymerExplorerDesktopPage({
     setHasAnalysisRun(true);
     setIsAnalysisOpen(true);
     setActiveRunMode(nextMode);
-    if (nextMode === "predict") {
-      try {
-        await predict.submit({ smiles: standardizedSmiles, properties: predictProperties });
-      } catch {
-        // The hook owns the error state and the panel renders it.
-      }
-      return;
-    }
     const nextRequest: SmilesQueryRequest = {
       ...request,
       smiles: standardizedSmiles,
@@ -657,14 +602,6 @@ export function PolymerExplorerDesktopPage({
     };
     setRequest(nextRequest);
     await submitQuery(nextRequest);
-  }
-  function togglePredictProperty(property: PredictableProperty) {
-    if (selectedProperties.includes(property)) {
-      const next = selectedProperties.filter((item) => item !== property);
-      if (next.length > 0) setSelectedProperties(next);
-      return;
-    }
-    setSelectedProperties([...selectedProperties, property]);
   }
   function startResize(event: ReactMouseEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -690,10 +627,8 @@ export function PolymerExplorerDesktopPage({
     });
   }, [queryData?.results, sortOrder]);
 
-  const mainButtonLabel =
-    mode === "predict" ? `${modeConfig[mode].label} (${predictProperties.length})` : mode === "property" ? `${modeConfig[mode].label} (1)` : modeConfig[mode].label;
-  const panelShowsQuery = activeRunMode !== "predict";
-  const showSort = panelShowsQuery && queryData && queryData.total > 0 && !isQueryLoading && !queryError;
+  const mainButtonLabel = mode === "property" ? `${modeConfig[mode].label} (1)` : modeConfig[mode].label;
+  const showSort = queryData && queryData.total > 0 && !isQueryLoading && !queryError;
 
   return (
     <div className="polymer-desktop-page polymer-desktop-page--embedded">
@@ -759,23 +694,23 @@ export function PolymerExplorerDesktopPage({
                         </button>
                         <button className="btn-generate-dropdown" id="btn-generate-dropdown" type="button" disabled={!hasSmiles || isRunning} title="选择探索模式" onClick={(event) => { event.stopPropagation(); setIsDropdownOpen((current) => !current); setSubmenuMode(null); }}><ChevronDown width={10} height={10} /></button>
                         <div className="generate-dropdown-menu" id="btn-generate-dropdown-menu" style={{ display: isDropdownOpen ? "flex" : "none" }}>
-                          {(["similarity", "property", "predict"] as ExplorerMode[]).map((item) => (
+                          {(["similarity", "property"] as ExplorerMode[]).map((item) => (
                             <div key={item} className={`dropdown-item${mode === item ? " active" : ""}`} data-mode={item} title={modeConfig[item].label} onClick={() => { setMode(item); setIsDropdownOpen(false); setSubmenuMode(null); }}>
                               <ModeIcon mode={item} />
-                              <span>{item === "predict" ? `${modeConfig[item].label} (${predictProperties.length})` : item === "property" ? `${modeConfig[item].label} (1)` : modeConfig[item].label}</span>
-                              {item !== "similarity" ? <button className="dropdown-item-config" type="button" data-config-mode={item} title="配置性能指标" onClick={(event) => { event.stopPropagation(); setSubmenuMode(item as "property" | "predict"); setIsDropdownOpen(false); }}><Settings className="icon-gear" width={10} height={10} /></button> : null}
+                              <span>{item === "property" ? `${modeConfig[item].label} (1)` : modeConfig[item].label}</span>
+                              {item !== "similarity" ? <button className="dropdown-item-config" type="button" data-config-mode={item} title="配置性能指标" onClick={(event) => { event.stopPropagation(); setSubmenuMode("property"); setIsDropdownOpen(false); }}><Settings className="icon-gear" width={10} height={10} /></button> : null}
                             </div>
                           ))}
                         </div>
-                        <div className={`generate-submenu-panel${submenuMode === "property" ? " single-select-mode" : ""}`} id="property-submenu-panel" style={{ display: submenuMode ? "flex" : "none" }}>
-                          <div className="submenu-header"><span>{submenuMode === "predict" ? "配置预测性能指标" : "配置探索性能指标"}</span></div>
+                        <div className="generate-submenu-panel single-select-mode" id="property-submenu-panel" style={{ display: submenuMode ? "flex" : "none" }}>
+                          <div className="submenu-header"><span>配置探索性能指标</span></div>
                           <div className="submenu-list">
                             {PROPERTY_OPTIONS.map((property) => {
-                              const checked = submenuMode === "predict" ? predictProperties.includes(property.key) : selectedProperty === property.key;
-                              return <label className="submenu-item" key={property.key}><input type="checkbox" checked={checked} onChange={() => { if (submenuMode === "predict") togglePredictProperty(property.key); else setSelectedProperty(property.key); }} /><span>{property.label} ({property.shortLabel})</span></label>;
+                              const checked = selectedProperty === property.key;
+                              return <label className="submenu-item" key={property.key}><input type="checkbox" checked={checked} onChange={() => setSelectedProperty(property.key)} /><span>{property.label} ({property.shortLabel})</span></label>;
                             })}
                           </div>
-                          <div className="submenu-footer"><div className="submenu-footer-left">{submenuMode === "predict" ? <><input type="checkbox" className="submenu-select-all-checkbox" checked={predictProperties.length === PROPERTY_OPTIONS.length} onChange={(event) => setSelectedProperties(event.target.checked ? PROPERTY_OPTIONS.map((item) => item.key) : [DEFAULT_PROPERTY])} /><span className="submenu-select-all">全选</span></> : null}<span className="submenu-count" id="val-submenu-count">(已选 {submenuMode === "predict" ? predictProperties.length : 1} 项)</span></div><button className="btn btn--primary btn--sm" id="btn-submenu-save" type="button" onClick={() => setSubmenuMode(null)}>确定</button></div>
+                          <div className="submenu-footer"><div className="submenu-footer-left"><span className="submenu-count" id="val-submenu-count">(已选 1 项)</span></div><button className="btn btn--primary btn--sm" id="btn-submenu-save" type="button" onClick={() => setSubmenuMode(null)}>确定</button></div>
                         </div>
                       </div>
                     </div>
@@ -795,9 +730,7 @@ export function PolymerExplorerDesktopPage({
       <div className="workspace-analysis-panel workspace-card" id="analysis-panel" style={{ display: isAnalysisOpen ? "flex" : "none", height: "100%", margin: 0, width: panelWidth }}>
             <div className="analysis-panel-header"><div className="panel-header-title"><h3>分析工作台</h3>{showSort ? <button className="btn-sort-similarity" id="btn-sort-similarity" type="button" title="点击切换排序" onClick={() => setSortOrder((current) => current === "desc" ? "asc" : "desc")}><span>相似度 {sortOrder === "desc" ? "降序" : "升序"}</span></button> : null}</div><button className="btn-close-analysis" id="btn-close-analysis" type="button" title="收起分析面板" onClick={() => setIsAnalysisOpen(false)}><X width={14} height={14} /></button></div>
             <div className="analysis-panel-body"><section className="results-section" id="results-section" style={{ display: "block" }}>
-              {activeRunMode === "predict" ? (
-                predict.isLoading ? <ResultSkeleton /> : predict.error ? <ErrorState message={predict.error} /> : predict.data ? <div className="results-content-area" id="results-content-area" style={{ display: "block" }}><PredictionCards data={predict.data} /></div> : <ResultsEmptyState title="暂无预测数据" description="请选择性能指标并运行预测探索。" />
-              ) : isQueryLoading ? <ResultSkeleton /> : queryError ? <ErrorState message={queryError} /> : queryData && queryData.total > 0 ? (
+              {isQueryLoading ? <ResultSkeleton /> : queryError ? <ErrorState message={queryError} /> : queryData && queryData.total > 0 ? (
                 <div className="results-content-area" id="results-content-area" style={{ display: "block" }}><div className="similarity-grid">{sortedResults.map((result) => <SimilarityResultCard key={result.polymer_id} result={result} mode={activeRunMode} selectedProperty={activeProperty.key} />)}</div></div>
               ) : queryData ? <ResultsEmptyState title="未找到匹配结果" description="请检查当前 SMILES，或切换探索模式后重新运行。" /> : <ResultsEmptyState title="暂无探索数据" description="请在左侧绘制、导入或输入聚合物结构式，并点击运行按钮。" />}
             </section></div>

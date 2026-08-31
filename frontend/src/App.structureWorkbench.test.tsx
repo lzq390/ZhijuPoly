@@ -29,6 +29,7 @@ vi.mock("./hooks/useTgStructureCanvas", () => ({
     clearCanvas: vi.fn().mockResolvedValue(true),
     importImageFile: vi.fn().mockResolvedValue(true),
     syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
+    resolveSmilesForSearch: vi.fn().mockResolvedValue("*CC*"),
     toggle3D: vi.fn().mockResolvedValue(true),
     copySmiles: vi.fn()
   })
@@ -53,6 +54,11 @@ function structureIframe(container: HTMLElement) {
 
 function openDiscoverGroup() {
   const group = screen.getByRole("button", { name: "材料发现 Discover" });
+  if (group.getAttribute("aria-expanded") !== "true") fireEvent.click(group);
+}
+
+function openBuildGroup() {
+  const group = screen.getByRole("button", { name: "材料设计 Build" });
   if (group.getAttribute("aria-expanded") !== "true") fireEvent.click(group);
 }
 
@@ -112,6 +118,25 @@ describe("App 结构工作台挂载与导航", () => {
     expect(view.container.querySelectorAll('iframe[title="结构工作台结构编辑器"]')).toHaveLength(1);
   });
 
+  it("均聚物预测深链和工作台跳转始终只挂载一个共享 Ketcher", async () => {
+    const view = render(<App />);
+    openBuildGroup();
+    fireEvent.click(screen.getByRole("button", { name: "均聚物性质预测" }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "均聚物性质预测" })).toBeTruthy());
+    expect(structureIframe(view.container)).toBeNull();
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+    expect(screen.getByTitle("均聚物性质预测结构编辑器")).toBeTruthy();
+    expect(window.location.pathname).toBe("/homopolymer-property-prediction");
+
+    view.unmount();
+    window.history.replaceState({}, "", "/homopolymer-property-prediction");
+    const deepLink = render(<App />);
+    expect(await screen.findByRole("heading", { name: "均聚物性质预测" })).toBeTruthy();
+    expect(deepLink.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "均聚物性质预测" }).getAttribute("aria-current")).toBe("page");
+  });
+
   it("侧栏导航等待同步并对重复激活只执行一次目标跳转", async () => {
     const deferred: { resolve?: () => void } = {};
     mocks.syncSmilesFromCanvas.mockReturnValue(new Promise<string>((resolve) => {
@@ -148,6 +173,24 @@ describe("App 结构工作台挂载与导航", () => {
     deferred.resolve?.();
     await screen.findByTestId("knowledge");
     expect(screen.queryByTestId("database-filter")).toBeNull();
+  });
+
+  it("均聚物预测页的 popstate 同样等待共享画板同步", async () => {
+    const deferred: { resolve?: () => void } = {};
+    mocks.syncSmilesFromCanvas.mockReturnValue(new Promise<string>((resolve) => {
+      deferred.resolve = () => resolve("*CC*");
+    }));
+    window.history.replaceState({}, "", "/homopolymer-property-prediction");
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "均聚物性质预测" })).toBeTruthy();
+
+    window.history.pushState({}, "", "/knowledge");
+    fireEvent(window, new PopStateEvent("popstate"));
+    expect(screen.queryByTestId("knowledge")).toBeNull();
+    expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1);
+
+    deferred.resolve?.();
+    await screen.findByTestId("knowledge");
   });
 
   it("等待中的侧栏目标会被更新的 popstate 目标取消", async () => {

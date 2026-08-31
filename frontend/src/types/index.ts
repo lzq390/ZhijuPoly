@@ -1,8 +1,6 @@
 import type { RefObject } from "react";
 
 export type MatchMode = "structure" | "property";
-export type WorkspaceMode = "query" | "predict";
-export type ResultsTab = "query" | "predict";
 export type SmilesLookupTable = "polymers" | "properties" | "pi_candidates";
 export type MonomerRetrosynthesisTargetRole = "auto" | "diamine" | "dianhydride" | "other";
 export type MonomerPolymerizationTargetClass =
@@ -1828,31 +1826,4 @@ export type DevGpuSessionStatusResponse = {
   source_sha: string | null;
   source_tree: string | null;
   updated_at: string | null;
-};
-
-export const PREDICTABLE_PROPERTIES: readonly PredictableProperty[] = [
-  "Glass transition temperature",
-  "Melting temperature",
-  "Thermal decomposition temperature",
-  "Thermal decomposition weight loss",
-  "Elongation at break",
-  "Tensile stress strength at break",
-  "O2 Permeability Barrer",
-  "Co2 Permeability Barrer",
-  "H2 Permeability Barrer"
-] as const;
-
-export const PREDICT_PROPERTY_META: Record<
-  PredictableProperty,
-  { label: string; unit: string }
-> = {
-  "Glass transition temperature": { label: "玻璃化转变温度", unit: "°C" },
-  "Melting temperature": { label: "熔融温度", unit: "°C" },
-  "Thermal decomposition temperature": { label: "热分解温度", unit: "°C" },
-  "Thermal decomposition weight loss": { label: "热分解失重率", unit: "%" },
-  "Elongation at break": { label: "断裂伸长率", unit: "%" },
-  "Tensile stress strength at break": { label: "断裂拉伸强度", unit: "MPa" },
-  "O2 Permeability Barrer": { label: "O2 渗透率", unit: "Barrer" },
-  "Co2 Permeability Barrer": { label: "CO2 渗透率", unit: "Barrer" },
-  "H2 Permeability Barrer": { label: "H2 渗透率", unit: "Barrer" }
 };

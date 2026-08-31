@@ -175,6 +175,7 @@ export function AppShell({
   const isReverseDesignWorkbench = activeModule === "reverseDesign";
   const isConditionalGenerationWorkbench = activeModule === "conditionalGeneration";
   const isStructureWorkbench = activeModule === "structureWorkbench";
+  const isHomopolymerPredictionWorkbench = activeModule === "homopolymerPrediction";
   const isDatabaseFilterWorkbench = activeModule === "databaseFilter";
   const isDatabaseAnalysisWorkbench = activeModule === "database";
   const isKnowledgeWorkbench = activeModule === "knowledge";
@@ -186,6 +187,7 @@ export function AppShell({
     isDatabaseAnalysisWorkbench ||
     isKnowledgeWorkbench ||
     isPolytaoWorkbench ||
+    isHomopolymerPredictionWorkbench ||
     isStructureWorkbench ||
     isReverseDesignWorkbench ||
     isConditionalGenerationWorkbench;
@@ -361,6 +363,7 @@ export function AppShell({
                     isReverseDesignWorkbench ||
                     isConditionalGenerationWorkbench ||
                     isStructureWorkbench ||
+                    isHomopolymerPredictionWorkbench ||
                     isDatabaseFilterWorkbench ||
                     isDatabaseAnalysisWorkbench ||
                     isKnowledgeWorkbench ||

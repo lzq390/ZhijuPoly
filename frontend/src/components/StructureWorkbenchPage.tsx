@@ -8,6 +8,7 @@ import {
   type CSSProperties,
   type FormEvent
 } from "react";
+import { SlidersHorizontal, Sparkles } from "lucide-react";
 import { REVERSE_DESIGN_DEMO_SMILES } from "../constants/reverseDesignDefaults";
 import { useTgStructureCanvas } from "../hooks/useTgStructureCanvas";
 import { predictMonomerPrecursors } from "../services/api";
@@ -31,9 +32,11 @@ import {
 export type { StructureWorkbenchModuleId } from "./structure-workbench/StructureUtilityPanels";
 export { CurrentStructurePanel, MissingStructurePanel, WorkbenchPanel } from "./CurrentStructurePanel";
 
-export type StructureWorkbenchHandle = {
+export type StructureCanvasOwnerHandle = {
   syncBeforeLeave(): Promise<void>;
 };
+
+export type StructureWorkbenchHandle = StructureCanvasOwnerHandle;
 
 type StructureWorkbenchPageProps = {
   structure: StructureWorkspaceContext;
@@ -322,16 +325,32 @@ export const StructureWorkbenchPage = forwardRef<
               structure={structure}
               canvas={canvas}
               hasActivated3D={hasActivated3D}
-              openPanel={openPanel}
-              moduleButtonRef={moduleButtonRef}
-              assistantButtonRef={assistantButtonRef}
               operationBusy={operationBusy}
+              utilityActions={[
+                {
+                  id: "modules",
+                  label: "功能参数",
+                  icon: <SlidersHorizontal aria-hidden="true" />,
+                  active: openPanel === "modules",
+                  buttonRef: moduleButtonRef,
+                  controls: "structure-module-panel",
+                  onClick: () => togglePanel("modules")
+                },
+                {
+                  id: "assistant",
+                  label: "AI 助手",
+                  icon: <Sparkles aria-hidden="true" />,
+                  active: openPanel === "assistant",
+                  buttonRef: assistantButtonRef,
+                  controls: "structure-assistant-panel",
+                  onClick: () => togglePanel("assistant")
+                }
+              ]}
               onLoadExample={() => void loadExample()}
               onImportFile={(file) => void importImage(file)}
               onClear={() => void clearStructure()}
               onSync={() => void syncFromCanvas()}
               onToggle3D={() => void toggle3D()}
-              onTogglePanel={togglePanel}
             />
 
             <StructureUtilityPanels

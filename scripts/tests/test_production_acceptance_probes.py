@@ -289,6 +289,7 @@ class ReadAndFrontendClient(FakeClient):
         if method == "GET" and path in {
             "/",
             "/structure-workbench",
+            "/homopolymer-property-prediction",
             "/database",
             "/database-filter",
             "/knowledge",
@@ -468,6 +469,7 @@ class ProductionAcceptanceProbeTests(unittest.TestCase):
         self.assertEqual(api["tg_assistant"]["guide_version"], 3)
         self.assertNotIn("must not be sealed", json.dumps(api))
         self.assertEqual(len(frontend["assets"]), 2)
+        self.assertIn("/homopolymer-property-prediction", frontend["routes"])
         self.assertIn("/reverse-design", frontend["routes"])
         self.assertIn("/monomer-dft", frontend["routes"])
 

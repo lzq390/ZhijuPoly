@@ -188,6 +188,16 @@ function getProjectButton(directory: string): HTMLButtonElement {
 }
 
 describe("AppShell 侧边栏", () => {
+  it("均聚物性质预测使用无内边距的满高工作台容器", () => {
+    const view = renderShell("homopolymerPrediction");
+    const main = view.container.querySelector("main");
+
+    expect(main?.classList.contains("overflow-hidden")).toBe(true);
+    expect(main?.classList.contains("p-0")).toBe(true);
+    expect(main?.classList.contains("px-4")).toBe(false);
+    expect(main?.firstElementChild?.classList.contains("h-full")).toBe(true);
+  });
+
   it("聚合物生成使用无内边距的满高工作台容器", () => {
     const view = renderShell("polytaoGeneration");
     const main = view.container.querySelector("main");

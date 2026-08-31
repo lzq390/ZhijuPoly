@@ -1,0 +1,523 @@
+.np-homopolymer-prediction .np-hp-parameters {
+  width: min(620px, calc(100% - 32px));
+}
+
+.np-homopolymer-prediction .np-hp-parameters .np-sw-popover__header h2 {
+  font-size: 17px;
+  line-height: 23px;
+}
+
+.np-homopolymer-prediction .np-hp-parameters .np-sw-popover__header small,
+.np-homopolymer-prediction .np-sw-drawer__header p {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.np-homopolymer-prediction .np-sw-drawer__header h2 {
+  font-size: 16px;
+}
+
+.np-homopolymer-prediction .np-hp-parameters__form {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px;
+  background: #f8fbfe;
+}
+
+.np-homopolymer-prediction .np-hp-property-groups {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.np-homopolymer-prediction .np-hp-property-group {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.np-homopolymer-prediction .np-hp-property-group > header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 9px;
+  border-right: 1px solid rgba(51, 83, 126, 0.11);
+  background: #fbfdff;
+}
+
+.np-homopolymer-prediction .np-hp-property-group > header > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.np-homopolymer-prediction .np-hp-property-group > header strong {
+  color: #183553;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.np-homopolymer-prediction .np-hp-property-group > header button,
+.np-homopolymer-prediction .np-hp-parameters__footer > div button {
+  border: 0;
+  padding: 2px 3px;
+  color: var(--np-sw-blue-strong);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.np-homopolymer-prediction .np-hp-property-group > header button:hover:not(:disabled),
+.np-homopolymer-prediction .np-hp-parameters__footer > div button:hover:not(:disabled) {
+  color: var(--np-sw-cyan);
+}
+
+.np-homopolymer-prediction .np-hp-property-group > header button:disabled,
+.np-homopolymer-prediction .np-hp-parameters__footer > div button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.np-homopolymer-prediction .np-hp-property-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  padding: 8px;
+}
+
+.np-homopolymer-prediction .np-hp-property-group.is-thermal .np-hp-property-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.np-homopolymer-prediction .np-hp-property-group.is-mechanical .np-hp-property-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.np-homopolymer-prediction .np-hp-property-group.is-permeability .np-hp-property-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.np-homopolymer-prediction .np-hp-property-option {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 42px;
+  gap: 7px;
+  padding: 6px 7px;
+  border: 1px solid rgba(51, 83, 126, 0.13);
+  border-radius: 8px;
+  color: var(--np-sw-muted);
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.np-homopolymer-prediction .np-hp-property-option:hover {
+  border-color: rgba(37, 99, 235, 0.3);
+  background: #f8fbff;
+}
+
+.np-homopolymer-prediction .np-hp-property-option.is-selected {
+  border-color: rgba(37, 99, 235, 0.34);
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.96), rgba(236, 254, 255, 0.7));
+  box-shadow: 0 5px 14px rgba(37, 99, 235, 0.07);
+}
+
+.np-homopolymer-prediction .np-hp-property-option > input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.np-homopolymer-prediction .np-hp-property-option:has(input:focus-visible) {
+  outline: 2px solid rgba(37, 99, 235, 0.45);
+  outline-offset: 2px;
+}
+
+.np-homopolymer-prediction .np-hp-property-option__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(71, 100, 143, 0.34);
+  border-radius: 5px;
+  color: #fff;
+  background: #fff;
+}
+
+.np-homopolymer-prediction .np-hp-property-option.is-selected .np-hp-property-option__check {
+  border-color: var(--np-sw-blue);
+  background: linear-gradient(135deg, var(--np-sw-blue), var(--np-sw-cyan));
+}
+
+.np-homopolymer-prediction .np-hp-property-option__check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.np-homopolymer-prediction .np-hp-property-option > span:last-child {
+  min-width: 0;
+}
+
+.np-homopolymer-prediction .np-hp-property-option strong,
+.np-homopolymer-prediction .np-hp-property-option small {
+  display: block;
+}
+
+.np-homopolymer-prediction .np-hp-property-option strong {
+  color: #183553;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.np-homopolymer-prediction .np-hp-property-option small {
+  margin-top: 2px;
+  color: #6f849d;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.np-homopolymer-prediction .np-hp-parameters__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 11px;
+  padding-top: 11px;
+  border-top: 1px solid rgba(51, 83, 126, 0.13);
+}
+
+.np-homopolymer-prediction .np-hp-parameters__footer > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.np-homopolymer-prediction .np-hp-parameters__footer > div > strong {
+  color: var(--np-sw-muted);
+  font-size: 12px;
+}
+
+.np-homopolymer-prediction .np-hp-parameters__footer > div > span {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.np-homopolymer-prediction .np-hp-results {
+  display: grid;
+  gap: 10px;
+}
+
+.np-homopolymer-prediction .np-hp-stale-notice {
+  padding: 9px 10px;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 8px;
+  color: #92400e;
+  background: #fffbeb;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.np-homopolymer-prediction .np-hp-result-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.np-homopolymer-prediction .np-hp-result-summary > div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 9px;
+  background: #f7faff;
+}
+
+.np-homopolymer-prediction .np-hp-result-summary span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #6f849d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.np-homopolymer-prediction .np-hp-result-summary span svg {
+  width: 12px;
+  height: 12px;
+}
+
+.np-homopolymer-prediction .np-hp-result-summary code,
+.np-homopolymer-prediction .np-hp-result-summary strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--np-sw-ink);
+}
+
+.np-homopolymer-prediction .np-hp-result-summary code {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.np-homopolymer-prediction .np-hp-result-summary strong {
+  font-size: 15px;
+}
+
+.np-homopolymer-prediction .np-hp-result-list {
+  display: grid;
+  gap: 8px;
+}
+
+.np-homopolymer-prediction .np-hp-result-card {
+  padding: 11px;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 5px 14px rgba(25, 55, 92, 0.045);
+}
+
+.np-homopolymer-prediction .np-hp-result-card.is-missing {
+  border-style: dashed;
+  background: #fbfdff;
+}
+
+.np-homopolymer-prediction .np-hp-result-card header,
+.np-homopolymer-prediction .np-hp-result-card > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.np-homopolymer-prediction .np-hp-result-card header > span {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--np-sw-blue-strong);
+  background: #eff6ff;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.np-homopolymer-prediction .np-hp-result-card > div span {
+  color: #6f849d;
+  font-size: 11px;
+}
+
+.np-homopolymer-prediction .np-hp-result-card h3 {
+  margin: 8px 0 6px;
+  color: #183553;
+  font-size: 13px;
+}
+
+.np-homopolymer-prediction .np-sw-result-state strong {
+  font-size: 15px;
+}
+
+.np-homopolymer-prediction .np-sw-result-state p {
+  font-size: 12.5px;
+}
+
+.np-homopolymer-prediction .np-hp-result-card > div strong {
+  color: var(--np-sw-ink);
+  font-family: var(--font-heading);
+  font-size: 21px;
+  line-height: 1.1;
+}
+
+@container np-sw-workbench (max-width: 559px) {
+  .np-homopolymer-prediction .np-hp-property-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .np-homopolymer-prediction .np-hp-property-group > header,
+  .np-homopolymer-prediction .np-hp-parameters__footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .np-homopolymer-prediction .np-hp-parameters__footer .np-sw-primary-button {
+    width: 100%;
+  }
+}
+
+@container np-sw-workbench (max-width: 699px) {
+  .np-homopolymer-prediction .np-hp-property-groups {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .np-homopolymer-prediction .np-hp-property-group {
+    display: block;
+  }
+
+  .np-homopolymer-prediction .np-hp-property-group > header {
+    border-right: 0;
+    border-bottom: 1px solid rgba(51, 83, 126, 0.11);
+  }
+
+  .np-homopolymer-prediction .np-hp-property-group.is-thermal .np-hp-property-grid,
+  .np-homopolymer-prediction .np-hp-property-group.is-mechanical .np-hp-property-grid,
+  .np-homopolymer-prediction .np-hp-property-group.is-permeability .np-hp-property-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container np-sw-workbench (max-width: 899px) {
+  .np-homopolymer-prediction .np-hp-parameters {
+    width: auto;
+  }
+
+  .np-homopolymer-prediction .np-hp-parameters__form {
+    max-height: calc(78vh - 62px);
+    max-height: calc(78dvh - 62px);
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-homopolymer-prediction .np-hp-parameters {
+    width: min(930px, calc(100% - 48px));
+  }
+
+  .np-homopolymer-prediction .np-hp-parameters .np-sw-popover__header h2 {
+    font-size: 24px;
+    line-height: 32px;
+  }
+
+  .np-homopolymer-prediction .np-hp-parameters .np-sw-popover__header small,
+  .np-homopolymer-prediction .np-sw-drawer__header p {
+    font-size: 15px;
+    line-height: 1.45;
+  }
+
+  .np-homopolymer-prediction .np-sw-drawer__header h2 {
+    font-size: 21px;
+  }
+
+  .np-homopolymer-prediction .np-hp-parameters__form {
+    padding: 21px;
+  }
+
+  .np-homopolymer-prediction .np-hp-parameters__footer > div > strong {
+    font-size: 15px;
+  }
+
+  .np-homopolymer-prediction .np-hp-property-groups {
+    gap: 15px;
+  }
+
+  .np-homopolymer-prediction .np-hp-property-group {
+    border-radius: 15px;
+    grid-template-columns: 177px minmax(0, 1fr);
+  }
+
+  .np-homopolymer-prediction .np-hp-property-group > header {
+    padding: 14px 16px;
+  }
+
+  .np-homopolymer-prediction .np-hp-property-group > header strong {
+    font-size: 17px;
+  }
+
+  .np-homopolymer-prediction .np-hp-property-group > header button,
+  .np-homopolymer-prediction .np-hp-parameters__footer > div button {
+    font-size: 13px;
+  }
+
+  .np-homopolymer-prediction .np-hp-property-grid {
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .np-homopolymer-prediction .np-hp-property-option {
+    min-height: 62px;
+    gap: 13px;
+    padding: 12px 14px;
+    border-radius: 12px;
+  }
+
+  .np-homopolymer-prediction .np-hp-property-option__check {
+    flex-basis: 27px;
+    width: 27px;
+    height: 27px;
+    border-radius: 8px;
+  }
+
+  .np-homopolymer-prediction .np-hp-property-option__check svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .np-homopolymer-prediction .np-hp-property-option strong {
+    font-size: 16px;
+  }
+
+  .np-homopolymer-prediction .np-hp-property-option small {
+    font-size: 13px;
+  }
+
+  .np-homopolymer-prediction .np-hp-stale-notice,
+  .np-homopolymer-prediction .np-hp-result-summary code {
+    font-size: 14px;
+  }
+
+  .np-homopolymer-prediction .np-hp-result-summary span,
+  .np-homopolymer-prediction .np-hp-result-card header > span {
+    font-size: 13px;
+  }
+
+  .np-homopolymer-prediction .np-hp-result-summary strong {
+    font-size: 19px;
+  }
+
+  .np-homopolymer-prediction .np-hp-result-card > div span {
+    font-size: 13.5px;
+  }
+
+  .np-homopolymer-prediction .np-sw-result-state strong {
+    font-size: 21px;
+  }
+
+  .np-homopolymer-prediction .np-sw-result-state p {
+    font-size: 16px;
+  }
+
+  .np-homopolymer-prediction .np-hp-result-card {
+    padding: 16px;
+    border-radius: 14px;
+  }
+
+  .np-homopolymer-prediction .np-hp-result-card h3 {
+    font-size: 16px;
+  }
+
+  .np-homopolymer-prediction .np-hp-result-card > div strong {
+    font-size: 31px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np-homopolymer-prediction .np-hp-property-option {
+    transition: none;
+  }
+}

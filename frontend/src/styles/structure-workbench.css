@@ -575,6 +575,7 @@
   display: flex;
   flex-direction: column;
   max-height: min(680px, calc(100vh - 120px));
+  max-height: min(680px, calc(100dvh - 120px));
   overflow: hidden;
   border: 1px solid rgba(51, 83, 126, 0.17);
   border-radius: 14px;
@@ -1271,6 +1272,10 @@
   transform: translateY(-50%);
 }
 
+.np-structure-workbench .np-sw-drawer-layer.is-overlay .np-sw-drawer__resizer {
+  display: none;
+}
+
 .np-structure-workbench .np-sw-drawer__body {
   flex: 1 1 auto;
   min-height: 0;
@@ -1496,6 +1501,41 @@
   height: 13px;
 }
 
+.np-structure-workbench .np-sw-drawer-reopen.is-side-handle {
+  position: fixed;
+  z-index: 52;
+  top: 50%;
+  right: 12px;
+  bottom: auto;
+  display: grid;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  place-items: center;
+  padding: 0;
+  border-color: rgba(125, 211, 252, 0.3);
+  border-radius: 12px;
+  color: #2875c7;
+  background: linear-gradient(145deg, #f8fbff, #e5f5ff);
+  box-shadow: 0 10px 25px rgba(51, 91, 128, 0.16), 0 0 18px rgba(34, 211, 238, 0.08);
+  transform: translateY(-50%);
+}
+
+.np-structure-workbench .np-sw-drawer-reopen.is-side-handle:hover {
+  border-color: rgba(96, 165, 250, 0.5);
+  color: var(--np-sw-blue-strong);
+}
+
+.np-structure-workbench .np-sw-drawer-reopen.is-side-handle span {
+  display: none;
+}
+
+.np-structure-workbench .np-sw-drawer-reopen.is-side-handle svg {
+  width: 18px;
+  height: 18px;
+}
+
 .np-structure-workbench .np-sw-spin {
   animation: np-sw-spin 800ms linear infinite;
 }
@@ -1513,6 +1553,7 @@
   .np-structure-workbench .np-sw-layout.has-open-drawer {
     width: min(100%, calc(var(--np-sw-layout-max-width) + var(--np-sw-drawer-effective-width) + var(--np-sw-drawer-gap)));
     grid-template-columns: minmax(0, var(--np-sw-layout-max-width)) var(--np-sw-drawer-effective-width);
+    grid-template-rows: minmax(0, 1fr);
     gap: var(--np-sw-drawer-gap);
   }
 
@@ -1521,6 +1562,7 @@
     inset: auto;
     width: var(--np-sw-drawer-effective-width);
     min-width: 0;
+    min-height: 0;
     height: 100%;
   }
 
@@ -1629,6 +1671,7 @@
     left: 10px;
     width: auto;
     max-height: min(78vh, 680px);
+    max-height: min(78dvh, 680px);
     border-radius: 14px;
     transform: translateY(18px);
     transform-origin: bottom center;
@@ -1645,6 +1688,7 @@
 
   .np-structure-workbench .np-sw-drawer__body {
     max-height: calc(78vh - 62px);
+    max-height: calc(78dvh - 62px);
   }
 }
 
@@ -1663,14 +1707,14 @@
     gap: 5px;
   }
 
+  .np-structure-workbench .np-sw-canvas-stage {
+    min-height: 362px;
+  }
+
   .np-structure-workbench .np-sw-tool {
     min-height: 34px;
     padding: 0 8px;
     font-size: 10px;
-  }
-
-  .np-structure-workbench .np-sw-canvas-stage {
-    min-height: 0;
   }
 
   .np-structure-workbench .np-sw-editor,
@@ -1690,6 +1734,12 @@
     z-index: 30;
     right: 12px;
     bottom: 12px;
+  }
+
+  .np-structure-workbench .np-sw-drawer-reopen.is-side-handle {
+    top: auto;
+    bottom: 12px;
+    transform: none;
   }
 }
 
@@ -1965,6 +2015,7 @@
   .np-structure-workbench .np-sw-popover {
     top: 57px;
     max-height: min(960px, calc(100vh - 170px));
+    max-height: min(960px, calc(100dvh - 170px));
   }
 
   .np-structure-workbench .np-sw-popover--modules {
@@ -2421,6 +2472,15 @@
   .np-structure-workbench .np-sw-drawer-reopen svg {
     width: 20px;
     height: 20px;
+  }
+
+  .np-structure-workbench .np-sw-drawer-reopen.is-side-handle {
+    right: 18px;
+    width: 54px;
+    min-width: 54px;
+    height: 54px;
+    min-height: 54px;
+    border-radius: 14px;
   }
 }
 
