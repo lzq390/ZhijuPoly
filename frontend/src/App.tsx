@@ -1104,7 +1104,10 @@ export default function App() {
       ) : null}
 
       {activeModule === "mdSimulationDemo" ? (
-        <MdSimulationDemoPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+        <MdSimulationDemoPage
+          structure={structureWorkspace}
+          onEditStructure={openStructureWorkbench}
+        />
       ) : null}
 
       {activeModule === "monomerMdSimulation" ? (

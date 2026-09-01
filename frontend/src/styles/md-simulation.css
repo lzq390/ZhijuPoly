@@ -1,0 +1,4310 @@
+.np-md-simulation {
+  --np-sw-layout-max-width: 1040px;
+}
+
+.np-md-simulation .np-md-page {
+  padding: 62px 0 0;
+}
+
+.np-md-simulation .np-sw-page-title {
+  top: 22px;
+  left: 20px;
+}
+
+.np-md-simulation .np-md-scroll-region {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 0 64px;
+  scrollbar-color: rgba(71, 100, 143, 0.42) transparent;
+  scrollbar-gutter: stable;
+}
+
+.np-md-simulation .np-md-scroll-region::-webkit-scrollbar {
+  width: 10px;
+}
+
+.np-md-simulation .np-md-scroll-region::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.np-md-simulation .np-md-scroll-region::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgba(71, 100, 143, 0.42);
+  background-clip: padding-box;
+}
+
+.np-md-simulation .np-sw-layout {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.np-md-simulation .np-md-content-column,
+.np-md-simulation .np-md-module-toolbar {
+  width: min(calc(100% - 48px), var(--np-sw-layout-max-width));
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.np-md-simulation .np-md-module-toolbar {
+  display: flex;
+  min-height: 38px;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.np-md-simulation .np-md-module-toolbar::before {
+  width: min(180px, 22vw);
+  height: 1px;
+  margin-right: auto;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0), rgba(59, 130, 246, 0.32), rgba(34, 211, 238, 0.5));
+  content: "";
+}
+
+.np-md-simulation .np-md-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.np-md-simulation .np-md-parameter-trigger {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.np-md-simulation .np-md-service-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.np-md-simulation .np-md-service-status > span,
+.np-md-simulation .np-md-service-status > button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(71, 100, 143, 0.21);
+  border-radius: 6px;
+  padding: 0 11px;
+  color: #526f8d;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 5px 15px rgba(30, 64, 175, 0.055);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-service-status > button {
+  cursor: pointer;
+}
+
+.np-md-simulation .np-md-service-status > button:hover:not(:disabled) {
+  border-color: rgba(37, 99, 235, 0.34);
+  color: var(--np-sw-blue-strong);
+  background: #f8fbff;
+}
+
+.np-md-simulation .np-md-service-status > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.np-md-simulation .np-md-service-status svg {
+  width: 14px;
+  height: 14px;
+}
+
+.np-md-simulation .np-md-service-status > span.is-ready {
+  color: #506780;
+}
+
+.np-md-simulation .np-md-service-status > span.is-loading {
+  color: var(--np-sw-muted);
+  background: #f7faff;
+}
+
+.np-md-simulation .np-md-service-status > span.is-error,
+.np-md-simulation .np-md-service-status > span.is-unavailable {
+  border-color: rgba(245, 158, 11, 0.24);
+  color: #a15408;
+  background: #fffbeb;
+}
+
+.np-md-simulation .np-md-ready-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.11), 0 0 11px rgba(16, 185, 129, 0.38);
+}
+
+.np-md-simulation .np-md-workbench-surface {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 12px 34px rgba(30, 64, 175, 0.075), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.np-md-simulation .np-md-workspace-navigation {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  border-bottom: 1px solid rgba(37, 99, 235, 0.09);
+  padding: 9px 18px;
+  background:
+    linear-gradient(110deg, rgba(249, 252, 255, 0.98), rgba(242, 248, 255, 0.88) 68%, rgba(239, 252, 255, 0.76));
+}
+
+.np-md-simulation .np-md-workspace-view {
+  min-width: 0;
+}
+
+.np-md-simulation .np-md-surface {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.97);
+}
+
+.np-md-simulation .np-md-view-header {
+  display: flex;
+  min-height: 82px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 15px 18px;
+  border-bottom: 1px solid rgba(37, 99, 235, 0.105);
+  background: linear-gradient(110deg, rgba(255, 255, 255, 0.99) 10%, rgba(239, 246, 255, 0.75) 72%, rgba(236, 254, 255, 0.54) 118%);
+}
+
+.np-md-simulation .np-md-view-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.np-md-simulation .np-md-surface-mark {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: #fff;
+  background: linear-gradient(145deg, #1d4ed8 0%, #3b82f6 58%, #06b6d4 135%);
+  box-shadow: 0 9px 20px rgba(37, 99, 235, 0.21), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.np-md-simulation .np-md-surface-mark svg {
+  width: 19px;
+  height: 19px;
+}
+
+.np-md-simulation .np-md-view-heading h2 {
+  margin: 0;
+  color: var(--np-sw-ink);
+  font-family: var(--font-heading);
+  font-size: 18px;
+  font-weight: 750;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+.np-md-simulation .np-md-view-heading p {
+  margin: 4px 0 0;
+  color: #617792;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.np-md-simulation .np-md-view-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  min-height: 31px;
+  border: 1px solid rgba(8, 145, 178, 0.18);
+  border-radius: 7px;
+  padding: 0 10px;
+  color: #0e7490;
+  background: #ecfeff;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.np-md-simulation .np-md-view-badge svg {
+  width: 13px;
+  height: 13px;
+}
+
+.np-md-simulation .np-md-demo-boundary,
+.np-md-simulation .np-md-service-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 24px 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(8, 145, 178, 0.16);
+  border-radius: 8px;
+  color: #376681;
+  background: rgba(236, 254, 255, 0.72);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.np-md-simulation .np-md-service-message {
+  border-color: rgba(245, 158, 11, 0.22);
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.np-md-simulation .np-md-demo-boundary svg,
+.np-md-simulation .np-md-service-message svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: 1px;
+}
+
+.np-md-simulation .np-md-section {
+  padding: 20px 24px 22px;
+}
+
+.np-md-simulation .np-md-section + .np-md-section {
+  border-top: 1px solid rgba(51, 83, 126, 0.12);
+}
+
+.np-md-simulation .np-md-section__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin-bottom: 15px;
+}
+
+.np-md-simulation .np-md-section__header > span {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: 8px;
+  color: var(--np-sw-blue-strong);
+  background: linear-gradient(145deg, #f8fbff, #eef8ff);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.np-md-simulation .np-md-section__header h2 {
+  margin: 0;
+  color: #183553;
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 720;
+  line-height: 1.35;
+}
+
+.np-md-simulation .np-md-section__header p {
+  margin: 3px 0 0;
+  color: #6f849d;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.np-md-simulation .np-md-structure-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(300px, 0.88fr);
+  gap: 14px;
+}
+
+.np-md-simulation .np-md-structure-editor,
+.np-md-simulation .np-md-preview {
+  min-width: 0;
+  border: 1px solid rgba(51, 83, 126, 0.16);
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.np-md-simulation .np-md-structure-editor {
+  padding: 13px;
+}
+
+.np-md-simulation .np-md-structure-editor > label,
+.np-md-simulation .np-md-field > span,
+.np-md-simulation .np-md-atom-fields label > span {
+  display: block;
+  margin-bottom: 6px;
+  color: #607995;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+}
+
+.np-md-simulation .np-md-structure-editor textarea {
+  width: 100%;
+  min-height: 116px;
+  resize: vertical;
+  border: 1px solid var(--np-sw-input-border);
+  border-radius: 8px;
+  padding: 10px 11px;
+  color: #17324d;
+  background: #fff;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.np-md-simulation .np-md-structure-input.has-error .np-md-structure-editor,
+.np-md-simulation .np-md-structure-input.has-error textarea,
+.np-md-simulation .np-md-field.has-error input {
+  border-color: rgba(220, 38, 38, 0.48);
+}
+
+.np-md-simulation .np-md-input-actions,
+.np-md-simulation .np-md-distance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.np-md-simulation .np-md-input-actions button,
+.np-md-simulation .np-md-trajectory-view__toolbar button,
+.np-md-simulation .np-md-distance-actions button {
+  display: inline-flex;
+  min-height: 31px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid rgba(51, 83, 126, 0.19);
+  border-radius: 7px;
+  padding: 0 10px;
+  color: #496783;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.np-md-simulation .np-md-input-actions button:hover:not(:disabled),
+.np-md-simulation .np-md-trajectory-view__toolbar button:hover:not(:disabled),
+.np-md-simulation .np-md-distance-actions button:hover:not(:disabled) {
+  border-color: rgba(37, 99, 235, 0.34);
+  color: var(--np-sw-blue-strong);
+  background: #f8fbff;
+}
+
+.np-md-simulation .np-md-input-actions button:disabled,
+.np-md-simulation .np-md-distance-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.np-md-simulation .np-md-input-actions button svg,
+.np-md-simulation .np-md-trajectory-view__toolbar button svg,
+.np-md-simulation .np-md-distance-actions button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.np-md-simulation .np-md-input-actions .is-icon {
+  width: 31px;
+  padding: 0;
+}
+
+.np-md-simulation .np-md-input-actions .np-md-edit-structure {
+  margin-left: auto;
+}
+
+.np-md-simulation .np-md-field-hint {
+  margin: 8px 0 0;
+  color: #72879e;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.np-md-simulation .np-md-field-hint code {
+  color: #c2410c;
+  font-family: var(--font-mono);
+}
+
+.np-md-simulation .np-md-field-error,
+.np-md-simulation .np-md-field > em,
+.np-md-simulation .np-md-inline-error {
+  display: block;
+  margin: 6px 0 0;
+  color: #dc2626;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.np-md-simulation .np-md-preview {
+  overflow: hidden;
+  background-color: #f8fbff;
+  background-image: linear-gradient(rgba(37, 99, 235, 0.038) 1px, transparent 1px), linear-gradient(90deg, rgba(37, 99, 235, 0.038) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.np-md-simulation .np-md-preview__label {
+  display: flex;
+  min-height: 31px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid rgba(51, 83, 126, 0.13);
+  padding: 0 10px;
+  color: #6f849d;
+  background: rgba(255, 255, 255, 0.68);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.np-md-simulation .np-md-preview__label small {
+  color: #a16207;
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  letter-spacing: 0;
+}
+
+.np-md-simulation .np-md-preview__canvas {
+  display: grid;
+  height: 176px;
+  place-items: center;
+  padding: 10px;
+}
+
+.np-md-simulation .np-md-preview__structure,
+.np-md-simulation .np-md-preview__image {
+  width: 100%;
+  height: 100%;
+  max-height: 156px;
+}
+
+.np-md-simulation .np-md-preview__state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  color: #7890aa;
+  font-size: 11px;
+  text-align: center;
+}
+
+.np-md-simulation .np-md-preview__state.is-error {
+  color: #b91c1c;
+}
+
+.np-md-simulation .np-md-preview__state svg {
+  width: 19px;
+  height: 19px;
+}
+
+.np-md-simulation .np-md-field {
+  display: block;
+  min-width: 0;
+}
+
+.np-md-simulation .np-md-number-input,
+.np-md-simulation .np-md-forcefield-input,
+.np-md-simulation .np-md-forcefield-select {
+  display: flex;
+  height: 44px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--np-sw-input-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.np-md-simulation .np-md-number-input input,
+.np-md-simulation .np-md-forcefield-input input,
+.np-md-simulation .np-md-forcefield-select select {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  padding: 0 11px;
+  color: #17324d;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.np-md-simulation .np-md-forcefield-select {
+  position: relative;
+}
+
+.np-md-simulation .np-md-forcefield-select select {
+  appearance: none;
+  cursor: pointer;
+  padding-right: 34px;
+  padding-left: 36px;
+}
+
+.np-md-simulation .np-md-forcefield-select > svg:first-child {
+  position: absolute;
+  left: 11px;
+  z-index: 1;
+  width: 15px;
+  height: 15px;
+  color: #6e88a2;
+  pointer-events: none;
+}
+
+.np-md-simulation .np-md-forcefield-select .np-md-select-chevron {
+  position: absolute;
+  right: 11px;
+  width: 15px;
+  height: 15px;
+  color: #6e88a2;
+  pointer-events: none;
+}
+
+.np-md-simulation .np-md-field.has-error .np-md-forcefield-select {
+  border-color: rgba(220, 38, 38, 0.48);
+}
+
+.np-md-simulation .np-md-number-input small {
+  display: inline-flex;
+  height: 100%;
+  align-items: center;
+  flex: none;
+  border-left: 1px solid rgba(51, 83, 126, 0.12);
+  padding: 0 10px;
+  color: #7890aa;
+  background: #f7faff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-forcefield-input > svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  margin-left: 11px;
+  color: #6e88a2;
+}
+
+/* Main workspace tabs */
+.np-md-simulation .np-md-workspace-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+  gap: 4px;
+  margin: 0;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 10px;
+  padding: 4px;
+  background: rgba(245, 249, 253, 0.92);
+  box-shadow: 0 4px 16px rgba(30, 64, 175, 0.045);
+}
+
+.np-md-simulation .np-md-workspace-tabs button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 0 14px;
+  color: #607995;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.np-md-simulation .np-md-workspace-tabs button.is-active {
+  border-color: rgba(37, 99, 235, 0.18);
+  color: var(--np-sw-blue-strong);
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.08);
+}
+
+.np-md-simulation .np-md-workspace-tabs button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.np-md-simulation .np-md-workspace-tabs button small {
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: #0e7490;
+  background: #ecfeff;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.np-md-simulation .np-md-input-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 24px 18px;
+  border-top: 1px solid rgba(51, 83, 126, 0.11);
+  background: #fbfdff;
+}
+
+.np-md-simulation .np-md-input-footer strong,
+.np-md-simulation .np-md-input-footer span {
+  display: block;
+}
+
+.np-md-simulation .np-md-input-footer strong {
+  color: #284965;
+  font-size: 12px;
+}
+
+.np-md-simulation .np-md-input-footer span {
+  margin-top: 2px;
+  color: #71869c;
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-input-footer code {
+  max-width: 52%;
+  overflow: hidden;
+  color: #526f8d;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Parameter popover */
+.np-md-simulation .np-md-parameters {
+  top: 50px;
+  right: max(24px, calc((100% - var(--np-sw-layout-max-width)) / 2));
+  width: min(660px, calc(100% - 48px));
+}
+
+.np-md-simulation .np-md-parameters .np-sw-popover__header h2 {
+  font-size: 17px;
+  line-height: 23px;
+}
+
+.np-md-simulation .np-md-parameters .np-sw-popover__header small {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.np-md-simulation .np-md-parameters__form {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px;
+  background: #f8fbfe;
+}
+
+.np-md-simulation .np-md-parameter-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.np-md-simulation .np-md-parameter-group {
+  overflow: hidden;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.np-md-simulation .np-md-parameter-group > header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 11px;
+  border-bottom: 1px solid rgba(51, 83, 126, 0.11);
+  background: #fbfdff;
+}
+
+.np-md-simulation .np-md-parameter-group > header > span {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: #167ca8;
+  background: #ecfeff;
+}
+
+.np-md-simulation .np-md-parameter-group > header svg {
+  width: 15px;
+  height: 15px;
+}
+
+.np-md-simulation .np-md-parameter-group > header strong,
+.np-md-simulation .np-md-parameter-group > header small {
+  display: block;
+}
+
+.np-md-simulation .np-md-parameter-group > header strong {
+  color: #183553;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.np-md-simulation .np-md-parameter-group > header small {
+  margin-top: 1px;
+  color: #71869c;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.np-md-simulation .np-md-parameter-grid {
+  display: grid;
+  gap: 11px;
+  padding: 12px;
+}
+
+.np-md-simulation .np-md-parameter-grid.is-thermo {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.np-md-simulation .np-md-parameter-grid.is-scale {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.np-md-simulation .np-md-parameters .np-md-field > span {
+  color: #183553;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+
+.np-md-simulation .np-md-parameters .np-md-number-input input {
+  font-weight: 650;
+}
+
+.np-md-simulation .np-md-parameters .np-md-number-input small {
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.np-md-simulation .np-md-parameters__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(51, 83, 126, 0.13);
+}
+
+.np-md-simulation .np-md-parameters__footer > div strong,
+.np-md-simulation .np-md-parameters__footer > div small {
+  display: block;
+}
+
+.np-md-simulation .np-md-parameters__footer > div strong {
+  color: #365775;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.np-md-simulation .np-md-parameters__footer > div small {
+  margin-top: 2px;
+  color: #71869c;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.np-md-simulation .np-md-parameters__footer > span {
+  display: flex;
+  gap: 7px;
+}
+
+/* Main result surface */
+.np-md-simulation .np-md-results-surface {
+  position: relative;
+  min-height: 560px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.97);
+}
+
+.np-md-simulation .np-md-results-body {
+  padding: 16px 18px 20px;
+}
+
+.np-md-simulation .np-md-results-body .np-md-result-tabs {
+  width: min(460px, 100%);
+  margin-bottom: 14px;
+}
+
+.np-md-simulation .np-md-results-body .np-md-progress-overview {
+  padding: 16px;
+}
+
+.np-md-simulation .np-md-results-body .np-md-progress-steps {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.np-md-simulation .np-md-results-body .np-md-overview-results {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 14px;
+}
+
+.np-md-simulation .np-md-results-body .np-md-result-identity,
+.np-md-simulation .np-md-results-body .np-md-result-kpis,
+.np-md-simulation .np-md-results-body .np-md-request-snapshot,
+.np-md-simulation .np-md-results-body .np-md-run-error {
+  grid-column: 1 / -1;
+}
+
+.np-md-simulation .np-md-results-body .np-md-result-identity {
+  grid-template-columns: minmax(0, 2fr) minmax(180px, 0.7fr);
+}
+
+.np-md-simulation .np-md-results-body .np-md-result-kpis > div {
+  padding: 12px 14px;
+}
+
+.np-md-simulation .np-md-results-body .np-md-result-kpis strong {
+  font-size: 19px;
+}
+
+.np-md-simulation .np-md-results-body .np-md-result-card > header {
+  padding: 12px 14px;
+}
+
+.np-md-simulation .np-md-results-body .np-md-result-card > header h3 {
+  font-size: 14px;
+}
+
+.np-md-simulation .np-md-results-body .np-md-series-selector {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.np-md-simulation .np-md-results-body .np-md-series-chart svg {
+  width: min(100%, 820px);
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.np-md-simulation .np-md-results-body .np-md-chart-meta {
+  width: min(100%, 820px);
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.np-md-simulation .np-md-results-body .np-md-trajectory-explorer {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 14px;
+}
+
+.np-md-simulation .np-md-results-body .np-md-trajectory-canvas {
+  height: 410px;
+}
+
+/* Result controls */
+.np-md-simulation .np-md-results-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+.np-md-simulation .np-md-result-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 9px;
+  padding: 4px;
+  background: #f5f9fd;
+}
+
+.np-md-simulation .np-md-result-tabs button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #6b8198;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.np-md-simulation .np-md-result-tabs button.is-active {
+  border-color: rgba(37, 99, 235, 0.16);
+  color: var(--np-sw-blue-strong);
+  background: #fff;
+  box-shadow: 0 2px 7px rgba(37, 99, 235, 0.08);
+}
+
+.np-md-simulation .np-md-result-tabs button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.np-md-simulation .np-md-result-tabs svg {
+  width: 13px;
+  height: 13px;
+}
+
+.np-md-simulation .np-md-stale-notice,
+.np-md-simulation .np-md-run-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-bottom: 9px;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: 8px;
+  padding: 8px 9px;
+  color: #92400e;
+  background: #fffbeb;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.np-md-simulation .np-md-run-error {
+  border-color: rgba(220, 38, 38, 0.18);
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
+.np-md-simulation .np-md-stale-notice svg,
+.np-md-simulation .np-md-run-error svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  margin-top: 1px;
+}
+
+.np-md-simulation .np-md-progress-overview,
+.np-md-simulation .np-md-overview-results,
+.np-md-simulation .np-md-curves-panel,
+.np-md-simulation .np-md-trajectory-explorer {
+  display: grid;
+  gap: 9px;
+}
+
+.np-md-simulation .np-md-progress-overview {
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 10px;
+  padding: 13px;
+  background: #fff;
+}
+
+.np-md-simulation .np-md-progress-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.np-md-simulation .np-md-progress-heading span {
+  display: block;
+  color: #0891b2;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.np-md-simulation .np-md-progress-heading strong {
+  display: block;
+  margin-top: 3px;
+  color: #183553;
+  font-family: var(--font-heading);
+  font-size: 15px;
+}
+
+.np-md-simulation .np-md-progress-heading p {
+  margin: 3px 0 0;
+  color: #6f849d;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.np-md-simulation .np-md-progress-heading b {
+  color: var(--np-sw-blue-strong);
+  font-family: var(--font-heading);
+  font-size: 27px;
+  line-height: 1;
+}
+
+.np-md-simulation .np-md-progress-heading b small {
+  color: #91a4b9;
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8f0f7;
+}
+
+.np-md-simulation .np-md-progress-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #06b6d4);
+  transition: width 500ms ease-out;
+}
+
+.np-md-simulation .np-md-progress-steps {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.np-md-simulation .np-md-progress-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid rgba(51, 83, 126, 0.1);
+  border-radius: 8px;
+  padding: 8px;
+  color: #8ca0b5;
+  background: #f8fafc;
+}
+
+.np-md-simulation .np-md-progress-steps li > span {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(71, 100, 143, 0.18);
+  border-radius: 6px;
+  background: #fff;
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.np-md-simulation .np-md-progress-steps li > span svg {
+  width: 11px;
+  height: 11px;
+}
+
+.np-md-simulation .np-md-progress-steps li strong {
+  display: block;
+  color: inherit;
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-progress-steps li p {
+  margin: 2px 0 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.np-md-simulation .np-md-progress-steps li.is-active {
+  border-color: rgba(37, 99, 235, 0.22);
+  color: #315f8b;
+  background: #eff6ff;
+}
+
+.np-md-simulation .np-md-progress-steps li.is-complete {
+  border-color: rgba(16, 185, 129, 0.16);
+  color: #3d7469;
+  background: #f0fdf9;
+}
+
+.np-md-simulation .np-md-demo-boundary.is-compact {
+  margin: 0;
+  font-size: 10.5px;
+}
+
+.np-md-simulation .np-md-result-identity {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr);
+  gap: 7px;
+}
+
+.np-md-simulation .np-md-result-identity > div,
+.np-md-simulation .np-md-result-kpis > div {
+  min-width: 0;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 8px;
+  padding: 9px;
+  background: #f8fbff;
+}
+
+.np-md-simulation .np-md-result-identity span,
+.np-md-simulation .np-md-result-kpis span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #7b91a7;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.np-md-simulation .np-md-result-identity svg {
+  width: 10px;
+  height: 10px;
+}
+
+.np-md-simulation .np-md-result-identity strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: #24435f;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-result-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.np-md-simulation .np-md-result-kpis strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  color: #123858;
+  font-family: var(--font-heading);
+  font-size: 15px;
+  text-overflow: ellipsis;
+}
+
+.np-md-simulation .np-md-result-kpis small {
+  display: block;
+  margin-top: 1px;
+  color: #7890aa;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-result-card {
+  overflow: hidden;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.np-md-simulation .np-md-result-card > header {
+  padding: 10px 11px;
+  border-bottom: 1px solid rgba(51, 83, 126, 0.11);
+  background: #fbfdff;
+}
+
+.np-md-simulation .np-md-result-card > header h3 {
+  margin: 0;
+  color: #183553;
+  font-family: var(--font-heading);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.np-md-simulation .np-md-result-card > header p {
+  margin: 2px 0 0;
+  color: #7890aa;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.np-md-simulation .np-md-compact-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  background: rgba(51, 83, 126, 0.1);
+}
+
+.np-md-simulation .np-md-compact-metrics > div {
+  padding: 9px 10px;
+  background: #fff;
+}
+
+.np-md-simulation .np-md-compact-metrics dt,
+.np-md-simulation .np-md-stage-detail dt,
+.np-md-simulation .np-md-request-snapshot dt {
+  color: #7b91a7;
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-compact-metrics dd,
+.np-md-simulation .np-md-stage-detail dd,
+.np-md-simulation .np-md-request-snapshot dd {
+  margin: 3px 0 0;
+  color: #24435f;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.np-md-simulation .np-md-stage-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  padding: 9px;
+}
+
+.np-md-simulation .np-md-stage-tabs button,
+.np-md-simulation .np-md-series-selector button {
+  min-width: 0;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 7px;
+  padding: 7px;
+  color: #667e96;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.np-md-simulation .np-md-stage-tabs button.is-active,
+.np-md-simulation .np-md-series-selector button.is-active {
+  border-color: rgba(37, 99, 235, 0.26);
+  color: var(--np-sw-blue-strong);
+  background: #eff6ff;
+}
+
+.np-md-simulation .np-md-stage-detail {
+  border-top: 1px solid rgba(51, 83, 126, 0.1);
+  padding: 10px;
+}
+
+.np-md-simulation .np-md-stage-detail > p {
+  margin: 0 0 9px;
+  color: #627a92;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.np-md-simulation .np-md-stage-detail dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.np-md-simulation .np-md-stage-detail dl > div:last-child {
+  grid-column: 1 / -1;
+}
+
+.np-md-simulation .np-md-request-snapshot {
+  overflow: hidden;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.np-md-simulation .np-md-request-snapshot summary {
+  padding: 10px 11px;
+  color: #496783;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.np-md-simulation .np-md-request-snapshot dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  border-top: 1px solid rgba(51, 83, 126, 0.1);
+  padding: 10px;
+}
+
+.np-md-simulation .np-md-request-snapshot dd {
+  overflow-wrap: anywhere;
+}
+
+.np-md-simulation .np-md-series-selector {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.np-md-simulation .np-md-series-selector button {
+  text-align: left;
+}
+
+.np-md-simulation .np-md-series-selector strong,
+.np-md-simulation .np-md-series-selector small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-series-selector small {
+  margin-top: 2px;
+  color: #8ba0b4;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-series-chart {
+  padding: 8px 9px 9px;
+}
+
+.np-md-simulation .np-md-series-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  border: 1px solid rgba(51, 83, 126, 0.1);
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.np-md-simulation .np-md-series-chart svg text {
+  fill: #71869c;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-chart-grid line {
+  stroke: rgba(71, 100, 143, 0.16);
+  stroke-dasharray: 3 4;
+  stroke-width: 1;
+}
+
+.np-md-simulation .np-md-chart-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 8px;
+  margin-top: 7px;
+  color: #7890aa;
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-chart-meta strong {
+  color: #365775;
+  font-family: var(--font-mono);
+  font-weight: 650;
+}
+
+.np-md-simulation .np-md-empty-chart {
+  display: grid;
+  min-height: 150px;
+  place-items: center;
+  padding: 20px;
+  color: #7890aa;
+  font-size: 11px;
+  text-align: center;
+}
+
+.np-md-simulation .np-md-trajectory-view {
+  padding: 9px;
+}
+
+.np-md-simulation .np-md-trajectory-view__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  margin-bottom: 7px;
+}
+
+.np-md-simulation .np-md-trajectory-view__toolbar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #71869c;
+  font-size: 10.5px;
+}
+
+.np-md-simulation .np-md-trajectory-view__toolbar > span svg {
+  width: 11px;
+  height: 11px;
+}
+
+.np-md-simulation .np-md-trajectory-view__toolbar button {
+  min-height: 27px;
+  padding: 0 7px;
+  font-size: 10.5px;
+}
+
+.np-md-simulation .np-md-trajectory-canvas {
+  position: relative;
+  height: 300px;
+  overflow: hidden;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.np-md-simulation .np-md-trajectory-canvas canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.np-md-simulation .np-md-trajectory-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #7890aa;
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-distance-panel {
+  overflow: visible;
+}
+
+.np-md-simulation .np-md-atom-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 10px 10px 0;
+}
+
+.np-md-simulation .np-md-atom-fields input {
+  width: 100%;
+  height: 37px;
+  border: 1px solid var(--np-sw-input-border);
+  border-radius: 7px;
+  padding: 0 9px;
+  color: #24435f;
+  background: #fff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-atom-fields small {
+  display: block;
+  min-height: 28px;
+  margin-top: 4px;
+  color: #8195aa;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.np-md-simulation .np-md-inline-error {
+  margin-right: 10px;
+  margin-left: 10px;
+}
+
+.np-md-simulation .np-md-distance-actions {
+  padding: 0 10px 10px;
+}
+
+.np-md-simulation .np-md-distance-actions button.is-primary {
+  border-color: var(--np-sw-blue);
+  color: #fff;
+  background: linear-gradient(135deg, var(--np-sw-blue), var(--np-sw-cyan));
+}
+
+.np-md-simulation .np-md-distance-state {
+  display: flex;
+  min-height: 120px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-top: 1px solid rgba(51, 83, 126, 0.1);
+  padding: 18px;
+  color: #7890aa;
+  font-size: 11px;
+  text-align: center;
+}
+
+.np-md-simulation .np-md-distance-state svg {
+  width: 15px;
+  height: 15px;
+}
+
+.np-md-simulation .np-md-distance-chart {
+  border-top: 1px solid rgba(51, 83, 126, 0.1);
+}
+
+.np-md-simulation .np-md-distance-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 5px;
+  border-top: 1px solid rgba(51, 83, 126, 0.1);
+  padding: 8px 10px;
+  color: #7890aa;
+  font-size: 10.5px;
+}
+
+/* Refined result analysis modules */
+.np-md-simulation .np-md-results-body .np-md-result-tabs {
+  width: 100%;
+  gap: 10px;
+  margin-bottom: 16px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.np-md-simulation .np-md-result-tabs button {
+  position: relative;
+  min-height: 68px;
+  justify-content: flex-start;
+  gap: 11px;
+  overflow: hidden;
+  border: 1px solid rgba(51, 83, 126, 0.13);
+  border-radius: 10px;
+  padding: 9px 12px;
+  color: #617a94;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(247, 251, 255, 0.94)),
+    linear-gradient(rgba(37, 99, 235, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.035) 1px, transparent 1px);
+  background-size: auto, 16px 16px, 16px 16px;
+  box-shadow: 0 7px 20px rgba(30, 64, 175, 0.045);
+  text-align: left;
+}
+
+.np-md-simulation .np-md-result-tabs button::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, transparent);
+  content: "";
+}
+
+.np-md-simulation .np-md-result-tabs button.is-active {
+  border-color: rgba(37, 99, 235, 0.26);
+  color: var(--np-sw-blue-strong);
+  background:
+    linear-gradient(135deg, rgba(239, 246, 255, 0.98), rgba(236, 254, 255, 0.78)),
+    linear-gradient(rgba(37, 99, 235, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.045) 1px, transparent 1px);
+  background-size: auto, 16px 16px, 16px 16px;
+  box-shadow: 0 8px 22px rgba(37, 99, 235, 0.09), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.np-md-simulation .np-md-result-tabs button.is-active::after {
+  background: linear-gradient(90deg, #2563eb, #06b6d4 72%, transparent);
+}
+
+.np-md-simulation .np-md-result-tab-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  place-items: center;
+  border: 1px solid rgba(71, 100, 143, 0.15);
+  border-radius: 9px;
+  color: #617a94;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 4px 12px rgba(30, 64, 175, 0.06);
+}
+
+.np-md-simulation .np-md-result-tabs button.is-active .np-md-result-tab-icon {
+  border-color: rgba(37, 99, 235, 0.2);
+  color: #fff;
+  background: linear-gradient(145deg, #2563eb, #0891b2);
+  box-shadow: 0 6px 14px rgba(37, 99, 235, 0.2);
+}
+
+.np-md-simulation .np-md-result-tab-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.np-md-simulation .np-md-result-tab-copy {
+  display: block;
+  min-width: 0;
+}
+
+.np-md-simulation .np-md-result-tab-copy strong,
+.np-md-simulation .np-md-result-tab-copy small {
+  display: block;
+}
+
+.np-md-simulation .np-md-result-tab-copy strong {
+  color: inherit;
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 740;
+}
+
+.np-md-simulation .np-md-result-tab-copy small {
+  margin-top: 2px;
+  color: #879aae;
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.np-md-simulation .np-md-result-identity > div {
+  position: relative;
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  padding: 10px 12px;
+  background:
+    linear-gradient(120deg, rgba(247, 251, 255, 0.98), rgba(239, 246, 255, 0.66)),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.035) 1px, transparent 1px);
+  background-size: auto, 20px 20px;
+}
+
+.np-md-simulation .np-md-result-identity > div::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #22d3ee);
+  content: "";
+}
+
+.np-md-simulation .np-md-identity-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  place-items: center;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 9px;
+  color: #2563eb;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.np-md-simulation .np-md-result-identity .np-md-identity-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.np-md-simulation .np-md-identity-copy {
+  min-width: 0;
+}
+
+.np-md-simulation .np-md-identity-copy > span {
+  color: #7b91a7;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+}
+
+.np-md-simulation .np-md-result-identity .np-md-identity-copy > strong {
+  margin-top: 3px;
+  color: #173b5b;
+  font-size: 12px;
+}
+
+.np-md-simulation .np-md-result-identity em {
+  display: inline-flex;
+  min-height: 25px;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  border: 1px solid rgba(16, 185, 129, 0.18);
+  border-radius: 999px;
+  padding: 0 9px;
+  color: #3d7469;
+  background: rgba(240, 253, 249, 0.88);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-result-identity em i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
+}
+
+.np-md-simulation .np-md-result-kpis > div {
+  position: relative;
+  display: grid;
+  min-height: 88px;
+  grid-template-columns: 38px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  border-color: rgba(37, 99, 235, 0.13);
+  background: linear-gradient(138deg, #fff 8%, #f8fbff 70%, rgba(239, 246, 255, 0.82));
+  box-shadow: 0 8px 22px rgba(30, 64, 175, 0.045);
+}
+
+.np-md-simulation .np-md-result-kpis > div::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: linear-gradient(180deg, #2563eb, #22d3ee);
+  content: "";
+}
+
+.np-md-simulation .np-md-result-kpis > div.is-temperature::before {
+  background: linear-gradient(180deg, #0891b2, #34d399);
+}
+
+.np-md-simulation .np-md-result-kpis > div.is-energy::before {
+  background: linear-gradient(180deg, #4f46e5, #8b5cf6);
+}
+
+.np-md-simulation .np-md-kpi-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  border-radius: 10px;
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.np-md-simulation .np-md-result-kpis .is-temperature .np-md-kpi-icon {
+  border-color: rgba(8, 145, 178, 0.15);
+  color: #0891b2;
+  background: #ecfeff;
+}
+
+.np-md-simulation .np-md-result-kpis .is-energy .np-md-kpi-icon {
+  border-color: rgba(79, 70, 229, 0.14);
+  color: #4f46e5;
+  background: #eef2ff;
+}
+
+.np-md-simulation .np-md-kpi-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.np-md-simulation .np-md-result-kpis > div > div > span {
+  color: #7088a0;
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+
+.np-md-simulation .np-md-result-kpis > div > div > strong {
+  margin-top: 2px;
+  font-size: 19px;
+  line-height: 1.15;
+}
+
+.np-md-simulation .np-md-result-kpis > div > div > small {
+  font-size: 10px;
+}
+
+.np-md-simulation .np-md-kpi-signal {
+  width: 22px;
+  height: 24px;
+  opacity: 0.42;
+  background: linear-gradient(135deg, transparent 0 18%, #2563eb 19% 24%, transparent 25% 40%, #22d3ee 41% 46%, transparent 47% 62%, #2563eb 63% 68%, transparent 69%);
+  clip-path: polygon(0 60%, 18% 60%, 31% 22%, 48% 82%, 62% 46%, 100% 46%, 100% 58%, 70% 58%, 45% 100%, 30% 48%, 26% 72%, 0 72%);
+}
+
+.np-md-simulation .np-md-result-card {
+  border-color: rgba(37, 99, 235, 0.13);
+  box-shadow: 0 8px 24px rgba(30, 64, 175, 0.04);
+}
+
+.np-md-simulation .np-md-result-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: linear-gradient(110deg, #fbfdff, rgba(239, 246, 255, 0.62));
+}
+
+.np-md-simulation .np-md-card-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.np-md-simulation .np-md-card-mark {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  place-items: center;
+  border: 1px solid rgba(37, 99, 235, 0.15);
+  border-radius: 8px;
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.np-md-simulation .np-md-card-mark.is-cyan {
+  border-color: rgba(8, 145, 178, 0.16);
+  color: #0891b2;
+  background: #ecfeff;
+}
+
+.np-md-simulation .np-md-card-mark.is-violet {
+  border-color: rgba(124, 58, 237, 0.15);
+  color: #7c3aed;
+  background: #f5f3ff;
+}
+
+.np-md-simulation .np-md-card-mark svg {
+  width: 14px;
+  height: 14px;
+}
+
+.np-md-simulation .np-md-card-code {
+  color: #8aa0b5;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-compact-metrics > div {
+  position: relative;
+  padding: 11px 12px 11px 36px;
+  background: linear-gradient(140deg, #fff, #fbfdff);
+}
+
+.np-md-simulation .np-md-compact-metrics > div > span {
+  position: absolute;
+  top: 12px;
+  left: 11px;
+  color: #a0afbf;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.np-md-simulation .np-md-compact-metrics dd {
+  color: #173b5b;
+  font-size: 12px;
+}
+
+.np-md-simulation .np-md-scale-footnote {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-top: 1px solid rgba(51, 83, 126, 0.09);
+  padding: 10px 11px;
+  color: #71869c;
+  background: linear-gradient(120deg, #fbfdff, rgba(239, 246, 255, 0.58));
+}
+
+.np-md-simulation .np-md-scale-footnote > svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  margin-top: 2px;
+  color: #2563eb;
+}
+
+.np-md-simulation .np-md-scale-footnote strong,
+.np-md-simulation .np-md-scale-footnote span {
+  display: block;
+}
+
+.np-md-simulation .np-md-scale-footnote strong {
+  color: #365775;
+  font-size: 10.5px;
+}
+
+.np-md-simulation .np-md-scale-footnote span {
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.np-md-simulation .np-md-stage-tabs {
+  gap: 7px;
+  padding: 11px;
+}
+
+.np-md-simulation .np-md-stage-tabs button {
+  display: flex;
+  min-height: 47px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.np-md-simulation .np-md-stage-tabs button > span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  border: 1px solid rgba(71, 100, 143, 0.13);
+  border-radius: 6px;
+  color: #8297ab;
+  background: #f8fbff;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+}
+
+.np-md-simulation .np-md-stage-tabs button > strong {
+  overflow: hidden;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-stage-tabs button.is-active > span {
+  border-color: rgba(37, 99, 235, 0.22);
+  color: #fff;
+  background: linear-gradient(145deg, #2563eb, #0891b2);
+}
+
+.np-md-simulation .np-md-stage-detail > p {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  border: 1px solid rgba(8, 145, 178, 0.1);
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: linear-gradient(120deg, #f8fbff, #ecfeff);
+}
+
+.np-md-simulation .np-md-stage-detail > p svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  margin-top: 2px;
+  color: #0891b2;
+}
+
+.np-md-simulation .np-md-series-summary {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) minmax(360px, 1.8fr);
+  align-items: center;
+  gap: 13px;
+  overflow: hidden;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  border-radius: 11px;
+  padding: 12px 14px;
+  background:
+    linear-gradient(120deg, rgba(239, 246, 255, 0.92), rgba(236, 254, 255, 0.62), rgba(255, 255, 255, 0.98)),
+    linear-gradient(rgba(37, 99, 235, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.035) 1px, transparent 1px);
+  background-size: auto, 18px 18px, 18px 18px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+.np-md-simulation .np-md-series-summary__mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 11px;
+  color: #fff;
+  background: linear-gradient(145deg, #2563eb, #0891b2);
+  box-shadow: 0 7px 18px rgba(37, 99, 235, 0.2);
+}
+
+.np-md-simulation .np-md-series-summary__mark svg {
+  width: 19px;
+  height: 19px;
+}
+
+.np-md-simulation .np-md-series-summary > div > small,
+.np-md-simulation .np-md-series-summary > div > strong,
+.np-md-simulation .np-md-series-summary > div > p {
+  display: block;
+}
+
+.np-md-simulation .np-md-series-summary > div > small {
+  color: #0891b2;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+}
+
+.np-md-simulation .np-md-series-summary > div > strong {
+  margin-top: 2px;
+  color: #173b5b;
+  font-family: var(--font-heading);
+  font-size: 16px;
+}
+
+.np-md-simulation .np-md-series-summary > div > p {
+  margin: 2px 0 0;
+  color: #71869c;
+  font-size: 10.5px;
+}
+
+.np-md-simulation .np-md-series-summary dl {
+  display: grid;
+  grid-template-columns: 0.7fr 1.1fr 1.3fr;
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid rgba(51, 83, 126, 0.1);
+  border-radius: 8px;
+  background: rgba(51, 83, 126, 0.09);
+}
+
+.np-md-simulation .np-md-series-summary dl > div {
+  min-width: 0;
+  padding: 8px 9px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.np-md-simulation .np-md-series-summary dt {
+  color: #8297ab;
+  font-size: 9.5px;
+}
+
+.np-md-simulation .np-md-series-summary dd {
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: #294b69;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-series-selector button {
+  display: flex;
+  min-height: 50px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: linear-gradient(140deg, #fff, #f8fbff);
+}
+
+.np-md-simulation .np-md-series-selector button > span:last-child {
+  min-width: 0;
+}
+
+.np-md-simulation .np-md-series-signal {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border: 1px solid rgba(71, 100, 143, 0.13);
+  border-radius: 8px;
+  background: #f7faff;
+}
+
+.np-md-simulation .np-md-series-signal i {
+  width: 14px;
+  height: 8px;
+  background: linear-gradient(135deg, transparent 0 18%, #7890aa 19% 27%, transparent 28% 42%, #7890aa 43% 52%, transparent 53% 64%, #7890aa 65% 74%, transparent 75%);
+  clip-path: polygon(0 70%, 22% 70%, 38% 8%, 55% 88%, 70% 38%, 100% 38%, 100% 55%, 78% 55%, 53% 100%, 37% 38%, 29% 85%, 0 85%);
+}
+
+.np-md-simulation .np-md-series-selector button.is-active .np-md-series-signal {
+  border-color: rgba(37, 99, 235, 0.18);
+  background: linear-gradient(145deg, #2563eb, #0891b2);
+}
+
+.np-md-simulation .np-md-series-selector button.is-active .np-md-series-signal i {
+  background: linear-gradient(135deg, transparent 0 18%, #fff 19% 27%, transparent 28% 42%, #fff 43% 52%, transparent 53% 64%, #fff 65% 74%, transparent 75%);
+}
+
+.np-md-simulation .np-md-series-chart {
+  padding: 12px 14px 13px;
+}
+
+.np-md-simulation .np-md-series-chart svg {
+  border-color: rgba(37, 99, 235, 0.13);
+  background:
+    radial-gradient(circle at 76% 16%, rgba(34, 211, 238, 0.08), transparent 28%),
+    linear-gradient(145deg, #fbfdff, #f5f9fd);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.np-md-simulation .np-md-chart-frame {
+  fill: rgba(255, 255, 255, 0.34);
+  stroke: rgba(37, 99, 235, 0.09);
+  stroke-width: 1;
+}
+
+.np-md-simulation .np-md-chart-line-glow {
+  opacity: 0.08;
+}
+
+.np-md-simulation .np-md-chart-line {
+  filter: drop-shadow(0 2px 3px rgba(37, 99, 235, 0.12));
+}
+
+.np-md-simulation .np-md-chart-endpoint {
+  stroke-width: 1.5;
+}
+
+.np-md-simulation .np-md-chart-endpoint.is-final {
+  stroke-width: 2;
+  filter: drop-shadow(0 0 4px rgba(37, 99, 235, 0.32));
+}
+
+.np-md-simulation .np-md-chart-meta {
+  justify-content: flex-start;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.np-md-simulation .np-md-chart-meta > span {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgba(51, 83, 126, 0.1);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: #f8fbff;
+}
+
+.np-md-simulation .np-md-chart-meta > span.is-final {
+  border-color: rgba(37, 99, 235, 0.14);
+  color: #526f8d;
+  background: #eff6ff;
+}
+
+.np-md-simulation .np-md-trajectory-view {
+  padding: 12px;
+}
+
+.np-md-simulation .np-md-trajectory-view__toolbar {
+  margin-bottom: 10px;
+}
+
+.np-md-simulation .np-md-trajectory-canvas {
+  border-color: rgba(37, 99, 235, 0.18);
+  background:
+    radial-gradient(circle at 50% 48%, rgba(34, 211, 238, 0.1), transparent 42%),
+    #f8fbff;
+  box-shadow: inset 0 0 36px rgba(37, 99, 235, 0.035);
+}
+
+.np-md-simulation .np-md-trajectory-canvas::after {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.45), transparent);
+  box-shadow: 0 -18px 30px rgba(34, 211, 238, 0.045);
+  content: "";
+  pointer-events: none;
+}
+
+.np-md-simulation .np-md-canvas-hud {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  right: 11px;
+  left: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #6f879e;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+}
+
+.np-md-simulation .np-md-canvas-hud span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.np-md-simulation .np-md-canvas-hud span i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1), 0 0 7px rgba(16, 185, 129, 0.3);
+}
+
+.np-md-simulation .np-md-canvas-hud b {
+  font-weight: 700;
+}
+
+.np-md-simulation .np-md-canvas-corners {
+  position: absolute;
+  z-index: 3;
+  inset: 8px;
+  pointer-events: none;
+}
+
+.np-md-simulation .np-md-canvas-corners i {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-color: rgba(37, 99, 235, 0.36);
+}
+
+.np-md-simulation .np-md-canvas-corners i:nth-child(1) {
+  top: 0;
+  left: 0;
+  border-top: 1px solid;
+  border-left: 1px solid;
+}
+
+.np-md-simulation .np-md-canvas-corners i:nth-child(2) {
+  top: 0;
+  right: 0;
+  border-top: 1px solid;
+  border-right: 1px solid;
+}
+
+.np-md-simulation .np-md-canvas-corners i:nth-child(3) {
+  bottom: 0;
+  left: 0;
+  border-bottom: 1px solid;
+  border-left: 1px solid;
+}
+
+.np-md-simulation .np-md-canvas-corners i:nth-child(4) {
+  right: 0;
+  bottom: 0;
+  border-right: 1px solid;
+  border-bottom: 1px solid;
+}
+
+.np-md-simulation .np-md-canvas-axis {
+  position: absolute;
+  z-index: 3;
+  right: 13px;
+  bottom: 13px;
+  width: 35px;
+  height: 35px;
+  color: #7890aa;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  pointer-events: none;
+}
+
+.np-md-simulation .np-md-canvas-axis::before,
+.np-md-simulation .np-md-canvas-axis::after {
+  position: absolute;
+  bottom: 7px;
+  left: 7px;
+  width: 22px;
+  height: 1px;
+  background: rgba(37, 99, 235, 0.35);
+  transform-origin: left;
+  content: "";
+}
+
+.np-md-simulation .np-md-canvas-axis::after {
+  transform: rotate(-90deg);
+}
+
+.np-md-simulation .np-md-canvas-axis span {
+  position: absolute;
+}
+
+.np-md-simulation .np-md-canvas-axis .is-x {
+  right: 0;
+  bottom: 1px;
+}
+
+.np-md-simulation .np-md-canvas-axis .is-y {
+  top: 0;
+  left: 4px;
+}
+
+.np-md-simulation .np-md-canvas-axis .is-z {
+  right: 6px;
+  bottom: 19px;
+  color: #0891b2;
+}
+
+.np-md-simulation .np-md-trajectory-meta,
+.np-md-simulation .np-md-pbc-badge {
+  display: inline-flex;
+  min-height: 25px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(8, 145, 178, 0.14);
+  border-radius: 999px;
+  padding: 0 9px;
+  color: #52738e;
+  background: rgba(236, 254, 255, 0.72);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-trajectory-meta i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #06b6d4;
+}
+
+.np-md-simulation .np-md-pbc-badge {
+  border-color: rgba(124, 58, 237, 0.13);
+  color: #6d5a91;
+  background: #f5f3ff;
+}
+
+.np-md-simulation .np-md-pbc-badge svg {
+  width: 11px;
+  height: 11px;
+}
+
+.np-md-simulation .np-md-atom-pair-rail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 11px 10px 0;
+  color: #8095aa;
+}
+
+.np-md-simulation .np-md-atom-pair-rail span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 7px;
+  color: #2563eb;
+  background: #eff6ff;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.np-md-simulation .np-md-atom-pair-rail span:last-child {
+  border-color: rgba(124, 58, 237, 0.15);
+  color: #7c3aed;
+  background: #f5f3ff;
+}
+
+.np-md-simulation .np-md-atom-pair-rail i {
+  width: 28px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.18), rgba(124, 58, 237, 0.2));
+}
+
+.np-md-simulation .np-md-atom-pair-rail svg {
+  width: 13px;
+  height: 13px;
+  color: #8095aa;
+}
+
+.np-md-simulation .np-md-atom-fields {
+  padding-top: 9px;
+}
+
+.np-md-simulation .np-md-atom-fields label {
+  min-width: 0;
+  border: 1px solid rgba(51, 83, 126, 0.11);
+  border-radius: 8px;
+  padding: 9px;
+  background: linear-gradient(140deg, #fff, #f8fbff);
+}
+
+.np-md-simulation .np-md-atom-fields label > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.np-md-simulation .np-md-atom-fields label > span b {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 5px;
+  color: #fff;
+  background: #2563eb;
+  font-size: 8px;
+}
+
+.np-md-simulation .np-md-atom-fields label.is-b > span b {
+  background: #7c3aed;
+}
+
+.np-md-simulation .np-md-atom-fields input:focus {
+  border-color: rgba(37, 99, 235, 0.45);
+  outline: 3px solid rgba(37, 99, 235, 0.08);
+}
+
+.np-md-simulation .np-md-distance-actions {
+  margin-top: 10px;
+}
+
+.np-md-simulation .np-md-distance-state {
+  min-height: 132px;
+  gap: 10px;
+  background:
+    linear-gradient(145deg, rgba(248, 251, 255, 0.9), rgba(245, 243, 255, 0.55)),
+    linear-gradient(rgba(124, 58, 237, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(124, 58, 237, 0.028) 1px, transparent 1px);
+  background-size: auto, 18px 18px, 18px 18px;
+  text-align: left;
+}
+
+.np-md-simulation .np-md-distance-state__icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border: 1px solid rgba(124, 58, 237, 0.13);
+  border-radius: 10px;
+  color: #7c3aed;
+  background: #f5f3ff;
+}
+
+.np-md-simulation .np-md-distance-state .np-md-distance-state__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.np-md-simulation .np-md-distance-state strong,
+.np-md-simulation .np-md-distance-state span {
+  display: block;
+}
+
+.np-md-simulation .np-md-distance-state strong {
+  color: #365775;
+  font-size: 11px;
+}
+
+.np-md-simulation .np-md-distance-state div > span {
+  margin-top: 3px;
+  color: #8195aa;
+  font-size: 10.5px;
+}
+
+.np-md-simulation .np-md-distance-stats {
+  justify-content: flex-start;
+  gap: 7px;
+  background: #fbfdff;
+}
+
+.np-md-simulation .np-md-distance-stats span {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(51, 83, 126, 0.1);
+  border-radius: 999px;
+  padding: 0 8px;
+  background: #fff;
+}
+
+.np-md-simulation .np-md-distance-stats span i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #7c3aed;
+  opacity: 0.65;
+}
+
+/* Forcefield picker follows the forward-polymerization class selector. */
+.np-md-simulation .np-md-parameter-group {
+  position: relative;
+}
+
+.np-md-simulation .np-md-parameter-group:has(.np-md-forcefield-picker) {
+  z-index: 3;
+  overflow: visible;
+}
+
+.np-md-simulation .np-md-parameters:has(.np-md-forcefield-picker.is-open),
+.np-md-simulation .np-md-parameters__form:has(.np-md-forcefield-picker.is-open) {
+  overflow: visible;
+}
+
+.np-md-simulation .np-md-forcefield-picker {
+  position: relative;
+  z-index: 5;
+}
+
+.np-md-simulation .np-md-forcefield-picker__control {
+  position: relative;
+}
+
+.np-md-simulation .np-md-forcefield-picker__trigger {
+  display: grid;
+  width: 100%;
+  height: 50px;
+  grid-template-columns: 31px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(51, 83, 126, 0.2);
+  border-radius: 9px;
+  padding: 0 11px 0 9px;
+  color: var(--np-sw-ink);
+  background: linear-gradient(180deg, #fff, #fbfdff);
+  box-shadow: 0 1px 2px rgba(15, 36, 63, 0.035), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+}
+
+.np-md-simulation .np-md-forcefield-picker__trigger:hover {
+  border-color: rgba(37, 99, 235, 0.38);
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(30, 75, 122, 0.07);
+}
+
+.np-md-simulation .np-md-forcefield-picker__trigger:focus-visible,
+.np-md-simulation .np-md-forcefield-picker.is-open .np-md-forcefield-picker__trigger {
+  border-color: rgba(37, 99, 235, 0.58);
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08), 0 5px 14px rgba(30, 75, 122, 0.08);
+}
+
+.np-md-simulation .np-md-forcefield-picker.has-error .np-md-forcefield-picker__trigger {
+  border-color: rgba(220, 38, 38, 0.48);
+}
+
+.np-md-simulation .np-md-forcefield-picker__icon {
+  display: inline-flex;
+  width: 31px;
+  height: 31px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(37, 99, 235, 0.12);
+  border-radius: 8px;
+  color: var(--np-sw-blue-strong);
+  background: linear-gradient(145deg, #eef5ff, #edfaff);
+}
+
+.np-md-simulation .np-md-forcefield-picker__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.np-md-simulation .np-md-forcefield-picker__selection {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.np-md-simulation .np-md-forcefield-picker__selection strong {
+  overflow: hidden;
+  color: #173a5d;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-forcefield-picker__selection small {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: #748aa2;
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-forcefield-picker__chevron {
+  width: 16px;
+  height: 16px;
+  color: #6c829a;
+  transition: transform 150ms ease, color 150ms ease;
+}
+
+.np-md-simulation .np-md-forcefield-picker.is-open .np-md-forcefield-picker__chevron {
+  color: var(--np-sw-blue-strong);
+  transform: rotate(180deg);
+}
+
+.np-md-simulation .np-md-forcefield-picker__list {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 7px);
+  right: 0;
+  bottom: auto;
+  left: 0;
+  max-height: 286px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid rgba(51, 83, 126, 0.18);
+  border-radius: 10px;
+  padding: 5px;
+  background: rgba(255, 255, 255, 0.985);
+  box-shadow: 0 18px 42px rgba(20, 52, 88, 0.16), 0 3px 10px rgba(20, 52, 88, 0.08);
+  backdrop-filter: blur(10px);
+}
+
+.np-md-simulation .np-md-forcefield-picker__option {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.np-md-simulation .np-md-forcefield-picker__option + .np-md-forcefield-picker__option {
+  margin-top: 2px;
+}
+
+.np-md-simulation .np-md-forcefield-picker__option.is-active {
+  border-color: rgba(37, 99, 235, 0.1);
+  background: #f3f8ff;
+}
+
+.np-md-simulation .np-md-forcefield-picker__option[aria-selected="true"] {
+  border-color: rgba(37, 99, 235, 0.17);
+  background: linear-gradient(90deg, #eef5ff, #f3fbff);
+}
+
+.np-md-simulation .np-md-forcefield-picker__option > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.np-md-simulation .np-md-forcefield-picker__option strong {
+  overflow: hidden;
+  color: #244461;
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-forcefield-picker__option small {
+  color: #7b90a6;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+/* Curves use one continuous analysis surface instead of nested cards. */
+.np-md-simulation .np-md-results-body .np-md-curves-panel {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(37, 99, 235, 0.13);
+  border-radius: 11px;
+  background:
+    radial-gradient(circle at 74% 10%, rgba(34, 211, 238, 0.07), transparent 30%),
+    linear-gradient(145deg, #fbfdff, #f6faff);
+  box-shadow: 0 8px 24px rgba(30, 64, 175, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.np-md-simulation .np-md-results-body .np-md-curves-panel .np-md-series-summary {
+  border: 0;
+  border-bottom: 1px solid rgba(51, 83, 126, 0.08);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.np-md-simulation .np-md-results-body .np-md-curves-panel .np-md-series-selector {
+  gap: 4px;
+  border-bottom: 1px solid rgba(51, 83, 126, 0.075);
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.np-md-simulation .np-md-results-body .np-md-curves-panel .np-md-series-selector button {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.np-md-simulation .np-md-results-body .np-md-curves-panel .np-md-series-selector button:hover {
+  border-color: rgba(37, 99, 235, 0.1);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.np-md-simulation .np-md-results-body .np-md-curves-panel .np-md-series-selector button.is-active {
+  border-color: rgba(37, 99, 235, 0.15);
+  background: rgba(239, 246, 255, 0.86);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.np-md-simulation .np-md-results-body .np-md-series-card {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.np-md-simulation .np-md-results-body .np-md-series-card > header {
+  border: 0;
+  padding-bottom: 4px;
+  background: transparent;
+}
+
+.np-md-simulation .np-md-results-body .np-md-series-card .np-md-series-chart {
+  padding-top: 2px;
+}
+
+.np-md-simulation .np-md-results-body .np-md-series-card .np-md-series-chart svg {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.np-md-simulation .np-md-results-body .np-md-series-card .np-md-chart-frame {
+  fill: rgba(255, 255, 255, 0.34);
+  stroke: none;
+}
+
+.np-md-simulation .np-md-results-body .np-md-series-card .np-md-chart-grid line {
+  stroke: rgba(71, 100, 143, 0.11);
+  stroke-dasharray: 2 5;
+}
+
+.np-md-simulation .np-md-results-body .np-md-series-card .np-md-chart-meta {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(51, 83, 126, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.np-md-simulation .np-md-results-body .np-md-series-card .np-md-chart-meta > span {
+  min-height: 29px;
+  border: 0;
+  border-radius: 0;
+  padding: 0 10px;
+  background: transparent;
+}
+
+.np-md-simulation .np-md-results-body .np-md-series-card .np-md-chart-meta > span + span {
+  border-left: 1px solid rgba(51, 83, 126, 0.075);
+}
+
+/* The distance result replaces a reserved slot; it never changes the row height. */
+.np-md-simulation .np-md-results-body .np-md-trajectory-explorer {
+  align-items: stretch;
+}
+
+.np-md-simulation .np-md-results-body .np-md-trajectory-explorer > .np-md-result-card {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.np-md-simulation .np-md-results-body .np-md-trajectory-explorer > .np-md-result-card:first-child .np-md-trajectory-view {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.np-md-simulation .np-md-results-body .np-md-trajectory-explorer > .np-md-result-card:first-child .np-md-trajectory-canvas {
+  height: auto;
+  min-height: 410px;
+  flex: 1;
+}
+
+.np-md-simulation .np-md-distance-panel {
+  overflow: hidden;
+}
+
+.np-md-simulation .np-md-distance-output {
+  position: relative;
+  min-height: 360px;
+  flex: 1 1 360px;
+  overflow: hidden;
+  border-top: 1px solid rgba(51, 83, 126, 0.08);
+  background:
+    radial-gradient(circle at 50% 38%, rgba(124, 58, 237, 0.055), transparent 46%),
+    linear-gradient(145deg, rgba(248, 251, 255, 0.9), rgba(250, 248, 255, 0.76));
+}
+
+.np-md-simulation .np-md-distance-output > .np-md-distance-state,
+.np-md-simulation .np-md-distance-output > .np-md-distance-chart {
+  position: absolute;
+  inset: 0;
+}
+
+.np-md-simulation .np-md-distance-output .np-md-distance-state {
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+}
+
+.np-md-simulation .np-md-distance-output .np-md-distance-chart {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+  border: 0;
+}
+
+.np-md-simulation .np-md-distance-output .np-md-series-chart {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+  padding: 7px 4px 6px;
+}
+
+.np-md-simulation .np-md-distance-output .np-md-series-chart svg {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border-color: rgba(124, 58, 237, 0.09);
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.np-md-simulation .np-md-distance-output .np-md-chart-meta {
+  flex-wrap: nowrap;
+  gap: 3px;
+  margin-top: 5px;
+}
+
+.np-md-simulation .np-md-distance-output .np-md-chart-meta > span {
+  min-width: 0;
+  min-height: 23px;
+  overflow: hidden;
+  padding: 0 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-md-simulation .np-md-distance-output .np-md-distance-stats {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.np-md-simulation .np-md-distance-output .np-md-distance-stats span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container np-sw-workbench (max-width: 760px) {
+  .np-md-simulation .np-md-structure-input {
+    grid-template-columns: 1fr;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-progress-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-overview-results,
+  .np-md-simulation .np-md-results-body .np-md-trajectory-explorer {
+    grid-template-columns: 1fr;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-series-selector {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-result-identity {
+    grid-template-columns: minmax(0, 1.4fr) minmax(150px, 0.6fr);
+  }
+
+  .np-md-simulation .np-md-series-summary {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .np-md-simulation .np-md-series-summary dl {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 899px) {
+  .np-md-simulation .np-md-parameters:has(.np-md-forcefield-picker.is-open) {
+    overflow: hidden;
+  }
+
+  .np-md-simulation .np-md-parameters__form:has(.np-md-forcefield-picker.is-open) {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .np-md-simulation .np-md-forcefield-picker__list {
+    position: relative;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    margin-top: 7px;
+  }
+}
+
+@container np-sw-workbench (max-width: 520px) {
+  .np-md-simulation .np-md-view-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .np-md-simulation .np-md-input-actions .np-md-edit-structure {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .np-md-simulation .np-md-workspace-tabs {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .np-md-simulation .np-md-workspace-tabs button {
+    min-width: 0;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .np-md-simulation .np-md-input-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .np-md-simulation .np-md-input-footer code {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .np-md-simulation .np-md-results-header .np-md-results-toolbar {
+    width: 100%;
+  }
+
+  .np-md-simulation .np-md-parameter-grid.is-thermo,
+  .np-md-simulation .np-md-parameter-grid.is-scale,
+  .np-md-simulation .np-md-results-body .np-md-progress-steps,
+  .np-md-simulation .np-md-results-body .np-md-result-identity,
+  .np-md-simulation .np-md-results-body .np-md-result-kpis,
+  .np-md-simulation .np-md-results-body .np-md-series-selector,
+  .np-md-simulation .np-md-atom-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .np-md-simulation .np-md-result-tabs button {
+    min-height: 58px;
+    justify-content: center;
+    padding: 7px;
+  }
+
+  .np-md-simulation .np-md-result-tab-icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .np-md-simulation .np-md-result-tab-copy small {
+    display: none;
+  }
+
+  .np-md-simulation .np-md-series-summary {
+    padding: 10px;
+  }
+
+  .np-md-simulation .np-md-series-summary dl {
+    grid-template-columns: 1fr;
+  }
+
+  .np-md-simulation .np-md-result-card > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .np-md-simulation .np-md-card-code,
+  .np-md-simulation .np-md-trajectory-meta,
+  .np-md-simulation .np-md-pbc-badge {
+    margin-left: 39px;
+  }
+
+  .np-md-simulation .np-md-parameters__footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .np-md-simulation .np-md-parameters__footer > span,
+  .np-md-simulation .np-md-parameters__footer button {
+    width: 100%;
+  }
+
+  .np-md-simulation .np-md-results-body {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-trajectory-canvas {
+    height: 320px;
+  }
+}
+
+@media (max-width: 899px) {
+  .np-md-simulation {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .np-md-simulation .np-md-page {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    padding: 52px 0 0;
+  }
+
+  .np-md-simulation .np-sw-page-title {
+    position: absolute;
+    top: 12px;
+    left: 14px;
+    padding: 0;
+    font-size: 18px;
+    line-height: 30px;
+  }
+
+  .np-md-simulation .np-sw-layout {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    margin: 0;
+  }
+
+  .np-md-simulation .np-sw-workspace {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .np-md-simulation .np-md-scroll-region {
+    height: 100%;
+    padding-bottom: 16px;
+  }
+
+  .np-md-simulation .np-md-content-column,
+  .np-md-simulation .np-md-module-toolbar {
+    width: calc(100% - 24px);
+  }
+
+  .np-md-simulation .np-md-module-toolbar {
+    margin-bottom: 10px;
+  }
+
+  .np-md-simulation .np-md-parameters {
+    top: auto;
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    width: auto;
+    max-height: min(78vh, 680px);
+    max-height: min(78dvh, 680px);
+  }
+
+  .np-md-simulation .np-md-view-header,
+  .np-md-simulation .np-md-section {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .np-md-simulation .np-md-demo-boundary,
+  .np-md-simulation .np-md-service-message {
+    margin-right: 16px;
+    margin-left: 16px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-md-simulation {
+    --np-sw-layout-max-width: 1560px;
+    --np-sw-grid-size: 48px;
+  }
+
+  .np-md-simulation .np-md-page {
+    padding: 84px 0 0;
+  }
+
+  .np-md-simulation .np-md-content-column,
+  .np-md-simulation .np-md-module-toolbar {
+    width: min(calc(100% - 72px), var(--np-sw-layout-max-width));
+  }
+
+  .np-md-simulation .np-sw-page-title {
+    top: 30px;
+    left: 36px;
+    font-size: 28px;
+    line-height: 42px;
+  }
+
+  .np-md-simulation .np-md-module-toolbar {
+    min-height: 54px;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .np-md-simulation .np-md-module-toolbar::before {
+    width: min(270px, 22vw);
+  }
+
+  .np-md-simulation .np-md-parameter-trigger {
+    min-height: 54px;
+    border-radius: 9px;
+    padding: 0 18px;
+    font-size: 18px;
+  }
+
+  .np-md-simulation .np-md-parameter-trigger svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .np-md-simulation .np-md-workspace-tabs {
+    grid-template-columns: repeat(2, minmax(225px, 1fr));
+    gap: 6px;
+    border-radius: 15px;
+    padding: 6px;
+  }
+
+  .np-md-simulation .np-md-workspace-navigation {
+    min-height: 87px;
+    padding: 13px 27px;
+  }
+
+  .np-md-simulation .np-md-workspace-tabs button {
+    min-height: 54px;
+    gap: 10px;
+    border-radius: 10px;
+    padding: 0 21px;
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-workspace-tabs button svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .np-md-simulation .np-md-workspace-tabs button small {
+    padding: 3px 9px;
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-parameters {
+    top: 72px;
+    right: max(36px, calc((100% - var(--np-sw-layout-max-width)) / 2));
+    width: min(900px, calc(100% - 72px));
+  }
+
+  .np-md-simulation .np-md-parameters .np-sw-popover__header h2 {
+    font-size: 24px;
+    line-height: 32px;
+  }
+
+  .np-md-simulation .np-md-parameters .np-sw-popover__header small {
+    font-size: 15px;
+    line-height: 1.45;
+  }
+
+  .np-md-simulation .np-md-parameters__form {
+    padding: 21px;
+  }
+
+  .np-md-simulation .np-md-parameter-groups {
+    gap: 15px;
+  }
+
+  .np-md-simulation .np-md-parameter-group {
+    border-radius: 15px;
+  }
+
+  .np-md-simulation .np-md-parameter-group > header {
+    gap: 13px;
+    padding: 15px 16px;
+  }
+
+  .np-md-simulation .np-md-parameter-group > header > span {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+  }
+
+  .np-md-simulation .np-md-parameter-group > header svg {
+    width: 21px;
+    height: 21px;
+  }
+
+  .np-md-simulation .np-md-parameter-group > header strong {
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-parameter-group > header small {
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-parameter-grid {
+    gap: 16px;
+    padding: 18px;
+  }
+
+  .np-md-simulation .np-md-parameters .np-md-field > span {
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-parameters .np-md-number-input input {
+    font-size: 16px;
+  }
+
+  .np-md-simulation .np-md-parameters .np-md-number-input small {
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-parameters__footer {
+    gap: 18px;
+    margin-top: 18px;
+    padding-top: 18px;
+  }
+
+  .np-md-simulation .np-md-parameters__footer > div strong {
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-parameters__footer > div small {
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-parameters__footer > span {
+    gap: 10px;
+  }
+
+  .np-md-simulation .np-md-parameters__footer button {
+    min-height: 52px;
+    padding: 0 18px;
+    font-size: 16px;
+  }
+
+  .np-md-simulation .np-md-service-status > span,
+  .np-md-simulation .np-md-service-status > button {
+    min-height: 54px;
+    gap: 10px;
+    border-radius: 9px;
+    padding: 0 16px;
+    font-size: 18px;
+  }
+
+  .np-md-simulation .np-md-service-status svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .np-md-simulation .np-md-ready-dot {
+    width: 8px;
+    height: 8px;
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.11), 0 0 15px rgba(16, 185, 129, 0.38);
+  }
+
+  .np-md-simulation .np-md-scroll-region {
+    padding-bottom: 88px;
+  }
+
+  .np-md-simulation .np-md-input-footer {
+    gap: 27px;
+    padding: 22px 36px 27px;
+  }
+
+  .np-md-simulation .np-md-input-footer strong {
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-input-footer span {
+    margin-top: 3px;
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-input-footer code {
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-results-surface {
+    min-height: 840px;
+  }
+
+  .np-md-simulation .np-md-results-body {
+    padding: 24px 27px 30px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-result-tabs {
+    width: min(690px, 100%);
+    margin-bottom: 21px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-progress-overview {
+    padding: 24px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-overview-results,
+  .np-md-simulation .np-md-results-body .np-md-trajectory-explorer {
+    gap: 21px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-result-kpis > div {
+    padding: 18px 21px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-result-kpis strong {
+    font-size: 28px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-result-card > header {
+    padding: 18px 21px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-result-card > header h3 {
+    font-size: 20px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-series-selector {
+    gap: 12px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-series-chart svg,
+  .np-md-simulation .np-md-results-body .np-md-chart-meta {
+    width: min(100%, 1230px);
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-trajectory-canvas {
+    height: 615px;
+  }
+
+  .np-md-simulation .np-md-workbench-surface {
+    border-radius: 20px;
+    box-shadow: 0 18px 50px rgba(30, 64, 175, 0.075), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  }
+
+  .np-md-simulation .np-md-view-header {
+    min-height: 123px;
+    gap: 30px;
+    padding: 22px 27px;
+  }
+
+  .np-md-simulation .np-md-view-heading {
+    gap: 18px;
+  }
+
+  .np-md-simulation .np-md-surface-mark {
+    width: 60px;
+    height: 60px;
+    border-radius: 14px;
+  }
+
+  .np-md-simulation .np-md-surface-mark svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .np-md-simulation .np-md-view-heading h2 {
+    font-size: 24px;
+  }
+
+  .np-md-simulation .np-md-view-heading p {
+    margin-top: 6px;
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-view-badge {
+    min-height: 46px;
+    gap: 9px;
+    border-radius: 10px;
+    padding: 0 15px;
+    font-size: 16px;
+  }
+
+  .np-md-simulation .np-md-view-badge svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .np-md-simulation .np-md-demo-boundary,
+  .np-md-simulation .np-md-service-message {
+    gap: 12px;
+    margin: 21px 34px 0;
+    padding: 13px 16px;
+    border-radius: 12px;
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-demo-boundary svg,
+  .np-md-simulation .np-md-service-message svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .np-md-simulation .np-md-section {
+    padding: 28px 34px 31px;
+  }
+
+  .np-md-simulation .np-md-section__header {
+    gap: 16px;
+    margin-bottom: 21px;
+  }
+
+  .np-md-simulation .np-md-section__header > span {
+    width: 45px;
+    height: 45px;
+    flex-basis: 45px;
+    border-radius: 11px;
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-section__header h2 {
+    font-size: 22px;
+  }
+
+  .np-md-simulation .np-md-section__header p {
+    margin-top: 5px;
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-structure-input {
+    gap: 18px;
+  }
+
+  .np-md-simulation .np-md-structure-editor,
+  .np-md-simulation .np-md-preview {
+    border-radius: 15px;
+  }
+
+  .np-md-simulation .np-md-structure-editor {
+    padding: 19px;
+  }
+
+  .np-md-simulation .np-md-structure-editor > label,
+  .np-md-simulation .np-md-field > span,
+  .np-md-simulation .np-md-atom-fields label > span {
+    margin-bottom: 9px;
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-structure-editor textarea {
+    min-height: 174px;
+    border-radius: 12px;
+    padding: 15px 16px;
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-input-actions {
+    gap: 9px;
+    margin-top: 12px;
+  }
+
+  .np-md-simulation .np-md-input-actions button,
+  .np-md-simulation .np-md-trajectory-view__toolbar button,
+  .np-md-simulation .np-md-distance-actions button {
+    min-height: 46px;
+    gap: 9px;
+    border-radius: 10px;
+    padding: 0 15px;
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-input-actions button svg,
+  .np-md-simulation .np-md-trajectory-view__toolbar button svg,
+  .np-md-simulation .np-md-distance-actions button svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .np-md-simulation .np-md-input-actions .is-icon {
+    width: 46px;
+  }
+
+  .np-md-simulation .np-md-field-hint,
+  .np-md-simulation .np-md-field-error,
+  .np-md-simulation .np-md-field > em {
+    margin-top: 10px;
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-preview__label {
+    min-height: 46px;
+    padding: 0 15px;
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-preview__label small {
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-preview__canvas {
+    height: 264px;
+    padding: 15px;
+  }
+
+  .np-md-simulation .np-md-preview__structure,
+  .np-md-simulation .np-md-preview__image {
+    max-height: 234px;
+  }
+
+  .np-md-simulation .np-md-preview__state {
+    gap: 12px;
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-preview__state svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .np-md-simulation .np-md-number-input,
+  .np-md-simulation .np-md-forcefield-input {
+    height: 66px;
+    border-radius: 12px;
+  }
+
+  .np-md-simulation .np-md-number-input input,
+  .np-md-simulation .np-md-forcefield-input input {
+    padding: 0 16px;
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-number-input small {
+    padding: 0 15px;
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-forcefield-input > svg {
+    width: 21px;
+    height: 21px;
+    margin-left: 16px;
+  }
+
+  .np-md-simulation .np-md-results-toolbar,
+  .np-md-simulation .np-md-result-tabs,
+  .np-md-simulation .np-md-progress-overview,
+  .np-md-simulation .np-md-overview-results,
+  .np-md-simulation .np-md-curves-panel,
+  .np-md-simulation .np-md-trajectory-explorer {
+    gap: 13px;
+  }
+
+  .np-md-simulation .np-md-result-tabs {
+    gap: 6px;
+    margin-bottom: 15px;
+    border-radius: 13px;
+    padding: 6px;
+  }
+
+  .np-md-simulation .np-md-result-tabs button {
+    min-height: 48px;
+    gap: 7px;
+    border-radius: 9px;
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-result-tabs svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .np-md-simulation .np-md-progress-overview,
+  .np-md-simulation .np-md-result-card,
+  .np-md-simulation .np-md-request-snapshot {
+    border-radius: 14px;
+  }
+
+  .np-md-simulation .np-md-progress-overview {
+    padding: 19px;
+  }
+
+  .np-md-simulation .np-md-progress-heading strong {
+    font-size: 22px;
+  }
+
+  .np-md-simulation .np-md-progress-heading p,
+  .np-md-simulation .np-md-progress-steps li strong,
+  .np-md-simulation .np-md-result-card > header p {
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-progress-heading b {
+    font-size: 40px;
+  }
+
+  .np-md-simulation .np-md-progress-track {
+    height: 10px;
+  }
+
+  .np-md-simulation .np-md-progress-steps {
+    gap: 9px;
+  }
+
+  .np-md-simulation .np-md-progress-steps li {
+    gap: 12px;
+    border-radius: 12px;
+    padding: 12px;
+  }
+
+  .np-md-simulation .np-md-progress-steps li > span {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-progress-steps li p {
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-result-identity,
+  .np-md-simulation .np-md-result-kpis,
+  .np-md-simulation .np-md-series-selector {
+    gap: 10px;
+  }
+
+  .np-md-simulation .np-md-result-identity > div,
+  .np-md-simulation .np-md-result-kpis > div {
+    border-radius: 12px;
+    padding: 13px;
+  }
+
+  .np-md-simulation .np-md-result-identity span,
+  .np-md-simulation .np-md-result-kpis span {
+    font-size: 12px;
+  }
+
+  .np-md-simulation .np-md-result-identity strong {
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-result-kpis strong {
+    font-size: 22px;
+  }
+
+  .np-md-simulation .np-md-result-kpis small,
+  .np-md-simulation .np-md-chart-meta,
+  .np-md-simulation .np-md-distance-stats {
+    font-size: 12px;
+  }
+
+  .np-md-simulation .np-md-result-card > header {
+    padding: 15px 16px;
+  }
+
+  .np-md-simulation .np-md-result-card > header h3 {
+    font-size: 18px;
+  }
+
+  .np-md-simulation .np-md-compact-metrics > div,
+  .np-md-simulation .np-md-stage-detail,
+  .np-md-simulation .np-md-request-snapshot dl {
+    padding: 14px 15px;
+  }
+
+  .np-md-simulation .np-md-compact-metrics dt,
+  .np-md-simulation .np-md-stage-detail dt,
+  .np-md-simulation .np-md-request-snapshot dt {
+    font-size: 12px;
+  }
+
+  .np-md-simulation .np-md-compact-metrics dd,
+  .np-md-simulation .np-md-stage-detail dd,
+  .np-md-simulation .np-md-request-snapshot dd {
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-stage-tabs,
+  .np-md-simulation .np-md-trajectory-view,
+  .np-md-simulation .np-md-atom-fields {
+    gap: 8px;
+    padding: 13px;
+  }
+
+  .np-md-simulation .np-md-stage-tabs button,
+  .np-md-simulation .np-md-series-selector button {
+    border-radius: 10px;
+    padding: 10px;
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-stage-detail > p,
+  .np-md-simulation .np-md-request-snapshot summary {
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-series-chart {
+    padding: 12px 13px 13px;
+  }
+
+  .np-md-simulation .np-md-trajectory-canvas {
+    height: 450px;
+    border-radius: 12px;
+  }
+
+  .np-md-simulation .np-md-atom-fields input {
+    height: 55px;
+    border-radius: 10px;
+    padding: 0 13px;
+    font-size: 16px;
+  }
+
+  .np-md-simulation .np-md-atom-fields small {
+    min-height: 40px;
+    font-size: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np-md-simulation .np-md-progress-track i {
+    transition: none;
+  }
+}
+
+@container np-sw-workbench (max-width: 760px) {
+  .np-md-simulation .np-md-results-body .np-md-trajectory-explorer > .np-md-result-card:first-child .np-md-trajectory-canvas {
+    min-height: 320px;
+  }
+
+  .np-md-simulation .np-md-distance-output {
+    min-height: 280px;
+    flex-basis: 280px;
+  }
+}
+
+@container np-sw-workbench (max-width: 520px) {
+  .np-md-simulation .np-md-forcefield-picker__list {
+    max-height: 230px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-series-card .np-md-chart-meta {
+    flex-wrap: wrap;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-series-card .np-md-chart-meta > span {
+    width: 50%;
+    border-left: 0;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-md-simulation .np-md-forcefield-picker__trigger {
+    height: 75px;
+    grid-template-columns: 46px minmax(0, 1fr) 27px;
+    gap: 15px;
+    border-radius: 13px;
+    padding: 0 16px 0 13px;
+  }
+
+  .np-md-simulation .np-md-forcefield-picker__icon {
+    width: 46px;
+    height: 46px;
+    border-radius: 12px;
+  }
+
+  .np-md-simulation .np-md-forcefield-picker__icon svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .np-md-simulation .np-md-forcefield-picker__selection strong {
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-forcefield-picker__selection small {
+    gap: 9px;
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-forcefield-picker__chevron {
+    width: 24px;
+    height: 24px;
+  }
+
+  .np-md-simulation .np-md-forcefield-picker__list {
+    top: calc(100% + 10px);
+    bottom: auto;
+    max-height: 360px;
+    border-radius: 15px;
+    padding: 7px;
+  }
+
+  .np-md-simulation .np-md-forcefield-picker__option {
+    min-height: 64px;
+    border-radius: 10px;
+    padding: 10px 15px;
+  }
+
+  .np-md-simulation .np-md-forcefield-picker__option strong {
+    font-size: 16px;
+  }
+
+  .np-md-simulation .np-md-forcefield-picker__option small {
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-trajectory-explorer {
+    align-items: stretch;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-trajectory-explorer > .np-md-result-card:first-child .np-md-trajectory-canvas {
+    min-height: 615px;
+  }
+
+  .np-md-simulation .np-md-distance-output {
+    min-height: 540px;
+    flex-basis: 540px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-md-simulation .np-md-forcefield-select {
+    height: 66px;
+    border-radius: 12px;
+  }
+
+  .np-md-simulation .np-md-forcefield-select select {
+    padding-right: 51px;
+    padding-left: 54px;
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-forcefield-select > svg:first-child {
+    left: 16px;
+    width: 21px;
+    height: 21px;
+  }
+
+  .np-md-simulation .np-md-forcefield-select .np-md-select-chevron {
+    right: 16px;
+    width: 21px;
+    height: 21px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-result-tabs {
+    gap: 15px;
+    margin-bottom: 24px;
+  }
+
+  .np-md-simulation .np-md-result-tabs button {
+    min-height: 96px;
+    gap: 16px;
+    border-radius: 15px;
+    padding: 13px 18px;
+    background-size: auto, 24px 24px, 24px 24px;
+  }
+
+  .np-md-simulation .np-md-result-tab-icon {
+    width: 51px;
+    height: 51px;
+    border-radius: 13px;
+  }
+
+  .np-md-simulation .np-md-result-tab-icon svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .np-md-simulation .np-md-result-tab-copy strong {
+    font-size: 19px;
+  }
+
+  .np-md-simulation .np-md-result-tab-copy small {
+    margin-top: 3px;
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-result-identity > div {
+    min-height: 96px;
+    gap: 15px;
+    padding: 15px 18px;
+    background-size: auto, 30px 30px;
+  }
+
+  .np-md-simulation .np-md-identity-icon {
+    width: 51px;
+    height: 51px;
+    border-radius: 13px;
+  }
+
+  .np-md-simulation .np-md-result-identity .np-md-identity-icon svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .np-md-simulation .np-md-identity-copy > span {
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-result-identity .np-md-identity-copy > strong {
+    margin-top: 5px;
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-result-identity em {
+    min-height: 37px;
+    gap: 9px;
+    padding: 0 13px;
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-result-identity em i {
+    width: 8px;
+    height: 8px;
+  }
+
+  .np-md-simulation .np-md-result-kpis > div {
+    min-height: 132px;
+    grid-template-columns: 57px minmax(0, 1fr) 33px;
+    gap: 15px;
+  }
+
+  .np-md-simulation .np-md-kpi-icon {
+    width: 57px;
+    height: 57px;
+    border-radius: 15px;
+  }
+
+  .np-md-simulation .np-md-kpi-icon svg {
+    width: 25px;
+    height: 25px;
+  }
+
+  .np-md-simulation .np-md-result-kpis > div > div > span {
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-results-body .np-md-result-kpis > div > div > strong {
+    margin-top: 3px;
+    font-size: 28px;
+  }
+
+  .np-md-simulation .np-md-result-kpis > div > div > small {
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-kpi-signal {
+    width: 33px;
+    height: 36px;
+  }
+
+  .np-md-simulation .np-md-card-heading {
+    gap: 13px;
+  }
+
+  .np-md-simulation .np-md-card-mark {
+    width: 45px;
+    height: 45px;
+    border-radius: 12px;
+  }
+
+  .np-md-simulation .np-md-card-mark svg {
+    width: 21px;
+    height: 21px;
+  }
+
+  .np-md-simulation .np-md-card-code {
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-compact-metrics > div {
+    padding: 16px 18px 16px 54px;
+  }
+
+  .np-md-simulation .np-md-compact-metrics > div > span {
+    top: 18px;
+    left: 16px;
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-compact-metrics dd {
+    font-size: 17px;
+  }
+
+  .np-md-simulation .np-md-scale-footnote {
+    gap: 12px;
+    padding: 15px 16px;
+  }
+
+  .np-md-simulation .np-md-scale-footnote > svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .np-md-simulation .np-md-scale-footnote strong {
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-scale-footnote span {
+    margin-top: 3px;
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-stage-tabs {
+    gap: 10px;
+    padding: 16px;
+  }
+
+  .np-md-simulation .np-md-stage-tabs button {
+    min-height: 70px;
+    gap: 12px;
+    padding: 10px 13px;
+  }
+
+  .np-md-simulation .np-md-stage-tabs button > span {
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+    font-size: 12px;
+  }
+
+  .np-md-simulation .np-md-stage-tabs button > strong {
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-stage-detail > p {
+    gap: 10px;
+    border-radius: 10px;
+    padding: 12px 13px;
+  }
+
+  .np-md-simulation .np-md-stage-detail > p svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .np-md-simulation .np-md-series-summary {
+    grid-template-columns: auto minmax(270px, 1fr) minmax(540px, 1.8fr);
+    gap: 19px;
+    border-radius: 16px;
+    padding: 18px 21px;
+    background-size: auto, 27px 27px, 27px 27px;
+  }
+
+  .np-md-simulation .np-md-series-summary__mark {
+    width: 63px;
+    height: 63px;
+    border-radius: 16px;
+  }
+
+  .np-md-simulation .np-md-series-summary__mark svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .np-md-simulation .np-md-series-summary > div > small {
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-series-summary > div > strong {
+    margin-top: 3px;
+    font-size: 24px;
+  }
+
+  .np-md-simulation .np-md-series-summary > div > p {
+    margin-top: 3px;
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-series-summary dl {
+    border-radius: 12px;
+  }
+
+  .np-md-simulation .np-md-series-summary dl > div {
+    padding: 12px 13px;
+  }
+
+  .np-md-simulation .np-md-series-summary dt {
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-series-summary dd {
+    margin-top: 4px;
+    font-size: 14px;
+  }
+
+  .np-md-simulation .np-md-series-selector button {
+    min-height: 75px;
+    gap: 12px;
+    padding: 12px 15px;
+  }
+
+  .np-md-simulation .np-md-series-signal {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+  }
+
+  .np-md-simulation .np-md-series-signal i {
+    width: 21px;
+    height: 12px;
+  }
+
+  .np-md-simulation .np-md-series-chart {
+    padding: 18px 21px 19px;
+  }
+
+  .np-md-simulation .np-md-chart-meta {
+    gap: 10px;
+    margin-top: 13px;
+  }
+
+  .np-md-simulation .np-md-chart-meta > span {
+    min-height: 39px;
+    gap: 6px;
+    border-radius: 9px;
+    padding: 0 12px;
+  }
+
+  .np-md-simulation .np-md-trajectory-view {
+    padding: 18px;
+  }
+
+  .np-md-simulation .np-md-trajectory-view__toolbar {
+    margin-bottom: 15px;
+  }
+
+  .np-md-simulation .np-md-canvas-hud {
+    top: 15px;
+    right: 16px;
+    left: 16px;
+    font-size: 12px;
+  }
+
+  .np-md-simulation .np-md-canvas-corners {
+    inset: 12px;
+  }
+
+  .np-md-simulation .np-md-canvas-corners i {
+    width: 19px;
+    height: 19px;
+  }
+
+  .np-md-simulation .np-md-canvas-axis {
+    right: 20px;
+    bottom: 20px;
+    transform: scale(1.5);
+    transform-origin: right bottom;
+  }
+
+  .np-md-simulation .np-md-trajectory-meta,
+  .np-md-simulation .np-md-pbc-badge {
+    min-height: 37px;
+    gap: 9px;
+    padding: 0 13px;
+    font-size: 12px;
+  }
+
+  .np-md-simulation .np-md-pbc-badge svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .np-md-simulation .np-md-atom-pair-rail {
+    gap: 10px;
+    padding: 16px 15px 0;
+  }
+
+  .np-md-simulation .np-md-atom-pair-rail span {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    font-size: 13px;
+  }
+
+  .np-md-simulation .np-md-atom-pair-rail i {
+    width: 42px;
+  }
+
+  .np-md-simulation .np-md-atom-fields label {
+    border-radius: 12px;
+    padding: 13px;
+  }
+
+  .np-md-simulation .np-md-atom-fields label > span b {
+    width: 27px;
+    height: 27px;
+    border-radius: 7px;
+    font-size: 12px;
+  }
+
+  .np-md-simulation .np-md-distance-state {
+    min-height: 198px;
+    gap: 15px;
+    background-size: auto, 27px 27px, 27px 27px;
+  }
+
+  .np-md-simulation .np-md-distance-state__icon {
+    width: 54px;
+    height: 54px;
+    border-radius: 15px;
+  }
+
+  .np-md-simulation .np-md-distance-state .np-md-distance-state__icon svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .np-md-simulation .np-md-distance-state strong {
+    font-size: 16px;
+  }
+
+  .np-md-simulation .np-md-distance-state div > span {
+    margin-top: 4px;
+    font-size: 15px;
+  }
+
+  .np-md-simulation .np-md-distance-stats {
+    gap: 10px;
+  }
+
+  .np-md-simulation .np-md-distance-stats span {
+    min-height: 36px;
+    gap: 7px;
+    padding: 0 12px;
+  }
+}

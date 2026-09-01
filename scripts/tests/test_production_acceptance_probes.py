@@ -296,6 +296,7 @@ class ReadAndFrontendClient(FakeClient):
             "/knowledge",
             "/reverse-design",
             "/monomer-dft",
+            "/md-simulation",
             "/monomer-md-simulation",
         }:
             return 200, {"Content-Type": "text/html"}, self.INDEX
@@ -474,6 +475,7 @@ class ProductionAcceptanceProbeTests(unittest.TestCase):
         self.assertIn("/database-query", frontend["routes"])
         self.assertIn("/reverse-design", frontend["routes"])
         self.assertIn("/monomer-dft", frontend["routes"])
+        self.assertIn("/md-simulation", frontend["routes"])
 
     def test_loopback_and_private_evidence_are_fail_closed(self) -> None:
         with self.assertRaisesRegex(PROBES.ProbeError, "127.0.0.1"):

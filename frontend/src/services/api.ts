@@ -175,16 +175,19 @@ export function predictSmiles(payload: PredictRequest, signal?: AbortSignal): Pr
   return postJSON("/predict", payload, signal);
 }
 
-export function fetchMdDemoDefaults(): Promise<MdDemoDefaultsResponse> {
-  return getJSON("/md-demo/defaults");
+export function fetchMdDemoDefaults(signal?: AbortSignal): Promise<MdDemoDefaultsResponse> {
+  return getJSON("/md-demo/defaults", { signal });
 }
 
-export function runMdDemo(payload: MdDemoRunRequest): Promise<MdDemoRunResponse> {
-  return postJSON("/md-demo/run", payload);
+export function runMdDemo(payload: MdDemoRunRequest, signal?: AbortSignal): Promise<MdDemoRunResponse> {
+  return postJSON("/md-demo/run", payload, signal);
 }
 
-export function calculateMdDemoAtomDistance(payload: MdDemoAtomDistanceRequest): Promise<MdDemoAtomDistanceResponse> {
-  return postJSON("/md-demo/atom-distance", payload);
+export function calculateMdDemoAtomDistance(
+  payload: MdDemoAtomDistanceRequest,
+  signal?: AbortSignal
+): Promise<MdDemoAtomDistanceResponse> {
+  return postJSON("/md-demo/atom-distance", payload, signal);
 }
 
 export class MonomerDftApiError extends Error {

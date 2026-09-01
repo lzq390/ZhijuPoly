@@ -8,6 +8,7 @@ import {
   fetchDevGpuSessionStatus,
   fetchMonomerPolymerizationStatus,
   fetchMonomerMdJobs,
+  fetchMdDemoDefaults,
   fetchPropertyFilterHistogram,
   fetchPropertyFilterOptions,
   fetchPolytaoJob,
@@ -20,6 +21,8 @@ import {
   predictSmiles,
   predictMonomerPrecursors,
   recoverDevGpuSession,
+  runMdDemo,
+  calculateMdDemoAtomDistance,
   runMonomerPolymerization,
   searchPropertyFilterRecords
 } from "./api";
@@ -175,6 +178,54 @@ describe("structure workbench request contracts", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+  });
+});
+
+describe("MD demo request contracts", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("forwards AbortSignal without changing the three existing contracts", async () => {
+    const defaultsResponse = {
+      default_request: {},
+      available_stages: [],
+      summary: {},
+      fixture_metadata: {}
+    };
+    const runResponse = { status: "completed" };
+    const distanceResponse = { distance: [] };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(defaultsResponse), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(runResponse), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(distanceResponse), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const runRequest = {
+      smiles: "*CC*",
+      temperature: 300,
+      pressure: 1,
+      n_atom: 1000,
+      n_chain: 10,
+      forcefield: "GAFF2_mod"
+    };
+    const distanceRequest = { atom_id_1: 1, atom_id_2: 2, use_pbc: true };
+
+    await fetchMdDemoDefaults(controller.signal);
+    await runMdDemo(runRequest, controller.signal);
+    await calculateMdDemoAtomDistance(distanceRequest, controller.signal);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/md-demo/defaults", { signal: controller.signal });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/md-demo/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(runRequest),
+      signal: controller.signal
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/md-demo/atom-distance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(distanceRequest),
       signal: controller.signal
     });
   });

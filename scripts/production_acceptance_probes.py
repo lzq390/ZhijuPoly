@@ -873,6 +873,7 @@ def run_frontend_probe(client: LoopbackClient) -> dict[str, Any]:
         "/knowledge",
         "/reverse-design",
         "/monomer-dft",
+        "/md-simulation",
         "/monomer-md-simulation",
     ]
     route_evidence: list[str] = []
