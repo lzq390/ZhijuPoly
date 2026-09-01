@@ -12,7 +12,7 @@ class ResizeObserverMock {
   disconnect() {}
 }
 
-function DrawerHarness() {
+function DrawerHarness({ overlayContainerWidth }: { overlayContainerWidth?: number } = {}) {
   const [open, setOpen] = useState(false);
   const [width, setWidth] = useState(380);
   return (
@@ -29,6 +29,7 @@ function DrawerHarness() {
         reopenLabel="展开预测结果"
         closeLabel="关闭性质预测结果"
         resizeLabel="调整性质预测结果抽屉宽度"
+        overlayContainerWidth={overlayContainerWidth}
         onWidthChange={setWidth}
         onClose={() => setOpen(false)}
         onOpen={() => setOpen(true)}
@@ -66,10 +67,12 @@ describe("WorkbenchDrawerShell", () => {
   it("覆盖模式循环焦点，Escape 关闭并恢复触发器焦点", async () => {
     render(<DrawerHarness />);
     const trigger = screen.getByRole("button", { name: "运行预测" });
+    expect(document.querySelector(".np-sw-drawer")?.hasAttribute("inert")).toBe(true);
     trigger.focus();
     fireEvent.click(trigger);
 
     const dialog = screen.getByRole("dialog", { name: "性质预测结果" });
+    expect(dialog.hasAttribute("inert")).toBe(false);
     expect(dialog.getAttribute("aria-modal")).toBe("true");
     expect(document.querySelector(".np-sw-drawer-layer")?.classList.contains("is-overlay")).toBe(true);
     const close = screen.getByRole("button", { name: "关闭性质预测结果" });
@@ -84,7 +87,14 @@ describe("WorkbenchDrawerShell", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(document.activeElement).toBe(trigger));
     expect(screen.queryByRole("dialog", { name: "性质预测结果" })).toBeNull();
-    expect(screen.getByRole("button", { name: "展开预测结果" })).toBeTruthy();
+    const reopen = screen.getByRole("button", { name: "展开预测结果" });
+    fireEvent.click(reopen);
+    const reopenedDialog = screen.getByRole("dialog", { name: "性质预测结果" });
+    expect(reopenedDialog.hasAttribute("inert")).toBe(false);
+    const reopenedClose = screen.getByRole("button", { name: "关闭性质预测结果" });
+    await waitFor(() => expect(document.activeElement).toBe(reopenedClose));
+    fireEvent.click(reopenedClose);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "展开预测结果" })));
   });
 
   it("并排模式保持非模态并支持键盘调整宽度", async () => {
@@ -105,5 +115,21 @@ describe("WorkbenchDrawerShell", () => {
     expect(separator.getAttribute("aria-valuenow")).toBe("380");
     fireEvent.keyDown(separator, { key: "ArrowLeft" });
     expect(separator.getAttribute("aria-valuenow")).toBe("396");
+
+    const close = screen.getByRole("button", { name: "关闭性质预测结果" });
+    close.focus();
+    fireEvent.click(close);
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("允许模块按实际内容宽度提高并排阈值", async () => {
+    containerWidth = 1300;
+    render(<DrawerHarness overlayContainerWidth={1360} />);
+    const trigger = screen.getByRole("button", { name: "运行预测" });
+    fireEvent.click(trigger);
+
+    const dialog = screen.getByRole("dialog", { name: "性质预测结果" });
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(document.querySelector(".np-sw-drawer-layer")?.classList.contains("is-overlay")).toBe(true);
   });
 });

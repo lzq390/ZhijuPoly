@@ -9,6 +9,7 @@ import type { DftMoleculeBrowserRecord, DftMoleculeDetail, DftPcaPoint } from ".
 import { DataTable, EmptyPanel, formatNumber, KpiStrip, Panel } from "./charts";
 import { databaseAnalysisErrorMessage } from "./errors";
 import type { DftAnalytics, DftTabKey, DrawerRequest } from "./types";
+import { dftConvergencePresentation } from "./types";
 
 const D3MOL_SRC = "/vendor/3Dmol-min.js";
 type AtomCoordinate = [number, number, number, number];
@@ -17,10 +18,23 @@ function loadScriptOnce(src: string, id: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const existing = document.getElementById(id) as HTMLScriptElement | null;
     if (existing) {
-      if (existing.dataset.loaded === "true") resolve();
+      if (existing.dataset.loaded === "true" && window.$3Dmol) resolve();
+      else if (existing.dataset.loaded === "true") {
+        existing.remove();
+        reject(new Error(`Failed to initialize script: ${src}`));
+      }
       else {
-        existing.addEventListener("load", () => resolve(), { once: true });
-        existing.addEventListener("error", () => reject(new Error(`Failed to load script: ${src}`)), { once: true });
+        existing.addEventListener("load", () => {
+          if (window.$3Dmol) resolve();
+          else {
+            existing.remove();
+            reject(new Error(`Failed to initialize script: ${src}`));
+          }
+        }, { once: true });
+        existing.addEventListener("error", () => {
+          existing.remove();
+          reject(new Error(`Failed to load script: ${src}`));
+        }, { once: true });
       }
       return;
     }
@@ -29,10 +43,18 @@ function loadScriptOnce(src: string, id: string): Promise<void> {
     script.src = src;
     script.async = true;
     script.onload = () => {
+      if (!window.$3Dmol) {
+        script.remove();
+        reject(new Error(`Failed to initialize script: ${src}`));
+        return;
+      }
       script.dataset.loaded = "true";
       resolve();
     };
-    script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+    script.onerror = () => {
+      script.remove();
+      reject(new Error(`Failed to load script: ${src}`));
+    };
     document.head.appendChild(script);
   });
 }
@@ -98,7 +120,7 @@ export function DftAnalysisView({
     const controller = new AbortController();
     setPointsLoading(true);
     setPointsError(null);
-    fetchDftPcaSample(160, controller.signal)
+    fetchDftPcaSample(80, controller.signal)
       .then((response) => {
         setPoints(response.results);
         setSelectedMolId((current) => current ?? response.results[0]?.mol_id ?? null);
@@ -155,12 +177,14 @@ export function DftAnalysisView({
     if (focus) requestAnimationFrame(() => tabListRef.current?.querySelector<HTMLElement>(`[data-dft-tab="${next}"]`)?.focus());
   }
 
+  const convergence = dftConvergencePresentation(molecule?.is_converged);
+
   return (
     <>
       <KpiStrip
         items={[
           { label: "DFT 分子", value: formatNumber(data.molCount, 0), unit: "个", note: "最终态分子构象" },
-          { label: "构象记录", value: formatNumber(recordCount ?? data.rows, 0), unit: "条", note: "真实几何优化步骤" },
+          { label: "构象记录", value: formatNumber(recordCount ?? data.rows, 0), unit: "条", note: "几何优化步骤" },
           { label: "中位优化步数", value: formatNumber(data.stepRange?.median, 0), unit: "步", note: `最长 ${formatNumber(data.stepRange?.max, 0)} 步` },
           { label: "中位能隙", value: formatNumber(data.gapRange?.median, 3), unit: "eV", note: "HOMO–LUMO gap" }
         ]}
@@ -220,7 +244,7 @@ export function DftAnalysisView({
         ) : null}
 
         {tab === "records" ? (
-          <Panel title="DFT 分子记录" subtitle="真实分子构象记录；可继续查看原始记录或优化步骤" meta={`${formatNumber(data.molCount, 0)} molecules`}>
+          <Panel title="DFT 分子记录" subtitle="分子构象记录；可继续查看原始记录或优化步骤" meta={`${formatNumber(data.molCount, 0)} molecules`}>
             {recordsLoading ? <DftInlineLoading /> : null}
             {recordsError ? <div className="dba-inline-error"><CircleAlert aria-hidden="true" />{recordsError}</div> : null}
             {!recordsLoading && !recordsError ? (
@@ -253,7 +277,7 @@ export function DftAnalysisView({
         ) : null}
 
         {tab === "steps" ? (
-          <Panel title="几何优化步骤" subtitle={selectedMolId ? `${selectedMolId} · 当前构象轨迹` : "请先选择分子"} meta={molecule?.is_converged ?? undefined}>
+          <Panel title="几何优化步骤" subtitle={selectedMolId ? `${selectedMolId} · 当前构象轨迹` : "请先选择分子"} meta={molecule ? convergence.label : undefined}>
             {moleculeLoading ? <DftInlineLoading /> : null}
             {moleculeError ? <div className="dba-inline-error"><CircleAlert aria-hidden="true" />{moleculeError}</div> : null}
             {!moleculeLoading && !moleculeError && molecule ? (
@@ -272,7 +296,7 @@ export function DftAnalysisView({
                 ))}
               </div>
             ) : null}
-            {!moleculeLoading && !moleculeError && !molecule ? <EmptyPanel message="选择 PCA 分子后显示真实优化轨迹。" /> : null}
+            {!moleculeLoading && !moleculeError && !molecule ? <EmptyPanel message="选择 PCA 分子后显示优化轨迹。" /> : null}
           </Panel>
         ) : null}
       </div>
@@ -348,9 +372,22 @@ function PcaScatter({
 
 function MoleculeViewer({ molecule, loading, error }: { molecule: DftMoleculeDetail | null; loading: boolean; error: string | null }) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
+  const viewerInstanceRef = useRef<ReturnType<NonNullable<Window["$3Dmol"]>["createViewer"]> | null>(null);
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [renderKey, setRenderKey] = useState(0);
   const molBlock = useMemo(() => molecule ? toMolBlock(molecule.mol_id, molecule.coordinates) : null, [molecule]);
+  const showStage = Boolean(molecule) || loading;
+
+  useEffect(() => {
+    const container = viewerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      viewerInstanceRef.current?.resize?.();
+      viewerInstanceRef.current?.render();
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [showStage]);
 
   useEffect(() => {
     if (!molBlock || !viewerRef.current) return;
@@ -361,6 +398,7 @@ function MoleculeViewer({ molecule, loading, error }: { molecule: DftMoleculeDet
         if (cancelled || !viewerRef.current || !window.$3Dmol) return;
         viewerRef.current.innerHTML = "";
         const viewer = window.$3Dmol.createViewer(viewerRef.current, { backgroundColor: "#f8fbff" });
+        viewerInstanceRef.current = viewer;
         viewer.addModel(molBlock, "mol");
         viewer.setStyle({}, { stick: { radius: 0.16, color: "0x64748b" }, sphere: { scale: 0.31, colorscheme: "Jmol" } });
         viewer.zoomTo();
@@ -371,18 +409,27 @@ function MoleculeViewer({ molecule, loading, error }: { molecule: DftMoleculeDet
       });
     return () => {
       cancelled = true;
+      viewerInstanceRef.current?.clear?.();
+      viewerInstanceRef.current = null;
       if (viewerRef.current) viewerRef.current.innerHTML = "";
     };
   }, [molBlock, renderKey]);
 
-  if (error || viewerError) return <div className="dba-inline-error"><CircleAlert aria-hidden="true" />{error ?? viewerError}</div>;
-  if (!molecule && !loading) return <EmptyPanel message="选择 PCA 点后显示真实三维构象。" />;
+  if (error) return <div className="dba-inline-error"><CircleAlert aria-hidden="true" />{error}</div>;
+  if (!molecule && !loading) return <EmptyPanel message="选择 PCA 点后显示三维构象。" />;
   return (
     <div className="dba-molecule-stage">
       <button className="dba-icon-button dba-molecule-reset" type="button" aria-label="重置构象视图" onClick={() => setRenderKey((key) => key + 1)}>
         <RotateCw aria-hidden="true" />
       </button>
       <div ref={viewerRef} className="dba-molecule-viewer" />
+      {viewerError ? (
+        <div className="dba-inline-error dba-viewer-error">
+          <CircleAlert aria-hidden="true" />
+          <span>{viewerError}</span>
+          <button type="button" onClick={() => { setViewerError(null); setRenderKey((key) => key + 1); }}>重试渲染</button>
+        </div>
+      ) : null}
       {loading ? <div className="dba-chart-loading">正在加载三维构象…</div> : null}
       {molecule ? (
         <div className="dba-molecule-caption">
@@ -423,7 +470,7 @@ function EnergyTrace({ molecule, loading, error }: { molecule: DftMoleculeDetail
         <div><span>总能量</span><strong>{molecule?.scf_energy === null || !molecule ? "—" : `${formatNumber(molecule.scf_energy, 6)} Ha`}</strong></div>
         <div><span>HOMO–LUMO gap</span><strong>{molecule?.gap_ev === null || !molecule ? "—" : `${formatNumber(molecule.gap_ev, 3)} eV`}</strong></div>
         <div><span>原子组成</span><strong>{molecule ? `${molecule.n_atoms} atoms` : "—"}</strong></div>
-        <div><span>收敛标记</span><strong>{molecule?.is_converged ?? "—"}</strong></div>
+        <div><span>收敛状态</span><strong>{molecule ? dftConvergencePresentation(molecule.is_converged).label : "—"}</strong></div>
       </div>
       {loading ? <div className="dba-chart-loading">正在获取能量轨迹…</div> : null}
     </div>
@@ -431,5 +478,5 @@ function EnergyTrace({ molecule, loading, error }: { molecule: DftMoleculeDetail
 }
 
 function DftInlineLoading() {
-  return <div className="dba-inline-loading">正在加载真实 DFT 数据…</div>;
+  return <div className="dba-inline-loading">正在加载 DFT 数据…</div>;
 }

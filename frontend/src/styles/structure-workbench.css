@@ -1560,19 +1560,19 @@
 }
 
 @container np-sw-workbench (min-width: 1280px) {
-  .np-structure-workbench .np-sw-page.has-open-drawer {
+  .np-structure-workbench .np-sw-page.has-open-drawer:has(.np-sw-drawer-layer.is-open:not(.is-overlay)) {
     padding-right: 24px;
     padding-left: 24px;
   }
 
-  .np-structure-workbench .np-sw-layout.has-open-drawer {
+  .np-structure-workbench .np-sw-layout.has-open-drawer:has(.np-sw-drawer-layer.is-open:not(.is-overlay)) {
     width: min(100%, calc(var(--np-sw-layout-max-width) + var(--np-sw-drawer-effective-width) + var(--np-sw-drawer-gap)));
     grid-template-columns: minmax(0, var(--np-sw-layout-max-width)) var(--np-sw-drawer-effective-width);
     grid-template-rows: minmax(0, 1fr);
     gap: var(--np-sw-drawer-gap);
   }
 
-  .np-structure-workbench .np-sw-drawer-layer.is-open {
+  .np-structure-workbench .np-sw-drawer-layer.is-open:not(.is-overlay) {
     position: relative;
     inset: auto;
     width: var(--np-sw-drawer-effective-width);
@@ -1581,11 +1581,11 @@
     height: 100%;
   }
 
-  .np-structure-workbench .np-sw-drawer-layer.is-open .np-sw-drawer-backdrop {
+  .np-structure-workbench .np-sw-drawer-layer.is-open:not(.is-overlay) .np-sw-drawer-backdrop {
     display: none;
   }
 
-  .np-structure-workbench .np-sw-drawer-layer.is-open .np-sw-drawer {
+  .np-structure-workbench .np-sw-drawer-layer.is-open:not(.is-overlay) .np-sw-drawer {
     position: relative;
     width: 100%;
     min-height: 0;
