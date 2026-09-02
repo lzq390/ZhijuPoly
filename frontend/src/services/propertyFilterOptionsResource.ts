@@ -180,7 +180,7 @@ export function refreshPropertyFilterOptions(): Promise<PropertyFilterOptionsCac
         return refreshed;
       }
       if (!isOptionsResponse(result.data)) {
-        throw new Error("属性目录响应格式无效，请稍后重试。");
+        throw new Error("暂时无法加载筛选属性，请稍后重试。");
       }
       const refreshed: PropertyFilterOptionsCache = {
         schemaVersion: PROPERTY_FILTER_OPTIONS_CACHE_SCHEMA_VERSION,
@@ -191,7 +191,7 @@ export function refreshPropertyFilterOptions(): Promise<PropertyFilterOptionsCac
       persist(refreshed);
       return refreshed;
     } catch (error) {
-      if (timedOut) throw new Error("属性目录请求超时，请稍后重试。");
+      if (timedOut) throw new Error("筛选属性加载时间过长，请稍后重试。");
       throw error;
     } finally {
       window.clearTimeout(timeout);

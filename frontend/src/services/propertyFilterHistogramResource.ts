@@ -106,7 +106,7 @@ export function loadPropertyFilterHistogram(
         return cached as PropertyFilterHistogramCache;
       }
       if (!isHistogramResponse(result.data, optionKey)) {
-        throw new Error("属性直方图响应格式无效，请稍后重试。");
+        throw new Error("暂时无法加载属性分布，请稍后重试。");
       }
       const refreshed: PropertyFilterHistogramCache = {
         catalogRevision,
@@ -117,7 +117,7 @@ export function loadPropertyFilterHistogram(
       memoryCache.set(key, refreshed);
       return refreshed;
     } catch (error) {
-      if (timedOut) throw new Error("属性直方图请求超时，请稍后重试。");
+      if (timedOut) throw new Error("属性分布加载时间过长，请稍后重试。");
       throw error;
     } finally {
       window.clearTimeout(timeout);

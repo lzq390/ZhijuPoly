@@ -83,7 +83,7 @@ describe("propertyFilterHistogramResource", () => {
 
     await expect(
       loadPropertyFilterHistogram("std:tg:C", 'W/"options-1"')
-    ).rejects.toThrow("属性直方图响应格式无效");
+    ).rejects.toThrow("暂时无法加载属性分布");
     expect(readPropertyFilterHistogram("std:tg:C", 'W/"options-1"')).toBeNull();
   });
 });

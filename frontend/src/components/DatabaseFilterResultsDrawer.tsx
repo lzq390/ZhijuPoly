@@ -7,20 +7,17 @@ import {
   Copy,
   Database,
   LoaderCircle,
+  PanelRightOpen,
   RefreshCw,
-  SearchX,
-  X
+  SearchX
 } from "lucide-react";
 import {
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
-  useState,
-  type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
-  type Ref
+  useState
 } from "react";
 import type {
   PropertyFilterRecord,
@@ -28,6 +25,80 @@ import type {
   PropertyFilterSearchResult
 } from "../types";
 import type { SubmittedPropertyFilter } from "../hooks/usePropertyFilter";
+import { WorkbenchDrawerShell } from "./structure-workbench/WorkbenchDrawerShell";
+
+export type DatabaseFilterDrawerProfile = {
+  defaultWidth: number;
+  minWidth: number;
+  maxWidth: number;
+  keyboardStep: number;
+  overlayContainerWidth: number;
+};
+
+const STANDARD_DRAWER_PROFILE: DatabaseFilterDrawerProfile = {
+  defaultWidth: 380,
+  minWidth: 320,
+  maxWidth: 560,
+  keyboardStep: 10,
+  overlayContainerWidth: 1360
+};
+
+const TWO_K_DRAWER_PROFILE: DatabaseFilterDrawerProfile = {
+  defaultWidth: 540,
+  minWidth: 480,
+  maxWidth: 720,
+  keyboardStep: 15,
+  overlayContainerWidth: 2050
+};
+
+const TWO_K_QUERY = "(min-width: 2000px) and (min-height: 1120px)";
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function mapDrawerWidth(
+  width: number,
+  from: DatabaseFilterDrawerProfile,
+  to: DatabaseFilterDrawerProfile
+) {
+  const ratio = (width - from.minWidth) / Math.max(1, from.maxWidth - from.minWidth);
+  return Math.round(to.minWidth + clamp(ratio, 0, 1) * (to.maxWidth - to.minWidth));
+}
+
+export function useDatabaseFilterDrawerSizing() {
+  const initialProfile = typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia(TWO_K_QUERY).matches
+    ? TWO_K_DRAWER_PROFILE
+    : STANDARD_DRAWER_PROFILE;
+  const [sizing, setSizing] = useState(() => ({
+    profile: initialProfile,
+    width: initialProfile.defaultWidth
+  }));
+  const setWidth = useCallback((width: number) => {
+    setSizing((current) => current.width === width ? current : { ...current, width });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(TWO_K_QUERY);
+    const update = () => {
+      const nextProfile = media.matches ? TWO_K_DRAWER_PROFILE : STANDARD_DRAWER_PROFILE;
+      setSizing((current) => current.profile === nextProfile
+        ? current
+        : {
+            profile: nextProfile,
+            width: mapDrawerWidth(current.width, current.profile, nextProfile)
+          });
+    };
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  return { width: sizing.width, setWidth, profile: sizing.profile };
+}
 
 type DatabaseFilterResultsDrawerProps = {
   open: boolean;
@@ -40,19 +111,13 @@ type DatabaseFilterResultsDrawerProps = {
   matchedRecords: number;
   totalPages: number;
   width: number;
+  profile: DatabaseFilterDrawerProfile;
   onWidthChange: (width: number) => void;
-  reopenButtonRef?: Ref<HTMLButtonElement>;
   onClose: () => void;
-  onOpen: () => void;
+  onOpen: (trigger?: HTMLElement) => void;
   onRetry: () => void;
   onPageChange: (page: number) => void;
 };
-
-const MIN_DRAWER_WIDTH = 320;
-const MAX_DRAWER_WIDTH = 560;
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 5) {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
@@ -122,10 +187,83 @@ const CopyButton = memo(function CopyButton({ value, label }: { value: string; l
   }
 
   return (
-    <button className="dbf-copy-button" type="button" onClick={handleCopy} aria-label={`复制${label}`}>
+    <button className="dbf-copy-button" type="button" onClick={handleCopy} aria-label={`复制 ${label}`}>
       {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
       <span>{copied ? "已复制" : "复制"}</span>
     </button>
+  );
+});
+
+const SmilesDetails = memo(function SmilesDetails({
+  value,
+  label,
+  secondary = false
+}: {
+  value: string;
+  label: string;
+  secondary?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <details
+      className={`dbf-smiles-details${secondary ? " is-secondary" : ""}`}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary>
+        <span className="dbf-smiles-summary-label">
+          <strong>{label}</strong>
+          {!expanded ? <code className="dbf-smiles-preview">{value}</code> : null}
+        </span>
+        <span className="dbf-smiles-toggle">
+          {expanded ? "收起" : "展开"}
+          <ChevronDown aria-hidden="true" />
+        </span>
+      </summary>
+      {expanded ? (
+        <div className="dbf-smiles-content">
+          <code>{value}</code>
+          <CopyButton value={value} label={label} />
+        </div>
+      ) : null}
+    </details>
+  );
+});
+
+const ResultTitle = memo(function ResultTitle({ value }: { value: string }) {
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [canExpand, setCanExpand] = useState(value.length > 48);
+
+  useEffect(() => {
+    if (expanded) return;
+    const title = titleRef.current;
+    if (!title) return;
+    const update = () => {
+      setCanExpand(title.scrollWidth > title.clientWidth || value.length > 48);
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(title);
+    return () => observer.disconnect();
+  }, [expanded, value]);
+
+  return (
+    <div className={`dbf-result-title${expanded ? " is-expanded" : ""}`}>
+      <h3 ref={titleRef}>{value}</h3>
+      {canExpand ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={expanded ? "收起完整标题" : "展开完整标题"}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <span>{expanded ? "收起" : "展开"}</span>
+          <ChevronDown aria-hidden="true" />
+        </button>
+      ) : null}
+    </div>
   );
 });
 
@@ -165,7 +303,7 @@ const RecordMetadata = memo(function RecordMetadata({ record }: { record: Proper
         <dd>{record.duplicate_flag || "无"}</dd>
       </div>
       <div>
-        <dt>来源行</dt>
+        <dt>原始记录序号</dt>
         <dd>#{record.source_row_number.toLocaleString("zh-CN")}</dd>
       </div>
     </dl>
@@ -215,31 +353,22 @@ const ResultCard = memo(function ResultCard({
       <div className="dbf-result-card-head">
         <span className="dbf-result-rank">#{rank}</span>
         <span className="dbf-result-match">
-          {result.matched_filters}/{submitted.conditions.length} 条件命中
+          {result.matched_filters}/{submitted.conditions.length} 条件满足
         </span>
       </div>
-      <h3>{result.polymer_name || "未命名聚合物"}</h3>
+      <ResultTitle value={result.polymer_name || "未命名聚合物"} />
 
       {primarySmiles ? (
-        <div className="dbf-smiles-block">
-          <div>
-            <span>{sameSmiles ? "SMILES / canonical SMILES" : result.canonical_smiles ? "canonical SMILES" : "SMILES"}</span>
-            <code title={primarySmiles}>{primarySmiles}</code>
-          </div>
-          <CopyButton value={primarySmiles} label="SMILES" />
-        </div>
+        <SmilesDetails
+          value={primarySmiles}
+          label={sameSmiles ? "SMILES / canonical SMILES" : result.canonical_smiles ? "canonical SMILES" : "SMILES"}
+        />
       ) : (
         <p className="dbf-result-muted">该记录未提供 SMILES。</p>
       )}
 
       {result.smiles && result.canonical_smiles && !sameSmiles ? (
-        <div className="dbf-smiles-block is-secondary">
-          <div>
-            <span>SMILES</span>
-            <code title={result.smiles}>{result.smiles}</code>
-          </div>
-          <CopyButton value={result.smiles} label="SMILES" />
-        </div>
+        <SmilesDetails value={result.smiles} label="SMILES" secondary />
       ) : null}
 
       <div className="dbf-condition-values">
@@ -250,7 +379,7 @@ const ResultCard = memo(function ResultCard({
             <div className="dbf-condition-value" key={`${condition.optionKey}-${conditionIndex}`}>
               <div className="dbf-condition-value-main">
                 <span>{condition.expression}</span>
-                <strong>{primaryRecord ? displayRecordValue(primaryRecord) : "未返回记录"}</strong>
+                <strong>{primaryRecord ? displayRecordValue(primaryRecord) : "暂无匹配值"}</strong>
               </div>
               {primaryRecord ? <MeasurementDetails records={records} /> : null}
             </div>
@@ -312,160 +441,52 @@ export function DatabaseFilterResultsDrawer({
   matchedRecords,
   totalPages,
   width,
+  profile,
   onWidthChange,
-  reopenButtonRef,
   onClose,
   onOpen,
   onRetry,
   onPageChange
 }: DatabaseFilterResultsDrawerProps) {
-  const [resizing, setResizing] = useState(false);
-  const drawerRef = useRef<HTMLElement | null>(null);
-  const dragState = useRef<{
-    startX: number;
-    startWidth: number;
-    root: HTMLElement | null;
-  } | null>(null);
-  const pendingWidth = useRef(width);
-  const resizeFrame = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!resizing) return;
-
-    function handlePointerMove(event: PointerEvent) {
-      if (!dragState.current) return;
-      const delta = dragState.current.startX - event.clientX;
-      pendingWidth.current = clamp(
-        dragState.current.startWidth + delta,
-        MIN_DRAWER_WIDTH,
-        MAX_DRAWER_WIDTH
-      );
-      if (resizeFrame.current !== null) return;
-      resizeFrame.current = window.requestAnimationFrame(() => {
-        resizeFrame.current = null;
-        const value = `${pendingWidth.current}px`;
-        dragState.current?.root?.style.setProperty("--dbf-drawer-width", value);
-        drawerRef.current?.style.setProperty("--dbf-drawer-width", value);
-      });
-    }
-
-    function stopResize() {
-      if (resizeFrame.current !== null) {
-        window.cancelAnimationFrame(resizeFrame.current);
-        resizeFrame.current = null;
-      }
-      const finalWidth = pendingWidth.current;
-      dragState.current?.root?.classList.remove("dbf-is-resizing");
-      dragState.current = null;
-      setResizing(false);
-      onWidthChange(finalWidth);
-    }
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", stopResize);
-    window.addEventListener("pointercancel", stopResize);
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", stopResize);
-      window.removeEventListener("pointercancel", stopResize);
-      if (resizeFrame.current !== null) window.cancelAnimationFrame(resizeFrame.current);
-      dragState.current?.root?.classList.remove("dbf-is-resizing");
-    };
-  }, [onWidthChange, resizing]);
-
-  useEffect(() => {
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape" && open) onClose();
-    }
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, [onClose, open]);
-
-  function startResize(event: ReactPointerEvent<HTMLDivElement>) {
-    event.preventDefault();
-    const root = event.currentTarget.closest<HTMLElement>(".database-filter-page");
-    pendingWidth.current = width;
-    dragState.current = { startX: event.clientX, startWidth: width, root };
-    root?.classList.add("dbf-is-resizing");
-    setResizing(true);
-  }
-
-  function handleResizeKey(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    event.preventDefault();
-    const amount = event.shiftKey ? 40 : 10;
-    onWidthChange(clamp(width + (event.key === "ArrowLeft" ? amount : -amount), MIN_DRAWER_WIDTH, MAX_DRAWER_WIDTH));
-  }
-
   const hasResults = Boolean(data && data.results.length > 0);
   const status = loading
-    ? "正在查询 PostgreSQL…"
+    ? "正在筛选…"
     : error
-      ? "查询失败"
+      ? "筛选未完成"
       : data
-        ? `${matchedRecords.toLocaleString("zh-CN")} 个聚合物 · ${formatNumber(data.query_time_ms, 1)} ms`
-        : "等待运行筛选";
+        ? `${matchedRecords.toLocaleString("zh-CN")} 个聚合物`
+        : "尚未筛选";
 
   return (
-    <>
-      {submitted && !open ? (
-        <button
-          ref={reopenButtonRef}
-          className="dbf-drawer-reopen"
-          type="button"
-          onClick={onOpen}
-          aria-expanded="false"
-          aria-controls="database-filter-results"
-        >
-          <Database aria-hidden="true" />
-          <span>查看结果</span>
-          {data ? <b>{matchedRecords.toLocaleString("zh-CN")}</b> : null}
-        </button>
-      ) : null}
-
-      <aside
-        ref={drawerRef}
-        id="database-filter-results"
-        className={`dbf-results-drawer${open ? " is-open" : ""}${resizing ? " is-resizing" : ""}`}
-        style={{ "--dbf-drawer-width": `${width}px` } as CSSProperties}
-        aria-labelledby="database-filter-results-title"
-        aria-hidden={!open}
-        inert={!open}
-      >
-        <div
-          className="dbf-drawer-resizer"
-          role="separator"
-          tabIndex={open ? 0 : -1}
-          aria-label="调整结果抽屉宽度"
-          aria-orientation="vertical"
-          aria-valuemin={MIN_DRAWER_WIDTH}
-          aria-valuemax={MAX_DRAWER_WIDTH}
-          aria-valuenow={Math.round(width)}
-          onPointerDown={startResize}
-          onKeyDown={handleResizeKey}
-        />
-
-        <header className="dbf-drawer-header">
-          <div className="dbf-drawer-title">
-            <span><Database aria-hidden="true" /></span>
-            <div>
-              <h2 id="database-filter-results-title">筛选结果</h2>
-              <p>{status}</p>
-            </div>
-          </div>
-          <button className="dbf-icon-button" type="button" onClick={onClose} aria-label="关闭筛选结果">
-            <X aria-hidden="true" />
-          </button>
-        </header>
-
-        {open && submitted ? (
+    <WorkbenchDrawerShell
+      open={open}
+      hasRun={Boolean(submitted)}
+      width={width}
+      minWidth={profile.minWidth}
+      maxWidth={profile.maxWidth}
+      keyboardStep={profile.keyboardStep}
+      overlayContainerWidth={profile.overlayContainerWidth + Math.max(0, width - profile.defaultWidth)}
+      title="筛选结果"
+      status={status}
+      headerIcon={<Database aria-hidden="true" />}
+      reopenIcon={<PanelRightOpen aria-hidden="true" />}
+      reopenLabel="查看结果"
+      reopenVariant="side-handle"
+      closeLabel="关闭筛选结果"
+      resizeLabel="调整筛选结果区域宽度"
+      onWidthChange={onWidthChange}
+      onClose={onClose}
+      onOpen={onOpen}
+    >
+      <div className="dbf-drawer-content">
+        {submitted ? (
           <div className="dbf-result-context">
-            <span>已提交条件</span>
+            <span>本次筛选条件</span>
             <strong>{submitted.expression}</strong>
           </div>
         ) : null}
 
-        {open ? <div className="dbf-drawer-body">
+        <div className="dbf-drawer-body">
           {loading ? <DrawerSkeleton /> : null}
 
           {!loading && error ? (
@@ -475,7 +496,7 @@ export function DatabaseFilterResultsDrawer({
               <p>{error}</p>
               <button type="button" onClick={onRetry}>
                 <RefreshCw aria-hidden="true" />
-                重试本次查询
+                重新筛选
               </button>
             </div>
           ) : null}
@@ -484,7 +505,7 @@ export function DatabaseFilterResultsDrawer({
             <div className="dbf-drawer-state">
               <span><SearchX aria-hidden="true" /></span>
               <h3>没有找到匹配记录</h3>
-              <p>可以放宽阈值区间，或清除关键词后重新运行。</p>
+              <p>可以放宽筛选范围，或清除关键词后重新运行。</p>
             </div>
           ) : null}
 
@@ -496,12 +517,12 @@ export function DatabaseFilterResultsDrawer({
             <div className="dbf-drawer-state">
               <span><LoaderCircle aria-hidden="true" /></span>
               <h3>等待筛选条件</h3>
-              <p>填写至少一个阈值并运行筛选后，结果会显示在这里。</p>
+              <p>填写最小值或最大值并运行筛选后，结果会显示在这里。</p>
             </div>
           ) : null}
-        </div> : null}
+        </div>
 
-        {open && !loading && !error && data && hasResults ? (
+        {!loading && !error && data && hasResults ? (
           <footer className="dbf-drawer-pagination">
             <button
               type="button"
@@ -522,7 +543,7 @@ export function DatabaseFilterResultsDrawer({
             </button>
           </footer>
         ) : null}
-      </aside>
-    </>
+      </div>
+    </WorkbenchDrawerShell>
   );
 }
