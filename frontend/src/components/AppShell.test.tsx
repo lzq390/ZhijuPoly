@@ -459,7 +459,7 @@ describe("AppShell 侧边栏", () => {
     expect(screen.getByRole("button", { name: "Tg 逆向设计" })).not.toBeNull();
   });
 
-  it("业务模块选中态使用与普通条目一致的扁平布局", () => {
+  it("结构工作台使用主工作区专属层级，业务模块保持扁平布局", () => {
     renderShell("structureWorkbench");
     fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
 
@@ -469,9 +469,16 @@ describe("AppShell 侧边栏", () => {
     expect(activeItem.getAttribute("aria-current")).toBe("page");
     expect(activeItem.getAttribute("data-active")).toBe("true");
     expect(activeItem.classList.contains("np-sidebar-module")).toBe(true);
+    expect(activeItem.classList.contains("np-sidebar-module--primary-workspace")).toBe(true);
+    expect(activeItem.getAttribute("data-primary-workspace")).toBe("true");
+    expect(within(activeItem).queryByText("主要工作区")).toBeNull();
+    expect(activeItem.querySelector(".np-sidebar-module__entry")).toBeNull();
     expect(inactiveItem.getAttribute("aria-current")).toBeNull();
     expect(inactiveItem.getAttribute("data-active")).toBe("false");
     expect(inactiveItem.classList.contains("np-sidebar-module")).toBe(true);
+    expect(inactiveItem.classList.contains("np-sidebar-module--primary-workspace")).toBe(false);
+    expect(inactiveItem.hasAttribute("data-primary-workspace")).toBe(false);
+    expect(inactiveItem.querySelector(".np-sidebar-module__eyebrow")).toBeNull();
   });
 
   it("业务模块、项目和对话按内容高度顺序平铺并共用侧栏滚动", () => {
