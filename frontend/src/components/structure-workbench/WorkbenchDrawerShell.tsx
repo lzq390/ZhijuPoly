@@ -48,6 +48,7 @@ type WorkbenchDrawerShellProps = {
   keyboardStep?: number;
   overlayContainerWidth?: number;
   restoreFocusTarget?: HTMLElement | null;
+  drawerClassName?: string;
 };
 
 export function WorkbenchDrawerShell({
@@ -70,7 +71,8 @@ export function WorkbenchDrawerShell({
   maxWidth = DEFAULT_MAX_WIDTH,
   keyboardStep = DEFAULT_KEYBOARD_STEP,
   overlayContainerWidth = OVERLAY_CONTAINER_WIDTH,
-  restoreFocusTarget = null
+  restoreFocusTarget = null,
+  drawerClassName = ""
 }: WorkbenchDrawerShellProps) {
   const titleId = useId();
   const layerRef = useRef<HTMLDivElement | null>(null);
@@ -212,10 +214,11 @@ export function WorkbenchDrawerShell({
         />
         <aside
           ref={drawerRef}
-          className="np-sw-drawer"
+          className={`np-sw-drawer${drawerClassName ? ` ${drawerClassName}` : ""}`}
           role="dialog"
           aria-modal={isOverlay ? "true" : "false"}
           aria-labelledby={titleId}
+          aria-hidden={!open}
           tabIndex={-1}
           inert={open ? undefined : true}
         >

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Atom,
   Check,
@@ -31,14 +31,14 @@ function ResultState({
   description,
   tone = "default"
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   title: string;
   description: string;
   tone?: "default" | "danger";
 }) {
   return (
-    <div className={`tg-result-state${tone === "danger" ? " is-danger" : ""}`}>
-      <span className="tg-result-state-icon">{icon}</span>
+    <div className={`np-sw-result-state${tone === "danger" ? " is-danger" : ""}`}>
+      <span>{icon}</span>
       <strong>{title}</strong>
       <p>{description}</p>
     </div>
@@ -79,36 +79,36 @@ function CandidateCard({
 }) {
   return (
     <article
-      className={`tg-candidate-card cg-candidate-card${selected ? " is-selected" : ""}`}
+      className={`np-cg-candidate-card cg-candidate-card${selected ? " is-selected" : ""}`}
       data-testid={`conditional-candidate-${candidate.rank}`}
     >
       <button
         type="button"
-        className="cg-candidate-select"
+        className="np-cg-candidate-select cg-candidate-select"
         aria-pressed={selected}
         aria-label={`选择候选 #${candidate.rank}：${candidate.generated_smiles}`}
         onClick={onSelect}
       >
-        <header className="tg-candidate-card-header">
-          <span className="tg-candidate-rank">{`#${candidate.rank}`}</span>
-          <code className="cg-candidate-smiles">{candidate.generated_smiles}</code>
-          <span className="cg-candidate-source">RDKit 2D</span>
+        <header className="np-cg-candidate-card__header">
+          <span className="np-cg-candidate-rank">{`#${candidate.rank}`}</span>
+          <code className="np-cg-candidate-smiles cg-candidate-smiles">{candidate.generated_smiles}</code>
+          <span className="np-cg-candidate-source cg-candidate-source">RDKit 2D</span>
         </header>
 
-        <div className="tg-candidate-structure cg-candidate-structure">
+        <div className="np-cg-candidate-structure cg-candidate-structure">
           {candidate.structure_svg ? (
             <StructureSvg
               svg={candidate.structure_svg}
               alt={`条件生成候选 ${candidate.rank} 的二维结构`}
-              className="cg-candidate-artwork"
-              imageClassName="cg-candidate-artwork-image"
+              className="np-cg-candidate-artwork cg-candidate-artwork"
+              imageClassName="np-cg-candidate-artwork__image cg-candidate-artwork-image"
             />
           ) : (
             <p>{candidate.generated_smiles}</p>
           )}
         </div>
 
-        <div className="tg-candidate-metrics cg-candidate-metrics">
+        <div className="np-cg-candidate-metrics cg-candidate-metrics">
           <div>
             <span>预测 Tg</span>
             <strong>{`${formatMetric(candidate.predicted_tg, 1)}${candidate.predicted_tg == null ? "" : ` ${candidate.tg_unit}`}`}</strong>
@@ -124,7 +124,7 @@ function CandidateCard({
         </div>
       </button>
 
-      <footer className="cg-candidate-footer">
+      <footer className="np-cg-candidate-footer cg-candidate-footer">
         <button
           type="button"
           onClick={onCopy}
@@ -193,16 +193,16 @@ export function ConditionalGenerationResults({
   if (isLoading) {
     const statusLabel = job?.status === "pending" ? "任务正在排队" : "正在生成候选结构";
     return (
-      <div className="cg-result-loading">
-        <div className="tg-result-loading-title">
-          <LoaderCircle className="animate-spin" />
+      <div className="np-cg-result-loading">
+        <div className="np-cg-loading-title">
+          <LoaderCircle className="np-sw-spin" />
           <div>
             <strong>{statusLabel}</strong>
             <span>{job?.message || "模型正在采样并筛选有效聚合物结构…"}</span>
           </div>
         </div>
-        <div className="cg-indeterminate-progress" aria-label="生成进行中" />
-        <div className="tg-result-skeleton-list" aria-hidden="true">
+        <div className="np-cg-indeterminate-progress cg-indeterminate-progress" aria-label="生成进行中" />
+        <div className="np-cg-result-skeleton-list" aria-hidden="true">
           {Array.from({ length: 2 }).map((_, index) => <span key={index} />)}
         </div>
       </div>
@@ -240,11 +240,11 @@ export function ConditionalGenerationResults({
   }
 
   return (
-    <div className="cg-result-success">
-      <p className="cg-ranking-note">
+    <div className="np-cg-result-success">
+      <p className="np-cg-ranking-note cg-ranking-note">
         排序：与种子结构的 Morgan–Tanimoto 相似度降序 → SA Score 升序 → 规范化 SMILES 字典序；预测 Tg 不参与排序。
       </p>
-      <div className="tg-candidate-list">
+      <div className="np-cg-candidate-list">
         {data.results.map((candidate) => (
           <CandidateCard
             key={`${candidate.rank}-${candidate.generated_smiles}`}
@@ -256,7 +256,7 @@ export function ConditionalGenerationResults({
           />
         ))}
       </div>
-      <span className="tg-visually-hidden" role="status" aria-live="polite">
+      <span className="np-sw-visually-hidden" role="status" aria-live="polite">
         {copyFeedback}
       </span>
     </div>

@@ -541,7 +541,8 @@ export default function App() {
         activeModuleRef.current === "structureWorkbench" ||
         activeModuleRef.current === "homopolymerPrediction" ||
         activeModuleRef.current === "explorer" ||
-        activeModuleRef.current === "databaseQuery"
+        activeModuleRef.current === "databaseQuery" ||
+        activeModuleRef.current === "conditionalGeneration"
       ) {
         void syncStructureBeforeNavigation().then(applyLatestRoute);
       } else {
@@ -1020,7 +1021,8 @@ export default function App() {
         activeModule === "structureWorkbench" ||
         activeModule === "homopolymerPrediction" ||
         activeModule === "explorer" ||
-        activeModule === "databaseQuery"
+        activeModule === "databaseQuery" ||
+        activeModule === "conditionalGeneration"
           ? beforeStructureCanvasNavigation
           : undefined
       }
@@ -1125,7 +1127,10 @@ export default function App() {
       ) : null}
 
       {activeModule === "conditionalGeneration" ? (
-        <ConditionalGenerationPage structure={structureWorkspace} />
+        <ConditionalGenerationPage
+          ref={structureCanvasOwnerRef}
+          structure={structureWorkspace}
+        />
       ) : null}
 
       {activeModule === "polytaoGeneration" ? (
