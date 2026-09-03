@@ -573,7 +573,7 @@ class Settings:
             )
         raw_online_knowledge_base_url = online_knowledge_base_url or os.getenv(
             "ONLINE_KNOWLEDGE_BASE_URL",
-            env_values.get("ONLINE_KNOWLEDGE_BASE_URL", "https://api.vectorengine.ai/v1"),
+            env_values.get("ONLINE_KNOWLEDGE_BASE_URL", "https://api.relayrouter.ai/v1"),
         )
         raw_online_knowledge_model = online_knowledge_model or os.getenv(
             "ONLINE_KNOWLEDGE_MODEL",
