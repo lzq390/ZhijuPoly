@@ -43,6 +43,7 @@ import {
   DatabaseFilterResultsDrawer,
   useDatabaseFilterDrawerSizing
 } from "./DatabaseFilterResultsDrawer";
+import { MaterialDiscoveryPageTitle } from "./MaterialDiscoveryPageTitle";
 import "../styles/structure-workbench.css";
 import "../styles/database-filter.css";
 
@@ -591,12 +592,12 @@ export function DatabaseFilterPage() {
 
   return (
     <div
-      className="np-structure-workbench np-database-filter database-filter-page"
+      className="np-structure-workbench np-database-filter database-filter-page np-material-discovery-page"
       data-module="database-filter"
       style={{ "--np-sw-drawer-width": `${drawerSizing.width}px` } as CSSProperties}
     >
       <div className={`np-sw-page${filter.drawerOpen ? " has-open-drawer" : ""}`}>
-        <h1 className="np-sw-page-title">数据库筛选</h1>
+        <MaterialDiscoveryPageTitle className="np-sw-page-title">数据库筛选</MaterialDiscoveryPageTitle>
         <div className={`np-sw-layout${filter.drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
             <div className="dbf-module-toolbar" aria-label="数据库筛选状态">

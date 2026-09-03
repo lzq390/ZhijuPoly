@@ -2,6 +2,7 @@ import { Database, FileText, Globe2 } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 import "../styles/knowledge-retrieval.css";
 import { LocalKnowledgePanel } from "./knowledge-search/LocalKnowledgePanel";
+import { MaterialDiscoveryPageTitle } from "./MaterialDiscoveryPageTitle";
 import { OnlineKnowledgeSearchPanel } from "./online-knowledge/OnlineKnowledgeSearchPanel";
 import { PdfSimilarityDemoPanel } from "./PdfSimilarityDemoPanel";
 
@@ -88,10 +89,10 @@ export function KnowledgeSearch({ initialQuery = "", initialTerms = [] }: Knowle
   }
 
   return (
-    <div className="knowledge-retrieval-page">
+    <div className="knowledge-retrieval-page np-material-discovery-page">
       <header className="ks-page-header">
         <div className="ks-page-title">
-          <h1>知识检索</h1>
+          <MaterialDiscoveryPageTitle>知识检索</MaterialDiscoveryPageTitle>
         </div>
       </header>
 

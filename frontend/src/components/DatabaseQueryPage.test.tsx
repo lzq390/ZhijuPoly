@@ -122,7 +122,9 @@ describe("DatabaseQueryPage", () => {
   it("复用结构工作台画板，并在首次查询前隐藏结果抽屉", () => {
     render(<DatabaseQueryPage structure={makeStructure()} />);
 
-    expect(screen.getByRole("heading", { name: "数据库查询" })).toBeTruthy();
+    const pageTitle = screen.getByRole("heading", { name: "数据库查询" });
+    expect(pageTitle.classList.contains("np-material-discovery-page-title")).toBe(true);
+    expect(pageTitle.closest(".np-material-discovery-page")).not.toBeNull();
     expect(screen.getByTitle("数据库查询结构编辑器")).toBeTruthy();
     expect(screen.getByRole("button", { name: "加载结构" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "AI 助手" })).toBeNull();

@@ -52,6 +52,7 @@ import {
 } from "../types";
 import { StructurePreview3D } from "./StructurePreview3D";
 import { StructureSvg } from "./StructureSvg";
+import { MaterialDiscoveryPageTitle } from "./MaterialDiscoveryPageTitle";
 import "../styles/polytao-generation.css";
 
 type PolytaoGenerationPageProps = {
@@ -636,7 +637,7 @@ export function PolytaoGenerationPage({
   return (
     <div
       ref={pageRef}
-      className={`polytao-page is-drawer-${drawerMode}${drawerOpen ? " is-drawer-open" : ""}`}
+      className={`polytao-page np-material-discovery-page is-drawer-${drawerMode}${drawerOpen ? " is-drawer-open" : ""}`}
       style={pageStyle}
     >
       <div
@@ -644,7 +645,7 @@ export function PolytaoGenerationPage({
         inert={drawerOpen && drawerMode === "overlay"}
       >
         <header className="polytao-page-heading">
-          <h1>聚合物生成</h1>
+          <MaterialDiscoveryPageTitle>聚合物生成</MaterialDiscoveryPageTitle>
         </header>
 
         <main className="polytao-workbench-shell">

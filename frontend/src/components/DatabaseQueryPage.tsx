@@ -18,6 +18,7 @@ import type {
 } from "../types";
 import "../styles/structure-workbench.css";
 import "../styles/database-query.css";
+import { MaterialDiscoveryPageTitle } from "./MaterialDiscoveryPageTitle";
 import type { StructureCanvasOwnerHandle } from "./StructureWorkbenchPage";
 import {
   DatabaseQueryDrawer,
@@ -205,12 +206,12 @@ export const DatabaseQueryPage = forwardRef<
 
   return (
     <div
-      className="np-structure-workbench np-database-query"
+      className="np-structure-workbench np-database-query np-material-discovery-page"
       data-module="database-query"
       style={workbenchStyle}
     >
       <div className={`np-sw-page${drawerOpen ? " has-open-drawer" : ""}`}>
-        <h1 className="np-sw-page-title">数据库查询</h1>
+        <MaterialDiscoveryPageTitle className="np-sw-page-title">数据库查询</MaterialDiscoveryPageTitle>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
             <StructureCanvasSurface

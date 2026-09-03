@@ -20,6 +20,7 @@ import type {
 } from "../types";
 import "../styles/structure-workbench.css";
 import "../styles/polymer-similarity-explorer.css";
+import { MaterialDiscoveryPageTitle } from "./MaterialDiscoveryPageTitle";
 import type { StructureCanvasOwnerHandle } from "./StructureWorkbenchPage";
 import {
   SimilarityExplorerDrawer,
@@ -195,12 +196,14 @@ export const PolymerSimilarityExplorerPage = forwardRef<
 
   return (
     <div
-      className="np-structure-workbench np-similarity-explorer"
+      className="np-structure-workbench np-similarity-explorer np-material-discovery-page"
       data-module="polymer-similarity-explorer"
       style={workbenchStyle}
     >
       <div className={`np-sw-page${drawerOpen ? " has-open-drawer" : ""}`}>
-        <h1 className="np-sw-page-title">聚合物相似性探索</h1>
+        <MaterialDiscoveryPageTitle className="np-sw-page-title">
+          聚合物相似性探索
+        </MaterialDiscoveryPageTitle>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
             <StructureCanvasSurface

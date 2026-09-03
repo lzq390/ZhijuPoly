@@ -243,6 +243,9 @@ describe("数据库分析工作台", () => {
   it("以紧凑全库概览替代 Hero，并通过数据集浮层切换深链", async () => {
     const view = renderAnalysis();
 
+    const pageTitle = screen.getByRole("heading", { name: "数据库分析" });
+    expect(pageTitle.classList.contains("np-material-discovery-page-title")).toBe(true);
+    expect(pageTitle.closest(".np-material-discovery-page")).not.toBeNull();
     expect(await screen.findByText("数据集概览")).not.toBeNull();
     expect(screen.getByText("全库概览")).not.toBeNull();
     expect(screen.getByText("统计数据")).not.toBeNull();
