@@ -33,6 +33,8 @@ describe("monomerMdDemoNotice", () => {
   });
 
   it("uses a number-free warning when the step count is unknown", () => {
-    expect(monomerMdDemoNotice(result(), null)).toBe("演示结果尚未达到平衡，不能作为物理密度估计。");
+    expect(monomerMdDemoNotice(result(), null)).toBe(
+      "这是由 Worker 实际执行的 MD 结果；由于步数不足，体系尚未达到平衡，不能作为物理密度估计。"
+    );
   });
 });

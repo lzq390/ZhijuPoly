@@ -186,6 +186,7 @@ export function AppShell({
   const isHomopolymerPredictionWorkbench = activeModule === "homopolymerPrediction";
   const isMonomerPolymerizationWorkbench = activeModule === "monomerPolymerization";
   const isMdSimulationWorkbench = activeModule === "mdSimulationDemo";
+  const isMonomerMdSimulationWorkbench = activeModule === "monomerMdSimulation";
   const isSimilarityExplorerWorkbench = activeModule === "explorer";
   const isDatabaseQueryWorkbench = activeModule === "databaseQuery";
   const isDatabaseFilterWorkbench = activeModule === "databaseFilter";
@@ -202,6 +203,7 @@ export function AppShell({
     isHomopolymerPredictionWorkbench ||
     isMonomerPolymerizationWorkbench ||
     isMdSimulationWorkbench ||
+    isMonomerMdSimulationWorkbench ||
     isStructureWorkbench ||
     isReverseDesignWorkbench ||
     isConditionalGenerationWorkbench;
@@ -469,6 +471,7 @@ export function AppShell({
                     isHomopolymerPredictionWorkbench ||
                     isMonomerPolymerizationWorkbench ||
                     isMdSimulationWorkbench ||
+                    isMonomerMdSimulationWorkbench ||
                     isSimilarityExplorerWorkbench ||
                     isDatabaseQueryWorkbench ||
                     isDatabaseFilterWorkbench ||

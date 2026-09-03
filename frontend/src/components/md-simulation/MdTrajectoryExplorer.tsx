@@ -9,7 +9,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   MdDemoAtomDistanceResponse,
   MdDemoAtomSelection,
@@ -33,6 +33,14 @@ type TrajectoryCloud = {
   center: { x: number; y: number; z: number };
   radius: number;
 };
+export type MdTrajectoryProjectionBounds = {
+  minX: number;
+  minY: number;
+  minZ: number;
+  maxX: number;
+  maxY: number;
+  maxZ: number;
+};
 type ProjectedTrajectoryPoint = {
   point: MdDemoTrajectoryPoint;
   x: number;
@@ -42,6 +50,7 @@ type ProjectedTrajectoryPoint = {
 };
 
 const INITIAL_VIEW: TrajectoryView = { rotationX: -0.45, rotationY: 0.62, zoom: 1 };
+const EMPTY_SELECTIONS: MdAtomSelectionSlots = [null, null];
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -72,11 +81,49 @@ function atomTypeToColor(atomType: string) {
     "7": "#16a34a",
     "8": "#7c3aed"
   };
-  return colors[atomType] ?? "#475569";
+  const elements: Record<string, string> = {
+    H: "#94a3b8",
+    C: "#334155",
+    N: "#2563eb",
+    O: "#ef4444",
+    F: "#22c55e",
+    P: "#f97316",
+    S: "#eab308",
+    CL: "#16a34a",
+    BR: "#a16207",
+    LI: "#7c3aed"
+  };
+  const element = atomType.replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase();
+  return colors[atomType] ?? elements[element] ?? "#475569";
 }
 
-function buildTrajectoryCloud(points: MdDemoTrajectoryPoint[]): TrajectoryCloud {
+function atomTypeLegendLabel(atomType: string) {
+  const letters = atomType.replace(/[^A-Za-z]/g, "").slice(0, 2);
+  if (!letters) return `类型 ${atomType}`;
+  return `${letters[0].toUpperCase()}${letters.slice(1).toLowerCase()}`;
+}
+
+function buildTrajectoryCloud(
+  points: MdDemoTrajectoryPoint[],
+  projectionBounds?: MdTrajectoryProjectionBounds
+): TrajectoryCloud {
   if (!points.length) return { points, center: { x: 0, y: 0, z: 0 }, radius: 1 };
+  if (projectionBounds && Object.values(projectionBounds).every(Number.isFinite)) {
+    return {
+      points,
+      center: {
+        x: (projectionBounds.minX + projectionBounds.maxX) / 2,
+        y: (projectionBounds.minY + projectionBounds.maxY) / 2,
+        z: (projectionBounds.minZ + projectionBounds.maxZ) / 2
+      },
+      radius: Math.max(
+        projectionBounds.maxX - projectionBounds.minX,
+        projectionBounds.maxY - projectionBounds.minY,
+        projectionBounds.maxZ - projectionBounds.minZ,
+        1
+      ) / 2
+    };
+  }
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
   let minZ = Number.POSITIVE_INFINITY;
@@ -202,24 +249,48 @@ function pickTrajectoryPoint(
   return bestPoint;
 }
 
-function TrajectoryCanvas({
+export function MdTrajectoryPointCloudCanvas({
   points,
-  selections,
-  onAtomSelect
+  projectionBounds,
+  selections = EMPTY_SELECTIONS,
+  onAtomSelect,
+  showAtomLegend = false,
+  helpText,
+  ariaLabel = "最终帧原子分布，可拖拽旋转和缩放",
+  hudLabel = "最终帧"
 }: {
   points: MdDemoTrajectoryPoint[];
-  selections: MdAtomSelectionSlots;
-  onAtomSelect: (atom: MdDemoAtomSelection) => void;
+  projectionBounds?: MdTrajectoryProjectionBounds;
+  selections?: MdAtomSelectionSlots;
+  onAtomSelect?: (atom: MdDemoAtomSelection) => void;
+  showAtomLegend?: boolean;
+  helpText?: string;
+  ariaLabel?: string;
+  hudLabel?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
+  const helpId = useId();
   const [view, setView] = useState<TrajectoryView>(INITIAL_VIEW);
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: 0, height: 0 });
-  const cloud = useMemo(() => buildTrajectoryCloud(points), [points]);
+  const cloud = useMemo(
+    () => buildTrajectoryCloud(points, projectionBounds),
+    [points, projectionBounds]
+  );
   const selectedIds = useMemo(
     () => new Set(selections.flatMap((selection) => selection ? [selection.atom_id] : [])),
     [selections]
   );
+  const atomLegend = useMemo(() => {
+    if (!showAtomLegend) return [];
+    const items = new Map<string, { label: string; color: string }>();
+    points.forEach((point) => {
+      const label = atomTypeLegendLabel(point.atom_type);
+      const key = label.toUpperCase();
+      if (!items.has(key)) items.set(key, { label, color: atomTypeToColor(point.atom_type) });
+    });
+    return [...items.values()];
+  }, [points, showAtomLegend]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -257,8 +328,8 @@ function TrajectoryCanvas({
   return (
     <div className="np-md-trajectory-view">
       <div className="np-md-trajectory-view__toolbar">
-        <span id="md-trajectory-help">
-          <MousePointer2 />拖拽旋转，滚轮缩放，点击选择原子
+        <span id={helpId}>
+          <MousePointer2 />{helpText ?? (onAtomSelect ? "拖拽旋转，滚轮缩放，点击选择原子" : "拖拽旋转，滚轮缩放")}
         </span>
         <button type="button" onClick={() => setView(INITIAL_VIEW)}>
           <RotateCcw />重置视角
@@ -269,14 +340,14 @@ function TrajectoryCanvas({
           <span>
             <i /> 交互视图
           </span>
-          <b>EQ3 · 最终帧</b>
+          <b>{hudLabel}</b>
         </div>
         <canvas
           ref={canvasRef}
           tabIndex={0}
           role="img"
-          aria-label="最终帧原子分布，可拖拽旋转并点击选择原子"
-          aria-describedby="md-trajectory-help"
+          aria-label={ariaLabel}
+          aria-describedby={helpId}
           onPointerDown={(event) => {
             dragStateRef.current = {
               pointerId: event.pointerId,
@@ -304,7 +375,7 @@ function TrajectoryCanvas({
             if (!drag || drag.pointerId !== event.pointerId) return;
             dragStateRef.current = null;
             event.currentTarget.releasePointerCapture(event.pointerId);
-            if (drag.moved) return;
+            if (drag.moved || !onAtomSelect) return;
             const rect = event.currentTarget.getBoundingClientRect();
             const point = pickTrajectoryPoint(
               cloud,
@@ -328,6 +399,14 @@ function TrajectoryCanvas({
           <span className="is-y">Y</span>
           <span className="is-z">Z</span>
         </div>
+        {atomLegend.length ? (
+          <div className="np-md-canvas-legend" role="list" aria-label="元素颜色图例">
+            <strong>元素配色</strong>
+            {atomLegend.map((item) => (
+              <span key={item.label} role="listitem"><i style={{ backgroundColor: item.color }} />{item.label}</span>
+            ))}
+          </div>
+        ) : null}
         {!points.length ? <div className="np-md-trajectory-empty">暂无轨迹坐标可显示。</div> : null}
       </div>
     </div>
@@ -408,7 +487,7 @@ export function MdTrajectoryExplorer({
             <i /> EQ3 · {points.length} 个原子 · {timePs.toFixed(2)} ps
           </span>
         </header>
-        <TrajectoryCanvas
+        <MdTrajectoryPointCloudCanvas
           points={points}
           selections={selections}
           onAtomSelect={(atom) => {

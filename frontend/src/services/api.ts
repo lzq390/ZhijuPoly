@@ -42,6 +42,7 @@ import type {
   MonomerMdJobResponse,
   MonomerMdProtocolCatalogResponse,
   MonomerMdServiceStatusResponse,
+  MonomerMdTrajectoryTimeline,
   MonomerPolymerizationRequest,
   MonomerPolymerizationResponse,
   MonomerPolymerizationStatusResponse,
@@ -484,6 +485,17 @@ export async function fetchMonomerMdJob(jobId: string, signal?: AbortSignal): Pr
   return normalizeMonomerMdJob(job);
 }
 
+export function fetchMonomerMdTrajectoryTimeline(
+  jobId: string,
+  stageId: string,
+  signal?: AbortSignal
+): Promise<MonomerMdTrajectoryTimeline> {
+  return getJSON(
+    `/monomer-md/jobs/${encodeURIComponent(jobId)}/visualization/stages/${encodeURIComponent(stageId)}/trajectory`,
+    { signal }
+  );
+}
+
 export async function fetchMonomerMdJobs(
   query: MonomerMdJobListQuery,
   signal?: AbortSignal
@@ -491,6 +503,7 @@ export async function fetchMonomerMdJobs(
   const params = new URLSearchParams();
   if (query.run_mode) params.set("run_mode", query.run_mode);
   if (query.active_only != null) params.set("active_only", String(query.active_only));
+  params.set("include_result", String(query.include_result ?? false));
   if (query.protocol) params.set("protocol", query.protocol);
   if (query.status) params.set("status", query.status);
   if (query.page != null) params.set("page", String(query.page));
@@ -511,9 +524,13 @@ export async function cancelMonomerMdJob(
   return normalizeMonomerMdJob(job);
 }
 
-export async function deleteMonomerMdArtifacts(jobId: string): Promise<MonomerMdJobResponse> {
+export async function deleteMonomerMdArtifacts(
+  jobId: string,
+  signal?: AbortSignal
+): Promise<MonomerMdJobResponse> {
   const response = await fetch(`${API_BASE_URL}/monomer-md/jobs/${encodeURIComponent(jobId)}/artifacts`, {
-    method: "DELETE"
+    method: "DELETE",
+    signal
   });
 
   if (!response.ok) {

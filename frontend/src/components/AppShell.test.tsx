@@ -295,6 +295,16 @@ describe("AppShell 侧边栏", () => {
     expect(main?.firstElementChild?.classList.contains("h-full")).toBe(true);
   });
 
+  it("单体 MD 模拟使用独立滚动的无内边距满高工作台容器", () => {
+    const view = renderShell("monomerMdSimulation");
+    const main = view.container.querySelector("main");
+
+    expect(main?.classList.contains("overflow-hidden")).toBe(true);
+    expect(main?.classList.contains("p-0")).toBe(true);
+    expect(main?.classList.contains("overflow-y-auto")).toBe(false);
+    expect(main?.firstElementChild?.classList.contains("h-full")).toBe(true);
+  });
+
   it("均聚物性质预测使用无内边距的满高工作台容器", () => {
     const view = renderShell("homopolymerPrediction");
     const main = view.container.querySelector("main");

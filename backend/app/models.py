@@ -1912,10 +1912,16 @@ class MonomerMdJobStatusResponse(BaseModel):
     result: dict[str, Any] | None = None
 
 
+class MonomerMdJobListItemResponse(MonomerMdJobStatusResponse):
+    """History-list shape; large result data may be projected out as null."""
+
+    result: dict[str, Any] | None = None
+
+
 class MonomerMdJobPageResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    items: list[MonomerMdJobStatusResponse]
+    items: list[MonomerMdJobListItemResponse]
     total: int = Field(ge=0)
     page: int = Field(ge=1)
     page_size: int = Field(ge=1)

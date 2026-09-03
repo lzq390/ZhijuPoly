@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelMonomerMdJob,
+  deleteMonomerMdArtifacts,
   deleteMonomerMdJob,
   browseExperimentalProcessRecords,
   fetchDatabaseAnalytics,
@@ -8,6 +9,7 @@ import {
   fetchDevGpuSessionStatus,
   fetchMonomerPolymerizationStatus,
   fetchMonomerMdJobs,
+  fetchMonomerMdTrajectoryTimeline,
   fetchMdDemoDefaults,
   fetchPropertyFilterHistogram,
   fetchPropertyFilterOptions,
@@ -486,6 +488,29 @@ describe("deleteMonomerMdJob", () => {
   });
 });
 
+describe("deleteMonomerMdArtifacts", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("forwards the optional AbortSignal and normalizes the returned task", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      job_id: "a".repeat(32),
+      status: "completed",
+      input_smiles: "CCO",
+      progress_percent: 100
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const job = await deleteMonomerMdArtifacts("a".repeat(32), controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/monomer-md/jobs/${"a".repeat(32)}/artifacts`,
+      { method: "DELETE", signal: controller.signal }
+    );
+    expect(job).toMatchObject({ smiles: "CCO", progress: 100 });
+  });
+});
+
 describe("fetchPolytaoStatus", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -660,7 +685,7 @@ describe("monomer MD queue API", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/monomer-md/jobs?run_mode=formal&active_only=false&protocol=Density&status=cancel_requested&page=2&page_size=10",
+      "/api/v1/monomer-md/jobs?run_mode=formal&active_only=false&include_result=false&protocol=Density&status=cancel_requested&page=2&page_size=10",
       expect.objectContaining({ signal: controller.signal })
     );
     expect(page.items[0]).toMatchObject({
@@ -668,6 +693,39 @@ describe("monomer MD queue API", () => {
       progress: 25,
       message: "cancelling"
     });
+  });
+
+  it("loads one trajectory timeline through the stage-scoped endpoint", async () => {
+    const timeline = {
+      schema_version: 1,
+      source_frame_count: 3000,
+      sampled_frame_count: 60,
+      total_atoms: 10062,
+      sampled_points: 2000,
+      coordinate_unit: "angstrom",
+      coordinate_scale: 0.01,
+      coordinate_encoding: "int16-delta-gzip-base64",
+      coordinate_byte_order: "little",
+      decoded_byte_length: 720000,
+      atoms: [],
+      frames: [],
+      coordinates: "encoded"
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(timeline), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(fetchMonomerMdTrajectoryTimeline("job/a", "gas nvt", controller.signal))
+      .resolves.toEqual(timeline);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/monomer-md/jobs/job%2Fa/visualization/stages/gas%20nvt/trajectory",
+      expect.objectContaining({ signal: controller.signal })
+    );
   });
 
   it.each([200, 202])(

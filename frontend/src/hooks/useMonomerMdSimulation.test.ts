@@ -2,7 +2,7 @@
 
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useMonomerMdSimulation } from "./useMonomerMdSimulation";
+import { getMonomerMdJobResult, useMonomerMdSimulation } from "./useMonomerMdSimulation";
 
 type ObservedRequest = {
   url: string;
@@ -15,6 +15,22 @@ afterEach(() => {
 });
 
 describe("useMonomerMdSimulation", () => {
+  it("falls back to the backend result_summary contract", () => {
+    expect(getMonomerMdJobResult({
+      job_id: "a".repeat(32),
+      status: "completed",
+      result_summary: { density: 1.02 },
+      artifacts: { report: { name: "report.json" } }
+    })).toEqual({
+      density_series: undefined,
+      temperature_series: undefined,
+      energy_series: undefined,
+      trajectory_preview: null,
+      summary: { density: 1.02 },
+      artifacts: { report: { name: "report.json" } }
+    });
+  });
+
   it("aborts both in-flight status fetches when the hook unmounts", async () => {
     const requests: ObservedRequest[] = [];
     const abortedUrls: string[] = [];

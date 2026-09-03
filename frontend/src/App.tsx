@@ -43,6 +43,7 @@ import { useQuery } from "./hooks/useQuery";
 import { useTgAssistant } from "./hooks/useTgAssistant";
 import { standardizeSmiles } from "./services/api";
 import { getMonomerDftJobIdFromSearch, getMonomerDftPath } from "./lib/monomerDftRouting";
+import { getMonomerMdJobIdFromSearch, getMonomerMdPath } from "./lib/monomerMdRouting";
 import {
   normalizeKnowledgeSearchGroups,
   serializeKnowledgeSearchGroups
@@ -323,6 +324,12 @@ export default function App() {
     }
     return getMonomerDftJobIdFromSearch(window.location.search);
   });
+  const [monomerMdJobId, setMonomerMdJobId] = useState<string | null>(() => {
+    if (typeof window === "undefined" || getInitialRoute().module !== "monomerMdSimulation") {
+      return null;
+    }
+    return getMonomerMdJobIdFromSearch(window.location.search);
+  });
   const [knowledgeInitialQuery, setKnowledgeInitialQuery] = useState(() => {
     if (typeof window === "undefined") {
       return "";
@@ -534,6 +541,9 @@ export default function App() {
         if (route.module === "monomerDft") {
           setMonomerDftJobId(getMonomerDftJobIdFromSearch(search));
         }
+        if (route.module === "monomerMdSimulation") {
+          setMonomerMdJobId(getMonomerMdJobIdFromSearch(search));
+        }
         applyRoute(route);
       };
 
@@ -585,8 +595,17 @@ export default function App() {
     navigate({ module: "mdSimulationDemo", datasetKey: null });
   }
 
-  function openMonomerMdSimulation() {
-    navigate({ module: "monomerMdSimulation", datasetKey: null });
+  function openMonomerMdSimulation(jobId: string | null = null) {
+    const route = { module: "monomerMdSimulation", datasetKey: null } satisfies AppRoute;
+    const path = getMonomerMdPath(jobId);
+    if (typeof window !== "undefined") {
+      if (`${normalizePath(window.location.pathname)}${window.location.search}` !== path) {
+        window.history.pushState(route, "", path);
+      }
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }
+    setMonomerMdJobId(jobId);
+    applyRoute(route);
   }
 
   function openMonomerDft(jobId: string | null = null) {
@@ -903,7 +922,7 @@ export default function App() {
         {
           id: "monomerMdSimulation",
           label: "单体 MD 模拟",
-          description: "Submit ordinary monomer SMILES and track MD worker job results.",
+          description: "配置单体或多组分正式协议，跟踪真实 MD Worker 任务与结果。",
           route: "/monomer-md-simulation",
           icon: <Microscope className="h-4 w-4" />,
           isActive: activeModule === "monomerMdSimulation",
@@ -1115,7 +1134,12 @@ export default function App() {
       ) : null}
 
       {activeModule === "monomerMdSimulation" ? (
-        <MonomerMdSimulationPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+        <MonomerMdSimulationPage
+          structure={structureWorkspace}
+          initialJobId={monomerMdJobId}
+          onJobIdChange={openMonomerMdSimulation}
+          onEditStructure={openStructureWorkbench}
+        />
       ) : null}
 
       {activeModule === "monomerDft" ? (

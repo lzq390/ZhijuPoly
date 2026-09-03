@@ -58,6 +58,11 @@ function Harness() {
   return null;
 }
 
+function TaskCenterHarness() {
+  hook = useMonomerMdSimulation({ taskCenterActive: true });
+  return null;
+}
+
 function currentHook(): MonomerMdSimulationHook {
   if (hook === null) {
     throw new Error("Monomer MD hook has not rendered");
@@ -94,7 +99,7 @@ beforeEach(() => {
     items: [],
     total: 0,
     page: 1,
-    page_size: 20
+    page_size: 10
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
     .IS_REACT_ACT_ENVIRONMENT = true;
@@ -201,6 +206,27 @@ describe("Monomer MD service status polling", () => {
 });
 
 describe("Monomer MD task response isolation", () => {
+  it("requests formal history in fixed pages of ten records", async () => {
+    api.fetchMonomerMdStatus.mockResolvedValue(readyStatus);
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<TaskCenterHarness />);
+    });
+
+    expect(currentHook().historyQuery.page_size).toBe(10);
+    expect(api.fetchMonomerMdJobs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run_mode: "formal",
+        active_only: false,
+        page: 1,
+        page_size: 10
+      }),
+      expect.any(AbortSignal)
+    );
+    act(() => renderer!.unmount());
+  });
+
   it("does not reselect a cancelled task after the user switches tasks", async () => {
     let resolveCancellation:
       | ((job: {
