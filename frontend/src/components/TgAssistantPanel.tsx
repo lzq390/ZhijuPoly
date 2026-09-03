@@ -131,7 +131,7 @@ function ActionCard({
           <button type="button" onClick={() => assistant.rejectAction(item.id)}>忽略</button>
         </div>
       ) : item.status === "applying" ? (
-        <span className="tg-assistant-action-status"><LoaderCircle className="animate-spin" />正在应用…</span>
+        <span className="tg-assistant-action-status"><LoaderCircle className="np-sw-spin" />正在应用…</span>
       ) : item.status === "expired" ? (
         <button type="button" onClick={() => onRegenerate(item.sourceText)}><RefreshCcw />重新生成</button>
       ) : (
@@ -180,7 +180,7 @@ function ProcessDetails({ item }: { item: TgAssistantMessageItem }) {
         <ol>
           {process.stages.map((stage) => (
             <li key={stage} className={stage === process.currentStage ? "is-active" : ""}>
-              {stage === process.currentStage && active ? <LoaderCircle className="animate-spin" /> : <Check />}
+              {stage === process.currentStage && active ? <LoaderCircle className="np-sw-spin" /> : <Check />}
               {PROCESS_STAGE_LABELS[stage]}
             </li>
           ))}
@@ -231,7 +231,7 @@ function MessageBubble({
               />
             ) : (
               <span className="tg-assistant-message-image-unavailable" role="img" aria-label={unavailableLabel}>
-                {imagePreviewRestoring ? <LoaderCircle className="animate-spin" /> : <Image />}
+                {imagePreviewRestoring ? <LoaderCircle className="np-sw-spin" /> : <Image />}
                 <em>{unavailableLabel}</em>
               </span>
             )}
@@ -240,7 +240,7 @@ function MessageBubble({
         ) : null}
         {item.content ? <SafeMarkdown content={item.content} /> : null}
         {item.status === "understanding" ? (
-          <small className="tg-assistant-thinking"><LoaderCircle className="animate-spin" />正在思考中</small>
+          <small className="tg-assistant-thinking"><LoaderCircle className="np-sw-spin" />正在思考中</small>
         ) : null}
         {item.status === "streaming" && !item.content ? <small>正在生成…</small> : null}
         {item.role === "assistant" ? <ProcessDetails item={item} /> : null}
@@ -373,17 +373,18 @@ export function TgAssistantPanel({
 
   return (
     <>
-      <header className="tg-assistant-header">
+      <header className="np-sw-popover__header tg-assistant-header">
         <div>
-          <span className="tg-assistant-mark"><Sparkles /></span>
+          <span className="np-sw-popover__mark tg-assistant-mark"><Sparkles aria-hidden="true" /></span>
           <span>
             <h2 id="tg-assistant-title">Tg AI 助手</h2>
             <small>{available ? "AI 服务已就绪" : "使用指南与本地帮助"}</small>
           </span>
         </div>
-        <span className="tg-assistant-header-actions">
+        <span className="np-sw-popover__actions tg-assistant-header-actions">
           <button
             type="button"
+            className="np-sw-icon-button"
             aria-label="清空当前对话（不可恢复）"
             title="清空当前对话（不可恢复）"
             onClick={() => {
@@ -396,7 +397,7 @@ export function TgAssistantPanel({
           >
             <Trash2 />
           </button>
-          <button type="button" aria-label="收起 AI 助手" onClick={onClose}><X /></button>
+          <button type="button" className="np-sw-icon-button" aria-label="收起 AI 助手" onClick={onClose}><X /></button>
         </span>
       </header>
 
@@ -410,7 +411,7 @@ export function TgAssistantPanel({
           nearBottomRef.current = target.scrollHeight - target.scrollTop - target.clientHeight < 80;
         }}
       >
-        <div className="tg-assistant-context" aria-label="当前 AI 上下文">
+        <div className="np-sw-assistant-context tg-assistant-context" aria-label="当前 AI 上下文">
           {contextLabels.map((label, index) => <span key={label} className={index === 0 ? "is-ready" : ""}><i />{label}</span>)}
         </div>
 
@@ -437,11 +438,11 @@ export function TgAssistantPanel({
         </section>
 
         {!hasConversationContent ? (
-          <div className="tg-assistant-welcome">
+          <div className="np-sw-assistant-welcome tg-assistant-welcome">
             <span className="tg-assistant-orb"><Sparkles /></span>
             <h3><em>你好，</em><br />今天想一起研究什么？</h3>
             <p>{localDiagnostic}</p>
-            <div className="tg-assistant-suggestions">
+            <div className="np-sw-assistant-suggestions tg-assistant-suggestions">
               {suggestions.map((suggestion) => (
                 <button key={suggestion} type="button" onClick={() => {
                   setInput(suggestion);
@@ -511,7 +512,7 @@ export function TgAssistantPanel({
         <div className="tg-assistant-input-shell">
           <input
             ref={imageInputRef}
-            className="tg-visually-hidden"
+            className="np-sw-visually-hidden"
             type="file"
             accept="image/png,image/jpeg,image/webp"
             aria-label="选择供 AI 分析的图片"

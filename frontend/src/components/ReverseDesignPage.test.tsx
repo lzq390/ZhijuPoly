@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StructureWorkspaceContext } from "../types";
 import type { TgAssistantSession } from "../hooks/useTgAssistant";
@@ -52,10 +52,16 @@ const mocks = vi.hoisted(() => ({
   syncSmilesFromCanvas: vi.fn(),
   toggle3D: vi.fn(),
   copySmiles: vi.fn(),
+  updateSmilesDraft: vi.fn(),
+  flushSmilesDraft: vi.fn(),
+  cancelSmilesDraftSync: vi.fn(),
+  adoptCanvasSmiles: vi.fn(),
   handleEditorLoad: vi.fn(),
   peekCanvasState: vi.fn(),
-  standardizeSmiles: vi.fn(),
-  reverseOverrides: {} as Record<string, unknown>
+  captureCanvasImage: vi.fn(),
+  setFeedback: vi.fn(),
+  reverseOverrides: {} as Record<string, unknown>,
+  canvasOverrides: {} as Record<string, unknown>
 }));
 
 vi.mock("../hooks/useReverseDesign", () => ({
@@ -79,10 +85,6 @@ vi.mock("../hooks/useReverseDesign", () => ({
   })
 }));
 
-vi.mock("../services/api", () => ({
-  standardizeSmiles: mocks.standardizeSmiles
-}));
-
 vi.mock("../hooks/useTgStructureCanvas", () => ({
   useTgStructureCanvas: () => ({
     fileInputRef: { current: null },
@@ -96,16 +98,25 @@ vi.mock("../hooks/useTgStructureCanvas", () => ({
     isSyncing: false,
     isBusy: false,
     feedback: null,
-    setFeedback: vi.fn(),
+    setFeedback: mocks.setFeedback,
     copyState: "idle",
+    smilesDraft: "*CC*",
+    smilesDraftState: "synced",
+    smilesDraftError: null,
+    updateSmilesDraft: mocks.updateSmilesDraft,
+    flushSmilesDraft: mocks.flushSmilesDraft,
+    cancelSmilesDraftSync: mocks.cancelSmilesDraftSync,
+    adoptCanvasSmiles: mocks.adoptCanvasSmiles,
     clearCanvas: mocks.clearCanvas,
     loadStructure: mocks.loadStructure,
     importImageFile: mocks.importImageFile,
     syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
     toggle3D: mocks.toggle3D,
     peekCanvasState: mocks.peekCanvasState,
+    captureCanvasImage: mocks.captureCanvasImage,
     resolveSmilesForSearch: mocks.resolveSmilesForSearch,
-    copySmiles: mocks.copySmiles
+    copySmiles: mocks.copySmiles,
+    ...mocks.canvasOverrides
   })
 }));
 
@@ -164,6 +175,7 @@ function makeAssistant(): TgAssistantSession {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.reverseOverrides = {};
+  mocks.canvasOverrides = {};
   mocks.peekCanvasState.mockResolvedValue({
     smiles: "*CC*",
     canvasDirty: false,
@@ -175,10 +187,8 @@ beforeEach(() => {
   mocks.resolveSmilesForSearch.mockResolvedValue("*CC*");
   mocks.clearCanvas.mockResolvedValue(true);
   mocks.loadStructure.mockResolvedValue(true);
-  mocks.standardizeSmiles.mockImplementation(async ({ smiles }: { smiles: string }) => ({
-    input_smiles: smiles,
-    standardized_smiles: smiles
-  }));
+  mocks.flushSmilesDraft.mockResolvedValue(true);
+  mocks.cancelSmilesDraftSync.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -187,13 +197,15 @@ afterEach(() => {
 });
 
 describe("ReverseDesignPage production workbench", () => {
-  it("renders the root-level title and all six required toolbar controls", () => {
+  it("reuses the structure workbench shell and all shared toolbar controls", () => {
     const view = render(
       <ReverseDesignPage structure={makeStructure()} onOpenKnowledge={vi.fn()} assistant={makeAssistant()} />
     );
     const title = screen.getByRole("heading", { name: "Tg 逆向设计" });
 
-    expect(title.parentElement).toBe(view.container.firstElementChild);
+    expect(view.container.firstElementChild?.classList.contains("np-structure-workbench")).toBe(true);
+    expect(title.parentElement?.classList.contains("np-sw-page")).toBe(true);
+    expect(screen.getByRole("button", { name: "加载结构" }).getAttribute("data-workbench-tool")).toBe("load");
     expect(screen.getByRole("button", { name: "导入图片" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "清空画布" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "生成SMILES" })).toBeTruthy();
@@ -218,7 +230,7 @@ describe("ReverseDesignPage production workbench", () => {
     expect(document.getElementById("tg-assistant-panel")?.getAttribute("aria-hidden")).toBe("false");
 
     fireEvent.click(screen.getByRole("button", { name: "搜索参数" }));
-    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    fireEvent.click(screen.getByRole("button", { name: "运行搜索" }));
 
     await waitFor(() => {
       expect(mocks.submit).toHaveBeenCalledWith({
@@ -228,12 +240,13 @@ describe("ReverseDesignPage production workbench", () => {
         candidate_size: 200
       });
     });
-    expect(document.querySelector(".tg-results-drawer")?.getAttribute("aria-hidden")).toBe("false");
+    expect(mocks.setFeedback).toHaveBeenCalledWith(null);
+    expect(document.querySelector(".np-tg-results-drawer")?.getAttribute("aria-hidden")).toBe("false");
     expect(parameterPanel?.getAttribute("aria-hidden")).toBe("true");
 
     fireEvent.click(screen.getByRole("button", { name: "搜索参数" }));
     expect(parameterPanel?.getAttribute("aria-hidden")).toBe("false");
-    expect(document.querySelector(".tg-results-drawer")?.getAttribute("aria-hidden")).toBe("false");
+    expect(document.querySelector(".np-tg-results-drawer")?.getAttribute("aria-hidden")).toBe("false");
   });
 
   it("builds a minimal current-page snapshot without database IDs, job IDs, SVG, or raw errors", async () => {
@@ -378,95 +391,49 @@ describe("ReverseDesignPage production workbench", () => {
     expect(mocks.submit).not.toHaveBeenCalled();
   });
 
-  it("debounces editable SMILES and loads the standardized structure without a submit button", async () => {
-    vi.useFakeTimers();
-    mocks.standardizeSmiles.mockResolvedValue({ input_smiles: "C(C)O", standardized_smiles: "CCO" });
-    mocks.peekCanvasState.mockResolvedValue({
-      smiles: "CCO",
-      canvasDirty: false,
-      editorReady: true,
-      viewMode: "2d",
-      busy: false,
-      revisionKey: "canvas-cco"
-    });
+  it("delegates editable SMILES to the shared Tg canvas controller", () => {
     render(<ReverseDesignPage structure={makeStructure()} onOpenKnowledge={vi.fn()} assistant={makeAssistant()} />);
     const input = screen.getByRole("textbox", { name: "SMILES 输入，自动同步到画板" });
 
     fireEvent.change(input, { target: { value: "C(C)O" } });
-    expect(mocks.standardizeSmiles).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: /加载|提交|绘制 SMILES/ })).toBeNull();
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    vi.useRealTimers();
 
-    expect(mocks.standardizeSmiles).toHaveBeenCalledWith({ smiles: "C(C)O" });
-    expect(mocks.loadStructure).toHaveBeenCalledWith("CCO", expect.objectContaining({ isCurrent: expect.any(Function) }));
+    expect(mocks.updateSmilesDraft).toHaveBeenCalledWith("C(C)O");
   });
 
-  it("keeps an invalid SMILES draft while preserving the existing canvas", async () => {
-    vi.useFakeTimers();
-    mocks.standardizeSmiles.mockRejectedValue(new Error("invalid"));
+  it("shows shared SMILES validation state and blocks structure-dependent actions", () => {
+    mocks.canvasOverrides = {
+      smilesDraft: "C(",
+      smilesDraftState: "error",
+      smilesDraftError: "SMILES 无效，原画板未修改。"
+    };
     render(<ReverseDesignPage structure={makeStructure()} onOpenKnowledge={vi.fn()} assistant={makeAssistant()} />);
     const input = screen.getByRole("textbox", { name: "SMILES 输入，自动同步到画板" });
-
-    fireEvent.change(input, { target: { value: "C(" } });
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    vi.useRealTimers();
 
     expect((input as HTMLTextAreaElement).value).toBe("C(");
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(screen.getByRole("alert").textContent).toContain("原画板未修改");
-    expect(mocks.loadStructure).not.toHaveBeenCalled();
-    expect(mocks.reset).not.toHaveBeenCalled();
     expect((screen.getByRole("button", { name: "3D构象" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "搜索参数" }));
+    expect((screen.getByRole("button", { name: "运行搜索" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("clears the canvas after an empty SMILES draft settles", async () => {
-    vi.useFakeTimers();
+  it("uses the shared mutation guard for load, clear, sync, and image import", async () => {
     render(<ReverseDesignPage structure={makeStructure()} onOpenKnowledge={vi.fn()} assistant={makeAssistant()} />);
-    const input = screen.getByRole("textbox", { name: "SMILES 输入，自动同步到画板" });
 
-    fireEvent.change(input, { target: { value: "" } });
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: "加载结构" }));
+    await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "清空画布" }));
+    await waitFor(() => expect(mocks.clearCanvas).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "生成SMILES" }));
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledOnce());
 
-    expect(mocks.clearCanvas).toHaveBeenCalledWith(expect.objectContaining({ isCurrent: expect.any(Function) }));
-    expect(mocks.standardizeSmiles).not.toHaveBeenCalled();
-  });
+    const image = new File(["image"], "structure.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("导入结构图片"), { target: { files: [image] } });
+    await waitFor(() => expect(mocks.importImageFile).toHaveBeenCalledWith(image));
 
-  it("keeps the old canvas and results when Ketcher rejects a standardized draft", async () => {
-    vi.useFakeTimers();
-    mocks.loadStructure.mockResolvedValue(false);
-    render(<ReverseDesignPage structure={makeStructure()} onOpenKnowledge={vi.fn()} assistant={makeAssistant()} />);
-    const input = screen.getByRole("textbox", { name: "SMILES 输入，自动同步到画板" });
-
-    fireEvent.change(input, { target: { value: "CCO" } });
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    vi.useRealTimers();
-
-    expect((input as HTMLTextAreaElement).value).toBe("CCO");
-    expect(screen.getByRole("alert").textContent).toContain("未能同步到画板");
-    expect(mocks.reset).not.toHaveBeenCalled();
-  });
-
-  it("adopts external canvas SMILES without writing it back into Ketcher", async () => {
-    const assistant = makeAssistant();
-    const structure = makeStructure();
-    const view = render(
-      <ReverseDesignPage structure={structure} onOpenKnowledge={vi.fn()} assistant={assistant} />
-    );
-
-    view.rerender(
-      <ReverseDesignPage
-        structure={{ ...structure, smiles: "CCC" }}
-        onOpenKnowledge={vi.fn()}
-        assistant={assistant}
-      />
-    );
-
-    await waitFor(() => expect(
-      (screen.getByRole("textbox", { name: "SMILES 输入，自动同步到画板" }) as HTMLTextAreaElement).value
-    ).toBe("CCC"));
-    expect(mocks.loadStructure).not.toHaveBeenCalled();
+    expect(mocks.cancelSmilesDraftSync).toHaveBeenCalledTimes(4);
+    expect(mocks.adoptCanvasSmiles).toHaveBeenCalledTimes(4);
   });
 
   it("expires an AI operation as soon as the SMILES draft revision changes", async () => {
@@ -486,34 +453,6 @@ describe("ReverseDesignPage production workbench", () => {
 
     expect(result.status).toBe("expired");
     expect(mocks.loadStructure).not.toHaveBeenCalled();
-  });
-
-  it("applies latest-wins when a newer SMILES arrives during validation", async () => {
-    vi.useFakeTimers();
-    let resolveFirst: ((value: { input_smiles: string; standardized_smiles: string }) => void) | undefined;
-    mocks.standardizeSmiles
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
-      .mockResolvedValueOnce({ input_smiles: "CCC", standardized_smiles: "CCC" });
-    mocks.peekCanvasState.mockResolvedValue({
-      smiles: "CCC",
-      canvasDirty: false,
-      editorReady: true,
-      viewMode: "2d",
-      busy: false,
-      revisionKey: "canvas-ccc"
-    });
-    render(<ReverseDesignPage structure={makeStructure()} onOpenKnowledge={vi.fn()} assistant={makeAssistant()} />);
-    const input = screen.getByRole("textbox", { name: "SMILES 输入，自动同步到画板" });
-
-    fireEvent.change(input, { target: { value: "CC" } });
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    fireEvent.change(input, { target: { value: "CCC" } });
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    await act(async () => { resolveFirst?.({ input_smiles: "CC", standardized_smiles: "CC" }); });
-
-    vi.useRealTimers();
-    await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledTimes(1));
-    expect(mocks.loadStructure.mock.calls[0][0]).toBe("CCC");
   });
 
   it("loads a confirmed AI set_structure operation through the shared canvas path", async () => {

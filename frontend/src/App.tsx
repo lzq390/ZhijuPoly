@@ -542,7 +542,8 @@ export default function App() {
         activeModuleRef.current === "homopolymerPrediction" ||
         activeModuleRef.current === "explorer" ||
         activeModuleRef.current === "databaseQuery" ||
-        activeModuleRef.current === "conditionalGeneration"
+        activeModuleRef.current === "conditionalGeneration" ||
+        activeModuleRef.current === "reverseDesign"
       ) {
         void syncStructureBeforeNavigation().then(applyLatestRoute);
       } else {
@@ -1022,7 +1023,8 @@ export default function App() {
         activeModule === "homopolymerPrediction" ||
         activeModule === "explorer" ||
         activeModule === "databaseQuery" ||
-        activeModule === "conditionalGeneration"
+        activeModule === "conditionalGeneration" ||
+        activeModule === "reverseDesign"
           ? beforeStructureCanvasNavigation
           : undefined
       }
@@ -1154,6 +1156,7 @@ export default function App() {
           aria-hidden={activeModule !== "reverseDesign"}
         >
           <ReverseDesignPage
+            ref={structureCanvasOwnerRef}
             structure={structureWorkspace}
             onOpenKnowledge={openKnowledge}
             assistant={tgAssistant}

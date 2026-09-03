@@ -39,6 +39,7 @@ type StructureCanvasSurfaceProps = {
   onClear: () => void | Promise<unknown>;
   onSync: () => void | Promise<unknown>;
   onToggle3D: () => void | Promise<unknown>;
+  onSmilesDraftChange?: (value: string) => void;
 };
 
 function ToolButton({
@@ -99,7 +100,8 @@ export function StructureCanvasSurface({
   onImportFile,
   onClear,
   onSync,
-  onToggle3D
+  onToggle3D,
+  onSmilesDraftChange
 }: StructureCanvasSurfaceProps) {
   async function runCanvasMutation(action: () => void | Promise<unknown>) {
     await canvas.cancelSmilesDraftSync();
@@ -236,7 +238,11 @@ export function StructureCanvasSurface({
           maxLength={8000}
           spellCheck={false}
           aria-invalid={canvas.smilesDraftState === "error"}
-          onChange={(event) => canvas.updateSmilesDraft(event.currentTarget.value)}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            canvas.updateSmilesDraft(value);
+            onSmilesDraftChange?.(value);
+          }}
           placeholder="输入 SMILES 后将自动校验并同步到上方画板。"
           aria-label="SMILES 输入，自动同步到画板"
         />

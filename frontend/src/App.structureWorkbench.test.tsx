@@ -36,6 +36,15 @@ vi.mock("./hooks/useTgStructureCanvas", () => ({
     clearCanvas: vi.fn().mockResolvedValue(true),
     importImageFile: vi.fn().mockResolvedValue(true),
     syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
+    peekCanvasState: vi.fn().mockResolvedValue({
+      smiles: "*CC*",
+      canvasDirty: false,
+      editorReady: true,
+      viewMode: "2d",
+      busy: false,
+      revisionKey: "app-canvas"
+    }),
+    captureCanvasImage: vi.fn().mockResolvedValue(null),
     resolveSmilesForSearch: vi.fn().mockResolvedValue("*CC*"),
     toggle3D: vi.fn().mockResolvedValue(true),
     copySmiles: vi.fn()
@@ -252,6 +261,27 @@ describe("App 结构工作台挂载与导航", () => {
 
     expect(await screen.findByRole("heading", { name: "条件聚合物生成" })).toBeTruthy();
     expect(screen.getByTitle("条件聚合物生成结构编辑器")).toBeTruthy();
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+
+    window.history.pushState({}, "", "/knowledge");
+    fireEvent(window, new PopStateEvent("popstate"));
+    expect(screen.queryByTestId("knowledge")).toBeNull();
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1));
+
+    deferred.resolve?.();
+    await screen.findByTestId("knowledge");
+  });
+
+  it("Tg 逆向设计深链复用单一 Ketcher，并在 popstate 前同步画板", async () => {
+    const deferred: { resolve?: () => void } = {};
+    mocks.syncSmilesFromCanvas.mockReturnValue(new Promise<string>((resolve) => {
+      deferred.resolve = () => resolve("*CC*");
+    }));
+    window.history.replaceState({}, "", "/reverse-design");
+    const view = render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Tg 逆向设计" })).toBeTruthy();
+    expect(screen.getByTitle("Tg 逆向设计结构编辑器")).toBeTruthy();
     expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
 
     window.history.pushState({}, "", "/knowledge");

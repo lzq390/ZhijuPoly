@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import {
   Atom,
   BookOpen,
@@ -42,14 +42,14 @@ function ResultState({
   description,
   tone = "default"
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   title: string;
   description: string;
   tone?: "default" | "danger";
 }) {
   return (
-    <div className={`tg-result-state${tone === "danger" ? " is-danger" : ""}`}>
-      <span className="tg-result-state-icon">{icon}</span>
+    <div className={`np-sw-result-state${tone === "danger" ? " is-danger" : ""}`}>
+      <span>{icon}</span>
       <strong>{title}</strong>
       <p>{description}</p>
     </div>
@@ -75,7 +75,7 @@ function ResultPagination({
     return null;
   }
   return (
-    <div className="tg-result-pagination" aria-label="候选结果分页">
+    <div className="np-tg-result-pagination tg-result-pagination" aria-label="候选结果分页">
       <button
         type="button"
         onClick={() => onChange(page - 1)}
@@ -127,16 +127,16 @@ function CandidateCard({
   }
 
   return (
-    <article className="tg-candidate-card">
-      <header className="tg-candidate-card-header">
-        <span className="tg-candidate-rank">{`#${candidate.rank}`}</span>
-        <span className="tg-candidate-id">{`PI ${candidate.pi_id}`}</span>
-        <span className="tg-candidate-score">
+    <article className="np-tg-candidate-card tg-candidate-card">
+      <header className="np-tg-candidate-card__header tg-candidate-card-header">
+        <span className="np-tg-candidate-rank tg-candidate-rank">{`#${candidate.rank}`}</span>
+        <span className="np-tg-candidate-id tg-candidate-id">{`PI ${candidate.pi_id}`}</span>
+        <span className="np-tg-candidate-score tg-candidate-score">
           {`${Math.round(candidate.similarity_score * 100)}%`}
         </span>
       </header>
 
-      <div className="tg-candidate-structure">
+      <div className="np-tg-candidate-structure tg-candidate-structure">
         {candidate.structure_svg ? (
           <StructureSvg
             svg={candidate.structure_svg}
@@ -148,7 +148,7 @@ function CandidateCard({
         )}
       </div>
 
-      <div className="tg-candidate-metrics">
+      <div className="np-tg-candidate-metrics tg-candidate-metrics">
         <div>
           <span>Tg</span>
           <strong>{`${candidate.tg_value.toFixed(1)} ${candidate.tg_unit}`}</strong>
@@ -163,13 +163,13 @@ function CandidateCard({
         </div>
       </div>
 
-      <details className="tg-candidate-details">
+      <details className="np-tg-candidate-details tg-candidate-details">
         <summary>
           <span>单体与结构信息</span>
           <ChevronDown />
         </summary>
-        <div className="tg-candidate-detail-body">
-          <div className="tg-monomer-block">
+        <div className="np-tg-candidate-detail-body tg-candidate-detail-body">
+          <div className="np-tg-monomer-block tg-monomer-block">
             <span>单体 A</span>
             {candidate.monomer_a_structure_svg ? (
               <StructureSvg
@@ -183,7 +183,7 @@ function CandidateCard({
               <p>{candidate.monomer_a_iupac || "暂无 IUPAC 名称"}</p>
             ) : null}
           </div>
-          <div className="tg-monomer-block">
+          <div className="np-tg-monomer-block tg-monomer-block">
             <span>单体 B</span>
             {candidate.monomer_b_structure_svg ? (
               <StructureSvg
@@ -197,16 +197,16 @@ function CandidateCard({
               <p>{candidate.monomer_b_iupac || "暂无 IUPAC 名称"}</p>
             ) : null}
           </div>
-          <code className="tg-polymer-smiles">{displaySmiles}</code>
+          <code className="np-tg-polymer-smiles tg-polymer-smiles">{displaySmiles}</code>
         </div>
       </details>
 
-      <footer className="tg-candidate-actions">
+      <footer className="np-tg-candidate-actions tg-candidate-actions">
         <button type="button" onClick={() => setShowIupac((current) => !current)}>
           <Atom />
           {showIupac ? "隐藏 IUPAC" : "IUPAC"}
         </button>
-        <div className="tg-knowledge-menu">
+        <div className="np-tg-knowledge-menu tg-knowledge-menu">
           <button
             type="button"
             onClick={() => setShowKnowledge((current) => !current)}
@@ -219,7 +219,7 @@ function CandidateCard({
             <ChevronDown />
           </button>
           {showKnowledge ? (
-            <div id={menuId} role="menu" className="tg-knowledge-menu-panel">
+            <div id={menuId} role="menu" className="np-tg-knowledge-menu-panel tg-knowledge-menu-panel">
               <button
                 type="button"
                 role="menuitem"
@@ -289,15 +289,15 @@ export function ReverseDesignResults({
 
   if (isLoading) {
     return (
-      <div className="tg-result-loading">
-        <div className="tg-result-loading-title">
-          <LoaderCircle className="animate-spin" />
+      <div className="np-tg-result-loading tg-result-loading">
+        <div className="np-tg-result-loading__title tg-result-loading-title">
+          <LoaderCircle className="np-sw-spin" />
           <div>
             <strong>正在搜索 PI 候选</strong>
             <span>{job?.message || "按 Tg 距离和结构相似度扫描候选库…"}</span>
           </div>
         </div>
-        <div className="tg-result-loading-grid">
+        <div className="np-tg-result-loading__grid tg-result-loading-grid">
           <div><span>已扫描</span><strong>{formatInteger(job?.scanned_rows)}</strong></div>
           <div><span>已命中</span><strong>{formatInteger(job?.matched_count)}</strong></div>
           <div>
@@ -309,7 +309,7 @@ export function ReverseDesignResults({
             <strong>{job?.best_similarity_score == null ? "—" : job.best_similarity_score.toFixed(3)}</strong>
           </div>
         </div>
-        <div className="tg-result-skeleton-list" aria-hidden="true">
+        <div className="np-tg-result-skeleton-list tg-result-skeleton-list" aria-hidden="true">
           {Array.from({ length: 3 }).map((_, index) => (
             <span key={index} />
           ))}
@@ -339,14 +339,14 @@ export function ReverseDesignResults({
   }
 
   return (
-    <div className="tg-result-success">
-      <section className="tg-result-summary" aria-label="本次搜索摘要">
+    <div className="np-tg-result-success tg-result-success">
+      <section className="np-tg-result-summary tg-result-summary" aria-label="本次搜索摘要">
         <div><span>目标 Tg</span><strong>{`${submittedRequest?.target_tg ?? data.target_tg} °C`}</strong></div>
         <div><span>阈值</span><strong>{submittedRequest?.similarity_threshold.toFixed(2) ?? "—"}</strong></div>
         <div><span>候选</span><strong>{data.total}</strong></div>
         <div><span>已扫描</span><strong>{formatInteger(job?.scanned_rows)}</strong></div>
       </section>
-      <div className="tg-result-meta">
+      <div className="np-tg-result-meta tg-result-meta">
         <span>{`候选池 ${data.candidate_pool_size.toLocaleString()}`}</span>
         <span>{`${data.query_time_ms.toFixed(1)} ms`}</span>
         <span>{`每页 ${RESULTS_PAGE_SIZE} 条`}</span>
@@ -359,7 +359,7 @@ export function ReverseDesignResults({
         total={total}
         onChange={(nextPage) => changePage(Math.min(Math.max(1, nextPage), totalPages))}
       />
-      <div className="tg-candidate-list">
+      <div className="np-tg-candidate-list tg-candidate-list">
         {results.map((candidate) => (
           <CandidateCard
             key={candidate.pi_id}
