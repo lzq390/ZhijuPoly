@@ -25,6 +25,10 @@
   line-height: 1.4;
 }
 
+.np-tg-reverse-design .np-tg-assistant-panel .np-sw-popover__header small {
+  font-size: var(--tg-assistant-meta-font-size);
+}
+
 .np-tg-reverse-design .np-tg-parameters__form {
   min-height: 0;
   overflow-y: auto;
@@ -156,8 +160,9 @@
 }
 
 .np-tg-reverse-design .np-tg-assistant-panel {
-  --tg-assistant-body-font-size: 12px;
-  --tg-assistant-title-font-size: 13px;
+  --tg-assistant-body-font-size: 13px;
+  --tg-assistant-title-font-size: 14px;
+  --tg-assistant-meta-font-size: 11px;
   width: min(430px, calc(100% - 32px));
   height: min(760px, calc(100vh - 120px));
   height: min(760px, calc(100dvh - 120px));
@@ -172,6 +177,12 @@
   color: #102a46;
   font-family: var(--font-heading);
   font-size: 16px;
+}
+
+.np-tg-reverse-design .np-tg-assistant-panel .tg-assistant-context span,
+.np-tg-reverse-design .np-tg-assistant-panel .tg-assistant-welcome > p,
+.np-tg-reverse-design .np-tg-assistant-panel .tg-assistant-suggestions button {
+  font-size: var(--tg-assistant-body-font-size);
 }
 
 .np-tg-reverse-design .np-tg-assistant-panel .tg-assistant-body {
@@ -255,6 +266,11 @@
 .np-tg-reverse-design .np-tg-assistant-panel .tg-assistant-message > div {
   border-color: rgba(51, 83, 126, 0.14);
   background: rgba(255, 255, 255, 0.94);
+}
+
+.np-tg-reverse-design .np-tg-assistant-panel .tg-assistant-message:not(.is-user) > span {
+  background: linear-gradient(145deg, var(--np-sw-blue), var(--np-sw-cyan));
+  box-shadow: 0 4px 11px rgba(37, 99, 235, 0.16);
 }
 
 .np-tg-reverse-design .np-tg-assistant-panel .tg-assistant-message.is-user > div {
@@ -570,6 +586,7 @@
   .np-tg-reverse-design .np-tg-assistant-panel {
     --tg-assistant-body-font-size: 16px;
     --tg-assistant-title-font-size: 17px;
+    --tg-assistant-meta-font-size: 14px;
     width: min(620px, calc(100% - 48px));
     height: min(960px, calc(100vh - 170px));
     height: min(960px, calc(100dvh - 170px));
@@ -675,7 +692,7 @@
   .np-tg-reverse-design .np-tg-assistant-panel .tg-assistant-input-shell textarea {
     min-height: 98px;
     padding: 17px 17px 5px;
-    font-size: 17px;
+    font-size: var(--tg-assistant-body-font-size);
   }
 
   .np-tg-reverse-design .np-tg-assistant-panel .tg-assistant-input-shell > .tg-assistant-input-actions {

@@ -138,6 +138,48 @@ describe("TgAssistantPanel", () => {
     expect(view.container.textContent).toContain("<a href=\"https://example.test\">raw html</a>");
   });
 
+  it("presents chemistry formulas and Markdown tables as themed research content", () => {
+    const content = [
+      "# 图 1 结构识别",
+      "当前画板结构可识别为 **甲基丙烯酸甲酯（MMA）**，其玻璃化转变温度记为 \\(T_g\\)。",
+      "\\[",
+      "\\mathrm{CH_2=C(CH_3)-C(=O)-OCH_3}",
+      "\\]",
+      "| 结构片段 | 对 Tg 的可能影响 |",
+      "| :--- | ---: |",
+      "| **酯基** | 增强偶极作用 |",
+      "| α-甲基 | 限制局部旋转 |",
+      "金额示例 $100+$200 不应被识别为公式。"
+    ].join("\n");
+    const view = renderPanel(assistantSession({
+      items: [{
+        kind: "message",
+        id: "assistant-research-format",
+        role: "assistant",
+        content,
+        createdAt: "2026-08-24T00:00:00.000Z",
+        status: "done"
+      }]
+    }));
+
+    expect(screen.getByRole("heading", { level: 3, name: "图 1 结构识别" })).toBeTruthy();
+    const equation = view.container.querySelector(".tg-assistant-md-equation");
+    expect(equation?.textContent).toBe("CH2=C(CH3)-C(=O)-OCH3");
+    expect(equation?.getAttribute("tabindex")).toBe("0");
+    expect(Array.from(equation?.querySelectorAll("sub") ?? []).map((node) => node.textContent)).toEqual(["2", "3", "3"]);
+    expect(view.container.querySelector(".tg-assistant-md-inline-math")?.textContent).toBe("Tg");
+
+    const table = view.container.querySelector(".tg-assistant-md-table-wrap table");
+    expect(table?.querySelectorAll("th")).toHaveLength(2);
+    expect(table?.querySelectorAll("tbody tr")).toHaveLength(2);
+    expect(table?.querySelector("th:first-child")?.classList.contains("is-left")).toBe(true);
+    expect(table?.querySelector("th:last-child")?.classList.contains("is-right")).toBe(true);
+    expect(table?.closest("[role='region']")?.getAttribute("tabindex")).toBe("0");
+    expect(view.container.textContent).toContain("金额示例 $100+$200 不应被识别为公式。");
+    expect(view.container.textContent).not.toContain("\\mathrm");
+    expect(view.container.textContent).not.toContain("| :--- | ---: |");
+  });
+
   it("supports Enter send, Shift+Enter newline, and Chinese IME composition", async () => {
     const assistant = assistantSession();
     renderPanel(assistant);
