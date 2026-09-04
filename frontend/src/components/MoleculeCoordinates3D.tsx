@@ -1,8 +1,6 @@
 import { Atom, ChevronLeft, ChevronRight, Loader2, Orbit, TriangleAlert } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { cn } from "../lib/utils";
-import type { MonomerDftAtom } from "../types";
-import { Button } from "./ui/button";
+import { useEffect, useRef, useState } from "react";
+import type { MonomerDftAtom, MonomerDftCalculationType } from "../types";
 
 const D3MOL_SRC = "/vendor/3Dmol-min.js";
 type ThreeDMolViewer = ReturnType<NonNullable<Window["$3Dmol"]>["createViewer"]>;
@@ -22,6 +20,7 @@ export type MoleculeCoordinateFrame = {
 
 type MoleculeCoordinates3DProps = {
   frames: MoleculeCoordinateFrame[];
+  calculationType: MonomerDftCalculationType;
   className?: string;
 };
 
@@ -40,7 +39,7 @@ function load3Dmol(): Promise<void> {
       existing.addEventListener("load", () => resolve(), { once: true });
       existing.addEventListener("error", () => {
         existing.remove();
-        reject(new Error("3Dmol 加载失败。"));
+        reject(new Error("三维预览组件加载失败。"));
       }, { once: true });
       return;
     }
@@ -54,7 +53,7 @@ function load3Dmol(): Promise<void> {
     };
     script.onerror = () => {
       script.remove();
-      reject(new Error("3Dmol 加载失败。"));
+      reject(new Error("三维预览组件加载失败。"));
     };
     document.head.appendChild(script);
   });
@@ -64,7 +63,7 @@ function atomElement(atom: MonomerDftAtom): string {
   return atom.element || ELEMENT_BY_ATOMIC_NUMBER[atom.atomic_number] || "X";
 }
 
-export function atomsToXyz(atoms: MonomerDftAtom[], label = "AIMNet2 geometry"): string {
+export function atomsToXyz(atoms: MonomerDftAtom[], label = "calculated geometry"): string {
   return [
     String(atoms.length),
     label,
@@ -94,7 +93,11 @@ function chargeColor(charge: number): string {
   return "#94a3b8";
 }
 
-export function MoleculeCoordinates3D({ frames, className }: MoleculeCoordinates3DProps) {
+export function MoleculeCoordinates3D({
+  frames,
+  calculationType,
+  className
+}: MoleculeCoordinates3DProps) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const viewerInstanceRef = useRef<ThreeDMolViewer | null>(null);
   const [frameIndex, setFrameIndex] = useState(Math.max(0, frames.length - 1));
@@ -102,14 +105,19 @@ export function MoleculeCoordinates3D({ frames, className }: MoleculeCoordinates
   const [showForces, setShowForces] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [renderRevision, setRenderRevision] = useState(0);
 
   useEffect(() => {
     setFrameIndex(Math.max(0, frames.length - 1));
-  }, [frames.length]);
+  }, [frames]);
 
   const frame = frames[frameIndex] ?? null;
-  const hasCharges = useMemo(() => frames.some((item) => item.atoms.some((atom) => atom.charge_e != null)), [frames]);
-  const hasForces = useMemo(() => frames.some((item) => item.atoms.some((atom) => vectorNorm(atom.force_ev_per_angstrom) > 0)), [frames]);
+  const hasTrajectory = frames.some((item) => item.kind === "trajectory");
+  const frameKinds: MoleculeCoordinateFrame["kind"][] = calculationType === "single_point"
+    ? ["initial", "final"]
+    : ["initial", "trajectory", "final"];
+  const hasCharges = Boolean(frame?.atoms.some((atom) => atom.charge_e != null));
+  const hasForces = Boolean(frame?.atoms.some((atom) => vectorNorm(atom.force_ev_per_angstrom) > 0));
 
   useEffect(() => {
     if (!frame || frame.atoms.length === 0) {
@@ -182,7 +190,7 @@ export function MoleculeCoordinates3D({ frames, className }: MoleculeCoordinates
         viewer.render();
       } catch (nextError) {
         if (!cancelled) {
-          setError(nextError instanceof Error ? nextError.message : "显式坐标 3D 渲染失败。");
+          setError(nextError instanceof Error ? nextError.message : "三维结构渲染失败。");
         }
       } finally {
         if (!cancelled) {
@@ -194,7 +202,34 @@ export function MoleculeCoordinates3D({ frames, className }: MoleculeCoordinates
     return () => {
       cancelled = true;
     };
-  }, [frame, showCharges, showForces]);
+  }, [frame, renderRevision, showCharges, showForces]);
+
+  useEffect(() => {
+    const target = viewerRef.current;
+    if (!target) return;
+    let animationFrame: number | null = null;
+    const resizeViewer = () => {
+      if (animationFrame != null) window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = null;
+        viewerInstanceRef.current?.resize?.();
+        viewerInstanceRef.current?.render();
+      });
+    };
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", resizeViewer);
+      return () => {
+        window.removeEventListener("resize", resizeViewer);
+        if (animationFrame != null) window.cancelAnimationFrame(animationFrame);
+      };
+    }
+    const observer = new ResizeObserver(resizeViewer);
+    observer.observe(target);
+    return () => {
+      observer.disconnect();
+      if (animationFrame != null) window.cancelAnimationFrame(animationFrame);
+    };
+  }, []);
 
   useEffect(() => () => {
     viewerInstanceRef.current?.clear();
@@ -212,39 +247,84 @@ export function MoleculeCoordinates3D({ frames, className }: MoleculeCoordinates
   }
 
   return (
-    <section className={cn("overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+    <section className={`np-dft-coordinate-viewer${className ? ` ${className}` : ""}`}>
+      <div className="np-dft-coordinate-viewer__header">
         <div>
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Orbit className="h-4 w-4 text-sky-600" />显式坐标 3D</div>
-          <div className="mt-1 text-xs text-slate-500">直接渲染 Worker 返回坐标，不从 SMILES 重建几何。</div>
+          <div><Orbit />显式坐标 3D</div>
+          <p>{calculationType === "single_point"
+            ? "单点计算只评估固定结构，不更新坐标，因此不生成优化轨迹。"
+            : "使用计算返回的原子坐标；轨迹帧展示几何优化过程。"}</p>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {(["initial", "trajectory", "final"] as const).map((kind) => {
+        <div className="np-dft-frame-kinds" role="group" aria-label="结构帧类型">
+          {frameKinds.map((kind) => {
             const available = frames.some((item) => item.kind === kind);
             const label = kind === "initial" ? "初始" : kind === "trajectory" ? "轨迹" : "最终";
-            return <button key={kind} type="button" disabled={!available} onClick={() => selectKind(kind)} className="rounded-md border border-slate-200 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-35">{label}</button>;
+            const selected = frame?.kind === kind;
+            return (
+              <button
+                key={kind}
+                type="button"
+                disabled={!available}
+                aria-pressed={selected}
+                className={selected ? "is-active" : ""}
+                title={!available && kind === "trajectory" ? "当前结果没有可用的中间轨迹帧" : undefined}
+                onClick={() => selectKind(kind)}
+              >
+                {label}
+              </button>
+            );
           })}
         </div>
       </div>
-      <div className="relative h-[360px] bg-slate-50">
-        <div ref={viewerRef} className="absolute inset-0" aria-label="AIMNet2 计算结构三维预览" />
-        {!frame ? <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-slate-500"><Atom className="h-7 w-7 text-slate-300" />计算完成后显示显式原子坐标</div> : null}
-        {isLoading ? <div className="absolute inset-0 flex items-center justify-center bg-white/60"><Loader2 className="h-5 w-5 animate-spin text-sky-600" /></div> : null}
-        {error ? <div className="absolute inset-0 flex items-center justify-center p-6"><div className="flex max-w-md items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />{error}</div></div> : null}
-      </div>
-      <div className="border-t border-slate-100 px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" className="h-8 w-8 rounded-md p-0" disabled={frameIndex <= 0} onClick={() => setFrameIndex((value) => Math.max(0, value - 1))} aria-label="上一帧"><ChevronLeft className="h-4 w-4" /></Button>
-            <div className="min-w-[160px] text-center text-xs text-slate-600"><span className="font-semibold text-slate-900">{frame?.label ?? "暂无帧"}</span>{frame?.energyEv != null ? ` · ${frame.energyEv.toFixed(6)} eV` : ""}</div>
-            <Button type="button" variant="outline" className="h-8 w-8 rounded-md p-0" disabled={frameIndex >= frames.length - 1} onClick={() => setFrameIndex((value) => Math.min(frames.length - 1, value + 1))} aria-label="下一帧"><ChevronRight className="h-4 w-4" /></Button>
+      <div className="np-dft-coordinate-viewer__canvas">
+        <div ref={viewerRef} aria-label="计算结构三维预览" />
+        {!frame ? <div className="np-dft-viewer-state"><Atom />计算完成后显示显式原子坐标</div> : null}
+        {isLoading ? <div className="np-dft-viewer-state is-loading"><Loader2 className="np-dft-spin" /><span>正在渲染三维结构</span></div> : null}
+        {error ? (
+          <div className="np-dft-viewer-state is-error" role="alert">
+            <TriangleAlert />
+            <div><strong>三维结构加载失败</strong><span>{error}</span></div>
+            <button type="button" onClick={() => setRenderRevision((value) => value + 1)}>重新加载</button>
           </div>
-          <div className="flex items-center gap-3 text-xs text-slate-600">
-            <label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={showCharges} disabled={!hasCharges} onChange={(event) => setShowCharges(event.target.checked)} />电荷着色</label>
-            <label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={showForces} disabled={!hasForces} onChange={(event) => setShowForces(event.target.checked)} />力箭头</label>
+        ) : null}
+      </div>
+      <div className="np-dft-coordinate-viewer__controls">
+        <div className="np-dft-frame-controls">
+          <div>
+            <button type="button" disabled={frameIndex <= 0} onClick={() => setFrameIndex((value) => Math.max(0, value - 1))} aria-label="上一帧"><ChevronLeft /></button>
+            <div><strong>{frame?.label ?? "暂无帧"}</strong>{frame?.energyEv != null ? <span>{frame.energyEv.toFixed(6)} eV</span> : null}</div>
+            <button type="button" disabled={frameIndex >= frames.length - 1} onClick={() => setFrameIndex((value) => Math.min(frames.length - 1, value + 1))} aria-label="下一帧"><ChevronRight /></button>
+          </div>
+          <div className="np-dft-view-options">
+            <label title={hasCharges ? undefined : "当前帧没有电荷数据"}>
+              <input
+                type="checkbox"
+                checked={showCharges && hasCharges}
+                disabled={!hasCharges}
+                onChange={(event) => setShowCharges(event.target.checked)}
+              />电荷着色
+            </label>
+            <label title={hasForces ? undefined : "当前帧没有可显示的原子力"}>
+              <input
+                type="checkbox"
+                checked={showForces && hasForces}
+                disabled={!hasForces}
+                onChange={(event) => setShowForces(event.target.checked)}
+              />力箭头
+            </label>
           </div>
         </div>
-        {frames.length > 1 ? <input className="mt-3 w-full accent-sky-600" type="range" min={0} max={frames.length - 1} value={frameIndex} onChange={(event) => setFrameIndex(Number(event.target.value))} aria-label="优化轨迹帧" /> : null}
+        {hasTrajectory ? (
+          <input
+            type="range"
+            min={0}
+            max={frames.length - 1}
+            value={frameIndex}
+            onChange={(event) => setFrameIndex(Number(event.target.value))}
+            aria-label="优化轨迹帧"
+            aria-valuetext={`${frame?.label ?? "暂无帧"}，第 ${frameIndex + 1} / ${frames.length} 帧`}
+          />
+        ) : null}
       </div>
     </section>
   );

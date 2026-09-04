@@ -841,7 +841,10 @@ export type MonomerDftArtifactDeleteResponse = {
 
 export type MonomerDftTrajectoryArtifact = {
   units: { energy: string; fmax: string; coordinates: string; charges?: string };
-  frames: Array<MonomerDftOptimizationStep & { coordinates_angstrom: MonomerDftVector3[] }>;
+  frames: Array<MonomerDftOptimizationStep & {
+    coordinates_angstrom: MonomerDftVector3[];
+    charges_e?: number[];
+  }>;
 };
 
 export type StructureImageRecognitionResponse = {

@@ -40,4 +40,14 @@ describe("StructureSvg", () => {
 
     expect(decodedImageSource()).toContain("<rect");
   });
+
+  it("can fill a fixed preview viewport without retaining intrinsic auto height", () => {
+    render(<StructureSvg svg={RDKIT_SVG} fillContainer transparentBackground />);
+
+    const source = decodedImageSource();
+    expect(source).toContain('viewBox="0 0 320 220"');
+    expect(screen.getByRole("img").classList.contains("h-full")).toBe(true);
+    expect(screen.getByRole("img").classList.contains("h-auto")).toBe(false);
+    expect(screen.getByRole("img").classList.contains("absolute")).toBe(true);
+  });
 });

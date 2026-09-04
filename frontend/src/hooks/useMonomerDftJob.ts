@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { userFacingMonomerDftMessage } from "../lib/monomerDftPresentation";
 import {
   cancelMonomerDftJob,
   createMonomerDftJob,
@@ -25,7 +26,7 @@ import type {
 
 export const MONOMER_DFT_JOB_POLL_MS = 1_500;
 export const MONOMER_DFT_STATUS_POLL_MS = 10_000;
-export const MONOMER_DFT_HISTORY_PAGE_SIZE = 20;
+export const MONOMER_DFT_HISTORY_PAGE_SIZE = 10;
 export const MONOMER_DFT_JOB_BACKOFF_MS = [1_500, 3_000, 6_000, 10_000] as const;
 
 export type MonomerDftPollState = "idle" | "polling" | "degraded" | "terminal" | "stopped";
@@ -52,17 +53,46 @@ export type MonomerDftValidationInput = {
 };
 
 const AROMATIC_ELEMENT: Record<string, string> = {
+  as: "As",
   b: "B",
   c: "C",
   n: "N",
   o: "O",
   p: "P",
-  s: "S"
+  s: "S",
+  se: "Se"
+};
+
+const SMILES_ATOM_TOKEN = /^(Cl|Br|Si|Se|Na|Li|Mg|Ca|Al|Zn|Fe|Cu|Pd|Pt|As|se|as|[A-Z][a-z]?|[bcnops])/;
+
+const PROPERTY_LABELS: Record<MonomerDftProperty, string> = {
+  energy: "能量",
+  forces: "原子力",
+  charges: "原子电荷",
+  hessian: "二阶力常数",
+  frequencies: "振动频率"
 };
 
 export function extractElementsFromSmiles(smiles: string): string[] {
-  const tokens = smiles.match(/Cl|Br|Si|Se|Na|Li|Mg|Ca|Al|Zn|Fe|Cu|Pd|Pt|[A-Z][a-z]?|[bcnops]/g) ?? [];
-  return [...new Set(tokens.map((token) => AROMATIC_ELEMENT[token] ?? token))];
+  const elements: string[] = [];
+  for (let index = 0; index < smiles.length;) {
+    if (smiles[index] === "[") {
+      const closingIndex = smiles.indexOf("]", index + 1);
+      const bracketContent = smiles.slice(index + 1, closingIndex < 0 ? smiles.length : closingIndex);
+      const token = bracketContent.replace(/^\d+/, "").match(SMILES_ATOM_TOKEN)?.[0];
+      if (token) elements.push(AROMATIC_ELEMENT[token] ?? token);
+      index = closingIndex < 0 ? smiles.length : closingIndex + 1;
+      continue;
+    }
+    const token = smiles.slice(index).match(SMILES_ATOM_TOKEN)?.[0];
+    if (token) {
+      elements.push(AROMATIC_ELEMENT[token] ?? token);
+      index += token.length;
+    } else {
+      index += 1;
+    }
+  }
+  return [...new Set(elements)];
 }
 
 export function isMonomerDftTerminal(status: MonomerDftJobStatus): boolean {
@@ -82,13 +112,13 @@ export function validateMonomerDftRequest(
       issues.push({ field: "smiles", message: "SMILES / PSMILES 不能包含空白字符。" });
     }
     if (smiles.includes("*") && input.psmilesMode == null) {
-      issues.push({ field: "smiles", message: "检测到 PSMILES 连接位点，请选择闭环或封端预处理方式。" });
+      issues.push({ field: "smiles", message: "检测到 PSMILES 连接位点，请选择连接两端或补全两端。" });
     }
     if (!smiles.includes("*") && input.psmilesMode != null) {
-      issues.push({ field: "smiles", message: "普通单体不需要 PSMILES 预处理方式。" });
+      issues.push({ field: "smiles", message: "普通分子不需要处理连接位点。" });
     }
     if (input.psmilesMode === "close" && [...smiles].filter((character) => character === "*").length !== 2) {
-      issues.push({ field: "smiles", message: "PSMILES 闭环模式要求恰好两个 * 连接位点。" });
+      issues.push({ field: "smiles", message: "连接两端需要结构中恰好有两个 * 连接位点。" });
     }
     if (smiles.includes(".")) {
       issues.push({ field: "smiles", message: "一次任务只接受一个连通分子，不能包含以 . 分隔的多组分。" });
@@ -103,45 +133,58 @@ export function validateMonomerDftRequest(
     issues.push({ field: "multiplicity", message: "自旋多重度必须是 1–7 的整数（2S+1）。" });
   }
   if (input.calculationType === "optimization") {
+    const minOptimizationSteps = capabilities?.limits.min_optimization_steps ?? 10;
+    const maxOptimizationSteps = capabilities?.limits.max_optimization_steps ?? 50;
     if (input.fmax == null || !Number.isFinite(input.fmax) || input.fmax < 0.001 || input.fmax > 1) {
-      issues.push({ field: "optimization", message: "Fmax 阈值必须在 0.001–1.0 eV/Å 范围内。" });
+      issues.push({ field: "optimization", message: "收敛力阈值必须在 0.001–1.0 eV/Å 范围内。" });
     }
-    if (input.maxSteps == null || !Number.isInteger(input.maxSteps) || input.maxSteps < 10 || input.maxSteps > 50) {
-      issues.push({ field: "optimization", message: "最大优化步数必须是 10–50 的整数。" });
+    if (
+      input.maxSteps == null ||
+      !Number.isInteger(input.maxSteps) ||
+      input.maxSteps < minOptimizationSteps ||
+      input.maxSteps > maxOptimizationSteps
+    ) {
+      issues.push({
+        field: "optimization",
+        message: `最大优化步数必须是 ${minOptimizationSteps}–${maxOptimizationSteps} 的整数。`
+      });
     }
   }
   if (input.seed != null && (!Number.isInteger(input.seed) || input.seed < 0 || input.seed > 2_147_483_647)) {
-    issues.push({ field: "conformer", message: "构象 seed 必须是 0–2147483647 的整数。" });
+    issues.push({ field: "conformer", message: "随机种子必须是 0–2147483647 的整数。" });
   }
   if (input.maxIterations != null && (!Number.isInteger(input.maxIterations) || input.maxIterations < 1 || input.maxIterations > 5000)) {
-    issues.push({ field: "conformer", message: "构象最大迭代必须是 1–5000 的整数。" });
+    issues.push({ field: "conformer", message: "初始构型最大优化步数必须是 1–5000 的整数。" });
   }
   if (!capabilities) {
-    issues.push({ field: "model", message: "正在等待后端返回模型能力目录。" });
+    issues.push({ field: "model", message: "正在载入可用的计算方案。" });
     return issues;
   }
   const model = capabilities.models.find((item) => item.id === input.modelId);
   if (!model) {
-    issues.push({ field: "model", message: "请选择能力目录中的模型。" });
+    issues.push({ field: "model", message: "请选择适合当前分子的计算用途。" });
     return issues;
   }
   if (!model.available) {
-    issues.push({ field: "model", message: `${model.label} 当前不可用。` });
+    issues.push({ field: "model", message: "当前计算方案暂不可用，请选择其他用途。" });
   }
   if (!model.supported_calculation_types.includes(input.calculationType)) {
-    issues.push({ field: "calculation", message: `${model.label} 不支持当前计算类型。` });
+    issues.push({ field: "calculation", message: "当前计算方案不支持所选计算类型。" });
+  }
+  if (!capabilities.calculation_types.includes(input.calculationType)) {
+    issues.push({ field: "calculation", message: "当前服务未开放该计算类型。" });
   }
   if (input.multiplicity !== 1 && !model.supports_spin) {
-    issues.push({ field: "multiplicity", message: `${model.label} 不支持开放壳层；请使用单重态或选择支持多重度的模型。` });
+    issues.push({ field: "multiplicity", message: "当前计算方案不支持多重态，请使用单重态或选择其他用途。" });
   }
   const chargeWithinGlobalContract = input.netCharge == null || (
     Number.isInteger(input.netCharge) && input.netCharge >= -5 && input.netCharge <= 5
   );
   if (chargeWithinGlobalContract && model.charge_min != null && input.netCharge != null && input.netCharge < model.charge_min) {
-    issues.push({ field: "charge", message: `${model.label} 支持的最小总电荷为 ${model.charge_min}。` });
+    issues.push({ field: "charge", message: `当前计算方案支持的最小总电荷为 ${model.charge_min}。` });
   }
   if (chargeWithinGlobalContract && model.charge_max != null && input.netCharge != null && input.netCharge > model.charge_max) {
-    issues.push({ field: "charge", message: `${model.label} 支持的最大总电荷为 ${model.charge_max}。` });
+    issues.push({ field: "charge", message: `当前计算方案支持的最大总电荷为 ${model.charge_max}。` });
   }
   const unsupportedElements = extractElementsFromSmiles(smiles).filter(
     (element) => model.supported_elements.length > 0 && !model.supported_elements.includes(element)
@@ -149,28 +192,35 @@ export function validateMonomerDftRequest(
   if (unsupportedElements.length > 0) {
     issues.push({
       field: "smiles",
-      message: `${model.label} 不支持当前结构中的元素：${unsupportedElements.join("、")}。`
+      message: `当前计算方案不支持这些元素：${unsupportedElements.join("、")}。`
     });
   }
   if (input.calculationType === "single_point") {
     if (!input.properties.includes("energy")) {
       issues.push({ field: "properties", message: "单点计算必须包含能量。" });
     }
-    const unsupportedProperties = input.properties.filter(
-      (property) => !model.supported_properties.includes(property)
-    );
-    if (unsupportedProperties.length > 0) {
-      issues.push({
-        field: "properties",
-        message: `${model.label} 不支持：${unsupportedProperties.join("、")}。`
-      });
-    }
+  }
+  const unsupportedProperties = input.properties.filter(
+    (property) => (
+      !capabilities.properties.includes(property) ||
+      !model.supported_properties.includes(property)
+    )
+  );
+  if (unsupportedProperties.length > 0) {
+    issues.push({
+      field: "properties",
+      message: `当前计算方案不支持：${unsupportedProperties.map((property) => PROPERTY_LABELS[property]).join("、")}。`
+    });
   }
   return issues;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message.trim() ? error.message : fallback;
+  if (!(error instanceof Error) || !error.message.trim()) return fallback;
+  return userFacingMonomerDftMessage(error.message, {
+    code: error instanceof MonomerDftApiError ? error.code : null,
+    fallback
+  });
 }
 
 function makeRequestId(): string {
@@ -261,7 +311,6 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
   const deletingArtifactsJobIdRef = useRef<string | null>(null);
   const pendingSubmissionRef = useRef<{ payload: string; idempotencyKey: string } | null>(null);
   const schemaReadyRef = useRef(false);
-  const knownJobIdsRef = useRef(new Set<string>());
   const purgeControllersRef = useRef(new Map<string, AbortController>());
   const purgeRevisionsRef = useRef(new Map<string, number>());
 
@@ -297,7 +346,6 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     for (const controller of purgeControllersRef.current.values()) controller.abort();
     purgeControllersRef.current.clear();
     purgeRevisionsRef.current.clear();
-    knownJobIdsRef.current.clear();
     setCapabilities(null);
     setHistory(null);
     setJob(null);
@@ -392,12 +440,11 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
         nextHistory = await fetchMonomerDftJobs(correctedQuery, controller.signal);
         if (historyTokenRef.current !== token || controller.signal.aborted) return;
       }
-      for (const item of nextHistory.items) knownJobIdsRef.current.add(item.job_id);
       setHistory(nextHistory);
       setHistoryError(null);
     } catch (error) {
       if (historyTokenRef.current !== token || controller.signal.aborted || isAbortError(error)) return;
-      setHistoryError(errorMessage(error, "读取单体 DFT 全局任务历史失败。"));
+      setHistoryError(errorMessage(error, "读取单体 DFT 任务历史失败。"));
     } finally {
       if (historyTokenRef.current === token && !controller.signal.aborted) {
         historyAbortRef.current = null;
@@ -447,7 +494,6 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
       try {
         const nextJob = await fetchMonomerDftJob(jobId, session.controller.signal);
         if (!isCurrent()) return;
-        knownJobIdsRef.current.add(jobId);
         if (
           requestOperationRevision !== operationRevisionRef.current ||
           cancellingJobIdRef.current === jobId ||
@@ -458,7 +504,12 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
         }
         transientFailures = 0;
         setJob(nextJob);
-        setJobError(nextJob.error?.message ?? null);
+        setJobError(nextJob.error
+          ? userFacingMonomerDftMessage(nextJob.error.message, {
+            code: nextJob.error.code,
+            fallback: "计算任务未能完成，请检查输入后重试。"
+          })
+          : null);
         if (pollingIsComplete(nextJob)) {
           jobPollSessionRef.current = null;
           setPollState("terminal");
@@ -470,11 +521,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
         schedule(MONOMER_DFT_JOB_POLL_MS);
       } catch (error) {
         if (!isCurrent() || isAbortError(error)) return;
-        if (
-          error instanceof MonomerDftApiError &&
-          error.status === 404 &&
-          knownJobIdsRef.current.has(jobId)
-        ) {
+        if (error instanceof MonomerDftApiError && error.status === 404) {
           jobPollSessionRef.current = null;
           activeJobIdRef.current = null;
           selectionEpochRef.current += 1;
@@ -547,6 +594,8 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
       await refreshStatus(true);
       if (schemaReadyRef.current) {
         await refreshHistory(historyQueryRef.current);
+      } else if (!stopped) {
+        setIsHistoryLoading(false);
       }
       if (!stopped) {
         timer = globalThis.setTimeout(() => void refresh(), MONOMER_DFT_STATUS_POLL_MS);
@@ -566,7 +615,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
   }, [refreshHistory, refreshStatus]);
 
   useEffect(() => {
-    if (serviceStatus?.schema_ready !== true) {
+    if (serviceStatus?.schema_ready !== true || capabilities?.schema_ready !== true) {
       return;
     }
     if (!initialJobId) {
@@ -581,7 +630,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     if (initialJobId !== activeJobIdRef.current) {
       loadJob(initialJobId, false);
     }
-  }, [beginSelection, initialJobId, loadJob, serviceStatus?.schema_ready]);
+  }, [beginSelection, capabilities?.schema_ready, initialJobId, loadJob, serviceStatus?.schema_ready]);
 
   useEffect(() => () => {
     selectionEpochRef.current += 1;
@@ -614,7 +663,6 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
       const created = await createMonomerDftJob(request, idempotencyKey, controller.signal);
       if (controller.signal.aborted || operationRevisionRef.current !== operationRevision) return null;
       pendingSubmissionRef.current = null;
-      knownJobIdsRef.current.add(created.job_id);
       const selectionEpoch = beginSelection(created.job_id);
       setJob(created);
       onJobIdChangeRef.current?.(created.job_id);
@@ -713,7 +761,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     } catch (error) {
       if (controller.signal.aborted || isAbortError(error) || operationRevisionRef.current !== operationRevision) return;
       if (!selectionMatches(targetJobId, selectionEpoch)) return;
-      setJobError(errorMessage(error, "删除单体 DFT 任务产物失败。"));
+      setJobError(errorMessage(error, "删除单体 DFT 输出文件失败。"));
     } finally {
       if (operationRevisionRef.current === operationRevision) {
         deleteAbortRef.current = null;
@@ -731,7 +779,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     purgeControllersRef.current.get(targetJobId)?.abort();
     const controller = new AbortController();
     purgeControllersRef.current.set(targetJobId, controller);
-    if (activeJobIdRef.current === targetJobId) operationRevisionRef.current += 1;
+    if (activeJobIdRef.current === targetJobId) invalidateOperations();
     setDeletingJobIds((current) => current.includes(targetJobId) ? current : [...current, targetJobId]);
     setDeleteJobErrors((current) => {
       const next = { ...current };
@@ -744,7 +792,6 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
         controller.signal.aborted ||
         purgeRevisionsRef.current.get(targetJobId) !== revision
       ) return;
-      knownJobIdsRef.current.delete(targetJobId);
       setHistory((current) => current ? {
         ...current,
         total: Math.max(0, current.total - 1),

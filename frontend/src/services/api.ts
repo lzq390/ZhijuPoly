@@ -236,33 +236,36 @@ export function parseMonomerDftRetryAfterSeconds(
   return Math.min(60, Math.max(1, Math.ceil(seconds)));
 }
 
+async function monomerDftResponseError(response: Response): Promise<MonomerDftApiError> {
+  const payload = await response.json().catch(() => null) as {
+    detail?: string | { code?: string; message?: string; retryable?: boolean; details?: unknown } | unknown[];
+    code?: string;
+    message?: string;
+    retryable?: boolean;
+    details?: unknown;
+  } | null;
+  const structuredDetail = payload?.detail && typeof payload.detail === "object" && !Array.isArray(payload.detail)
+    ? payload.detail
+    : null;
+  const message =
+    (typeof payload?.detail === "string" ? payload.detail : null) ??
+    structuredDetail?.message ??
+    payload?.message ??
+    (Array.isArray(payload?.detail) ? "单体 DFT 请求参数校验失败。" : `单体 DFT 请求失败（${response.status}）。`);
+  return new MonomerDftApiError({
+    message,
+    status: response.status,
+    code: structuredDetail?.code ?? payload?.code ?? null,
+    retryable: structuredDetail?.retryable ?? payload?.retryable,
+    retryAfterSeconds: parseMonomerDftRetryAfterSeconds(response.headers.get("Retry-After")),
+    details: structuredDetail?.details ?? payload?.details ?? payload?.detail
+  });
+}
+
 async function monomerDftRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, init);
   if (!response.ok) {
-    const payload = await response.json().catch(() => null) as {
-      detail?: string | { code?: string; message?: string; retryable?: boolean; details?: unknown } | unknown[];
-      code?: string;
-      message?: string;
-      retryable?: boolean;
-      details?: unknown;
-    } | null;
-    const structuredDetail = payload?.detail && typeof payload.detail === "object" && !Array.isArray(payload.detail)
-      ? payload.detail
-      : null;
-    const message =
-      (typeof payload?.detail === "string" ? payload.detail : null) ??
-      structuredDetail?.message ??
-      payload?.message ??
-      (Array.isArray(payload?.detail) ? "单体 DFT 请求参数校验失败。" : `单体 DFT 请求失败（${response.status}）。`);
-    const retryAfterSeconds = parseMonomerDftRetryAfterSeconds(response.headers.get("Retry-After"));
-    throw new MonomerDftApiError({
-      message,
-      status: response.status,
-      code: structuredDetail?.code ?? payload?.code ?? null,
-      retryable: structuredDetail?.retryable ?? payload?.retryable,
-      retryAfterSeconds,
-      details: structuredDetail?.details ?? payload?.details ?? payload?.detail
-    });
+    throw await monomerDftResponseError(response);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -450,6 +453,12 @@ export function getMonomerDftArtifactUrl(jobId: string, artifactId: string): str
 
 export function getMonomerDftBundleUrl(jobId: string): string {
   return `${API_BASE_URL}/monomer-dft/jobs/${encodeURIComponent(jobId)}/bundle`;
+}
+
+export async function downloadMonomerDftBundle(jobId: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(getMonomerDftBundleUrl(jobId), { signal });
+  if (!response.ok) throw await monomerDftResponseError(response);
+  return response.blob();
 }
 
 export function fetchMonomerDftArtifactJson<T>(jobId: string, artifactId: string, signal?: AbortSignal): Promise<T> {
@@ -692,8 +701,11 @@ export function fetchStructure2D(smiles: string, signal?: AbortSignal): Promise<
   return postJSON("/structure/2d", { smiles }, signal);
 }
 
-export function standardizeSmiles(payload: SmilesStandardizeRequest): Promise<SmilesStandardizeResponse> {
-  return postJSON("/structure/standardize-smiles", payload);
+export function standardizeSmiles(
+  payload: SmilesStandardizeRequest,
+  signal?: AbortSignal
+): Promise<SmilesStandardizeResponse> {
+  return postJSON("/structure/standardize-smiles", payload, signal);
 }
 
 export function recognizeStructureImage(file: File, signal?: AbortSignal): Promise<StructureImageRecognitionResponse> {

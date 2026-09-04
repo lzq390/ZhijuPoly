@@ -9,7 +9,8 @@ import {
   labelMonomerDftStage,
   lowestMonomerDftFrequency,
   resolveMonomerDftRdkitPreparation,
-  selectMonomerDftDisplayTimings
+  selectMonomerDftDisplayTimings,
+  userFacingMonomerDftMessage
 } from "./monomerDftPresentation";
 
 const artifact = (available: boolean): MonomerDftArtifact => ({
@@ -26,17 +27,17 @@ describe("monomer DFT presentation", () => {
     ["pending", "等待调度"],
     ["queued", "任务排队"],
     ["validating", "输入校验"],
-    ["conformer", "生成三维构象"],
-    ["single_point", "能量与原子属性推理"],
+    ["conformer", "准备三维构型"],
+    ["single_point", "计算能量与原子性质"],
     ["optimization", "几何优化"],
-    ["hessian", "计算 Hessian"],
+    ["hessian", "计算二阶力常数"],
     ["frequency", "计算振动频率"],
-    ["artifacts", "整理结果与产物"],
+    ["artifacts", "整理结果与文件"],
     ["running", "计算中"],
-    ["dispatch_retry", "等待重新连接 Worker"],
-    ["dispatch_failed", "Worker 调度失败"],
+    ["dispatch_retry", "正在恢复计算连接"],
+    ["dispatch_failed", "计算任务启动失败"],
     ["cancel_requested", "等待取消"],
-    ["worker_failed", "Worker 执行失败"],
+    ["worker_failed", "计算未能完成"],
     ["completed", "计算完成"],
     ["failed", "计算失败"],
     ["cancelled", "任务已取消"]
@@ -46,6 +47,44 @@ describe("monomer DFT presentation", () => {
 
   it("does not leak an unknown backend stage as raw English", () => {
     expect(labelMonomerDftStage("future_worker_phase")).toBe("处理中");
+  });
+
+  it("translates the single-conformer warning into user-facing Chinese", () => {
+    expect(userFacingMonomerDftMessage(
+      "Only one deterministic local conformer was evaluated."
+    )).toBe("本次仅评估了一个自动生成的初始构型。");
+  });
+
+  it("translates charge warnings as complete sentences", () => {
+    expect(userFacingMonomerDftMessage(
+      "Explicit net_charge overrides SMILES charge inference and differs from the encoded formal charge.",
+      { code: "net_charge_override" }
+    )).toBe("已使用手动设置的总电荷，该值与结构中标注的形式电荷不同。");
+    expect(userFacingMonomerDftMessage(
+      "Explicit net_charge overrides SMILES charge inference and matches the encoded formal charge.",
+      { code: "net_charge_override" }
+    )).toBe("已使用手动设置的总电荷，该值与结构中标注的形式电荷一致。");
+  });
+
+  it("uses stable codes without exposing service implementation terms", () => {
+    expect(userFacingMonomerDftMessage(
+      "monomer DFT Unix socket is not configured",
+      { code: "worker_socket_not_configured" }
+    )).toBe("计算服务暂不可用，请联系管理员。");
+    expect(userFacingMonomerDftMessage(
+      "The CUDA context entered an unsafe state and the worker must restart.",
+      { code: "cuda_fatal" }
+    )).toBe("计算资源发生异常，本次任务未能完成，请稍后重试。");
+  });
+
+  it("uses a Chinese fallback for unknown English service messages", () => {
+    expect(userFacingMonomerDftMessage("Failed to fetch", {
+      fallback: "读取服务状态失败。"
+    })).toBe("读取服务状态失败。");
+    expect(userFacingMonomerDftMessage("请检查输入结构。")).toBe("请检查输入结构。");
+    expect(userFacingMonomerDftMessage("服务端 Worker unavailable", {
+      fallback: "读取服务状态失败。"
+    })).toBe("读取服务状态失败。");
   });
 
   it("uses artifact availability for individual files and aggregate actions", () => {

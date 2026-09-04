@@ -56,21 +56,78 @@ function validate(overrides: Partial<Parameters<typeof validateMonomerDftRequest
 describe("monomer DFT validation", () => {
   it("recognizes aromatic and two-letter elements", () => {
     expect(extractElementsFromSmiles("c1cc(Cl)ncc1Br")).toEqual(["C", "Cl", "N", "Br"]);
+    expect(extractElementsFromSmiles("[C@TH1](F)(Cl)Br")).toEqual(["C", "F", "Cl", "Br"]);
+    expect(extractElementsFromSmiles("[as]C[se]")).toEqual(["As", "C", "Se"]);
   });
 
   it("requires an explicit conversion mode for PSMILES only", () => {
     expect(validate({ smiles: "*CC*" }).some((issue) => issue.message.includes("PSMILES"))).toBe(true);
     expect(validate({ smiles: "*CC*", psmilesMode: "cap" })).toEqual([]);
-    expect(validate({ psmilesMode: "cap" }).some((issue) => issue.message.includes("普通单体"))).toBe(true);
+    expect(validate({ psmilesMode: "cap" }).some((issue) => issue.message.includes("普通分子"))).toBe(true);
   });
 
   it("uses capability metadata for elements and multiplicity", () => {
     expect(validate({ smiles: "C[SiH3]" }).some((issue) => issue.message.includes("Si"))).toBe(true);
-    expect(validate({ multiplicity: 3 }).some((issue) => issue.message.includes("开放壳层"))).toBe(true);
+    expect(validate({ multiplicity: 3 }).some((issue) => issue.message.includes("不支持多重态"))).toBe(true);
   });
 
   it("allows requesting frequencies without explicitly selecting Hessian", () => {
     expect(validate({ properties: ["energy", "frequencies"] })).toEqual([]);
+  });
+
+  it("validates unsupported post-optimization properties against the selected model", () => {
+    const issues = validateMonomerDftRequest({
+      smiles: "CCO",
+      netCharge: 0,
+      multiplicity: 1,
+      psmilesMode: null,
+      calculationType: "optimization",
+      modelId: "aimnet2",
+      properties: ["energy", "forces", "charges", "frequencies"],
+      fmax: 0.01,
+      maxSteps: 50,
+      seed: 1,
+      maxIterations: 500
+    }, {
+      ...capabilities,
+      models: [{
+        ...capabilities.models[0],
+        supported_properties: ["energy", "forces", "charges"]
+      }]
+    });
+
+    expect(issues).toContainEqual({
+      field: "properties",
+      message: "当前计算方案不支持：振动频率。"
+    });
+  });
+
+  it("uses service-level calculation types, properties, and optimization limits", () => {
+    const constrained = {
+      ...capabilities,
+      calculation_types: ["single_point"] as MonomerDftCapabilitiesResponse["calculation_types"],
+      properties: ["energy", "forces", "charges"] as MonomerDftCapabilitiesResponse["properties"],
+      limits: { ...capabilities.limits, max_optimization_steps: 30 }
+    };
+    const issues = validateMonomerDftRequest({
+      smiles: "CCO",
+      netCharge: 0,
+      multiplicity: 1,
+      psmilesMode: null,
+      calculationType: "optimization",
+      modelId: "aimnet2",
+      properties: ["energy", "forces", "charges", "hessian"],
+      fmax: 0.01,
+      maxSteps: 50,
+      seed: 1,
+      maxIterations: 500
+    }, constrained);
+
+    expect(issues.map((issue) => issue.message)).toEqual(expect.arrayContaining([
+      "最大优化步数必须是 10–30 的整数。",
+      "当前服务未开放该计算类型。",
+      "当前计算方案不支持：二阶力常数。"
+    ]));
   });
 
   it("enforces approved multiplicity and optimization bounds in JavaScript", () => {

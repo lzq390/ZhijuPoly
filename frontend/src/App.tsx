@@ -930,8 +930,8 @@ export default function App() {
         },
         {
           id: "monomerDft",
-          label: "单体 DFT（AIMNet2）",
-          description: "用独立 GPU Worker 计算单点性质、Hessian、频率和几何优化。",
+          label: "单体 DFT",
+          description: "计算单点性质、二阶力常数、振动频率并优化分子构型。",
           route: "/monomer-dft",
           icon: <FlaskConical className="h-4 w-4" />,
           isActive: activeModule === "monomerDft",
@@ -1007,6 +1007,7 @@ export default function App() {
     activeModule !== "homopolymerPrediction" &&
     activeModule !== "explorer" &&
     activeModule !== "databaseQuery" &&
+    activeModule !== "monomerDft" &&
     !isTgKetcherOwner;
 
   return (
@@ -1148,7 +1149,6 @@ export default function App() {
           initialJobId={monomerDftJobId}
           onJobIdChange={openMonomerDft}
           onEditStructure={openStructureWorkbench}
-          onBackHome={() => navigate({ module: "home", datasetKey: null })}
         />
       ) : null}
 

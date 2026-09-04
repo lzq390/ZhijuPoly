@@ -60,6 +60,9 @@ vi.mock("./components/DatabaseFilterPage", () => ({
 vi.mock("./components/KnowledgeSearch", () => ({
   KnowledgeSearch: () => <div data-testid="knowledge">知识检索</div>
 }));
+vi.mock("./components/MonomerDftPage", () => ({
+  MonomerDftPage: () => <div data-testid="monomer-dft">单体 DFT</div>
+}));
 
 function structureIframe(container: HTMLElement) {
   return container.querySelector<HTMLIFrameElement>('iframe[title="结构工作台结构编辑器"]');
@@ -131,6 +134,19 @@ describe("App 结构工作台挂载与导航", () => {
     await waitFor(() => expect(structureIframe(view.container)).not.toBeNull());
     expect(structureIframe(view.container)).not.toBe(firstIframe);
     expect(view.container.querySelectorAll('iframe[title="结构工作台结构编辑器"]')).toHaveLength(1);
+  });
+
+  it("进入单体 DFT 时卸载隐藏的结构工作台 iframe", async () => {
+    const view = render(<App />);
+    expect(structureIframe(view.container)).not.toBeNull();
+
+    openBuildGroup();
+    fireEvent.click(screen.getByRole("button", { name: "单体 DFT" }));
+
+    await screen.findByTestId("monomer-dft");
+    expect(structureIframe(view.container)).toBeNull();
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(0);
+    expect(window.location.pathname).toBe("/monomer-dft");
   });
 
   it("均聚物预测深链和工作台跳转始终只挂载一个共享 Ketcher", async () => {
