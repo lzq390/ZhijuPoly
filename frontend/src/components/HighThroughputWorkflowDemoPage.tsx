@@ -26,6 +26,8 @@ import {
 } from "../constants/highThroughputDemoScenario";
 import { cn } from "../lib/utils";
 import { WorkbenchSelect } from "./structure-workbench/WorkbenchSelect";
+import { PriorImportWorkspace } from "./high-throughput/PriorImportWorkspace";
+import type { PriorDataUploadState, PriorDataUploadsState } from "./high-throughput/types";
 import "../styles/structure-workbench.css";
 import "./HighThroughputWorkflowDemoPage.css";
 
@@ -47,21 +49,6 @@ type ConfirmedSetup = {
   targetValues: Record<HighThroughputTargetKey, number>;
 };
 
-type PriorDataUploadState = {
-  targetKey: HighThroughputTargetKey;
-  fileName: string;
-  fileType: string;
-  sampleCount: number;
-  fieldCount: number;
-  expectedFileName: string;
-  propertyColumn: string;
-  uploadedAt: string;
-  uploadToken: string;
-  isLoading: boolean;
-  errorMessage?: string;
-};
-
-type PriorDataUploadsState = Partial<Record<HighThroughputTargetKey, PriorDataUploadState>>;
 type RecommendationSelection = {
   targetKey: HighThroughputTargetKey;
   candidateId: string;
@@ -835,6 +822,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const [stageTransition, setStageTransition] = useState<StageTransitionState | null>(null);
   const priorUploadTimersRef = useRef<Partial<Record<HighThroughputTargetKey, number>>>({});
   const stageTransitionTimerRef = useRef<number | null>(null);
+  const previousStageRef = useRef(currentStageIndex);
   const mapStageRef = useRef<HTMLDivElement | null>(null);
   const nextStepState = getStageCompletionState({
     currentStageIndex,
@@ -861,6 +849,14 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const displayedNextStepState = stageTransition
     ? { canAdvance: false, label: "处理中", hint: stageTransition.message }
     : nextStepState;
+  const isWorkbenchStage = currentStageIndex <= 1;
+
+  useEffect(() => {
+    if (previousStageRef.current !== currentStageIndex && isWorkbenchStage) {
+      document.getElementById("ht-workbench-surface-title")?.focus();
+    }
+    previousStageRef.current = currentStageIndex;
+  }, [currentStageIndex, isWorkbenchStage]);
 
   useEffect(() => () => {
     Object.values(priorUploadTimersRef.current).forEach((timerId) => {
@@ -1167,21 +1163,22 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   return (
-    <div className={cn("high-throughput-demo", currentStageIndex === 0 && "ht-s0-page")}>
-      {currentStageIndex === 0 ? <h1 className="ht-s0-page-title">高通量优化演示</h1> : null}
+    <div className={cn("high-throughput-demo", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page")}>
+      {isWorkbenchStage ? <h1 className="ht-workbench-title">高通量优化演示</h1> : null}
       <main className="ht-shell">
-        {currentStageIndex === 0 ? (
+        {isWorkbenchStage ? (
           <ScenarioModuleToolbar
             canReset={!stageTransition}
             onReset={resetCurrentStageActions}
+            resetLabel={currentStageIndex === 0 ? "恢复默认场景参数" : "重置 S1 上传数据"}
           />
         ) : null}
 
         <section
-          className={cn("ht-docx-board", currentStageIndex === 0 && "ht-s0-board np-sw-accented-surface")}
-          aria-labelledby={currentStageIndex === 0 ? "ht-s0-surface-title" : undefined}
+          className={cn("ht-docx-board", isWorkbenchStage && "ht-workbench-board np-sw-accented-surface", currentStageIndex === 0 && "ht-s0-board", currentStageIndex === 1 && "ht-s1-board")}
+          aria-labelledby={isWorkbenchStage ? "ht-workbench-surface-title" : undefined}
         >
-          {currentStageIndex === 0 ? <ScenarioSurfaceHeader /> : null}
+          {isWorkbenchStage ? <ScenarioSurfaceHeader stageIndex={currentStageIndex} /> : null}
 
           <FlowControlBar
             currentStageIndex={currentStageIndex}
@@ -1189,6 +1186,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
             onNextStep={handleNextStep}
             onResetStage={resetCurrentStageActions}
             canResetStage={!stageTransition && [0, 1, 2, 3, 5].includes(currentStageIndex)}
+            navigationOnly={isWorkbenchStage}
           />
 
           {currentStageIndex === 0 ? (
@@ -1196,6 +1194,30 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
               confirmedSetup={confirmedSetup}
               onConfirmSetup={confirmSetup}
               resetToken={setupResetToken}
+            />
+          ) : currentStageIndex === 1 ? (
+            <PriorImportWorkspace
+              targets={scenario.targets.map((target) => getConfiguredTarget(target.key, confirmedSetup))}
+              candidateTotal={confirmedSetup.candidateTotal}
+              materialType={confirmedSetup.materialType}
+              representation={confirmedSetup.representation}
+              activeTargetKey={activeSpaceTargetKey}
+              onSelectTarget={setActiveSpaceTargetKey}
+              uploads={priorDataUploads}
+              onUpload={handlePriorDataUpload}
+              onBack={() => enterStage(0)}
+              onNext={handleNextStep}
+              canAdvance={displayedNextStepState.canAdvance}
+              transitionMessage={stageTransition?.message ?? null}
+              candidateMap={(
+                <PropertySpaceCard
+                  stageIndex={1}
+                  target={getConfiguredTarget(activeSpaceTargetKey, confirmedSetup)}
+                  variant="large"
+                  priorDataUpload={priorDataUploads[activeSpaceTargetKey] ?? null}
+                  showSummary={false}
+                />
+              )}
             />
           ) : (
             <>
@@ -1370,7 +1392,7 @@ function ScenarioHeader({
 
   return (
     <section className="ht-scenario-panel" aria-label="材料与目标设置">
-      <div className="ht-s0-demo-note">
+      <div className="ht-workbench-demo-note">
         <BadgeInfo aria-hidden="true" size={16} />
         <span><strong>交互说明：</strong>保留任务设置输入用于演示配置过程；候选数据、推荐批次与后续搜索路径仍采用预设场景。</span>
       </div>
@@ -1486,12 +1508,13 @@ function ScenarioHeader({
                       step={target.key === "modulus" ? "0.1" : "1"}
                       type="number"
                       value={targetValues[target.key]}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
                         setTargetValues((current) => ({
                           ...current,
-                          [target.key]: event.currentTarget.value,
-                        }))
-                      }
+                          [target.key]: value,
+                        }));
+                      }}
                     />
                     <span id={`ht-target-unit-${target.key}`} className="ht-target-unit">
                       {target.unit === "degC" ? "°C" : target.unit}
@@ -1524,13 +1547,15 @@ function ScenarioHeader({
 function ScenarioModuleToolbar({
   canReset,
   onReset,
+  resetLabel,
 }: {
   canReset: boolean;
   onReset: () => void;
+  resetLabel: string;
 }) {
   return (
-    <div className="ht-s0-module-toolbar" aria-label="高通量优化演示状态">
-      <div className="ht-s0-module-actions">
+    <div className="ht-workbench-toolbar" aria-label="高通量优化演示状态">
+      <div className="ht-workbench-actions">
         <span role="status">
           <i aria-hidden="true" />
           <strong>固定演示</strong>
@@ -1538,7 +1563,7 @@ function ScenarioModuleToolbar({
         <button
           type="button"
           onClick={onReset}
-          aria-label="恢复默认场景参数"
+          aria-label={resetLabel}
           disabled={!canReset}
         >
           <RotateCcw aria-hidden="true" />
@@ -1549,16 +1574,17 @@ function ScenarioModuleToolbar({
   );
 }
 
-function ScenarioSurfaceHeader() {
+function ScenarioSurfaceHeader({ stageIndex }: { stageIndex: number }) {
+  const isPrior = stageIndex === 1;
   return (
-    <header className="ht-s0-surface-header">
-      <div className="ht-s0-surface-heading">
-        <span className="ht-s0-surface-mark">
-          <FlaskConical aria-hidden="true" />
+    <header className="ht-workbench-header">
+      <div className="ht-workbench-heading">
+        <span className="ht-workbench-mark">
+          {isPrior ? <TestTube2 aria-hidden="true" /> : <FlaskConical aria-hidden="true" />}
         </span>
         <div>
-          <h2 id="ht-s0-surface-title">材料体系与目标设置</h2>
-          <p>设置材料体系、候选空间与优化目标。</p>
+          <h2 id="ht-workbench-surface-title" tabIndex={-1}>{isPrior ? "正交实验与先验导入" : "材料体系与目标设置"}</h2>
+          <p>{isPrior ? "为四个性质 Agent 导入 DOE 样例，查看候选分布与先验数据。" : "设置材料体系、候选空间与优化目标。"}</p>
         </div>
       </div>
     </header>
@@ -1616,18 +1642,20 @@ function FlowControlBar({
   onNextStep,
   onResetStage,
   canResetStage,
+  navigationOnly = false,
 }: {
   currentStageIndex: number;
   nextStepState: NextStepState;
   onNextStep: () => void;
   onResetStage: () => void;
   canResetStage: boolean;
+  navigationOnly?: boolean;
 }) {
   const stages = highThroughputDemoScenario.stages;
 
   return (
     <section className="ht-flow-control-bar" aria-label="演示播放控制">
-      {currentStageIndex !== 0 ? (
+      {currentStageIndex !== 0 && !navigationOnly ? (
         <div className="ht-flow-next">
           <div className="ht-flow-next-actions">
             <button
@@ -1898,6 +1926,7 @@ function PropertySpaceCard({
   validationValues = {},
   selectedRecommendation = null,
   onSelectRecommendation,
+  showSummary = true,
 }: {
   stageIndex: number;
   target: HighThroughputTarget;
@@ -1907,6 +1936,7 @@ function PropertySpaceCard({
   validationValues?: RecommendationValidationValues;
   selectedRecommendation?: RecommendationSelection | null;
   onSelectRecommendation?: (selection: RecommendationSelection) => void;
+  showSummary?: boolean;
 }) {
   const space = getPropertySpace(target.key);
   const activeRounds = highThroughputDemoScenario.roundsByTarget[target.key];
@@ -1978,15 +2008,17 @@ function PropertySpaceCard({
 
   return (
     <article className={cn("ht-property-space-card", variant)} style={{ "--target-color": target.color } as CSSProperties}>
-      <div className="ht-property-space-head">
-        <div>
-          <span>{target.shortLabel} Space</span>
-          <strong>{target.label}</strong>
+      {showSummary ? (
+        <div className="ht-property-space-head">
+          <div>
+            <span>{target.shortLabel} Space</span>
+            <strong>{target.label}</strong>
+          </div>
+          <b className={cn(stageIndex === 3 && "ht-property-round-label")} data-tooltip={stageLabel} tabIndex={stageIndex === 3 ? 0 : undefined}>
+            <span>{stageLabel}</span>
+          </b>
         </div>
-        <b className={cn(stageIndex === 3 && "ht-property-round-label")} data-tooltip={stageLabel} tabIndex={stageIndex === 3 ? 0 : undefined}>
-          <span>{stageLabel}</span>
-        </b>
-      </div>
+      ) : null}
 
       <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role="img" aria-label={`${target.shortLabel} single-property optimization space`}>
         <defs>
@@ -2118,17 +2150,21 @@ function PropertySpaceCard({
         ) : null}
       </svg>
 
-      <div className="ht-property-space-meta">
-        <span>DOE <b>{priorSet.size}</b></span>
-        <span>已测 <b>{measuredSet.size}</b></span>
-        <span>推荐 <b>{recommendedSet.size}</b></span>
-        <span>热点 <b>{surfaceLabel}</b></span>
-      </div>
-      <div className="ht-property-space-best">
-        <span>当前最优</span>
-        <strong>{currentBestId || "--"}</strong>
-        <em>{candidateValueWithValidation(currentBest, target, validationValues)} / gap {targetGapLabelWithValidation(currentBest, target, validationValues)}</em>
-      </div>
+      {showSummary ? (
+        <>
+          <div className="ht-property-space-meta">
+            <span>DOE <b>{priorSet.size}</b></span>
+            <span>已测 <b>{measuredSet.size}</b></span>
+            <span>推荐 <b>{recommendedSet.size}</b></span>
+            <span>热点 <b>{surfaceLabel}</b></span>
+          </div>
+          <div className="ht-property-space-best">
+            <span>当前最优</span>
+            <strong>{currentBestId || "--"}</strong>
+            <em>{candidateValueWithValidation(currentBest, target, validationValues)} / gap {targetGapLabelWithValidation(currentBest, target, validationValues)}</em>
+          </div>
+        </>
+      ) : null}
     </article>
   );
 }
