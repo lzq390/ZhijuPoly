@@ -2,6 +2,7 @@ import {
   BadgeInfo,
   Bot,
   BrainCircuit,
+  Check,
   CheckCircle2,
   ChevronRight,
   FileCheck2,
@@ -13,7 +14,7 @@ import {
   TestTube2,
   UploadCloud,
 } from "lucide-react";
-import { type ChangeEvent, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ChangeEvent, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   highThroughputDemoScenario,
   type HighThroughputCandidate,
@@ -24,6 +25,8 @@ import {
   type HighThroughputTargetKey,
 } from "../constants/highThroughputDemoScenario";
 import { cn } from "../lib/utils";
+import { WorkbenchSelect } from "./structure-workbench/WorkbenchSelect";
+import "../styles/structure-workbench.css";
 import "./HighThroughputWorkflowDemoPage.css";
 
 type HighThroughputWorkflowDemoPageProps = {
@@ -1164,15 +1167,21 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   return (
-    <div className="high-throughput-demo">
+    <div className={cn("high-throughput-demo", currentStageIndex === 0 && "ht-s0-page")}>
+      {currentStageIndex === 0 ? <h1 className="ht-s0-page-title">高通量优化演示</h1> : null}
       <main className="ht-shell">
-        <section className="ht-docx-board">
-          <ScenarioHeader
-            confirmedSetup={confirmedSetup}
-            onConfirmSetup={confirmSetup}
-            isConfirmed={currentStageIndex > 0}
-            resetToken={setupResetToken}
+        {currentStageIndex === 0 ? (
+          <ScenarioModuleToolbar
+            canReset={!stageTransition}
+            onReset={resetCurrentStageActions}
           />
+        ) : null}
+
+        <section
+          className={cn("ht-docx-board", currentStageIndex === 0 && "ht-s0-board np-sw-accented-surface")}
+          aria-labelledby={currentStageIndex === 0 ? "ht-s0-surface-title" : undefined}
+        >
+          {currentStageIndex === 0 ? <ScenarioSurfaceHeader /> : null}
 
           <FlowControlBar
             currentStageIndex={currentStageIndex}
@@ -1182,99 +1191,109 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
             canResetStage={!stageTransition && [0, 1, 2, 3, 5].includes(currentStageIndex)}
           />
 
-          <div className="ht-docx-map-stage" ref={mapStageRef}>
-            <AgentOrbitPanel
-              stageIndex={currentStageIndex}
-              side="left"
+          {currentStageIndex === 0 ? (
+            <ScenarioHeader
               confirmedSetup={confirmedSetup}
-              activeTargetKey={activeSpaceTargetKey}
-              onSelectTarget={setActiveSpaceTargetKey}
-              iterationRoundIndex={activeIterationRoundIndex}
-              priorDataUploads={priorDataUploads}
-              onPriorDataUpload={handlePriorDataUpload}
-            />
-
-            <div className="ht-map-column">
-              {currentStageIndex <= 4 ? (
-                <PropertySpaceBoard
-                  stageIndex={currentStageIndex}
-                  confirmedSetup={confirmedSetup}
-                  activeTargetKey={activeSpaceTargetKey}
-                  onActiveTargetChange={setActiveSpaceTargetKey}
-                  iterationRoundIndex={activeIterationRoundIndex}
-                  priorDataUploads={priorDataUploads}
-                  validationValues={recommendationValidationValues}
-                  selectedRecommendation={selectedRecommendation}
-                  onSelectRecommendation={setSelectedRecommendation}
-                />
-              ) : (
-                <RatioAnnealingMap
-                  stageIndex={currentStageIndex}
-                  activeStepIndex={activeRatioSearchStepIndex}
-                  confirmedSetup={confirmedSetup}
-                  activeStepValidationConfirmed={activeRatioValidationConfirmed}
-                />
-              )}
-            </div>
-
-            <AgentOrbitPanel
-              stageIndex={currentStageIndex}
-              side="right"
-              confirmedSetup={confirmedSetup}
-              activeTargetKey={activeSpaceTargetKey}
-              onSelectTarget={setActiveSpaceTargetKey}
-              iterationRoundIndex={activeIterationRoundIndex}
-              priorDataUploads={priorDataUploads}
-              onPriorDataUpload={handlePriorDataUpload}
-            />
-
-            {currentStageIndex <= 4 ? (
-              <AgentAttentionOverlay
-                stageIndex={currentStageIndex}
-                iterationRoundIndex={activeIterationRoundIndex}
-                stageRef={mapStageRef}
-              />
-            ) : null}
-            {stageTransition ? (
-              <div className="ht-stage-transition-overlay" role="status" aria-live="polite">
-                <span>实验流程处理中</span>
-                <strong>{stageTransition.message}</strong>
-              </div>
-            ) : null}
-          </div>
-
-          {currentStageIndex <= 3 ? (
-            <ExperimentPriorPanel
-              stageIndex={currentStageIndex}
-              activeTargetKey={activeSpaceTargetKey}
-              priorDataUploads={priorDataUploads}
-              iterationRoundIndex={activeIterationRoundIndex}
-              selectedRecommendation={selectedRecommendation}
-              onSelectRecommendation={setSelectedRecommendation}
-              validationValues={recommendationValidationValues}
-              onValidationValueChange={handleRecommendationValidationValueChange}
-              validationConfirmed={activeValidationConfirmed}
-              validationMissingCount={activeValidationMissingCount}
-              validationRequiredCount={activeValidationRequirements.length}
-              onConfirmValidationGroup={confirmCurrentValidationGroup}
-            />
-          ) : currentStageIndex === 4 ? (
-            <CandidateOutputPanel activeTargetKey={activeSpaceTargetKey} confirmedSetup={confirmedSetup} />
-          ) : currentStageIndex === 5 ? (
-            <RatioSearchPanel
-              activeStepIndex={activeRatioSearchStepIndex}
-              confirmedSetup={confirmedSetup}
-              ratioValidationValues={ratioValidationValues}
-              validationConfirmed={activeRatioValidationConfirmed}
-              validationMissingCount={activeRatioValidationMissingCount}
-              onValidationValueChange={handleRatioValidationValueChange}
-              onConfirmValidation={confirmCurrentRatioValidation}
+              onConfirmSetup={confirmSetup}
+              resetToken={setupResetToken}
             />
           ) : (
-            <FinalFormulationPanel
-              weights={weights}
-              confirmedSetup={confirmedSetup}
-            />
+            <>
+              <div className="ht-docx-map-stage" ref={mapStageRef}>
+                <AgentOrbitPanel
+                  stageIndex={currentStageIndex}
+                  side="left"
+                  confirmedSetup={confirmedSetup}
+                  activeTargetKey={activeSpaceTargetKey}
+                  onSelectTarget={setActiveSpaceTargetKey}
+                  iterationRoundIndex={activeIterationRoundIndex}
+                  priorDataUploads={priorDataUploads}
+                  onPriorDataUpload={handlePriorDataUpload}
+                />
+
+                <div className="ht-map-column">
+                  {currentStageIndex <= 4 ? (
+                    <PropertySpaceBoard
+                      stageIndex={currentStageIndex}
+                      confirmedSetup={confirmedSetup}
+                      activeTargetKey={activeSpaceTargetKey}
+                      onActiveTargetChange={setActiveSpaceTargetKey}
+                      iterationRoundIndex={activeIterationRoundIndex}
+                      priorDataUploads={priorDataUploads}
+                      validationValues={recommendationValidationValues}
+                      selectedRecommendation={selectedRecommendation}
+                      onSelectRecommendation={setSelectedRecommendation}
+                    />
+                  ) : (
+                    <RatioAnnealingMap
+                      stageIndex={currentStageIndex}
+                      activeStepIndex={activeRatioSearchStepIndex}
+                      confirmedSetup={confirmedSetup}
+                      activeStepValidationConfirmed={activeRatioValidationConfirmed}
+                    />
+                  )}
+                </div>
+
+                <AgentOrbitPanel
+                  stageIndex={currentStageIndex}
+                  side="right"
+                  confirmedSetup={confirmedSetup}
+                  activeTargetKey={activeSpaceTargetKey}
+                  onSelectTarget={setActiveSpaceTargetKey}
+                  iterationRoundIndex={activeIterationRoundIndex}
+                  priorDataUploads={priorDataUploads}
+                  onPriorDataUpload={handlePriorDataUpload}
+                />
+
+                {currentStageIndex <= 4 ? (
+                  <AgentAttentionOverlay
+                    stageIndex={currentStageIndex}
+                    iterationRoundIndex={activeIterationRoundIndex}
+                    stageRef={mapStageRef}
+                  />
+                ) : null}
+                {stageTransition ? (
+                  <div className="ht-stage-transition-overlay" role="status" aria-live="polite">
+                    <span>实验流程处理中</span>
+                    <strong>{stageTransition.message}</strong>
+                  </div>
+                ) : null}
+              </div>
+
+              {currentStageIndex <= 3 ? (
+                <ExperimentPriorPanel
+                  stageIndex={currentStageIndex}
+                  activeTargetKey={activeSpaceTargetKey}
+                  priorDataUploads={priorDataUploads}
+                  iterationRoundIndex={activeIterationRoundIndex}
+                  selectedRecommendation={selectedRecommendation}
+                  onSelectRecommendation={setSelectedRecommendation}
+                  validationValues={recommendationValidationValues}
+                  onValidationValueChange={handleRecommendationValidationValueChange}
+                  validationConfirmed={activeValidationConfirmed}
+                  validationMissingCount={activeValidationMissingCount}
+                  validationRequiredCount={activeValidationRequirements.length}
+                  onConfirmValidationGroup={confirmCurrentValidationGroup}
+                />
+              ) : currentStageIndex === 4 ? (
+                <CandidateOutputPanel activeTargetKey={activeSpaceTargetKey} confirmedSetup={confirmedSetup} />
+              ) : currentStageIndex === 5 ? (
+                <RatioSearchPanel
+                  activeStepIndex={activeRatioSearchStepIndex}
+                  confirmedSetup={confirmedSetup}
+                  ratioValidationValues={ratioValidationValues}
+                  validationConfirmed={activeRatioValidationConfirmed}
+                  validationMissingCount={activeRatioValidationMissingCount}
+                  onValidationValueChange={handleRatioValidationValueChange}
+                  onConfirmValidation={confirmCurrentRatioValidation}
+                />
+              ) : (
+                <FinalFormulationPanel
+                  weights={weights}
+                  confirmedSetup={confirmedSetup}
+                />
+              )}
+            </>
           )}
         </section>
       </main>
@@ -1285,12 +1304,10 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
 function ScenarioHeader({
   confirmedSetup,
   onConfirmSetup,
-  isConfirmed,
   resetToken,
 }: {
   confirmedSetup: ConfirmedSetup;
   onConfirmSetup: (setup: ConfirmedSetup) => void;
-  isConfirmed: boolean;
   resetToken: number;
 }) {
   const scenario = highThroughputDemoScenario;
@@ -1300,7 +1317,6 @@ function ScenarioHeader({
   const [candidateA, setCandidateA] = useState(String(confirmedSetup.monomerACount));
   const [candidateB, setCandidateB] = useState(String(confirmedSetup.monomerBCount));
   const [selectedTargetKeys, setSelectedTargetKeys] = useState<HighThroughputTargetKey[]>(confirmedSetup.selectedTargetKeys);
-  const [focusedTargetKey, setFocusedTargetKey] = useState<HighThroughputTargetKey>("tg");
   const [targetValues, setTargetValues] = useState<Record<HighThroughputTargetKey, string>>(
     () => buildTargetValueInputs(confirmedSetup.targetValues),
   );
@@ -1318,7 +1334,6 @@ function ScenarioHeader({
   }, [confirmedSetup, resetToken]);
 
   function handleTargetClick(targetKey: HighThroughputTargetKey) {
-    setFocusedTargetKey(targetKey);
     setSelectedTargetKeys((current) => {
       if (current.includes(targetKey)) {
         return current.filter((key) => key !== targetKey);
@@ -1355,43 +1370,58 @@ function ScenarioHeader({
 
   return (
     <section className="ht-scenario-panel" aria-label="材料与目标设置">
-      <div className="ht-scenario-title">
-        <FlaskConical aria-hidden="true" size={22} />
-        <div>
-          <span className="ht-kicker">Material & Target Setup</span>
-          <h2>材料体系与目标设置</h2>
-        </div>
+      <div className="ht-s0-demo-note">
+        <BadgeInfo aria-hidden="true" size={16} />
+        <span><strong>交互说明：</strong>保留任务设置输入用于演示配置过程；候选数据、推荐批次与后续搜索路径仍采用预设场景。</span>
       </div>
 
       <div className="ht-setup-grid">
         <div className="ht-setup-section">
-          <SetupControl icon={<Layers3 aria-hidden="true" size={20} />} label="Material type">
-            <select value={materialType} onChange={(event) => setMaterialType(event.currentTarget.value)}>
-              <option value="Polyimide">Polyimide</option>
-            </select>
+          <SetupSectionHeading
+            index="01"
+            title="材料体系"
+            description="定义聚合物类别与单体组合方式"
+          />
+          <SetupControl icon={<Layers3 aria-hidden="true" size={20} />} label="材料类型" htmlFor="ht-material-type">
+            <WorkbenchSelect
+              id="ht-material-type"
+              ariaLabel="材料类型"
+              value={materialType}
+              options={[{ value: "Polyimide", label: "Polyimide", description: "聚酰亚胺（PI）薄膜" }]}
+              onChange={setMaterialType}
+            />
           </SetupControl>
 
-          <SetupControl icon={<FlaskConical aria-hidden="true" size={20} />} label="Monomer system">
-            <select value={monomerSystem} onChange={(event) => setMonomerSystem(event.currentTarget.value)}>
-              <option value="Diamine + Dianhydride">Diamine + Dianhydride</option>
-            </select>
+          <SetupControl icon={<FlaskConical aria-hidden="true" size={20} />} label="单体体系" htmlFor="ht-monomer-system">
+            <WorkbenchSelect
+              id="ht-monomer-system"
+              ariaLabel="单体体系"
+              value={monomerSystem}
+              options={[{ value: "Diamine + Dianhydride", label: "Diamine + Dianhydride", description: "二胺与二酐组合" }]}
+              onChange={setMonomerSystem}
+            />
           </SetupControl>
         </div>
 
         <div className="ht-setup-section middle">
-          <SetupControl icon={<Layers3 aria-hidden="true" size={20} />} label="Candidate space">
+          <SetupSectionHeading
+            index="02"
+            title="候选空间"
+            description="设置组合规模与二维空间表征"
+          />
+          <SetupControl icon={<Layers3 aria-hidden="true" size={20} />} label="候选空间">
             <div className="ht-candidate-space-inputs">
               <input
-                aria-label="Candidate monomer A count"
+                aria-label="单体 A 候选数量"
                 inputMode="numeric"
                 min="0"
                 type="number"
                 value={candidateA}
                 onChange={(event) => setCandidateA(event.currentTarget.value)}
               />
-              <span aria-hidden="true">x</span>
+              <span aria-hidden="true">×</span>
               <input
-                aria-label="Candidate monomer B count"
+                aria-label="单体 B 候选数量"
                 inputMode="numeric"
                 min="0"
                 type="number"
@@ -1401,53 +1431,61 @@ function ScenarioHeader({
             </div>
           </SetupControl>
 
-          <SetupControl icon={<BrainCircuit aria-hidden="true" size={20} />} label="Representation">
-            <select value={representation} onChange={(event) => setRepresentation(event.currentTarget.value)}>
-              <option value="PolyBERT">PolyBERT</option>
-            </select>
+          <SetupControl icon={<BrainCircuit aria-hidden="true" size={20} />} label="空间表征" htmlFor="ht-representation">
+            <WorkbenchSelect
+              id="ht-representation"
+              ariaLabel="空间表征"
+              value={representation}
+              options={[{ value: "PolyBERT", label: "PolyBERT", description: "聚合物表征的二维投影" }]}
+              onChange={setRepresentation}
+            />
           </SetupControl>
         </div>
 
         <div className="ht-setup-section targets">
-          <div className="ht-setup-row">
-            <span className="ht-setup-icon">
-              <Target aria-hidden="true" size={20} />
-            </span>
-            <div className="ht-setup-field">
-              <span className="ht-setup-label">Target properties</span>
+          <SetupSectionHeading
+            index="03"
+            title="优化目标"
+            description="选择目标性质并调整演示阈值"
+          />
+          <div className="ht-s0-target-controls">
+            <SetupControl icon={<Target aria-hidden="true" size={20} />} label="目标性质">
               <div className="ht-property-buttons">
                 {scenario.targets.map((target) => (
                   <button
                     key={target.key}
                     type="button"
                     aria-pressed={selectedTargetKeys.includes(target.key)}
+                    title={target.label}
                     onClick={() => handleTargetClick(target.key)}
                     style={{ "--target-color": target.color } as CSSProperties}
                   >
+                    <Check aria-hidden="true" className="ht-target-check" />
                     <span>{target.shortLabel}</span>
                   </button>
                 ))}
               </div>
-            </div>
-          </div>
+            </SetupControl>
 
-          <div className="ht-setup-row">
-            <span className="ht-setup-icon">
-              <BadgeInfo aria-hidden="true" size={20} />
-            </span>
-            <div className="ht-setup-field">
-              <span className="ht-setup-label">Target values</span>
+            <SetupControl icon={<BadgeInfo aria-hidden="true" size={20} />} label="目标阈值">
               <div className="ht-target-value-inputs">
                 {selectedTargets.length > 0 ? selectedTargets.map((target) => (
                   <label key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
                     <span>{target.shortLabel}</span>
+                    <span
+                      id={`ht-target-direction-${target.key}`}
+                      className="ht-target-direction"
+                    >
+                      <span aria-hidden="true">{target.direction === "higher" ? "≥" : "≤"}</span>
+                      <span className="sr-only">{target.direction === "higher" ? "不低于" : "不超过"}</span>
+                    </span>
                     <input
-                      aria-label={`${target.shortLabel} target value`}
+                      aria-label={`${target.shortLabel} 目标值`}
+                      aria-describedby={`ht-target-direction-${target.key} ht-target-unit-${target.key}`}
                       inputMode="decimal"
                       step={target.key === "modulus" ? "0.1" : "1"}
                       type="number"
                       value={targetValues[target.key]}
-                      onFocus={() => setFocusedTargetKey(target.key)}
                       onChange={(event) =>
                         setTargetValues((current) => ({
                           ...current,
@@ -1455,40 +1493,110 @@ function ScenarioHeader({
                         }))
                       }
                     />
+                    <span id={`ht-target-unit-${target.key}`} className="ht-target-unit">
+                      {target.unit === "degC" ? "°C" : target.unit}
+                    </span>
                   </label>
                 )) : <span className="ht-target-empty">请选择目标性质</span>}
               </div>
-            </div>
+            </SetupControl>
           </div>
         </div>
       </div>
 
       <div className="ht-setup-actions">
         <div className="ht-setup-summary">
-          <span>Candidate space preview</span>
+          <span>候选空间预览</span>
           <strong>
-            {candidateA || "0"} x {candidateB || "0"} = {formatNumber(candidateTotalPreview)}
+            {candidateA || "0"} × {candidateB || "0"} = {formatNumber(candidateTotalPreview)}
           </strong>
-          <em>{selectedTargets.length} target properties selected</em>
+          <em>已选择 {selectedTargets.length} 个目标性质</em>
         </div>
-        <button type="button" className="ht-confirm-setup-button" onClick={handleConfirmSetup} disabled={isConfirmed}>
-          {isConfirmed ? <CheckCircle2 aria-hidden="true" size={17} /> : <ChevronRight aria-hidden="true" size={17} />}
-          {isConfirmed ? "任务设置已确认" : "确认任务设置，生成候选空间"}
+        <button type="button" className="ht-confirm-setup-button" onClick={handleConfirmSetup}>
+          确认场景设置，进入 S1
+          <ChevronRight aria-hidden="true" size={17} />
         </button>
       </div>
     </section>
   );
 }
 
-function SetupControl({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
+function ScenarioModuleToolbar({
+  canReset,
+  onReset,
+}: {
+  canReset: boolean;
+  onReset: () => void;
+}) {
   return (
-    <div className="ht-setup-row">
-      <span className="ht-setup-icon">{icon}</span>
-      <span className="ht-setup-field">
-        <span className="ht-setup-label">{label}</span>
-        {children}
-      </span>
+    <div className="ht-s0-module-toolbar" aria-label="高通量优化演示状态">
+      <div className="ht-s0-module-actions">
+        <span role="status">
+          <i aria-hidden="true" />
+          <strong>固定演示</strong>
+        </span>
+        <button
+          type="button"
+          onClick={onReset}
+          aria-label="恢复默认场景参数"
+          disabled={!canReset}
+        >
+          <RotateCcw aria-hidden="true" />
+          重置
+        </button>
+      </div>
     </div>
+  );
+}
+
+function ScenarioSurfaceHeader() {
+  return (
+    <header className="ht-s0-surface-header">
+      <div className="ht-s0-surface-heading">
+        <span className="ht-s0-surface-mark">
+          <FlaskConical aria-hidden="true" />
+        </span>
+        <div>
+          <h2 id="ht-s0-surface-title">材料体系与目标设置</h2>
+          <p>设置材料体系、候选空间与优化目标。</p>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function SetupControl({ icon, label, htmlFor, children }: { icon: ReactNode; label: string; htmlFor?: string; children: ReactNode }) {
+  const labelId = useId();
+  return (
+    <div className="ht-setup-row" role="group" aria-labelledby={labelId}>
+      <div className="ht-setup-label">
+        <span className="ht-setup-icon">{icon}</span>
+        {htmlFor ? <label id={labelId} htmlFor={htmlFor}>{label}</label> : <span id={labelId}>{label}</span>}
+      </div>
+      <div className="ht-setup-field">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function SetupSectionHeading({
+  index,
+  title,
+  description,
+}: {
+  index: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <header className="ht-s0-section-heading">
+      <span>{index}</span>
+      <div>
+        <h3>{title}</h3>
+        <p>{description}</p>
+      </div>
+    </header>
   );
 }
 
@@ -1519,30 +1627,32 @@ function FlowControlBar({
 
   return (
     <section className="ht-flow-control-bar" aria-label="演示播放控制">
-      <div className="ht-flow-next">
-        <div className="ht-flow-next-actions">
-          <button
-            type="button"
-            className="ht-primary-control ht-next-step-control"
-            onClick={onNextStep}
-            disabled={!nextStepState.canAdvance}
-          >
-            {nextStepState.label}
-            <ChevronRight aria-hidden="true" size={16} />
-          </button>
-          <button
-            type="button"
-            className="ht-icon-button ht-stage-reset-button"
-            onClick={onResetStage}
-            aria-label="重置当前阶段"
-            title={canResetStage ? "重置当前阶段" : "当前阶段无可重置动作"}
-            disabled={!canResetStage}
-          >
-            <RotateCcw aria-hidden="true" size={15} />
-          </button>
+      {currentStageIndex !== 0 ? (
+        <div className="ht-flow-next">
+          <div className="ht-flow-next-actions">
+            <button
+              type="button"
+              className="ht-primary-control ht-next-step-control"
+              onClick={onNextStep}
+              disabled={!nextStepState.canAdvance}
+            >
+              {nextStepState.label}
+              <ChevronRight aria-hidden="true" size={16} />
+            </button>
+            <button
+              type="button"
+              className="ht-icon-button ht-stage-reset-button"
+              onClick={onResetStage}
+              aria-label="重置当前阶段"
+              title={canResetStage ? "重置当前阶段" : "当前阶段无可重置动作"}
+              disabled={!canResetStage}
+            >
+              <RotateCcw aria-hidden="true" size={15} />
+            </button>
+          </div>
+          <span>{nextStepState.hint}</span>
         </div>
-        <span>{nextStepState.hint}</span>
-      </div>
+      ) : null}
       <nav className="ht-flow-steps" aria-label="S0 到 S6 演示阶段">
         {stages.map((stage, index) => {
           const state = index < currentStageIndex

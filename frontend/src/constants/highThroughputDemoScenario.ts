@@ -882,8 +882,8 @@ export const highThroughputDemoScenario: HighThroughputDemoScenario = {
   stages: [
     {
       id: "S0",
-      label: "任务设置",
-      title: "配置材料体系与四个单性质优化任务",
+      label: "场景设置",
+      title: "设置材料体系、候选空间与四个单性质优化目标",
       activeTargetKey: "tg",
     },
     {
