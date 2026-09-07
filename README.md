@@ -46,7 +46,7 @@ React 19 / Vite / Ketcher / 3Dmol
 | dev | `nexpoly_dev` | `127.0.0.1:9001` | `127.0.0.1:18000` | `127.0.0.1:15532` | `NEXPOLY_DEV_FRONTEND_PORT`、`NEXPOLY_DEV_BACKEND_PORT`、`NEXPOLY_DEV_POSTGRES_PORT` |
 | prod | `nexpoly` | `:9000` | Compose 内部 `:8000` | `127.0.0.1:55432` → 容器 `:5432` | `NEXPOLY_WEB_PORT`、`NEXPOLY_POSTGRES_PORT` |
 
-dev 的默认宿主机端口仅绑定 loopback，并使用独立数据库和开发配置。dev 端口可由表中的 `NEXPOLY_DEV_*_PORT` 变量覆盖；只有在明确需要从其他机器访问时，才将 `NEXPOLY_DEV_FRONTEND_BIND_ADDRESS` 设为 `0.0.0.0`，并把实际外部 Origin 加入 `NEXPOLY_DEV_ALLOWED_ORIGINS`。该设置会同时公开前端及其 `/api` 代理，Backend 和 PostgreSQL 端口仍只绑定 loopback。prod 前端和 PostgreSQL 宿主机端口可分别由 `NEXPOLY_WEB_PORT`、`NEXPOLY_POSTGRES_PORT` 覆盖。未经明确授权，不得从 dev 流程启动、停止、迁移或探测 prod 服务。`9000` 和 `55432` 都只是 prod Compose 的默认值，不是识别 prod 的固定标志；端口被覆盖后仍须以 Compose 项目和解析配置判断环境。
+dev 的默认宿主机端口仅绑定 loopback，并使用独立数据库和开发配置。dev 端口可由表中的 `NEXPOLY_DEV_*_PORT` 变量覆盖；只有在明确需要从其他机器访问、且已安装并从白名单内外网络验证[公网入口 IP 白名单](docs/public-ingress-security.md)时，才将 `NEXPOLY_DEV_FRONTEND_BIND_ADDRESS` 设为 `0.0.0.0`，并把实际外部 Origin 加入 `NEXPOLY_DEV_ALLOWED_ORIGINS`。该设置会同时公开前端及其 `/api` 代理，Backend 和 PostgreSQL 端口仍只绑定 loopback。CORS 只约束浏览器，不是访问控制，不能代替白名单。prod 前端和 PostgreSQL 宿主机端口可分别由 `NEXPOLY_WEB_PORT`、`NEXPOLY_POSTGRES_PORT` 覆盖。未经明确授权，不得从 dev 流程启动、停止、迁移或探测 prod 服务。`9000` 和 `55432` 都只是 prod Compose 的默认值，不是识别 prod 的固定标志；端口被覆盖后仍须以 Compose 项目和解析配置判断环境。
 
 OpenScience 是独立部署的前端，不属于 NexPoly Compose 服务；宿主机预留
 `9011` 作为其未来入口。`VITE_AGENT_WORKSPACE_URL` 为空时 NexPoly 只显示
@@ -168,6 +168,7 @@ docker compose config --quiet
 ## 权威文档
 
 - [生产 Pull 部署控制器](docs/release-controller.md)
+- [9000/9001/9011 公网入口 IP 白名单](docs/public-ingress-security.md)
 - [CI/CD 与生产部署入口](docs/deployment.md)
 - [PostgreSQL 迁移治理](docs/postgres-migration-governance.md)
 - [Monomer-MD Worker](docs/monomer-md-worker.md)

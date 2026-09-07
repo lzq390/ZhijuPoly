@@ -99,6 +99,13 @@ checkout and its Git metadata must not be group- or world-writable.
 
 ### OpenScience workspace release
 
+Any direct public binding of ports `9000`, `9001`, or `9011` requires the
+root-managed source-IP allowlist in
+[public-ingress-security.md](public-ingress-security.md). Docker-published
+ports must not rely on CORS or ordinary host `INPUT`/UFW rules as their access
+control. If direct remote access is unnecessary, bind the services to loopback
+and use an authenticated reverse proxy or SSH forwarding instead.
+
 OpenScience is an independently deployed frontend and is not a service in the
 NexPoly production Compose project. Its browser-facing endpoint remains
 `http://114.214.255.154:9011/`; both the production NexPoly parent on `9000`
