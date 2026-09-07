@@ -1,0 +1,31 @@
+[Unit]
+Description=NexPoly public web source-IP allowlist
+Documentation=file:/data/lzq/gith/nexpoly/docs/public-ingress-security.md
+DefaultDependencies=no
+After=local-fs.target ufw.service
+Before=network-pre.target docker.service
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+UMask=0077
+ExecStart=/usr/bin/python3 -I -B /usr/local/libexec/nexpoly-public-ingress-firewall apply
+ExecReload=/usr/bin/python3 -I -B /usr/local/libexec/nexpoly-public-ingress-firewall apply
+ExecStartPost=/usr/bin/python3 -I -B /usr/local/libexec/nexpoly-public-ingress-firewall status
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

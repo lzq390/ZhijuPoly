@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import subprocess
 from pathlib import Path
@@ -14,9 +15,16 @@ from .formal_protocols import (
     required_result_file,
     sanitize_formal_config,
 )
+from .formal_result_visualization import (
+    build_formal_visualization,
+    unavailable_visualization,
+)
 from .models import JobRequest
 from .process_control import create_fenced_subprocess_exec, wait_for_process_group
 from gpu_resource import ManagedGpuLease, mps_client_environment
+
+
+logger = logging.getLogger(__name__)
 
 
 class FormalProtocolRunResult:
@@ -119,6 +127,23 @@ class ByteFF2FormalRunner:
             raise RuntimeError(f"ByteFF2 {protocol} result file must contain a JSON object")
 
         summary = _summary_from_result(raw_result)
+        try:
+            visualization = await asyncio.to_thread(
+                build_formal_visualization,
+                protocol,
+                output_dir,
+            )
+        except Exception:
+            # Visualization is derived display data.  A parser/runtime defect
+            # must not discard an otherwise valid and expensive formal result.
+            logger.exception(
+                "failed to materialize formal visualization for job %s",
+                request.job_id,
+            )
+            visualization = unavailable_visualization(
+                protocol,
+                "VISUALIZATION_EXTRACTION_FAILED",
+            )
         artifact_manifest = _artifact_manifest(output_dir)
         byteff2_git_sha = resolve_byteff2_commit(self._settings.byteff2_root)
         completed_steps = estimate_requested_steps(protocol, final_config)
@@ -129,6 +154,7 @@ class ByteFF2FormalRunner:
             "config": _public_config(final_config, output_dir),
             "metrics": raw_result,
             "summary": summary,
+            "visualization": visualization,
             "result_file": str(result_path.relative_to(output_dir)),
             "artifact_manifest": artifact_manifest,
             "artifacts": _frontend_artifacts(artifact_manifest),

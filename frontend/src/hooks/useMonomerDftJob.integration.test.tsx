@@ -147,7 +147,7 @@ describe("useMonomerDftJob polling and operation fencing", () => {
     Object.values(apiMocks).forEach((mock) => mock.mockReset());
     apiMocks.fetchStatus.mockResolvedValue(serviceStatus);
     apiMocks.fetchCapabilities.mockResolvedValue(capabilities);
-    apiMocks.fetchJobs.mockResolvedValue({ items: [], page: 1, page_size: 20, total: 0 });
+    apiMocks.fetchJobs.mockResolvedValue({ items: [], page: 1, page_size: 10, total: 0 });
   });
 
   it("keeps retrying after more than three network failures and resets to polling on success", async () => {
@@ -172,6 +172,56 @@ describe("useMonomerDftJob polling and operation fencing", () => {
     expect(apiMocks.fetchJob).toHaveBeenCalledTimes(5);
     expect(result.current.job?.job_id).toBe(JOB_A);
     expect(result.current.pollState).toBe("polling");
+    unmount();
+  });
+
+  it("uses API error codes for user-facing submission messages", async () => {
+    apiMocks.createJob.mockRejectedValue(new MonomerDftApiError({
+      message: "monomer DFT Unix socket is not configured",
+      status: 503,
+      code: "worker_socket_not_configured",
+      retryable: false
+    }));
+    const { result, unmount } = renderHook(() => useMonomerDftJob());
+    await flush();
+
+    await act(async () => {
+      await result.current.submit(makeJob(JOB_A).request);
+    });
+
+    expect(result.current.jobError).toBe("计算服务暂不可用，请联系管理员。");
+    expect(result.current.jobError).not.toMatch(/Worker|socket/i);
+    unmount();
+  });
+
+  it("stops the history loading state when the initial service check fails", async () => {
+    apiMocks.fetchStatus.mockRejectedValue(new TypeError("network unavailable"));
+    const { result, unmount } = renderHook(() => useMonomerDftJob());
+
+    await flush();
+    expect(result.current.isServiceLoading).toBe(false);
+    expect(result.current.isHistoryLoading).toBe(false);
+    expect(result.current.serviceError).toBe("读取单体 DFT 服务状态失败。");
+    expect(apiMocks.fetchJobs).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("restores a deep link after capabilities recover on a later service check", async () => {
+    apiMocks.fetchCapabilities
+      .mockRejectedValueOnce(new TypeError("capabilities unavailable"))
+      .mockResolvedValue(capabilities);
+    apiMocks.fetchJob.mockResolvedValue(makeJob(JOB_A, "completed"));
+    const { result, unmount } = renderHook(() => useMonomerDftJob({ initialJobId: JOB_A }));
+
+    await flush();
+    expect(apiMocks.fetchJob).not.toHaveBeenCalled();
+    expect(result.current.serviceError).toBe("读取单体 DFT 服务状态失败。");
+
+    await advance(10_000);
+    await flush();
+    expect(apiMocks.fetchJob).toHaveBeenCalledTimes(1);
+    expect(result.current.job?.job_id).toBe(JOB_A);
+    expect(result.current.serviceError).toBeNull();
     unmount();
   });
 
@@ -215,9 +265,15 @@ describe("useMonomerDftJob polling and operation fencing", () => {
       status: 404,
       retryable: false
     }));
-    const { result, unmount } = renderHook(() => useMonomerDftJob({ initialJobId: JOB_A }));
+    const onJobIdChange = vi.fn();
+    const { result, unmount } = renderHook(() => useMonomerDftJob({
+      initialJobId: JOB_A,
+      onJobIdChange
+    }));
     await flush();
     expect(result.current.pollState).toBe("stopped");
+    expect(result.current.jobError).toBe("该任务已被删除或已按保留策略到期清理。");
+    expect(onJobIdChange).toHaveBeenCalledWith(null);
     await advance(60_000);
     expect(apiMocks.fetchJob).toHaveBeenCalledTimes(1);
     unmount();
@@ -290,6 +346,44 @@ describe("useMonomerDftJob polling and operation fencing", () => {
     unmount();
   });
 
+  it("aborts a pending rerun before deleting the selected record", async () => {
+    let submissionSignal: AbortSignal | undefined;
+    apiMocks.fetchJob.mockResolvedValue(makeJob(JOB_A, "completed"));
+    apiMocks.createJob.mockImplementation((_request, _idempotencyKey, signal: AbortSignal) => {
+      submissionSignal = signal;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("aborted", "AbortError")),
+          { once: true }
+        );
+      });
+    });
+    apiMocks.deleteJob.mockResolvedValue(undefined);
+    const onJobIdChange = vi.fn();
+    const { result, unmount } = renderHook(() => useMonomerDftJob({
+      initialJobId: JOB_A,
+      onJobIdChange
+    }));
+    await flush();
+    const selectedJob = result.current.job;
+    expect(selectedJob?.status).toBe("completed");
+
+    act(() => { void result.current.rerun(); });
+    await flush();
+    expect(result.current.isSubmitting).toBe(true);
+    expect(submissionSignal?.aborted).toBe(false);
+
+    act(() => { void result.current.deleteJobRecord(selectedJob!); });
+    await flush();
+    expect(submissionSignal?.aborted).toBe(true);
+    expect(result.current.isSubmitting).toBe(false);
+    expect(apiMocks.deleteJob).toHaveBeenCalledWith(JOB_A, expect.any(AbortSignal));
+    expect(result.current.job).toBeNull();
+    expect(onJobIdChange).toHaveBeenLastCalledWith(null);
+    unmount();
+  });
+
   it("does not read history until the schema status and capabilities are ready", async () => {
     const status = deferred<MonomerDftServiceStatusResponse>();
     const nextCapabilities = deferred<MonomerDftCapabilitiesResponse>();
@@ -306,7 +400,13 @@ describe("useMonomerDftJob polling and operation fencing", () => {
     nextCapabilities.resolve(capabilities);
     await flush();
     expect(apiMocks.fetchJobs).toHaveBeenCalledTimes(1);
-    history.resolve({ items: [], page: 1, page_size: 20, total: 0 });
+    expect(apiMocks.fetchJobs).toHaveBeenCalledWith({
+      page: 1,
+      page_size: 10,
+      status: "",
+      calculation_type: ""
+    }, expect.any(AbortSignal));
+    history.resolve({ items: [], page: 1, page_size: 10, total: 0 });
     unmount();
   });
 

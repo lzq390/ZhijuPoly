@@ -288,6 +288,38 @@ def get_monomer_md_job_postgres(connection: Any, job_id: str) -> dict[str, Any] 
     return _monomer_md_job_from_row(row)
 
 
+def get_monomer_md_trajectory_timeline_postgres(
+    connection: Any,
+    *,
+    job_id: str,
+    stage_id: str,
+) -> dict[str, Any] | None:
+    """Return one bounded trajectory timeline without loading the full job result."""
+
+    row = connection.execute(
+        """
+        SELECT stage.value -> 'trajectory_timeline' AS trajectory_timeline
+        FROM md.monomer_md_jobs job
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE
+            WHEN jsonb_typeof(job.result_data #> '{visualization,stages}') = 'array'
+              THEN job.result_data #> '{visualization,stages}'
+            ELSE '[]'::jsonb
+          END
+        ) AS stage(value)
+        WHERE job.job_id = %s
+          AND stage.value ->> 'stage_id' = %s
+          AND jsonb_typeof(stage.value -> 'trajectory_timeline') = 'object'
+        LIMIT 1
+        """,
+        (job_id, stage_id),
+    ).fetchone()
+    if row is None:
+        return None
+    timeline = row["trajectory_timeline"]
+    return _as_dict(timeline) if timeline is not None else None
+
+
 def list_expired_monomer_md_jobs_postgres(
     connection: Any,
     *,
@@ -366,6 +398,7 @@ def list_monomer_md_jobs_postgres(
     *,
     run_mode: str | None = None,
     active_only: bool = False,
+    include_result: bool = True,
     protocol: str | None = None,
     status: str | None = None,
     page: int = 1,
@@ -390,13 +423,18 @@ def list_monomer_md_jobs_postgres(
         tuple(params),
     ).fetchone()
     total = int(total_row["count"] if total_row is not None else 0)
+    result_projection = (
+        "artifacts, artifact_manifest, result_data"
+        if include_result
+        else "'{}'::jsonb AS artifacts, '{}'::jsonb AS artifact_manifest, NULL::jsonb AS result_data"
+    )
     rows = connection.execute(
         f"""
         SELECT job_id, status, input_smiles, canonical_smiles, protocol, run_mode, config_json, components,
                requested_steps, completed_steps, progress_percent,
                progress_stage, progress_message, worker_id, worker_job_id, worker_version, engine, artifact_root,
-               artifacts, artifact_manifest, artifact_deleted_at, artifact_delete_message, result_summary,
-               byteff2_git_sha, gpu_device, error_category, result_data, error_message,
+               {result_projection}, artifact_deleted_at, artifact_delete_message, result_summary,
+               byteff2_git_sha, gpu_device, error_category, error_message,
                created_at, updated_at, started_at, finished_at, cancel_requested_at, queue_sequence,
                CASE
                  WHEN queue_sequence IS NULL THEN NULL

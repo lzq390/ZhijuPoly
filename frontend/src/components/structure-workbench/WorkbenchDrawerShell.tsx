@@ -42,10 +42,13 @@ type WorkbenchDrawerShellProps = {
   children: ReactNode;
   onWidthChange: (width: number) => void;
   onClose: () => void;
-  onOpen: () => void;
+  onOpen: (trigger?: HTMLElement) => void;
   minWidth?: number;
   maxWidth?: number;
   keyboardStep?: number;
+  overlayContainerWidth?: number;
+  restoreFocusTarget?: HTMLElement | null;
+  drawerClassName?: string;
 };
 
 export function WorkbenchDrawerShell({
@@ -66,13 +69,18 @@ export function WorkbenchDrawerShell({
   onOpen,
   minWidth = DEFAULT_MIN_WIDTH,
   maxWidth = DEFAULT_MAX_WIDTH,
-  keyboardStep = DEFAULT_KEYBOARD_STEP
+  keyboardStep = DEFAULT_KEYBOARD_STEP,
+  overlayContainerWidth = OVERLAY_CONTAINER_WIDTH,
+  restoreFocusTarget = null,
+  drawerClassName = ""
 }: WorkbenchDrawerShellProps) {
   const titleId = useId();
   const layerRef = useRef<HTMLDivElement | null>(null);
   const drawerRef = useRef<HTMLElement | null>(null);
   const reopenRef = useRef<HTMLButtonElement | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const reopenTriggerRef = useRef<HTMLElement | null>(null);
+  const restoreFocusFrameRef = useRef<number | null>(null);
   const onCloseRef = useRef(onClose);
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [isOverlay, setIsOverlay] = useState(true);
@@ -81,13 +89,13 @@ export function WorkbenchDrawerShell({
   useEffect(() => {
     const root = layerRef.current?.closest<HTMLElement>(".np-structure-workbench");
     if (!root) return;
-    const update = () => setIsOverlay(root.getBoundingClientRect().width < OVERLAY_CONTAINER_WIDTH);
+    const update = () => setIsOverlay(root.getBoundingClientRect().width < overlayContainerWidth);
     update();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(update);
     observer.observe(root);
     return () => observer.disconnect();
-  }, []);
+  }, [overlayContainerWidth]);
 
   useEffect(() => {
     function handlePointerMove(event: PointerEvent) {
@@ -110,10 +118,36 @@ export function WorkbenchDrawerShell({
   }, [maxWidth, minWidth, onWidthChange]);
 
   useEffect(() => {
+    if (!open) return;
+    if (restoreFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(restoreFocusFrameRef.current);
+      restoreFocusFrameRef.current = null;
+    }
+    restoreFocusRef.current = reopenTriggerRef.current
+      ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    reopenTriggerRef.current = null;
+    return () => {
+      const restoreTarget = restoreFocusRef.current;
+      restoreFocusFrameRef.current = window.requestAnimationFrame(() => {
+        restoreFocusFrameRef.current = null;
+        const hiddenAncestor = restoreTarget?.closest<HTMLElement>("[inert], [aria-hidden='true']");
+        if (restoreTarget?.isConnected && !hiddenAncestor) restoreTarget.focus();
+        else reopenRef.current?.focus();
+      });
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open && restoreFocusTarget) restoreFocusRef.current = restoreFocusTarget;
+  }, [open, restoreFocusTarget]);
+
+  useEffect(() => {
     if (!open || !isOverlay) return;
-    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const frame = window.requestAnimationFrame(() => {
-      drawerRef.current?.querySelector<HTMLElement>("button:not([disabled]), [tabindex='0']")?.focus();
+    // Let the originating pointer event finish its default focus before entering the modal.
+    let frame = window.requestAnimationFrame(() => {
+      frame = window.requestAnimationFrame(() => {
+        drawerRef.current?.querySelector<HTMLElement>("button:not([disabled]), [tabindex='0']")?.focus();
+      });
     });
 
     function handleKeyDown(event: globalThis.KeyboardEvent) {
@@ -144,12 +178,6 @@ export function WorkbenchDrawerShell({
     return () => {
       window.cancelAnimationFrame(frame);
       document.removeEventListener("keydown", handleKeyDown);
-      const restoreTarget = restoreFocusRef.current;
-      window.requestAnimationFrame(() => {
-        const hiddenAncestor = restoreTarget?.closest<HTMLElement>("[inert], [aria-hidden='true']");
-        if (restoreTarget?.isConnected && !hiddenAncestor) restoreTarget.focus();
-        else reopenRef.current?.focus();
-      });
     };
   }, [isOverlay, open]);
 
@@ -186,12 +214,13 @@ export function WorkbenchDrawerShell({
         />
         <aside
           ref={drawerRef}
-          className="np-sw-drawer"
+          className={`np-sw-drawer${drawerClassName ? ` ${drawerClassName}` : ""}`}
           role="dialog"
           aria-modal={isOverlay ? "true" : "false"}
           aria-labelledby={titleId}
+          aria-hidden={!open}
           tabIndex={-1}
-          inert={!open}
+          inert={open ? undefined : true}
         >
           <div
             className="np-sw-drawer__resizer"
@@ -228,7 +257,10 @@ export function WorkbenchDrawerShell({
           ref={reopenRef}
           type="button"
           className={`np-sw-drawer-reopen${reopenVariant === "side-handle" ? " is-side-handle" : ""}`}
-          onClick={onOpen}
+          onClick={(event) => {
+            reopenTriggerRef.current = event.currentTarget;
+            onOpen(event.currentTarget);
+          }}
           aria-label={reopenLabel}
           title={reopenLabel}
         >

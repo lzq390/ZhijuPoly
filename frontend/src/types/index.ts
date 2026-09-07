@@ -224,6 +224,7 @@ export type MdDemoRunResponse = {
 
 export type MonomerMdJobStatus = "pending" | "submitted" | "running" | "cancel_requested" | "completed" | "failed" | "cancelled";
 export type MonomerMdProtocol = "DensityDemo" | "Density" | "Transport" | "HVap" | "Dielectric" | "Compressibility";
+export type MonomerMdFormalProtocol = Exclude<MonomerMdProtocol, "DensityDemo">;
 export type MonomerMdRunMode = "demo" | "formal";
 
 export type MonomerMdServiceStatusResponse = {
@@ -277,25 +278,94 @@ export type MonomerMdProtocolCatalogResponse = {
   message: string;
 };
 
-export type MonomerMdJobCreateRequest = {
-  smiles?: string;
-  protocol?: MonomerMdProtocol;
-  run_mode?: MonomerMdRunMode;
-  config_json?: Record<string, unknown>;
+export type MonomerMdDemoJobCreateRequest = {
+  smiles: string;
+  protocol: "DensityDemo";
+  run_mode: "demo";
+  config_json?: never;
 };
+export type MonomerMdFormalJobCreateRequest = {
+  smiles?: never;
+  protocol: MonomerMdFormalProtocol;
+  run_mode: "formal";
+  config_json: Record<string, unknown>;
+};
+export type MonomerMdJobCreateRequest =
+  | MonomerMdDemoJobCreateRequest
+  | MonomerMdFormalJobCreateRequest;
 export type MonomerMdJobCreateResponse = { job_id: string; status: MonomerMdJobStatus };
 export type MonomerMdSeriesPoint = { step?: number; frame?: number; time_ps?: number; time_ns?: number; value?: number; [key: string]: string | number | null | undefined };
-export type MonomerMdSeries = { key?: string; label?: string; unit?: string; points: MonomerMdSeriesPoint[] } | MonomerMdSeriesPoint[];
-export type MonomerMdTrajectoryPoint = { atom_id?: number; chain_id?: number; atom_type?: string; element?: string; x: number; y: number; z: number };
-export type MonomerMdTrajectoryPreview = { stage_id?: string; frame_index?: number; time_ps?: number; sampled_points?: number; points?: MonomerMdTrajectoryPoint[]; atoms?: MonomerMdTrajectoryPoint[]; box?: { lx?: number; ly?: number; lz?: number }; preview_url?: string | null; format?: string | null; content?: string | null; [key: string]: unknown };
+export type MonomerMdSeries = { key?: string; label?: string; unit?: string; source_point_count?: number; sampled_point_count?: number; points: MonomerMdSeriesPoint[] } | MonomerMdSeriesPoint[];
+export type MonomerMdTrajectoryPoint = { atom_id?: number; chain_id?: number; atom_type?: string; residue_name?: string; element?: string; x: number; y: number; z: number };
+export type MonomerMdTrajectoryPreview = { stage_id?: string; frame_index?: number; time_ps?: number; coordinate_unit?: "angstrom" | string; total_atoms?: number; sampled_points?: number; points?: MonomerMdTrajectoryPoint[]; atoms?: MonomerMdTrajectoryPoint[]; box?: { lx?: number; ly?: number; lz?: number; unit?: string } | null; preview_url?: string | null; format?: string | null; content?: string | null; [key: string]: unknown };
+export type MonomerMdTrajectoryAtom = Omit<MonomerMdTrajectoryPoint, "x" | "y" | "z">;
+export type MonomerMdTrajectoryTimelineFrame = {
+  frame_index: number;
+  time_ps?: number;
+  box?: { lx: number; ly: number; lz: number; unit: "angstrom" | string } | null;
+};
+export type MonomerMdTrajectoryTimeline = {
+  schema_version: 1;
+  source_frame_count: number;
+  sampled_frame_count: number;
+  total_atoms: number;
+  sampled_points: number;
+  coordinate_unit: "angstrom";
+  coordinate_scale: number;
+  coordinate_encoding: "int16-delta-gzip-base64";
+  coordinate_byte_order: "little";
+  decoded_byte_length: number;
+  compressed_byte_length?: number;
+  sampling_strategy?: string;
+  atoms: MonomerMdTrajectoryAtom[];
+  frames: MonomerMdTrajectoryTimelineFrame[];
+  coordinates: string;
+};
+export type MonomerMdTrajectoryTimelineSummary = Pick<
+  MonomerMdTrajectoryTimeline,
+  | "schema_version"
+  | "source_frame_count"
+  | "sampled_frame_count"
+  | "total_atoms"
+  | "sampled_points"
+  | "coordinate_unit"
+  | "coordinate_encoding"
+  | "compressed_byte_length"
+  | "sampling_strategy"
+>;
+export type MonomerMdVisualizationStage = {
+  stage_id: string;
+  label: string;
+  phase?: "liquid" | "gas";
+  density_series?: MonomerMdSeries;
+  temperature_series?: MonomerMdSeries;
+  potential_energy_series?: MonomerMdSeries;
+  kinetic_energy_series?: MonomerMdSeries;
+  energy_series?: MonomerMdSeries;
+  trajectory_preview?: MonomerMdTrajectoryPreview | null;
+  trajectory_timeline?: MonomerMdTrajectoryTimeline | null;
+  trajectory_timeline_available?: boolean;
+  trajectory_timeline_summary?: MonomerMdTrajectoryTimelineSummary;
+  warnings?: string[];
+};
+export type MonomerMdVisualization = {
+  schema_version: 1 | 2 | 3;
+  status: "complete" | "partial" | "unavailable";
+  default_stage_id: string;
+  stages: MonomerMdVisualizationStage[];
+  warnings?: string[];
+};
 export type MonomerMdArtifact = { name?: string; label?: string; kind?: string; url?: string | null; path?: string | null; size_bytes?: number | null; [key: string]: string | number | boolean | null | undefined };
 export type MonomerMdSimulationResult = {
   protocol?: MonomerMdProtocol;
   run_mode?: MonomerMdRunMode;
   density_series?: MonomerMdSeries;
   temperature_series?: MonomerMdSeries;
+  potential_energy_series?: MonomerMdSeries;
+  kinetic_energy_series?: MonomerMdSeries;
   energy_series?: MonomerMdSeries;
   trajectory_preview?: MonomerMdTrajectoryPreview | null;
+  visualization?: MonomerMdVisualization;
   summary: Record<string, string | number | boolean | null>;
   metrics?: Record<string, unknown>;
   artifact_manifest?: Record<string, unknown>;
@@ -345,6 +415,8 @@ export type MonomerMdJobResponse = {
   result?: MonomerMdSimulationResult | null;
   density_series?: MonomerMdSeries;
   temperature_series?: MonomerMdSeries;
+  potential_energy_series?: MonomerMdSeries;
+  kinetic_energy_series?: MonomerMdSeries;
   energy_series?: MonomerMdSeries;
   trajectory_preview?: MonomerMdTrajectoryPreview | null;
   summary?: Record<string, string | number | boolean | null>;
@@ -352,15 +424,20 @@ export type MonomerMdJobResponse = {
 };
 
 export type MonomerMdJobPageResponse = {
-  items: MonomerMdJobResponse[];
+  items: MonomerMdJobListItem[];
   total: number;
   page: number;
   page_size: number;
 };
 
+export type MonomerMdJobListItem = Omit<MonomerMdJobResponse, "result"> & {
+  result?: MonomerMdSimulationResult | null;
+};
+
 export type MonomerMdJobListQuery = {
   run_mode?: MonomerMdRunMode;
   active_only?: boolean;
+  include_result?: boolean;
   protocol?: MonomerMdProtocol | "";
   status?: MonomerMdJobStatus | "";
   page?: number;
@@ -764,7 +841,10 @@ export type MonomerDftArtifactDeleteResponse = {
 
 export type MonomerDftTrajectoryArtifact = {
   units: { energy: string; fmax: string; coordinates: string; charges?: string };
-  frames: Array<MonomerDftOptimizationStep & { coordinates_angstrom: MonomerDftVector3[] }>;
+  frames: Array<MonomerDftOptimizationStep & {
+    coordinates_angstrom: MonomerDftVector3[];
+    charges_e?: number[];
+  }>;
 };
 
 export type StructureImageRecognitionResponse = {

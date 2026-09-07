@@ -41,8 +41,8 @@ export function monomerMdDemoNotice(
   }
   const steps = monomerMdDemoStepCount(result, job);
   return steps == null
-    ? "演示结果尚未达到平衡，不能作为物理密度估计。"
-    : `${steps} 步演示结果尚未达到平衡，不能作为物理密度估计。`;
+    ? "这是由 Worker 实际执行的 MD 结果；由于步数不足，体系尚未达到平衡，不能作为物理密度估计。"
+    : `这是由 Worker 实际执行的 ${steps} 步 MD 结果；由于步数不足，体系尚未达到平衡，不能作为物理密度估计。`;
 }
 
 export function isGenericMonomerMdDemoWarning(warning: string): boolean {

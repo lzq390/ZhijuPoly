@@ -379,8 +379,9 @@
 }
 
 .tg-assistant-panel {
-  --tg-assistant-body-font-size: 12px;
-  --tg-assistant-title-font-size: 13px;
+  --tg-assistant-body-font-size: 13px;
+  --tg-assistant-title-font-size: 14px;
+  --tg-assistant-meta-font-size: 11px;
   right: 0;
   display: flex;
   width: 370px;
@@ -426,7 +427,7 @@
   display: block;
   margin-top: 2px;
   color: #94a3b8;
-  font-size: var(--tg-assistant-body-font-size);
+  font-size: var(--tg-assistant-meta-font-size);
 }
 
 .tg-assistant-body {
@@ -619,7 +620,7 @@
   border: 0;
   outline: 0;
   color: #1e293b;
-  font-size: 13px;
+  font-size: var(--tg-assistant-body-font-size);
   line-height: 1.5;
   max-width: 100%;
   min-width: 0;
@@ -694,7 +695,7 @@
 .tg-assistant-image-preview span {
   overflow: hidden;
   color: #475569;
-  font-size: 11px;
+  font-size: var(--tg-assistant-meta-font-size);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -710,7 +711,7 @@
 .tg-assistant-image-error {
   margin: 5px 2px 0;
   color: #b91c1c;
-  font-size: 10px;
+  font-size: var(--tg-assistant-meta-font-size);
 }
 
 .tg-assistant-message-image {
@@ -741,7 +742,7 @@
   min-width: 0;
   overflow: hidden;
   color: #64748b;
-  font-size: 10px;
+  font-size: var(--tg-assistant-meta-font-size);
   line-height: 1.35;
   text-align: right;
   text-overflow: ellipsis;
@@ -768,14 +769,14 @@
 }
 
 .tg-assistant-message-image-unavailable em {
-  font-size: 10px;
+  font-size: var(--tg-assistant-meta-font-size);
   font-style: normal;
 }
 
 .tg-assistant-structure-change dd {
   overflow-wrap: anywhere;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 10px;
+  font-size: var(--tg-assistant-meta-font-size);
 }
 
 .tg-assistant-guide {
@@ -818,6 +819,10 @@
   color: #64748b;
   font-size: var(--tg-assistant-body-font-size);
   line-height: 1.65;
+}
+
+.tg-assistant-guide > div > small {
+  font-size: var(--tg-assistant-meta-font-size);
 }
 
 .tg-assistant-guide details {
@@ -933,6 +938,11 @@
   margin: 0;
 }
 
+.tg-assistant-markdown strong {
+  color: #203b58;
+  font-weight: 700;
+}
+
 .tg-assistant-markdown,
 .tg-assistant-markdown p,
 .tg-assistant-md-list,
@@ -945,19 +955,29 @@
 
 .tg-assistant-markdown p + p,
 .tg-assistant-md-list + p,
-.tg-assistant-markdown p + .tg-assistant-md-list {
-  margin-top: 5px;
+.tg-assistant-markdown p + .tg-assistant-md-list,
+.tg-assistant-md-list + .tg-assistant-md-list {
+  margin-top: 6px;
 }
 
 .tg-assistant-md-heading {
   display: block;
-  margin: 3px 0 4px;
-  color: #0f172a;
+  margin: 12px 0 6px;
+  color: #183553;
+  font-family: var(--font-body);
+  font-size: var(--tg-assistant-title-font-size);
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.tg-assistant-markdown > .tg-assistant-md-heading:first-child {
+  margin-top: 0;
 }
 
 .tg-assistant-md-list {
   display: flex;
   gap: 5px;
+  line-height: 1.6;
 }
 
 .tg-assistant-md-space {
@@ -969,11 +989,118 @@
   padding: 1px 3px;
   border-radius: 3px;
   background: #e2e8f0;
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--tg-assistant-body-font-size);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-all;
+}
+
+.tg-assistant-md-inline-math {
+  display: inline;
+  padding: 1px 3px;
+  border-radius: 4px;
+  background: rgba(219, 234, 254, 0.58);
+  color: #234f7d;
+  font-family: var(--font-mono);
+  font-size: 0.96em;
+  white-space: nowrap;
+}
+
+.tg-assistant-md-inline-math sub,
+.tg-assistant-md-inline-math sup,
+.tg-assistant-md-equation sub,
+.tg-assistant-md-equation sup {
+  position: relative;
+  font-size: 0.76em;
+  line-height: 0;
+  vertical-align: baseline;
+}
+
+.tg-assistant-md-inline-math sub,
+.tg-assistant-md-equation sub {
+  bottom: -0.24em;
+}
+
+.tg-assistant-md-inline-math sup,
+.tg-assistant-md-equation sup {
+  top: -0.42em;
+}
+
+.tg-assistant-md-equation {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 8px 0;
+  overflow-x: auto;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-left: 2px solid rgba(8, 145, 178, 0.55);
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.9), rgba(236, 254, 255, 0.5));
+  color: #183553;
+  font-family: var(--font-mono);
+  font-size: var(--tg-assistant-body-font-size);
+  font-weight: 500;
+  line-height: 1.65;
+  white-space: nowrap;
+  scrollbar-width: thin;
+  box-sizing: border-box;
+}
+
+.tg-assistant-md-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  margin: 8px 0;
+  overflow-x: auto;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  scrollbar-width: thin;
+  box-sizing: border-box;
+}
+
+.tg-assistant-md-table-wrap table {
+  width: 100%;
+  min-width: 300px;
+  border-collapse: collapse;
+  color: #405b78;
+  font-size: var(--tg-assistant-body-font-size);
+  line-height: 1.5;
+}
+
+.tg-assistant-md-table-wrap th,
+.tg-assistant-md-table-wrap td {
+  padding: 7px 8px;
+  border-right: 1px solid rgba(51, 83, 126, 0.1);
+  border-bottom: 1px solid rgba(51, 83, 126, 0.1);
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.tg-assistant-md-table-wrap th {
+  background: #f2f6fa;
+  color: #294761;
+  font-weight: 700;
+}
+
+.tg-assistant-md-table-wrap tr:last-child td {
+  border-bottom: 0;
+}
+
+.tg-assistant-md-table-wrap th:last-child,
+.tg-assistant-md-table-wrap td:last-child {
+  border-right: 0;
+}
+
+.tg-assistant-md-table-wrap .is-center {
+  text-align: center;
+}
+
+.tg-assistant-md-table-wrap .is-right {
+  text-align: right;
 }
 
 .tg-assistant-markdown pre {
@@ -1033,6 +1160,7 @@
 .tg-assistant-process > summary small {
   overflow: hidden;
   color: #94a3b8;
+  font-size: var(--tg-assistant-meta-font-size);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1065,7 +1193,7 @@
   align-items: center;
   gap: 5px;
   color: #94a3b8;
-  font-size: 10px;
+  font-size: var(--tg-assistant-meta-font-size);
 }
 
 .tg-assistant-process li.is-active {
@@ -1088,7 +1216,7 @@
 .tg-assistant-reasoning-summary > div > small {
   display: block;
   color: #64748b;
-  font-size: 10px;
+  font-size: var(--tg-assistant-meta-font-size);
 }
 
 .tg-assistant-reasoning-summary > div {
@@ -1098,13 +1226,13 @@
 .tg-assistant-reasoning-summary .tg-assistant-markdown {
   margin-top: 2px;
   color: #64748b;
-  font-size: 10px;
+  font-size: var(--tg-assistant-meta-font-size);
 }
 
 .tg-assistant-process-warning {
   margin: 6px 0 0;
   color: #a16207;
-  font-size: 10px;
+  font-size: var(--tg-assistant-meta-font-size);
 }
 
 .tg-assistant-message-error {
@@ -1172,6 +1300,10 @@
   display: block;
   color: #1e3a8a;
   font-size: var(--tg-assistant-title-font-size);
+}
+
+.tg-assistant-action-card > small {
+  font-size: var(--tg-assistant-meta-font-size);
 }
 
 .tg-assistant-action-card dl {
@@ -1322,7 +1454,7 @@
 }
 
 .tg-assistant-consent strong {
-  font-size: 14px;
+  font-size: var(--tg-assistant-title-font-size);
 }
 
 .tg-assistant-consent p {

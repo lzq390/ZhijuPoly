@@ -867,11 +867,18 @@ def run_frontend_probe(client: LoopbackClient) -> dict[str, Any]:
     routes = [
         "/structure-workbench",
         "/homopolymer-property-prediction",
+        "/database-query",
         "/database",
+        "/database/process",
+        "/database/property",
+        "/database/structure-effect",
+        "/database/dft",
+        "/database/formulation",
         "/database-filter",
         "/knowledge",
         "/reverse-design",
         "/monomer-dft",
+        "/md-simulation",
         "/monomer-md-simulation",
     ]
     route_evidence: list[str] = []

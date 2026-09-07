@@ -39,7 +39,12 @@ import type {
   PropertyFilterHistogram as PropertyFilterHistogramData,
   PropertyFilterOption
 } from "../types";
-import { DatabaseFilterResultsDrawer } from "./DatabaseFilterResultsDrawer";
+import {
+  DatabaseFilterResultsDrawer,
+  useDatabaseFilterDrawerSizing
+} from "./DatabaseFilterResultsDrawer";
+import { MaterialDiscoveryPageTitle } from "./MaterialDiscoveryPageTitle";
+import "../styles/structure-workbench.css";
 import "../styles/database-filter.css";
 
 function formatInteger(value: number | null | undefined) {
@@ -145,9 +150,9 @@ const PropertyHistogram = memo(function PropertyHistogram({
       .then((resource) => {
         if (subscribed) setHistogram(resource.data.histogram);
       })
-      .catch((requestError: unknown) => {
+      .catch(() => {
         if (!subscribed) return;
-        setError(requestError instanceof Error ? requestError.message : "真实分布加载失败。");
+        setError("属性分布暂时无法加载，请稍后重试。");
       })
       .finally(() => {
         if (subscribed) setLoading(false);
@@ -159,10 +164,10 @@ const PropertyHistogram = memo(function PropertyHistogram({
 
   if (loading && !histogram) {
     return (
-      <div className="dbf-histogram is-loading" role="status" aria-label={`${option.label} 真实分布加载中`}>
+      <div className="dbf-histogram is-loading" role="status" aria-label={`${option.label} 分布加载中`}>
         <div className="dbf-histogram-head">
           <strong>真实分布</strong>
-          <span>读取区间计数…</span>
+          <span>正在加载分布…</span>
         </div>
         <div className="dbf-histogram-skeleton" aria-hidden="true">
           {Array.from({ length: 18 }, (_, index) => <i key={index} />)}
@@ -178,7 +183,7 @@ const PropertyHistogram = memo(function PropertyHistogram({
           <strong>真实分布</strong>
           <button type="button" onClick={() => setRetryKey((current) => current + 1)}>重试</button>
         </div>
-        <p title={error}>分布加载失败</p>
+        <p title={error}>暂时无法加载分布</p>
       </div>
     );
   }
@@ -207,11 +212,11 @@ const PropertyHistogram = memo(function PropertyHistogram({
     ? undefined
     : ({ "--dbf-median-position": `${medianPosition}%` } as CSSProperties);
   const accessibleSummary = [
-    `${option.label} 全库测量记录真实直方图`,
-    `${formatInteger(histogram.total_count)} 条记录`,
-    `${domainStartLabel} 到 ${domainEndLabel} 主区间 ${formatInteger(centralCount)} 条`,
-    `左侧尾部 ${formatInteger(histogram.underflow_count)} 条`,
-    `右侧尾部 ${formatInteger(histogram.overflow_count)} 条`,
+    `${option.label} 属性分布图`,
+    `${formatInteger(histogram.total_count)} 条测量记录`,
+    `${domainStartLabel} 到 ${domainEndLabel} 显示 ${formatInteger(centralCount)} 条`,
+    `低于显示范围 ${formatInteger(histogram.underflow_count)} 条`,
+    `高于显示范围 ${formatInteger(histogram.overflow_count)} 条`,
     `${formatInteger(option.unique_smiles)} 个 SMILES`,
     `${domainStartLabel} ${formatValue(histogram.domain_min)}`,
     `P50 ${formatValue(option.median_value)}`,
@@ -227,7 +232,7 @@ const PropertyHistogram = memo(function PropertyHistogram({
     >
       <div className="dbf-histogram-head">
         <strong>真实分布</strong>
-        <span title={`左右尾部另计 ${formatInteger(histogram.underflow_count + histogram.overflow_count)} 条`}>
+        <span title={`显示范围之外另有 ${formatInteger(histogram.underflow_count + histogram.overflow_count)} 条记录`}>
           {formatInteger(centralCount)} / {formatInteger(histogram.total_count)} 条 · {unit || "无单位"}
         </span>
       </div>
@@ -260,9 +265,15 @@ type PropertyPickerProps = {
   search: string;
   standardizedOptions: PropertyFilterOption[];
   rawOptions: PropertyFilterOption[];
+  optionUsage: ReadonlyMap<string, readonly PropertyOptionAssignment[]>;
   onToggle: () => void;
   onSearch: (value: string) => void;
   onSelect: (optionKey: string) => void;
+};
+
+type PropertyOptionAssignment = {
+  draftId: number;
+  conditionNumber: number;
 };
 
 const PropertyPicker = memo(function PropertyPicker({
@@ -272,6 +283,7 @@ const PropertyPicker = memo(function PropertyPicker({
   search,
   standardizedOptions,
   rawOptions,
+  optionUsage,
   onToggle,
   onSearch,
   onSelect
@@ -306,11 +318,17 @@ const PropertyPicker = memo(function PropertyPicker({
         </header>
         {options.map((candidate) => {
           const selected = candidate.option_key === draft.optionKey;
+          const occupiedBy = optionUsage
+            .get(candidate.option_key)
+            ?.find((assignment) => assignment.draftId !== draft.id);
+          const unavailable = occupiedBy !== undefined;
           return (
             <button
               type="button"
-              className={selected ? "is-selected" : ""}
+              className={`${selected ? "is-selected" : ""}${unavailable ? " is-unavailable" : ""}`.trim()}
               key={candidate.option_key}
+              disabled={unavailable}
+              title={occupiedBy ? `已用于属性 ${occupiedBy.conditionNumber}` : undefined}
               onClick={() => onSelect(candidate.option_key)}
             >
               <PropertyTypeDot raw={raw} />
@@ -318,7 +336,9 @@ const PropertyPicker = memo(function PropertyPicker({
                 <strong>{candidate.label}</strong>
                 <small>{candidate.filter_type} · {optionRange(candidate)}</small>
               </span>
-              <em>{formatInteger(candidate.rows)} rows</em>
+              <em className={unavailable ? "is-used" : undefined}>
+                {occupiedBy ? `已用于属性 ${occupiedBy.conditionNumber}` : `${formatInteger(candidate.rows)} 条记录`}
+              </em>
               {selected ? <CheckCircle2 aria-hidden="true" /> : null}
             </button>
           );
@@ -339,7 +359,7 @@ const PropertyPicker = memo(function PropertyPicker({
         <PropertyTypeDot raw={option?.filter_type === "raw"} />
         <span>
           <strong>{option?.label || "选择筛选属性"}</strong>
-          <small>{option ? `${option.filter_type} · ${optionRange(option)}` : "属性目录加载后可选择"}</small>
+          <small>{option ? `${option.filter_type} · ${optionRange(option)}` : "属性加载完成后即可选择"}</small>
         </span>
         <ChevronDown aria-hidden="true" />
       </button>
@@ -353,7 +373,7 @@ const PropertyPicker = memo(function PropertyPicker({
               type="search"
               value={search}
               onChange={(event) => onSearch(event.target.value)}
-              placeholder="搜索属性名、key 或单位"
+              placeholder="搜索属性名称或单位"
               autoComplete="off"
             />
             {search ? (
@@ -385,6 +405,7 @@ const ConditionRow = memo(function ConditionRow({
   pickerSearch,
   standardizedOptions,
   rawOptions,
+  optionUsage,
   onTogglePicker,
   onPickerSearch,
   onSelectProperty,
@@ -400,6 +421,7 @@ const ConditionRow = memo(function ConditionRow({
   pickerSearch: string;
   standardizedOptions: PropertyFilterOption[];
   rawOptions: PropertyFilterOption[];
+  optionUsage: ReadonlyMap<string, readonly PropertyOptionAssignment[]>;
   onTogglePicker: (id: number) => void;
   onPickerSearch: (value: string) => void;
   onSelectProperty: (id: number, optionKey: string) => void;
@@ -419,6 +441,7 @@ const ConditionRow = memo(function ConditionRow({
             search={pickerSearch}
             standardizedOptions={standardizedOptions}
             rawOptions={rawOptions}
+            optionUsage={optionUsage}
             onToggle={() => onTogglePicker(draft.id)}
             onSearch={onPickerSearch}
             onSelect={(optionKey) => onSelectProperty(draft.id, optionKey)}
@@ -487,12 +510,10 @@ const ConditionRow = memo(function ConditionRow({
 
 export function DatabaseFilterPage() {
   const filter = usePropertyFilter();
-  const [drawerWidth, setDrawerWidth] = useState(380);
+  const drawerSizing = useDatabaseFilterDrawerSizing();
   const [openPickerId, setOpenPickerId] = useState<number | null>(null);
   const [pickerSearch, setPickerSearch] = useState("");
   const pickerTriggerRefs = useRef(new Map<number, HTMLButtonElement>());
-  const previousDrawerOpen = useRef(filter.drawerOpen);
-  const drawerReopenRef = useRef<HTMLButtonElement | null>(null);
 
   const sourceReady = filter.optionsData?.source_status === "ready" || Boolean(filter.optionsData && !filter.optionsError);
   const sourceError = Boolean(filter.optionsError || filter.optionsRefreshError);
@@ -525,22 +546,25 @@ export function DatabaseFilterPage() {
     };
   }, [openPickerId]);
 
-  useEffect(() => {
-    if (previousDrawerOpen.current && !filter.drawerOpen && filter.submitted) {
-      window.setTimeout(() => drawerReopenRef.current?.focus(), 0);
-    }
-    previousDrawerOpen.current = filter.drawerOpen;
-  }, [filter.drawerOpen, filter.submitted]);
-
   const metrics = useMemo(
     () => [
-      { label: "属性记录", value: filter.optionsData?.total_records },
-      { label: "标准化记录", value: filter.optionsData?.mapped_records },
-      { label: "原始记录", value: filter.optionsData?.raw_records },
-      { label: "可筛选属性", value: filter.options.length }
+      { label: "属性记录", value: filter.optionsData?.total_records, tone: "neutral" },
+      { label: "标准化记录", value: filter.optionsData?.mapped_records, tone: "standardized" },
+      { label: "原始记录", value: filter.optionsData?.raw_records, tone: "raw" },
+      { label: "可筛选属性", value: filter.options.length, tone: "neutral" }
     ],
     [filter.options.length, filter.optionsData]
   );
+  const optionUsage = useMemo(() => {
+    const usage = new Map<string, PropertyOptionAssignment[]>();
+    filter.drafts.forEach((draft, index) => {
+      if (!draft.optionKey) return;
+      const assignments = usage.get(draft.optionKey) ?? [];
+      assignments.push({ draftId: draft.id, conditionNumber: index + 1 });
+      usage.set(draft.optionKey, assignments);
+    });
+    return usage;
+  }, [filter.drafts]);
 
   const handleSubmit = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -564,223 +588,235 @@ export function DatabaseFilterPage() {
   );
   const handleRemoveCondition = useCallback((id: number) => filter.removeCondition(id), [filter.removeCondition]);
   const closeDrawer = useCallback(() => filter.setDrawerOpen(false), [filter.setDrawerOpen]);
-  const openDrawer = useCallback(() => filter.setDrawerOpen(true), [filter.setDrawerOpen]);
+  const openDrawer = useCallback((_trigger?: HTMLElement) => filter.setDrawerOpen(true), [filter.setDrawerOpen]);
 
   return (
     <div
-      className={`database-filter-page${filter.drawerOpen ? " dbf-has-open-drawer" : ""}`}
-      style={{ "--dbf-drawer-width": `${drawerWidth}px` } as CSSProperties}
+      className="np-structure-workbench np-database-filter database-filter-page np-material-discovery-page"
+      data-module="database-filter"
+      style={{ "--np-sw-drawer-width": `${drawerSizing.width}px` } as CSSProperties}
     >
-      <div className="dbf-background" aria-hidden="true" />
-
-      <div className="dbf-page-heading">
-        <h1>数据库筛选</h1>
-      </div>
-
-      <div className="dbf-workbench-shell">
-        <div className="dbf-workbench-column">
-          <div className="dbf-toolbar" aria-label="数据库筛选工具栏">
-            <span className={`dbf-tool-status${sourceError ? " is-error" : sourceReady ? " is-ready" : ""}`}>
-              <i aria-hidden="true" />
-              {filter.optionsPending
-                ? "正在连接数据源"
-                : filter.optionsRefreshing
-                  ? "正在同步属性目录"
-                  : filter.optionsRefreshError || filter.optionsError
-                    ? "目录同步异常"
-                    : "数据源就绪 · PostgreSQL"}
-            </span>
-            <button
-              type="button"
-              onClick={filter.retryOptions}
-              disabled={filter.optionsPending || filter.optionsRefreshing}
-              aria-label="刷新数据，检查数据库属性目录是否有更新"
-              title="检查数据库属性目录是否有更新"
-            >
-              <RefreshCw className={filter.optionsRefreshing ? "dbf-spin" : undefined} aria-hidden="true" />
-              {filter.optionsRefreshing ? "刷新中" : "刷新数据"}
-            </button>
-            <button type="button" onClick={filter.reset}>
-              <RotateCcw aria-hidden="true" />
-              重置条件
-            </button>
-          </div>
-
-          <section className="dbf-filter-surface" aria-labelledby="database-filter-surface-title">
-            <header className="dbf-surface-header">
-              <div className="dbf-surface-heading">
-                <span><Filter aria-hidden="true" /></span>
-                <div>
-                  <h2 id="database-filter-surface-title">多性质阈值筛选</h2>
-                  <p>在同一聚合物 SMILES 上组合属性区间，条件之间按 AND 取交集</p>
-                </div>
-              </div>
-            </header>
-
-            <div className="dbf-metric-strip" aria-label="数据库摘要">
-              {metrics.map((metric) => (
-                <div className="dbf-metric" key={metric.label}>
-                  <span>{metric.label}</span>
-                  <strong>{filter.optionsPending ? "···" : formatInteger(metric.value)}</strong>
-                </div>
-              ))}
+      <div className={`np-sw-page${filter.drawerOpen ? " has-open-drawer" : ""}`}>
+        <MaterialDiscoveryPageTitle className="np-sw-page-title">数据库筛选</MaterialDiscoveryPageTitle>
+        <div className={`np-sw-layout${filter.drawerOpen ? " has-open-drawer" : ""}`}>
+          <main className="np-sw-workspace">
+            <div className="dbf-module-toolbar" aria-label="数据库筛选状态">
+              <span className={`dbf-tool-status${sourceError ? " is-error" : sourceReady ? " is-ready" : ""}`}>
+                <i aria-hidden="true" />
+                {filter.optionsPending
+                  ? "正在加载数据"
+                  : filter.optionsRefreshing
+                    ? "正在更新筛选属性"
+                    : filter.optionsRefreshError || filter.optionsError
+                      ? "筛选属性更新失败"
+                      : "数据已就绪"}
+              </span>
             </div>
 
-            {filter.optionsLoading ? (
-              <div className="dbf-options-state" aria-live="polite">
-                <LoaderCircle className="dbf-spin" aria-hidden="true" />
-                <div><strong>正在读取属性目录</strong><span>加载真实属性范围与分布统计…</span></div>
-              </div>
-            ) : null}
-
-            {!filter.optionsLoading && filter.optionsError ? (
-              <div className="dbf-options-state is-error" role="alert">
-                <AlertTriangle aria-hidden="true" />
-                <div><strong>属性目录加载失败</strong><span>{filter.optionsError}</span></div>
-                <button type="button" onClick={filter.retryOptions}><RefreshCw aria-hidden="true" />重新加载</button>
-              </div>
-            ) : null}
-
-            {filter.optionsData && filter.optionsRefreshError ? (
-              <div className="dbf-options-refresh-warning" role="status">
-                <AlertTriangle aria-hidden="true" />
-                <span>属性目录同步失败，当前继续使用本次会话中的缓存数据。</span>
-                <button type="button" onClick={filter.retryOptions}>重新同步</button>
-              </div>
-            ) : null}
-
-            {!filter.optionsLoading && !filter.optionsError && filter.options.length === 0 ? (
-              <div className="dbf-options-state">
-                <Info aria-hidden="true" />
-                <div><strong>暂无可筛选属性</strong><span>数据库已连接，但属性目录当前为空。</span></div>
-              </div>
-            ) : null}
-
-            {!filter.optionsLoading && !filter.optionsError && filter.options.length > 0 ? (
-              <form className="dbf-filter-form" onSubmit={handleSubmit} noValidate>
-                <div className="dbf-conditions-header">
-                  <div>
-                    <strong>筛选条件</strong>
-                    <span>AND 同时满足</span>
+            <div className="dbf-filter-scroll">
+              <section className="dbf-filter-surface" aria-labelledby="database-filter-surface-title">
+                <header className="dbf-surface-header">
+                  <div className="dbf-surface-heading">
+                    <span><Filter aria-hidden="true" /></span>
+                    <div>
+                      <h2 id="database-filter-surface-title">多属性范围筛选</h2>
+                      <p>组合多个属性范围，查找同时满足全部条件的聚合物</p>
+                    </div>
                   </div>
-                  <em>{filter.drafts.length} / {PROPERTY_FILTER_MAX_CONDITIONS}</em>
-                </div>
+                  <div className="dbf-surface-actions" aria-label="筛选操作">
+                    <button
+                      type="button"
+                      className="dbf-surface-action is-refresh"
+                      onClick={filter.retryOptions}
+                      disabled={filter.optionsPending || filter.optionsRefreshing}
+                      aria-label="刷新筛选属性和分布统计"
+                      title="刷新筛选属性和分布统计"
+                    >
+                      <RefreshCw className={filter.optionsRefreshing ? "dbf-spin" : undefined} aria-hidden="true" />
+                      {filter.optionsRefreshing ? "刷新中" : "刷新数据"}
+                    </button>
+                    <button type="button" className="dbf-surface-action is-reset" onClick={filter.reset}>
+                      <RotateCcw aria-hidden="true" />
+                      重置条件
+                    </button>
+                  </div>
+                </header>
 
-                <div className="dbf-conditions-list">
-                  {filter.drafts.map((draft, index) => (
-                    <div key={draft.id}>
-                      {index > 0 ? <div className="dbf-and-connector"><span>AND</span></div> : null}
-                      <div
-                        ref={(node) => {
-                          const trigger = node?.querySelector<HTMLButtonElement>(".dbf-property-trigger");
-                          if (trigger) pickerTriggerRefs.current.set(draft.id, trigger);
-                          else pickerTriggerRefs.current.delete(draft.id);
-                        }}
-                      >
-                        <ConditionRow
-                          draft={draft}
-                          index={index}
-                          option={filter.optionsByKey.get(draft.optionKey)}
-                          catalogRevision={filter.optionsRevision}
-                          canRemove={filter.drafts.length > 1}
-                          pickerOpen={openPickerId === draft.id}
-                          pickerSearch={openPickerId === draft.id ? pickerSearch : ""}
-                          standardizedOptions={filter.standardizedOptions}
-                          rawOptions={filter.rawOptions}
-                          onTogglePicker={togglePicker}
-                          onPickerSearch={setPickerSearch}
-                          onSelectProperty={handleSelectProperty}
-                          onBoundChange={handleBoundChange}
-                          onRemove={handleRemoveCondition}
-                        />
-                      </div>
+                <div className="dbf-metric-strip" aria-label="数据概览">
+                  {metrics.map((metric) => (
+                    <div className={`dbf-metric is-${metric.tone}`} key={metric.label}>
+                      <span>{metric.label}</span>
+                      <strong>{filter.optionsPending ? "···" : formatInteger(metric.value)}</strong>
                     </div>
                   ))}
                 </div>
 
-                <div className="dbf-add-row">
-                  <button
-                    type="button"
-                    onClick={filter.addCondition}
-                    disabled={filter.drafts.length >= PROPERTY_FILTER_MAX_CONDITIONS}
-                  >
-                    <Plus aria-hidden="true" />
-                    {filter.drafts.length >= PROPERTY_FILTER_MAX_CONDITIONS ? "已达 8 条上限" : "添加条件"}
-                  </button>
-                  <span>每个条件至少填写一个阈值</span>
-                </div>
-
-                <div className="dbf-query-zone">
-                  <label className="dbf-query-input">
-                    <Search aria-hidden="true" />
-                    <input
-                      type="search"
-                      value={filter.queryDraft}
-                      maxLength={200}
-                      onChange={(event) => filter.setQueryDraft(event.target.value)}
-                      placeholder="可选：按聚合物名称或 SMILES 进一步缩小范围"
-                      aria-label="关键词"
-                    />
-                    <span>{filter.queryDraft.length}/200</span>
-                  </label>
-                  <select
-                    className="dbf-page-size"
-                    value={filter.pageSize}
-                    onChange={(event) => filter.setPageSize(Number(event.target.value))}
-                    aria-label="每页结果数"
-                  >
-                    {PROPERTY_FILTER_PAGE_SIZES.map((size) => <option value={size} key={size}>{size} 条 / 页</option>)}
-                  </select>
-                  <button className="dbf-run-button" type="submit" aria-busy={filter.searchLoading}>
-                    {filter.searchLoading ? <LoaderCircle className="dbf-spin" aria-hidden="true" /> : <Search aria-hidden="true" />}
-                    {filter.searchLoading ? "正在筛选" : "运行筛选"}
-                  </button>
-                </div>
-
-                <div className="dbf-expression-capsule">
-                  <span><Filter aria-hidden="true" /></span>
-                  <div>
-                    <small>当前草稿表达式</small>
-                    <code>{filter.draftExpression}</code>
-                  </div>
-                  <em>按 canonical SMILES 聚合</em>
-                </div>
-
-                {filter.validationError ? (
-                  <div className="dbf-validation-banner" role="alert">
-                    <AlertTriangle aria-hidden="true" />
-                    {filter.validationError}
+                {filter.optionsLoading ? (
+                  <div className="dbf-options-state" aria-live="polite">
+                    <LoaderCircle className="dbf-spin" aria-hidden="true" />
+                    <div><strong>正在加载筛选属性</strong><span>正在准备属性范围和分布…</span></div>
                   </div>
                 ) : null}
-              </form>
-            ) : null}
 
-            <div className="dbf-surface-note">
-              <Info aria-hidden="true" />
-              <span>直方图来自全库测量记录真实计数；数据充足时展示 P5–P95 等宽区间及两侧尾部，小样本使用完整范围。</span>
+                {!filter.optionsLoading && filter.optionsError ? (
+                  <div className="dbf-options-state is-error" role="alert">
+                    <AlertTriangle aria-hidden="true" />
+                    <div><strong>筛选属性加载失败</strong><span>{filter.optionsError}</span></div>
+                    <button type="button" onClick={filter.retryOptions}><RefreshCw aria-hidden="true" />重新加载</button>
+                  </div>
+                ) : null}
+
+                {filter.optionsData && filter.optionsRefreshError ? (
+                  <div className="dbf-options-refresh-warning" role="status">
+                    <AlertTriangle aria-hidden="true" />
+                    <span>筛选属性更新失败，将继续使用已加载的数据。</span>
+                    <button type="button" onClick={filter.retryOptions}>重新加载</button>
+                  </div>
+                ) : null}
+
+                {!filter.optionsLoading && !filter.optionsError && filter.options.length === 0 ? (
+                  <div className="dbf-options-state">
+                    <Info aria-hidden="true" />
+                    <div><strong>暂无可筛选属性</strong><span>当前没有可用于筛选的属性。</span></div>
+                  </div>
+                ) : null}
+
+                {!filter.optionsLoading && !filter.optionsError && filter.options.length > 0 ? (
+                  <form className="dbf-filter-form" onSubmit={handleSubmit} noValidate>
+                    <div className="dbf-conditions-header">
+                      <div>
+                        <strong>筛选条件</strong>
+                        <span>全部满足</span>
+                      </div>
+                      <em>{filter.drafts.length} / {PROPERTY_FILTER_MAX_CONDITIONS}</em>
+                    </div>
+
+                    <div className="dbf-conditions-list">
+                      {filter.drafts.map((draft, index) => (
+                        <div key={draft.id}>
+                          {index > 0 ? <div className="dbf-and-connector"><span>并且</span></div> : null}
+                          <div
+                            ref={(node) => {
+                              const trigger = node?.querySelector<HTMLButtonElement>(".dbf-property-trigger");
+                              if (trigger) pickerTriggerRefs.current.set(draft.id, trigger);
+                              else pickerTriggerRefs.current.delete(draft.id);
+                            }}
+                          >
+                            <ConditionRow
+                              draft={draft}
+                              index={index}
+                              option={filter.optionsByKey.get(draft.optionKey)}
+                              catalogRevision={filter.optionsRevision}
+                              canRemove={filter.drafts.length > 1}
+                              pickerOpen={openPickerId === draft.id}
+                              pickerSearch={openPickerId === draft.id ? pickerSearch : ""}
+                              standardizedOptions={filter.standardizedOptions}
+                              rawOptions={filter.rawOptions}
+                              optionUsage={optionUsage}
+                              onTogglePicker={togglePicker}
+                              onPickerSearch={setPickerSearch}
+                              onSelectProperty={handleSelectProperty}
+                              onBoundChange={handleBoundChange}
+                              onRemove={handleRemoveCondition}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="dbf-add-row">
+                      <button
+                        type="button"
+                        onClick={filter.addCondition}
+                        disabled={!filter.canAddCondition}
+                      >
+                        <Plus aria-hidden="true" />
+                        {filter.drafts.length >= PROPERTY_FILTER_MAX_CONDITIONS
+                          ? "已达 8 条上限"
+                          : filter.unusedOptionCount === 0
+                            ? "无更多可用属性"
+                            : "添加条件"}
+                      </button>
+                      <span>
+                        {filter.unusedOptionCount === 0
+                          ? "所有可筛选属性均已添加"
+                          : "每个条件至少填写最小值或最大值"}
+                      </span>
+                    </div>
+
+                    <div className="dbf-query-zone">
+                      <label className="dbf-query-input">
+                        <Search aria-hidden="true" />
+                        <input
+                          type="search"
+                          value={filter.queryDraft}
+                          maxLength={200}
+                          onChange={(event) => filter.setQueryDraft(event.target.value)}
+                          placeholder="可选：按聚合物名称或 SMILES 进一步缩小范围"
+                          aria-label="关键词"
+                        />
+                        <span>{filter.queryDraft.length}/200</span>
+                      </label>
+                      <select
+                        className="dbf-page-size"
+                        value={filter.pageSize}
+                        onChange={(event) => filter.setPageSize(Number(event.target.value))}
+                        aria-label="每页结果数"
+                      >
+                        {PROPERTY_FILTER_PAGE_SIZES.map((size) => <option value={size} key={size}>{size} 条 / 页</option>)}
+                      </select>
+                      <button className="dbf-run-button" type="submit" aria-busy={filter.searchLoading}>
+                        {filter.searchLoading ? <LoaderCircle className="dbf-spin" aria-hidden="true" /> : <Search aria-hidden="true" />}
+                        {filter.searchLoading ? "正在筛选" : "运行筛选"}
+                      </button>
+                    </div>
+
+                    <div className="dbf-expression-capsule">
+                      <span><Filter aria-hidden="true" /></span>
+                      <div>
+                        <small>需同时满足</small>
+                        <code>{filter.draftExpression}</code>
+                      </div>
+                      <em>相同聚合物合并展示</em>
+                    </div>
+
+                    {filter.validationError ? (
+                      <div className="dbf-validation-banner" role="alert">
+                        <AlertTriangle aria-hidden="true" />
+                        {filter.validationError}
+                      </div>
+                    ) : null}
+                  </form>
+                ) : null}
+
+                <div className="dbf-surface-note">
+                  <Info aria-hidden="true" />
+                  <span>分布图基于数据库中的测量记录；数据较多时重点展示 P5–P95 区间，少量数据展示完整范围。</span>
+                </div>
+              </section>
             </div>
-          </section>
+          </main>
+
+          <DatabaseFilterResultsDrawer
+            open={filter.drawerOpen}
+            submitted={filter.submitted}
+            data={filter.searchData}
+            loading={filter.searchLoading}
+            error={filter.searchError}
+            page={filter.page}
+            pageSize={filter.pageSize}
+            matchedRecords={filter.matchedRecords}
+            totalPages={filter.totalPages}
+            width={drawerSizing.width}
+            profile={drawerSizing.profile}
+            onWidthChange={drawerSizing.setWidth}
+            onClose={closeDrawer}
+            onOpen={openDrawer}
+            onRetry={filter.retrySearch}
+            onPageChange={filter.setPage}
+          />
         </div>
       </div>
-
-      <DatabaseFilterResultsDrawer
-        open={filter.drawerOpen}
-        submitted={filter.submitted}
-        data={filter.searchData}
-        loading={filter.searchLoading}
-        error={filter.searchError}
-        page={filter.page}
-        pageSize={filter.pageSize}
-        matchedRecords={filter.matchedRecords}
-        totalPages={filter.totalPages}
-        width={drawerWidth}
-        onWidthChange={setDrawerWidth}
-        reopenButtonRef={drawerReopenRef}
-        onClose={closeDrawer}
-        onOpen={openDrawer}
-        onRetry={filter.retrySearch}
-        onPageChange={filter.setPage}
-      />
     </div>
   );
 }

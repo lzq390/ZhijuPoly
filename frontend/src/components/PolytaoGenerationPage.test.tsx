@@ -255,7 +255,9 @@ describe("PolytaoGenerationPage", () => {
   it("renders the renamed page and all 15 descriptor fields in three expanded groups", () => {
     renderPage();
 
-    expect(screen.getByRole("heading", { name: "聚合物生成" })).toBeTruthy();
+    const pageTitle = screen.getByRole("heading", { name: "聚合物生成" });
+    expect(pageTitle.classList.contains("np-material-discovery-page-title")).toBe(true);
+    expect(pageTitle.closest(".np-material-discovery-page")).not.toBeNull();
     const referenceToggle = within(referenceRegion()).getByRole("button", { name: /已设置 · 共享结构.*展开/ });
     expect(referenceToggle.getAttribute("aria-expanded")).toBe("false");
     expect(api.fetchStructure2D).not.toHaveBeenCalled();

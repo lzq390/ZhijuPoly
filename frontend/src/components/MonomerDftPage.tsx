@@ -1,37 +1,54 @@
 import {
   Activity,
-  ArrowLeft,
   Atom,
   Ban,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Clipboard,
+  Download,
   FlaskConical,
+  Gauge,
   History,
   Info,
   Loader2,
   Play,
   RefreshCw,
   RotateCcw,
-  Server,
   Settings2,
   Trash2,
   TriangleAlert,
   XCircle
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent
+} from "react";
 import {
   isMonomerDftTerminal,
+  MONOMER_DFT_HISTORY_PAGE_SIZE,
   useMonomerDftJob,
   validateMonomerDftRequest
 } from "../hooks/useMonomerDftJob";
-import { cn } from "../lib/utils";
+import {
+  hasAvailableMonomerDftArtifacts,
+  labelMonomerDftStage,
+  userFacingMonomerDftMessage
+} from "../lib/monomerDftPresentation";
 import { hasInvalidMonomerDftJobSearch } from "../lib/monomerDftRouting";
-import { labelMonomerDftStage } from "../lib/monomerDftPresentation";
+import {
+  downloadMonomerDftBundle,
+  MonomerDftApiError,
+  standardizeSmiles
+} from "../services/api";
 import type {
   MonomerDftCalculationType,
   MonomerDftJobCreateRequest,
+  MonomerDftJobResponse,
   MonomerDftJobStatus,
   MonomerDftModelCapability,
   MonomerDftModelName,
@@ -39,19 +56,58 @@ import type {
   MonomerDftProperty,
   StructureWorkspaceContext
 } from "../types";
-import { CurrentStructurePanel } from "./CurrentStructurePanel";
+import { MonomerDftStructureInput } from "./monomer-dft/MonomerDftStructureInput";
+import {
+  MonomerDftSelect,
+  type MonomerDftSelectOption
+} from "./monomer-dft/MonomerDftSelect";
 import { MonomerDftResults } from "./MonomerDftResults";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { Select } from "./ui/select";
+import "../styles/structure-workbench.css";
+import "../styles/monomer-dft.css";
 
 type MonomerDftPageProps = {
   structure: StructureWorkspaceContext;
   initialJobId: string | null;
   onJobIdChange: (jobId: string | null) => void;
   onEditStructure: () => void;
-  onBackHome: () => void;
 };
+
+type PrimaryTab = "config" | "tasks" | "results";
+type DftController = ReturnType<typeof useMonomerDftJob>;
+
+const PRIMARY_TABS: Array<{
+  id: PrimaryTab;
+  label: string;
+  description: string;
+  surfaceTitle: string;
+  surfaceDescription: string;
+  icon: typeof FlaskConical;
+}> = [
+  {
+    id: "config",
+    label: "计算配置",
+    description: "结构与方法",
+    surfaceTitle: "计算配置",
+    surfaceDescription: "设置结构、计算方式与输出内容。",
+    icon: FlaskConical
+  },
+  {
+    id: "tasks",
+    label: "任务中心",
+    description: "进度与历史",
+    surfaceTitle: "任务中心",
+    surfaceDescription: "跟踪任务进度，查看历史记录。",
+    icon: History
+  },
+  {
+    id: "results",
+    label: "结果分析",
+    description: "结构与性质",
+    surfaceTitle: "结果分析",
+    surfaceDescription: "分析结构、性质与原子数据。",
+    icon: Gauge
+  }
+];
 
 export function selectableMonomerDftModels(
   models: MonomerDftModelCapability[]
@@ -69,53 +125,547 @@ const STATUS_LABELS: Record<MonomerDftJobStatus, string> = {
   cancelled: "已取消"
 };
 
-const STATUS_STYLES: Record<MonomerDftJobStatus, string> = {
-  pending: "bg-slate-100 text-slate-700",
-  queued: "bg-amber-50 text-amber-800",
-  running: "bg-sky-50 text-sky-800",
-  cancel_requested: "bg-orange-50 text-orange-800",
-  completed: "bg-emerald-50 text-emerald-800",
-  failed: "bg-red-50 text-red-800",
-  cancelled: "bg-slate-100 text-slate-600"
-};
-
-const PROPERTY_OPTIONS: { value: MonomerDftProperty; label: string; detail: string }[] = [
-  { value: "energy", label: "能量", detail: "eV，必选" },
+const PROPERTY_OPTIONS: Array<{
+  value: MonomerDftProperty;
+  label: string;
+  detail: string;
+}> = [
+  { value: "energy", label: "能量", detail: "eV · 必选" },
   { value: "forces", label: "原子力", detail: "eV/Å" },
   { value: "charges", label: "原子电荷", detail: "e" },
-  { value: "hessian", label: "Hessian", detail: "完整矩阵作为产物" },
-  { value: "frequencies", label: "振动频率", detail: "自动隐式计算 Hessian" }
+  { value: "hessian", label: "二阶力常数", detail: "用于结构稳定性分析" },
+  { value: "frequencies", label: "振动频率", detail: "自动包含二阶力常数" }
 ];
+
+type ModelPurpose = {
+  label: string;
+  description: string;
+};
+
+export function describeMonomerDftModelPurpose(model: MonomerDftModelCapability): ModelPurpose {
+  if (model.id === "aimnet2-nse") {
+    return { label: "带电与多重态体系", description: "适合离子、自由基和键解离结构" };
+  }
+  if (model.id === "aimnet2-pd") {
+    return { label: "含钯催化体系", description: "适合包含钯元素的催化结构" };
+  }
+  if (model.id === "aimnet2-rxn") {
+    return { label: "反应路径与活性结构", description: "适合由氢、碳、氮、氧组成的反应体系" };
+  }
+  return { label: "通用有机分子", description: "适合常见有机分子与单重态结构" };
+}
 
 function formatDate(value: string | null | undefined): string {
   if (!value) return "--";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString("zh-CN", { hour12: false });
 }
 
 function statusIcon(status: MonomerDftJobStatus) {
-  if (status === "completed") return <CheckCircle2 className="h-3.5 w-3.5" />;
-  if (status === "failed") return <XCircle className="h-3.5 w-3.5" />;
-  if (status === "cancelled") return <Ban className="h-3.5 w-3.5" />;
-  if (["running", "cancel_requested"].includes(status)) return <Loader2 className="h-3.5 w-3.5 animate-spin" />;
-  return <Activity className="h-3.5 w-3.5" />;
+  if (status === "completed") return <CheckCircle2 />;
+  if (status === "failed") return <XCircle />;
+  if (status === "cancelled") return <Ban />;
+  if (status === "running" || status === "cancel_requested") {
+    return <Loader2 className="np-dft-spin" />;
+  }
+  return <Activity />;
 }
 
 function StatusBadge({ status }: { status: MonomerDftJobStatus }) {
-  return <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold", STATUS_STYLES[status])}>{statusIcon(status)}{STATUS_LABELS[status]}</span>;
+  return (
+    <span className={`np-dft-status-badge is-${status}`}>
+      {statusIcon(status)}
+      {STATUS_LABELS[status]}
+    </span>
+  );
 }
 
-function PropertyChoices({ values, onChange, supported, compact = false }: { values: MonomerDftProperty[]; onChange: (values: MonomerDftProperty[]) => void; supported: MonomerDftProperty[]; compact?: boolean }) {
-  const options = compact ? PROPERTY_OPTIONS.filter((option) => ["hessian", "frequencies"].includes(option.value)) : PROPERTY_OPTIONS;
-  return <div className={cn("grid gap-2", compact ? "sm:grid-cols-2" : "sm:grid-cols-2")}>{options.map((option) => {
-    const checked = values.includes(option.value);
-    const disabled = (!compact && option.value === "energy") || !supported.includes(option.value);
-    return <label key={option.value} className={cn("flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-xs", checked ? "border-sky-200 bg-sky-50" : "border-slate-200 bg-white", disabled && !checked ? "cursor-not-allowed opacity-45" : "")}><input type="checkbox" className="mt-0.5 accent-sky-600" checked={checked} disabled={disabled} onChange={(event) => { if (event.target.checked) onChange([...values, option.value]); else onChange(values.filter((item) => item !== option.value)); }} /><span><span className="block font-semibold text-slate-800">{option.label}</span><span className="mt-0.5 block text-[11px] text-slate-500">{option.detail}</span></span></label>;
-  })}</div>;
+function PropertyChoices({
+  values,
+  onChange,
+  supported,
+  locked,
+  compact = false
+}: {
+  values: MonomerDftProperty[];
+  onChange: (values: MonomerDftProperty[]) => void;
+  supported: MonomerDftProperty[];
+  locked: boolean;
+  compact?: boolean;
+}) {
+  const options = compact
+    ? PROPERTY_OPTIONS.filter((option) => option.value === "hessian" || option.value === "frequencies")
+    : PROPERTY_OPTIONS;
+
+  return (
+    <div className={`np-dft-property-grid${compact ? " is-compact" : ""}`}>
+      {options.map((option) => {
+        const checked = values.includes(option.value);
+        const fixed = !compact && option.value === "energy";
+        const unavailable = !supported.includes(option.value);
+        const disabled = locked || fixed || (unavailable && !checked);
+        return (
+          <label
+            key={option.value}
+            className={`${checked ? "is-selected" : ""}${unavailable ? " is-unavailable" : ""}`}
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              disabled={disabled}
+              onChange={(event) => {
+                if (event.target.checked) onChange([...values, option.value]);
+                else onChange(values.filter((item) => item !== option.value));
+              }}
+            />
+            <span>
+              <strong>{option.label}</strong>
+              <small>{unavailable ? `${option.detail} · 当前方案不支持` : option.detail}</small>
+            </span>
+          </label>
+        );
+      })}
+    </div>
+  );
 }
 
-export function MonomerDftPage({ structure, initialJobId, onJobIdChange, onEditStructure, onBackHome }: MonomerDftPageProps) {
+function SelectedJobCard({
+  dft,
+  serviceReady,
+  submissionDisabled,
+  requestCreating,
+  onShowTasks,
+  onRerun
+}: {
+  dft: DftController;
+  serviceReady: boolean;
+  submissionDisabled: boolean;
+  requestCreating: boolean;
+  onShowTasks?: () => void;
+  onRerun: () => void;
+}) {
+  const selectedJobId = dft.job?.job_id ?? null;
+  const downloadAbortRef = useRef<AbortController | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadFeedback, setDownloadFeedback] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    downloadAbortRef.current?.abort();
+    downloadAbortRef.current = null;
+    setIsDownloading(false);
+    setDownloadFeedback(null);
+    setDownloadError(null);
+    return () => {
+      downloadAbortRef.current?.abort();
+      downloadAbortRef.current = null;
+    };
+  }, [selectedJobId]);
+
+  const job = dft.job;
+  if (!job) {
+    return (
+      <div className="np-dft-empty-state is-compact">
+        <Activity />
+        <div>
+          <strong>尚未选择任务</strong>
+          <span>提交新任务，或从历史记录中选择一项。</span>
+        </div>
+      </div>
+    );
+  }
+
+  const jobId = job.job_id;
+  const progress = Math.max(0, Math.min(100, job.progress_percent));
+  const deleting = dft.deletingJobIds.includes(job.job_id);
+  const canDownloadResults = isMonomerDftTerminal(job.status) &&
+    hasAvailableMonomerDftArtifacts(job);
+  const jobFailureMessage = job.error
+    ? userFacingMonomerDftMessage(job.error.message, {
+      code: job.error.code,
+      fallback: "计算任务未能完成，请检查输入后重试。"
+    })
+    : null;
+  const actionErrorMessage = dft.jobError
+    ? userFacingMonomerDftMessage(dft.jobError)
+    : null;
+
+  async function downloadResults() {
+    if (!canDownloadResults || isDownloading) return;
+    downloadAbortRef.current?.abort();
+    const controller = new AbortController();
+    downloadAbortRef.current = controller;
+    setIsDownloading(true);
+    setDownloadFeedback(null);
+    setDownloadError(null);
+    let objectUrl: string | null = null;
+    try {
+      const bundle = await downloadMonomerDftBundle(jobId, controller.signal);
+      if (controller.signal.aborted) return;
+      objectUrl = URL.createObjectURL(bundle);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `monomer-dft-${jobId}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      const completedObjectUrl = objectUrl;
+      objectUrl = null;
+      window.setTimeout(() => URL.revokeObjectURL(completedObjectUrl), 0);
+      setDownloadFeedback("结果下载已开始。");
+    } catch (error) {
+      if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) return;
+      setDownloadError(error instanceof Error
+        ? userFacingMonomerDftMessage(error.message, {
+          code: error instanceof MonomerDftApiError ? error.code : null,
+          fallback: "结果下载失败，请稍后重试。"
+        })
+        : "结果下载失败，请稍后重试。");
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (downloadAbortRef.current === controller) {
+        downloadAbortRef.current = null;
+        setIsDownloading(false);
+      }
+    }
+  }
+
+  return (
+    <section className="np-dft-selected-job" aria-labelledby="np-dft-selected-job-title">
+      <header className="np-dft-selected-job__header">
+        <div className="np-dft-job-identity">
+          <span>当前任务</span>
+          <code id="np-dft-selected-job-title" tabIndex={0} title={job.job_id}>{job.job_id}</code>
+          <p>本次提交参数已固定</p>
+        </div>
+        <StatusBadge status={job.status} />
+      </header>
+
+      <dl className="np-dft-job-facts">
+        <div><dt>计算类型</dt><dd className="is-ui-value">{job.calculation_type === "single_point" ? "单点计算" : "几何优化"}</dd></div>
+        <div><dt>创建时间</dt><dd>{formatDate(job.created_at)}</dd></div>
+        <div><dt>队列位置</dt><dd className="is-ui-value">{job.queue_position == null ? "--" : `第 ${job.queue_position} 位`}</dd></div>
+      </dl>
+
+      <div className="np-dft-job-progress">
+        <div>
+          <span>{labelMonomerDftStage(job.stage)}</span>
+          <strong>{Math.round(progress)}%</strong>
+        </div>
+        <div
+          className={`np-dft-progress-track${job.status === "failed" ? " is-error" : ""}`}
+          role="progressbar"
+          aria-label="任务进度"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress)}
+        >
+          <i style={{ width: `${progress}%` }} />
+        </div>
+      </div>
+
+      {job.error && jobFailureMessage ? (
+        <div className="np-dft-inline-message is-error" role="alert">
+          <TriangleAlert />
+          <div>
+            <strong>计算未完成</strong>
+            <span>{jobFailureMessage}</span>
+            <small>{job.error.retryable ? "可以重新尝试" : "请修改输入后重新提交。"}</small>
+          </div>
+        </div>
+      ) : null}
+      {actionErrorMessage && actionErrorMessage !== jobFailureMessage ? (
+        <div className="np-dft-inline-message is-error" role="alert">
+          <TriangleAlert />
+          <div>
+            <strong>操作未完成</strong>
+            <span>{actionErrorMessage}</span>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="np-dft-job-actions">
+        {!isMonomerDftTerminal(job.status) ? (
+          <button
+            type="button"
+            className="is-danger"
+            onClick={() => void dft.cancel()}
+            disabled={dft.isCancelling || job.status === "cancel_requested"}
+          >
+            {dft.isCancelling ? <Loader2 className="np-dft-spin" /> : <Ban />}
+            {dft.isCancelling ? "正在取消" : "取消任务"}
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={onRerun}
+              disabled={requestCreating || isDownloading || !serviceReady}
+            >
+              {dft.isSubmitting ? <Loader2 className="np-dft-spin" /> : <RotateCcw />}
+              {submissionDisabled ? "功能尚未开放" : "重跑同参数"}
+            </button>
+            <button
+              type="button"
+              className="is-danger"
+              disabled={deleting || requestCreating || isDownloading}
+              onClick={() => {
+                if (window.confirm("删除后，本次任务的参数、结果和分享链接都无法恢复。确定继续吗？")) {
+                  void dft.deleteJobRecord(job);
+                }
+              }}
+            >
+              {deleting ? <Loader2 className="np-dft-spin" /> : <Trash2 />}
+              {deleting ? "正在删除" : "删除记录"}
+            </button>
+          </>
+        )}
+        <button
+          type="button"
+          onClick={dft.clearJob}
+          disabled={!isMonomerDftTerminal(job.status) || requestCreating || isDownloading}
+        >
+          取消选择
+        </button>
+        {onShowTasks ? <button type="button" onClick={onShowTasks}><History />任务中心</button> : null}
+        <button
+          type="button"
+          className="np-dft-download-results"
+          disabled={!canDownloadResults || isDownloading || requestCreating}
+          title={!canDownloadResults
+            ? isMonomerDftTerminal(job.status) ? "结果文件不可用" : "任务完成后可下载"
+            : undefined}
+          onClick={() => void downloadResults()}
+        >
+          {isDownloading ? <Loader2 className="np-dft-spin" /> : <Download />}
+          {isDownloading ? "正在准备下载" : "下载结果"}
+        </button>
+      </div>
+      {downloadFeedback ? <p className="np-dft-action-feedback" role="status">{downloadFeedback}</p> : null}
+      {downloadError ? <p className="np-dft-action-feedback is-error" role="alert">{downloadError}</p> : null}
+    </section>
+  );
+}
+
+function TaskCenter({
+  dft,
+  serviceReady,
+  submissionDisabled,
+  requestCreating,
+  onSelectJob,
+  onRerun
+}: {
+  dft: DftController;
+  serviceReady: boolean;
+  submissionDisabled: boolean;
+  requestCreating: boolean;
+  onSelectJob: (jobId: string) => void;
+  onRerun: () => void;
+}) {
+  const pageCount = Math.max(1, Math.ceil(
+    (dft.history?.total ?? 0) / (dft.history?.page_size ?? MONOMER_DFT_HISTORY_PAGE_SIZE)
+  ));
+
+  return (
+    <div className="np-dft-task-center">
+      <SelectedJobCard
+        dft={dft}
+        serviceReady={serviceReady}
+        submissionDisabled={submissionDisabled}
+        requestCreating={requestCreating}
+        onRerun={onRerun}
+      />
+
+      <div className="np-dft-trust-notice">
+        <Info />
+        <div>
+          <strong>共享任务记录</strong>
+          <span>此工作区中的访问者都可以查看和管理这些任务。</span>
+        </div>
+      </div>
+
+      <section className="np-dft-history" aria-labelledby="np-dft-history-title">
+        <header className="np-dft-section-heading is-row">
+          <div>
+            <span className="np-dft-eyebrow">TASK HISTORY</span>
+            <h3 id="np-dft-history-title">任务历史</h3>
+            <p>每页 10 条；筛选不切换当前结果。</p>
+          </div>
+          <button
+            type="button"
+            className="np-dft-icon-button"
+            aria-label="刷新任务历史"
+            title="刷新任务历史"
+            onClick={() => void dft.refreshHistory()}
+            disabled={dft.isHistoryLoading}
+          >
+            <RefreshCw className={dft.isHistoryLoading ? "np-dft-spin" : ""} />
+          </button>
+        </header>
+
+        <div className="np-dft-history-filters">
+          <div className="np-dft-field">
+            <span id="np-dft-history-status-label">任务状态</span>
+            <MonomerDftSelect
+              id="np-dft-history-status"
+              ariaLabelledBy="np-dft-history-status-label"
+              value={(dft.historyQuery.status ?? "") as MonomerDftJobStatus | ""}
+              options={[
+                { value: "", label: "全部状态" },
+                ...Object.entries(STATUS_LABELS).map(([value, label]) => ({
+                  value: value as MonomerDftJobStatus,
+                  label
+                }))
+              ]}
+              onChange={(status) => dft.changeHistoryQuery({ page: 1, status })}
+            />
+          </div>
+          <div className="np-dft-field">
+            <span id="np-dft-history-type-label">计算类型</span>
+            <MonomerDftSelect
+              id="np-dft-history-type"
+              ariaLabelledBy="np-dft-history-type-label"
+              value={(dft.historyQuery.calculation_type ?? "") as MonomerDftCalculationType | ""}
+              options={[
+                { value: "", label: "全部类型" },
+                { value: "single_point", label: "单点计算" },
+                { value: "optimization", label: "几何优化" }
+              ]}
+              onChange={(calculation_type) => dft.changeHistoryQuery({ page: 1, calculation_type })}
+            />
+          </div>
+        </div>
+
+        {dft.historyError ? (
+          <div className="np-dft-inline-message is-warning" role="alert">
+            <TriangleAlert />
+            <span>{userFacingMonomerDftMessage(dft.historyError)}</span>
+          </div>
+        ) : null}
+
+        <div className="np-dft-history-list" aria-live="polite">
+          {dft.history?.items.length ? dft.history.items.map((item) => {
+            const selected = dft.job?.job_id === item.job_id;
+            const deleting = dft.deletingJobIds.includes(item.job_id);
+            return (
+              <article key={item.job_id} className={selected ? "is-selected" : ""}>
+                <button
+                  type="button"
+                  className="np-dft-history-select"
+                  disabled={requestCreating}
+                  title={`${item.job_id}\n${item.request.input.smiles}`}
+                  onClick={() => onSelectJob(item.job_id)}
+                >
+                  <div className="np-dft-history-row">
+                    <code>{item.job_id}</code>
+                    <StatusBadge status={item.status} />
+                  </div>
+                  <strong>{item.request.input.smiles}</strong>
+                  <span>
+                    {item.calculation_type === "single_point" ? "单点计算" : "几何优化"}
+                    {" · "}{formatDate(item.created_at)}
+                  </span>
+                </button>
+                {isMonomerDftTerminal(item.status) ? (
+                  <button
+                    type="button"
+                    className="np-dft-history-delete"
+                    disabled={deleting || requestCreating}
+                    onClick={() => {
+                      if (window.confirm("删除后，本次任务的参数、结果和分享链接都无法恢复。确定继续吗？")) {
+                        void dft.deleteJobRecord(item);
+                      }
+                    }}
+                  >
+                    {deleting ? <Loader2 className="np-dft-spin" /> : <Trash2 />}
+                    {deleting ? "正在删除" : "删除记录"}
+                  </button>
+                ) : null}
+                {dft.deleteJobErrors[item.job_id] ? (
+                  <p className="np-dft-action-feedback is-error" role="alert">{userFacingMonomerDftMessage(dft.deleteJobErrors[item.job_id])}</p>
+                ) : null}
+              </article>
+            );
+          }) : (
+            <div className="np-dft-empty-state is-compact">
+              {dft.isHistoryLoading ? <Loader2 className="np-dft-spin" /> : <History />}
+              <div>
+                <strong>{dft.isHistoryLoading ? "正在读取历史" : "没有符合条件的任务"}</strong>
+                <span>{dft.isHistoryLoading ? "请稍候…" : "可以调整筛选条件或提交新任务。"}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <nav className="np-dft-pagination" aria-label="任务历史分页">
+          <button
+            type="button"
+            aria-label="上一页"
+            disabled={dft.historyQuery.page <= 1}
+            onClick={() => dft.changeHistoryQuery({ page: dft.historyQuery.page - 1 })}
+          >
+            <ChevronLeft />
+          </button>
+          <span>第 <strong>{dft.historyQuery.page}</strong> / {pageCount} 页 · 共 {dft.history?.total ?? 0} 项</span>
+          <button
+            type="button"
+            aria-label="下一页"
+            disabled={dft.historyQuery.page >= pageCount}
+            onClick={() => dft.changeHistoryQuery({ page: dft.historyQuery.page + 1 })}
+          >
+            <ChevronRight />
+          </button>
+        </nav>
+      </section>
+    </div>
+  );
+}
+
+function samePropertySelection<T extends string>(left: T[], right: T[]): boolean {
+  return left.length === right.length && left.every((item) => right.includes(item));
+}
+
+export function monomerDftRequestsMatch(
+  job: MonomerDftJobResponse | null,
+  request: MonomerDftJobCreateRequest
+) {
+  if (!job) return true;
+  const submitted = job.request;
+  if (
+    submitted.calculation_type !== request.calculation_type ||
+    submitted.input.smiles !== request.input.smiles ||
+    submitted.input.net_charge !== request.input.net_charge ||
+    submitted.input.multiplicity !== request.input.multiplicity ||
+    submitted.input.psmiles_mode !== request.input.psmiles_mode ||
+    submitted.model !== request.model ||
+    submitted.conformer.seed !== request.conformer.seed ||
+    submitted.conformer.max_iterations !== request.conformer.max_iterations
+  ) return false;
+  if (submitted.calculation_type === "single_point" && request.calculation_type === "single_point") {
+    return samePropertySelection(submitted.single_point.properties, request.single_point.properties);
+  }
+  if (submitted.calculation_type === "optimization" && request.calculation_type === "optimization") {
+    return submitted.optimization.fmax_eV_per_A === request.optimization.fmax_eV_per_A &&
+      submitted.optimization.max_steps === request.optimization.max_steps &&
+      samePropertySelection(
+        submitted.optimization.post_optimization_properties,
+        request.optimization.post_optimization_properties
+      );
+  }
+  return false;
+}
+
+export function MonomerDftPage({
+  structure,
+  initialJobId,
+  onJobIdChange,
+  onEditStructure
+}: MonomerDftPageProps) {
   const dft = useMonomerDftJob({ initialJobId, onJobIdChange });
+  const [activeTab, setActiveTab] = useState<PrimaryTab>(initialJobId ? "results" : "config");
+  const [smilesDraft, setSmilesDraft] = useState(structure.smiles);
   const [calculationType, setCalculationType] = useState<MonomerDftCalculationType>("single_point");
   const [modelId, setModelId] = useState<MonomerDftModelName | "">("");
   const [netChargeText, setNetChargeText] = useState("");
@@ -128,12 +678,33 @@ export function MonomerDftPage({ structure, initialJobId, onJobIdChange, onEditS
   const [fmax, setFmax] = useState(0.01);
   const [maxSteps, setMaxSteps] = useState(50);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  const [isPreparingSubmission, setIsPreparingSubmission] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const defaultsInitializedRef = useRef(false);
+  const submissionPreparingRef = useRef(false);
+  const submissionPreparationAbortRef = useRef<AbortController | null>(null);
+  const scrollRegionRef = useRef<HTMLDivElement | null>(null);
+
   const selectableModels = useMemo(
     () => selectableMonomerDftModels(dft.capabilities?.models ?? []),
     [dft.capabilities]
   );
+
+  useEffect(() => {
+    setSmilesDraft(structure.smiles);
+  }, [structure.smiles]);
+
+  useEffect(() => {
+    if (initialJobId) {
+      setActiveTab("results");
+      if (scrollRegionRef.current) scrollRegionRef.current.scrollTop = 0;
+    }
+  }, [initialJobId]);
+
+  useEffect(() => () => {
+    submissionPreparationAbortRef.current?.abort();
+    submissionPreparationAbortRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (!dft.capabilities || dft.capabilities.schema_ready !== true) {
@@ -148,9 +719,9 @@ export function MonomerDftPage({ structure, initialJobId, onJobIdChange, onEditS
       setFormError(null);
       return;
     }
-    setModelId((current) => current && selectableModels.some((model) => model.id === current)
+    setModelId((current) => current && selectableModels.some((model) => model.id === current && model.available)
       ? current
-      : selectableModels.find((model) => model.id === dft.capabilities?.default_model)?.id
+      : selectableModels.find((model) => model.id === dft.capabilities?.default_model && model.available)?.id
         ?? selectableModels.find((model) => model.available)?.id
         ?? "");
     if (!defaultsInitializedRef.current) {
@@ -166,158 +737,711 @@ export function MonomerDftPage({ structure, initialJobId, onJobIdChange, onEditS
   }, [dft.capabilities, selectableModels]);
 
   useEffect(() => {
-    if (!structure.smiles.includes("*")) {
-      setPsmilesMode(null);
-    }
-  }, [structure.smiles]);
+    if (!smilesDraft.includes("*")) setPsmilesMode(null);
+  }, [smilesDraft]);
 
   const selectedModel = selectableModels.find((model) => model.id === modelId) ?? null;
+  const purposeModels = useMemo(() => {
+    const isGeneralPurpose = (model: MonomerDftModelCapability) =>
+      model.id === "aimnet2" || model.id === "aimnet2-2025";
+    const generalModels = selectableModels.filter(isGeneralPurpose);
+    const generalChoice = generalModels.find((model) => model.id === modelId && model.available)
+      ?? generalModels.find((model) => model.id === dft.capabilities?.default_model && model.available)
+      ?? generalModels.find((model) => model.available)
+      ?? generalModels.find((model) => model.id === modelId)
+      ?? generalModels.find((model) => model.id === dft.capabilities?.default_model)
+      ?? generalModels[0];
+    let generalAdded = false;
+    return selectableModels.flatMap((model) => {
+      if (!isGeneralPurpose(model)) return [model];
+      if (generalAdded || !generalChoice) return [];
+      generalAdded = true;
+      return [generalChoice];
+    });
+  }, [dft.capabilities?.default_model, modelId, selectableModels]);
+  const modelOptions = useMemo<Array<MonomerDftSelectOption<MonomerDftModelName | "">>>(() => [
+    {
+      value: "",
+      label: dft.capabilities ? "请选择计算用途" : "正在载入计算方案",
+      description: dft.capabilities ? "根据分子类型选择适用范围" : "请稍候",
+      disabled: true
+    },
+    ...purposeModels.map((model) => {
+      const purpose = describeMonomerDftModelPurpose(model);
+      return {
+        value: model.id,
+        label: purpose.label,
+        description: model.available ? purpose.description : `${purpose.description} · 暂不可选择`,
+        disabled: !model.available
+      };
+    })
+  ], [dft.capabilities, purposeModels]);
   const netCharge = netChargeText.trim() === "" ? null : Number(netChargeText);
+  const requestProperties: MonomerDftProperty[] = calculationType === "single_point"
+    ? properties
+    : ["energy", "forces", "charges", ...postOptimizationProperties];
   const validationIssues = useMemo(() => validateMonomerDftRequest({
-    smiles: structure.smiles,
+    smiles: smilesDraft,
     netCharge,
     multiplicity,
     psmilesMode,
     calculationType,
     modelId,
-    properties: calculationType === "single_point" ? properties : ["energy", "forces", "charges", ...postOptimizationProperties],
+    properties: requestProperties,
     fmax,
     maxSteps,
     seed,
     maxIterations
-  }, dft.capabilities), [calculationType, dft.capabilities, fmax, maxIterations, maxSteps, modelId, multiplicity, netCharge, postOptimizationProperties, properties, psmilesMode, seed, structure.smiles]);
+  }, dft.capabilities), [
+    calculationType,
+    dft.capabilities,
+    fmax,
+    maxIterations,
+    maxSteps,
+    modelId,
+    multiplicity,
+    netCharge,
+    postOptimizationProperties,
+    properties,
+    psmilesMode,
+    seed,
+    smilesDraft
+  ]);
 
-  const serviceReady = Boolean(
-    dft.serviceStatus?.schema_ready && dft.capabilities?.schema_ready &&
-    dft.serviceStatus.enabled && dft.serviceStatus.available && dft.serviceStatus.runtime_ready !== false &&
-    !dft.serviceStatus.draining && dft.capabilities?.available
-  );
-  const submissionDisabled = dft.serviceStatus?.enabled === false || dft.capabilities?.enabled === false;
-  const activeJob = dft.job && !isMonomerDftTerminal(dft.job.status);
-  const canSubmit = serviceReady && validationIssues.length === 0 && !dft.isSubmitting && !activeJob;
-  const historyPageCount = Math.max(1, Math.ceil((dft.history?.total ?? 0) / (dft.history?.page_size ?? 20)));
-  const invalidJobDeepLink = typeof window !== "undefined" && hasInvalidMonomerDftJobSearch(window.location.search);
-  const maxRunningJobs = dft.capabilities?.limits.max_concurrent_jobs;
-  const maxQueuedJobs = dft.capabilities?.limits.max_queued_jobs;
   const maxActiveJobs = dft.serviceStatus?.max_active_jobs ?? dft.capabilities?.limits.max_active_jobs;
-  const pollStatusLabel = dft.pollState === "degraded"
-    ? "连接中断，正在自动重试"
-    : dft.pollState === "stopped"
-      ? "自动同步已停止"
-      : dft.pollState === "polling"
-        ? "每 1.5 秒同步"
-        : null;
+  const minOptimizationSteps = dft.capabilities?.limits.min_optimization_steps ?? 10;
+  const maxOptimizationSteps = dft.capabilities?.limits.max_optimization_steps ?? 50;
+  const capabilitiesRuntimeReady = dft.capabilities?.worker?.runtime_ready;
+  const capabilitiesDraining = dft.capabilities?.worker?.draining;
+  const serviceDraining = dft.serviceStatus?.draining === true || capabilitiesDraining === true;
+  const capacityFull = maxActiveJobs != null && (dft.serviceStatus?.active_jobs ?? 0) >= maxActiveJobs;
+  const submissionDisabled = dft.serviceStatus?.enabled === false || dft.capabilities?.enabled === false;
+  const serviceReady = Boolean(
+    !dft.serviceError &&
+    dft.serviceStatus?.schema_ready &&
+    dft.capabilities?.schema_ready &&
+    dft.serviceStatus.enabled &&
+    dft.capabilities.enabled &&
+    dft.serviceStatus.available &&
+    dft.capabilities.available &&
+    dft.serviceStatus.runtime_ready === true &&
+    dft.serviceStatus.draining === false &&
+    capabilitiesRuntimeReady !== false &&
+    capabilitiesDraining !== true &&
+    !capacityFull
+  );
+  const activeJob = dft.job && !isMonomerDftTerminal(dft.job.status);
+  const configLocked = Boolean(activeJob) || isPreparingSubmission || dft.isSubmitting;
+  const canSubmit = serviceReady && validationIssues.length === 0 && !configLocked;
+  const invalidJobDeepLink = typeof window !== "undefined" && hasInvalidMonomerDftJobSearch(window.location.search);
+  const activeTabDefinition = PRIMARY_TABS.find((tab) => tab.id === activeTab) ?? PRIMARY_TABS[0];
+  const SurfaceIcon = activeTabDefinition.icon;
+
+  const currentRequest = useMemo<MonomerDftJobCreateRequest | null>(() => {
+    if (!selectedModel) return null;
+    const common = {
+      input: {
+        smiles: smilesDraft.trim(),
+        net_charge: netCharge,
+        multiplicity,
+        psmiles_mode: psmilesMode
+      },
+      model: selectedModel.id,
+      conformer: { seed, max_iterations: maxIterations }
+    };
+    return calculationType === "single_point"
+      ? { ...common, calculation_type: "single_point", single_point: { properties } }
+      : {
+        ...common,
+        calculation_type: "optimization",
+        optimization: {
+          fmax_eV_per_A: fmax,
+          max_steps: maxSteps,
+          post_optimization_properties: postOptimizationProperties
+        }
+      };
+  }, [
+    calculationType,
+    fmax,
+    maxIterations,
+    maxSteps,
+    multiplicity,
+    netCharge,
+    postOptimizationProperties,
+    properties,
+    psmilesMode,
+    seed,
+    selectedModel,
+    smilesDraft
+  ]);
+  const resultUsesPreviousSnapshot = Boolean(currentRequest && !monomerDftRequestsMatch(dft.job, currentRequest));
+
+  function showResultsAtTop() {
+    setActiveTab("results");
+    if (scrollRegionRef.current) scrollRegionRef.current.scrollTop = 0;
+  }
+
+  function changeSmilesDraft(value: string) {
+    setSmilesDraft(value);
+    structure.setSmiles(value);
+    setFormError(null);
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (submissionPreparingRef.current) return;
+    submissionPreparingRef.current = true;
+    submissionPreparationAbortRef.current?.abort();
+    const preparationController = new AbortController();
+    submissionPreparationAbortRef.current = preparationController;
+    setIsPreparingSubmission(true);
     setFormError(null);
-    const currentSmiles = (await structure.getCurrentSmiles()).trim();
-    const issues = validateMonomerDftRequest({
-      smiles: currentSmiles,
-      netCharge,
-      multiplicity,
-      psmilesMode,
-      calculationType,
-      modelId,
-      properties: calculationType === "single_point" ? properties : ["energy", "forces", "charges", ...postOptimizationProperties],
-      fmax,
-      maxSteps,
-      seed,
-      maxIterations
-    }, dft.capabilities);
-    if (issues.length > 0) {
-      setFormError(issues[0].message);
-      return;
+    try {
+      const rawSmiles = smilesDraft.trim();
+      let standardizedSmiles = rawSmiles;
+      if (rawSmiles) {
+        const standardized = await standardizeSmiles({ smiles: rawSmiles }, preparationController.signal);
+        if (preparationController.signal.aborted) return;
+        standardizedSmiles = standardized.standardized_smiles.trim();
+        if (standardizedSmiles && standardizedSmiles !== rawSmiles) {
+          setSmilesDraft(standardizedSmiles);
+          structure.setSmiles(standardizedSmiles);
+        }
+      }
+      const issues = validateMonomerDftRequest({
+        smiles: standardizedSmiles,
+        netCharge,
+        multiplicity,
+        psmilesMode,
+        calculationType,
+        modelId,
+        properties: requestProperties,
+        fmax,
+        maxSteps,
+        seed,
+        maxIterations
+      }, dft.capabilities);
+      if (issues.length > 0) {
+        setFormError(issues[0].message);
+        return;
+      }
+      const submitModel = selectableModels.find((model) => model.id === modelId);
+      if (!submitModel) {
+        setFormError("请选择适合当前分子的计算用途。");
+        return;
+      }
+      const common = {
+        input: {
+          smiles: standardizedSmiles,
+          net_charge: netCharge,
+          multiplicity,
+          psmiles_mode: psmilesMode
+        },
+        model: submitModel.id,
+        conformer: { seed, max_iterations: maxIterations }
+      };
+      const request: MonomerDftJobCreateRequest = calculationType === "single_point"
+        ? { ...common, calculation_type: "single_point", single_point: { properties } }
+        : {
+          ...common,
+          calculation_type: "optimization",
+          optimization: {
+            fmax_eV_per_A: fmax,
+            max_steps: maxSteps,
+            post_optimization_properties: postOptimizationProperties
+          }
+      };
+      const jobId = await dft.submit(request);
+      if (preparationController.signal.aborted) return;
+      if (jobId) showResultsAtTop();
+    } catch (error) {
+      if (preparationController.signal.aborted || (error instanceof Error && error.name === "AbortError")) return;
+      setFormError("SMILES 标准化失败，任务未提交。请检查结构后重试。");
+    } finally {
+      if (submissionPreparationAbortRef.current === preparationController) {
+        submissionPreparationAbortRef.current = null;
+        submissionPreparingRef.current = false;
+        setIsPreparingSubmission(false);
+      }
     }
-    const submitModel = selectableModels.find((model) => model.id === modelId);
-    if (!submitModel) {
-      setFormError("请选择能力目录中的模型。");
-      return;
-    }
-    const common = {
-      input: { smiles: currentSmiles, net_charge: netCharge, multiplicity, psmiles_mode: psmilesMode },
-      model: submitModel.id,
-      conformer: { seed, max_iterations: maxIterations }
-    };
-    const request: MonomerDftJobCreateRequest = calculationType === "single_point"
-      ? { ...common, calculation_type: "single_point", single_point: { properties } }
-      : { ...common, calculation_type: "optimization", optimization: { fmax_eV_per_A: fmax, max_steps: maxSteps, post_optimization_properties: postOptimizationProperties } };
-    await dft.submit(request);
   }
 
-  function copyJobLink() {
-    if (!dft.job || typeof navigator === "undefined") return;
-    const url = new URL(window.location.href);
-    url.pathname = "/monomer-dft";
-    url.search = new URLSearchParams({ job: dft.job.job_id }).toString();
-    void navigator.clipboard.writeText(url.toString());
+  async function rerunSelectedJob() {
+    const jobId = await dft.rerun();
+    if (jobId) showResultsAtTop();
   }
 
-  return <div className="min-h-full bg-slate-50">
-    <header className="border-b border-slate-200 bg-white px-4 py-4 md:px-6">
-      <div className="mx-auto flex max-w-[1640px] flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <Button type="button" variant="outline" className="h-9 w-9 shrink-0 rounded-lg p-0" onClick={onBackHome} aria-label="返回首页"><ArrowLeft className="h-4 w-4" /></Button>
-          <div><div className="flex flex-wrap items-center gap-2"><h1 className="text-xl font-semibold text-slate-950">单体 DFT（AIMNet2）</h1><span className="rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700">GPU Broker 调度 · 独立 Worker</span></div><p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">使用拟合 DFT 参考数据的 AIMNet2 机器学习势预测能量和响应属性；<strong className="font-semibold text-slate-800">它不是传统 SCF / 从头算 DFT</strong>。</p></div>
+  function handleTabKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const currentIndex = PRIMARY_TABS.findIndex((tab) => tab.id === activeTab);
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? PRIMARY_TABS.length - 1
+        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + PRIMARY_TABS.length) % PRIMARY_TABS.length;
+    const nextTab = PRIMARY_TABS[nextIndex];
+    setActiveTab(nextTab.id);
+    document.getElementById(`monomer-dft-main-tab-${nextTab.id}`)?.focus();
+  }
+
+  const serviceTone = dft.isServiceLoading
+    ? "loading"
+    : dft.serviceError
+      ? "error"
+      : dft.serviceStatus?.schema_ready === false || dft.capabilities?.schema_ready === false
+      ? "warning"
+      : submissionDisabled
+        ? "disabled"
+        : serviceDraining
+          ? "warning"
+          : capacityFull
+            ? "capacity"
+            : serviceReady
+              ? "ready"
+              : "error";
+  const serviceLabel = dft.isServiceLoading
+    ? "正在检查"
+    : dft.serviceError
+      ? "状态检查失败"
+      : dft.serviceStatus?.schema_ready === false || dft.capabilities?.schema_ready === false
+      ? "服务准备中"
+      : submissionDisabled
+        ? "暂未开放功能"
+        : serviceDraining
+          ? "暂缓新任务"
+          : capacityFull
+            ? "任务繁忙"
+            : serviceReady
+              ? "准备就绪"
+              : "暂时不可用";
+  const pollStatusLabel = dft.pollState === "degraded"
+    ? "连接中断，正在自动重试"
+    : dft.pollState === "stopped"
+      ? "任务进度同步已暂停"
+      : dft.pollState === "polling"
+        ? "正在同步任务进度"
+        : null;
+  const structureIssue = validationIssues.find((issue) => issue.field === "smiles")?.message ?? null;
+
+  return (
+    <div className="np-structure-workbench np-monomer-dft" data-module="monomer-dft">
+      <div className="np-dft-page">
+        <h1 className="np-sw-page-title">单体 DFT</h1>
+
+        <div className="np-dft-module-toolbar" aria-label="单体 DFT 服务状态">
+          <div className="np-dft-service-status">
+            <span className={`is-${serviceTone}`} role="status">
+              {serviceTone === "ready" ? <i className="np-dft-ready-dot" aria-hidden="true" /> : null}
+              {serviceTone === "disabled" ? <i className="np-dft-disabled-dot" aria-hidden="true" /> : null}
+              {serviceTone === "loading" ? <Loader2 className="np-dft-spin" /> : null}
+              {serviceTone === "warning" || serviceTone === "capacity" ? <TriangleAlert /> : null}
+              {serviceTone === "error" ? <XCircle /> : null}
+              <strong>{serviceLabel}</strong>
+            </span>
+            <button
+              type="button"
+              onClick={() => void dft.refreshStatus()}
+              disabled={dft.isServiceLoading}
+            >
+              <RefreshCw className={dft.isServiceLoading ? "np-dft-spin" : ""} />刷新
+            </button>
+          </div>
         </div>
-        <div className="flex flex-col items-end gap-2"><div className="flex items-center gap-2"><span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold", serviceReady ? "bg-emerald-50 text-emerald-700" : submissionDisabled ? "bg-slate-100 text-slate-700" : dft.serviceStatus?.draining ? "bg-amber-50 text-amber-800" : "bg-red-50 text-red-700")}><Server className="h-3.5 w-3.5" />{dft.isServiceLoading ? "检查服务" : serviceReady ? "Worker 就绪" : submissionDisabled ? "功能尚未开放" : dft.serviceStatus?.draining ? "发布排空中" : "服务不可用"}</span><Button type="button" variant="outline" className="h-8 rounded-md px-2.5 text-xs" onClick={() => void dft.refreshStatus()} disabled={dft.isServiceLoading}><RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", dft.isServiceLoading && "animate-spin")} />刷新</Button></div><div className="flex flex-wrap justify-end gap-x-3 gap-y-1 text-[11px] text-slate-500"><span>队列容量：{maxRunningJobs ?? "--"} running + {maxQueuedJobs ?? "--"} queued</span><span>当前活跃：{dft.serviceStatus?.active_jobs ?? "--"} / {maxActiveJobs ?? "--"} active</span></div></div>
+
+        <div ref={scrollRegionRef} className="np-dft-scroll-region">
+          <div className="np-dft-content-column">
+            {dft.serviceStatus?.schema_ready === false ? (
+              <div className="np-dft-page-message is-warning" role="alert">
+                <TriangleAlert />
+                <div><strong>服务正在准备</strong><span>历史记录与计算功能暂不可用，请稍后刷新。</span></div>
+              </div>
+            ) : null}
+            {invalidJobDeepLink ? (
+              <div className="np-dft-page-message is-error" role="alert">
+                <TriangleAlert />
+                <div><strong>任务链接无效</strong><span>链接中的任务编号格式不正确，已返回默认页面。</span></div>
+              </div>
+            ) : null}
+            {submissionDisabled ? (
+              <div className="np-dft-page-message" role="status">
+                <Info />
+                <div><strong>计算功能暂未开放</strong><span>当前可以查看历史记录和已有结果，暂不能提交或重新计算。</span></div>
+              </div>
+            ) : null}
+
+            <main className="np-dft-workbench-surface np-sw-accented-surface" aria-label="单体 DFT 主工作区">
+              <header className="np-dft-view-header">
+                <div className="np-dft-view-heading">
+                  <span className="np-dft-surface-mark"><SurfaceIcon /></span>
+                  <div>
+                    <h2>{activeTabDefinition.surfaceTitle}</h2>
+                    <p>{activeTabDefinition.surfaceDescription}</p>
+                  </div>
+                </div>
+              </header>
+
+              <div className="np-dft-main-tabs" role="tablist" aria-label="单体 DFT 主工作区" onKeyDown={handleTabKeyDown}>
+                {PRIMARY_TABS.map((tab) => {
+                  const Icon = tab.icon;
+                  return (
+                    <button
+                      key={tab.id}
+                      id={`monomer-dft-main-tab-${tab.id}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTab === tab.id}
+                      aria-controls={`monomer-dft-main-panel-${tab.id}`}
+                      tabIndex={activeTab === tab.id ? 0 : -1}
+                      className={activeTab === tab.id ? "is-active" : ""}
+                      onClick={() => setActiveTab(tab.id)}
+                    >
+                      <Icon />
+                      <span><strong>{tab.label}</strong><small>{tab.description}</small></span>
+                      {tab.id === "results" && dft.job ? <i className={`is-${dft.job.status}`} /> : null}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <section
+                id={`monomer-dft-main-panel-${activeTab}`}
+                role="tabpanel"
+                aria-labelledby={`monomer-dft-main-tab-${activeTab}`}
+                className="np-dft-main-panel"
+              >
+                {activeTab === "config" ? (
+                  <form className="np-dft-config" onSubmit={handleSubmit} noValidate>
+                    <section className="np-dft-config-section" aria-labelledby="np-dft-structure-title">
+                      <header className="np-dft-section-heading">
+                        <span className="np-dft-step">01</span>
+                        <div>
+                          <h3 id="np-dft-structure-title">结构输入</h3>
+                          <p>编辑提交结构并核对 2D 预览。</p>
+                        </div>
+                      </header>
+                      <MonomerDftStructureInput
+                        value={smilesDraft}
+                        disabled={configLocked}
+                        error={structureIssue}
+                        onChange={changeSmilesDraft}
+                        onEditStructure={onEditStructure}
+                      />
+                    </section>
+
+                    <section className="np-dft-config-section" aria-labelledby="np-dft-method-title">
+                      <header className="np-dft-section-heading">
+                        <span className="np-dft-step">02</span>
+                        <div>
+                          <h3 id="np-dft-method-title">计算方法</h3>
+                          <p>选择计算用途，并设置分子电荷与自旋状态。</p>
+                        </div>
+                      </header>
+
+                      <div className="np-dft-mode-switch" role="group" aria-label="计算类型">
+                        {(["single_point", "optimization"] as const).map((type) => (
+                          <button
+                            key={type}
+                            type="button"
+                            aria-pressed={calculationType === type}
+                            disabled={configLocked}
+                            className={calculationType === type ? "is-active" : ""}
+                            onClick={() => setCalculationType(type)}
+                          >
+                            {type === "single_point" ? <Activity /> : <Atom />}
+                            <span>
+                              <strong>{type === "single_point" ? "单点计算" : "几何优化"}</strong>
+                              <small>{type === "single_point" ? "计算自动生成的初始三维结构，不进行几何优化" : "优化分子构型，记录完整变化轨迹"}</small>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="np-dft-fields is-method">
+                        <div className="np-dft-field is-wide">
+                          <span id="np-dft-model-purpose-label">适用体系</span>
+                          <MonomerDftSelect
+                            id="np-dft-model-purpose"
+                            ariaLabelledBy="np-dft-model-purpose-label"
+                            value={modelId}
+                            disabled={configLocked || !dft.capabilities}
+                            options={modelOptions}
+                            onChange={setModelId}
+                          />
+                        </div>
+                        <label className="np-dft-field">
+                          <span>净电荷</span>
+                          <input
+                            type="number"
+                            step={1}
+                            value={netChargeText}
+                            disabled={configLocked}
+                            placeholder="留空自动"
+                            onChange={(event) => setNetChargeText(event.target.value)}
+                          />
+                        </label>
+                        <label className="np-dft-field">
+                          <span>自旋多重度</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={7}
+                            step={1}
+                            value={multiplicity}
+                            disabled={configLocked}
+                            onChange={(event) => setMultiplicity(Number(event.target.value))}
+                          />
+                        </label>
+                        <div className="np-dft-field">
+                          <span id="np-dft-psmiles-mode-label">连接位点处理</span>
+                          <MonomerDftSelect
+                            id="np-dft-psmiles-mode"
+                            ariaLabelledBy="np-dft-psmiles-mode-label"
+                            value={psmilesMode ?? ""}
+                            disabled={configLocked || !smilesDraft.includes("*")}
+                            options={[
+                              {
+                                value: "",
+                                label: smilesDraft.includes("*") ? "请选择处理方式" : "无需处理",
+                                description: smilesDraft.includes("*") ? "当前结构包含连接位点" : "当前结构为普通分子"
+                              },
+                              { value: "close", label: "连接两端", description: "将两个连接位点闭合为环状结构" },
+                              { value: "cap", label: "补全两端", description: "补全连接位点，形成有限分子" }
+                            ]}
+                            onChange={(value) => setPsmilesMode(
+                              value === "close" || value === "cap"
+                                ? value
+                                : null
+                            )}
+                          />
+                        </div>
+                      </div>
+
+                      {selectedModel ? (
+                        <div className="np-dft-model-summary">
+                          <div><strong>{describeMonomerDftModelPurpose(selectedModel).label}</strong><span>{selectedModel.available ? "可用" : "暂不可用"}</span></div>
+                          <p>{describeMonomerDftModelPurpose(selectedModel).description}</p>
+                          <small>适用元素：<code>{selectedModel.supported_elements.join("、") || "提交时检查"}</code> · {selectedModel.supports_spin ? "支持多重态" : "仅支持单重态"}</small>
+                        </div>
+                      ) : null}
+                    </section>
+
+                    <section className="np-dft-config-section" aria-labelledby="np-dft-properties-title">
+                      <header className="np-dft-section-heading">
+                        <span className="np-dft-step">03</span>
+                        <div>
+                          <h3 id="np-dft-properties-title">性质与收敛</h3>
+                          <p>{calculationType === "single_point" ? "选择输出性质。" : "设置收敛条件与附加计算。"}</p>
+                        </div>
+                      </header>
+
+                      {calculationType === "single_point" ? (
+                        <PropertyChoices
+                          values={properties}
+                          onChange={setProperties}
+                          supported={selectedModel?.supported_properties ?? []}
+                          locked={configLocked}
+                        />
+                      ) : (
+                        <>
+                          <div className="np-dft-fields is-optimization">
+                            <label className="np-dft-field">
+                              <span>收敛力阈值 / eV·Å⁻¹</span>
+                              <input
+                                type="number"
+                                min={0.001}
+                                max={1}
+                                step={0.001}
+                                value={fmax}
+                                disabled={configLocked}
+                                onChange={(event) => setFmax(Number(event.target.value))}
+                              />
+                            </label>
+                            <label className="np-dft-field">
+                              <span>最大步数（{minOptimizationSteps}–{maxOptimizationSteps}）</span>
+                              <input
+                                type="number"
+                                min={minOptimizationSteps}
+                                max={maxOptimizationSteps}
+                                step={1}
+                                value={maxSteps}
+                                disabled={configLocked}
+                                onChange={(event) => setMaxSteps(Number(event.target.value))}
+                              />
+                            </label>
+                          </div>
+                          <PropertyChoices
+                            compact
+                            values={postOptimizationProperties}
+                            onChange={(values) => setPostOptimizationProperties(values.filter(
+                              (value): value is MonomerDftPostOptimizationProperty => value === "hessian" || value === "frequencies"
+                            ))}
+                            supported={selectedModel?.supported_properties ?? []}
+                            locked={configLocked}
+                          />
+                          <p className="np-dft-field-hint">最终能量、原子力和电荷默认返回；还可计算二阶力常数或振动频率。</p>
+                        </>
+                      )}
+
+                      <button
+                        type="button"
+                        className="np-dft-advanced-toggle"
+                        aria-expanded={isAdvancedOpen}
+                        aria-controls="np-dft-conformer-settings"
+                        onClick={() => setIsAdvancedOpen((value) => !value)}
+                      >
+                        <Settings2 />
+                        <span><strong>初始构型</strong><small>调整随机种子与初步优化步数</small></span>
+                        <ChevronDown className={isAdvancedOpen ? "is-open" : ""} />
+                      </button>
+                      {isAdvancedOpen ? (
+                        <div id="np-dft-conformer-settings" className="np-dft-fields is-advanced">
+                          <label className="np-dft-field">
+                            <span>随机种子</span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={2147483647}
+                              step={1}
+                              value={seed}
+                              disabled={configLocked}
+                              onChange={(event) => setSeed(Number(event.target.value))}
+                            />
+                          </label>
+                          <label className="np-dft-field">
+                            <span>初始构型最大优化步数</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={5000}
+                              step={1}
+                              value={maxIterations}
+                              disabled={configLocked}
+                              onChange={(event) => setMaxIterations(Number(event.target.value))}
+                            />
+                          </label>
+                        </div>
+                      ) : null}
+                    </section>
+
+                    <details className="np-dft-scope-notice">
+                      <summary><Info />科学说明<ChevronDown /></summary>
+                      <ul>
+                        <li>不同计算方案适用的元素、电荷和自旋状态不同，提交时会自动检查。</li>
+                        <li>闭环或补全两端仅生成用于计算的有限分子，不代表完整聚合物周期环境。</li>
+                        <li>几何优化从一个确定的初始构型出发，不保证得到全局最低能结构。</li>
+                        <li>不同计算方案得到的绝对能量不可直接比较，也不应混合计算能量差。</li>
+                      </ul>
+                    </details>
+
+                    {activeJob ? (
+                      <div className="np-dft-inline-message is-warning" role="status">
+                        <Activity />
+                        <span>任务运行中，配置已锁定；前往任务中心查看进度。</span>
+                      </div>
+                    ) : null}
+                    {validationIssues.length > 0 ? (
+                      <div className="np-dft-validation" role="status">
+                        <TriangleAlert />
+                        <ul>{validationIssues.map((issue, index) => <li key={`${issue.field}-${index}`}>{issue.message}</li>)}</ul>
+                      </div>
+                    ) : null}
+                    {formError || dft.jobError ? (
+                      <div className="np-dft-inline-message is-error" role="alert">
+                        <TriangleAlert /><span>{userFacingMonomerDftMessage(formError ?? dft.jobError ?? "")}</span>
+                      </div>
+                    ) : null}
+                    {dft.serviceError ? (
+                      <div className="np-dft-inline-message is-error" role="alert">
+                        <TriangleAlert /><span>{userFacingMonomerDftMessage(dft.serviceError)}</span>
+                      </div>
+                    ) : null}
+
+                    <div className="np-dft-submit-bar">
+                      <div>
+                        <span>任务提交</span>
+                        <strong>{activeJob ? "任务运行中" : serviceReady ? "准备就绪" : serviceLabel}</strong>
+                        <small>{canSubmit ? "提交后将固定当前结构与参数" : validationIssues[0]?.message ?? "当前无法创建任务"}</small>
+                      </div>
+                      <button type="submit" disabled={!canSubmit}>
+                        {isPreparingSubmission || dft.isSubmitting ? <Loader2 className="np-dft-spin" /> : <Play />}
+                        {isPreparingSubmission || dft.isSubmitting ? "正在创建任务" : submissionDisabled ? "功能尚未开放" : "提交计算"}
+                      </button>
+                    </div>
+                  </form>
+                ) : null}
+
+                {activeTab === "tasks" ? (
+                  <TaskCenter
+                    dft={dft}
+                    serviceReady={serviceReady}
+                    submissionDisabled={submissionDisabled}
+                    requestCreating={isPreparingSubmission || dft.isSubmitting}
+                    onRerun={() => void rerunSelectedJob()}
+                    onSelectJob={(jobId) => {
+                      showResultsAtTop();
+                      dft.loadJob(jobId);
+                    }}
+                  />
+                ) : null}
+
+                {activeTab === "results" ? (
+                  <div className="np-dft-results-workspace">
+                    {dft.job ? (
+                      <>
+                        <SelectedJobCard
+                          dft={dft}
+                          serviceReady={serviceReady}
+                          submissionDisabled={submissionDisabled}
+                          requestCreating={isPreparingSubmission || dft.isSubmitting}
+                          onRerun={() => void rerunSelectedJob()}
+                          onShowTasks={() => setActiveTab("tasks")}
+                        />
+                        {resultUsesPreviousSnapshot ? (
+                          <div className="np-dft-inline-message" role="status">
+                            <Info /><span>当前结果属于上次提交的参数；页面中的配置已经改变。</span>
+                          </div>
+                        ) : null}
+                        {pollStatusLabel ? (
+                          <div className={`np-dft-poll-state is-${dft.pollState}`} role="status">
+                            {dft.isJobLoading ? <Loader2 className="np-dft-spin" /> : <TriangleAlert />}
+                            {pollStatusLabel}
+                          </div>
+                        ) : null}
+                        <MonomerDftResults job={dft.job} />
+                      </>
+                    ) : (
+                      <>
+                        {dft.jobError ? (
+                          <div className="np-dft-inline-message is-error" role="alert">
+                            <TriangleAlert />
+                            <span>{userFacingMonomerDftMessage(dft.jobError)}</span>
+                          </div>
+                        ) : null}
+                        <div className="np-dft-empty-state">
+                          {dft.isJobLoading ? <Loader2 className="np-dft-spin" /> : <Gauge />}
+                          <div>
+                            <strong>{dft.isJobLoading ? "正在读取任务" : "尚未选择计算结果"}</strong>
+                            <span>{dft.isJobLoading
+                              ? "正在同步任务状态与结果，请稍候…"
+                              : "提交任务，或前往任务中心选择历史任务。"}</span>
+                          </div>
+                          {!dft.isJobLoading ? (
+                            <div className="np-dft-empty-actions">
+                              <button type="button" onClick={() => setActiveTab("config")}><FlaskConical />计算配置</button>
+                              <button type="button" onClick={() => setActiveTab("tasks")}><History />任务中心</button>
+                            </div>
+                          ) : null}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : null}
+              </section>
+            </main>
+          </div>
+        </div>
       </div>
-    </header>
-
-    <main className="mx-auto max-w-[1640px] space-y-4 p-4 md:p-6">
-      {dft.serviceStatus?.schema_ready === false ? <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">单体 DFT 数据库迁移尚未完成。历史记录、任务深链接和提交功能会保持关闭，迁移就绪后自动恢复。</div> : null}
-      {invalidJobDeepLink ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800">任务深链接无效：<code>job</code> 必须是 UUID。已安全忽略该参数，未发送任务查询。</div> : null}
-      {submissionDisabled ? <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-700"><strong className="font-semibold text-slate-900">功能尚未开放。</strong> 当前发布仅提供历史记录和既有结果查看；新任务提交、重跑和 Worker 计算将在独立生产启用后开放。</div> : null}
-      <CurrentStructurePanel structure={structure} onEditStructure={onEditStructure} compact />
-      <section className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950">
-        <div className="flex items-start gap-2"><Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" /><div><div className="font-semibold">适用范围与共享环境提示</div><ul className="mt-1 grid list-disc gap-x-8 pl-4 md:grid-cols-2"><li>元素、净电荷和多重度必须落在所选模型的能力域，最终以服务端校验为准。</li><li>PSMILES 的 close/cap 只生成有限代理分子，不代表完整聚合物周期环境。</li><li>几何优化从一个确定性构象出发，是单构象局部优化，不保证全局最低能构象。</li><li>不同模型家族的绝对能量不可直接横向比较或混用于同一能量差。</li><li className="md:col-span-2">当前全局历史面向可信单租户环境：所有能访问此页面的访问者都能查看任务，并可取消任务或删除产物。</li></ul></div></div>
-      </section>
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_390px]">
-        <form onSubmit={handleSubmit} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><FlaskConical className="h-4 w-4 text-violet-600" />计算设置</div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            {(["single_point", "optimization"] as const).map((type) => <button key={type} type="button" disabled={Boolean(activeJob)} onClick={() => setCalculationType(type)} className={cn("rounded-xl border p-3 text-left", calculationType === type ? "border-violet-300 bg-violet-50" : "border-slate-200 bg-white hover:bg-slate-50")}><span className="block text-sm font-semibold text-slate-900">{type === "single_point" ? "单点计算" : "几何优化"}</span><span className="mt-1 block text-xs leading-5 text-slate-500">{type === "single_point" ? "固定构象计算能量、力、电荷、Hessian 或频率。" : "BFGS 优化并返回逐步能量、Fmax 与显式坐标轨迹。"}</span></button>)}
-          </div>
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <label className="block"><span className="mb-1.5 block text-xs font-medium text-slate-600">共享 SMILES</span><Input value={structure.smiles} onChange={(event) => structure.setSmiles(event.target.value)} disabled={Boolean(activeJob)} className="h-10 rounded-lg border-slate-200 bg-white font-mono text-xs" placeholder="从结构工作台同步或直接输入" /></label>
-            <label className="block"><span className="mb-1.5 block text-xs font-medium text-slate-600">AIMNet 模型</span><Select value={modelId} onChange={(event) => setModelId(event.target.value as MonomerDftModelName | "")} disabled={Boolean(activeJob) || !dft.capabilities} className="h-10 rounded-lg border-slate-200 bg-white"><option value="">等待能力目录</option>{selectableModels.map((model) => <option key={model.id} value={model.id} disabled={!model.available}>{model.label}{!model.available ? "（不可用）" : ""}</option>)}</Select></label>
-          </div>
-          {selectedModel ? <div className={cn("mt-3 rounded-lg border px-3 py-2 text-xs leading-5", selectedModel.deprecated ? "border-amber-200 bg-amber-50 text-amber-900" : "border-slate-100 bg-slate-50 text-slate-600")}><span className="font-semibold">{selectedModel.label}</span>：{selectedModel.description ?? "由后端能力目录提供的 AIMNet 模型。"}{selectedModel.deprecation_message ? ` ${selectedModel.deprecation_message}` : ""}<div className="mt-1 text-[11px]">支持元素：{selectedModel.supported_elements.join("、") || "由服务端校验"} · {selectedModel.supports_spin ? "支持开放壳层" : "仅闭壳层"}</div></div> : null}
-          <div className="mt-4 grid gap-4 sm:grid-cols-3">
-            <label><span className="mb-1.5 block text-xs font-medium text-slate-600">净电荷</span><Input type="number" step={1} value={netChargeText} onChange={(event) => setNetChargeText(event.target.value)} disabled={Boolean(activeJob)} className="h-10 rounded-lg border-slate-200 bg-white" placeholder="留空自动" /></label>
-            <label><span className="mb-1.5 block text-xs font-medium text-slate-600">多重度（2S+1）</span><Input type="number" min={1} max={7} step={1} value={multiplicity} onChange={(event) => setMultiplicity(Number(event.target.value))} disabled={Boolean(activeJob)} className="h-10 rounded-lg border-slate-200 bg-white" /></label>
-            <label><span className="mb-1.5 block text-xs font-medium text-slate-600">PSMILES 处理</span><Select value={psmilesMode ?? ""} onChange={(event) => setPsmilesMode(event.target.value === "close" || event.target.value === "cap" ? event.target.value : null)} disabled={Boolean(activeJob) || !structure.smiles.includes("*")} className="h-10 rounded-lg border-slate-200 bg-white"><option value="">普通单体 / 未选择</option><option value="close">闭环（close）</option><option value="cap">封端（cap）</option></Select></label>
-          </div>
-
-          <div className="mt-4"><div className="mb-2 text-xs font-medium text-slate-600">{calculationType === "single_point" ? "请求属性" : "优化后高级属性"}</div>{calculationType === "single_point" ? <PropertyChoices values={properties} onChange={setProperties} supported={selectedModel?.supported_properties ?? []} /> : <><div className="grid gap-4 sm:grid-cols-2"><label><span className="mb-1.5 block text-xs font-medium text-slate-600">Fmax 阈值 / eV Å⁻¹</span><Input type="number" min={0.001} step={0.001} value={fmax} onChange={(event) => setFmax(Number(event.target.value))} disabled={Boolean(activeJob)} className="h-10 rounded-lg border-slate-200 bg-white" /></label><label><span className="mb-1.5 block text-xs font-medium text-slate-600">最大优化步数（10–50）</span><Input type="number" min={10} max={50} step={1} value={maxSteps} onChange={(event) => setMaxSteps(Number(event.target.value))} disabled={Boolean(activeJob)} className="h-10 rounded-lg border-slate-200 bg-white" /></label></div><div className="mt-3"><PropertyChoices compact values={postOptimizationProperties} onChange={(values) => setPostOptimizationProperties(values.filter((value): value is MonomerDftPostOptimizationProperty => value === "hessian" || value === "frequencies"))} supported={selectedModel?.supported_properties ?? []} /></div><p className="mt-2 text-[11px] text-slate-500">优化始终返回最终能量、力和电荷；这里只选择额外 Hessian / 频率。</p></>}
-          </div>
-
-          <button type="button" className="mt-4 inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-900" onClick={() => setIsAdvancedOpen((value) => !value)}><Settings2 className="h-3.5 w-3.5" />构象生成高级设置 · {isAdvancedOpen ? "收起" : "展开"}</button>
-          {isAdvancedOpen ? <div className="mt-3 grid gap-4 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:grid-cols-2"><label><span className="mb-1.5 block text-xs font-medium text-slate-600">RDKit seed</span><Input type="number" step={1} value={seed} onChange={(event) => setSeed(Number(event.target.value))} disabled={Boolean(activeJob)} className="h-9 rounded-lg border-slate-200 bg-white" /></label><label><span className="mb-1.5 block text-xs font-medium text-slate-600">最大嵌入迭代</span><Input type="number" min={1} step={1} value={maxIterations} onChange={(event) => setMaxIterations(Number(event.target.value))} disabled={Boolean(activeJob)} className="h-9 rounded-lg border-slate-200 bg-white" /></label></div> : null}
-
-          {validationIssues.length > 0 ? <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900"><div className="flex items-start gap-2"><TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" /><ul className="space-y-1">{validationIssues.map((issue, index) => <li key={`${issue.field}-${index}`}>{issue.message}</li>)}</ul></div></div> : null}
-          {formError || dft.jobError ? <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800">{formError ?? dft.jobError}</div> : null}
-          {dft.serviceError ? <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800">状态接口：{dft.serviceError}</div> : null}
-          <div className="mt-4 flex flex-wrap gap-2"><Button type="submit" disabled={!canSubmit} className="h-10 rounded-lg px-4 shadow-none">{dft.isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}{dft.isSubmitting ? "正在提交" : submissionDisabled ? "功能尚未开放" : "提交计算"}</Button><Button type="button" variant="outline" className="h-10 rounded-lg border-slate-200 px-4" onClick={onEditStructure} disabled={Boolean(activeJob)}><Atom className="mr-2 h-4 w-4" />打开 Ketcher</Button></div>
-        </form>
-
-        <aside className="space-y-4">
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Activity className="h-4 w-4 text-sky-600" />当前任务</div>{dft.job ? <StatusBadge status={dft.job.status} /> : null}</div>
-            {dft.job ? <div className="mt-4 space-y-3"><div className="rounded-lg bg-slate-50 p-3"><div className="flex items-center justify-between gap-2"><span className="truncate font-mono text-xs text-slate-700" title={dft.job.job_id}>{dft.job.job_id}</span><button type="button" onClick={copyJobLink} className="shrink-0 text-slate-400 hover:text-slate-700" title="复制任务链接"><Clipboard className="h-3.5 w-3.5" /></button></div><div className="mt-2 text-[11px] text-slate-500">{dft.job.calculation_type === "single_point" ? "单点" : "几何优化"} · {dft.job.request.model} · {formatDate(dft.job.created_at)}</div></div><div><div className="mb-1 flex items-center justify-between text-xs text-slate-500"><span>{labelMonomerDftStage(dft.job.stage)}{dft.job.queue_position != null ? ` · 队列第 ${dft.job.queue_position} 位` : ""}</span><span>{Math.round(dft.job.progress_percent)}%</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className={cn("h-full rounded-full transition-all", dft.job.status === "failed" ? "bg-red-500" : "bg-sky-500")} style={{ width: `${Math.max(0, Math.min(100, dft.job.progress_percent))}%` }} /></div></div>{dft.job.error ? <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-800"><div className="font-semibold">{dft.job.error.code}</div><div>{dft.job.error.message}</div><div className="mt-1">{dft.job.error.retryable ? "可重试" : "不可重试，请修改输入或环境。"}</div></div> : null}<div className="flex flex-wrap gap-2">{!isMonomerDftTerminal(dft.job.status) ? <Button type="button" variant="outline" className="h-9 rounded-md border-red-200 px-3 text-xs text-red-700 hover:bg-red-50" onClick={() => void dft.cancel()} disabled={dft.isCancelling || dft.job.status === "cancel_requested"}>{dft.isCancelling ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Ban className="mr-1.5 h-3.5 w-3.5" />}取消</Button> : <><Button type="button" variant="outline" className="h-9 rounded-md border-slate-200 px-3 text-xs" onClick={() => void dft.rerun()} disabled={dft.isSubmitting || !serviceReady}><RotateCcw className="mr-1.5 h-3.5 w-3.5" />{submissionDisabled ? "功能尚未开放" : "重跑同参数"}</Button><Button type="button" variant="outline" className="h-9 rounded-md border-red-200 px-3 text-xs text-red-700 hover:bg-red-50" disabled={dft.deletingJobIds.includes(dft.job.job_id)} onClick={() => { const selected = dft.job; if (selected && window.confirm("删除后，任务参数、结果、深链接和在线存储都无法在产品中恢复。确定继续吗？")) void dft.deleteJobRecord(selected); }}>{dft.deletingJobIds.includes(dft.job.job_id) ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1.5 h-3.5 w-3.5" />}删除记录</Button></>}<Button type="button" variant="outline" className="h-9 rounded-md border-slate-200 px-3 text-xs" onClick={dft.clearJob} disabled={Boolean(activeJob)}>清空当前</Button></div></div> : <div className="mt-6 rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs leading-5 text-slate-500">提交任务或从全局历史选择记录。URL 中的 <code>?job=uuid</code> 可直接恢复查看与轮询。</div>}
-          </section>
-
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><History className="h-4 w-4 text-violet-600" />全局任务历史</div><Button type="button" variant="outline" className="h-8 w-8 rounded-md p-0" onClick={() => void dft.refreshHistory()} disabled={dft.isHistoryLoading} aria-label="刷新历史"><RefreshCw className={cn("h-3.5 w-3.5", dft.isHistoryLoading && "animate-spin")} /></Button></div>
-            <div className="mt-3 grid grid-cols-2 gap-2"><Select value={dft.historyQuery.status ?? ""} onChange={(event) => dft.changeHistoryQuery({ page: 1, status: event.target.value as MonomerDftJobStatus | "" })} className="h-9 rounded-lg border-slate-200 bg-white px-2 text-xs"><option value="">全部状态</option>{Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select><Select value={dft.historyQuery.calculation_type ?? ""} onChange={(event) => dft.changeHistoryQuery({ page: 1, calculation_type: event.target.value as MonomerDftCalculationType | "" })} className="h-9 rounded-lg border-slate-200 bg-white px-2 text-xs"><option value="">全部类型</option><option value="single_point">单点</option><option value="optimization">几何优化</option></Select></div>
-            {dft.historyError ? <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">{dft.historyError}</div> : null}
-            <div className="mt-3 max-h-[430px] space-y-2 overflow-auto pr-1">{dft.history?.items.length ? dft.history.items.map((item) => <div key={item.job_id} className={cn("rounded-lg border p-3", dft.job?.job_id === item.job_id ? "border-sky-300 bg-sky-50" : "border-slate-100 bg-white")}><button type="button" onClick={() => dft.loadJob(item.job_id)} className="w-full text-left hover:opacity-80"><div className="flex items-center justify-between gap-2"><span className="truncate font-mono text-[11px] text-slate-600">{item.job_id}</span><StatusBadge status={item.status} /></div><div className="mt-2 truncate text-xs font-medium text-slate-800">{item.request.input.smiles}</div><div className="mt-1 text-[11px] text-slate-500">{item.request.calculation_type === "single_point" ? "单点" : "优化"} · {item.request.model} · {formatDate(item.created_at)}</div></button>{isMonomerDftTerminal(item.status) ? <Button type="button" variant="outline" className="mt-2 h-8 rounded-md border-red-200 px-2.5 text-xs text-red-700 hover:bg-red-50" disabled={dft.deletingJobIds.includes(item.job_id)} onClick={() => { if (window.confirm("删除后，任务参数、结果、深链接和在线存储都无法在产品中恢复。确定继续吗？")) void dft.deleteJobRecord(item); }}>{dft.deletingJobIds.includes(item.job_id) ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1.5 h-3.5 w-3.5" />}删除记录</Button> : null}{dft.deleteJobErrors[item.job_id] ? <div className="mt-2 text-[11px] text-red-700">{dft.deleteJobErrors[item.job_id]}</div> : null}</div>) : <div className="rounded-lg border border-dashed border-slate-200 p-5 text-center text-xs text-slate-500">{dft.isHistoryLoading ? "读取历史…" : "没有符合条件的任务"}</div>}</div>
-            <div className="mt-3 flex items-center justify-between text-xs text-slate-500"><Button type="button" variant="outline" className="h-8 w-8 rounded-md p-0" disabled={dft.historyQuery.page <= 1} onClick={() => dft.changeHistoryQuery({ page: dft.historyQuery.page - 1 })}><ChevronLeft className="h-3.5 w-3.5" /></Button><span>第 {dft.historyQuery.page} / {historyPageCount} 页 · 共 {dft.history?.total ?? 0} 项</span><Button type="button" variant="outline" className="h-8 w-8 rounded-md p-0" disabled={dft.historyQuery.page >= historyPageCount} onClick={() => dft.changeHistoryQuery({ page: dft.historyQuery.page + 1 })}><ChevronRight className="h-3.5 w-3.5" /></Button></div>
-          </section>
-        </aside>
-      </div>
-
-      <section className="space-y-3"><div className="flex items-center justify-between"><div><h2 className="text-base font-semibold text-slate-950">结果与产物</h2><p className="mt-1 text-xs text-slate-500">显示后端返回的真实值、实际耗时和可复现性信息。</p></div>{pollStatusLabel ? <span className={cn("inline-flex items-center gap-1.5 text-xs", dft.pollState === "degraded" ? "text-amber-700" : dft.pollState === "stopped" ? "text-red-700" : "text-sky-700")}>{dft.isJobLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <TriangleAlert className="h-3.5 w-3.5" />}{pollStatusLabel}</span> : null}</div>{dft.job ? <MonomerDftResults job={dft.job} onDeleteArtifacts={() => { if (window.confirm("确定删除该任务在服务器上的计算产物吗？任务元数据会保留。")) void dft.deleteArtifacts(); }} isDeletingArtifacts={dft.isDeletingArtifacts} /> : <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500"><Info className="mx-auto mb-2 h-6 w-6 text-slate-300" />尚未选择任务。</div>}</section>
-    </main>
-  </div>;
+    </div>
+  );
 }

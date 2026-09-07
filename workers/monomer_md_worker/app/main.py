@@ -36,6 +36,7 @@ from .runtime_health import (
     initial_runtime_snapshot,
     probe_runtime_snapshot,
 )
+from .storage_lock import job_storage_lock
 from gpu_resource import GpuBrokerClient, GpuBrokerClientError, ManagedGpuLease
 from scripts.worker_slot_runtime import (
     PRODUCTION_RUNTIME_ROOT,
@@ -578,14 +579,11 @@ async def delete_job_artifacts(job_id: str) -> ArtifactDeletionResponse:
                         status_code=status.HTTP_409_CONFLICT,
                         detail="cannot delete artifacts for an active monomer MD job",
                     )
-                detached = await asyncio.to_thread(
-                    _detach_artifact_entry,
-                    artifact_root,
-                    tombstone,
-                )
-            removed = await asyncio.to_thread(
-                _durably_remove_artifact_entry,
+            detached, removed = await asyncio.to_thread(
+                _delete_artifact_entry_locked,
+                artifact_root,
                 tombstone,
+                job_id,
             )
     except HTTPException:
         raise
@@ -621,6 +619,17 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _delete_artifact_entry_locked(
+    artifact_root: Path,
+    tombstone: Path,
+    job_id: str,
+) -> tuple[bool, bool]:
+    with job_storage_lock(artifact_root.parent, job_id):
+        detached = _detach_artifact_entry(artifact_root, tombstone)
+        removed = _durably_remove_artifact_entry(tombstone)
+    return detached, removed
 
 
 def _durably_remove_artifact_entry(path: Path) -> bool:

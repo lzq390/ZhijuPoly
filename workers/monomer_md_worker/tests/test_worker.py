@@ -961,6 +961,12 @@ def test_formal_runner_writes_config_and_parses_density_result(tmp_path: Path):
         item["path"] == "outputs/density_results.json"
         for item in result.result["artifact_manifest"]["files"]
     )
+    visualization = result.result["visualization"]
+    assert visualization["schema_version"] == 3
+    assert visualization["status"] == "unavailable"
+    assert visualization["default_stage_id"] == "npt"
+    assert visualization["stages"][0]["stage_id"] == "npt"
+    assert "npt:STATE_CSV_MISSING" in visualization["warnings"]
 
 
 def test_formal_runner_cancellation_terminates_process_group(

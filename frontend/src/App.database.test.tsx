@@ -24,6 +24,10 @@ vi.mock("./components/DatabaseAnalysis", () => ({
   )
 }));
 
+vi.mock("./components/DatabaseFilterPage", () => ({
+  DatabaseFilterPage: () => <div data-testid="database-filter-route">database filter</div>
+}));
+
 vi.mock("./components/AgentWorkspaceHomePage", () => ({
   AgentWorkspaceHomePage: () => null,
   agentWorkspaceUrl: () => null
@@ -72,5 +76,14 @@ describe("数据库分析深链路由", () => {
     fireEvent.click(screen.getByRole("button", { name: "返回全库概览" }));
     expect(window.location.pathname).toBe("/database");
     expect(screen.getByTestId("database-analysis-route").textContent).toContain("overview");
+  });
+
+  it.each(["/database-filter", "/database/property-filter"])("筛选路由 %s 不会误入实验性能分析", (path) => {
+    window.history.replaceState({}, "", path);
+    render(<App />);
+
+    expect(screen.getByTestId("database-filter-route")).not.toBeNull();
+    expect(screen.queryByTestId("database-analysis-route")).toBeNull();
+    expect(screen.getByRole("button", { name: "数据库筛选" }).getAttribute("aria-current")).toBe("page");
   });
 });

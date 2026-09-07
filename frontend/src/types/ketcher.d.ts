@@ -38,6 +38,7 @@ declare global {
         zoomTo: () => void;
         render: () => void;
         clear: () => void;
+        resize?: () => void;
         setBackgroundColor: (color: string) => void;
       };
     };

@@ -43,6 +43,7 @@ import { useQuery } from "./hooks/useQuery";
 import { useTgAssistant } from "./hooks/useTgAssistant";
 import { standardizeSmiles } from "./services/api";
 import { getMonomerDftJobIdFromSearch, getMonomerDftPath } from "./lib/monomerDftRouting";
+import { getMonomerMdJobIdFromSearch, getMonomerMdPath } from "./lib/monomerMdRouting";
 import {
   normalizeKnowledgeSearchGroups,
   serializeKnowledgeSearchGroups
@@ -323,6 +324,12 @@ export default function App() {
     }
     return getMonomerDftJobIdFromSearch(window.location.search);
   });
+  const [monomerMdJobId, setMonomerMdJobId] = useState<string | null>(() => {
+    if (typeof window === "undefined" || getInitialRoute().module !== "monomerMdSimulation") {
+      return null;
+    }
+    return getMonomerMdJobIdFromSearch(window.location.search);
+  });
   const [knowledgeInitialQuery, setKnowledgeInitialQuery] = useState(() => {
     if (typeof window === "undefined") {
       return "";
@@ -534,13 +541,19 @@ export default function App() {
         if (route.module === "monomerDft") {
           setMonomerDftJobId(getMonomerDftJobIdFromSearch(search));
         }
+        if (route.module === "monomerMdSimulation") {
+          setMonomerMdJobId(getMonomerMdJobIdFromSearch(search));
+        }
         applyRoute(route);
       };
 
       if (
         activeModuleRef.current === "structureWorkbench" ||
         activeModuleRef.current === "homopolymerPrediction" ||
-        activeModuleRef.current === "explorer"
+        activeModuleRef.current === "explorer" ||
+        activeModuleRef.current === "databaseQuery" ||
+        activeModuleRef.current === "conditionalGeneration" ||
+        activeModuleRef.current === "reverseDesign"
       ) {
         void syncStructureBeforeNavigation().then(applyLatestRoute);
       } else {
@@ -582,8 +595,17 @@ export default function App() {
     navigate({ module: "mdSimulationDemo", datasetKey: null });
   }
 
-  function openMonomerMdSimulation() {
-    navigate({ module: "monomerMdSimulation", datasetKey: null });
+  function openMonomerMdSimulation(jobId: string | null = null) {
+    const route = { module: "monomerMdSimulation", datasetKey: null } satisfies AppRoute;
+    const path = getMonomerMdPath(jobId);
+    if (typeof window !== "undefined") {
+      if (`${normalizePath(window.location.pathname)}${window.location.search}` !== path) {
+        window.history.pushState(route, "", path);
+      }
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }
+    setMonomerMdJobId(jobId);
+    applyRoute(route);
   }
 
   function openMonomerDft(jobId: string | null = null) {
@@ -900,7 +922,7 @@ export default function App() {
         {
           id: "monomerMdSimulation",
           label: "单体 MD 模拟",
-          description: "Submit ordinary monomer SMILES and track MD worker job results.",
+          description: "配置单体或多组分正式协议，跟踪真实 MD Worker 任务与结果。",
           route: "/monomer-md-simulation",
           icon: <Microscope className="h-4 w-4" />,
           isActive: activeModule === "monomerMdSimulation",
@@ -908,8 +930,8 @@ export default function App() {
         },
         {
           id: "monomerDft",
-          label: "单体 DFT（AIMNet2）",
-          description: "用独立 GPU Worker 计算单点性质、Hessian、频率和几何优化。",
+          label: "单体 DFT",
+          description: "计算单点性质、二阶力常数、振动频率并优化分子构型。",
           route: "/monomer-dft",
           icon: <FlaskConical className="h-4 w-4" />,
           isActive: activeModule === "monomerDft",
@@ -985,6 +1007,7 @@ export default function App() {
     activeModule !== "homopolymerPrediction" &&
     activeModule !== "explorer" &&
     activeModule !== "databaseQuery" &&
+    activeModule !== "monomerDft" &&
     !isTgKetcherOwner;
 
   return (
@@ -1018,7 +1041,10 @@ export default function App() {
       beforeNavigate={
         activeModule === "structureWorkbench" ||
         activeModule === "homopolymerPrediction" ||
-        activeModule === "explorer"
+        activeModule === "explorer" ||
+        activeModule === "databaseQuery" ||
+        activeModule === "conditionalGeneration" ||
+        activeModule === "reverseDesign"
           ? beforeStructureCanvasNavigation
           : undefined
       }
@@ -1041,9 +1067,8 @@ export default function App() {
 
       {activeModule === "databaseQuery" ? (
         <DatabaseQueryPage
+          ref={structureCanvasOwnerRef}
           structure={structureWorkspace}
-          onEditStructure={openStructureWorkbench}
-          onBackHome={() => navigate({ module: "home", datasetKey: null })}
         />
       ) : null}
 
@@ -1103,11 +1128,19 @@ export default function App() {
       ) : null}
 
       {activeModule === "mdSimulationDemo" ? (
-        <MdSimulationDemoPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+        <MdSimulationDemoPage
+          structure={structureWorkspace}
+          onEditStructure={openStructureWorkbench}
+        />
       ) : null}
 
       {activeModule === "monomerMdSimulation" ? (
-        <MonomerMdSimulationPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
+        <MonomerMdSimulationPage
+          structure={structureWorkspace}
+          initialJobId={monomerMdJobId}
+          onJobIdChange={openMonomerMdSimulation}
+          onEditStructure={openStructureWorkbench}
+        />
       ) : null}
 
       {activeModule === "monomerDft" ? (
@@ -1116,12 +1149,14 @@ export default function App() {
           initialJobId={monomerDftJobId}
           onJobIdChange={openMonomerDft}
           onEditStructure={openStructureWorkbench}
-          onBackHome={() => navigate({ module: "home", datasetKey: null })}
         />
       ) : null}
 
       {activeModule === "conditionalGeneration" ? (
-        <ConditionalGenerationPage structure={structureWorkspace} />
+        <ConditionalGenerationPage
+          ref={structureCanvasOwnerRef}
+          structure={structureWorkspace}
+        />
       ) : null}
 
       {activeModule === "polytaoGeneration" ? (
@@ -1145,6 +1180,7 @@ export default function App() {
           aria-hidden={activeModule !== "reverseDesign"}
         >
           <ReverseDesignPage
+            ref={structureCanvasOwnerRef}
             structure={structureWorkspace}
             onOpenKnowledge={openKnowledge}
             assistant={tgAssistant}

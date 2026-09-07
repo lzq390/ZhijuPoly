@@ -160,6 +160,9 @@ describe("KnowledgeSearch", () => {
       value: { writeText }
     });
     render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    const pageTitle = screen.getByRole("heading", { name: "知识检索" });
+    expect(pageTitle.classList.contains("np-material-discovery-page-title")).toBe(true);
+    expect(pageTitle.closest(".np-material-discovery-page")).not.toBeNull();
     const input = screen.getByRole("searchbox", { name: "本地知识库检索词" });
 
     fireEvent.change(input, {

@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.models import (
     MonomerMdJobCreateResponse,
+    MonomerMdJobListItemResponse,
     MonomerMdJobPageResponse,
     MonomerMdJobStatus,
     MonomerMdJobStatusResponse,
@@ -24,6 +25,7 @@ from app.postgres_database import postgres_connection
 from app.services.monomer_md_repository import (
     create_monomer_md_job_postgres,
     get_monomer_md_job_postgres,
+    get_monomer_md_trajectory_timeline_postgres,
     get_monomer_md_mode_capacity_postgres,
     list_monomer_md_jobs_postgres,
     mark_monomer_md_artifacts_deleted_postgres,
@@ -380,11 +382,83 @@ def _get_job(dsn: str, job_id: str) -> dict[str, Any] | None:
         return get_monomer_md_job_postgres(connection, job_id)
 
 
+def _get_trajectory_timeline(
+    dsn: str,
+    job_id: str,
+    stage_id: str,
+) -> dict[str, Any] | None:
+    with postgres_connection(dsn) as connection:
+        return get_monomer_md_trajectory_timeline_postgres(
+            connection,
+            job_id=job_id,
+            stage_id=stage_id,
+        )
+
+
+def _without_embedded_trajectory_timelines(job: dict[str, Any]) -> dict[str, Any]:
+    """Keep detail responses bounded while advertising lazily loadable timelines."""
+
+    result = job.get("result")
+    if not isinstance(result, dict):
+        return job
+    visualization = result.get("visualization")
+    if not isinstance(visualization, dict):
+        return job
+    stages = visualization.get("stages")
+    if not isinstance(stages, list):
+        return job
+
+    changed = False
+    slim_stages: list[Any] = []
+    metadata_keys = (
+        "schema_version",
+        "source_frame_count",
+        "sampled_frame_count",
+        "total_atoms",
+        "sampled_points",
+        "coordinate_unit",
+        "coordinate_encoding",
+        "compressed_byte_length",
+        "sampling_strategy",
+    )
+    for stage in stages:
+        if not isinstance(stage, dict):
+            slim_stages.append(stage)
+            continue
+        timeline = stage.get("trajectory_timeline")
+        if not isinstance(timeline, dict):
+            slim_stages.append(stage)
+            continue
+        slim_stage = {key: value for key, value in stage.items() if key != "trajectory_timeline"}
+        slim_stage["trajectory_timeline_available"] = True
+        slim_stage["trajectory_timeline_summary"] = {
+            key: timeline[key]
+            for key in metadata_keys
+            if key in timeline
+        }
+        slim_stages.append(slim_stage)
+        changed = True
+
+    if not changed:
+        return job
+    return {
+        **job,
+        "result": {
+            **result,
+            "visualization": {
+                **visualization,
+                "stages": slim_stages,
+            },
+        },
+    }
+
+
 def _list_jobs(
     dsn: str,
     *,
     run_mode: str | None,
     active_only: bool,
+    include_result: bool,
     protocol: str | None,
     job_status: str | None,
     page: int,
@@ -395,6 +469,7 @@ def _list_jobs(
             connection,
             run_mode=run_mode,
             active_only=active_only,
+            include_result=include_result,
             protocol=protocol,
             status=job_status,
             page=page,
@@ -702,7 +777,11 @@ async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Requ
 
 
 @router.get("/jobs/{job_id}", response_model=MonomerMdJobStatusResponse)
-async def get_monomer_md_job(job_id: str, request: Request) -> MonomerMdJobStatusResponse:
+async def get_monomer_md_job(
+    job_id: str,
+    request: Request,
+    include_trajectory: bool = False,
+) -> MonomerMdJobStatusResponse:
     job = await run_in_threadpool(
         _get_job,
         request.app.state.settings.app_postgres_dsn,
@@ -710,7 +789,28 @@ async def get_monomer_md_job(job_id: str, request: Request) -> MonomerMdJobStatu
     )
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    if not include_trajectory:
+        job = _without_embedded_trajectory_timelines(job)
     return MonomerMdJobStatusResponse(**job)
+
+
+@router.get("/jobs/{job_id}/visualization/stages/{stage_id}/trajectory")
+async def get_monomer_md_trajectory_timeline(
+    job_id: str,
+    stage_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    if not _JOB_ID_RE.fullmatch(job_id) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", stage_id):
+        raise HTTPException(status_code=404, detail="Trajectory timeline not found")
+    timeline = await run_in_threadpool(
+        _get_trajectory_timeline,
+        request.app.state.settings.app_postgres_dsn,
+        job_id,
+        stage_id,
+    )
+    if timeline is None:
+        raise HTTPException(status_code=404, detail="Trajectory timeline not found")
+    return timeline
 
 
 @router.get("/jobs", response_model=MonomerMdJobPageResponse)
@@ -718,6 +818,7 @@ async def list_monomer_md_jobs(
     request: Request,
     run_mode: MonomerMdRunMode | None = None,
     active_only: bool = False,
+    include_result: bool = True,
     protocol: MonomerMdProtocol | None = None,
     job_status: MonomerMdJobStatus | None = Query(default=None, alias="status"),
     page: int = Query(default=1, ge=1),
@@ -728,13 +829,17 @@ async def list_monomer_md_jobs(
         request.app.state.settings.app_postgres_dsn,
         run_mode=run_mode,
         active_only=active_only,
+        include_result=include_result,
         protocol=protocol,
         job_status=job_status,
         page=page,
         page_size=page_size,
     )
     return MonomerMdJobPageResponse(
-        items=[MonomerMdJobStatusResponse(**item) for item in items],
+        items=[
+            MonomerMdJobListItemResponse(**_without_embedded_trajectory_timelines(item))
+            for item in items
+        ],
         total=total,
         page=page,
         page_size=page_size,

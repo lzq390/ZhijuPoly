@@ -36,6 +36,15 @@ vi.mock("./hooks/useTgStructureCanvas", () => ({
     clearCanvas: vi.fn().mockResolvedValue(true),
     importImageFile: vi.fn().mockResolvedValue(true),
     syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
+    peekCanvasState: vi.fn().mockResolvedValue({
+      smiles: "*CC*",
+      canvasDirty: false,
+      editorReady: true,
+      viewMode: "2d",
+      busy: false,
+      revisionKey: "app-canvas"
+    }),
+    captureCanvasImage: vi.fn().mockResolvedValue(null),
     resolveSmilesForSearch: vi.fn().mockResolvedValue("*CC*"),
     toggle3D: vi.fn().mockResolvedValue(true),
     copySmiles: vi.fn()
@@ -48,11 +57,11 @@ vi.mock("./components/StructurePreview3D", () => ({
 vi.mock("./components/DatabaseFilterPage", () => ({
   DatabaseFilterPage: () => <div data-testid="database-filter">数据库筛选</div>
 }));
-vi.mock("./components/DatabaseQueryPage", () => ({
-  DatabaseQueryPage: () => <div data-testid="database-query">数据库查询</div>
-}));
 vi.mock("./components/KnowledgeSearch", () => ({
   KnowledgeSearch: () => <div data-testid="knowledge">知识检索</div>
+}));
+vi.mock("./components/MonomerDftPage", () => ({
+  MonomerDftPage: () => <div data-testid="monomer-dft">单体 DFT</div>
 }));
 
 function structureIframe(container: HTMLElement) {
@@ -116,13 +125,28 @@ describe("App 结构工作台挂载与导航", () => {
 
     openDiscoverGroup();
     fireEvent.click(screen.getByRole("button", { name: "数据库查询" }));
-    await screen.findByTestId("database-query");
+    await screen.findByRole("heading", { name: "数据库查询" });
     expect(structureIframe(view.container)).toBeNull();
+    expect(screen.getByTitle("数据库查询结构编辑器")).toBeTruthy();
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "结构工作台" }));
     await waitFor(() => expect(structureIframe(view.container)).not.toBeNull());
     expect(structureIframe(view.container)).not.toBe(firstIframe);
     expect(view.container.querySelectorAll('iframe[title="结构工作台结构编辑器"]')).toHaveLength(1);
+  });
+
+  it("进入单体 DFT 时卸载隐藏的结构工作台 iframe", async () => {
+    const view = render(<App />);
+    expect(structureIframe(view.container)).not.toBeNull();
+
+    openBuildGroup();
+    fireEvent.click(screen.getByRole("button", { name: "单体 DFT" }));
+
+    await screen.findByTestId("monomer-dft");
+    expect(structureIframe(view.container)).toBeNull();
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(0);
+    expect(window.location.pathname).toBe("/monomer-dft");
   });
 
   it("均聚物预测深链和工作台跳转始终只挂载一个共享 Ketcher", async () => {
@@ -212,6 +236,69 @@ describe("App 结构工作台挂载与导航", () => {
     window.history.replaceState({}, "", "/homopolymer-property-prediction");
     render(<App />);
     expect(await screen.findByRole("heading", { name: "均聚物性质预测" })).toBeTruthy();
+
+    window.history.pushState({}, "", "/knowledge");
+    fireEvent(window, new PopStateEvent("popstate"));
+    expect(screen.queryByTestId("knowledge")).toBeNull();
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1));
+
+    deferred.resolve?.();
+    await screen.findByTestId("knowledge");
+  });
+
+  it("数据库查询深链使用单一共享 Ketcher，并在 popstate 前同步画板", async () => {
+    const deferred: { resolve?: () => void } = {};
+    mocks.syncSmilesFromCanvas.mockReturnValue(new Promise<string>((resolve) => {
+      deferred.resolve = () => resolve("*CC*");
+    }));
+    window.history.replaceState({}, "", "/database-query");
+    const view = render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "数据库查询" })).toBeTruthy();
+    expect(screen.getByTitle("数据库查询结构编辑器")).toBeTruthy();
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+
+    window.history.pushState({}, "", "/knowledge");
+    fireEvent(window, new PopStateEvent("popstate"));
+    expect(screen.queryByTestId("knowledge")).toBeNull();
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1));
+
+    deferred.resolve?.();
+    await screen.findByTestId("knowledge");
+  });
+
+  it("条件聚合物生成深链复用单一 Ketcher，并在 popstate 前同步画板", async () => {
+    const deferred: { resolve?: () => void } = {};
+    mocks.syncSmilesFromCanvas.mockReturnValue(new Promise<string>((resolve) => {
+      deferred.resolve = () => resolve("*CC*");
+    }));
+    window.history.replaceState({}, "", "/conditional-generation");
+    const view = render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "条件聚合物生成" })).toBeTruthy();
+    expect(screen.getByTitle("条件聚合物生成结构编辑器")).toBeTruthy();
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+
+    window.history.pushState({}, "", "/knowledge");
+    fireEvent(window, new PopStateEvent("popstate"));
+    expect(screen.queryByTestId("knowledge")).toBeNull();
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1));
+
+    deferred.resolve?.();
+    await screen.findByTestId("knowledge");
+  });
+
+  it("Tg 逆向设计深链复用单一 Ketcher，并在 popstate 前同步画板", async () => {
+    const deferred: { resolve?: () => void } = {};
+    mocks.syncSmilesFromCanvas.mockReturnValue(new Promise<string>((resolve) => {
+      deferred.resolve = () => resolve("*CC*");
+    }));
+    window.history.replaceState({}, "", "/reverse-design");
+    const view = render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Tg 逆向设计" })).toBeTruthy();
+    expect(screen.getByTitle("Tg 逆向设计结构编辑器")).toBeTruthy();
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
 
     window.history.pushState({}, "", "/knowledge");
     fireEvent(window, new PopStateEvent("popstate"));

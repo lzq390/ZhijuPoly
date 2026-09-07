@@ -84,10 +84,10 @@ function buildConditionExpression(
   const unit = propertyFilterOptionUnit(option);
   const unitSuffix = unit ? ` ${unit}` : "";
   if (minValue !== null && maxValue !== null) {
-    return `${label} ${formatExpressionNumber(minValue)}–${formatExpressionNumber(maxValue)}${unitSuffix}`;
+    return `${label}：${formatExpressionNumber(minValue)}–${formatExpressionNumber(maxValue)}${unitSuffix}`;
   }
-  if (minValue !== null) return `${label} ≥ ${formatExpressionNumber(minValue)}${unitSuffix}`;
-  return `${label} ≤ ${formatExpressionNumber(maxValue as number)}${unitSuffix}`;
+  if (minValue !== null) return `${label}：不低于 ${formatExpressionNumber(minValue)}${unitSuffix}`;
+  return `${label}：不高于 ${formatExpressionNumber(maxValue as number)}${unitSuffix}`;
 }
 
 function buildRequestCondition(
@@ -115,6 +115,30 @@ function buildRequestCondition(
 
 function initialDraft(optionKey = ""): PropertyFilterDraft {
   return { id: 1, optionKey, minValue: "", maxValue: "", error: null };
+}
+
+function reconcileDraftOptions(
+  drafts: PropertyFilterDraft[],
+  options: PropertyFilterOption[]
+): PropertyFilterDraft[] {
+  const validKeys = new Set(options.map((option) => option.option_key));
+  const preferredOption = preferredDefaultOption(options);
+  const replacementOptions = preferredOption
+    ? [preferredOption, ...options.filter((option) => option.option_key !== preferredOption.option_key)]
+    : options;
+  const usedKeys = new Set<string>();
+
+  return drafts.map((draft) => {
+    if (draft.optionKey && validKeys.has(draft.optionKey) && !usedKeys.has(draft.optionKey)) {
+      usedKeys.add(draft.optionKey);
+      return draft;
+    }
+
+    const replacement = replacementOptions.find((option) => !usedKeys.has(option.option_key));
+    const optionKey = replacement?.option_key ?? "";
+    if (optionKey) usedKeys.add(optionKey);
+    return { ...draft, optionKey, minValue: "", maxValue: "", error: null };
+  });
 }
 
 function optionsCatalogRevision(cache: { etag: string | null; cachedAt: number } | null) {
@@ -160,15 +184,7 @@ export function usePropertyFilter() {
     ) => {
       setOptionsData(response);
       setOptionsRevision(optionsCatalogRevision(cache));
-      const defaultKey = preferredDefaultOption(response.options)?.option_key ?? "";
-      const validKeys = new Set(response.options.map((option) => option.option_key));
-      setDrafts((current) =>
-        current.map((draft) =>
-          draft.optionKey && validKeys.has(draft.optionKey)
-            ? draft
-            : { ...draft, optionKey: defaultKey, minValue: "", maxValue: "", error: null }
-        )
-      );
+      setDrafts((current) => reconcileDraftOptions(current, response.options));
     };
     if (cached) applyOptions(cached.data, cached);
     const shouldRefresh = optionsRetryKey > 0 || !cached || !isPropertyFilterOptionsCacheFresh(cached);
@@ -192,9 +208,9 @@ export function usePropertyFilter() {
         if (!subscribed) return;
         applyOptions(cache.data, cache);
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!subscribed) return;
-        const message = error instanceof Error ? error.message : "属性目录加载失败。";
+        const message = "筛选属性加载失败，请稍后重试。";
         if (cached) {
           setOptionsRefreshError(message);
         } else {
@@ -242,14 +258,14 @@ export function usePropertyFilter() {
         if (requestId !== searchRequestId.current) return;
         setSearchData(response);
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (requestId !== searchRequestId.current) return;
         if (timedOut) {
-          setSearchError("数据库筛选请求超时，请缩小范围后重试。");
+          setSearchError("筛选等待时间过长，请缩小范围后重试。");
           return;
         }
         if (controller.signal.aborted) return;
-        setSearchError(error instanceof Error ? error.message : "数据库筛选失败。");
+        setSearchError("筛选暂时无法完成，请稍后重试。");
       })
       .finally(() => {
         window.clearTimeout(timeout);
@@ -275,6 +291,18 @@ export function usePropertyFilter() {
     () => options.filter((option) => option.filter_type === "raw"),
     [options]
   );
+  const unusedOptionCount = useMemo(() => {
+    const usedKeys = new Set(
+      drafts
+        .map((draft) => draft.optionKey)
+        .filter((optionKey) => optionKey && optionsByKey.has(optionKey))
+    );
+    return options.reduce(
+      (count, option) => count + (usedKeys.has(option.option_key) ? 0 : 1),
+      0
+    );
+  }, [drafts, options, optionsByKey]);
+  const canAddCondition = drafts.length < PROPERTY_FILTER_MAX_CONDITIONS && unusedOptionCount > 0;
 
   const draftExpression = useMemo(() => {
     const conditions = drafts.map((draft) => {
@@ -283,15 +311,15 @@ export function usePropertyFilter() {
       const minValue = parseBound(draft.minValue);
       const maxValue = parseBound(draft.maxValue);
       if (Number.isNaN(minValue) || Number.isNaN(maxValue)) {
-        return `${propertyFilterOptionShortLabel(option)}（阈值无效）`;
+        return `${propertyFilterOptionShortLabel(option)}：数值格式有误`;
       }
       if (minValue === null && maxValue === null) {
-        return `${propertyFilterOptionShortLabel(option)}（待填写阈值）`;
+        return `${propertyFilterOptionShortLabel(option)}：请填写最小值或最大值`;
       }
       return buildConditionExpression(option, minValue, maxValue);
     });
-    const expression = conditions.join(" ∧ ");
-    return queryDraft.trim() ? `${expression} · 关键词 “${queryDraft.trim()}”` : expression;
+    const expression = conditions.join("；");
+    return queryDraft.trim() ? `${expression}；关键词：“${queryDraft.trim()}”` : expression;
   }, [drafts, optionsByKey, queryDraft]);
 
   const updateBound = useCallback((id: number, field: "minValue" | "maxValue", value: string) => {
@@ -302,33 +330,37 @@ export function usePropertyFilter() {
   }, []);
 
   const selectProperty = useCallback((id: number, optionKey: string) => {
-    setDrafts((current) =>
-      current.map((draft) =>
-        draft.id === id
-          ? { ...draft, optionKey, minValue: "", maxValue: "", error: null }
-          : draft
-      )
-    );
+    setDrafts((current) => {
+      if (optionKey && current.some((draft) => draft.id !== id && draft.optionKey === optionKey)) {
+        return current;
+      }
+      return current.map((draft) => {
+        if (draft.id !== id || draft.optionKey === optionKey) return draft;
+        return { ...draft, optionKey, minValue: "", maxValue: "", error: null };
+      });
+    });
     setValidationError(null);
   }, []);
 
   const addCondition = useCallback(() => {
-    if (drafts.length >= PROPERTY_FILTER_MAX_CONDITIONS || options.length === 0) return;
-    const usedKeys = new Set(drafts.map((draft) => draft.optionKey));
-    const nextOption = standardizedOptions.find((option) => !usedKeys.has(option.option_key)) ??
-      options.find((option) => !usedKeys.has(option.option_key)) ??
-      options[0];
-    setDrafts((current) => [
-      ...current,
-      {
-        id: nextDraftId.current++,
-        optionKey: nextOption?.option_key ?? "",
-        minValue: "",
-        maxValue: "",
-        error: null
-      }
-    ]);
-  }, [drafts, options, standardizedOptions]);
+    setDrafts((current) => {
+      if (current.length >= PROPERTY_FILTER_MAX_CONDITIONS || options.length === 0) return current;
+      const usedKeys = new Set(current.map((draft) => draft.optionKey));
+      const nextOption = standardizedOptions.find((option) => !usedKeys.has(option.option_key)) ??
+        options.find((option) => !usedKeys.has(option.option_key));
+      if (!nextOption) return current;
+      return [
+        ...current,
+        {
+          id: nextDraftId.current++,
+          optionKey: nextOption.option_key,
+          minValue: "",
+          maxValue: "",
+          error: null
+        }
+      ];
+    });
+  }, [options, standardizedOptions]);
 
   const removeCondition = useCallback((id: number) => {
     setDrafts((current) => (current.length <= 1 ? current : current.filter((draft) => draft.id !== id)));
@@ -344,19 +376,25 @@ export function usePropertyFilter() {
 
     const filters: PropertyFilterCondition[] = [];
     const submittedConditions: SubmittedPropertyFilterCondition[] = [];
+    const optionUsage = new Map<string, number>();
+    drafts.forEach((draft) => {
+      if (draft.optionKey) optionUsage.set(draft.optionKey, (optionUsage.get(draft.optionKey) ?? 0) + 1);
+    });
     let firstError: string | null = null;
     const validatedDrafts = drafts.map((draft) => {
       const option = optionsByKey.get(draft.optionKey);
       let error: string | null = null;
       if (!option) {
         error = "请选择筛选属性。";
+      } else if ((optionUsage.get(draft.optionKey) ?? 0) > 1) {
+        error = "该属性已用于其他筛选条件。";
       }
       const minValue = parseBound(draft.minValue);
       const maxValue = parseBound(draft.maxValue);
       if (!error && (Number.isNaN(minValue) || Number.isNaN(maxValue))) {
         error = "请输入有效数字。";
       } else if (!error && minValue === null && maxValue === null) {
-        error = "至少填写一个阈值。";
+        error = "请填写最小值或最大值。";
       } else if (!error && minValue !== null && maxValue !== null && minValue > maxValue) {
         error = "最小值不能大于最大值。";
       }
@@ -382,7 +420,7 @@ export function usePropertyFilter() {
       return false;
     }
 
-    const expression = submittedConditions.map((condition) => condition.expression).join(" ∧ ");
+    const expression = submittedConditions.map((condition) => condition.expression).join("；");
     const requestKey = JSON.stringify({ filters, query: trimmedQuery, pageSize });
     setValidationError(null);
     if (searchLoading && page === 1 && submitted?.requestKey === requestKey) {
@@ -397,7 +435,7 @@ export function usePropertyFilter() {
       filters,
       conditions: submittedConditions,
       query: trimmedQuery,
-      expression: trimmedQuery ? `${expression} · 关键词 “${trimmedQuery}”` : expression,
+      expression: trimmedQuery ? `${expression}；关键词：“${trimmedQuery}”` : expression,
       requestKey
     });
     setDrawerOpen(true);
@@ -464,6 +502,8 @@ export function usePropertyFilter() {
     optionsByKey,
     standardizedOptions,
     rawOptions,
+    unusedOptionCount,
+    canAddCondition,
     optionsLoading: optionsPending,
     optionsPending,
     optionsRefreshing,

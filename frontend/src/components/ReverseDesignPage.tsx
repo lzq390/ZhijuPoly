@@ -1,29 +1,20 @@
+import { SlidersHorizontal, Sparkles } from "lucide-react";
 import {
-  Box,
-  Check,
-  Copy,
-  Eraser,
-  ImagePlus,
-  LoaderCircle,
-  MessageSquareText,
-  RefreshCcw,
-  Search,
-  SlidersHorizontal,
-  Sparkles,
-  X
-} from "lucide-react";
-import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
-  type CSSProperties,
-  type PointerEvent as ReactPointerEvent
+  type CSSProperties
 } from "react";
-import { useReverseDesign } from "../hooks/useReverseDesign";
-import { useTgStructureCanvas } from "../hooks/useTgStructureCanvas";
-import { standardizeSmiles } from "../services/api";
+import { REVERSE_DESIGN_DEMO_SMILES } from "../constants/reverseDesignDefaults";
 import type { TgAssistantSession } from "../hooks/useTgAssistant";
+import { useReverseDesign } from "../hooks/useReverseDesign";
+import {
+  useTgStructureCanvas,
+  type TgSmilesDraftState
+} from "../hooks/useTgStructureCanvas";
 import type {
   KnowledgeNavigationRequest,
   ReverseDesignTgRequest,
@@ -31,20 +22,22 @@ import type {
   TgAssistantOperation,
   TgAssistantPageContext
 } from "../types";
-import { ReverseDesignResults } from "./ReverseDesignResults";
-import { StructurePreview3D } from "./StructurePreview3D";
-import { TgAssistantPanel } from "./TgAssistantPanel";
-import "../styles/polymer-desktop.css";
+import "../styles/structure-workbench.css";
 import "../styles/reverse-design.css";
+import "../styles/tg-reverse-design-workbench.css";
+import type { StructureCanvasOwnerHandle } from "./StructureWorkbenchPage";
+import { ReverseDesignDrawer } from "./reverse-design/ReverseDesignDrawer";
+import {
+  ReverseDesignUtilityPanels,
+  type ReverseDesignOpenPanel
+} from "./reverse-design/ReverseDesignUtilityPanels";
+import { StructureCanvasSurface } from "./structure-workbench/StructureCanvasSurface";
 
 type ReverseDesignPageProps = {
   structure: StructureWorkspaceContext;
   onOpenKnowledge: (request: KnowledgeNavigationRequest) => void;
   assistant: TgAssistantSession;
 };
-
-type OpenPanel = "parameters" | "assistant" | null;
-type SmilesSyncState = "synced" | "pending" | "syncing" | "error";
 
 type TgAssistantSuggestionContext = {
   isLoading: boolean;
@@ -53,14 +46,11 @@ type TgAssistantSuggestionContext = {
   resultCount: number;
   parametersDirty: boolean;
   editorReady: boolean;
-  smilesState: SmilesSyncState;
+  smilesState: TgSmilesDraftState;
   hasSmiles: boolean;
   validationMessage: string | null;
   targetTg: number | null;
 };
-
-const DRAWER_MIN_WIDTH = 320;
-const DRAWER_MAX_WIDTH = 560;
 
 export function getTgAssistantSuggestions({
   isLoading,
@@ -154,15 +144,8 @@ export function getTgAssistantSuggestions({
   ];
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
 function validateRequest(request: ReverseDesignTgRequest) {
-  if (
-    request.target_tg === null ||
-    !Number.isFinite(request.target_tg)
-  ) {
+  if (request.target_tg === null || !Number.isFinite(request.target_tg)) {
     return "目标 Tg 必须为有效数值。";
   }
   if (
@@ -186,9 +169,7 @@ function requestsDiffer(
   draft: ReverseDesignTgRequest,
   submitted: ReverseDesignTgRequest | null
 ) {
-  if (!submitted) {
-    return false;
-  }
+  if (!submitted) return false;
   return (
     draft.target_tg !== submitted.target_tg ||
     draft.similarity_threshold !== submitted.similarity_threshold ||
@@ -196,193 +177,118 @@ function requestsDiffer(
   );
 }
 
-export function ReverseDesignPage({
-  structure,
-  onOpenKnowledge,
-  assistant
-}: ReverseDesignPageProps) {
+export const ReverseDesignPage = forwardRef<
+  StructureCanvasOwnerHandle,
+  ReverseDesignPageProps
+>(function ReverseDesignPage({ structure, onOpenKnowledge, assistant }, forwardedRef) {
   const reverseDesign = useReverseDesign();
-  const [openPanel, setOpenPanel] = useState<OpenPanel>(null);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [openPanel, setOpenPanel] = useState<ReverseDesignOpenPanel>(null);
+  const [hasActivated3D, setHasActivated3D] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [hasRun, setHasRun] = useState(false);
   const [drawerWidth, setDrawerWidth] = useState(380);
   const [resultPage, setResultPage] = useState(1);
-  const [smilesDraft, setSmilesDraft] = useState(structure.smiles);
-  const [smilesSyncState, setSmilesSyncState] = useState<SmilesSyncState>("synced");
-  const [smilesSyncError, setSmilesSyncError] = useState<string | null>(null);
   const parameterPanelRef = useRef<HTMLElement | null>(null);
   const assistantPanelRef = useRef<HTMLElement | null>(null);
   const parameterButtonRef = useRef<HTMLButtonElement | null>(null);
   const assistantButtonRef = useRef<HTMLButtonElement | null>(null);
-  const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const restoreFocusFrameRef = useRef<number | null>(null);
   const revisionRef = useRef(globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-tg`);
   const lastCanvasRevisionRef = useRef<string | null>(null);
-  const smilesDraftRef = useRef(structure.smiles);
-  const lastSharedSmilesRef = useRef(structure.smiles);
-  const smilesDraftRevisionRef = useRef(0);
-  const smilesSyncTimerRef = useRef<number | null>(null);
-  const pendingSmilesSyncRef = useRef<{ revision: number; value: string } | null>(null);
-  const smilesSyncRunningRef = useRef(false);
-  const activeSmilesSyncRevisionRef = useRef<number | null>(null);
 
   const handleStructureChanged = useCallback(() => {
     revisionRef.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-structure`;
     reverseDesign.reset();
     setHasRun(false);
-    setIsDrawerOpen(false);
+    setDrawerOpen(false);
     setResultPage(1);
     assistant.addDivider("结构已变化");
   }, [assistant, reverseDesign]);
 
-  const canvas = useTgStructureCanvas({
-    structure,
-    onStructureChanged: handleStructureChanged
-  });
+  const canvas = useTgStructureCanvas({ structure, onStructureChanged: handleStructureChanged });
 
   function markAssistantRevision(label: string) {
     revisionRef.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${label}`;
   }
 
-  function cancelPendingSmilesSync() {
-    if (smilesSyncTimerRef.current !== null) {
-      window.clearTimeout(smilesSyncTimerRef.current);
-      smilesSyncTimerRef.current = null;
+  const closePanel = useCallback((restoreFocus = true) => {
+    const panel = openPanel;
+    setOpenPanel(null);
+    if (!panel || !restoreFocus) return;
+    if (restoreFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(restoreFocusFrameRef.current);
     }
-    pendingSmilesSyncRef.current = null;
-    smilesDraftRevisionRef.current += 1;
-  }
-
-  async function drainSmilesSyncQueue() {
-    if (smilesSyncRunningRef.current) return;
-    smilesSyncRunningRef.current = true;
-    try {
-      while (pendingSmilesSyncRef.current) {
-        const task = pendingSmilesSyncRef.current;
-        pendingSmilesSyncRef.current = null;
-        if (task.revision !== smilesDraftRevisionRef.current) continue;
-        activeSmilesSyncRevisionRef.current = task.revision;
-        setSmilesSyncState("syncing");
-        setSmilesSyncError(null);
-        const isCurrent = () => task.revision === smilesDraftRevisionRef.current;
-        let applied = false;
-        let synchronizedSmiles = "";
-        if (!task.value.trim()) {
-          applied = await canvas.clearCanvas({ isCurrent });
-        } else {
-          try {
-            const result = await standardizeSmiles({ smiles: task.value });
-            if (!isCurrent()) continue;
-            synchronizedSmiles = result.standardized_smiles.trim();
-            applied = await canvas.loadStructure(synchronizedSmiles, { isCurrent });
-          } catch (error) {
-            if (!isCurrent()) continue;
-            console.error("Failed to standardize editable Tg SMILES", error);
-            setSmilesSyncState("error");
-            setSmilesSyncError("SMILES 无效或尚未完整，原画板未修改。");
-            continue;
-          }
-        }
-        if (!isCurrent()) continue;
-        if (!applied) {
-          setSmilesSyncState("error");
-          setSmilesSyncError("结构未能同步到画板，请检查 SMILES 或编辑器状态。");
-          continue;
-        }
-        const peek = await canvas.peekCanvasState();
-        if (!isCurrent()) continue;
-        const nextValue = task.value.trim() ? (peek.smiles || synchronizedSmiles) : "";
-        lastSharedSmilesRef.current = nextValue;
-        smilesDraftRef.current = nextValue;
-        setSmilesDraft(nextValue);
-        setSmilesSyncState("synced");
-        setSmilesSyncError(null);
-      }
-    } finally {
-      activeSmilesSyncRevisionRef.current = null;
-      smilesSyncRunningRef.current = false;
-      if (pendingSmilesSyncRef.current) queueMicrotask(() => void drainSmilesSyncQueue());
-    }
-  }
-
-  function updateSmilesDraft(nextValue: string) {
-    if (nextValue.length > 8000) return;
-    if (smilesSyncTimerRef.current !== null) {
-      window.clearTimeout(smilesSyncTimerRef.current);
-      smilesSyncTimerRef.current = null;
-    }
-    const nextRevision = smilesDraftRevisionRef.current + 1;
-    smilesDraftRevisionRef.current = nextRevision;
-    smilesDraftRef.current = nextValue;
-    setSmilesDraft(nextValue);
-    setSmilesSyncError(null);
-    markAssistantRevision("smiles-draft");
-    if (nextValue.trim() === lastSharedSmilesRef.current.trim()) {
-      pendingSmilesSyncRef.current = null;
-      setSmilesSyncState("synced");
-      return;
-    }
-    setSmilesSyncState("pending");
-    smilesSyncTimerRef.current = window.setTimeout(() => {
-      smilesSyncTimerRef.current = null;
-      pendingSmilesSyncRef.current = { revision: nextRevision, value: nextValue };
-      void drainSmilesSyncQueue();
-    }, 500);
-  }
-
-  async function adoptCanvasSmiles() {
-    const peek = await canvas.peekCanvasState();
-    const nextValue = peek.smiles;
-    lastSharedSmilesRef.current = nextValue;
-    smilesDraftRef.current = nextValue;
-    setSmilesDraft(nextValue);
-    setSmilesSyncState("synced");
-    setSmilesSyncError(null);
-  }
-
-  async function clearCanvasFromToolbar() {
-    cancelPendingSmilesSync();
-    if (await canvas.clearCanvas()) await adoptCanvasSmiles();
-  }
-
-  async function importImageFromToolbar(file: File) {
-    cancelPendingSmilesSync();
-    if (await canvas.importImageFile(file)) await adoptCanvasSmiles();
-  }
-
-  async function syncCanvasFromToolbar() {
-    cancelPendingSmilesSync();
-    await canvas.syncSmilesFromCanvas();
-    await adoptCanvasSmiles();
-  }
+    restoreFocusFrameRef.current = window.requestAnimationFrame(() => {
+      restoreFocusFrameRef.current = null;
+      (panel === "parameters" ? parameterButtonRef.current : assistantButtonRef.current)?.focus();
+    });
+  }, [openPanel]);
 
   useEffect(() => {
-    const sharedSmiles = structure.smiles;
-    if (sharedSmiles === lastSharedSmilesRef.current) return;
-    lastSharedSmilesRef.current = sharedSmiles;
-    const activeRevision = activeSmilesSyncRevisionRef.current;
-    if (activeRevision !== null && activeRevision !== smilesDraftRevisionRef.current) return;
-    if (activeRevision === null) cancelPendingSmilesSync();
-    smilesDraftRef.current = sharedSmiles;
-    setSmilesDraft(sharedSmiles);
-    setSmilesSyncState("synced");
-    setSmilesSyncError(null);
-  }, [structure.smiles]);
-
-  useEffect(() => () => {
-    if (smilesSyncTimerRef.current !== null) {
-      window.clearTimeout(smilesSyncTimerRef.current);
-    }
-    pendingSmilesSyncRef.current = null;
-    smilesDraftRevisionRef.current += 1;
+    return () => {
+      if (restoreFocusFrameRef.current !== null) {
+        window.cancelAnimationFrame(restoreFocusFrameRef.current);
+      }
+    };
   }, []);
 
-  const validationMessage = validateRequest(reverseDesign.request);
-  const parametersDirty = requestsDiffer(
-    reverseDesign.request,
-    reverseDesign.submittedRequest
+  useEffect(() => {
+    if (!openPanel) return;
+    const panel = openPanel === "parameters" ? parameterPanelRef.current : assistantPanelRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      panel
+        ?.querySelector<HTMLElement>(
+          openPanel === "parameters"
+            ? ".np-tg-field input"
+            : 'textarea[aria-label="发送给 AI 助手的消息"]'
+        )
+        ?.focus();
+    });
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (
+        openPanel === "assistant" &&
+        target instanceof Element &&
+        target.closest(".np-sw-drawer")
+      ) {
+        return;
+      }
+      const trigger = openPanel === "parameters" ? parameterButtonRef.current : assistantButtonRef.current;
+      if (!panel?.contains(target) && !trigger?.contains(target)) closePanel(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closePanel(true);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [closePanel, openPanel]);
+
+  useImperativeHandle(
+    forwardedRef,
+    () => ({
+      async syncBeforeLeave() {
+        if (!(await canvas.flushSmilesDraft())) return;
+        await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
+      }
+    }),
+    [canvas]
   );
+
+  const validationMessage = validateRequest(reverseDesign.request);
+  const parametersDirty = requestsDiffer(reverseDesign.request, reverseDesign.submittedRequest);
   const operationBusy = canvas.isBusy || reverseDesign.isLoading;
-  const smilesSyncBlocked = smilesSyncState !== "synced";
+  const smilesSyncBlocked = canvas.smilesDraftState !== "synced";
   const searchFailed = Boolean(reverseDesign.error) ||
     reverseDesign.job?.status === "failed" ||
     reverseDesign.job?.status === "cancelled";
@@ -397,6 +303,9 @@ export function ReverseDesignPage({
 
   const revisionKey = JSON.stringify([
     structure.smiles,
+    canvas.smilesDraft,
+    canvas.smilesDraftState,
+    canvas.smilesDraftError,
     reverseDesign.request.target_tg,
     reverseDesign.request.similarity_threshold,
     reverseDesign.request.candidate_size,
@@ -420,108 +329,23 @@ export function ReverseDesignPage({
   }, [reverseDesign.data]);
 
   function updateRequest(partial: Partial<ReverseDesignTgRequest>) {
-    reverseDesign.setRequest({
-      ...reverseDesign.request,
-      ...partial
-    });
+    reverseDesign.setRequest({ ...reverseDesign.request, ...partial });
   }
 
-  function restorePanelFocus(panel: Exclude<OpenPanel, null>) {
-    const target =
-      panel === "parameters" ? parameterButtonRef.current : assistantButtonRef.current;
-    window.requestAnimationFrame(() => target?.focus());
-  }
-
-  function closePanel(restoreFocus = true) {
-    if (openPanel && restoreFocus) {
-      restorePanelFocus(openPanel);
-    }
-    setOpenPanel(null);
-  }
-
-  function togglePanel(panel: Exclude<OpenPanel, null>) {
-    setOpenPanel((current) => (current === panel ? null : panel));
+  function togglePanel(panel: Exclude<ReverseDesignOpenPanel, null>) {
+    if (openPanel === panel) closePanel(true);
+    else setOpenPanel(panel);
   }
 
   function openDrawer() {
-    setOpenPanel((current) => (current === "parameters" ? null : current));
-    setIsDrawerOpen(true);
+    setOpenPanel((current) => current === "parameters" ? null : current);
+    setDrawerOpen(true);
   }
 
-  useEffect(() => {
-    if (!openPanel) {
-      return;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      const target = event.target;
-      if (!(target instanceof Node)) {
-        return;
-      }
-      if (
-        openPanel === "assistant" &&
-        target instanceof Element &&
-        target.closest(".tg-results-drawer")
-      ) {
-        return;
-      }
-      const panel =
-        openPanel === "parameters" ? parameterPanelRef.current : assistantPanelRef.current;
-      const trigger =
-        openPanel === "parameters" ? parameterButtonRef.current : assistantButtonRef.current;
-      if (!panel?.contains(target) && !trigger?.contains(target)) {
-        closePanel(false);
-      }
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closePanel(true);
-      }
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [openPanel]);
-
-  useEffect(() => {
-    function handlePointerMove(event: PointerEvent) {
-      const resizeState = resizeStateRef.current;
-      if (!resizeState) {
-        return;
-      }
-      const nextWidth = resizeState.startWidth + resizeState.startX - event.clientX;
-      setDrawerWidth(clamp(nextWidth, DRAWER_MIN_WIDTH, DRAWER_MAX_WIDTH));
-    }
-
-    function stopResize() {
-      resizeStateRef.current = null;
-      document.body.classList.remove("tg-is-resizing");
-    }
-
-    document.addEventListener("pointermove", handlePointerMove);
-    document.addEventListener("pointerup", stopResize);
-    document.addEventListener("pointercancel", stopResize);
-    return () => {
-      document.removeEventListener("pointermove", handlePointerMove);
-      document.removeEventListener("pointerup", stopResize);
-      document.removeEventListener("pointercancel", stopResize);
-      document.body.classList.remove("tg-is-resizing");
-    };
-  }, []);
-
-  function startDrawerResize(event: ReactPointerEvent<HTMLDivElement>) {
-    event.preventDefault();
-    resizeStateRef.current = {
-      startX: event.clientX,
-      startWidth: drawerWidth
-    };
-    document.body.classList.add("tg-is-resizing");
+  async function toggle3D() {
+    const activating = !canvas.isFlipped;
+    const changed = await canvas.toggle3D();
+    if (changed && activating) setHasActivated3D(true);
   }
 
   async function performSearch(draft: ReverseDesignTgRequest) {
@@ -531,14 +355,10 @@ export function ReverseDesignPage({
     }
     if (validateRequest(draft) || canvas.isBusy || reverseDesign.isLoading) return false;
     const smiles = await canvas.resolveSmilesForSearch();
-    if (!smiles) {
-      return false;
-    }
+    if (!smiles) return false;
+    canvas.setFeedback(null);
 
-    const request: ReverseDesignTgRequest = {
-      ...draft,
-      smiles
-    };
+    const request: ReverseDesignTgRequest = { ...draft, smiles };
     setResultPage(1);
     setHasRun(true);
     openDrawer();
@@ -548,9 +368,7 @@ export function ReverseDesignPage({
   }
 
   async function handleSearch() {
-    if (!(await performSearch(reverseDesign.request))) {
-      setOpenPanel("parameters");
-    }
+    if (!(await performSearch(reverseDesign.request))) setOpenPanel("parameters");
   }
 
   async function captureAssistantContext(): Promise<TgAssistantPageContext> {
@@ -560,15 +378,15 @@ export function ReverseDesignPage({
     }
     lastCanvasRevisionRef.current = peek.revisionKey;
     const request = reverseDesign.request;
-    const validationError = smilesSyncError
-      ? { field: "structure" as const, message: smilesSyncError }
+    const validationError = canvas.smilesDraftError
+      ? { field: "structure" as const, message: canvas.smilesDraftError }
       : request.target_tg === null || !Number.isFinite(request.target_tg)
-      ? { field: "target_tg" as const, message: "目标 Tg 必须为有效数值。" }
-      : !Number.isFinite(request.similarity_threshold) || request.similarity_threshold < 0 || request.similarity_threshold > 1
-        ? { field: "similarity_threshold" as const, message: "相似度阈值必须在 0–1 之间。" }
-        : !Number.isInteger(request.candidate_size) || request.candidate_size < 1 || request.candidate_size > 200
-          ? { field: "candidate_size" as const, message: "候选数量必须为 1–200 的整数。" }
-          : null;
+        ? { field: "target_tg" as const, message: "目标 Tg 必须为有效数值。" }
+        : !Number.isFinite(request.similarity_threshold) || request.similarity_threshold < 0 || request.similarity_threshold > 1
+          ? { field: "similarity_threshold" as const, message: "相似度阈值必须在 0–1 之间。" }
+          : !Number.isInteger(request.candidate_size) || request.candidate_size < 1 || request.candidate_size > 200
+            ? { field: "candidate_size" as const, message: "候选数量必须为 1–200 的整数。" }
+            : null;
     const start = (resultPage - 1) * 5;
     const candidates = reverseDesign.data?.results.slice(start, start + 5) ?? [];
     const submitted = reverseDesign.submittedRequest;
@@ -578,11 +396,11 @@ export function ReverseDesignPage({
       captured_at: new Date().toISOString(),
       action_context_revision: revisionRef.current,
       structure: {
-        smiles: (smilesSyncBlocked ? smilesDraftRef.current.trim() : peek.smiles) || null,
+        smiles: (smilesSyncBlocked ? canvas.smilesDraft.trim() : peek.smiles) || null,
         canvas_dirty: peek.canvasDirty || smilesSyncBlocked,
         editor_ready: peek.editorReady,
         view_mode: peek.viewMode,
-        busy: peek.busy || smilesSyncState === "syncing"
+        busy: peek.busy || canvas.smilesDraftState === "syncing"
       },
       draft_parameters: {
         target_tg: Number.isFinite(request.target_tg) ? request.target_tg : null,
@@ -629,7 +447,7 @@ export function ReverseDesignPage({
         total: reverseDesign.data.total,
         page: resultPage,
         page_size: 5,
-        drawer_open: isDrawerOpen,
+        drawer_open: drawerOpen,
         visible_candidates: candidates.map((candidate) => ({
           rank: candidate.rank,
           polymer_smiles: candidate.canonical_polym || candidate.polymer_smiles || null,
@@ -661,6 +479,7 @@ export function ReverseDesignPage({
     if (reverseDesign.isLoading) {
       return { status: "expired", detail: "搜索状态已变化，当前操作不能执行。" };
     }
+
     let nextRequest = { ...reverseDesign.request };
     let runSearch = false;
     let hasParameterChange = false;
@@ -668,6 +487,7 @@ export function ReverseDesignPage({
     if (!["set_parameters", "run_search", "set_parameters,run_search", "set_structure"].includes(operationTypes)) {
       return { status: "failed", detail: "操作组合无效，未修改页面。" };
     }
+
     if (operationTypes === "set_structure") {
       if (smilesSyncBlocked) {
         return { status: "expired", detail: "SMILES 输入状态已变化，请等待同步后重新生成操作。" };
@@ -684,16 +504,23 @@ export function ReverseDesignPage({
         ? { status: "applied" }
         : { status: "failed", detail: "结构加载失败，原画板已恢复。" };
     }
+
     for (const operation of operations) {
       if (operation.type === "set_parameters") {
         const patch = operation.parameters;
         if (patch.target_tg !== undefined && (patch.target_tg === null || !Number.isFinite(patch.target_tg))) {
           return { status: "failed", detail: "目标 Tg 参数无效。" };
         }
-        if (patch.similarity_threshold !== undefined && (!Number.isFinite(patch.similarity_threshold) || patch.similarity_threshold < 0 || patch.similarity_threshold > 1)) {
+        if (
+          patch.similarity_threshold !== undefined &&
+          (!Number.isFinite(patch.similarity_threshold) || patch.similarity_threshold < 0 || patch.similarity_threshold > 1)
+        ) {
           return { status: "failed", detail: "相似度阈值参数无效。" };
         }
-        if (patch.candidate_size !== undefined && (!Number.isInteger(patch.candidate_size) || patch.candidate_size < 1 || patch.candidate_size > 200)) {
+        if (
+          patch.candidate_size !== undefined &&
+          (!Number.isInteger(patch.candidate_size) || patch.candidate_size < 1 || patch.candidate_size > 200)
+        ) {
           return { status: "failed", detail: "候选数量参数无效。" };
         }
         hasParameterChange = Object.entries(patch).some(
@@ -704,6 +531,7 @@ export function ReverseDesignPage({
         runSearch = true;
       }
     }
+
     if (operations.some((operation) => operation.type === "set_parameters") && !hasParameterChange) {
       return { status: "failed", detail: "当前参数已经是建议值，未执行重复修改。" };
     }
@@ -730,19 +558,21 @@ export function ReverseDesignPage({
         Number.isFinite(reverseDesign.request.similarity_threshold) &&
         reverseDesign.request.similarity_threshold >= 0 &&
         reverseDesign.request.similarity_threshold <= 1
-        ? reverseDesign.request.similarity_threshold
-        : null,
+          ? reverseDesign.request.similarity_threshold
+          : null,
       candidate_size:
         Number.isInteger(reverseDesign.request.candidate_size) &&
         reverseDesign.request.candidate_size >= 1 &&
         reverseDesign.request.candidate_size <= 200
-        ? reverseDesign.request.candidate_size
-        : null
+          ? reverseDesign.request.candidate_size
+          : null
     }),
-    getStructureSmiles: () => smilesSyncState === "synced" ? (smilesDraftRef.current.trim() || null) : null,
+    getStructureSmiles: () => canvas.smilesDraftState === "synced"
+      ? (canvas.smilesDraft.trim() || null)
+      : null,
     navigate: (target) => {
       if (target === "parameters") setOpenPanel("parameters");
-      else setIsDrawerOpen(true);
+      else setDrawerOpen(true);
     },
     applyOperations: applyAssistantOperations
   }));
@@ -754,8 +584,8 @@ export function ReverseDesignPage({
     resultCount: reverseDesign.data?.total ?? 0,
     parametersDirty,
     editorReady: canvas.isEditorReady,
-    smilesState: smilesSyncState,
-    hasSmiles: Boolean(smilesDraft.trim()),
+    smilesState: canvas.smilesDraftState,
+    hasSmiles: Boolean(canvas.smilesDraft.trim()),
     validationMessage,
     targetTg: Number.isFinite(reverseDesign.request.target_tg)
       ? reverseDesign.request.target_tg
@@ -772,372 +602,118 @@ export function ReverseDesignPage({
           ? `当前有 ${reverseDesign.data.total} 个候选，可分析当前页 5 条。`
           : !canvas.isEditorReady
             ? "结构编辑器尚未就绪，请稍后重试。"
-            : !smilesDraft.trim()
+            : !canvas.smilesDraft.trim()
               ? "先绘制或导入结构，再设置 Tg、相似度阈值和候选数量。"
               : validationMessage
                 ? validationMessage
                 : "当前结构和参数已准备完成，可以开始搜索或向 AI 提问。";
 
-  const rootStyle = {
-    "--tg-drawer-width": `${drawerWidth}px`
-  } as CSSProperties;
+  function parameterStatusText() {
+    if (canvas.smilesDraftError) return canvas.smilesDraftError;
+    if (canvas.smilesDraftState === "pending") return "等待 SMILES 输入完成后自动同步…";
+    if (canvas.smilesDraftState === "syncing") return "正在校验并同步结构，请稍候…";
+    if (validationMessage) return validationMessage;
+    if (parametersDirty) return "参数已修改，需要重新搜索。";
+    return "参数已就绪 · 搜索结果按 Tg 距离和结构相似度筛选。";
+  }
+
+  const parameterHasError = Boolean(canvas.smilesDraftError || validationMessage);
+  const workbenchStyle = { "--np-sw-drawer-width": `${drawerWidth}px` } as CSSProperties;
 
   return (
     <div
-      className={`polymer-desktop-page polymer-desktop-page--embedded tg-reverse-page${isDrawerOpen ? " has-open-drawer" : ""}`}
-      style={rootStyle}
+      className="np-structure-workbench np-tg-reverse-design"
+      data-module="tg-reverse-design"
+      style={workbenchStyle}
     >
-      <h1 className="tg-page-title">Tg 逆向设计</h1>
+      <div className={`np-sw-page${drawerOpen ? " has-open-drawer" : ""}`}>
+        <h1 className="np-sw-page-title">Tg 逆向设计</h1>
 
-      <div className="tg-workbench-shell">
-        <div className="tg-workbench-column">
-          <header className="polymer-module-header tg-toolbar-row">
-            <input
-              ref={canvas.fileInputRef}
-              className="tg-visually-hidden"
-              type="file"
-              accept="image/*"
-              aria-label="导入结构图片"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
-                if (file) {
-                  void importImageFromToolbar(file);
+        <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
+          <main className="np-sw-workspace">
+            <StructureCanvasSurface
+              structure={structure}
+              canvas={canvas}
+              hasActivated3D={hasActivated3D}
+              operationBusy={operationBusy}
+              editorTitle="Tg 逆向设计结构编辑器"
+              utilityActions={[
+                {
+                  id: "tg-search-parameters",
+                  label: "搜索参数",
+                  icon: <SlidersHorizontal aria-hidden="true" />,
+                  active: openPanel === "parameters",
+                  buttonRef: parameterButtonRef,
+                  controls: "tg-parameter-panel",
+                  onClick: () => togglePanel("parameters")
+                },
+                {
+                  id: "tg-assistant",
+                  label: "AI 助手",
+                  icon: <Sparkles aria-hidden="true" />,
+                  active: openPanel === "assistant",
+                  busy: assistant.isStreaming,
+                  buttonRef: assistantButtonRef,
+                  controls: "tg-assistant-panel",
+                  onClick: () => togglePanel("assistant")
                 }
-              }}
+              ]}
+              onLoadExample={() => canvas.loadStructure(REVERSE_DESIGN_DEMO_SMILES)}
+              onImportFile={(file) => canvas.importImageFile(file)}
+              onClear={() => canvas.clearCanvas()}
+              onSync={() => canvas.syncSmilesFromCanvas()}
+              onToggle3D={toggle3D}
+              onSmilesDraftChange={() => markAssistantRevision("smiles-draft")}
             />
-            <div className="header-actions tg-toolbar" aria-label="Tg 结构工具栏">
-              <button
-                type="button"
-                className="btn btn--outline btn--sm tg-tool-button"
-                id="btn-import-img"
-                onClick={() => canvas.fileInputRef.current?.click()}
-                disabled={operationBusy}
-              >
-                {canvas.isImportingImage ? <LoaderCircle className="animate-spin" /> : <ImagePlus />}
-                导入图片
-              </button>
-              <button
-                type="button"
-                className="btn btn--outline btn--sm tg-tool-button"
-                id="btn-clear-canvas"
-                onClick={() => void clearCanvasFromToolbar()}
-                disabled={operationBusy || !canvas.isEditorReady}
-              >
-                {canvas.isClearing ? <LoaderCircle className="animate-spin" /> : <Eraser />}
-                清空画布
-              </button>
-              <button
-                type="button"
-                className="btn btn--outline btn--sm tg-tool-button"
-                id="btn-sync-canvas"
-                onClick={() => void syncCanvasFromToolbar()}
-                disabled={operationBusy || !canvas.isEditorReady}
-              >
-                {canvas.isSyncing ? <LoaderCircle className="animate-spin" /> : <RefreshCcw />}
-                生成SMILES
-              </button>
-              <button
-                type="button"
-                className={`btn btn--outline btn--sm tg-tool-button${canvas.isFlipped ? " active" : ""}`}
-                id="btn-toggle-3d"
-                onClick={() => void canvas.toggle3D()}
-                disabled={operationBusy || smilesSyncBlocked || !canvas.isEditorReady}
-              >
-                {canvas.isFlipping ? <LoaderCircle className="animate-spin" /> : <Box />}
-                {canvas.isFlipped ? "2D画布" : "3D构象"}
-              </button>
-              <span className="tg-toolbar-separator" aria-hidden="true" />
-              <button
-                ref={parameterButtonRef}
-                type="button"
-                className={`btn btn--outline btn--sm tg-icon-tool${openPanel === "parameters" ? " is-active" : ""}`}
-                aria-label="搜索参数"
-                title="搜索参数"
-                aria-expanded={openPanel === "parameters"}
-                aria-controls="tg-parameter-panel"
-                onClick={() => togglePanel("parameters")}
-              >
-                <SlidersHorizontal />
-              </button>
-              <button
-                ref={assistantButtonRef}
-                type="button"
-                className={`btn btn--outline btn--sm tg-icon-tool${openPanel === "assistant" ? " is-active" : ""}`}
-                aria-label="AI 助手"
-                title="AI 助手"
-                aria-expanded={openPanel === "assistant"}
-                aria-controls="tg-assistant-panel"
-                onClick={() => togglePanel("assistant")}
-              >
-                <Sparkles />
-              </button>
-            </div>
 
-            <section
-              ref={parameterPanelRef}
-              id="tg-parameter-panel"
-              className={`tg-parameter-panel${openPanel === "parameters" ? " is-open" : ""}`}
-              role="dialog"
-              aria-modal="false"
-              aria-labelledby="tg-parameter-title"
-              aria-hidden={openPanel !== "parameters"}
-              inert={openPanel !== "parameters"}
-            >
-              <header>
-                <h2 id="tg-parameter-title">Tg 搜索参数</h2>
-                <button type="button" aria-label="收起搜索参数" onClick={() => closePanel()}>
-                  <X />
-                </button>
-              </header>
-              <div className="tg-parameter-fields">
-                <label>
-                  <span>目标 Tg</span>
-                  <span className="tg-input-shell">
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={reverseDesign.request.target_tg ?? ""}
-                      onChange={(event) =>
-                        updateRequest({
-                          target_tg:
-                            event.currentTarget.value === ""
-                              ? null
-                              : Number(event.currentTarget.value)
-                        })
-                      }
-                    />
-                    <small>°C</small>
-                  </span>
-                </label>
-                <label>
-                  <span>相似度阈值</span>
-                  <span className="tg-input-shell">
-                    <input
-                      type="number"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      value={
-                        Number.isNaN(reverseDesign.request.similarity_threshold)
-                          ? ""
-                          : reverseDesign.request.similarity_threshold
-                      }
-                      onChange={(event) =>
-                        updateRequest({
-                          similarity_threshold:
-                            event.currentTarget.value === ""
-                              ? Number.NaN
-                              : Number(event.currentTarget.value)
-                        })
-                      }
-                    />
-                  </span>
-                </label>
-                <label>
-                  <span>候选数量</span>
-                  <span className="tg-input-shell">
-                    <input
-                      type="number"
-                      min="1"
-                      max="200"
-                      step="1"
-                      value={
-                        Number.isNaN(reverseDesign.request.candidate_size)
-                          ? ""
-                          : reverseDesign.request.candidate_size
-                      }
-                      onChange={(event) =>
-                        updateRequest({
-                          candidate_size:
-                            event.currentTarget.value === ""
-                              ? Number.NaN
-                              : Number(event.currentTarget.value)
-                        })
-                      }
-                    />
-                    <small>个</small>
-                  </span>
-                </label>
-              </div>
-              <div className="tg-parameter-validation" role="status" aria-live="polite">
-                {validationMessage ||
-                  (parametersDirty ? "参数已修改，需要重新搜索。" : "参数已就绪。")}
-              </div>
-              <button
-                type="button"
-                className="tg-search-button"
-                onClick={() => void handleSearch()}
-                disabled={Boolean(validationMessage) || operationBusy || smilesSyncBlocked}
-              >
-                {reverseDesign.isLoading ? <LoaderCircle className="animate-spin" /> : <Search />}
-                搜索
-              </button>
-            </section>
-
-            <section
-              ref={assistantPanelRef}
-              id="tg-assistant-panel"
-              className={`tg-assistant-panel${openPanel === "assistant" ? " is-open" : ""}`}
-              role="dialog"
-              aria-modal="false"
-              aria-labelledby="tg-assistant-title"
-              aria-hidden={openPanel !== "assistant"}
-              inert={openPanel !== "assistant"}
-            >
-              <TgAssistantPanel
-                assistant={assistant}
-                onClose={() => closePanel()}
-                contextLabels={[
-                  smilesSyncState === "syncing"
-                    ? "结构同步中"
-                    : smilesSyncBlocked
-                      ? "结构输入待修正"
-                      : smilesDraft.trim()
-                        ? "结构已准备"
-                        : "尚未添加结构",
-                  `Tg ${reverseDesign.request.target_tg ?? "—"} °C`,
-                  resultStatus
-                ]}
-                localDiagnostic={localDiagnostic}
-                contextualSuggestions={assistantSuggestions}
-              />
-            </section>
-          </header>
-
-          <section className="tg-structure-surface" aria-label="结构画布">
-            <div className={`tg-structure-flip${canvas.isFlipped ? " is-flipped" : ""}`}>
-              <div className="tg-structure-face tg-structure-face-front">
-                <iframe
-                  ref={structure.iframeRef}
-                  title="Tg 逆向设计结构编辑器"
-                  src="/ketcher/index.html"
-                  onLoad={canvas.handleEditorLoad}
-                />
-              </div>
-              <div
-                className="tg-structure-face tg-structure-face-back"
-                aria-hidden={!canvas.isFlipped}
-              >
-                <StructurePreview3D
-                  smiles={smilesSyncState === "synced" ? structure.smiles : ""}
-                  variant="bare"
-                  visualStyle="polished-atoms"
-                  className="h-full"
-                  previewClassName="h-full min-h-0"
-                />
-              </div>
-            </div>
-          </section>
-
-          <section className="tg-smiles-capsule" aria-labelledby="tg-smiles-label">
-            <label id="tg-smiles-label">SMILES</label>
-            <textarea
-              rows={2}
-              value={smilesDraft}
-              maxLength={8000}
-              spellCheck={false}
-              aria-invalid={smilesSyncState === "error"}
-              onChange={(event) => updateSmilesDraft(event.currentTarget.value)}
-              placeholder="输入 SMILES 后将自动校验并同步到上方画板。"
-              aria-label="SMILES 输入，自动同步到画板"
+            <ReverseDesignUtilityPanels
+              openPanel={openPanel}
+              parameterPanelRef={parameterPanelRef}
+              assistantPanelRef={assistantPanelRef}
+              request={reverseDesign.request}
+              parameterStatus={parameterStatusText()}
+              parameterHasError={parameterHasError}
+              searching={reverseDesign.isLoading}
+              canSearch={!validationMessage && !operationBusy && !smilesSyncBlocked}
+              assistant={assistant}
+              assistantContextLabels={[
+                canvas.smilesDraftState === "syncing"
+                  ? "结构同步中"
+                  : smilesSyncBlocked
+                    ? "结构输入待修正"
+                    : canvas.smilesDraft.trim()
+                      ? "结构已准备"
+                      : "尚未添加结构",
+                `Tg ${reverseDesign.request.target_tg ?? "—"} °C`,
+                resultStatus
+              ]}
+              assistantLocalDiagnostic={localDiagnostic}
+              assistantSuggestions={assistantSuggestions}
+              onClose={closePanel}
+              onRequestChange={updateRequest}
+              onSearch={() => void handleSearch()}
             />
-            <button
-              type="button"
-              onClick={() => void canvas.copySmiles(smilesDraft)}
-              disabled={!smilesDraft.trim()}
-              aria-label="复制当前 SMILES 输入"
-              title="复制当前 SMILES 输入"
-            >
-              {canvas.copyState === "copied" ? <Check /> : <Copy />}
-            </button>
-            {smilesSyncError || canvas.feedback || smilesSyncState === "pending" || smilesSyncState === "syncing" ? (
-              <p
-                className={smilesSyncState === "error" ? "is-error" : ""}
-                role={smilesSyncState === "error" ? "alert" : "status"}
-                aria-live="polite"
-              >
-                {smilesSyncError || (smilesSyncState === "pending"
-                  ? "等待输入完成后自动同步…"
-                  : smilesSyncState === "syncing"
-                    ? "正在校验并同步到画板…"
-                    : canvas.feedback)}
-              </p>
-            ) : null}
-          </section>
-        </div>
-      </div>
+          </main>
 
-      <aside
-        className={`tg-results-drawer${isDrawerOpen ? " is-open" : ""}`}
-        aria-hidden={!isDrawerOpen}
-        inert={!isDrawerOpen}
-        aria-labelledby="tg-results-title"
-      >
-        <div
-          className="tg-drawer-resizer"
-          role="separator"
-          tabIndex={isDrawerOpen ? 0 : -1}
-          aria-label="调整候选结果抽屉宽度"
-          aria-orientation="vertical"
-          aria-valuemin={DRAWER_MIN_WIDTH}
-          aria-valuemax={DRAWER_MAX_WIDTH}
-          aria-valuenow={drawerWidth}
-          onPointerDown={startDrawerResize}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-              event.preventDefault();
-              const amount = event.shiftKey ? 40 : 16;
-              setDrawerWidth((current) =>
-                clamp(
-                  current + (event.key === "ArrowLeft" ? amount : -amount),
-                  DRAWER_MIN_WIDTH,
-                  DRAWER_MAX_WIDTH
-                )
-              );
-            }
-          }}
-        />
-        <header className="tg-results-header">
-          <div>
-            <span><MessageSquareText /></span>
-            <div>
-              <h2 id="tg-results-title">Tg 候选结果</h2>
-              <p>{resultStatus}</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            aria-label="关闭候选结果"
-            onClick={() => setIsDrawerOpen(false)}
-          >
-            <X />
-          </button>
-        </header>
-        <div className="tg-results-body">
-          <ReverseDesignResults
+          <ReverseDesignDrawer
+            open={drawerOpen}
+            hasRun={hasRun}
+            width={drawerWidth}
+            status={resultStatus}
             data={reverseDesign.data}
             error={reverseDesign.error}
-            isLoading={reverseDesign.isLoading}
+            loading={reverseDesign.isLoading}
             job={reverseDesign.job}
             submittedRequest={reverseDesign.submittedRequest}
-            onOpenKnowledge={onOpenKnowledge}
             page={resultPage}
             onPageChange={setResultPage}
+            onOpenKnowledge={onOpenKnowledge}
+            onWidthChange={setDrawerWidth}
+            onClose={() => setDrawerOpen(false)}
+            onOpen={openDrawer}
           />
         </div>
-      </aside>
-
-      {hasRun && !isDrawerOpen ? (
-        <button
-          type="button"
-          className="btn-expand-analysis tg-drawer-reopen"
-          onClick={openDrawer}
-          aria-label="展开 Tg 候选结果"
-          title="展开 Tg 候选结果"
-        >
-          <Search width={14} height={14} />
-        </button>
-      ) : null}
+      </div>
     </div>
   );
-}
+});

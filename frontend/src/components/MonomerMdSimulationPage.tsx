@@ -1,728 +1,425 @@
 import {
   Activity,
-  ArrowLeft,
   Atom,
-  Ban,
-  CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  Database,
-  FileJson,
-  Gauge,
-  History,
-  Loader2,
+  CircleOff,
+  ClipboardList,
+  FlaskConical,
+  LoaderCircle,
   Play,
-  RotateCw,
-  Timer,
-  Trash2,
-  TriangleAlert,
-  XCircle
+  RefreshCw,
+  ServerCog,
+  TriangleAlert
 } from "lucide-react";
-import { type FormEvent } from "react";
-import {
-  getMonomerMdSmilesValidationError,
-  useMonomerMdSimulation
-} from "../hooks/useMonomerMdSimulation";
-import { cn } from "../lib/utils";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { getMonomerMdSmilesValidationError, useMonomerMdSimulation } from "../hooks/useMonomerMdSimulation";
+import { hasInvalidMonomerMdJobSearch } from "../lib/monomerMdRouting";
 import type {
-  MonomerMdArtifact,
-  MonomerMdJobResponse,
-  MonomerMdJobStatus,
-  MonomerMdProtocol,
-  MonomerMdSeries,
-  MonomerMdSimulationResult,
-  MonomerMdTrajectoryPoint,
-  MonomerMdTrajectoryPreview
+  MonomerMdFormalProtocol,
+  MonomerMdRunMode,
+  StructureWorkspaceContext
 } from "../types";
-import { isGenericMonomerMdDemoWarning, monomerMdDemoNotice, monomerMdServiceCanSubmit } from "../utils/monomerMdPresentation";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { Select } from "./ui/select";
-import { Textarea } from "./ui/textarea";
+import { MonomerMdFormalConfig } from "./monomer-md-simulation/MonomerMdFormalConfig";
+import { MonomerMdResultsPanel } from "./monomer-md-simulation/MonomerMdResultsPanel";
+import { MonomerMdStructureInput } from "./monomer-md-simulation/MonomerMdStructureInput";
+import { MonomerMdTaskCenter } from "./monomer-md-simulation/MonomerMdTaskCenter";
+import {
+  cloneConfig,
+  configFingerprint,
+  FORMAL_PROTOCOLS,
+  isRecord,
+  restoreManagedPaths,
+  validateFormalConfig
+} from "./monomer-md-simulation/config";
+import {
+  loadMonomerMdSession,
+  saveMonomerMdSession
+} from "./monomer-md-simulation/session";
+import {
+  formatNumber,
+  translateMonomerMdMessage
+} from "./monomer-md-simulation/presentation";
+import "../styles/structure-workbench.css";
+import "../styles/monomer-md-simulation.css";
+
+type MainTab = "config" | "tasks" | "results";
 
 type MonomerMdSimulationPageProps = {
-  onBackHome: () => void;
+  structure: StructureWorkspaceContext;
+  initialJobId: string | null;
+  onJobIdChange: (jobId: string | null) => void;
+  onEditStructure: () => void;
 };
 
-type PlotPoint = {
-  x: number;
-  y: number;
-};
+const MAIN_TABS: Array<{
+  id: MainTab;
+  label: string;
+  description: string;
+  surfaceTitle: string;
+  surfaceDescription: string;
+  badge: string | null;
+  icon: typeof FlaskConical;
+}> = [
+  {
+    id: "config",
+    label: "模拟配置",
+    description: "快速演示与完整 MD",
+    surfaceTitle: "单体 MD 任务配置",
+    surfaceDescription: "提交快速Density模拟演示，或正式MD模拟任务",
+    badge: null,
+    icon: FlaskConical
+  },
+  {
+    id: "tasks",
+    label: "任务中心",
+    description: "全局正式队列与历史",
+    surfaceTitle: "全局 MD 任务中心",
+    surfaceDescription: "查看正式活跃队列、排队位置与全局正式任务历史。",
+    badge: "全局任务",
+    icon: ClipboardList
+  },
+  {
+    id: "results",
+    label: "结果分析",
+    description: "真实进度、曲线与构象",
+    surfaceTitle: "单体 MD 结果分析",
+    surfaceDescription: "查看当前任务的真实阶段、科学指标、变化曲线与构象轨迹。",
+    badge: "真实计算结果",
+    icon: Activity
+  }
+];
 
-const STATUS_LABELS: Record<MonomerMdJobStatus, string> = {
-  pending: "等待提交",
-  submitted: "已提交",
-  running: "运行中",
-  cancel_requested: "终止中",
-  completed: "已完成",
-  failed: "失败",
-  cancelled: "已取消"
-};
+export function MonomerMdSimulationPage({
+  structure,
+  initialJobId,
+  onJobIdChange,
+  onEditStructure
+}: MonomerMdSimulationPageProps) {
+  const restoredSession = useRef(loadMonomerMdSession()).current;
+  const [activeTab, setActiveTab] = useState<MainTab>(initialJobId ? "results" : "config");
+  const [runMode, setRunMode] = useState<MonomerMdRunMode>(restoredSession.runMode);
+  const [demoSmiles, setDemoSmiles] = useState(restoredSession.demoSmiles);
+  const [demoTouched, setDemoTouched] = useState(false);
+  const [selectedProtocol, setSelectedProtocol] = useState<MonomerMdFormalProtocol>(restoredSession.selectedProtocol);
+  const [configs, setConfigs] = useState(restoredSession.configs);
+  const [templateFingerprints, setTemplateFingerprints] = useState(restoredSession.templateFingerprints);
+  const [templateChanges, setTemplateChanges] = useState<Set<MonomerMdFormalProtocol>>(new Set());
 
-const STATUS_STEPS: MonomerMdJobStatus[] = ["pending", "submitted", "running", "completed"];
-const FORMAL_PROTOCOLS: MonomerMdProtocol[] = ["Density", "HVap", "Compressibility", "Dielectric", "Transport"];
-const PROTOCOL_LABELS: Record<MonomerMdProtocol, string> = {
-  DensityDemo: "DensityDemo",
-  Density: "Density",
-  HVap: "HVap",
-  Compressibility: "Compressibility",
-  Dielectric: "Dielectric",
-  Transport: "Transport"
-};
-const SUMMARY_LABELS: Record<string, string> = {
-  final_density_g_cm3: "最终密度",
-  mean_density_g_cm3: "平均密度",
-  mean_temperature_k: "平均温度",
-  final_temperature_k: "最终温度",
-  mean_total_energy_kcal_mol: "平均总能量",
-  final_total_energy_kcal_mol: "最终总能量",
-  elapsed_seconds: "耗时",
-  n_atoms: "原子数",
-  n_frames: "帧数",
-  n_steps: "步数",
-  density: "密度",
-  density_std: "密度标准差",
-  hvap: "汽化焓",
-  hvap_std: "汽化焓标准差",
-  dielectric: "介电常数",
-  compressibility: "等温压缩率",
-  viscosity: "粘度"
-};
-
-const RESULT_MESSAGE_TRANSLATIONS: Record<string, string> = {
-  "300-step demo output is not equilibrated and is not a physical density estimate.": "300 步演示结果尚未达到平衡，不能作为物理密度估计。",
-  "1000-step demo output is not equilibrated and is not a physical density estimate.": "1000 步演示结果尚未达到平衡，不能作为物理密度估计。",
-  "Density demo output is not equilibrated and is not a physical density estimate.": "密度演示输出尚未达到平衡，不能作为物理密度估计。"
-};
-
-const UI_MESSAGE_TRANSLATIONS: Record<string, string> = {
-  "Backend reports that monomer MD service is unavailable.": "后端报告单体 MD 服务当前不可用。",
-  "Request validation failed with status 422": "请求参数校验失败，请检查输入的 SMILES。",
-  "Request failed with status 422": "请求参数校验失败，请检查输入的 SMILES。",
-  "monomer MD submissions are disabled": "单体 MD 提交功能当前已关闭。",
-  "monomer MD worker is ready": "单体 MD worker 已就绪。",
-  "monomer MD worker is disabled until MONOMER_MD_WORKER_BASE_URL is configured": "单体 MD worker 尚未启用，请配置 MONOMER_MD_WORKER_BASE_URL。",
-  "monomer MD worker is not configured": "单体 MD worker 尚未配置。",
-  "monomer MD worker is not reachable": "无法连接单体 MD worker。",
-  "monomer MD worker database is not configured": "单体 MD worker 数据库尚未配置。",
-  "monomer MD worker ByteFF2 root is not available": "单体 MD worker 找不到 ByteFF2 根目录。",
-  "monomer MD worker runtime is not ready": "单体 MD worker 运行环境尚未就绪。",
-  "monomer MD submit rate limit exceeded; please wait before submitting another job": "提交过于频繁，请稍后再试。",
-  "monomer MD job capacity is full; please wait for the active job to finish": "当前已有单体 MD 任务在运行，请等待完成后再提交。",
-  "formal ByteFF2 monomer MD capacity is full; please wait for the current formal job to finish": "正式单体 MD 的执行和排队容量已满，请等待任务完成。",
-  "monomer MD job capacity is full; please wait for the current demo job to finish": "当前已有单体 MD 任务在运行，请等待完成后再提交。",
-  "monomer MD worker is draining for deployment": "单体 MD worker 正在等待现有任务完成并进行部署升级。",
-  "monomer MD worker is not accepting jobs": "单体 MD worker 当前暂不接收新任务。",
-  "monomer MD worker database recovery has not completed": "单体 MD worker 正在恢复任务状态，请稍后重试。",
-  "monomer MD database capacity check failed": "无法读取单体 MD 任务容量，请稍后重试。",
-  "monomer MD worker active job capacity is full": "单体 MD worker 当前任务已满，请等待当前任务完成。",
-  "Failed to fetch": "网络请求失败。"
-};
-
-const WORKER_STATUS_LABELS: Record<string, string> = {
-  degraded: "降级",
-  failed: "失败",
-  ok: "正常",
-  unreachable: "不可达",
-  unknown: "未知"
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function numericValue(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
-function formatNumber(value: number, digits = 2) {
-  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: digits }).format(value);
-}
-
-function formatDate(value: string | null | undefined) {
-  if (!value) return "--";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
-}
-
-function formatValue(value: unknown) {
-  const numeric = numericValue(value);
-  if (numeric != null) {
-    return formatNumber(numeric, Math.abs(numeric) >= 100 ? 1 : 3);
-  }
-  if (typeof value === "boolean") {
-    return value ? "是" : "否";
-  }
-  if (typeof value === "string" && value.trim()) {
-    return value;
-  }
-  return "--";
-}
-
-function translateResultMessage(message: string): string {
-  return RESULT_MESSAGE_TRANSLATIONS[message] ?? message;
-}
-
-function translateRuntimeDetail(message: string): string {
-  if (message.startsWith("BYTEFF2_DENSITY_DEMO_ENTRY does not exist:")) {
-    return `BYTEFF2_DENSITY_DEMO_ENTRY 指向的入口文件不存在：${message.replace("BYTEFF2_DENSITY_DEMO_ENTRY does not exist:", "").trim()}`;
-  }
-  if (message.startsWith("ByteFF2 root does not exist:")) {
-    return `ByteFF2 根目录不存在：${message.replace("ByteFF2 root does not exist:", "").trim()}`;
-  }
-  if (message.startsWith("BYTEFF2_PYTHON not found:")) {
-    return `找不到 BYTEFF2_PYTHON：${message.replace("BYTEFF2_PYTHON not found:", "").trim()}`;
-  }
-  if (message === "gmx was not found on PATH") {
-    return "PATH 中找不到 gmx 命令。";
-  }
-  if (message.startsWith("runtime import probe timed out after")) {
-    return `运行环境导入检查超时：${message.replace("runtime import probe timed out after", "").trim()}`;
-  }
-  if (message.startsWith("gmx probe timed out after")) {
-    return `gmx 检查超时：${message.replace("gmx probe timed out after", "").trim()}`;
-  }
-  return message;
-}
-
-function translateUiMessage(message: string): string {
-  const trimmed = message.trim();
-  const exact = UI_MESSAGE_TRANSLATIONS[trimmed];
-  if (exact) {
-    return exact;
-  }
-  if (trimmed.startsWith("invalid smiles:")) {
-    return "SMILES 无法解析，请检查结构格式。";
-  }
-  if (trimmed.includes("single-molecule SMILES without attachment points")) {
-    return "单体 MD 只接受普通单分子 SMILES，请不要输入带 * 的聚合物重复单元。";
-  }
-  if (trimmed.startsWith("MONOMER_MD_WORKER_BASE_URL")) {
-    return "单体 MD worker 地址配置无效，请检查 MONOMER_MD_WORKER_BASE_URL。";
-  }
-  if (trimmed.startsWith("monomer MD worker health is ")) {
-    const workerStatus = trimmed.replace("monomer MD worker health is ", "");
-    return `单体 MD worker 健康状态异常：${WORKER_STATUS_LABELS[workerStatus] ?? workerStatus}`;
-  }
-  if (trimmed.startsWith("monomer MD worker health check failed:")) {
-    return `单体 MD worker 健康检查失败：${translateUiMessage(trimmed.replace("monomer MD worker health check failed:", "").trim())}`;
-  }
-  if (trimmed.startsWith("monomer MD worker runtime is not ready:")) {
-    return `单体 MD worker 运行环境尚未就绪：${translateRuntimeDetail(trimmed.replace("monomer MD worker runtime is not ready:", "").trim())}`;
-  }
-  if (trimmed.startsWith("monomer MD worker rejected the job:")) {
-    return translateUiMessage(trimmed.replace("monomer MD worker rejected the job:", "").trim());
-  }
-  return trimmed || "单体 MD 请求失败。";
-}
-
-function normalizeSeries(series: MonomerMdSeries | undefined, valueKeys: string[]): PlotPoint[] {
-  if (!series) {
-    return [];
-  }
-  const rawPoints = Array.isArray(series) ? series : series.points;
-  return rawPoints
-    .map((point, index) => {
-      const record = point as Record<string, unknown>;
-      const timeNs = numericValue(record.time_ns);
-      const x = numericValue(record.time_ps) ?? (timeNs == null ? null : timeNs * 1000) ?? numericValue(record.step) ?? numericValue(record.frame) ?? index;
-      const y =
-        numericValue(record.value) ??
-        valueKeys.map((key) => numericValue(record[key])).find((value) => value != null) ??
-        Object.entries(record)
-          .filter(([key]) => !["time_ps", "time_ns", "step", "frame"].includes(key))
-          .map(([, value]) => numericValue(value))
-          .find((value) => value != null);
-      return y == null || !Number.isFinite(x) ? null : { x, y };
-    })
-    .filter((point): point is PlotPoint => point !== null);
-}
-
-function polyline(points: PlotPoint[]) {
-  const width = 320;
-  const height = 120;
-  const pad = 14;
-  const xs = points.map((point) => point.x);
-  const ys = points.map((point) => point.y);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const xSpan = maxX - minX || 1;
-  const ySpan = maxY - minY || 1;
-  return points
-    .map((point) => {
-      const x = pad + ((point.x - minX) / xSpan) * (width - pad * 2);
-      const y = height - pad - ((point.y - minY) / ySpan) * (height - pad * 2);
-      return `${x.toFixed(2)},${y.toFixed(2)}`;
-    })
-    .join(" ");
-}
-
-function progressValue(status: MonomerMdJobStatus | null, progress: number | null | undefined) {
-  const explicit = numericValue(progress);
-  if (explicit != null) {
-    return Math.max(0, Math.min(100, explicit <= 1 ? explicit * 100 : explicit));
-  }
-  if (status === "completed") return 100;
-  if (status === "running") return 62;
-  if (status === "cancel_requested") return 90;
-  if (status === "submitted") return 24;
-  if (status === "pending") return 10;
-  if (status === "failed" || status === "cancelled") return 100;
-  return 0;
-}
-
-function statusTone(status: MonomerMdJobStatus | null) {
-  if (status === "completed") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "failed" || status === "cancelled") return "border-red-200 bg-red-50 text-red-700";
-  if (status) return "border-sky-200 bg-sky-50 text-sky-700";
-  return "border-slate-200 bg-slate-50 text-slate-600";
-}
-
-function summaryEntries(result: MonomerMdSimulationResult | null) {
-  if (!result) return [];
-  const seen = new Set<string>();
-  const preferred = Object.keys(SUMMARY_LABELS)
-    .filter((key) => key in result.summary)
-    .map((key) => {
-      seen.add(key);
-      return [key, result.summary[key]] as const;
-    });
-  return [...preferred, ...Object.entries(result.summary).filter(([key]) => !seen.has(key))].slice(0, 8);
-}
-
-function normalizeArtifacts(artifacts: MonomerMdSimulationResult["artifacts"] | undefined): MonomerMdArtifact[] {
-  if (!artifacts) return [];
-  if (Array.isArray(artifacts)) return artifacts;
-  return Object.entries(artifacts).map(([name, value]) => {
-    if (isRecord(value)) {
-      return { name, ...(value as MonomerMdArtifact) };
-    }
-    return { name, path: value == null ? null : String(value) };
+  const simulation = useMonomerMdSimulation({
+    initialJobId,
+    onJobIdChange,
+    taskCenterActive: activeTab === "tasks"
   });
-}
 
-function trajectoryPoints(trajectory: MonomerMdTrajectoryPreview | null | undefined): MonomerMdTrajectoryPoint[] {
-  return trajectory?.points ?? trajectory?.atoms ?? [];
-}
+  const invalidDeepLink =
+    typeof window !== "undefined" &&
+    hasInvalidMonomerMdJobSearch(window.location.search);
 
-function atomColor(point: MonomerMdTrajectoryPoint) {
-  const label = (point.element ?? point.atom_type ?? "").toUpperCase();
-  if (label.startsWith("O")) return "#ef4444";
-  if (label.startsWith("N")) return "#2563eb";
-  if (label.startsWith("H")) return "#94a3b8";
-  if (label.startsWith("F") || label.startsWith("CL")) return "#10b981";
-  return "#0f172a";
-}
+  useEffect(() => {
+    if (initialJobId) setActiveTab("results");
+  }, [initialJobId]);
 
-function projectAtom(point: MonomerMdTrajectoryPoint, points: MonomerMdTrajectoryPoint[]) {
-  const xs = points.map((item) => item.x);
-  const ys = points.map((item) => item.y);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const xSpan = maxX - minX || 1;
-  const ySpan = maxY - minY || 1;
-  return {
-    x: 16 + ((point.x - minX) / xSpan) * 288,
-    y: 164 - ((point.y - minY) / ySpan) * 148
-  };
-}
-
-function StatusBadge({ status }: { status: MonomerMdJobStatus | null }) {
-  return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold", statusTone(status))}>
-      {status === "completed" ? <CheckCircle2 className="h-3.5 w-3.5" /> : null}
-      {status === "failed" || status === "cancelled" ? <XCircle className="h-3.5 w-3.5" /> : null}
-      {status === "pending" || status === "submitted" || status === "running" || status === "cancel_requested" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-      {status ? STATUS_LABELS[status] : "未提交"}
-    </span>
-  );
-}
-
-function SeriesCard({ title, chartLabel, series, unit, color, valueKeys, isLoading }: { title: string; chartLabel: string; series: MonomerMdSeries | undefined; unit: string; color: string; valueKeys: string[]; isLoading: boolean }) {
-  const points = normalizeSeries(series, valueKeys);
-  const latest = points[points.length - 1];
-  return (
-    <section className="flex min-h-[230px] flex-col rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase text-slate-400">{title}</div>
-          <div className="mt-1 text-sm font-semibold text-slate-950">{chartLabel}</div>
-        </div>
-        <div className="text-right">
-          <div className="text-lg font-semibold tabular-nums text-slate-950">{latest ? formatNumber(latest.y, Math.abs(latest.y) >= 100 ? 1 : 3) : "--"}</div>
-          <div className="text-[11px] text-slate-500">{unit}</div>
-        </div>
-      </div>
-      <div className="mt-4 flex min-h-[126px] flex-1 items-center justify-center rounded-lg border border-slate-100 bg-slate-50/80">
-        {points.length > 1 ? (
-          <svg viewBox="0 0 320 120" role="img" aria-label={chartLabel} className="h-full w-full">
-            <line x1="14" y1="28" x2="306" y2="28" stroke="#e2e8f0" strokeDasharray="4 5" />
-            <line x1="14" y1="60" x2="306" y2="60" stroke="#e2e8f0" strokeDasharray="4 5" />
-            <line x1="14" y1="92" x2="306" y2="92" stroke="#e2e8f0" strokeDasharray="4 5" />
-            <polyline points={polyline(points)} fill="none" stroke={color} strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
-          </svg>
-        ) : (
-          <div className="px-4 text-center text-xs leading-5 text-slate-500">{isLoading ? "正在等待后端返回曲线数据。" : "提交一个 SMILES 后显示该曲线。"}</div>
-        )}
-      </div>
-      <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-slate-500">
-        <span>{points.length ? `${points.length} 个采样点` : "暂无数据"}</span>
-        <span>{latest ? formatNumber(latest.x, 1) : "--"}</span>
-      </div>
-    </section>
-  );
-}
-
-function SummaryPanel({ result }: { result: MonomerMdSimulationResult | null }) {
-  const entries = summaryEntries(result);
-  return (
-    <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Gauge className="h-4 w-4 text-sky-600" />结果摘要</div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {entries.length ? entries.map(([key, value]) => (
-          <div key={key} className="min-h-[72px] rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-            <div className="truncate text-[11px] text-slate-500">{SUMMARY_LABELS[key] ?? key}</div>
-            <div className="mt-1 break-words text-sm font-semibold text-slate-950">{formatValue(value)}</div>
-          </div>
-        )) : (
-          <div className="col-span-full min-h-[72px] rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-5 text-sm text-slate-500">完成后将显示密度、温度、能量和采样摘要。</div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function MetricsPanel({ result }: { result: MonomerMdSimulationResult | null }) {
-  const metrics = result?.metrics;
-  const entries = metrics && isRecord(metrics)
-    ? Object.entries(metrics).filter(([, value]) => ["string", "number", "boolean"].includes(typeof value)).slice(0, 10)
-    : [];
-  if (!entries.length) {
-    return null;
-  }
-  return (
-    <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><FileJson className="h-4 w-4 text-slate-600" />正式协议指标</div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-        {entries.map(([key, value]) => (
-          <div key={key} className="min-h-[72px] rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-            <div className="truncate text-[11px] text-slate-500">{SUMMARY_LABELS[key] ?? key}</div>
-            <div className="mt-1 break-words text-sm font-semibold text-slate-950">{formatValue(value)}</div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function TrajectoryCard({ trajectory }: { trajectory: MonomerMdTrajectoryPreview | null | undefined }) {
-  const points = trajectoryPoints(trajectory);
-  const visiblePoints = points.slice(0, 180);
-  return (
-    <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Atom className="h-4 w-4 text-teal-600" />轨迹预览</div>
-        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600">{trajectory?.stage_id ?? "预览"}</span>
-      </div>
-      <div className="mt-4 min-h-[220px] rounded-lg border border-slate-100 bg-slate-50">
-        {visiblePoints.length ? (
-          <svg viewBox="0 0 320 180" role="img" aria-label="轨迹投影" className="h-full min-h-[220px] w-full">
-            <rect x="12" y="12" width="296" height="156" rx="10" fill="#ffffff" stroke="#e2e8f0" />
-            {visiblePoints.map((point, index) => {
-              const projected = projectAtom(point, visiblePoints);
-              return <circle key={`${point.atom_id ?? index}-${index}`} cx={projected.x} cy={projected.y} r={point.element === "H" || point.atom_type === "H" ? 2 : 3} fill={atomColor(point)} opacity="0.76" />;
-            })}
-          </svg>
-        ) : trajectory?.preview_url ? (
-          <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 px-4 text-center text-sm text-slate-600"><Database className="h-5 w-5 text-slate-400" /><a className="font-medium text-sky-700 hover:text-sky-800" href={trajectory.preview_url} target="_blank" rel="noreferrer">打开轨迹预览</a></div>
-        ) : (
-          <div className="flex min-h-[220px] items-center justify-center px-4 text-center text-sm text-slate-500">完成后将显示轨迹采样或预览文件。</div>
-        )}
-      </div>
-      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
-        <div className="rounded-lg bg-slate-50 px-3 py-2"><span className="block text-[11px] text-slate-400">帧</span><span className="font-semibold text-slate-900">{trajectory?.frame_index ?? "--"}</span></div>
-        <div className="rounded-lg bg-slate-50 px-3 py-2"><span className="block text-[11px] text-slate-400">时间</span><span className="font-semibold text-slate-900">{trajectory?.time_ps != null ? `${formatNumber(trajectory.time_ps, 1)} ps` : "--"}</span></div>
-        <div className="rounded-lg bg-slate-50 px-3 py-2"><span className="block text-[11px] text-slate-400">采样点</span><span className="font-semibold text-slate-900">{trajectory?.sampled_points ?? (points.length || "--")}</span></div>
-      </div>
-    </section>
-  );
-}
-
-function ArtifactsPanel({
-  result,
-  job,
-  onDelete,
-  deleteError
-}: {
-  result: MonomerMdSimulationResult | null;
-  job: { status?: MonomerMdJobStatus; artifact_root?: string | null; artifact_deleted_at?: string | null; artifact_delete_message?: string | null } | null;
-  onDelete: () => void;
-  deleteError: string | null;
-}) {
-  const deleted = Boolean(job?.artifact_deleted_at);
-  const artifacts = deleted ? [] : normalizeArtifacts(result?.artifacts);
-  const canDelete = Boolean(job?.artifact_root) && !deleted && job?.status && !["pending", "submitted", "running", "cancel_requested"].includes(job.status);
-  return (
-    <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Database className="h-4 w-4 text-slate-600" />输出文件</div>
-        {canDelete ? (
-          <Button type="button" variant="outline" onClick={onDelete} className="h-8 rounded-md border-red-200 bg-white px-2.5 text-xs text-red-700 shadow-none hover:bg-red-50"><Trash2 className="mr-1.5 h-3.5 w-3.5" />删除输出文件</Button>
-        ) : null}
-      </div>
-      {deleted ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">{job?.artifact_delete_message ?? "输出文件已删除，任务审计记录仍保留。"}</div> : null}
-      {deleteError ? <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">{translateUiMessage(deleteError)}</div> : null}
-      <div className="mt-3 space-y-2">
-        {artifacts.length ? artifacts.map((artifact, index) => {
-          const label = artifact.label ?? artifact.name ?? `artifact-${index + 1}`;
-          const detail = artifact.path ?? artifact.kind ?? "artifact";
-          return (
-            <div key={`${label}-${index}`} className="flex min-h-[54px] items-center justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-              <div className="min-w-0"><div className="truncate text-sm font-medium text-slate-950">{label}</div><div className="truncate text-xs text-slate-500">{detail}</div></div>
-              <div className="shrink-0 text-right text-xs text-slate-500">{artifact.url ? <a href={artifact.url} target="_blank" rel="noreferrer" className="font-medium text-sky-700 hover:text-sky-800">打开</a> : "--"}</div>
-            </div>
-          );
-        }) : <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-5 text-sm text-slate-500">{deleted ? "输出文件已删除；任务审计记录和结果摘要仍保留。" : "完成后将显示轨迹、日志和曲线数据文件。"}</div>}
-      </div>
-    </section>
-  );
-}
-
-function ResultNotice({ result, job, completedWithoutResult }: { result: MonomerMdSimulationResult | null; job: MonomerMdJobResponse | null; completedWithoutResult: boolean }) {
-  if (completedWithoutResult) {
-    return (
-      <section className="rounded-[14px] border border-red-100 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700">
-        <span className="inline-flex items-start gap-2">
-          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-          任务已完成，但后端没有返回结果数据。使用本次结果前，请先检查 worker 日志和输出文件路径。
-        </span>
-      </section>
-    );
-  }
-  if (!result) {
-    return null;
-  }
-
-  const messages = new Set<string>();
-  const demoNotice = monomerMdDemoNotice(result, job);
-  if (demoNotice) {
-    messages.add(demoNotice);
-  }
-  for (const warning of result.warnings ?? []) {
-    if (warning.trim() && !isGenericMonomerMdDemoWarning(warning)) {
-      messages.add(translateResultMessage(warning.trim()));
+  useEffect(() => {
+    const catalog = simulation.protocolCatalog;
+    if (!catalog) return;
+    const nextConfigs = { ...configs };
+    const nextFingerprints = { ...templateFingerprints };
+    const changed = new Set(templateChanges);
+    let configsChanged = false;
+    let fingerprintsChanged = false;
+    let changesChanged = false;
+    for (const protocol of FORMAL_PROTOCOLS) {
+      const template = catalog.protocols.find((item) => item.protocol === protocol)?.default_config;
+      if (!isRecord(template) || !validateFormalConfig(template, protocol).valid) continue;
+      const fingerprint = configFingerprint(template);
+      if (!nextConfigs[protocol]) {
+        nextConfigs[protocol] = cloneConfig(template);
+        nextFingerprints[protocol] = fingerprint;
+        configsChanged = true;
+        fingerprintsChanged = true;
+      } else if (nextFingerprints[protocol] && nextFingerprints[protocol] !== fingerprint) {
+        if (!changed.has(protocol)) {
+          changed.add(protocol);
+          changesChanged = true;
+        }
+      } else if (!nextFingerprints[protocol]) {
+        nextFingerprints[protocol] = fingerprint;
+        fingerprintsChanged = true;
+      }
     }
+    if (configsChanged) setConfigs(nextConfigs);
+    if (fingerprintsChanged) setTemplateFingerprints(nextFingerprints);
+    if (changesChanged) setTemplateChanges(changed);
+    // The catalog object is the only trigger; state snapshots are intentionally handled atomically here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [simulation.protocolCatalog]);
+
+  useEffect(() => {
+    saveMonomerMdSession({
+      runMode,
+      demoSmiles,
+      selectedProtocol,
+      configs,
+      templateFingerprints
+    });
+  }, [configs, demoSmiles, runMode, selectedProtocol, templateFingerprints]);
+
+  const currentConfig = configs[selectedProtocol] ?? null;
+  const demoValidationError = demoTouched
+    ? getMonomerMdSmilesValidationError(demoSmiles)
+    : null;
+  const demoCanSubmit =
+    !simulation.isStatusLoading &&
+    simulation.statusError == null &&
+    simulation.serviceStatus?.can_submit === true;
+  const formalCanSubmit =
+    !simulation.isStatusLoading &&
+    simulation.statusError == null &&
+    simulation.serviceStatus?.formal_can_submit === true;
+
+  const servicePresentation = useMemo(() => {
+    if (simulation.isStatusLoading && !simulation.serviceStatus) {
+      return { tone: "loading", icon: LoaderCircle, title: "服务检查中", detail: "正在读取快速演示与完整 MD 任务容量" };
+    }
+    if (simulation.statusError || simulation.serviceStatus?.available === false) {
+      return { tone: "error", icon: CircleOff, title: "服务不可用", detail: translateMonomerMdMessage(simulation.statusError || simulation.serviceStatus?.message) || "后端未报告可用状态" };
+    }
+    if (simulation.serviceStatus?.draining) {
+      return { tone: "warning", icon: ServerCog, title: "部署排空", detail: "可只读查看已有任务，暂不接受新提交" };
+    }
+    if (!demoCanSubmit && !formalCanSubmit) {
+      return { tone: "warning", icon: TriangleAlert, title: "容量已满", detail: "快速演示与完整 MD 提交当前均已关闭" };
+    }
+    return { tone: "ready", icon: null, title: "准备就绪", detail: null };
+  }, [demoCanSubmit, formalCanSubmit, simulation.isStatusLoading, simulation.serviceStatus, simulation.statusError]);
+
+  function changeMainTab(next: MainTab) {
+    setActiveTab(next);
   }
-  if (!messages.size) {
-    return null;
-  }
 
-  return (
-    <section className="rounded-[14px] border border-amber-100 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-      <div className="inline-flex items-start gap-2">
-        <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-        <div className="space-y-1">
-          {[...messages].map((message) => (
-            <div key={message}>{message}</div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-export function MonomerMdSimulationPage({ onBackHome }: MonomerMdSimulationPageProps) {
-  const simulation = useMonomerMdSimulation();
-  const validationError = simulation.runMode === "demo" ? getMonomerMdSmilesValidationError(simulation.smiles) : null;
-  const serviceUnavailable = simulation.serviceStatus?.enabled === false || simulation.serviceStatus?.available === false;
-  const serviceBusy = simulation.serviceStatus?.busy === true;
-  const serviceDraining = simulation.serviceStatus?.draining === true;
-  const serviceCanSubmit = monomerMdServiceCanSubmit(
-    simulation.serviceStatus,
-    simulation.isStatusLoading,
-    simulation.statusError
-  );
-  const protocolCatalog = simulation.protocolCatalog?.protocols ?? [];
-  const selectedProtocolInfo = protocolCatalog.find((item) => item.protocol === simulation.selectedProtocol);
-  const formalReady = simulation.runMode !== "formal" || selectedProtocolInfo?.runtime_ready === true;
-  const formalUnavailable = simulation.runMode === "formal" && selectedProtocolInfo?.runtime_ready === false;
-  const formalUnknown = simulation.runMode === "formal" && selectedProtocolInfo?.runtime_ready !== true && !formalUnavailable;
-  const modeCanSubmit = simulation.runMode === "formal"
-    ? simulation.serviceStatus?.formal_can_submit === true
-    : serviceCanSubmit;
-  const formLocked = simulation.isSubmitting || (simulation.runMode === "demo" && simulation.isLoading);
-  const canSubmit = !formLocked
-    && !validationError
-    && !serviceUnavailable
-    && modeCanSubmit
-    && formalReady;
-  const currentStatus = simulation.job?.status ?? null;
-  const progress = progressValue(currentStatus, simulation.job?.progress);
-  const result = simulation.data;
-  const completedWithoutResult = currentStatus === "completed" && !result;
-  const currentModeLabel = simulation.runMode === "formal" ? "正式协议" : "DensityDemo";
-  const resultRunMode = result?.run_mode ?? simulation.job?.run_mode ?? simulation.runMode;
-  const hasSeries = Boolean(result?.density_series || result?.temperature_series || result?.energy_series);
-  const showSeriesCards = !result || hasSeries || resultRunMode === "demo";
-  const historyPageCount = Math.max(1, Math.ceil((simulation.history?.total ?? 0) / (simulation.history?.page_size ?? 20)));
-
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleMainTabKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    if (canSubmit) {
-      void simulation.submit(simulation.smiles);
-    }
+    const currentIndex = MAIN_TABS.findIndex((tab) => tab.id === activeTab);
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? MAIN_TABS.length - 1
+        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + MAIN_TABS.length) % MAIN_TABS.length;
+    const next = MAIN_TABS[nextIndex];
+    setActiveTab(next.id);
+    document.getElementById(`monomer-md-main-tab-${next.id}`)?.focus();
   }
 
+  async function submitDemo() {
+    setDemoTouched(true);
+    const error = getMonomerMdSmilesValidationError(demoSmiles);
+    if (error || !demoCanSubmit) return;
+    const jobId = await simulation.submit({
+      run_mode: "demo",
+      protocol: "DensityDemo",
+      smiles: demoSmiles.trim()
+    });
+    if (jobId) setActiveTab("results");
+  }
+
+  async function submitFormal() {
+    if (!currentConfig || !formalCanSubmit) return;
+    const validation = validateFormalConfig(currentConfig, selectedProtocol);
+    if (!validation.valid) return;
+    const jobId = await simulation.submit({
+      run_mode: "formal",
+      protocol: selectedProtocol,
+      config_json: restoreManagedPaths(currentConfig)
+    });
+    if (jobId) setActiveTab("results");
+  }
+
+  function restoreProtocolTemplate(protocol: MonomerMdFormalProtocol) {
+    const template = simulation.protocolCatalog?.protocols.find((item) => item.protocol === protocol)?.default_config;
+    if (!isRecord(template) || !validateFormalConfig(template, protocol).valid) return;
+    setConfigs((current) => ({ ...current, [protocol]: cloneConfig(template) }));
+    setTemplateFingerprints((current) => ({ ...current, [protocol]: configFingerprint(template) }));
+    setTemplateChanges((current) => {
+      const next = new Set(current);
+      next.delete(protocol);
+      return next;
+    });
+  }
+
+  function keepChangedTemplates() {
+    const fingerprints = { ...templateFingerprints };
+    for (const protocol of templateChanges) {
+      const template = simulation.protocolCatalog?.protocols.find((item) => item.protocol === protocol)?.default_config;
+      if (isRecord(template)) fingerprints[protocol] = configFingerprint(template);
+    }
+    setTemplateFingerprints(fingerprints);
+    setTemplateChanges(new Set());
+  }
+
+  function restoreChangedTemplates() {
+    for (const protocol of templateChanges) restoreProtocolTemplate(protocol);
+    setTemplateChanges(new Set());
+  }
+
+  const StatusIcon = servicePresentation.icon;
+  const activeMainTab = MAIN_TABS.find((tab) => tab.id === activeTab) ?? MAIN_TABS[0];
+  const SurfaceIcon = activeMainTab.icon;
+  const demoSteps = simulation.serviceStatus?.default_steps ?? 300;
+
   return (
-    <div className="min-h-full bg-[#f1f5f9] text-slate-950">
-      <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-4">
-        <nav className="flex flex-col gap-3 rounded-[14px] border border-slate-200 bg-white px-4 py-3 shadow-sm md:flex-row md:items-center md:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <Button type="button" variant="outline" onClick={onBackHome} className="h-9 shrink-0 rounded-md border-slate-200 bg-white px-3 text-slate-700 shadow-none hover:border-slate-300 hover:bg-slate-50"><ArrowLeft className="mr-2 h-4 w-4" />返回</Button>
-            <div className="min-w-0"><div className="text-[11px] font-semibold uppercase text-slate-400">单体 MD 工作台</div><div className="truncate text-base font-semibold text-slate-950">单体 MD 模拟</div></div>
+    <div className="np-structure-workbench np-monomer-md-simulation">
+      <div className="np-mmd-page">
+        <h1 className="np-sw-page-title">单体 MD 模拟</h1>
+        <div className="np-mmd-module-toolbar" aria-label="单体 MD 模拟工具栏">
+          <div className="np-mmd-toolbar-actions">
+            <div className="np-mmd-service-status">
+              <span className={`is-${servicePresentation.tone}`} role="status" title={servicePresentation.detail ?? undefined}>
+                {servicePresentation.tone === "ready" ? <i className="np-mmd-ready-dot" aria-hidden="true" /> : null}
+                {StatusIcon ? <StatusIcon className={servicePresentation.tone === "loading" ? "np-mmd-spin" : ""} /> : null}
+                <span className="np-mmd-service-status__copy">
+                  <strong>{servicePresentation.title}</strong>
+                  {servicePresentation.detail ? <small>{servicePresentation.detail}</small> : null}
+                </span>
+              </span>
+              <button type="button" onClick={() => void simulation.refreshStatus()} disabled={simulation.isStatusLoading}>
+                <RefreshCw className={simulation.isStatusLoading ? "np-mmd-spin" : ""} />刷新
+              </button>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className={cn("inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-medium", serviceUnavailable ? "border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-600")}>
-              {simulation.isStatusLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}
-              {simulation.isStatusLoading ? "正在检查计算服务" : simulation.statusError ? "状态检查失败" : serviceUnavailable ? "计算服务不可用" : serviceDraining ? "部署排空中" : serviceBusy ? "任务容量已满" : "计算服务可用"}
-            </span>
-            <Button type="button" variant="outline" onClick={() => void simulation.refreshStatus()} className="h-8 rounded-md border-slate-200 bg-white px-2.5 text-xs text-slate-600 shadow-none hover:bg-slate-50"><RotateCw className="mr-1.5 h-3.5 w-3.5" />刷新</Button>
-          </div>
-        </nav>
-
-        <section className="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
-          <div className="flex min-w-0 flex-col gap-4">
-            <form onSubmit={handleSubmit} className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] font-semibold uppercase text-slate-400">输入</div><h1 className="mt-1 text-base font-semibold text-slate-950">ByteFF2 {currentModeLabel}</h1></div><span className="rounded-md bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700">{simulation.runMode === "formal" ? simulation.selectedProtocol : "演示"}</span></div>
-              <div className="mt-4 grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
-                <Button type="button" variant="outline" onClick={() => simulation.setRunMode("demo")} disabled={formLocked} className={cn("h-9 rounded-md border-transparent text-sm shadow-none", simulation.runMode === "demo" ? "bg-white text-slate-950 shadow-sm" : "bg-transparent text-slate-600 hover:bg-white/70")}>DensityDemo</Button>
-                <Button type="button" variant="outline" onClick={() => simulation.setRunMode("formal")} disabled={formLocked} className={cn("h-9 rounded-md border-transparent text-sm shadow-none", simulation.runMode === "formal" ? "bg-white text-slate-950 shadow-sm" : "bg-transparent text-slate-600 hover:bg-white/70")}>正式模块</Button>
+        </div>
+        <div className="np-mmd-scroll-region">
+          <div className="np-mmd-content-column">
+            {invalidDeepLink ? (
+              <div className="np-mmd-deep-link-error" role="alert">
+                <TriangleAlert /><div><strong>任务深链格式无效</strong><span>job 必须是 32 位十六进制 ID；本页没有向后端发送该查询。</span></div>
               </div>
+            ) : null}
 
-              {simulation.runMode === "demo" ? (
-                <>
-                  <label className="mt-4 block space-y-2"><span className="text-xs font-medium text-slate-600">SMILES</span><Textarea value={simulation.smiles} onChange={(event) => simulation.setSmiles(event.target.value)} placeholder="示例：CCOC(=O)c1ccc(N)cc1" spellCheck={false} className="min-h-[96px] rounded-lg border-slate-200 bg-white font-mono text-[13px] leading-5 text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-sky-200" disabled={formLocked} /></label>
-                  <div className="mt-2 min-h-[20px] text-xs text-slate-500">{validationError ? <span className="text-red-600">{validationError}</span> : "可输入任意普通单分子 SMILES；不要输入带 * 的聚合物重复单元。"}</div>
-                  <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">第一阶段只运行 300 步演示。结果尚未达到平衡，不能作为真实物理密度结论。</div>
-                </>
-              ) : (
-                <>
-                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                    {FORMAL_PROTOCOLS.map((protocol) => {
-                      const protocolInfo = protocolCatalog.find((item) => item.protocol === protocol);
-                      const isSelected = simulation.selectedProtocol === protocol;
-                      const isReady = protocolInfo?.runtime_ready;
-                      return (
-                        <Button key={protocol} type="button" variant="outline" onClick={() => { simulation.setSelectedProtocol(protocol); simulation.loadProtocolTemplate(protocol); }} disabled={simulation.isSubmitting} className={cn("h-auto min-h-[54px] justify-between rounded-lg border px-3 py-2 text-left shadow-none", isSelected ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")}>
-                          <span className="font-semibold">{PROTOCOL_LABELS[protocol]}</span>
-                          <span className={cn("ml-3 shrink-0 rounded-md px-1.5 py-0.5 text-[11px]", isReady ? "bg-emerald-50 text-emerald-700" : protocolInfo ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-500")}>{isReady ? "ready" : protocolInfo ? "blocked" : "unknown"}</span>
-                        </Button>
-                      );
-                    })}
+            <main className="np-mmd-workbench-surface np-sw-accented-surface" aria-label="单体 MD 主工作区">
+              <header className="np-mmd-view-header">
+                <div className="np-mmd-view-heading">
+                  <span className="np-mmd-surface-mark"><SurfaceIcon /></span>
+                  <div>
+                    <h2>{activeMainTab.surfaceTitle}</h2>
+                    <p>{activeMainTab.surfaceDescription}</p>
                   </div>
-                  <div className="mt-4 flex items-center justify-between gap-3"><span className="text-xs font-medium text-slate-600">ByteFF2 config JSON</span><Button type="button" variant="outline" onClick={() => simulation.loadProtocolTemplate()} disabled={simulation.isSubmitting} className="h-8 rounded-md border-slate-200 bg-white px-2.5 text-xs text-slate-700 shadow-none hover:bg-slate-50"><FileJson className="mr-1.5 h-3.5 w-3.5" />载入模板</Button></div>
-                  <Textarea value={simulation.configText} onChange={(event) => simulation.setConfigText(event.target.value)} spellCheck={false} className="mt-2 min-h-[300px] rounded-lg border-slate-200 bg-white font-mono text-xs leading-5 text-slate-900 shadow-none focus-visible:ring-sky-200" disabled={simulation.isSubmitting} />
-                  {formalUnavailable ? <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">当前协议运行环境未就绪：{translateRuntimeDetail(String(selectedProtocolInfo?.runtime_error ?? "runtime not ready"))}</div> : null}
-                  {formalUnknown ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">正在等待该协议的运行环境 readiness，确认前不可提交正式任务。</div> : null}
-                  {simulation.protocolsError ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">协议列表不可用：{translateUiMessage(simulation.protocolsError)}</div> : null}
-                </>
-              )}
-              <div className="mt-4 flex flex-wrap items-center gap-2"><Button type="submit" disabled={!canSubmit} className="h-10 rounded-md px-4 shadow-none disabled:opacity-[0.45]">{simulation.isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}{simulation.isSubmitting ? "正在提交" : simulation.runMode === "formal" ? "提交正式任务" : simulation.isLoading ? "运行中" : "提交演示"}</Button><Button type="button" variant="outline" onClick={simulation.reset} disabled={formLocked} className="h-10 rounded-md border-slate-200 bg-white px-4 text-slate-700 shadow-none hover:bg-slate-50">清空结果</Button></div>
-              {simulation.runMode === "formal" ? <div className="mt-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900">全局共享队列：{simulation.serviceStatus?.formal_running_jobs ?? 0} / {simulation.serviceStatus?.formal_max_running_jobs ?? 1} 个执行槽，{simulation.serviceStatus?.formal_queued_jobs ?? 0} / {simulation.serviceStatus?.formal_max_queued_jobs ?? 2} 个排队槽。可信单租户环境中的访问者可查看和终止这些任务。</div> : null}
-              {serviceUnavailable ? <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">{simulation.serviceStatus?.message ? translateUiMessage(simulation.serviceStatus.message) : "后端报告单体 MD 服务当前不可用。"}</div> : null}
-              {!serviceUnavailable && serviceDraining ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">单体 MD worker 正在等待现有任务完成并进行部署升级，升级完成后会自动恢复提交。</div> : null}
-              {!serviceUnavailable && !serviceDraining && serviceBusy ? <div className="mt-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">当前已有单体 MD 任务运行，任务完成后会自动释放提交容量。</div> : null}
-              {simulation.statusError ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">状态接口不可用：{translateUiMessage(simulation.statusError)}</div> : null}
-            </form>
-
-            {simulation.runMode === "formal" ? (
-              <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Activity className="h-4 w-4 text-sky-600" />当前正式任务</div>
-                  <Button type="button" variant="outline" onClick={() => void simulation.refreshActiveJobs()} disabled={simulation.isActiveJobsLoading} className="h-8 w-8 rounded-md p-0" aria-label="刷新当前正式任务"><RotateCw className={cn("h-3.5 w-3.5", simulation.isActiveJobsLoading && "animate-spin")} /></Button>
                 </div>
-                {simulation.activeJobsError ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">{translateUiMessage(simulation.activeJobsError)}</div> : null}
-                <div className="mt-3 space-y-2">
-                  {simulation.activeJobs.length ? simulation.activeJobs.map((job) => {
-                    const queued = job.queue_position != null;
-                    const cancelling = simulation.cancellingJobIds.includes(job.job_id) || job.status === "cancel_requested";
-                    return (
-                      <div key={job.job_id} className={cn("rounded-lg border p-3", simulation.job?.job_id === job.job_id ? "border-sky-300 bg-sky-50" : "border-slate-100 bg-slate-50")}>
-                        <button type="button" onClick={() => void simulation.loadJob(job.job_id)} className="w-full text-left">
-                          <div className="flex items-center justify-between gap-2"><span className="truncate font-mono text-[11px] text-slate-600">{job.job_id}</span><StatusBadge status={job.status} /></div>
-                          <div className="mt-2 flex items-center justify-between gap-2 text-xs"><span className="font-semibold text-slate-900">{job.protocol ? PROTOCOL_LABELS[job.protocol] : "--"}</span><span className="text-slate-500">{queued ? `队列第 ${job.queue_position} 位` : job.progress_stage === "acquiring_gpu" ? "等待 GPU" : "执行槽"}</span></div>
-                          <div className="mt-1 text-[11px] text-slate-500">{formatDate(job.created_at)} · {formatNumber(progressValue(job.status, job.progress), 0)}%</div>
-                        </button>
-                        <Button type="button" variant="outline" disabled={cancelling || job.status === "pending"} onClick={() => { if (window.confirm(queued ? "确定取消这个排队任务吗？" : "确定终止这个正在进行的任务吗？终止会安全清理进程和 GPU 资源。")) void simulation.cancelJob(job); }} className="mt-2 h-8 rounded-md border-red-200 px-2.5 text-xs text-red-700 hover:bg-red-50">
-                          {cancelling ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Ban className="mr-1.5 h-3.5 w-3.5" />}{cancelling ? "终止中…" : job.status === "pending" ? "等待 Worker 接收" : queued ? "取消排队" : "终止任务"}
-                        </Button>
+                {activeMainTab.badge ? <span className="np-mmd-view-badge"><ServerCog />{activeMainTab.badge}</span> : null}
+              </header>
+              <div className="np-mmd-main-tabs" role="tablist" aria-label="单体 MD 主工作区" onKeyDown={handleMainTabKeyDown}>
+                {MAIN_TABS.map((tab) => {
+                  const Icon = tab.icon;
+                  return (
+                    <button
+                      key={tab.id}
+                      id={`monomer-md-main-tab-${tab.id}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTab === tab.id}
+                      aria-controls={`monomer-md-main-panel-${tab.id}`}
+                      tabIndex={activeTab === tab.id ? 0 : -1}
+                      className={activeTab === tab.id ? "is-active" : ""}
+                      onClick={() => changeMainTab(tab.id)}
+                    >
+                      <Icon /><span><strong>{tab.label}</strong><small>{tab.description}</small></span>
+                      {tab.id === "tasks" && simulation.activeJobs.length ? <b>{simulation.activeJobs.length}</b> : null}
+                      {tab.id === "results" && simulation.job ? <i className={`is-${simulation.job.status}`} /> : null}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <section
+                id={`monomer-md-main-panel-${activeTab}`}
+                role="tabpanel"
+                aria-labelledby={`monomer-md-main-tab-${activeTab}`}
+                className="np-mmd-main-panel"
+              >
+                {activeTab === "config" ? (
+                  <div className="np-mmd-config-workspace">
+                    <div className="np-mmd-mode-switch" role="group" aria-label="模拟运行模式">
+                      <button type="button" className={runMode === "demo" ? "is-active" : ""} onClick={() => setRunMode("demo")}><Atom /><span><strong>快速演示</strong><small>DensityDemo · 真实 Worker MD</small></span></button>
+                      <button type="button" className={runMode === "formal" ? "is-active" : ""} onClick={() => setRunMode("formal")}><FlaskConical /><span><strong>完整MD模拟</strong><small>ByteFF2 · 五种科研物性任务</small></span></button>
+                    </div>
+
+                    {runMode === "demo" ? (
+                      <div className="np-mmd-demo-config">
+                        <div className="np-mmd-section-heading">
+                          <div><span className="np-mmd-eyebrow">DENSITY DEMO</span><h3>真实密度演示</h3><p>提交后由 Worker 真实执行 ByteFF2 NPT 分子动力学；由于演示步数较短，不能作为平衡密度估计。</p></div>
+                          <div className="np-mmd-readonly-steps"><span>真实执行步数</span><strong>{formatNumber(demoSteps, 0)}</strong><small>Worker 服务只读配置</small></div>
+                        </div>
+                        <MonomerMdStructureInput
+                          value={demoSmiles}
+                          error={demoValidationError}
+                          onChange={(value) => { setDemoSmiles(value); if (demoTouched) setDemoTouched(true); }}
+                          getSharedSmiles={structure.getCurrentSmiles}
+                          onEditStructure={onEditStructure}
+                        />
+                        <div className="np-mmd-demo-warning"><TriangleAlert /><div><strong>真实计算，但尚未平衡</strong><span>Worker 会实际运行 MD；演示步数不足以使体系达到平衡，不能作为物理密度结论。</span></div></div>
+                        <div className="np-mmd-submit-bar">
+                          <div><span>提交状态</span><strong className="np-mmd-submit-status">{demoCanSubmit ? "真实模拟可提交" : servicePresentation.title}</strong><small>关闭提交时仍可浏览已有真实任务和结果</small></div>
+                          <div className="np-mmd-submit-bar__action"><span>{demoValidationError || (demoCanSubmit ? "将创建真实异步 Worker 任务，后端会继续验证化学结构" : "当前无法创建演示任务")}</span><button type="button" disabled={simulation.isSubmitting || !demoCanSubmit || Boolean(getMonomerMdSmilesValidationError(demoSmiles))} onClick={() => void submitDemo()}>{simulation.isSubmitting ? <LoaderCircle className="np-mmd-spin" /> : <Play />}{simulation.isSubmitting ? "正在创建真实任务" : "开始快速模拟"}</button></div>
+                        </div>
                       </div>
-                    );
-                  }) : <div className="rounded-lg border border-dashed border-slate-200 p-5 text-center text-xs text-slate-500">{simulation.isActiveJobsLoading ? "读取当前任务…" : "当前没有正式任务"}</div>}
-                </div>
+                    ) : (
+                      <MonomerMdFormalConfig
+                        protocol={selectedProtocol}
+                        config={currentConfig}
+                        catalog={simulation.protocolCatalog}
+                        canSubmit={formalCanSubmit}
+                        submissionReason={formalCanSubmit ? "完整 MD 模拟容量可用" : servicePresentation.title}
+                        isSubmitting={simulation.isSubmitting}
+                        templateChangeCount={templateChanges.size}
+                        onProtocolChange={setSelectedProtocol}
+                        onApplyConfig={(protocol, config) => setConfigs((current) => ({ ...current, [protocol]: config }))}
+                        onRestoreTemplate={restoreProtocolTemplate}
+                        onKeepChangedTemplates={keepChangedTemplates}
+                        onRestoreChangedTemplates={restoreChangedTemplates}
+                        onSubmit={() => void submitFormal()}
+                      />
+                    )}
+                    {simulation.error ? <div className="np-mmd-inline-error" role="alert">{translateMonomerMdMessage(simulation.error)}</div> : null}
+                  </div>
+                ) : null}
+
+                {activeTab === "tasks" ? (
+                  <MonomerMdTaskCenter
+                    selectedJob={simulation.job}
+                    activeJobs={simulation.activeJobs}
+                    isActiveJobsLoading={simulation.isActiveJobsLoading}
+                    activeJobsError={simulation.activeJobsError}
+                    history={simulation.history}
+                    historyQuery={simulation.historyQuery}
+                    isHistoryLoading={simulation.isHistoryLoading}
+                    historyError={simulation.historyError}
+                    cancellingJobIds={simulation.cancellingJobIds}
+                    deletingJobIds={simulation.deletingJobIds}
+                    deleteJobErrors={simulation.deleteJobErrors}
+                    onRefresh={() => { void simulation.refreshActiveJobs(); void simulation.refreshHistory(); }}
+                    onSelect={(job) => { setActiveTab("results"); void simulation.selectJob(job.job_id); }}
+                    onCancel={(job) => { if (window.confirm("确定取消这个全局正式任务吗？")) void simulation.cancelJob(job); }}
+                    onDelete={(job) => { if (window.confirm("删除后任务记录、结果和深链均无法恢复。确定继续吗？")) void simulation.deleteJobRecord(job); }}
+                    onChangeQuery={simulation.changeHistoryQuery}
+                  />
+                ) : null}
+
+                {activeTab === "results" ? (
+                  <MonomerMdResultsPanel
+                    job={simulation.job}
+                    result={simulation.data}
+                    isLoading={simulation.isJobLoading}
+                    error={simulation.error}
+                    cancelling={Boolean(simulation.job && simulation.cancellingJobIds.includes(simulation.job.job_id))}
+                    deleting={Boolean(simulation.job && simulation.deletingJobIds.includes(simulation.job.job_id))}
+                    onCancel={(job) => void simulation.cancelJob(job)}
+                    onDelete={(job) => void simulation.deleteJobRecord(job)}
+                    onClear={() => simulation.clearSelectedJob()}
+                  />
+                ) : null}
               </section>
-            ) : null}
-
-            {simulation.runMode === "formal" ? (
-              <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><History className="h-4 w-4 text-violet-600" />正式任务历史</div><Button type="button" variant="outline" onClick={() => void simulation.refreshHistory()} disabled={simulation.isHistoryLoading} className="h-8 w-8 rounded-md p-0" aria-label="刷新正式任务历史"><RotateCw className={cn("h-3.5 w-3.5", simulation.isHistoryLoading && "animate-spin")} /></Button></div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <Select value={simulation.historyQuery.protocol ?? ""} onChange={(event) => simulation.changeHistoryQuery({ page: 1, protocol: event.target.value as MonomerMdProtocol | "" })} className="h-9 rounded-md border-slate-200 bg-white px-2 text-xs"><option value="">全部协议</option>{FORMAL_PROTOCOLS.map((protocol) => <option key={protocol} value={protocol}>{PROTOCOL_LABELS[protocol]}</option>)}</Select>
-                  <Select value={simulation.historyQuery.status ?? ""} onChange={(event) => simulation.changeHistoryQuery({ page: 1, status: event.target.value as MonomerMdJobStatus | "" })} className="h-9 rounded-md border-slate-200 bg-white px-2 text-xs"><option value="">全部状态</option>{Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select>
-                </div>
-                {simulation.historyError ? <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">{translateUiMessage(simulation.historyError)}</div> : null}
-                <div className="mt-3 max-h-[390px] space-y-2 overflow-auto pr-1">
-                  {simulation.history?.items.length ? simulation.history.items.map((job) => <div key={job.job_id} className={cn("rounded-lg border p-3", simulation.job?.job_id === job.job_id ? "border-sky-300 bg-sky-50" : "border-slate-100 bg-white")}><button type="button" onClick={() => void simulation.loadJob(job.job_id)} className="w-full text-left hover:opacity-80"><div className="flex items-center justify-between gap-2"><span className="truncate font-mono text-[11px] text-slate-600">{job.job_id}</span><StatusBadge status={job.status} /></div><div className="mt-2 text-xs font-semibold text-slate-900">{job.protocol ? PROTOCOL_LABELS[job.protocol] : "--"}{job.queue_position != null ? ` · 队列第 ${job.queue_position} 位` : ""}</div><div className="mt-1 text-[11px] text-slate-500">{formatDate(job.created_at)}</div></button>{["completed", "failed", "cancelled"].includes(job.status) ? <Button type="button" variant="outline" disabled={simulation.deletingJobIds.includes(job.job_id)} onClick={() => { if (window.confirm("删除后，任务参数、结果、深链接和在线存储都无法在产品中恢复。确定继续吗？")) void simulation.deleteJobRecord(job); }} className="mt-2 h-8 rounded-md border-red-200 px-2.5 text-xs text-red-700 hover:bg-red-50">{simulation.deletingJobIds.includes(job.job_id) ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1.5 h-3.5 w-3.5" />}删除记录</Button> : null}{simulation.deleteJobErrors[job.job_id] ? <div className="mt-2 text-[11px] text-red-700">{translateUiMessage(simulation.deleteJobErrors[job.job_id])}</div> : null}</div>) : <div className="rounded-lg border border-dashed border-slate-200 p-5 text-center text-xs text-slate-500">{simulation.isHistoryLoading ? "读取历史…" : "没有符合条件的正式任务"}</div>}
-                </div>
-                <div className="mt-3 flex items-center justify-between text-xs text-slate-500"><Button type="button" variant="outline" aria-label="上一页" className="h-8 w-8 rounded-md p-0" disabled={(simulation.historyQuery.page ?? 1) <= 1} onClick={() => simulation.changeHistoryQuery({ page: (simulation.historyQuery.page ?? 1) - 1 })}><ChevronLeft className="h-3.5 w-3.5" /></Button><span>第 {simulation.historyQuery.page ?? 1} / {historyPageCount} 页 · 共 {simulation.history?.total ?? 0} 项</span><Button type="button" variant="outline" aria-label="下一页" className="h-8 w-8 rounded-md p-0" disabled={(simulation.historyQuery.page ?? 1) >= historyPageCount} onClick={() => simulation.changeHistoryQuery({ page: (simulation.historyQuery.page ?? 1) + 1 })}><ChevronRight className="h-3.5 w-3.5" /></Button></div>
-              </section>
-            ) : null}
-
-            <section className="rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-sm font-semibold text-slate-950"><Timer className="h-4 w-4 text-slate-600" />任务状态</div><StatusBadge status={currentStatus} /></div>
-              <div className="mt-4 space-y-3">
-                <label className="block space-y-1.5"><span className="text-xs font-medium text-slate-500">任务 ID</span><Input value={simulation.job?.job_id ?? ""} readOnly placeholder="暂无任务" className="h-9 rounded-md border-slate-200 bg-slate-50 font-mono text-xs shadow-none" /></label>
-                <div className="grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-1">
-                  <div className="rounded-lg bg-slate-50 px-3 py-2"><span className="block text-[11px] text-slate-400">协议</span><span className="font-semibold text-slate-900">{simulation.job?.protocol ? PROTOCOL_LABELS[simulation.job.protocol] : "--"}</span></div>
-                  <div className="rounded-lg bg-slate-50 px-3 py-2"><span className="block text-[11px] text-slate-400">GPU</span><span className="font-semibold text-slate-900">{simulation.job?.gpu_device ?? "--"}</span></div>
-                </div>
-                <div><div className="mb-1 flex items-center justify-between text-xs text-slate-500"><span>{currentStatus ? STATUS_LABELS[currentStatus] : "提交后开始轮询后端任务。"}</span><span className="tabular-nums">{formatNumber(progress, 0)}%</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className={cn("h-full rounded-full transition-all", currentStatus === "failed" || currentStatus === "cancelled" ? "bg-red-500" : "bg-sky-500")} style={{ width: `${progress}%` }} /></div></div>
-                <div className="grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-1">{STATUS_STEPS.map((status) => { const active = currentStatus === status; const complete = STATUS_STEPS.indexOf(currentStatus ?? "pending") > STATUS_STEPS.indexOf(status) || currentStatus === "completed"; return <div key={status} className={cn("flex items-center justify-between rounded-lg border px-3 py-2", active ? "border-sky-200 bg-sky-50 text-sky-800" : complete ? "border-emerald-100 bg-emerald-50 text-emerald-800" : "border-slate-100 bg-slate-50 text-slate-500")}><span>{STATUS_LABELS[status]}</span>{complete ? <CheckCircle2 className="h-3.5 w-3.5" /> : active ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span className="h-3.5 w-3.5 rounded-full border border-slate-200" />}</div>; })}</div>
-                {simulation.job?.queue_position != null ? <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">当前排队位置：第 {simulation.job.queue_position} 位</div> : null}
-                {simulation.job && simulation.job.run_mode === "formal" && !["completed", "failed", "cancelled"].includes(simulation.job.status) ? <Button type="button" variant="outline" disabled={simulation.job.status === "pending" || simulation.job.status === "cancel_requested" || simulation.cancellingJobIds.includes(simulation.job.job_id)} onClick={() => { const selectedJob = simulation.job; if (!selectedJob) return; const queued = selectedJob.queue_position != null; if (window.confirm(queued ? "确定取消这个排队任务吗？" : "确定终止这个正在进行的任务吗？")) void simulation.cancelJob(selectedJob); }} className="h-9 rounded-md border-red-200 px-3 text-xs text-red-700 hover:bg-red-50"><Ban className="mr-1.5 h-3.5 w-3.5" />{simulation.job.status === "pending" ? "等待 Worker 接收" : simulation.job.status === "cancel_requested" ? "终止中…" : simulation.job.queue_position != null ? "取消排队" : "终止任务"}</Button> : null}
-                {simulation.job && ["completed", "failed", "cancelled"].includes(simulation.job.status) ? <Button type="button" variant="outline" disabled={simulation.deletingJobIds.includes(simulation.job.job_id)} onClick={() => { const selectedJob = simulation.job; if (selectedJob && window.confirm("删除后，任务参数、结果、深链接和在线存储都无法在产品中恢复。确定继续吗？")) void simulation.deleteJobRecord(selectedJob); }} className="h-9 rounded-md border-red-200 px-3 text-xs text-red-700 hover:bg-red-50">{simulation.deletingJobIds.includes(simulation.job.job_id) ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1.5 h-3.5 w-3.5" />}删除记录</Button> : null}
-                {simulation.error ? <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700"><span className="inline-flex items-start gap-2"><TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />{translateUiMessage(simulation.error)}</span></div> : null}
-              </div>
-            </section>
+            </main>
           </div>
-
-          <div className="grid min-w-0 gap-4">
-            <ResultNotice result={result} job={simulation.job} completedWithoutResult={completedWithoutResult} />
-            <SummaryPanel result={result} />
-            <MetricsPanel result={result} />
-            {showSeriesCards ? (
-              <div className="grid gap-4 lg:grid-cols-3">
-                <SeriesCard title="密度" chartLabel="密度曲线" series={result?.density_series} unit="g/cm3" color="#0ea5e9" valueKeys={["density", "density_g_cm3", "rho"]} isLoading={simulation.isJobLoading || simulation.isSubmitting} />
-                <SeriesCard title="温度" chartLabel="温度曲线" series={result?.temperature_series} unit="K" color="#10b981" valueKeys={["temperature", "temperature_k", "temp"]} isLoading={simulation.isJobLoading || simulation.isSubmitting} />
-                <SeriesCard title="能量" chartLabel="能量曲线" series={result?.energy_series} unit="kcal/mol" color="#6366f1" valueKeys={["energy", "total_energy", "total_energy_kcal_mol", "potential_energy"]} isLoading={simulation.isJobLoading || simulation.isSubmitting} />
-              </div>
-            ) : (
-              <section className="rounded-[14px] border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm">正式协议结果已写入摘要和输出文件；该协议未返回前端曲线数据。</section>
-            )}
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]"><TrajectoryCard trajectory={result?.trajectory_preview} /><ArtifactsPanel result={result} job={simulation.job} onDelete={() => void simulation.deleteArtifacts()} deleteError={simulation.artifactDeleteError} /></div>
-          </div>
-        </section>
+        </div>
       </div>
     </div>
   );

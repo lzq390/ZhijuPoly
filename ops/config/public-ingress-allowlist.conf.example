@@ -1,0 +1,7 @@
+# Install as /etc/nexpoly/public-ingress-allowlist.conf with owner root:root
+# and mode 0600. Replace the documentation-only addresses before installation.
+# Use the real public egress address of each administrator/VPN as a /32 (IPv4)
+# or /128 (IPv6), or a reviewed organization CIDR when individual addresses are
+# not stable. Never use 0.0.0.0/0 or ::/0.
+NEXPOLY_INGRESS_ALLOW_IPV4=192.0.2.10/32,198.51.100.0/24
+NEXPOLY_INGRESS_ALLOW_IPV6=

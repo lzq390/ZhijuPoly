@@ -200,7 +200,7 @@ describe("StructureWorkbenchPage", () => {
     ["databaseQuery", "打开数据库查询"],
     ["homopolymerPrediction", "打开均聚物性质预测"],
     ["explorer", "打开聚合物相似性探索"],
-    ["monomerDft", "打开单体 DFT（AIMNet2）"],
+    ["monomerDft", "打开单体 DFT"],
     ["monomerPolymerization", "打开单体正向聚合"],
     ["reverseDesign", "打开Tg 逆向设计"],
     ["conditionalGeneration", "打开条件聚合物生成"],

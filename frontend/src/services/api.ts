@@ -42,6 +42,7 @@ import type {
   MonomerMdJobResponse,
   MonomerMdProtocolCatalogResponse,
   MonomerMdServiceStatusResponse,
+  MonomerMdTrajectoryTimeline,
   MonomerPolymerizationRequest,
   MonomerPolymerizationResponse,
   MonomerPolymerizationStatusResponse,
@@ -164,24 +165,30 @@ export function recoverDevGpuSession(signal?: AbortSignal): Promise<DevGpuSessio
   return postJSON("/dev-gpu-session/recover", {}, signal);
 }
 
-export function lookupSmilesInDatabase(payload: SmilesLookupRequest): Promise<SmilesLookupResponse> {
-  return postJSON("/database-browser/smiles-lookup", payload);
+export function lookupSmilesInDatabase(
+  payload: SmilesLookupRequest,
+  signal?: AbortSignal
+): Promise<SmilesLookupResponse> {
+  return postJSON("/database-browser/smiles-lookup", payload, signal);
 }
 
 export function predictSmiles(payload: PredictRequest, signal?: AbortSignal): Promise<PredictResponse> {
   return postJSON("/predict", payload, signal);
 }
 
-export function fetchMdDemoDefaults(): Promise<MdDemoDefaultsResponse> {
-  return getJSON("/md-demo/defaults");
+export function fetchMdDemoDefaults(signal?: AbortSignal): Promise<MdDemoDefaultsResponse> {
+  return getJSON("/md-demo/defaults", { signal });
 }
 
-export function runMdDemo(payload: MdDemoRunRequest): Promise<MdDemoRunResponse> {
-  return postJSON("/md-demo/run", payload);
+export function runMdDemo(payload: MdDemoRunRequest, signal?: AbortSignal): Promise<MdDemoRunResponse> {
+  return postJSON("/md-demo/run", payload, signal);
 }
 
-export function calculateMdDemoAtomDistance(payload: MdDemoAtomDistanceRequest): Promise<MdDemoAtomDistanceResponse> {
-  return postJSON("/md-demo/atom-distance", payload);
+export function calculateMdDemoAtomDistance(
+  payload: MdDemoAtomDistanceRequest,
+  signal?: AbortSignal
+): Promise<MdDemoAtomDistanceResponse> {
+  return postJSON("/md-demo/atom-distance", payload, signal);
 }
 
 export class MonomerDftApiError extends Error {
@@ -229,33 +236,36 @@ export function parseMonomerDftRetryAfterSeconds(
   return Math.min(60, Math.max(1, Math.ceil(seconds)));
 }
 
+async function monomerDftResponseError(response: Response): Promise<MonomerDftApiError> {
+  const payload = await response.json().catch(() => null) as {
+    detail?: string | { code?: string; message?: string; retryable?: boolean; details?: unknown } | unknown[];
+    code?: string;
+    message?: string;
+    retryable?: boolean;
+    details?: unknown;
+  } | null;
+  const structuredDetail = payload?.detail && typeof payload.detail === "object" && !Array.isArray(payload.detail)
+    ? payload.detail
+    : null;
+  const message =
+    (typeof payload?.detail === "string" ? payload.detail : null) ??
+    structuredDetail?.message ??
+    payload?.message ??
+    (Array.isArray(payload?.detail) ? "单体 DFT 请求参数校验失败。" : `单体 DFT 请求失败（${response.status}）。`);
+  return new MonomerDftApiError({
+    message,
+    status: response.status,
+    code: structuredDetail?.code ?? payload?.code ?? null,
+    retryable: structuredDetail?.retryable ?? payload?.retryable,
+    retryAfterSeconds: parseMonomerDftRetryAfterSeconds(response.headers.get("Retry-After")),
+    details: structuredDetail?.details ?? payload?.details ?? payload?.detail
+  });
+}
+
 async function monomerDftRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, init);
   if (!response.ok) {
-    const payload = await response.json().catch(() => null) as {
-      detail?: string | { code?: string; message?: string; retryable?: boolean; details?: unknown } | unknown[];
-      code?: string;
-      message?: string;
-      retryable?: boolean;
-      details?: unknown;
-    } | null;
-    const structuredDetail = payload?.detail && typeof payload.detail === "object" && !Array.isArray(payload.detail)
-      ? payload.detail
-      : null;
-    const message =
-      (typeof payload?.detail === "string" ? payload.detail : null) ??
-      structuredDetail?.message ??
-      payload?.message ??
-      (Array.isArray(payload?.detail) ? "单体 DFT 请求参数校验失败。" : `单体 DFT 请求失败（${response.status}）。`);
-    const retryAfterSeconds = parseMonomerDftRetryAfterSeconds(response.headers.get("Retry-After"));
-    throw new MonomerDftApiError({
-      message,
-      status: response.status,
-      code: structuredDetail?.code ?? payload?.code ?? null,
-      retryable: structuredDetail?.retryable ?? payload?.retryable,
-      retryAfterSeconds,
-      details: structuredDetail?.details ?? payload?.details ?? payload?.detail
-    });
+    throw await monomerDftResponseError(response);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -445,6 +455,12 @@ export function getMonomerDftBundleUrl(jobId: string): string {
   return `${API_BASE_URL}/monomer-dft/jobs/${encodeURIComponent(jobId)}/bundle`;
 }
 
+export async function downloadMonomerDftBundle(jobId: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(getMonomerDftBundleUrl(jobId), { signal });
+  if (!response.ok) throw await monomerDftResponseError(response);
+  return response.blob();
+}
+
 export function fetchMonomerDftArtifactJson<T>(jobId: string, artifactId: string, signal?: AbortSignal): Promise<T> {
   return monomerDftRequest(`/monomer-dft/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactId)}`, { signal });
 }
@@ -478,6 +494,17 @@ export async function fetchMonomerMdJob(jobId: string, signal?: AbortSignal): Pr
   return normalizeMonomerMdJob(job);
 }
 
+export function fetchMonomerMdTrajectoryTimeline(
+  jobId: string,
+  stageId: string,
+  signal?: AbortSignal
+): Promise<MonomerMdTrajectoryTimeline> {
+  return getJSON(
+    `/monomer-md/jobs/${encodeURIComponent(jobId)}/visualization/stages/${encodeURIComponent(stageId)}/trajectory`,
+    { signal }
+  );
+}
+
 export async function fetchMonomerMdJobs(
   query: MonomerMdJobListQuery,
   signal?: AbortSignal
@@ -485,6 +512,7 @@ export async function fetchMonomerMdJobs(
   const params = new URLSearchParams();
   if (query.run_mode) params.set("run_mode", query.run_mode);
   if (query.active_only != null) params.set("active_only", String(query.active_only));
+  params.set("include_result", String(query.include_result ?? false));
   if (query.protocol) params.set("protocol", query.protocol);
   if (query.status) params.set("status", query.status);
   if (query.page != null) params.set("page", String(query.page));
@@ -505,9 +533,13 @@ export async function cancelMonomerMdJob(
   return normalizeMonomerMdJob(job);
 }
 
-export async function deleteMonomerMdArtifacts(jobId: string): Promise<MonomerMdJobResponse> {
+export async function deleteMonomerMdArtifacts(
+  jobId: string,
+  signal?: AbortSignal
+): Promise<MonomerMdJobResponse> {
   const response = await fetch(`${API_BASE_URL}/monomer-md/jobs/${encodeURIComponent(jobId)}/artifacts`, {
-    method: "DELETE"
+    method: "DELETE",
+    signal
   });
 
   if (!response.ok) {
@@ -669,8 +701,11 @@ export function fetchStructure2D(smiles: string, signal?: AbortSignal): Promise<
   return postJSON("/structure/2d", { smiles }, signal);
 }
 
-export function standardizeSmiles(payload: SmilesStandardizeRequest): Promise<SmilesStandardizeResponse> {
-  return postJSON("/structure/standardize-smiles", payload);
+export function standardizeSmiles(
+  payload: SmilesStandardizeRequest,
+  signal?: AbortSignal
+): Promise<SmilesStandardizeResponse> {
+  return postJSON("/structure/standardize-smiles", payload, signal);
 }
 
 export function recognizeStructureImage(file: File, signal?: AbortSignal): Promise<StructureImageRecognitionResponse> {

@@ -3,6 +3,7 @@ import {
   createMonomerDftJob,
   deleteMonomerDftArtifactsAndReloadJob,
   deleteMonomerDftJob,
+  downloadMonomerDftBundle,
   fetchMonomerDftCapabilities,
   fetchMonomerDftJobs,
   getMonomerDftArtifactUrl,
@@ -120,6 +121,32 @@ describe("monomer DFT API client", () => {
   it("exposes artifact-id and bundle URLs without host filesystem paths", () => {
     expect(getMonomerDftArtifactUrl("job id", "result/json")).toBe("/api/v1/monomer-dft/jobs/job%20id/artifacts/result%2Fjson");
     expect(getMonomerDftBundleUrl("job id")).toBe("/api/v1/monomer-dft/jobs/job%20id/bundle");
+  });
+
+  it("downloads the result bundle as a blob and preserves structured download errors", async () => {
+    const bundle = new Blob(["zip"], { type: "application/zip" });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(bundle, {
+        status: 200,
+        headers: { "Content-Type": "application/zip" }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        detail: { code: "download_capacity_full", message: "busy", retryable: true }
+      }), {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": "5" }
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const downloaded = await downloadMonomerDftBundle("job id");
+    expect(downloaded.type).toBe("application/zip");
+    expect(await downloaded.text()).toBe("zip");
+    await expect(downloadMonomerDftBundle("job id")).rejects.toMatchObject({
+      status: 429,
+      code: "download_capacity_full",
+      retryable: true,
+      retryAfterSeconds: 5
+    });
   });
 
   it("preserves structured retry information", async () => {

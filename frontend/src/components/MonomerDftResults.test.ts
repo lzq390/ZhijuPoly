@@ -57,9 +57,9 @@ const result = {
 const trajectory = {
   units: { energy: "eV", fmax: "eV/angstrom", coordinates: "angstrom" },
   frames: [
-    { step: 0, energy_eV: -99, fmax_eV_per_A: 0.4, coordinates_angstrom: [[0, 0, 0], [1, 0, 0]] },
-    { step: 1, energy_eV: -99.5, fmax_eV_per_A: 0.1, coordinates_angstrom: [[0, 0, 0], [1.1, 0, 0]] },
-    { step: 2, energy_eV: -100, fmax_eV_per_A: 0.005, coordinates_angstrom: [[0, 0, 0], [1.2 + 5e-9, 0, 0]] }
+    { step: 0, energy_eV: -99, fmax_eV_per_A: 0.4, coordinates_angstrom: [[0, 0, 0], [1, 0, 0]], charges_e: [0.1, -0.1] },
+    { step: 1, energy_eV: -99.5, fmax_eV_per_A: 0.1, coordinates_angstrom: [[0, 0, 0], [1.1, 0, 0]], charges_e: [0.2, -0.2] },
+    { step: 2, energy_eV: -100, fmax_eV_per_A: 0.005, coordinates_angstrom: [[0, 0, 0], [1.2 + 5e-9, 0, 0]], charges_e: [0.3, -0.3] }
   ]
 } satisfies MonomerDftTrajectoryArtifact;
 
@@ -73,6 +73,9 @@ describe("monomer DFT coordinate frames", () => {
       ["final", "final", undefined]
     ]);
     expect(result.optimization.trace.map((point) => point.step)).toEqual([0, 1, 2]);
+    expect(frames[0].atoms.map((atom) => atom.charge_e)).toEqual([0.1, -0.1]);
+    expect(frames[1].atoms.map((atom) => atom.charge_e)).toEqual([0.2, -0.2]);
+    expect(frames[2].atoms.map((atom) => atom.charge_e)).toEqual([0.3, -0.3]);
     expect(atomsToXyz(frames[1].atoms, frames[1].label).split("\n")).toEqual([
       "2",
       "优化第 1 步",

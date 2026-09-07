@@ -68,7 +68,7 @@ const WORKBENCH_MODULES: WorkbenchModule[] = [
   },
   {
     id: "monomerDft",
-    name: "单体 DFT（AIMNet2）",
+    name: "单体 DFT",
     shortName: "单体 DFT",
     icon: Orbit,
     relationship: "shared"

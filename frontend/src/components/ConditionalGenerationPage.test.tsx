@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   refreshStatus: vi.fn(),
   resolveSmilesForSearch: vi.fn(),
   clearCanvas: vi.fn(),
+  loadStructure: vi.fn(),
   importImageFile: vi.fn(),
   syncSmilesFromCanvas: vi.fn(),
   toggle3D: vi.fn(),
@@ -89,6 +90,7 @@ vi.mock("../hooks/useTgStructureCanvas", async () => {
       flushSmilesDraft: mocks.flushSmilesDraft,
       cancelSmilesDraftSync: mocks.cancelSmilesDraftSync,
       adoptCanvasSmiles: mocks.adoptCanvasSmiles,
+      loadStructure: mocks.loadStructure,
       clearCanvas: mocks.clearCanvas,
       importImageFile: mocks.importImageFile,
       syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
@@ -128,15 +130,17 @@ afterEach(() => {
 });
 
 describe("ConditionalGenerationPage Tg workbench reuse", () => {
-  it("renders the Tg workbench skeleton and keeps advanced sampling collapsed", () => {
+  it("完整复用结构工作台骨架并默认收起高级采样", () => {
     const view = render(<ConditionalGenerationPage structure={makeStructure()} />);
     const title = screen.getByRole("heading", { name: "条件聚合物生成" });
 
-    expect(title.parentElement).toBe(view.container.firstElementChild);
-    expect(screen.getByRole("button", { name: "导入图片" }).id).toBe("btn-import-img");
-    expect(screen.getByRole("button", { name: "清空画布" }).id).toBe("btn-clear-canvas");
-    expect(screen.getByRole("button", { name: "生成SMILES" }).id).toBe("btn-sync-canvas");
-    expect(screen.getByRole("button", { name: "3D构象" }).id).toBe("btn-toggle-3d");
+    expect(view.container.firstElementChild?.classList.contains("np-structure-workbench")).toBe(true);
+    expect(title.parentElement?.classList.contains("np-sw-page")).toBe(true);
+    expect(screen.getByRole("button", { name: "加载结构" }).getAttribute("data-workbench-tool")).toBe("load");
+    expect(screen.getByRole("button", { name: "导入图片" }).getAttribute("data-workbench-tool")).toBe("import");
+    expect(screen.getByRole("button", { name: "清空画布" }).getAttribute("data-workbench-tool")).toBe("clear");
+    expect(screen.getByRole("button", { name: "生成SMILES" }).getAttribute("data-workbench-tool")).toBe("sync");
+    expect(screen.getByRole("button", { name: "3D构象" }).getAttribute("data-workbench-tool")).toBe("3d");
     expect(screen.getByRole("button", { name: "生成参数" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "AI 助手" })).toBeTruthy();
 
@@ -155,6 +159,8 @@ describe("ConditionalGenerationPage Tg workbench reuse", () => {
   it("wires the shared Tg canvas toolbar actions to the same controls", async () => {
     render(<ConditionalGenerationPage structure={makeStructure()} />);
 
+    fireEvent.click(screen.getByRole("button", { name: "加载结构" }));
+    await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledWith("*CC*"));
     fireEvent.click(screen.getByRole("button", { name: "清空画布" }));
     await waitFor(() => expect(mocks.clearCanvas).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole("button", { name: "生成SMILES" }));
@@ -164,8 +170,8 @@ describe("ConditionalGenerationPage Tg workbench reuse", () => {
 
     expect(mocks.toggle3D).toHaveBeenCalledOnce();
     expect(mocks.copySmiles).toHaveBeenCalledWith("*CC*");
-    expect(mocks.cancelSmilesDraftSync).toHaveBeenCalledTimes(2);
-    expect(mocks.adoptCanvasSmiles).toHaveBeenCalledTimes(2);
+    expect(mocks.cancelSmilesDraftSync).toHaveBeenCalledTimes(3);
+    expect(mocks.adoptCanvasSmiles).toHaveBeenCalledTimes(3);
 
     const structureImage = new File(["image"], "seed.png", { type: "image/png" });
     fireEvent.change(screen.getByLabelText("导入结构图片"), {
@@ -218,7 +224,7 @@ describe("ConditionalGenerationPage Tg workbench reuse", () => {
     fireEvent.keyDown(separator, { key: "ArrowLeft" });
     expect(separator.getAttribute("aria-valuenow")).toBe("396");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "关闭候选结果" })[1]);
+    fireEvent.click(screen.getByRole("button", { name: "关闭候选结果" }));
     expect(document.querySelector(".cg-results-drawer")?.getAttribute("aria-hidden")).toBe("true");
     expect(screen.getByRole("button", { name: "展开条件生成候选" })).toBeTruthy();
   });

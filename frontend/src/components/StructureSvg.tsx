@@ -6,6 +6,7 @@ type StructureSvgProps = {
   alt?: string;
   className?: string;
   imageClassName?: string;
+  fillContainer?: boolean;
   transparentBackground?: boolean;
 };
 
@@ -74,6 +75,7 @@ export function StructureSvg({
   alt = "2D structure",
   className,
   imageClassName,
+  fillContainer = false,
   transparentBackground = false
 }: StructureSvgProps) {
   const src = useMemo(() => {
@@ -85,11 +87,15 @@ export function StructureSvg({
   }, [svg, transparentBackground]);
 
   return (
-    <div className={className}>
+    <div className={cn(fillContainer && "relative", className)}>
       <img
         src={src}
         alt={alt}
-        className={cn("mx-auto block h-auto max-h-full w-full max-w-full object-contain", imageClassName)}
+        className={cn(
+          "mx-auto block max-h-full w-full max-w-full object-contain",
+          fillContainer ? "absolute inset-0 h-full" : "h-auto",
+          imageClassName
+        )}
         decoding="async"
         draggable={false}
         loading="lazy"

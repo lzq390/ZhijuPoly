@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -17,6 +17,67 @@ const apiMocks = vi.hoisted(() => ({
   fetchHistogram: vi.fn(),
   search: vi.fn()
 }));
+
+function installTwoKMedia(initialMatches: boolean) {
+  let matches = initialMatches;
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  const mediaQuery = {
+    get matches() {
+      return matches;
+    },
+    media: "(min-width: 2000px) and (min-height: 1120px)",
+    onchange: null,
+    addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => listeners.add(listener),
+    removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener),
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    dispatchEvent: () => true
+  } as MediaQueryList;
+  vi.stubGlobal("matchMedia", vi.fn(() => mediaQuery));
+  return {
+    setMatches(nextMatches: boolean) {
+      matches = nextMatches;
+      const event = { matches, media: mediaQuery.media } as MediaQueryListEvent;
+      listeners.forEach((listener) => listener(event));
+    }
+  };
+}
+
+function installWorkbenchContainerWidth(initialWidth: number) {
+  let width = initialWidth;
+  const observers = new Set<ResizeObserverCallback>();
+  class ResizeObserverMock {
+    constructor(private readonly callback: ResizeObserverCallback) {}
+    observe() {
+      observers.add(this.callback);
+      this.callback([], this as unknown as ResizeObserver);
+    }
+    unobserve() {
+      observers.delete(this.callback);
+    }
+    disconnect() {
+      observers.delete(this.callback);
+    }
+  }
+  vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
+    width,
+    height: 900,
+    top: 0,
+    right: width,
+    bottom: 900,
+    left: 0,
+    x: 0,
+    y: 0,
+    toJSON: () => ({})
+  }));
+  return {
+    setWidth(nextWidth: number) {
+      width = nextWidth;
+      observers.forEach((observer) => observer([], {} as ResizeObserver));
+    }
+  };
+}
 
 vi.mock("../services/api", () => ({
   API_BASE_URL: "/api/v1",
@@ -222,6 +283,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 async function renderLoadedPage() {
@@ -230,6 +292,62 @@ async function renderLoadedPage() {
 }
 
 describe("DatabaseFilterPage", () => {
+  it("使用共享工作台骨架，并将状态与 Surface 操作分层", async () => {
+    await renderLoadedPage();
+
+    const root = document.querySelector<HTMLElement>(".np-database-filter");
+    expect(root?.classList.contains("np-structure-workbench")).toBe(true);
+    expect(root?.classList.contains("np-material-discovery-page")).toBe(true);
+    expect(
+      screen.getByRole("heading", { name: "数据库筛选" }).classList.contains("np-material-discovery-page-title")
+    ).toBe(true);
+    expect(root?.querySelector(".np-sw-page > .np-sw-layout > .np-sw-workspace")).not.toBeNull();
+    expect(root?.querySelectorAll(".dbf-module-toolbar button")).toHaveLength(0);
+
+    const surfaceHeader = root?.querySelector<HTMLElement>(".dbf-surface-header");
+    expect(surfaceHeader).not.toBeNull();
+    expect(
+      within(surfaceHeader as HTMLElement).getByRole("button", {
+        name: "刷新筛选属性和分布统计"
+      })
+    ).not.toBeNull();
+    expect(within(surfaceHeader as HTMLElement).getByRole("button", { name: "重置条件" })).not.toBeNull();
+  });
+
+  it("在原生 2K 档使用 540px 抽屉和 15px 键盘步进", async () => {
+    installTwoKMedia(true);
+    const container = installWorkbenchContainerWidth(2048);
+    await renderLoadedPage();
+    expect(document.querySelector<HTMLElement>(".np-database-filter")?.style.getPropertyValue("--np-sw-drawer-width")).toBe("540px");
+
+    fireEvent.change(screen.getByLabelText("属性 1 最大值"), { target: { value: "180" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
+    expect(document.querySelector(".np-sw-drawer-layer")?.classList.contains("is-overlay")).toBe(true);
+    act(() => container.setWidth(2050));
+    await waitFor(() => expect(document.querySelector(".np-sw-drawer-layer")?.classList.contains("is-overlay")).toBe(false));
+    const separator = await screen.findByRole("separator", { name: "调整筛选结果区域宽度" });
+    expect(separator.getAttribute("aria-valuemin")).toBe("480");
+    expect(separator.getAttribute("aria-valuemax")).toBe("720");
+    expect(separator.getAttribute("aria-valuenow")).toBe("540");
+    fireEvent.keyDown(separator, { key: "ArrowLeft" });
+    expect(separator.getAttribute("aria-valuenow")).toBe("555");
+  });
+
+  it("跨标准与 2K 档时按可调范围比例映射抽屉宽度", async () => {
+    const media = installTwoKMedia(false);
+    await renderLoadedPage();
+    fireEvent.change(screen.getByLabelText("属性 1 最大值"), { target: { value: "180" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
+    const separator = await screen.findByRole("separator", { name: "调整筛选结果区域宽度" });
+    fireEvent.keyDown(separator, { key: "ArrowLeft" });
+    expect(separator.getAttribute("aria-valuenow")).toBe("390");
+
+    act(() => media.setMatches(true));
+    expect(separator.getAttribute("aria-valuemin")).toBe("480");
+    expect(separator.getAttribute("aria-valuemax")).toBe("720");
+    expect(separator.getAttribute("aria-valuenow")).toBe("550");
+  });
+
   it("在 StrictMode 中合并目录请求，并在重新进入时同步使用缓存", async () => {
     const firstRender = render(
       <StrictMode>
@@ -237,14 +355,14 @@ describe("DatabaseFilterPage", () => {
       </StrictMode>
     );
     await screen.findByRole("button", { name: /玻璃化转变温度/ });
-    await screen.findByRole("img", { name: /全库测量记录真实直方图/ });
+    await screen.findByRole("img", { name: /属性分布图/ });
     expect(apiMocks.fetchOptions).toHaveBeenCalledOnce();
     expect(apiMocks.fetchHistogram).toHaveBeenCalledOnce();
 
     firstRender.unmount();
     render(<DatabaseFilterPage />);
     expect(screen.getByRole("button", { name: /玻璃化转变温度/ })).not.toBeNull();
-    expect(screen.queryByText("正在读取属性目录")).toBeNull();
+    expect(screen.queryByText("正在加载筛选属性")).toBeNull();
     expect(apiMocks.fetchOptions).toHaveBeenCalledOnce();
     expect(apiMocks.fetchHistogram).toHaveBeenCalledOnce();
   });
@@ -260,14 +378,14 @@ describe("DatabaseFilterPage", () => {
     render(<DatabaseFilterPage />);
 
     expect(screen.getByRole("button", { name: /玻璃化转变温度/ })).not.toBeNull();
-    expect(screen.queryByText("正在读取属性目录")).toBeNull();
+    expect(screen.queryByText("正在加载筛选属性")).toBeNull();
     expect(
-      await screen.findByText("属性目录同步失败，当前继续使用本次会话中的缓存数据。")
+      await screen.findByText("筛选属性更新失败，将继续使用已加载的数据。")
     ).not.toBeNull();
     expect(apiMocks.fetchOptions).toHaveBeenCalledTimes(2);
   });
 
-  it("移除标题区性质分类标签，并可在工具栏检查数据库更新", async () => {
+  it("移除标题区性质分类标签，并可在 Surface 表头检查数据库更新", async () => {
     await renderLoadedPage();
     expect(document.querySelector(".dbf-surface-badges")).toBeNull();
 
@@ -276,7 +394,7 @@ describe("DatabaseFilterPage", () => {
       data: null,
       etag: 'W/"pf-options-v1-test"'
     });
-    fireEvent.click(screen.getByRole("button", { name: /刷新数据，检查数据库属性目录是否有更新/ }));
+    fireEvent.click(screen.getByRole("button", { name: "刷新筛选属性和分布统计" }));
 
     await waitFor(() => expect(apiMocks.fetchOptions).toHaveBeenCalledTimes(2));
     expect(apiMocks.fetchOptions.mock.calls[1][0]).toMatchObject({
@@ -284,7 +402,7 @@ describe("DatabaseFilterPage", () => {
     });
     expect(
       (await screen.findByRole("button", {
-        name: /刷新数据，检查数据库属性目录是否有更新/
+        name: "刷新筛选属性和分布统计"
       })) as HTMLButtonElement
     ).toHaveProperty("disabled", false);
   });
@@ -293,7 +411,13 @@ describe("DatabaseFilterPage", () => {
     await renderLoadedPage();
 
     expect(screen.getByText("615,159")).not.toBeNull();
-    expect(await screen.findByRole("img", { name: /全库测量记录真实直方图，45,160 条记录/ })).not.toBeNull();
+    expect(await screen.findByRole("img", { name: /属性分布图，45,160 条测量记录/ })).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "多属性范围筛选" })).not.toBeNull();
+    expect(screen.getByText("需同时满足")).not.toBeNull();
+    expect(screen.queryByText("当前草稿表达式")).toBeNull();
+    expect(document.querySelector(".dbf-expression-capsule code")?.textContent).toContain("Tg：请填写最小值或最大值");
+    expect(screen.getByText("相同聚合物合并展示")).not.toBeNull();
+    expect(screen.queryByText(/PostgreSQL/)).toBeNull();
     const bars = document.querySelectorAll<HTMLElement>(".dbf-histogram-bars > i");
     expect(bars).toHaveLength(6);
     expect(Number.parseFloat(bars[0]?.style.height ?? "0")).toBeLessThan(
@@ -312,7 +436,7 @@ describe("DatabaseFilterPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /玻璃化转变温度/ }));
     expect(screen.getByText("标准化属性")).not.toBeNull();
     expect(screen.getByText("原始属性")).not.toBeNull();
-    fireEvent.change(screen.getByPlaceholderText("搜索属性名、key 或单位"), {
+    fireEvent.change(screen.getByPlaceholderText("搜索属性名称或单位"), {
       target: { value: "Cv" }
     });
     expect(screen.queryByText("标准化属性")).toBeNull();
@@ -320,11 +444,43 @@ describe("DatabaseFilterPage", () => {
     expect(screen.getByRole("button", { name: /Cv · cal/ })).not.toBeNull();
   });
 
+  it("禁用其它条件已使用的属性，并在属性全部占用后停止新增", async () => {
+    await renderLoadedPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "添加条件" }));
+    let conditionRows = document.querySelectorAll<HTMLElement>(".dbf-condition-row");
+    expect(conditionRows).toHaveLength(2);
+
+    const secondRow = conditionRows[1] as HTMLElement;
+    const secondTrigger = secondRow.querySelector<HTMLButtonElement>(".dbf-property-trigger") as HTMLButtonElement;
+    fireEvent.click(secondTrigger);
+    const secondPicker = within(secondRow).getByRole("dialog", { name: "选择筛选属性" });
+    const occupiedTg = within(secondPicker).getByRole("button", {
+      name: /玻璃化转变温度.*已用于属性 1/
+    }) as HTMLButtonElement;
+    expect(occupiedTg.disabled).toBe(true);
+    expect(occupiedTg.title).toBe("已用于属性 1");
+
+    fireEvent.click(occupiedTg);
+    expect(secondTrigger.textContent).toContain("带隙 (Bandgap)");
+    expect(within(secondRow).getByRole("dialog", { name: "选择筛选属性" })).not.toBeNull();
+    fireEvent.click(secondTrigger);
+
+    const addButton = screen.getByRole("button", { name: "添加条件" });
+    fireEvent.click(addButton);
+    fireEvent.click(addButton);
+    conditionRows = document.querySelectorAll<HTMLElement>(".dbf-condition-row");
+    expect(conditionRows).toHaveLength(4);
+    expect(screen.getByText("4 / 8")).not.toBeNull();
+    expect(screen.getByText("所有可筛选属性均已添加")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "无更多可用属性" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("执行本地阈值校验并将真实 standardized 契约提交到结果抽屉", async () => {
     await renderLoadedPage();
 
     fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
-    expect((await screen.findAllByText("至少填写一个阈值。")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("请填写最小值或最大值。")).length).toBeGreaterThan(0);
     expect(apiMocks.search).not.toHaveBeenCalled();
 
     const minInput = screen.getByLabelText("属性 1 最小值");
@@ -372,20 +528,21 @@ describe("DatabaseFilterPage", () => {
     expect(await screen.findAllByText("原始测量")).toHaveLength(2);
 
     const submittedContext = document.querySelector(".dbf-result-context strong");
-    expect(submittedContext?.textContent).toContain("Tg 100–200 °C");
+    expect(submittedContext?.textContent).toContain("Tg：100–200 °C");
     fireEvent.change(minInput, { target: { value: "120" } });
-    expect(document.querySelector(".dbf-expression-capsule code")?.textContent).toContain("Tg 120–200 °C");
-    expect(submittedContext?.textContent).toContain("Tg 100–200 °C");
+    expect(document.querySelector(".dbf-expression-capsule code")?.textContent).toContain("Tg：120–200 °C");
+    expect(submittedContext?.textContent).toContain("Tg：100–200 °C");
 
-    const separator = screen.getByRole("separator", { name: "调整结果抽屉宽度" });
+    const separator = screen.getByRole("separator", { name: "调整筛选结果区域宽度" });
     expect(separator.getAttribute("aria-valuenow")).toBe("380");
     fireEvent.keyDown(separator, { key: "ArrowLeft" });
     expect(separator.getAttribute("aria-valuenow")).toBe("390");
 
     fireEvent.click(screen.getByRole("button", { name: "关闭筛选结果" }));
     const reopen = await screen.findByRole("button", { name: /查看结果/ });
-    expect(reopen.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByText("示例聚合物")).toBeNull();
+    expect(document.querySelector(".np-sw-drawer-layer")?.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByRole("heading", { name: "筛选结果" })).toBeNull();
+    expect(screen.getByText("示例聚合物").closest("[inert]")).not.toBeNull();
     fireEvent.click(reopen);
     expect(await screen.findByRole("heading", { name: "筛选结果" })).not.toBeNull();
     expect(apiMocks.search).toHaveBeenCalledOnce();
@@ -441,9 +598,10 @@ describe("DatabaseFilterPage", () => {
     fireEvent.change(screen.getByLabelText("属性 1 最大值"), { target: { value: "180" } });
     fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
     expect(await screen.findByText("暂时无法完成筛选")).not.toBeNull();
-    expect(screen.getByText("database timeout")).not.toBeNull();
+    expect(screen.getByText("筛选暂时无法完成，请稍后重试。")).not.toBeNull();
+    expect(screen.queryByText("database timeout")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "重试本次查询" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新筛选" }));
     expect(await screen.findByText("没有找到匹配记录")).not.toBeNull();
     expect(apiMocks.search).toHaveBeenCalledTimes(2);
   });
@@ -459,6 +617,7 @@ describe("DatabaseFilterPage", () => {
 
     fireEvent.change(screen.getByLabelText("属性 1 最小值"), { target: { value: "100" } });
     fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
+    expect(document.querySelector(".dbf-result-skeletons")).not.toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "正在筛选" }));
 
     await waitFor(() => expect(apiMocks.search).toHaveBeenCalledOnce());
@@ -467,7 +626,91 @@ describe("DatabaseFilterPage", () => {
     expect(apiMocks.search).toHaveBeenCalledOnce();
   });
 
+  it("以单行省略预览收起长标题与 SMILES，并允许展开完整内容", async () => {
+    const longLabel = `超长性质字段 ${"thermal_property_key_".repeat(8)}`;
+    const longTitle = `poly{${"NCC(=O)c1ccc(cc1)".repeat(12)}}`;
+    const longSmiles = `*${"CC(C)(C)OC(=O)NCC".repeat(18)}*`;
+    apiMocks.fetchOptions.mockResolvedValueOnce({
+      status: "success",
+      data: {
+        ...optionsResponse,
+        options: [{ ...optionsResponse.options[0], label: longLabel }, ...optionsResponse.options.slice(1)]
+      },
+      etag: 'W/"pf-options-long-fields"'
+    });
+    apiMocks.search.mockResolvedValueOnce({
+      ...successResponse,
+      results: [{ ...successResponse.results[0], polymer_name: longTitle, canonical_smiles: longSmiles }]
+    });
+
+    render(<DatabaseFilterPage />);
+    const longPropertyTrigger = await screen.findByRole("button", { name: new RegExp(longLabel.slice(0, 12)) });
+    fireEvent.change(screen.getByLabelText("属性 1 最大值"), { target: { value: "180" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
+
+    const title = await screen.findByRole("heading", { name: longTitle });
+    const titleShell = title.closest(".dbf-result-title") as HTMLElement;
+    const expandTitleButton = within(titleShell).getByRole("button", { name: "展开完整标题" });
+    expect(titleShell.classList.contains("is-expanded")).toBe(false);
+    expect(expandTitleButton.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(expandTitleButton);
+    expect(titleShell.classList.contains("is-expanded")).toBe(true);
+    expect(within(titleShell).getByRole("button", { name: "收起完整标题" }).getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(within(titleShell).getByRole("button", { name: "收起完整标题" }));
+    expect(titleShell.classList.contains("is-expanded")).toBe(false);
+
+    expect(document.querySelector(".dbf-smiles-content")).toBeNull();
+    expect(document.querySelectorAll(".dbf-smiles-details")).toHaveLength(2);
+    expect(screen.getByText("SMILES", { selector: ".dbf-smiles-summary-label strong" })).not.toBeNull();
+
+    const canonicalLabel = screen.getByText("canonical SMILES", {
+      selector: ".dbf-smiles-summary-label strong"
+    });
+    const canonicalDetails = canonicalLabel.closest("details") as HTMLDetailsElement;
+    const canonicalSummary = canonicalLabel.closest("summary") as HTMLElement;
+    const collapsedPreview = within(canonicalDetails).getByText(longSmiles, { selector: ".dbf-smiles-preview" });
+    expect(canonicalDetails.open).toBe(false);
+    expect(collapsedPreview.closest("summary")).toBe(canonicalSummary);
+    expect(canonicalSummary.textContent).toContain("展开");
+    expect(canonicalSummary.textContent).not.toContain("展开查看");
+
+    fireEvent.click(canonicalSummary);
+    const smiles = await screen.findByText(longSmiles, { selector: ".dbf-smiles-content code" });
+    expect(within(canonicalDetails).queryByText(longSmiles, { selector: ".dbf-smiles-preview" })).toBeNull();
+    expect(smiles.closest(".dbf-smiles-details")?.getAttribute("open")).not.toBeNull();
+    expect(within(canonicalDetails).getByText("收起")).not.toBeNull();
+    expect(within(canonicalDetails).getByRole("button", { name: "复制 canonical SMILES" })).not.toBeNull();
+
+    fireEvent.click(canonicalSummary);
+    await waitFor(() => expect(within(canonicalDetails).queryByText(longSmiles, { selector: ".dbf-smiles-content code" })).toBeNull());
+    expect(within(canonicalDetails).getByText(longSmiles, { selector: ".dbf-smiles-preview" })).not.toBeNull();
+    expect(canonicalDetails.open).toBe(false);
+    expect(longPropertyTrigger.closest(".dbf-condition-property")).not.toBeNull();
+    expect(document.querySelector(".dbf-result-card")?.closest(".dbf-drawer-body")).not.toBeNull();
+  });
+
   it("限制最多八条条件，并在重置时取消进行中的查询", async () => {
+    const expandedOptions: PropertyFilterOption[] = [
+      ...optionsResponse.options,
+      ...Array.from({ length: 4 }, (_, index) => ({
+        ...optionsResponse.options[1],
+        option_key: `standardized:test_property_${index + 5}:`,
+        label: `测试属性 ${index + 5}`,
+        property_key: `test_property_${index + 5}`,
+        canonical_unit: null
+      }))
+    ];
+    apiMocks.fetchOptions.mockResolvedValue({
+      status: "success",
+      data: { ...optionsResponse, options: expandedOptions },
+      etag: 'W/"pf-options-eight-properties"'
+    });
+    apiMocks.fetchHistogram.mockImplementation((optionKey: string) => {
+      const option = expandedOptions.find((candidate) => candidate.option_key === optionKey);
+      if (!option) throw new Error(`unknown histogram option ${optionKey}`);
+      return Promise.resolve(histogramResponse(option));
+    });
     const requestSignals: AbortSignal[] = [];
     apiMocks.search.mockImplementation((_payload, signal: AbortSignal) => {
       requestSignals.push(signal);
@@ -508,7 +751,8 @@ describe("DatabaseFilterPage", () => {
     apiMocks.fetchOptions.mockRejectedValueOnce(new Error("PostgreSQL unavailable"));
     render(<DatabaseFilterPage />);
 
-    expect(await screen.findByText("PostgreSQL unavailable")).not.toBeNull();
+    expect(await screen.findByText("筛选属性加载失败，请稍后重试。")).not.toBeNull();
+    expect(screen.queryByText("PostgreSQL unavailable")).toBeNull();
     apiMocks.fetchOptions.mockResolvedValueOnce({
       status: "success",
       data: optionsResponse,

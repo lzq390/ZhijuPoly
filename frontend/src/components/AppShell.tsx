@@ -185,20 +185,27 @@ export function AppShell({
   const isStructureWorkbench = activeModule === "structureWorkbench";
   const isHomopolymerPredictionWorkbench = activeModule === "homopolymerPrediction";
   const isMonomerPolymerizationWorkbench = activeModule === "monomerPolymerization";
+  const isMdSimulationWorkbench = activeModule === "mdSimulationDemo";
+  const isMonomerMdSimulationWorkbench = activeModule === "monomerMdSimulation";
+  const isMonomerDftWorkbench = activeModule === "monomerDft";
   const isSimilarityExplorerWorkbench = activeModule === "explorer";
+  const isDatabaseQueryWorkbench = activeModule === "databaseQuery";
   const isDatabaseFilterWorkbench = activeModule === "databaseFilter";
   const isDatabaseAnalysisWorkbench = activeModule === "database";
   const isKnowledgeWorkbench = activeModule === "knowledge";
   const isPolytaoWorkbench = activeModule === "polytaoGeneration";
   const isResearchWorkbench =
     isSimilarityExplorerWorkbench ||
-    activeModule === "databaseQuery" ||
+    isDatabaseQueryWorkbench ||
     isDatabaseFilterWorkbench ||
     isDatabaseAnalysisWorkbench ||
     isKnowledgeWorkbench ||
     isPolytaoWorkbench ||
     isHomopolymerPredictionWorkbench ||
     isMonomerPolymerizationWorkbench ||
+    isMdSimulationWorkbench ||
+    isMonomerMdSimulationWorkbench ||
+    isMonomerDftWorkbench ||
     isStructureWorkbench ||
     isReverseDesignWorkbench ||
     isConditionalGenerationWorkbench;
@@ -465,7 +472,11 @@ export function AppShell({
                     isStructureWorkbench ||
                     isHomopolymerPredictionWorkbench ||
                     isMonomerPolymerizationWorkbench ||
+                    isMdSimulationWorkbench ||
+                    isMonomerMdSimulationWorkbench ||
+                    isMonomerDftWorkbench ||
                     isSimilarityExplorerWorkbench ||
+                    isDatabaseQueryWorkbench ||
                     isDatabaseFilterWorkbench ||
                     isDatabaseAnalysisWorkbench ||
                     isKnowledgeWorkbench ||

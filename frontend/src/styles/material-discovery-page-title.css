@@ -1,0 +1,91 @@
+/* Shared title geometry for the six modules in 材料发现. */
+.np-material-discovery-page {
+  --np-material-discovery-title-left: 20px;
+  --np-material-discovery-title-top: 22px;
+  --np-material-discovery-title-size: 20px;
+  --np-material-discovery-title-line-height: 30px;
+  --np-material-discovery-content-top: 62px;
+  --np-material-discovery-title-gap: 10px;
+}
+
+.np-material-discovery-page .np-material-discovery-page-title {
+  margin: 0;
+  color: #0b1f3a;
+  font-family: var(--font-heading);
+  font-size: var(--np-material-discovery-title-size);
+  font-weight: 750;
+  line-height: var(--np-material-discovery-title-line-height);
+  letter-spacing: -0.02em;
+}
+
+.np-material-discovery-page.knowledge-retrieval-page .ks-page-header {
+  top: var(--np-material-discovery-title-top);
+  left: var(--np-material-discovery-title-left);
+}
+
+.np-material-discovery-page.knowledge-retrieval-page .ks-panel-scroll {
+  padding-top: var(--np-material-discovery-content-top);
+}
+
+.np-material-discovery-page.polytao-page .polytao-page-scroll {
+  padding-top: var(--np-material-discovery-title-top);
+  padding-right: var(--np-material-discovery-title-left);
+  padding-left: var(--np-material-discovery-title-left);
+}
+
+.np-material-discovery-page.polytao-page.is-drawer-inline.is-drawer-open > .polytao-page-scroll {
+  padding-right: calc(var(--polytao-drawer-width) + var(--np-material-discovery-title-left));
+}
+
+.np-material-discovery-page.polytao-page .polytao-page-heading {
+  min-height: var(--np-material-discovery-title-line-height);
+  margin-bottom: var(--np-material-discovery-title-gap);
+}
+
+.np-material-discovery-page.np-structure-workbench .np-sw-page {
+  padding-top: var(--np-material-discovery-content-top);
+}
+
+.np-material-discovery-page.np-structure-workbench .np-material-discovery-page-title {
+  position: absolute;
+  top: var(--np-material-discovery-title-top);
+  left: var(--np-material-discovery-title-left);
+  width: max-content;
+  max-width: calc(100% - var(--np-material-discovery-title-left) - var(--np-material-discovery-title-left));
+  padding: 0;
+  font-size: var(--np-material-discovery-title-size);
+  line-height: var(--np-material-discovery-title-line-height);
+  white-space: nowrap;
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-material-discovery-page {
+    --np-material-discovery-title-left: 36px;
+    --np-material-discovery-title-top: 30px;
+    --np-material-discovery-title-size: 28px;
+    --np-material-discovery-title-line-height: 42px;
+    --np-material-discovery-content-top: 84px;
+    --np-material-discovery-title-gap: 12px;
+  }
+}
+
+@media (max-width: 899px) {
+  .np-material-discovery-page {
+    --np-material-discovery-title-left: 16px;
+    --np-material-discovery-title-top: 20px;
+    --np-material-discovery-title-size: 20px;
+    --np-material-discovery-title-line-height: 30px;
+    --np-material-discovery-content-top: 60px;
+    --np-material-discovery-title-gap: 10px;
+  }
+
+  .np-material-discovery-page.np-structure-workbench .np-sw-layout {
+    margin-top: 0;
+  }
+}
+
+@container np-sw-workbench (max-width: 899px) {
+  .np-material-discovery-page.np-structure-workbench .np-sw-layout {
+    margin-top: 0;
+  }
+}

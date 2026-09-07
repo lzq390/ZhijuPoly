@@ -3,7 +3,6 @@ import {
   Atom,
   Check,
   ChevronDown,
-  Clock3,
   Database,
   FlaskConical,
   Grid2X2,
@@ -13,11 +12,13 @@ import {
   Sigma,
   TableProperties
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchDatabaseAnalytics, fetchDatabaseDatasetSummary } from "../../services/api";
 import type { DatasetSummaryResponse } from "../../types";
+import "../../styles/structure-workbench.css";
 import "../../styles/database-analysis.css";
+import { MaterialDiscoveryPageTitle } from "../MaterialDiscoveryPageTitle";
 import {
   averageComponentCount,
   BarList,
@@ -34,11 +35,12 @@ import {
   RangeList,
   SourceMatrix
 } from "./charts";
-import { DatabaseRecordDrawer } from "./DatabaseRecordDrawer";
+import { DatabaseRecordDrawer, useDatabaseRecordDrawerSizing } from "./DatabaseRecordDrawer";
 import { DftAnalysisView } from "./DftAnalysisView";
-import { databaseAnalysisErrorMessage } from "./errors";
+import { databaseAnalysisErrorMessage, databaseAnalysisSourceMessage } from "./errors";
 import type {
   AnalysisViewKey,
+  AnalyticsValidationErrors,
   DatabaseAnalyticsPayload,
   DftAnalytics,
   DatasetDefinition,
@@ -51,7 +53,7 @@ import type {
   RankedItem,
   StructureEffectAnalytics
 } from "./types";
-import { isDatasetReady, toDisplayDataset } from "./types";
+import { isDatasetReady, toDisplayDataset, validateDatabaseAnalyticsPayload } from "./types";
 
 const DATASETS: DatasetDefinition[] = [
   {
@@ -60,8 +62,8 @@ const DATASETS: DatasetDefinition[] = [
     title: "实验过程数据",
     subtitle: "EXPERIMENTAL PROCESS DATA",
     description: "过程关键词、材料实体、产品名称与反应条件",
-    accent: "#3b82f6",
-    soft: "#eef5ff"
+    accent: "#2563eb",
+    soft: "#eef4ff"
   },
   {
     key: "property",
@@ -69,8 +71,8 @@ const DATASETS: DatasetDefinition[] = [
     title: "实验性能数据",
     subtitle: "EXPERIMENTAL PROPERTY DATA",
     description: "性能类别、属性排行、数值范围与代表属性",
-    accent: "#06a7c5",
-    soft: "#ecfbfd"
+    accent: "#0891b2",
+    soft: "#eafcff"
   },
   {
     key: "structureEffect",
@@ -78,17 +80,17 @@ const DATASETS: DatasetDefinition[] = [
     title: "结构–性能数据",
     subtitle: "STRUCTURE–PROPERTY DATA",
     description: "数据来源、单位分布与结构–性能关联",
-    accent: "#8b5cf6",
-    soft: "#f5f1ff"
+    accent: "#1d4ed8",
+    soft: "#e8f1ff"
   },
   {
     key: "dft",
     routeKey: "dft",
     title: "DFT 构象数据",
     subtitle: "DFT CONFORMATION DATA",
-    description: "PCA、真实三维构象、能量轨迹与优化步骤",
+    description: "PCA、三维构象、能量轨迹与优化步骤",
     accent: "#4f46e5",
-    soft: "#f0f0ff"
+    soft: "#eef0ff"
   },
   {
     key: "formulation",
@@ -96,8 +98,8 @@ const DATASETS: DatasetDefinition[] = [
     title: "配方比例数据",
     subtitle: "FORMULATION RATIO DATA",
     description: "组分、比例、聚合物家族与工艺覆盖",
-    accent: "#0f9f8f",
-    soft: "#edf9f6"
+    accent: "#0284c7",
+    soft: "#ecf8ff"
   }
 ];
 
@@ -115,6 +117,7 @@ type AnalyticsState = {
   error: string | null;
   source: string | null;
   generatedAt: string | null;
+  validationErrors: AnalyticsValidationErrors;
 };
 
 function datasetIcon(key: AnalysisViewKey, className?: string) {
@@ -131,23 +134,33 @@ function useDatasetSummary() {
   const [summary, setSummary] = useState<DatasetSummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const controllerRef = useRef<AbortController | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
+    controllerRef.current?.abort();
     const controller = new AbortController();
+    controllerRef.current = controller;
     setLoading(true);
     setError(null);
-    fetchDatabaseDatasetSummary(controller.signal)
-      .then(setSummary)
-      .catch((nextError) => {
-        if (!controller.signal.aborted) setError(databaseAnalysisErrorMessage(nextError, "数据源状态加载失败"));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
+    try {
+      const response = await fetchDatabaseDatasetSummary(controller.signal);
+      if (controller.signal.aborted) return false;
+      setSummary(response);
+      return true;
+    } catch (nextError) {
+      if (!controller.signal.aborted) setError(databaseAnalysisErrorMessage(nextError, "数据源状态加载失败"));
+      return false;
+    } finally {
+      if (!controller.signal.aborted) setLoading(false);
+    }
   }, []);
 
-  return { summary, loading, error };
+  useEffect(() => {
+    void load();
+    return () => controllerRef.current?.abort();
+  }, [load]);
+
+  return { summary, loading, error, reload: load };
 }
 
 function useDatabaseAnalytics() {
@@ -157,7 +170,8 @@ function useDatabaseAnalytics() {
     refreshing: false,
     error: null,
     source: null,
-    generatedAt: null
+    generatedAt: null,
+    validationErrors: {}
   });
   const controllerRef = useRef<AbortController | null>(null);
 
@@ -175,13 +189,15 @@ function useDatabaseAnalytics() {
     try {
       const response = await fetchDatabaseAnalytics({ refresh, signal: controller.signal });
       if (controller.signal.aborted) return false;
+      const validated = validateDatabaseAnalyticsPayload(response.datasets);
       setState({
-        analytics: response.datasets as DatabaseAnalyticsPayload,
+        analytics: validated.analytics,
         loading: false,
         refreshing: false,
         error: null,
         source: response.source,
-        generatedAt: response.generated_at ?? new Date().toISOString()
+        generatedAt: response.generated_at ?? new Date().toISOString(),
+        validationErrors: validated.errors
       });
       if (!refresh) return "loaded";
       return response.refresh_status ?? (response.source === "snapshot" ? "unchanged" : "recomputed");
@@ -202,7 +218,19 @@ function useDatabaseAnalytics() {
     return () => controllerRef.current?.abort();
   }, [load]);
 
-  return { ...state, refresh: () => load(true) };
+  return { ...state, reload: () => load(false), refresh: () => load(true) };
+}
+
+function analyticsRecordCount(analytics: DatabaseAnalyticsPayload | null, key: DatasetKey) {
+  const data = analytics?.[key];
+  if (!data) return undefined;
+  return data.rows;
+}
+
+function focusableElements(container: HTMLElement) {
+  return Array.from(container.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )).filter((element) => !element.hasAttribute("inert") && element.getAttribute("aria-hidden") !== "true");
 }
 
 export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
@@ -212,18 +240,29 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
   const [transientMessage, setTransientMessage] = useState<string | null>(null);
   const [drawerRequest, setDrawerRequest] = useState<DrawerRequest | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerSeen, setDrawerSeen] = useState(false);
+  const [drawerRestoreTarget, setDrawerRestoreTarget] = useState<HTMLElement | null>(null);
+  const [datasetPopoverOverlay, setDatasetPopoverOverlay] = useState(false);
+  const drawerSizing = useDatabaseRecordDrawerSizing();
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const datasetButtonRef = useRef<HTMLButtonElement | null>(null);
   const datasetPopoverRef = useRef<HTMLElement | null>(null);
-  const lastDrawerTriggerRef = useRef<HTMLElement | null>(null);
+  const datasetPopoverOpenRef = useRef(datasetPopoverOpen);
+  const restoreDatasetFocusRef = useRef(false);
   const messageTimerRef = useRef<number | null>(null);
+  datasetPopoverOpenRef.current = datasetPopoverOpen;
 
   const displayDatasets = useMemo(() => {
     const byKey = new Map(summaryState.summary?.datasets.map((item) => [item.key, item]) ?? []);
     return DATASETS.map((definition) =>
-      toDisplayDataset(definition, byKey.get(definition.key), summaryState.loading, summaryState.error)
+      toDisplayDataset(
+        definition,
+        byKey.get(definition.key),
+        summaryState.loading,
+        summaryState.error,
+        analyticsRecordCount(analyticsState.analytics, definition.key)
+      )
     );
-  }, [summaryState.error, summaryState.loading, summaryState.summary]);
+  }, [analyticsState.analytics, summaryState.error, summaryState.loading, summaryState.summary]);
 
   const currentView: AnalysisViewKey = props.selectedKey ?? "overview";
   const currentDataset = props.selectedKey
@@ -239,13 +278,13 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
   const updatedAt = analyticsState.generatedAt ?? latestImport;
   const analyticsMode = analyticsState.source === "live"
     ? {
-        value: "实时重算",
-        description: "本次结果由刷新操作按当前数据库实时重新计算。"
+        value: "已更新",
+        description: "已根据当前数据更新聚合统计结果。"
       }
     : analyticsState.source === "snapshot"
       ? {
-          value: "预计算统计",
-          description: "读取后端提前生成并保存的数据库聚合统计；记录仍来自真实数据库。"
+          value: "统计数据",
+          description: "展示当前数据源的聚合统计结果。"
         }
       : {
           value: currentDataset?.dataSource === "postgres" ? "数据库统计" : "统计数据",
@@ -253,22 +292,58 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
         };
 
   useEffect(() => {
+    restoreDatasetFocusRef.current = false;
     setDatasetPopoverOpen(false);
+    setDrawerOpen(false);
+    setDrawerRequest(null);
+    setDrawerRestoreTarget(null);
   }, [props.selectedKey]);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const container = root.querySelector<HTMLElement>(".np-sw-workspace") ?? root;
+    const update = () => {
+      const measuredWidth = container.getBoundingClientRect().width;
+      const width = measuredWidth > 0 ? measuredWidth : window.innerWidth;
+      setDatasetPopoverOverlay(width < 900);
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!datasetPopoverOpen) return;
     function handlePointerDown(event: PointerEvent) {
       const target = event.target as Node;
       if (!datasetPopoverRef.current?.contains(target) && !datasetButtonRef.current?.contains(target)) {
+        restoreDatasetFocusRef.current = false;
         setDatasetPopoverOpen(false);
       }
     }
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setDatasetPopoverOpen(false);
-      datasetButtonRef.current?.focus();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        restoreDatasetFocusRef.current = false;
+        setDatasetPopoverOpen(false);
+        datasetButtonRef.current?.focus();
+        return;
+      }
+      if (!datasetPopoverOverlay || event.key !== "Tab" || !datasetPopoverRef.current) return;
+      const focusable = focusableElements(datasetPopoverRef.current);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
@@ -276,8 +351,12 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
+      if (!datasetPopoverOpenRef.current && restoreDatasetFocusRef.current) {
+        restoreDatasetFocusRef.current = false;
+        window.requestAnimationFrame(() => datasetButtonRef.current?.focus());
+      }
     };
-  }, [datasetPopoverOpen]);
+  }, [datasetPopoverOpen, datasetPopoverOverlay]);
 
   useEffect(() => () => {
     if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current);
@@ -287,14 +366,16 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
     setTransientMessage(null);
     const outcome = await analyticsState.refresh();
     if (!outcome) return;
+    await summaryState.reload();
     setTransientMessage(outcome === "unchanged"
-      ? "数据表未发生变化，无需重新计算；已保留当前统计结果。"
-      : "已按当前数据库完成实时重算，当前数据集和浏览位置保持不变。");
+      ? "数据已是最新，当前统计结果保持不变。"
+      : "数据已更新，当前数据集和浏览位置保持不变。");
     if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current);
     messageTimerRef.current = window.setTimeout(() => setTransientMessage(null), 2600);
   }
 
   function selectDataset(key: AnalysisViewKey) {
+    restoreDatasetFocusRef.current = true;
     setDatasetPopoverOpen(false);
     if (key === "overview") props.onBackDatabase();
     else props.onOpenDataset(key);
@@ -302,21 +383,15 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
   }
 
   function openRecords(request: DrawerRequest, trigger?: HTMLElement) {
-    if (trigger) lastDrawerTriggerRef.current = trigger;
+    setDrawerRestoreTarget(trigger ?? null);
     setDrawerRequest(request);
     setDrawerOpen(true);
-    setDrawerSeen(true);
-  }
-
-  function closeRecords() {
-    setDrawerOpen(false);
-    window.setTimeout(() => lastDrawerTriggerRef.current?.focus(), 0);
   }
 
   const banner = analyticsState.refreshing
     ? {
         tone: "info",
-        message: "正在检查数据表变更；检测到更新后才会重新计算，期间保留当前结果。"
+        message: "正在检查数据更新，期间保留当前结果。"
       }
     : analyticsState.error
       ? { tone: "error", message: analyticsState.analytics ? `统计更新失败，仍显示上次成功结果：${analyticsState.error}` : analyticsState.error }
@@ -326,119 +401,148 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
           ? { tone: "success", message: transientMessage }
           : null;
 
+  const rootStyle = { "--np-sw-drawer-width": `${drawerSizing.width}px` } as CSSProperties;
+
   return (
-    <div className="database-analysis-page" data-view-key={currentView === "structureEffect" ? "structure-effect" : currentView}>
-      <header className="dba-pagebar"><h1>数据库分析</h1></header>
-      <div className="dba-workbench-column">
-        <section className="dba-analysis-surface" aria-labelledby="dba-surface-title">
-          <header className="dba-surface-head">
-            <div className="dba-surface-identity">
-              <span className="dba-surface-icon">{datasetIcon(currentView)}</span>
-              <div className="dba-surface-heading">
-                <h2 id="dba-surface-title">{currentDataset?.title ?? "全库概览"}</h2>
-                <p>{currentDataset?.subtitle ?? "POLYMER DATABASE OVERVIEW"}</p>
+    <div
+      ref={rootRef}
+      className="np-structure-workbench np-database-analysis np-material-discovery-page"
+      data-view-key={currentView === "structureEffect" ? "structure-effect" : currentView}
+      style={rootStyle}
+    >
+      <div className={`np-sw-page${drawerOpen ? " has-open-drawer" : ""}`}>
+        <MaterialDiscoveryPageTitle className="np-sw-page-title">数据库分析</MaterialDiscoveryPageTitle>
+        <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
+          <main className={`np-sw-workspace${datasetPopoverOpen && datasetPopoverOverlay ? " has-dataset-modal" : ""}`}>
+            <div className="dba-module-toolbar" aria-label="数据库分析工具栏">
+              <div
+                className={`dba-toolbar-status${readyCount === displayDatasets.length ? " is-ready" : " is-warning"}`}
+                title={`${analyticsMode.description} 最近更新：${formatTimestamp(updatedAt)}`}
+              >
+                <Database aria-hidden="true" />
+                <span>{analyticsMode.value}</span>
+                <span className="dba-toolbar-detail">{formatNumber(currentDataset?.recordCount ?? totalRecords, 0)} 条</span>
+                <time className="dba-toolbar-detail" dateTime={updatedAt ?? undefined}>{formatTimestamp(updatedAt)}</time>
+                <i aria-hidden="true" />
+                <strong>{readyCount} / {displayDatasets.length} 数据源</strong>
               </div>
             </div>
 
-            <div className="dba-surface-head-actions">
-              <div className="dba-surface-meta">
-                <MetaItem
-                  label="统计方式"
-                  value={analyticsMode.value}
-                  status={currentDataset ? isDatasetReady(currentDataset) : readyCount > 0}
-                  description={analyticsMode.description}
-                />
-                <MetaItem label="记录量" value={`${formatNumber(currentDataset?.recordCount ?? totalRecords, 0)} 条`} />
-                <MetaItem label="更新时间" value={formatTimestamp(updatedAt)} icon={<Clock3 aria-hidden="true" />} />
-              </div>
-              <div className="dba-toolbar" aria-label="数据操作">
-                <button
-                  type="button"
-                  className={`dba-tool-button dba-refresh-button ${analyticsState.refreshing ? "is-refreshing" : ""}`}
-                  data-workbench-tool="refresh"
-                  aria-busy={analyticsState.refreshing}
-                  disabled={analyticsState.refreshing}
-                  onClick={() => void handleRefresh()}
-                >
-                  <RefreshCw aria-hidden="true" /><span>{analyticsState.refreshing ? "刷新中" : "刷新数据"}</span>
-                </button>
-                <button
-                  ref={datasetButtonRef}
-                  type="button"
-                  className="dba-tool-button dba-dataset-button"
-                  aria-expanded={datasetPopoverOpen}
-                  aria-controls="dba-dataset-popover"
-                  onClick={() => setDatasetPopoverOpen((open) => !open)}
-                >
-                  <Layers3 aria-hidden="true" /><span>数据集</span><ChevronDown aria-hidden="true" />
-                </button>
-                {datasetPopoverOpen ? (
-                  <DatasetPopover
-                    ref={datasetPopoverRef}
-                    currentView={currentView}
-                    datasets={displayDatasets}
-                    readyCount={readyCount}
-                    onSelect={selectDataset}
-                  />
+            <div className="dba-analysis-scroll">
+              <section className="dba-analysis-surface" aria-labelledby="dba-surface-title">
+                <header className={`dba-surface-head${datasetPopoverOpen && datasetPopoverOverlay ? " has-dataset-modal" : ""}`}>
+                  <div className="dba-surface-identity">
+                    <span className="dba-surface-icon">{datasetIcon(currentView)}</span>
+                    <div className="dba-surface-heading">
+                      <h2 id="dba-surface-title">{currentDataset?.title ?? "全库概览"}</h2>
+                      <p>{currentDataset?.description ?? "汇总五类聚合物数据源，查看统计覆盖与数据状态"}</p>
+                    </div>
+                  </div>
+                  <div className="dba-toolbar" aria-label="数据操作">
+                    <button
+                      type="button"
+                      className={`dba-tool-button dba-refresh-button ${analyticsState.refreshing ? "is-refreshing" : ""}`}
+                      data-workbench-tool="refresh"
+                      aria-busy={analyticsState.refreshing}
+                      disabled={analyticsState.refreshing}
+                      onClick={() => void handleRefresh()}
+                    >
+                      <RefreshCw aria-hidden="true" /><span>{analyticsState.refreshing ? "刷新中" : "刷新数据"}</span>
+                    </button>
+                    <button
+                      ref={datasetButtonRef}
+                      type="button"
+                      className="dba-tool-button dba-dataset-button"
+                      aria-expanded={datasetPopoverOpen}
+                      aria-controls="dba-dataset-popover"
+                      onClick={() => {
+                        restoreDatasetFocusRef.current = true;
+                        setDatasetPopoverOpen((open) => !open);
+                      }}
+                    >
+                      <Layers3 aria-hidden="true" /><span>选择数据集</span><ChevronDown aria-hidden="true" />
+                    </button>
+                    {datasetPopoverOpen ? (
+                      <>
+                        {datasetPopoverOverlay ? (
+                          <button
+                            type="button"
+                            className="dba-dataset-backdrop"
+                            aria-label="关闭数据集选择"
+                            onPointerDown={(event) => {
+                              event.stopPropagation();
+                              restoreDatasetFocusRef.current = true;
+                              setDatasetPopoverOpen(false);
+                            }}
+                            onClick={() => {
+                              restoreDatasetFocusRef.current = true;
+                              setDatasetPopoverOpen(false);
+                            }}
+                          />
+                        ) : null}
+                        <DatasetPopover
+                          ref={datasetPopoverRef}
+                          currentView={currentView}
+                          datasets={displayDatasets}
+                          readyCount={readyCount}
+                          modal={datasetPopoverOverlay}
+                          onSelect={selectDataset}
+                        />
+                      </>
+                    ) : null}
+                  </div>
+                </header>
+
+                {banner ? (
+                  <div className={`dba-surface-banner ${banner.tone}`} role="status" aria-live="polite">
+                    <span>
+                      {banner.tone === "error" || banner.tone === "warning" ? <AlertTriangle aria-hidden="true" /> : <Check aria-hidden="true" />}
+                      {banner.message}
+                    </span>
+                    {banner.tone === "error" ? (
+                      <button type="button" onClick={() => void (analyticsState.analytics ? handleRefresh() : analyticsState.reload())}>重试</button>
+                    ) : banner.tone === "warning" ? (
+                      <button type="button" onClick={() => void summaryState.reload()}>重试状态</button>
+                    ) : null}
+                  </div>
                 ) : null}
-              </div>
-            </div>
-          </header>
 
-          {banner ? (
-            <div className={`dba-surface-banner ${banner.tone}`} role="status" aria-live="polite">
-              <span>
-                {banner.tone === "error" || banner.tone === "warning" ? <AlertTriangle aria-hidden="true" /> : <Check aria-hidden="true" />}
-                {banner.message}
-              </span>
-              {banner.tone === "error" ? <button type="button" onClick={() => void handleRefresh()}>重试</button> : null}
+                <div className={`dba-surface-body ${currentView === "overview" ? "is-overview" : ""}`} aria-busy={analyticsState.loading || analyticsState.refreshing}>
+                  {analyticsState.loading && !analyticsState.analytics ? (
+                    <AnalysisSkeleton />
+                  ) : (
+                    <AnalysisContent
+                      view={currentView}
+                      datasets={displayDatasets}
+                      analytics={analyticsState.analytics}
+                      analyticsError={analyticsState.error}
+                      validationErrors={analyticsState.validationErrors}
+                      updatedAt={updatedAt}
+                      onRetry={() => void analyticsState.reload()}
+                      onOpenDataset={props.onOpenDataset}
+                      onOpenRecords={openRecords}
+                    />
+                  )}
+                  {analyticsState.refreshing ? <RefreshOverlay /> : null}
+                </div>
+              </section>
             </div>
-          ) : null}
-
-          <div className={`dba-surface-body ${currentView === "overview" ? "is-overview" : ""}`} aria-busy={analyticsState.loading || analyticsState.refreshing}>
-            {analyticsState.loading && !analyticsState.analytics ? (
-              <AnalysisSkeleton />
-            ) : (
-              <AnalysisContent
-                view={currentView}
-                datasets={displayDatasets}
-                analytics={analyticsState.analytics}
-                analyticsError={analyticsState.error}
-                updatedAt={updatedAt}
-                onOpenDataset={props.onOpenDataset}
-                onOpenRecords={openRecords}
-              />
-            )}
-            {analyticsState.refreshing ? <RefreshOverlay /> : null}
-          </div>
-        </section>
+          </main>
+          <DatabaseRecordDrawer
+            open={drawerOpen}
+            request={drawerRequest}
+            width={drawerSizing.width}
+            profile={drawerSizing.profile}
+            restoreFocusTarget={drawerRestoreTarget}
+            onWidthChange={drawerSizing.setWidth}
+            onClose={() => setDrawerOpen(false)}
+            onOpen={(trigger) => {
+              setDrawerRestoreTarget(trigger ?? null);
+              setDrawerOpen(true);
+            }}
+          />
+        </div>
       </div>
-
-      <DatabaseRecordDrawer open={drawerOpen} request={drawerRequest} onClose={closeRecords} />
-      {drawerSeen && !drawerOpen && drawerRequest ? (
-        <button className="dba-drawer-reopen" type="button" onClick={() => setDrawerOpen(true)}>重新打开记录</button>
-      ) : null}
-    </div>
-  );
-}
-
-function MetaItem({
-  label,
-  value,
-  status,
-  icon,
-  description
-}: {
-  label: string;
-  value: string;
-  status?: boolean;
-  icon?: ReactNode;
-  description?: string;
-}) {
-  return (
-    <div className={`dba-meta-item ${description ? "has-description" : ""}`} title={description}>
-      <span>{label}</span>
-      <strong>{status !== undefined ? <i className={status ? "is-ready" : ""} /> : null}{icon}{value}</strong>
     </div>
   );
 }
@@ -448,19 +552,33 @@ const DatasetPopover = function DatasetPopover({
   currentView,
   datasets,
   readyCount,
+  modal,
   onSelect
 }: {
   ref: React.Ref<HTMLElement>;
   currentView: AnalysisViewKey;
   datasets: DisplayDataset[];
   readyCount: number;
+  modal: boolean;
   onSelect: (key: AnalysisViewKey) => void;
 }) {
+  const availabilityTone = readyCount === datasets.length
+    ? "is-ready"
+    : readyCount > 0
+      ? "is-partial"
+      : "is-unavailable";
   return (
-    <section ref={ref} className="dba-dataset-popover" id="dba-dataset-popover" aria-label="选择数据集">
+    <section
+      ref={ref}
+      className={`dba-dataset-popover${modal ? " is-modal" : ""}`}
+      id="dba-dataset-popover"
+      role={modal ? "dialog" : "region"}
+      aria-modal={modal ? "true" : undefined}
+      aria-label="选择数据集"
+    >
       <header>
         <div><h3>切换分析数据集</h3><p>选择后进入对应的完整分析工作面</p></div>
-        <span><i />{readyCount} 个可用</span>
+        <span className={availabilityTone}><i />{readyCount} 个可用</span>
       </header>
       <div className="dba-dataset-grid">
         <button
@@ -495,7 +613,9 @@ function AnalysisContent({
   datasets,
   analytics,
   analyticsError,
+  validationErrors,
   updatedAt,
+  onRetry,
   onOpenDataset,
   onOpenRecords
 }: {
@@ -503,7 +623,9 @@ function AnalysisContent({
   datasets: DisplayDataset[];
   analytics: DatabaseAnalyticsPayload | null;
   analyticsError: string | null;
+  validationErrors: AnalyticsValidationErrors;
   updatedAt: string | null;
+  onRetry: () => void;
   onOpenDataset: (key: DatasetKey) => void;
   onOpenRecords: (request: DrawerRequest, trigger?: HTMLElement) => void;
 }) {
@@ -511,13 +633,17 @@ function AnalysisContent({
     return <Overview datasets={datasets} analytics={analytics} updatedAt={updatedAt} onOpenDataset={onOpenDataset} />;
   }
   const dataset = datasets.find((item) => item.key === view);
-  if (!dataset) return <WorkbenchState title="未知数据集" message="当前深链没有对应的数据集定义。" />;
-  if (!isDatasetReady(dataset)) {
-    return <WorkbenchState title="该数据源尚未就绪" message={dataset.sourceMessage ?? "分析入口已保留，数据准备完成后会在当前工作面展示。"} />;
-  }
+  if (!dataset) return <WorkbenchState title="未找到数据集" message="当前地址没有对应的数据集。" />;
   const data = analytics?.[view];
+  const summaryUnavailable = ["loading", "unknown", "unavailable"].includes(dataset.sourceStatus);
+  if (!isDatasetReady(dataset) && !(data && summaryUnavailable)) {
+    return <WorkbenchState title="该数据源尚未就绪" message={databaseAnalysisSourceMessage(dataset.sourceMessage)} />;
+  }
+  if (validationErrors[view]) {
+    return <WorkbenchState title="分析数据格式异常" message={validationErrors[view] ?? "分析数据暂时无法读取。"} actionLabel="重新加载" onAction={onRetry} />;
+  }
   if (!data) {
-    return <WorkbenchState title={analyticsError ? "分析数据加载失败" : "暂无可展示的分析快照"} message={analyticsError ?? "数据源已经连接，但统计快照尚未返回当前数据集。"} />;
+    return <WorkbenchState title={analyticsError ? "分析数据加载失败" : "暂无可展示的分析数据"} message={analyticsError ?? "当前数据源暂无可展示的分析结果。"} actionLabel="重新加载" onAction={onRetry} />;
   }
   if (view === "process") return <ProcessView data={data as ProcessAnalytics} recordCount={dataset.recordCount} onOpenRecords={onOpenRecords} />;
   if (view === "property") return <PropertyView data={data as PropertyAnalytics} recordCount={dataset.recordCount} onOpenRecords={onOpenRecords} />;
@@ -544,12 +670,12 @@ function Overview({
   return (
     <>
       <KpiStrip items={[
-        { label: "分析数据集", value: String(datasets.length), unit: "个", note: "五类真实统计工作面" },
+        { label: "分析数据集", value: String(datasets.length), unit: "个", note: "五类统计分析工作面" },
         { label: "可用数据源", value: `${readyCount} / ${datasets.length}`, note: readyCount === datasets.length ? "全部数据源可用" : "部分数据源待就绪" },
         { label: "总记录量", value: formatNumber(totalRecords, 0), unit: "条", note: "按五类数据集汇总" },
         { label: "最近同步", value: time, note: `${date} · 统计结果` }
       ]} />
-      <div className="dba-section-row"><h3>数据集概览</h3><span>{readyCount} 个真实数据源</span></div>
+      <div className="dba-section-row"><h3>数据集概览</h3></div>
       <div className="dba-overview-grid">
         {datasets.map((dataset) => {
           const stats = overviewStats(dataset.key, analytics);
@@ -606,15 +732,15 @@ function ProcessView({ data, recordCount, onOpenRecords }: { data: ProcessAnalyt
     <>
       <KpiStrip items={[
         { label: "过程记录", value: formatNumber(recordCount ?? data.rows, 0), unit: "条", note: `${formatNumber(data.uniqueRecordIds, 0)} 个独立来源记录` },
-        { label: "聚合物实体", value: formatNumber(data.uniquePolymers, 0), unit: "个", note: "真实名称去重统计" },
+        { label: "聚合物实体", value: formatNumber(data.uniquePolymers, 0), unit: "个", note: "按名称去重统计" },
         { label: "产品名称", value: formatNumber(data.uniqueProducts, 0), unit: "个", note: "实验产物与材料名称" },
         { label: "过程文本中位数", value: formatNumber(data.processSignalSummary?.medianChars, 0), unit: "字符", note: `平均 ${formatNumber(data.avgProcessTextLength, 1)} 字符` }
       ]} />
       <div className="dba-dashboard-grid">
-        <Panel title="过程关键词" subtitle="实验记录中的高频过程语义" meta="Top terms"><BarList data={data.topTerms} onSelect={drill} /></Panel>
-        <Panel title="材料实体" subtitle="从原始材料描述中提取的高频实体" meta={`${formatNumber(data.topMaterials.length, 0)} entities`}><ChipCloud data={data.topMaterials} onSelect={drill} /></Panel>
-        <Panel title="产品排行" subtitle="按产品名称统计实验记录频次" meta="Top products"><BarList data={data.topProducts} onSelect={drill} /></Panel>
-        <Panel title="过程条件" subtitle="温度、时间、溶剂及操作信号覆盖" meta={`${formatNumber(data.processSignalSummary?.uniqueSnippets, 0)} records`}><SignalCoverage data={data.processSignals} onSelect={drill} /></Panel>
+        <Panel title="过程关键词" subtitle="实验记录中的高频过程语义" meta="高频词"><BarList data={data.topTerms} onSelect={drill} /></Panel>
+        <Panel title="材料实体" subtitle="从原始材料描述中提取的高频实体" meta={`${formatNumber(data.topMaterials.length, 0)} 个实体`}><ChipCloud data={data.topMaterials} onSelect={drill} /></Panel>
+        <Panel title="产品排行" subtitle="按产品名称统计实验记录频次" meta="高频产品"><BarList data={data.topProducts} onSelect={drill} /></Panel>
+        <Panel title="过程条件" subtitle="温度、时间、溶剂及操作信号覆盖" meta={`${formatNumber(data.processSignalSummary?.uniqueSnippets, 0)} 条记录`}><SignalCoverage data={data.processSignals} onSelect={drill} /></Panel>
       </div>
     </>
   );
@@ -640,10 +766,10 @@ function PropertyView({ data, recordCount, onOpenRecords }: { data: PropertyAnal
         { label: "数值样本", value: formatNumber(numericSamples, 0), unit: "条", note: "当前高频属性范围样本" }
       ]} />
       <div className="dba-dashboard-grid">
-        <Panel title="性能类别" subtitle="记录数量的类别占比" meta={`${formatNumber(data.categories.length, 0)} categories`}><DonutBlock data={data.categories} /></Panel>
-        <Panel title="属性排行" subtitle="归一化名称后的记录频次" meta="Top properties"><BarList data={data.topProperties} onSelect={drill} /></Panel>
-        <Panel title="数值范围" subtitle="可解析数值的 P5—P95 区间" meta="P5—P95"><RangeList data={data.ranges} /></Panel>
-        <Panel title="代表属性" subtitle="每个性能类别中的最高频属性" meta="Representative"><BarList data={data.categoryTop} onSelect={drill} /></Panel>
+        <Panel title="性能类别" subtitle="记录数量的类别占比" meta={`${formatNumber(data.categories.length, 0)} 类`}><DonutBlock data={data.categories} /></Panel>
+        <Panel title="属性排行" subtitle="按标准属性名称统计记录频次" meta="高频属性"><BarList data={data.topProperties} onSelect={drill} /></Panel>
+        <Panel title="数值范围" subtitle="数值记录的 P5—P95 区间" meta="P5—P95"><RangeList data={data.ranges} /></Panel>
+        <Panel title="代表属性" subtitle="每个性能类别中的最高频属性" meta="代表项"><BarList data={data.categoryTop} onSelect={drill} /></Panel>
       </div>
     </>
   );
@@ -656,14 +782,14 @@ function StructureEffectView({ data, recordCount, onOpenRecords }: { data: Struc
       <KpiStrip items={[
         { label: "结构–性能记录", value: formatNumber(recordCount ?? data.rows, 0), unit: "条", note: "聚合物属性关联记录" },
         { label: "有效结构", value: formatNumber(data.uniqueSmiles, 0), unit: "个", note: "按聚合物结构去重" },
-        { label: "高频属性", value: formatNumber(data.properties.length, 0), unit: "种", note: "当前快照展示范围" },
+        { label: "高频属性", value: formatNumber(data.properties.length, 0), unit: "种", note: "当前统计范围" },
         { label: "数据来源", value: formatNumber(data.sources.length, 0), unit: "类", note: "实验、模拟与未标注" }
       ]} />
       <div className="dba-dashboard-grid">
-        <Panel title="来源 × 属性矩阵" subtitle="高频属性在实验与模拟来源中的记录量" meta="records"><SourceMatrix data={data.sourceMatrix} /></Panel>
-        <Panel title="单位分布" subtitle="原始属性单位的使用频次" meta="Top units"><DonutBlock data={data.units} /></Panel>
-        <Panel title="属性数量" subtitle="结构–性能记录中的高频属性" meta="Top properties"><BarList data={data.properties} onSelect={drill} /></Panel>
-        <Panel title="典型属性范围" subtitle="真实数值记录的最小值、中位数和最大值" meta="Normalized"><RangeList data={data.ranges} /></Panel>
+        <Panel title="来源 × 属性矩阵" subtitle="高频属性在实验与模拟来源中的记录量" meta="记录数"><SourceMatrix data={data.sourceMatrix} /></Panel>
+        <Panel title="单位分布" subtitle="原始属性单位的使用频次" meta="高频单位"><DonutBlock data={data.units} /></Panel>
+        <Panel title="属性数量" subtitle="结构–性能记录中的高频属性" meta="高频属性"><BarList data={data.properties} onSelect={drill} /></Panel>
+        <Panel title="典型属性范围" subtitle="数值记录的最小值、中位数和最大值" meta="数值范围"><RangeList data={data.ranges} /></Panel>
       </div>
     </>
   );
@@ -676,17 +802,17 @@ function FormulationView({ data, recordCount, onOpenRecords }: { data: Formulati
     <>
       <KpiStrip items={[
         { label: "配方记录", value: formatNumber(recordCount ?? data.rows, 0), unit: "条", note: `${formatNumber(data.files, 0)} 个文档来源` },
-        { label: "高频组分", value: formatNumber(data.topComponents.length, 0), unit: "类", note: "当前快照展示范围" },
+        { label: "高频组分", value: formatNumber(data.topComponents.length, 0), unit: "类", note: "当前统计范围" },
         { label: "聚合物家族", value: formatNumber(data.polymerFamilies.length, 0), unit: "类", note: "按聚合物名称归类" },
-        { label: "平均组分数", value: formatNumber(average, 1), unit: "个", note: "按可解析配方估算" }
+        { label: "平均组分数", value: formatNumber(average, 1), unit: "个", note: "按已识别的配方组分估算" }
       ]} />
       <div className="dba-dashboard-grid">
-        <Panel title="字段覆盖率" subtitle="配方记录中的关键字段完整度" meta={`${formatNumber(data.rows, 0)} records`}><CoverageList data={data.coverage} /></Panel>
-        <Panel title="组分数量" subtitle="每条配方的可解析组分数分布" meta="components"><BarList data={data.componentCounts} /></Panel>
-        <Panel title="聚合物家族" subtitle="按配方记录数统计" meta="families"><DonutBlock data={data.polymerFamilies} centerLabel="配方" /></Panel>
-        <Panel title="比例 / 温度 / 时间" subtitle="配方表达与工艺条件分布" meta="process"><DistributionGroups groups={[{ label: "比例表达", data: data.ratioTypes }, { label: "温度区间", data: data.tempBands }, { label: "时间单位", data: data.timeUnits }]} /></Panel>
-        <Panel title="高频催化剂与溶剂" subtitle="标准名称及关联配方数" meta="Top entities"><div className="dba-entity-groups"><h4>催化剂</h4><ChipCloud data={data.topCatalysts} limit={6} onSelect={(item, trigger) => drill(item, trigger, "催化剂相关配方")} /><h4>溶剂</h4><ChipCloud data={data.topSolvents} limit={6} onSelect={(item, trigger) => drill(item, trigger, "溶剂相关配方")} /></div></Panel>
-        <Panel title="代表配方" subtitle="真实数据库中的配方与工艺示例" meta={`${formatNumber(data.examples.length, 0)} examples`}>
+        <Panel title="字段覆盖率" subtitle="配方记录中的关键字段完整度" meta={`${formatNumber(data.rows, 0)} 条记录`}><CoverageList data={data.coverage} /></Panel>
+        <Panel title="组分数量" subtitle="每条配方的可识别组分数分布" meta="组分数"><BarList data={data.componentCounts} /></Panel>
+        <Panel title="聚合物家族" subtitle="按配方记录数统计" meta="家族分布"><DonutBlock data={data.polymerFamilies} centerLabel="配方" /></Panel>
+        <Panel title="比例、温度与时间" subtitle="配方表达与工艺条件分布" meta="工艺条件"><DistributionGroups groups={[{ label: "比例表达", data: data.ratioTypes }, { label: "温度区间", data: data.tempBands }, { label: "时间单位", data: data.timeUnits }]} /></Panel>
+        <Panel title="高频催化剂与溶剂" subtitle="标准名称及关联配方数" meta="高频实体" className="dba-formulation-entity-panel"><div className="dba-entity-groups"><h4>催化剂</h4><ChipCloud data={data.topCatalysts} limit={6} onSelect={(item, trigger) => drill(item, trigger, "催化剂相关配方")} /><h4>溶剂</h4><ChipCloud data={data.topSolvents} limit={6} onSelect={(item, trigger) => drill(item, trigger, "溶剂相关配方")} /></div></Panel>
+        <Panel title="代表配方" subtitle="数据源中的配方与工艺示例" meta={`${formatNumber(data.examples.length, 0)} 个示例`} className="dba-formulation-table-panel">
           <DataTable caption="代表配方" headers={["体系", "聚合物", "配方", "条件"]} rows={data.examples.map((item) => [item.title, item.polymer, item.formula, item.condition])} />
         </Panel>
       </div>
@@ -694,8 +820,18 @@ function FormulationView({ data, recordCount, onOpenRecords }: { data: Formulati
   );
 }
 
-function WorkbenchState({ title, message }: { title: string; message: string }) {
-  return <div className="dba-workbench-state"><div><Database aria-hidden="true" /></div><h2>{title}</h2><p>{message}</p></div>;
+function WorkbenchState({
+  title,
+  message,
+  actionLabel,
+  onAction
+}: {
+  title: string;
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return <div className="dba-workbench-state"><div><Database aria-hidden="true" /></div><h2>{title}</h2><p>{message}</p>{actionLabel && onAction ? <button type="button" onClick={onAction}>{actionLabel}</button> : null}</div>;
 }
 
 function AnalysisSkeleton() {

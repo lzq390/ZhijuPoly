@@ -262,24 +262,26 @@ describe("job polling hook wiring", () => {
 
     const { result, unmount } = renderHook(() => useMonomerMdSimulation());
     await flush();
-    let first!: Promise<void>;
-    let second!: Promise<void>;
+    let first!: Promise<string | null>;
+    let second!: Promise<string | null>;
     act(() => {
-      first = result.current.submit("CCO");
+      first = result.current.submit({ run_mode: "demo", protocol: "DensityDemo", smiles: "CCO" });
     });
     await flush();
     expect(signals).toHaveLength(1);
-    act(() => result.current.reset());
+    act(() => result.current.clearSelectedJob());
     expect(signals[0].aborted).toBe(true);
     expect(result.current.isLoading).toBe(false);
 
     act(() => {
-      second = result.current.submit("CCN");
+      second = result.current.submit({ run_mode: "demo", protocol: "DensityDemo", smiles: "CCN" });
     });
     await flush();
     expect(signals).toHaveLength(2);
-    expect(apiMocks.createMonomerMd.mock.calls[0][1]).toBe(signals[0]);
-    expect(apiMocks.createMonomerMd.mock.calls[1][1]).toBe(signals[1]);
+    expect(apiMocks.createMonomerMd.mock.calls[0][1]).toBeInstanceOf(AbortSignal);
+    expect(apiMocks.createMonomerMd.mock.calls[1][1]).toBeInstanceOf(AbortSignal);
+    expect(apiMocks.createMonomerMd.mock.calls[0][1]).not.toBe(signals[0]);
+    expect(apiMocks.createMonomerMd.mock.calls[1][1]).not.toBe(signals[1]);
     unmount();
     expect(signals[1].aborted).toBe(true);
     await Promise.all([first, second]);

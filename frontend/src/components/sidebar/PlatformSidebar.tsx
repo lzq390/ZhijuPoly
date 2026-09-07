@@ -232,7 +232,12 @@ function SidebarModuleNavigation({
       {standaloneModules.length > 0 ? (
         <div className="np-sidebar__standalone">
           {standaloneModules.map((item) => (
-            <SidebarModuleButton key={item.id} item={item} onNavigate={onNavigate} />
+            <SidebarModuleButton
+              key={item.id}
+              item={item}
+              primaryWorkspace={item.id === "structureWorkbench"}
+              onNavigate={onNavigate}
+            />
           ))}
         </div>
       ) : null}
@@ -284,9 +289,11 @@ function SidebarModuleNavigation({
 
 function SidebarModuleButton({
   item,
+  primaryWorkspace = false,
   onNavigate
 }: {
   item: AppShellModuleItem;
+  primaryWorkspace?: boolean;
   onNavigate: (action: () => void) => void;
 }) {
   return (
@@ -294,9 +301,11 @@ function SidebarModuleButton({
       type="button"
       data-module-id={item.id}
       data-active={item.isActive ? "true" : "false"}
+      data-primary-workspace={primaryWorkspace ? "true" : undefined}
       aria-current={item.isActive ? "page" : undefined}
+      aria-label={primaryWorkspace ? item.label : undefined}
       title={item.description}
-      className="np-sidebar-module"
+      className={`np-sidebar-module${primaryWorkspace ? " np-sidebar-module--primary-workspace" : ""}`}
       onClick={() => onNavigate(item.onClick)}
     >
       <span className="np-sidebar-module__icon" aria-hidden="true">

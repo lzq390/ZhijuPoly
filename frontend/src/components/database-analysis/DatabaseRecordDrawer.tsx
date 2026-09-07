@@ -1,5 +1,5 @@
-import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, CircleAlert, Clock3, Database, PanelRightOpen, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   browseDftEnergySteps,
   browseDftMolecules,
@@ -16,14 +16,16 @@ import type {
   FormulationRecord,
   StructurePropertyRecord
 } from "../../types";
+import { WorkbenchDrawerShell } from "../structure-workbench/WorkbenchDrawerShell";
 import { formatNumber } from "./charts";
-import { databaseAnalysisErrorMessage } from "./errors";
-import type { DrawerRequest } from "./types";
+import { databaseAnalysisErrorMessage, databaseAnalysisSourceMessage } from "./errors";
+import type { DftConvergencePresentation, DrawerRequest } from "./types";
+import { dftConvergencePresentation } from "./types";
 
 type DrawerRecord = {
   id: string;
   title: string;
-  status?: string;
+  status?: DftConvergencePresentation;
   mono?: string;
   details: Array<{ label: string; value: string }>;
 };
@@ -88,7 +90,7 @@ function dftMoleculeRecord(row: DftMoleculeBrowserRecord): DrawerRecord {
   return {
     id: row.mol_id,
     title: `DFT 构象 ${row.mol_id}`,
-    status: row.is_converged || undefined,
+    status: dftConvergencePresentation(row.is_converged),
     mono: row.range_group,
     details: [
       { label: "原子数", value: String(row.n_atoms) },
@@ -117,60 +119,120 @@ function formulationRecord(row: FormulationRecord): DrawerRecord {
   return {
     id: `FRM-${row.formulation_id}`,
     title: row.polymer_iupac || `配方记录 ${row.formulation_id}`,
-    mono: `knowledge #${row.knowledge_id}`,
+    mono: `知识文档 #${row.knowledge_id}`,
     details: [
       { label: "配方", value: optional(row.formulation) },
-      { label: "催化剂 / 溶剂", value: [row.catalyst, row.solvent].filter(Boolean).join(" · ") || "—" },
-      { label: "温度 / 时间", value: [row.temperature, row.reaction_time].filter(Boolean).join(" · ") || "—" },
+      { label: "催化剂与溶剂", value: [row.catalyst, row.solvent].filter(Boolean).join(" · ") || "—" },
+      { label: "温度与时间", value: [row.temperature, row.reaction_time].filter(Boolean).join(" · ") || "—" },
       { label: "来源", value: `${row.source_file}:${row.source_row_number}` }
     ]
   };
 }
 
-function useMobileDrawer() {
-  const [mobile, setMobile] = useState(
-    () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 899px)").matches
-  );
+export type DrawerSizeProfile = {
+  defaultWidth: number;
+  minWidth: number;
+  maxWidth: number;
+  keyboardStep: number;
+  overlayContainerWidth: number;
+};
+
+const STANDARD_DRAWER: DrawerSizeProfile = {
+  defaultWidth: 380,
+  minWidth: 320,
+  maxWidth: 560,
+  keyboardStep: 16,
+  overlayContainerWidth: 1360
+};
+const TWO_K_DRAWER: DrawerSizeProfile = {
+  defaultWidth: 540,
+  minWidth: 480,
+  maxWidth: 720,
+  keyboardStep: 24,
+  overlayContainerWidth: 2050
+};
+const TWO_K_QUERY = "(min-width: 2000px) and (min-height: 1120px)";
+
+function mapDrawerWidth(width: number, from: DrawerSizeProfile, to: DrawerSizeProfile) {
+  const ratio = (width - from.minWidth) / Math.max(1, from.maxWidth - from.minWidth);
+  return Math.round(to.minWidth + Math.min(1, Math.max(0, ratio)) * (to.maxWidth - to.minWidth));
+}
+
+export function useDatabaseRecordDrawerSizing() {
+  const initialProfile = typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia(TWO_K_QUERY).matches
+    ? TWO_K_DRAWER
+    : STANDARD_DRAWER;
+  const [sizing, setSizing] = useState(() => ({
+    profile: initialProfile,
+    width: initialProfile.defaultWidth
+  }));
+  const setWidth = useCallback((width: number) => {
+    setSizing((current) => current.width === width ? current : { ...current, width });
+  }, []);
+
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia("(max-width: 899px)");
-    const update = () => setMobile(media.matches);
+    const media = window.matchMedia(TWO_K_QUERY);
+    const update = () => {
+      const nextProfile = media.matches ? TWO_K_DRAWER : STANDARD_DRAWER;
+      setSizing((current) => {
+        if (current.profile === nextProfile) return current;
+        return {
+          profile: nextProfile,
+          width: mapDrawerWidth(current.width, current.profile, nextProfile)
+        };
+      });
+    };
     update();
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
-  return mobile;
+
+  return { width: sizing.width, setWidth, profile: sizing.profile };
 }
 
 export function DatabaseRecordDrawer({
   open,
   request,
-  onClose
+  onClose,
+  onOpen,
+  width,
+  onWidthChange,
+  profile,
+  restoreFocusTarget
 }: {
   open: boolean;
   request: DrawerRequest | null;
   onClose: () => void;
+  onOpen: (trigger?: HTMLElement) => void;
+  width: number;
+  onWidthChange: (width: number) => void;
+  profile: DrawerSizeProfile;
+  restoreFocusTarget?: HTMLElement | null;
 }) {
   const [queryDraft, setQueryDraft] = useState("");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
-  const [width, setWidth] = useState(380);
   const [payload, setPayload] = useState<DrawerPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryVersion, setRetryVersion] = useState(0);
   const [initializedRequest, setInitializedRequest] = useState<string | null>(null);
-  const searchRef = useRef<HTMLInputElement | null>(null);
-  const drawerRef = useRef<HTMLElement | null>(null);
-  const resizeRef = useRef<HTMLDivElement | null>(null);
-  const mobile = useMobileDrawer();
   const pageSize = 10;
   const requestIdentity = request
     ? [request.dataset, request.mode ?? "records", request.molId ?? "", request.context, request.query ?? ""].join("|")
     : null;
 
   useEffect(() => {
-    if (!open || !request) return;
+    if (!request || !requestIdentity) {
+      setInitializedRequest(null);
+      setPayload(null);
+      setError(null);
+      return;
+    }
+    if (initializedRequest === requestIdentity) return;
     const initialQuery = request.query ?? "";
     setQueryDraft(initialQuery);
     setQuery(initialQuery);
@@ -178,23 +240,21 @@ export function DatabaseRecordDrawer({
     setPayload(null);
     setError(null);
     setInitializedRequest(requestIdentity);
-    requestAnimationFrame(() => searchRef.current?.focus());
-  }, [open, request, requestIdentity]);
+  }, [initializedRequest, request, requestIdentity]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!request) return;
     const timer = window.setTimeout(() => {
-      setQuery((current) => {
-        const next = queryDraft.trim();
-        if (current !== next) setPage(1);
-        return next;
-      });
+      const next = queryDraft.trim();
+      if (query === next) return;
+      setPage(1);
+      setQuery(next);
     }, 240);
     return () => window.clearTimeout(timer);
-  }, [open, queryDraft]);
+  }, [query, queryDraft, request]);
 
   useEffect(() => {
-    if (!open || !request || initializedRequest !== requestIdentity) return;
+    if (!request || initializedRequest !== requestIdentity) return;
     const currentRequest = request;
     const controller = new AbortController();
     setLoading(true);
@@ -204,61 +264,73 @@ export function DatabaseRecordDrawer({
       try {
         if (currentRequest.dataset === "process") {
           const response = await browseExperimentalProcessRecords({ q: query, page, page_size: pageSize }, controller.signal);
-          setPayload({
+          const nextPayload = {
             total: response.matched_records,
             sourceStatus: response.source_status,
             sourceMessage: response.source_message,
             queryTimeMs: response.query_time_ms,
             records: response.results.map(processRecord)
-          });
+          };
+          setPayload(nextPayload);
+          setPage((current) => Math.min(current, Math.max(1, Math.ceil(nextPayload.total / pageSize))));
         } else if (currentRequest.dataset === "property") {
           const response = await browseExperimentalPropertyRecords({ q: query, page, page_size: pageSize }, controller.signal);
-          setPayload({
+          const nextPayload = {
             total: response.matched_records,
             sourceStatus: response.source_status,
             sourceMessage: response.source_message,
             queryTimeMs: response.query_time_ms,
             records: response.results.map(propertyRecord)
-          });
+          };
+          setPayload(nextPayload);
+          setPage((current) => Math.min(current, Math.max(1, Math.ceil(nextPayload.total / pageSize))));
         } else if (currentRequest.dataset === "structureEffect") {
           const response = await browseStructurePropertyRecords({ q: query, page, page_size: pageSize }, controller.signal);
-          setPayload({
+          const nextPayload = {
             total: response.matched_records,
             sourceStatus: response.source_status,
             sourceMessage: response.source_message,
             queryTimeMs: response.query_time_ms,
             records: response.results.map(structureRecord)
-          });
+          };
+          setPayload(nextPayload);
+          setPage((current) => Math.min(current, Math.max(1, Math.ceil(nextPayload.total / pageSize))));
         } else if (currentRequest.dataset === "formulation") {
           const response = await browseFormulationRecords({ q: query, page, page_size: pageSize }, controller.signal);
-          setPayload({
+          const nextPayload = {
             total: response.matched_records,
             sourceStatus: response.source_status,
             sourceMessage: response.source_message,
             queryTimeMs: response.query_time_ms,
             records: response.results.map(formulationRecord)
-          });
+          };
+          setPayload(nextPayload);
+          setPage((current) => Math.min(current, Math.max(1, Math.ceil(nextPayload.total / pageSize))));
         } else if (currentRequest.mode === "dftSteps") {
           const response = await browseDftEnergySteps(
             { q: query, mol_id: currentRequest.molId, page, page_size: pageSize },
             controller.signal
           );
-          setPayload({
+          const nextPayload = {
             total: response.matched_records,
             sourceStatus: response.source_status,
             sourceMessage: response.source_message,
             queryTimeMs: response.query_time_ms,
             records: response.results.map(dftStepRecord)
-          });
+          };
+          setPayload(nextPayload);
+          setPage((current) => Math.min(current, Math.max(1, Math.ceil(nextPayload.total / pageSize))));
         } else {
           const response = await browseDftMolecules({ q: query, page, page_size: pageSize }, controller.signal);
-          setPayload({
+          const nextPayload = {
             total: response.matched_records,
             sourceStatus: response.source_status,
             sourceMessage: response.source_message,
             queryTimeMs: response.query_time_ms,
             records: response.results.map(dftMoleculeRecord)
-          });
+          };
+          setPayload(nextPayload);
+          setPage((current) => Math.min(current, Math.max(1, Math.ceil(nextPayload.total / pageSize))));
         }
       } catch (nextError) {
         if (controller.signal.aborted) return;
@@ -270,36 +342,7 @@ export function DatabaseRecordDrawer({
 
     void load();
     return () => controller.abort();
-  }, [initializedRequest, open, page, query, request, requestIdentity, retryVersion]);
-
-  useEffect(() => {
-    if (!open) return;
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab" || !mobile || !drawerRef.current) return;
-      const focusable = Array.from(
-        drawerRef.current.querySelectorAll<HTMLElement>(
-          "button:not(:disabled), input:not(:disabled), [tabindex='0']"
-        )
-      ).filter((element) => element.offsetParent !== null);
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [mobile, onClose, open]);
+  }, [initializedRequest, page, query, request, requestIdentity, retryVersion]);
 
   const totalPages = Math.max(1, Math.ceil((payload?.total ?? 0) / pageSize));
   const title = request?.mode === "dftSteps" ? "DFT 优化步骤" : "原始记录";
@@ -312,88 +355,37 @@ export function DatabaseRecordDrawer({
     return "ready";
   }, [error, loading, payload]);
 
-  function resizeBy(delta: number) {
-    setWidth((current) => Math.max(320, Math.min(560, current + delta)));
-  }
-
   return (
-    <>
-      <button
-        type="button"
-        className={`dba-drawer-backdrop ${open && mobile ? "is-open" : ""}`}
-        aria-label="关闭记录抽屉"
-        aria-hidden={!open || !mobile}
-        tabIndex={open && mobile ? 0 : -1}
-        onClick={onClose}
-      />
-      <aside
-        ref={drawerRef}
-        className={`dba-drawer ${open ? "is-open" : ""}`}
-        style={{ "--dba-drawer-width": `${width}px` } as React.CSSProperties}
-        role="dialog"
-        aria-modal={mobile ? "true" : "false"}
-        aria-labelledby="dba-drawer-title"
-        aria-hidden={!open}
-        inert={!open}
-      >
-        <div
-          ref={resizeRef}
-          className="dba-resize-handle"
-          role="separator"
-          tabIndex={open && !mobile ? 0 : -1}
-          aria-orientation="vertical"
-          aria-label="调整记录抽屉宽度"
-          aria-valuemin={320}
-          aria-valuemax={560}
-          aria-valuenow={width}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowLeft") {
-              event.preventDefault();
-              resizeBy(16);
-            } else if (event.key === "ArrowRight") {
-              event.preventDefault();
-              resizeBy(-16);
-            }
-          }}
-          onPointerDown={(event) => {
-            if (mobile) return;
-            event.preventDefault();
-            const handle = event.currentTarget;
-            handle.setPointerCapture(event.pointerId);
-            const move = (moveEvent: PointerEvent) => {
-              setWidth(Math.max(320, Math.min(560, window.innerWidth - moveEvent.clientX)));
-            };
-            const end = (endEvent: PointerEvent) => {
-              if (handle.hasPointerCapture(endEvent.pointerId)) handle.releasePointerCapture(endEvent.pointerId);
-              handle.removeEventListener("pointermove", move);
-              handle.removeEventListener("pointerup", end);
-              handle.removeEventListener("pointercancel", end);
-            };
-            handle.addEventListener("pointermove", move);
-            handle.addEventListener("pointerup", end);
-            handle.addEventListener("pointercancel", end);
-          }}
-        />
-
-        <header className="dba-drawer-head">
-          <div>
-            <h2 id="dba-drawer-title">{title}</h2>
-            <p>{context}</p>
-          </div>
-          <button className="dba-icon-button" type="button" aria-label="关闭记录抽屉" onClick={onClose}>
-            <X aria-hidden="true" />
-          </button>
-        </header>
-
+    <WorkbenchDrawerShell
+      open={open}
+      hasRun={Boolean(request)}
+      width={width}
+      minWidth={profile.minWidth}
+      maxWidth={profile.maxWidth}
+      keyboardStep={profile.keyboardStep}
+      overlayContainerWidth={profile.overlayContainerWidth + Math.max(0, width - profile.defaultWidth)}
+      restoreFocusTarget={restoreFocusTarget}
+      title={title}
+      status={payload ? `${context} · ${formatNumber(payload.total, 0)} 条` : context}
+      headerIcon={<Database aria-hidden="true" />}
+      reopenIcon={<PanelRightOpen aria-hidden="true" />}
+      reopenLabel="重新打开记录"
+      reopenVariant="side-handle"
+      closeLabel="关闭记录抽屉"
+      resizeLabel="调整记录抽屉宽度"
+      onWidthChange={onWidthChange}
+      onClose={onClose}
+      onOpen={onOpen}
+    >
+      <div className="dba-record-drawer-content">
         <div className="dba-drawer-tools">
           <label className="dba-search-box">
             <span className="dba-sr-only">搜索当前数据集记录</span>
             <Search aria-hidden="true" />
             <input
-              ref={searchRef}
               type="search"
               value={queryDraft}
-              disabled={!open || state === "reserved"}
+              disabled={state === "reserved"}
               placeholder="按材料、指标或来源搜索"
               onChange={(event) => setQueryDraft(event.target.value)}
             />
@@ -403,17 +395,17 @@ export function DatabaseRecordDrawer({
         <div className="dba-drawer-body" aria-busy={loading}>
           {state === "loading" ? <DrawerSkeleton /> : null}
           {state === "error" ? (
-            <DrawerState title="记录加载失败" message={error ?? "请稍后重试。"}>
+            <DrawerState tone="error" title="记录加载失败" message={error ?? "请稍后重试。"}>
               <button type="button" onClick={() => setRetryVersion((version) => version + 1)}>重试</button>
             </DrawerState>
           ) : null}
           {state === "empty" ? (
-            <DrawerState title="没有匹配记录" message="当前搜索范围内没有原始记录。">
+            <DrawerState tone="empty" title="没有匹配记录" message="当前搜索范围内没有原始记录。">
               {queryDraft ? <button type="button" onClick={() => setQueryDraft("")}>清空搜索</button> : null}
             </DrawerState>
           ) : null}
           {state === "reserved" ? (
-            <DrawerState title="数据源暂不可用" message={payload?.sourceMessage ?? "该数据源尚未导入或正在准备。"} />
+            <DrawerState tone="reserved" title="数据源暂不可用" message={databaseAnalysisSourceMessage(payload?.sourceMessage)} />
           ) : null}
           {state === "ready" && payload ? (
             <div className="dba-drawer-records">
@@ -421,7 +413,7 @@ export function DatabaseRecordDrawer({
                 <article className="dba-record-card" key={record.id}>
                   <div className="dba-record-top">
                     <span>{record.id}</span>
-                    {record.status ? <em>{record.status}</em> : null}
+                    {record.status ? <em className={`is-${record.status.tone}`}>{record.status.label}</em> : null}
                   </div>
                   <h3>{record.title}</h3>
                   {record.mono ? <code title={record.mono}>{record.mono}</code> : null}
@@ -465,8 +457,8 @@ export function DatabaseRecordDrawer({
             </button>
           </div>
         </footer>
-      </aside>
-    </>
+      </div>
+    </WorkbenchDrawerShell>
   );
 }
 
@@ -482,10 +474,25 @@ function DrawerSkeleton() {
   );
 }
 
-function DrawerState({ title, message, children }: { title: string; message: string; children?: React.ReactNode }) {
+function DrawerState({
+  tone,
+  title,
+  message,
+  children
+}: {
+  tone: "error" | "empty" | "reserved";
+  title: string;
+  message: string;
+  children?: ReactNode;
+}) {
+  const icon = tone === "error"
+    ? <CircleAlert aria-hidden="true" />
+    : tone === "reserved"
+      ? <Clock3 aria-hidden="true" />
+      : <Search aria-hidden="true" />;
   return (
-    <div className="dba-drawer-state">
-      <div className="dba-drawer-state-icon"><Search aria-hidden="true" /></div>
+    <div className={`dba-drawer-state is-${tone}`}>
+      <div className="dba-drawer-state-icon">{icon}</div>
       <h3>{title}</h3>
       <p>{message}</p>
       {children}

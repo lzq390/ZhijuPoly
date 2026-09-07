@@ -28,8 +28,137 @@ type TgAssistantPanelProps = {
   contextualSuggestions: string[];
 };
 
+const LATEX_SYMBOLS: Record<string, string> = {
+  alpha: "α",
+  beta: "β",
+  gamma: "γ",
+  Delta: "Δ",
+  delta: "δ",
+  degree: "°",
+  circ: "°",
+  cdot: "·",
+  times: "×",
+  pm: "±",
+  le: "≤",
+  ge: "≥",
+  approx: "≈",
+  sim: "∼",
+  to: "→",
+  rightarrow: "→"
+};
+
+const LATEX_TEXT_COMMANDS = ["\\mathrm{", "\\text{", "\\operatorname{", "\\ce{"];
+
+function matchingBrace(value: string, openIndex: number): number {
+  let depth = 0;
+  for (let index = openIndex; index < value.length; index += 1) {
+    if (value[index] === "{") depth += 1;
+    if (value[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function unwrapLatexText(value: string, depth = 0): string {
+  if (depth >= 16) return value;
+  let result = "";
+  let index = 0;
+  while (index < value.length) {
+    const command = LATEX_TEXT_COMMANDS.find((candidate) => value.startsWith(candidate, index));
+    if (!command) {
+      result += value[index];
+      index += 1;
+      continue;
+    }
+    const openIndex = index + command.length - 1;
+    const closeIndex = matchingBrace(value, openIndex);
+    if (closeIndex < 0) {
+      result += value.slice(index + 1, openIndex);
+      index = openIndex + 1;
+      continue;
+    }
+    result += unwrapLatexText(value.slice(openIndex + 1, closeIndex), depth + 1);
+    index = closeIndex + 1;
+  }
+  return result;
+}
+
+function normalizeLatex(value: string): string {
+  let normalized = value.trim();
+  for (let pass = 0; pass < 3; pass += 1) {
+    normalized = normalized
+      .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "($1)/($2)")
+      .replace(/\\sqrt\{([^{}]+)\}/g, "√($1)");
+  }
+  normalized = unwrapLatexText(normalized)
+    .replace(/\\(?:left|right)\b/g, "")
+    .replace(/\\([A-Za-z]+)(?![A-Za-z])/g, (_match, command: string) => LATEX_SYMBOLS[command] ?? command)
+    .replace(/\\[,;:!]/g, " ")
+    .replace(/\\([%_#&{}])/g, "$1")
+    .replace(/~/g, " ")
+    .replace(/\s+/g, " ");
+  return normalized.trim();
+}
+
+type FormulaPart = { kind: "text" | "sub" | "sup"; value: string };
+
+function formulaParts(source: string): FormulaPart[] {
+  const value = normalizeLatex(source);
+  const parts: FormulaPart[] = [];
+  let text = "";
+  const flushText = () => {
+    if (!text) return;
+    parts.push({ kind: "text", value: text });
+    text = "";
+  };
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character !== "_" && character !== "^") {
+      if (character !== "{" && character !== "}") text += character;
+      continue;
+    }
+    const kind = character === "_" ? "sub" : "sup";
+    const nextIndex = index + 1;
+    if (nextIndex >= value.length) {
+      text += character;
+      continue;
+    }
+    flushText();
+    if (value[nextIndex] === "{") {
+      const closeIndex = matchingBrace(value, nextIndex);
+      if (closeIndex >= 0) {
+        parts.push({ kind, value: normalizeLatex(value.slice(nextIndex + 1, closeIndex)) });
+        index = closeIndex;
+        continue;
+      }
+    }
+    parts.push({ kind, value: value[nextIndex] });
+    index = nextIndex;
+  }
+  flushText();
+  return parts;
+}
+
+function FormulaText({ source }: { source: string }) {
+  return formulaParts(source).map((part, index) => {
+    if (part.kind === "sub") return <sub key={index}>{part.value}</sub>;
+    if (part.kind === "sup") return <sup key={index}>{part.value}</sup>;
+    return <Fragment key={index}>{part.value}</Fragment>;
+  });
+}
+
+function formulaLabel(source: string): string {
+  return formulaParts(source).map((part) => {
+    if (part.kind === "sub") return ` 下标 ${part.value}`;
+    if (part.kind === "sup") return ` 上标 ${part.value}`;
+    return part.value;
+  }).join("");
+}
+
 function inlineMarkdown(text: string): ReactNode[] {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).filter(Boolean);
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\\\([^\n]*?\\\)|\$[^$\n]+\$)/g).filter(Boolean);
   return parts.map((part, index) => {
     if (part.startsWith("`") && part.endsWith("`")) {
       return <code key={index}>{part.slice(1, -1)}</code>;
@@ -37,32 +166,142 @@ function inlineMarkdown(text: string): ReactNode[] {
     if (part.startsWith("**") && part.endsWith("**")) {
       return <strong key={index}>{part.slice(2, -2)}</strong>;
     }
+    const slashDelimited = part.startsWith("\\(") && part.endsWith("\\)");
+    const dollarDelimited = part.startsWith("$") && part.endsWith("$");
+    if (slashDelimited || dollarDelimited) {
+      const source = part.slice(slashDelimited ? 2 : 1, slashDelimited ? -2 : -1);
+      const looksLikeFormula = slashDelimited || /[\\_^=]|[A-Za-z]/.test(source);
+      if (looksLikeFormula) {
+        return <span className="tg-assistant-md-inline-math" key={index}><FormulaText source={source} /></span>;
+      }
+    }
     return <Fragment key={index}>{part}</Fragment>;
   });
+}
+
+function tableCells(line: string): string[] {
+  let value = line.trim();
+  if (value.startsWith("|")) value = value.slice(1);
+  if (value.endsWith("|")) value = value.slice(0, -1);
+  const cells: string[] = [];
+  let cell = "";
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === "\\" && value[index + 1] === "|") {
+      cell += "|";
+      index += 1;
+    } else if (value[index] === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += value[index];
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function tableDivider(line: string): boolean {
+  const cells = tableCells(line);
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function tableAlignment(divider: string): "left" | "center" | "right" {
+  if (divider.startsWith(":") && divider.endsWith(":")) return "center";
+  if (divider.endsWith(":")) return "right";
+  return "left";
+}
+
+function MarkdownHeading({ level, children }: { level: number; children: ReactNode }) {
+  if (level === 1) return <h3 className="tg-assistant-md-heading">{children}</h3>;
+  if (level === 2) return <h4 className="tg-assistant-md-heading">{children}</h4>;
+  return <h5 className="tg-assistant-md-heading">{children}</h5>;
 }
 
 function SafeMarkdown({ content }: { content: string }) {
   const lines = content.split("\n");
   const nodes: ReactNode[] = [];
-  let code: string[] | null = null;
-  lines.forEach((line, index) => {
-    if (line.trim().startsWith("```")) {
-      if (code) {
-        nodes.push(<pre key={`code-${index}`}><code>{code.join("\n")}</code></pre>);
-        code = null;
-      } else {
-        code = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      const startIndex = index;
+      const code: string[] = [];
+      index += 1;
+      while (index < lines.length && !lines[index].trim().startsWith("```")) {
+        code.push(lines[index]);
+        index += 1;
       }
-      return;
+      if (index < lines.length) index += 1;
+      nodes.push(<pre key={`code-${startIndex}`}><code>{code.join("\n")}</code></pre>);
+      continue;
     }
-    if (code) {
-      code.push(line);
-      return;
+
+    const sameLineMath = /^\\\[(.*)\\\]$/.exec(trimmed) ?? /^\$\$(.*)\$\$$/.exec(trimmed);
+    const mathFence = trimmed === "\\[" ? "\\]" : trimmed === "$$" ? "$$" : null;
+    if (sameLineMath || mathFence) {
+      const startIndex = index;
+      const formula: string[] = sameLineMath ? [sameLineMath[1]] : [];
+      index += 1;
+      if (mathFence) {
+        while (index < lines.length && lines[index].trim() !== mathFence) {
+          formula.push(lines[index].trim());
+          index += 1;
+        }
+        if (index < lines.length) index += 1;
+      }
+      const source = formula.join(" ").trim();
+      nodes.push(
+        <div className="tg-assistant-md-equation" role="math" aria-label={`公式：${formulaLabel(source)}`} tabIndex={0} key={`math-${startIndex}`}>
+          <FormulaText source={source} />
+        </div>
+      );
+      continue;
     }
+
+    if (index + 1 < lines.length && line.includes("|") && tableDivider(lines[index + 1])) {
+      const startIndex = index;
+      const headers = tableCells(line);
+      const dividers = tableCells(lines[index + 1]);
+      const alignments = headers.map((_header, cellIndex) => tableAlignment(dividers[cellIndex] ?? "---"));
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index].trim() && lines[index].includes("|")) {
+        const cells = tableCells(lines[index]);
+        if (cells.length < 2) break;
+        rows.push(cells);
+        index += 1;
+      }
+      nodes.push(
+        <div
+          className="tg-assistant-md-table-wrap"
+          role="region"
+          aria-label={`数据表：${headers.join("、")}`}
+          tabIndex={0}
+          key={`table-${startIndex}`}
+        >
+          <table>
+            <thead>
+              <tr>{headers.map((header, cellIndex) => (
+                <th className={`is-${alignments[cellIndex]}`} scope="col" key={cellIndex}>{inlineMarkdown(header)}</th>
+              ))}</tr>
+            </thead>
+            <tbody>{rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>{headers.map((_header, cellIndex) => (
+                <td className={`is-${alignments[cellIndex]}`} key={cellIndex}>{inlineMarkdown(row[cellIndex] ?? "")}</td>
+              ))}</tr>
+            ))}</tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
     const heading = /^(#{1,3})\s+(.+)$/.exec(line);
     if (heading) {
-      nodes.push(<strong className="tg-assistant-md-heading" key={index}>{inlineMarkdown(heading[2])}</strong>);
-      return;
+      nodes.push(<MarkdownHeading level={heading[1].length} key={index}>{inlineMarkdown(heading[2])}</MarkdownHeading>);
+      index += 1;
+      continue;
     }
     const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
     const numbered = /^\s*(\d+)\.\s+(.+)$/.exec(line);
@@ -75,10 +314,7 @@ function SafeMarkdown({ content }: { content: string }) {
     } else {
       nodes.push(<span className="tg-assistant-md-space" key={index} />);
     }
-  });
-  if (code !== null) {
-    const remainingCode = code as string[];
-    nodes.push(<pre key="code-final"><code>{remainingCode.join("\n")}</code></pre>);
+    index += 1;
   }
   return <div className="tg-assistant-markdown">{nodes}</div>;
 }
@@ -131,7 +367,7 @@ function ActionCard({
           <button type="button" onClick={() => assistant.rejectAction(item.id)}>忽略</button>
         </div>
       ) : item.status === "applying" ? (
-        <span className="tg-assistant-action-status"><LoaderCircle className="animate-spin" />正在应用…</span>
+        <span className="tg-assistant-action-status"><LoaderCircle className="np-sw-spin" />正在应用…</span>
       ) : item.status === "expired" ? (
         <button type="button" onClick={() => onRegenerate(item.sourceText)}><RefreshCcw />重新生成</button>
       ) : (
@@ -180,7 +416,7 @@ function ProcessDetails({ item }: { item: TgAssistantMessageItem }) {
         <ol>
           {process.stages.map((stage) => (
             <li key={stage} className={stage === process.currentStage ? "is-active" : ""}>
-              {stage === process.currentStage && active ? <LoaderCircle className="animate-spin" /> : <Check />}
+              {stage === process.currentStage && active ? <LoaderCircle className="np-sw-spin" /> : <Check />}
               {PROCESS_STAGE_LABELS[stage]}
             </li>
           ))}
@@ -231,7 +467,7 @@ function MessageBubble({
               />
             ) : (
               <span className="tg-assistant-message-image-unavailable" role="img" aria-label={unavailableLabel}>
-                {imagePreviewRestoring ? <LoaderCircle className="animate-spin" /> : <Image />}
+                {imagePreviewRestoring ? <LoaderCircle className="np-sw-spin" /> : <Image />}
                 <em>{unavailableLabel}</em>
               </span>
             )}
@@ -240,7 +476,7 @@ function MessageBubble({
         ) : null}
         {item.content ? <SafeMarkdown content={item.content} /> : null}
         {item.status === "understanding" ? (
-          <small className="tg-assistant-thinking"><LoaderCircle className="animate-spin" />正在思考中</small>
+          <small className="tg-assistant-thinking"><LoaderCircle className="np-sw-spin" />正在思考中</small>
         ) : null}
         {item.status === "streaming" && !item.content ? <small>正在生成…</small> : null}
         {item.role === "assistant" ? <ProcessDetails item={item} /> : null}
@@ -373,17 +609,18 @@ export function TgAssistantPanel({
 
   return (
     <>
-      <header className="tg-assistant-header">
+      <header className="np-sw-popover__header tg-assistant-header">
         <div>
-          <span className="tg-assistant-mark"><Sparkles /></span>
+          <span className="np-sw-popover__mark tg-assistant-mark"><Sparkles aria-hidden="true" /></span>
           <span>
             <h2 id="tg-assistant-title">Tg AI 助手</h2>
             <small>{available ? "AI 服务已就绪" : "使用指南与本地帮助"}</small>
           </span>
         </div>
-        <span className="tg-assistant-header-actions">
+        <span className="np-sw-popover__actions tg-assistant-header-actions">
           <button
             type="button"
+            className="np-sw-icon-button"
             aria-label="清空当前对话（不可恢复）"
             title="清空当前对话（不可恢复）"
             onClick={() => {
@@ -396,7 +633,7 @@ export function TgAssistantPanel({
           >
             <Trash2 />
           </button>
-          <button type="button" aria-label="收起 AI 助手" onClick={onClose}><X /></button>
+          <button type="button" className="np-sw-icon-button" aria-label="收起 AI 助手" onClick={onClose}><X /></button>
         </span>
       </header>
 
@@ -410,7 +647,7 @@ export function TgAssistantPanel({
           nearBottomRef.current = target.scrollHeight - target.scrollTop - target.clientHeight < 80;
         }}
       >
-        <div className="tg-assistant-context" aria-label="当前 AI 上下文">
+        <div className="np-sw-assistant-context tg-assistant-context" aria-label="当前 AI 上下文">
           {contextLabels.map((label, index) => <span key={label} className={index === 0 ? "is-ready" : ""}><i />{label}</span>)}
         </div>
 
@@ -437,11 +674,11 @@ export function TgAssistantPanel({
         </section>
 
         {!hasConversationContent ? (
-          <div className="tg-assistant-welcome">
+          <div className="np-sw-assistant-welcome tg-assistant-welcome">
             <span className="tg-assistant-orb"><Sparkles /></span>
             <h3><em>你好，</em><br />今天想一起研究什么？</h3>
             <p>{localDiagnostic}</p>
-            <div className="tg-assistant-suggestions">
+            <div className="np-sw-assistant-suggestions tg-assistant-suggestions">
               {suggestions.map((suggestion) => (
                 <button key={suggestion} type="button" onClick={() => {
                   setInput(suggestion);
@@ -511,7 +748,7 @@ export function TgAssistantPanel({
         <div className="tg-assistant-input-shell">
           <input
             ref={imageInputRef}
-            className="tg-visually-hidden"
+            className="np-sw-visually-hidden"
             type="file"
             accept="image/png,image/jpeg,image/webp"
             aria-label="选择供 AI 分析的图片"

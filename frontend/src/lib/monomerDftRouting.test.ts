@@ -20,6 +20,12 @@ describe("monomer DFT query routing", () => {
     expect(hasInvalidMonomerDftJobSearch("")) .toBe(false);
   });
 
+  it.each(["6", "7", "8"])("rejects unsupported UUID version %s", (version) => {
+    const jobId = `7c78fd8a-e901-${version}fae-9873-90236b52b36a`;
+    expect(getMonomerDftJobIdFromSearch(`?job=${jobId}`)).toBeNull();
+    expect(hasInvalidMonomerDftJobSearch(`?job=${jobId}`)).toBe(true);
+  });
+
   it("builds the module route when no job is selected", () => {
     expect(getMonomerDftPath(null)).toBe("/monomer-dft");
   });

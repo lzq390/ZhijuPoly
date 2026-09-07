@@ -7,6 +7,7 @@ from app.routers import monomer_md as monomer_md_routes
 from app.config import Settings
 from app.postgres_database import postgres_connection
 from app.routers.monomer_md import router as monomer_md_router
+from app.services import monomer_md_repository as monomer_md_repository_module
 from app.services.monomer_md_repository import (
     count_active_monomer_md_jobs_postgres,
     create_monomer_md_job_postgres,
@@ -676,6 +677,43 @@ def test_monomer_md_formal_density_submit_and_status_roundtrip(postgres_dsn: str
                     "summary": {"density": 1.21, "density_std": 0.02},
                     "artifacts": {"outputs/density_results.json": {"path": "outputs/density_results.json"}},
                     "metrics": {"density": 1.21, "density_std": 0.02},
+                    "visualization": {
+                        "schema_version": 1,
+                        "status": "complete",
+                        "default_stage_id": "npt",
+                        "stages": [
+                            {
+                                "stage_id": "npt",
+                                "label": "NPT",
+                                "density_series": {
+                                    "points": [{"step": 10, "time_ps": 0.02, "value": 1.21}],
+                                },
+                                "trajectory_preview": {
+                                    "frame_index": 10,
+                                    "coordinate_unit": "angstrom",
+                                    "total_atoms": 2,
+                                    "sampled_points": 1,
+                                    "points": [{"x": 1.0, "y": 2.0, "z": 3.0}],
+                                },
+                                "trajectory_timeline": {
+                                    "schema_version": 1,
+                                    "source_frame_count": 3000,
+                                    "sampled_frame_count": 60,
+                                    "total_atoms": 2,
+                                    "sampled_points": 1,
+                                    "coordinate_unit": "angstrom",
+                                    "coordinate_encoding": "int16-delta-gzip-base64",
+                                    "compressed_byte_length": 12,
+                                    "sampling_strategy": "all_atoms",
+                                    "atoms": [{"atom_id": 1, "element": "C"}],
+                                    "frames": [{"frame_index": 10, "time_ps": 0.02}],
+                                    "coordinates": "encoded-coordinates",
+                                },
+                                "warnings": [],
+                            }
+                        ],
+                        "warnings": [],
+                    },
                 },
             )
 
@@ -688,6 +726,60 @@ def test_monomer_md_formal_density_submit_and_status_roundtrip(postgres_dsn: str
         assert completed_payload["byteff2_git_sha"] == "abc1234"
         assert completed_payload["gpu_device"] == "2"
         assert completed_payload["result"]["metrics"]["density"] == 1.21
+        assert completed_payload["result"]["visualization"]["schema_version"] == 1
+        slim_stage = completed_payload["result"]["visualization"]["stages"][0]
+        assert "trajectory_timeline" not in slim_stage
+        assert slim_stage["trajectory_timeline_available"] is True
+        assert slim_stage["trajectory_timeline_summary"] == {
+            "schema_version": 1,
+            "source_frame_count": 3000,
+            "sampled_frame_count": 60,
+            "total_atoms": 2,
+            "sampled_points": 1,
+            "coordinate_unit": "angstrom",
+            "coordinate_encoding": "int16-delta-gzip-base64",
+            "compressed_byte_length": 12,
+            "sampling_strategy": "all_atoms",
+        }
+
+        compatibility_detail = client.get(
+            f"/api/v1/monomer-md/jobs/{job_id}",
+            params={"include_trajectory": "true"},
+        )
+        assert compatibility_detail.status_code == 200
+        embedded_timeline = compatibility_detail.json()["result"]["visualization"]["stages"][0][
+            "trajectory_timeline"
+        ]
+        assert embedded_timeline["coordinates"] == "encoded-coordinates"
+
+        timeline_response = client.get(
+            f"/api/v1/monomer-md/jobs/{job_id}/visualization/stages/npt/trajectory"
+        )
+        assert timeline_response.status_code == 200
+        assert timeline_response.json()["coordinates"] == "encoded-coordinates"
+        assert client.get(
+            f"/api/v1/monomer-md/jobs/{job_id}/visualization/stages/nvt/trajectory"
+        ).status_code == 404
+
+        lightweight_list = client.get(
+            "/api/v1/monomer-md/jobs",
+            params={"run_mode": "formal", "include_result": "false"},
+        )
+        assert lightweight_list.status_code == 200
+        lightweight_item = lightweight_list.json()["items"][0]
+        assert lightweight_item["result"] is None
+        assert lightweight_item["artifacts"] == {}
+        assert lightweight_item["artifact_manifest"] == {}
+        assert lightweight_item["result_summary"]["density"] == 1.21
+
+        compatibility_list = client.get(
+            "/api/v1/monomer-md/jobs",
+            params={"run_mode": "formal"},
+        )
+        assert compatibility_list.status_code == 200
+        listed_result = compatibility_list.json()["items"][0]["result"]
+        assert listed_result["visualization"]["schema_version"] == 1
+        assert "trajectory_timeline" not in listed_result["visualization"]["stages"][0]
 
 
 def test_monomer_md_formal_job_rejects_invalid_dielectric_step_config(postgres_dsn: str):
@@ -845,6 +937,58 @@ def test_monomer_md_list_and_cancel_formal_jobs(postgres_dsn: str):
     assert filtered.status_code == 200
     assert filtered.json()["total"] == 1
     assert filtered.json()["items"][0]["job_id"] == job_ids[1]
+
+
+def test_monomer_md_lightweight_list_projects_out_large_json(monkeypatch) -> None:
+    class QueryResult:
+        def __init__(self, *, row=None, rows=None) -> None:
+            self.row = row
+            self.rows = rows or []
+
+        def fetchone(self):
+            return self.row
+
+        def fetchall(self):
+            return self.rows
+
+
+    class RecordingConnection:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def execute(self, query: str, _params=()):
+            self.queries.append(query)
+            if query.startswith("SELECT count"):
+                return QueryResult(row={"count": 1})
+            return QueryResult(rows=[{
+                "result_data": None,
+                "artifacts": {},
+                "artifact_manifest": {},
+            }])
+
+    monkeypatch.setattr(
+        monomer_md_repository_module,
+        "_monomer_md_job_from_row",
+        lambda row: {
+            "result": row["result_data"],
+            "artifacts": row["artifacts"],
+            "artifact_manifest": row["artifact_manifest"],
+        },
+    )
+    connection = RecordingConnection()
+
+    items, total = list_monomer_md_jobs_postgres(
+        connection,
+        run_mode="formal",
+        include_result=False,
+    )
+
+    select = connection.queries[1]
+    assert "NULL::jsonb AS result_data" in select
+    assert "'{}'::jsonb AS artifacts" in select
+    assert "'{}'::jsonb AS artifact_manifest" in select
+    assert total == 1
+    assert items == [{"result": None, "artifacts": {}, "artifact_manifest": {}}]
 
 
 def test_monomer_md_cancel_handles_pending_terminal_and_unknown_jobs(
@@ -1008,7 +1152,17 @@ def test_monomer_md_artifact_delete_marks_job_and_preserves_audit(postgres_dsn: 
                 artifacts={"npt_state_csv": {"path": "npt_state.csv"}},
                 artifact_manifest={"files": [{"path": "npt_state.csv"}]},
                 result_summary={"final_density_g_cm3": 0.8},
-                result_data={"summary": {"final_density_g_cm3": 0.8}, "artifacts": {}},
+                result_data={
+                    "summary": {"final_density_g_cm3": 0.8},
+                    "artifacts": {},
+                    "visualization": {
+                        "schema_version": 1,
+                        "status": "complete",
+                        "default_stage_id": "npt",
+                        "stages": [{"stage_id": "npt", "label": "NPT", "warnings": []}],
+                        "warnings": [],
+                    },
+                },
             )
 
         delete_response = client.delete(f"/api/v1/monomer-md/jobs/{job_id}/artifacts")
@@ -1021,6 +1175,7 @@ def test_monomer_md_artifact_delete_marks_job_and_preserves_audit(postgres_dsn: 
     assert payload["artifact_delete_message"] == "artifacts deleted"
     assert payload["artifact_manifest"]["deleted"] is True
     assert payload["artifact_root"] == f"/runs/{job_id}"
+    assert payload["result"]["visualization"]["schema_version"] == 1
 
 
 def test_monomer_md_worker_identity_update_does_not_regress_running_status(postgres_dsn: str):
