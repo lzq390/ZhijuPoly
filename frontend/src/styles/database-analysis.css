@@ -17,9 +17,11 @@
   --dba-danger: #dc2626;
   --dba-border: rgba(51, 83, 126, 0.14);
   --dba-border-strong: rgba(51, 83, 126, 0.23);
-  --dba-accent-gradient: linear-gradient(145deg, var(--dba-blue-strong) 0%, var(--dba-blue) 56%, var(--dba-cyan) 100%);
-  --dba-accent-line: linear-gradient(90deg, transparent 0%, rgba(37, 99, 235, 0.8) 34%, rgba(8, 145, 178, 0.72) 68%, transparent 100%);
-  --dba-accent-rule: linear-gradient(90deg, rgba(37, 99, 235, 0.24), rgba(8, 145, 178, 0.18), transparent 92%);
+  --dba-accent-gradient: linear-gradient(145deg, #1d4ed8 0%, #3b82f6 58%, #06b6d4 135%);
+  --dba-accent-line: linear-gradient(90deg, transparent 0%, rgba(59, 130, 246, 0.8) 34%, rgba(34, 211, 238, 0.72) 68%, transparent 100%);
+  --dba-accent-line-soft: linear-gradient(90deg, transparent 0%, rgba(59, 130, 246, 0.42) 34%, rgba(34, 211, 238, 0.38) 68%, transparent 100%);
+  --dba-toolbar-line: linear-gradient(90deg, rgba(37, 99, 235, 0), rgba(59, 130, 246, 0.32), rgba(34, 211, 238, 0.5));
+  --dba-accent-rule: linear-gradient(90deg, rgba(59, 130, 246, 0.24), rgba(34, 211, 238, 0.18), transparent 92%);
   --dba-title-surface: linear-gradient(110deg, rgba(255, 255, 255, 0.99) 10%, rgba(239, 246, 255, 0.75) 72%, rgba(236, 254, 255, 0.54) 118%);
   --dba-view-accent: var(--dba-blue);
   --dba-view-soft: #eff6ff;
@@ -78,7 +80,7 @@
   width: min(180px, 22cqw);
   height: 1px;
   margin-right: auto;
-  background: var(--dba-accent-line);
+  background: var(--dba-toolbar-line);
   content: "";
 }
 
@@ -514,7 +516,7 @@
   left: 14px;
   height: 2px;
   border-radius: 0 0 3px 3px;
-  background: var(--dba-accent-line);
+  background: var(--dba-accent-line-soft);
   pointer-events: none;
   content: "";
 }

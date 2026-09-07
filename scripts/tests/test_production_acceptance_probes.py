@@ -292,6 +292,11 @@ class ReadAndFrontendClient(FakeClient):
             "/homopolymer-property-prediction",
             "/database-query",
             "/database",
+            "/database/process",
+            "/database/property",
+            "/database/structure-effect",
+            "/database/dft",
+            "/database/formulation",
             "/database-filter",
             "/knowledge",
             "/reverse-design",
@@ -473,6 +478,8 @@ class ProductionAcceptanceProbeTests(unittest.TestCase):
         self.assertEqual(len(frontend["assets"]), 2)
         self.assertIn("/homopolymer-property-prediction", frontend["routes"])
         self.assertIn("/database-query", frontend["routes"])
+        self.assertIn("/database/process", frontend["routes"])
+        self.assertIn("/database/formulation", frontend["routes"])
         self.assertIn("/reverse-design", frontend["routes"])
         self.assertIn("/monomer-dft", frontend["routes"])
         self.assertIn("/md-simulation", frontend["routes"])
