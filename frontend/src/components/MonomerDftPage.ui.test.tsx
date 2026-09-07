@@ -242,7 +242,7 @@ describe("MonomerDftPage workbench", () => {
   });
 
   it("presents calculation purposes in the styled dropdown without exposing model names", async () => {
-    const { view } = renderPage();
+    renderPage();
     const purposeSelect = screen.getByRole("combobox", { name: /适用体系/ });
 
     purposeSelect.focus();
@@ -250,14 +250,14 @@ describe("MonomerDftPage workbench", () => {
     const purposeOption = screen.getByRole("option", { name: /通用有机分子/ });
     expect(purposeOption).toBeTruthy();
     expect(screen.queryByText(/AIMNet/)).toBeNull();
-    expect(view.container.querySelector(".np-dft-select__menu")).toBeTruthy();
+    expect(screen.getByRole("listbox")).toBeTruthy();
 
     fireEvent.keyDown(purposeSelect, { key: "Tab" });
-    expect(view.container.querySelector(".np-dft-select__menu")).toBeNull();
+    expect(screen.queryByRole("listbox")).toBeNull();
 
     fireEvent.click(purposeSelect);
     fireEvent.keyDown(purposeSelect, { key: "Escape" });
-    expect(view.container.querySelector(".np-dft-select__menu")).toBeNull();
+    expect(screen.queryByRole("listbox")).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(purposeSelect));
   });
 
