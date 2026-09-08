@@ -3991,7 +3991,7 @@
   }
 }
 
-/* Shared S0/S1 frame — aligned with the platform research workbench. */
+/* Shared S0–S2 frame — aligned with the platform research workbench. */
 .high-throughput-demo.ht-workbench-page {
   --ht-s0-column: 1040px;
   --ht-s0-type-label: 12px;
@@ -4182,7 +4182,7 @@
   letter-spacing: -0.01em;
 }
 
-/* A stage heading receives programmatic focus when moving between S0/S1. */
+/* Workbench stage changes focus the surface heading without moving the outer shell. */
 .ht-workbench-heading h2:focus {
   outline: none;
 }

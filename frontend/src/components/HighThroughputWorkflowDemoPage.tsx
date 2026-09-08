@@ -27,7 +27,9 @@ import {
 import { cn } from "../lib/utils";
 import { WorkbenchSelect } from "./structure-workbench/WorkbenchSelect";
 import { PriorImportWorkspace } from "./high-throughput/PriorImportWorkspace";
-import type { PriorDataUploadState, PriorDataUploadsState } from "./high-throughput/types";
+import { PriorHotspotWorkspace } from "./high-throughput/PriorHotspotWorkspace";
+import { fallbackCandidateSmiles, validationNumber } from "./high-throughput/prior-hotspot-model";
+import type { PriorDataUploadState, PriorDataUploadsState, RecommendationSelection, RecommendationValidationValues } from "./high-throughput/types";
 import "../styles/structure-workbench.css";
 import "./HighThroughputWorkflowDemoPage.css";
 
@@ -49,11 +51,6 @@ type ConfirmedSetup = {
   targetValues: Record<HighThroughputTargetKey, number>;
 };
 
-type RecommendationSelection = {
-  targetKey: HighThroughputTargetKey;
-  candidateId: string;
-};
-type RecommendationValidationValues = Record<string, string>;
 type RecommendationValidationRequirement = {
   targetKey: HighThroughputTargetKey;
   candidateId: string;
@@ -183,18 +180,6 @@ function uniqueItems<T>(items: T[]) {
   return Array.from(new Set(items));
 }
 
-function validationNumber(
-  validationValues: RecommendationValidationValues,
-  targetKey: HighThroughputTargetKey,
-  candidateId: string,
-) {
-  const rawValue = validationValues[recommendationValidationKey(targetKey, candidateId)];
-  if (rawValue === undefined || rawValue.trim() === "") {
-    return null;
-  }
-  const parsedValue = Number(rawValue);
-  return Number.isFinite(parsedValue) ? parsedValue : null;
-}
 
 function hasValidationValue(
   validationValues: RecommendationValidationValues,
@@ -230,30 +215,6 @@ function isTargetCsvReady(upload: PriorDataUploadState | null | undefined) {
   return Boolean(upload && !upload.isLoading && !upload.errorMessage);
 }
 
-function fallbackCandidateSmiles(candidate: HighThroughputCandidate | undefined) {
-  if (!candidate) {
-    return {
-      polymerSmiles: "--",
-      monomerASmiles: "--",
-      monomerBSmiles: "--",
-    };
-  }
-
-  const monomerANumber = Number(candidate.monomerA.replace(/\D/g, "")) || 1;
-  const monomerBNumber = Number(candidate.monomerB.replace(/\D/g, "")) || 1;
-  const daSideChain = "C".repeat((monomerANumber % 10) + 1);
-  const daSecondChain = "C".repeat(Math.floor(monomerANumber / 10) + 1);
-  const dmSpacer = "C".repeat((monomerBNumber % 10) + 1);
-  const dmMethylPattern = "C".repeat(Math.floor(monomerBNumber / 10) + 1);
-  const aromaticBridge = `c1ccc(C(${daSideChain})(${daSecondChain})c2ccc(O)cc2)cc1`;
-  const diamineTail = `Nc1ccc(${dmSpacer}Oc2ccc(N)c(${dmMethylPattern})c2)cc1`;
-
-  return {
-    polymerSmiles: candidate.polymerSmiles ?? `*N(C(=O)c1ccc(${aromaticBridge})cc1C(=O)*)${diamineTail}`,
-    monomerASmiles: candidate.monomerASmiles ?? `O=C1OC(=O)c2ccc(${aromaticBridge})cc21`,
-    monomerBSmiles: candidate.monomerBSmiles ?? diamineTail,
-  };
-}
 
 function getAgentForCandidate(candidateId: string) {
   return highThroughputDemoScenario.agents.find(
@@ -850,7 +811,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const displayedNextStepState = stageTransition
     ? { canAdvance: false, label: "处理中", hint: stageTransition.message }
     : nextStepState;
-  const isWorkbenchStage = currentStageIndex <= 1;
+  const isWorkbenchStage = currentStageIndex <= 2;
 
   useEffect(() => {
     if (previousStageRef.current !== currentStageIndex) {
@@ -940,7 +901,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     }
 
     if (currentStageIndex === 2) {
-      runStageTransition("实验结果回流中，正在生成第一轮单性质模型...", VALIDATION_FEEDBACK_MS, () => enterStage(3));
+      runStageTransition("正在演示验证回流，准备进入 S3 单性质迭代…", VALIDATION_FEEDBACK_MS, () => enterStage(3));
       return;
     }
 
@@ -1002,7 +963,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function confirmCurrentValidationGroup() {
-    if (!activeValidationGroupKey || activeValidationMissingCount > 0) {
+    if (!activeValidationGroupKey || activeValidationMissingCount > 0 || stageTransition) {
       return;
     }
     setValidationConfirmations((confirmations) => ({
@@ -1044,6 +1005,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function resetCurrentStageActions() {
+    if (stageTransition) return;
     if (currentStageIndex === 0) {
       setConfirmedSetup(buildDefaultConfirmedSetup());
       setSetupResetToken((token) => token + 1);
@@ -1064,7 +1026,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     if (currentStageIndex === 2) {
       resetValidationValues(getRequiredValidationIds(2));
       clearValidationConfirmation(2);
-      setSelectedRecommendation(null);
+      setSelectedRecommendation({ targetKey: activeSpaceTargetKey, candidateId: recommendationValidationIds(activeSpaceTargetKey, 2)[0] });
       return;
     }
 
@@ -1082,6 +1044,15 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function confirmSetup(setup: ConfirmedSetup) {
+    // Going back alone preserves confirmation; a genuinely changed scene requires a new review.
+    const targetsChanged = setup.selectedTargetKeys.length !== confirmedSetup.selectedTargetKeys.length ||
+      setup.selectedTargetKeys.some((key) => !confirmedSetup.selectedTargetKeys.includes(key));
+    if (targetsChanged || setup.materialType !== confirmedSetup.materialType ||
+      setup.monomerSystem !== confirmedSetup.monomerSystem || setup.representation !== confirmedSetup.representation ||
+      setup.monomerACount !== confirmedSetup.monomerACount || setup.monomerBCount !== confirmedSetup.monomerBCount ||
+      scenario.targets.some((target) => setup.targetValues[target.key] !== confirmedSetup.targetValues[target.key])) {
+      clearValidationConfirmation(2);
+    }
     setConfirmedSetup(setup);
     enterStage(1);
   }
@@ -1098,6 +1069,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   // Both entry points select built-in demo rows by filename, sharing the same
   // loading timer and stale-result guard. No file contents or service are used.
   function beginPriorDataImport(targetKey: HighThroughputTargetKey, fileName: string) {
+    if (currentStageIndex !== 1 || stageTransition) return;
+    clearValidationConfirmation(2);
     clearPriorUploadTimer(targetKey);
     const csvFile = scenario.doeCsvFiles[targetKey];
     const uploadedAt = new Intl.DateTimeFormat("zh-CN", {
@@ -1164,6 +1137,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function handleRecommendationValidationValueChange(targetKey: HighThroughputTargetKey, candidateId: string, value: string) {
+    if (stageTransition) return;
     setRecommendationValidationValues((values) => ({
       ...values,
       [recommendationValidationKey(targetKey, candidateId)]: value,
@@ -1172,18 +1146,18 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   return (
-    <div className={cn("high-throughput-demo", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page")}>
+    <div className={cn("high-throughput-demo", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page", currentStageIndex === 2 && "ht-s2-page")}>
       {isWorkbenchStage ? <h1 className="ht-workbench-title">高通量优化演示</h1> : null}
       {isWorkbenchStage ? (
         <ScenarioModuleToolbar
           canReset={!stageTransition}
           onReset={resetCurrentStageActions}
-          resetLabel={currentStageIndex === 0 ? "恢复默认场景参数" : "重置 S1 上传数据"}
+          resetLabel={currentStageIndex === 0 ? "恢复默认场景参数" : currentStageIndex === 1 ? "重置 S1 上传数据" : "重置 S2 验证值"}
         />
       ) : null}
       <main ref={scrollRegionRef} className="ht-shell ht-scroll-region">
         <section
-          className={cn("ht-docx-board", isWorkbenchStage && "ht-workbench-board np-sw-accented-surface", currentStageIndex === 0 && "ht-s0-board", currentStageIndex === 1 && "ht-s1-board")}
+          className={cn("ht-docx-board", isWorkbenchStage && "ht-workbench-board np-sw-accented-surface", currentStageIndex === 0 && "ht-s0-board", (currentStageIndex === 1 || currentStageIndex === 2) && "ht-s1-board", currentStageIndex === 2 && "ht-s2-board")}
           aria-labelledby={isWorkbenchStage ? "ht-workbench-surface-title" : undefined}
         >
           {isWorkbenchStage ? <ScenarioSurfaceHeader stageIndex={currentStageIndex} /> : null}
@@ -1226,6 +1200,32 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
                   priorDataUpload={priorDataUploads[activeSpaceTargetKey] ?? null}
                   showSummary={false}
                 />
+              )}
+            />
+          ) : currentStageIndex === 2 ? (
+            <PriorHotspotWorkspace
+              targets={scenario.targets.map((target) => getConfiguredTarget(target.key, confirmedSetup))}
+              candidateTotal={confirmedSetup.candidateTotal}
+              materialType={confirmedSetup.materialType}
+              representation={confirmedSetup.representation}
+              uploads={priorDataUploads}
+              activeTargetKey={activeSpaceTargetKey}
+              onSelectTarget={setActiveSpaceTargetKey}
+              selectedRecommendation={selectedRecommendation}
+              onSelectRecommendation={setSelectedRecommendation}
+              validationValues={recommendationValidationValues}
+              onValidationValueChange={handleRecommendationValidationValueChange}
+              validationConfirmed={activeValidationConfirmed}
+              onConfirm={confirmCurrentValidationGroup}
+              onBack={() => enterStage(1)}
+              onNext={handleNextStep}
+              canAdvance={displayedNextStepState.canAdvance}
+              transitionMessage={stageTransition?.message ?? null}
+              renderCandidateMap={(onSelect) => (
+                <PropertySpaceCard stageIndex={2} target={getConfiguredTarget(activeSpaceTargetKey, confirmedSetup)}
+                  variant="large" showSummary={false} validationValues={recommendationValidationValues}
+                  selectedRecommendation={selectedRecommendation} onSelectRecommendation={onSelect}
+                  interactionDisabled={Boolean(stageTransition)} />
               )}
             />
           ) : (
@@ -1585,15 +1585,16 @@ function ScenarioModuleToolbar({
 
 function ScenarioSurfaceHeader({ stageIndex }: { stageIndex: number }) {
   const isPrior = stageIndex === 1;
+  const isHotspot = stageIndex === 2;
   return (
     <header className="ht-workbench-header">
       <div className="ht-workbench-heading">
         <span className="ht-workbench-mark">
-          {isPrior ? <TestTube2 aria-hidden="true" /> : <FlaskConical aria-hidden="true" />}
+          {isHotspot ? <BrainCircuit aria-hidden="true" /> : isPrior ? <TestTube2 aria-hidden="true" /> : <FlaskConical aria-hidden="true" />}
         </span>
         <div>
-          <h2 id="ht-workbench-surface-title" tabIndex={-1}>{isPrior ? "正交实验与先验导入" : "材料体系与目标设置"}</h2>
-          <p>{isPrior ? "为四个性质 Agent 导入 DOE 样例，查看候选分布与先验数据。" : "设置材料体系、候选空间与优化目标。"}</p>
+          <h2 id="ht-workbench-surface-title" tabIndex={-1}>{isHotspot ? "先验热点与推荐验证" : isPrior ? "正交实验与先验导入" : "材料体系与目标设置"}</h2>
+          <p>{isHotspot ? "查看四个性质的初始热点，编辑并确认本批推荐点的演示验证值。" : isPrior ? "为四个性质 Agent 导入 DOE 样例，查看候选分布与先验数据。" : "设置材料体系、候选空间与优化目标。"}</p>
         </div>
       </div>
     </header>
@@ -1936,6 +1937,7 @@ function PropertySpaceCard({
   selectedRecommendation = null,
   onSelectRecommendation,
   showSummary = true,
+  interactionDisabled = false,
 }: {
   stageIndex: number;
   target: HighThroughputTarget;
@@ -1946,6 +1948,7 @@ function PropertySpaceCard({
   selectedRecommendation?: RecommendationSelection | null;
   onSelectRecommendation?: (selection: RecommendationSelection) => void;
   showSummary?: boolean;
+  interactionDisabled?: boolean;
 }) {
   const space = getPropertySpace(target.key);
   const activeRounds = highThroughputDemoScenario.roundsByTarget[target.key];
@@ -1997,6 +2000,7 @@ function PropertySpaceCard({
           ? "Prior DOE Surface"
           : surface?.label ?? "Round surface";
   const canInspectRecommendation =
+    !interactionDisabled &&
     (stageIndex === 2 || stageIndex === 3) &&
     recommendedSet.size > 0 &&
     Boolean(onSelectRecommendation);
@@ -2029,7 +2033,7 @@ function PropertySpaceCard({
         </div>
       ) : null}
 
-      <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role="img" aria-label={`${target.shortLabel} single-property optimization space`}>
+      <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role={stageIndex === 2 ? "group" : "img"} aria-label={stageIndex === 2 ? `${target.shortLabel} 先验热点与推荐点` : `${target.shortLabel} single-property optimization space`}>
         <defs>
           <radialGradient id={`ht-property-gradient-${target.key}-${surface?.id ?? "none"}`} cx="50%" cy="50%" r="55%">
             <stop offset="0%" stopColor={target.color} stopOpacity="0.82" />
@@ -2117,7 +2121,8 @@ function PropertySpaceCard({
                 className={cn("ht-recommended-sample-node", canInspectRecommendation && "selectable", isSelected && "selected")}
                 role={canInspectRecommendation ? "button" : undefined}
                 tabIndex={canInspectRecommendation ? 0 : undefined}
-                aria-label={canInspectRecommendation ? `查看 ${point.candidateId} SMILES 并录入 ${target.shortLabel} 实测值` : undefined}
+                aria-label={canInspectRecommendation ? stageIndex === 2 ? `查看 ${point.candidateId} 推荐点并编辑 ${target.shortLabel} 演示验证值` : `查看 ${point.candidateId} SMILES 并录入 ${target.shortLabel} 实测值` : undefined}
+                aria-pressed={stageIndex === 2 && canInspectRecommendation ? isSelected : undefined}
                 onClick={() => selectRecommendation(point.candidateId)}
                 onKeyDown={(event) => handleRecommendationKeyDown(event, point.candidateId)}
               >

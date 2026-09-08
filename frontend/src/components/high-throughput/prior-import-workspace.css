@@ -605,6 +605,7 @@
   .ht-s1-space-focus > svg { width: 22px; height: 22px; }
   .ht-s1-space-body { gap: 18px; padding: 20px 22px; }
   .ht-s1-map-legend { padding: 8px 12px; }
+  .ht-s1-map-legend i { width: 10px; height: 10px; }
   .ht-s1-section-title { gap: 13px; }
   .ht-s1-section-index { width: 42px; height: 42px; border-radius: 11px; }
   .ht-s1-stage .ht-s1-target-tabs button { min-height: 40px; gap: 7px; }

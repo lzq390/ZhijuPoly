@@ -1,5 +1,12 @@
 import type { HighThroughputTargetKey } from "../../constants/highThroughputDemoScenario";
 
+export type RecommendationSelection = {
+  targetKey: HighThroughputTargetKey;
+  candidateId: string;
+};
+
+export type RecommendationValidationValues = Record<string, string>;
+
 export type PriorDataUploadState = {
   targetKey: HighThroughputTargetKey;
   fileName: string;

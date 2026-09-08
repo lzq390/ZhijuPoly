@@ -516,7 +516,9 @@ describe("HighThroughputWorkflowDemoPage S1", () => {
     expect(view.container.querySelector(".ht-s1-page")).toBeNull();
     expect(view.container.querySelector(".ht-scroll-region")).toBe(scrollRegion);
     expect(scrollRegion.scrollTop).toBe(0);
-    expect(view.container.querySelectorAll(".ht-agent-orbit")).toHaveLength(2);
+    expect(view.container.querySelectorAll(".ht-agent-orbit")).toHaveLength(0);
+    expect(view.container.querySelector(".ht-s2-board")).not.toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "先验热点与推荐验证" }));
     expect(view.container.querySelector(".ht-property-candidate-point")?.getAttribute("opacity")).toBe("0.34");
     expect(view.container.querySelector(".ht-property-space-backdrop")?.getAttribute("fill")).toBe("#fbfdff");
   });
@@ -651,9 +653,11 @@ describe("HighThroughputWorkflowDemoPage S1", () => {
       visited.add(previous);
       expect(view.container.querySelector(".ht-scroll-region")).toBe(scrollRegion);
       expect(scrollRegion.querySelector(".ht-docx-board")).not.toBeNull();
-      expect(view.container.querySelector(".ht-workbench-toolbar")).toBeNull();
-      const confirm = screen.queryByRole("button", { name: /^确认本(轮|步)实测值$/ });
-      const next = view.container.querySelector<HTMLButtonElement>(".ht-next-step-control")!;
+      if (previous === "S2") expect(view.container.querySelector(".ht-workbench-toolbar")).not.toBeNull();
+      else expect(view.container.querySelector(".ht-workbench-toolbar")).toBeNull();
+      const confirm = screen.queryByRole("button", { name: previous === "S2" ? "确认本批 8 项验证值" : /^确认本(轮|步)实测值$/ });
+      const next = previous === "S2" ? screen.getByRole<HTMLButtonElement>("button", { name: "进入 S3" })
+        : view.container.querySelector<HTMLButtonElement>(".ht-next-step-control")!;
       if (confirm) {
         expect(next.disabled).toBe(true);
         fireEvent.click(confirm);

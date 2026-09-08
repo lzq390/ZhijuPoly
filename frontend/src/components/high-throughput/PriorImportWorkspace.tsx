@@ -1,9 +1,8 @@
 import {
-  ArrowDownRight, ArrowLeft, ArrowUpRight, BadgeInfo, Bot, CheckCircle2, ChevronDown, ChevronLeft,
-  ChevronRight, Circle, Download, FileSpreadsheet, Gauge, Layers3, LoaderCircle,
-  MoveHorizontal, Shrink, Thermometer, UploadCloud, TriangleAlert,
+  ArrowLeft, BadgeInfo, CheckCircle2, ChevronDown, ChevronRight, Circle, Download,
+  FileSpreadsheet, Layers3, LoaderCircle, UploadCloud, TriangleAlert,
 } from "lucide-react";
-import { type CSSProperties, type KeyboardEvent, type ReactNode, useId, useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useId, useRef, useState } from "react";
 import {
   highThroughputDemoScenario,
   type HighThroughputDoeCsvFile,
@@ -12,7 +11,7 @@ import {
 } from "../../constants/highThroughputDemoScenario";
 import { cn } from "../../lib/utils";
 import type { PriorDataUploadsState, PriorDataUploadState } from "./types";
-import "./prior-import-workspace.css";
+import { AgentCardShell, AgentDockLayout, AGENT_PROPERTY_ICONS, TargetTabs } from "./PriorWorkbench";
 
 type PriorImportWorkspaceProps = {
   targets: HighThroughputTarget[];
@@ -30,40 +29,6 @@ type PriorImportWorkspaceProps = {
   transitionMessage: string | null;
   candidateMap: ReactNode;
 };
-
-// Narrow canvases show one floating card at a time to keep its controls reachable.
-const COMPACT_AGENT_LAYOUT_WIDTH = 836;
-const INSET_AGENT_CLEARANCE = 12;
-const AGENT_SIDES: HighThroughputTargetKey[][] = [["tg", "cte"], ["elongation", "modulus"]];
-type OpenAgents = Partial<Record<HighThroughputTargetKey, boolean>>;
-type AgentLayoutMode = "outside" | "inset" | "compact";
-
-function agentLayoutMode(layout: HTMLElement): AgentLayoutMode {
-  if (layout.clientWidth > 0 && layout.clientWidth < COMPACT_AGENT_LAYOUT_WIDTH) return "compact";
-  // CSS owns the container/native-2K breakpoints; interaction follows the same mode.
-  return getComputedStyle(layout).getPropertyValue("--ht-s1-inset-agents").trim() === "1" ? "inset" : "outside";
-}
-
-function fitOpenAgents(agents: OpenAgents, mode: AgentLayoutMode, preferred: HighThroughputTargetKey): OpenAgents {
-  if (mode === "outside") return agents;
-  const groups = mode === "compact" ? [AGENT_SIDES.flat()] : AGENT_SIDES;
-  let next = agents;
-  for (const group of groups) {
-    const open = group.filter((key) => agents[key]);
-    if (open.length <= 1) continue;
-    const keep = open.includes(preferred) ? preferred : open[open.length - 1];
-    if (next === agents) next = { ...agents };
-    for (const key of open) next[key] = key === keep;
-  }
-  return next;
-}
-
-const AGENT_PROPERTY_ICONS = {
-  tg: Thermometer,
-  cte: Shrink,
-  elongation: MoveHorizontal,
-  modulus: Gauge,
-} satisfies Record<HighThroughputTargetKey, typeof Thermometer>;
 
 function uploadState(upload?: PriorDataUploadState) {
   if (upload?.errorMessage) return "error";
@@ -84,10 +49,7 @@ export function PriorImportWorkspace({
   onSelectTarget, uploads, onUpload, onUploadSample, onBack, onNext, canAdvance,
   transitionMessage, candidateMap,
 }: PriorImportWorkspaceProps) {
-  const [openAgents, setOpenAgents] = useState<OpenAgents>({});
-  const layoutRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
-  const lastOpenTarget = useRef<HighThroughputTargetKey>("tg");
   const activeTarget = targets.find((target) => target.key === activeTargetKey) ?? targets[0];
   const activeUpload = uploads[activeTarget.key];
   const activeCsv = highThroughputDemoScenario.doeCsvFiles[activeTarget.key];
@@ -96,55 +58,6 @@ export function PriorImportWorkspace({
   const isBusy = Boolean(transitionMessage);
   const tabId = useId();
 
-  function toggleAgent(targetKey: HighThroughputTargetKey) {
-    const willOpen = !openAgents[targetKey];
-    const mode = layoutRef.current ? agentLayoutMode(layoutRef.current) : "outside";
-    if (willOpen) {
-      lastOpenTarget.current = targetKey;
-      onSelectTarget(targetKey);
-    }
-    setOpenAgents((agents) => fitOpenAgents({ ...agents, [targetKey]: willOpen }, mode, targetKey));
-  }
-
-  useLayoutEffect(() => {
-    const layout = layoutRef.current;
-    const map = mapRef.current;
-    if (!layout || !map) return;
-    const syncLayout = () => {
-      const plot = map.getBoundingClientRect();
-      if (plot.height > 0) {
-        layout.style.setProperty("--ht-s1-inset-height", `${Math.max(0, plot.height - 2 * INSET_AGENT_CLEARANCE)}px`);
-        layout.querySelectorAll<HTMLElement>(".ht-s1-agent-disclosure").forEach((agent) => {
-          const upper = agent.style.getPropertyValue("--agent-row") === "1";
-          const anchor = upper ? plot.top + INSET_AGENT_CLEARANCE : plot.bottom - INSET_AGENT_CLEARANCE;
-          agent.style.setProperty("--ht-s1-inset-anchor", `${anchor - agent.getBoundingClientRect().top}px`);
-        });
-      }
-      const focusedAgent = document.activeElement?.closest<HTMLElement>("[data-agent-theme]")?.dataset.agentTheme as HighThroughputTargetKey | undefined;
-      setOpenAgents((agents) => fitOpenAgents(agents, agentLayoutMode(layout), focusedAgent ?? lastOpenTarget.current));
-    };
-    syncLayout();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(syncLayout);
-    observer.observe(layout);
-    observer.observe(map);
-    // The board can stay 1560px wide while outside clearance changes on resize.
-    const workbench = layout.closest(".ht-workbench-page");
-    if (workbench) observer.observe(workbench);
-    return () => observer.disconnect();
-  }, []);
-
-  function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    let nextIndex: number;
-    if (event.key === "ArrowRight") nextIndex = (index + 1) % targets.length;
-    else if (event.key === "ArrowLeft") nextIndex = (index + targets.length - 1) % targets.length;
-    else if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = targets.length - 1;
-    else return;
-    event.preventDefault();
-    onSelectTarget(targets[nextIndex].key);
-    document.getElementById(`${tabId}-${targets[nextIndex].key}`)?.focus();
-  }
 
   return (
     <div className="ht-s1-stage">
@@ -169,23 +82,13 @@ export function PriorImportWorkspace({
           </div>
         </div>
 
-        <div ref={layoutRef} className="ht-s1-agent-layout">
-          {targets.map((target, index) => (
-            <PriorAgentDisclosure
-              key={target.key}
-              target={target}
-              index={index}
-              open={Boolean(openAgents[target.key])}
-              onToggle={() => toggleAgent(target.key)}
-              selected={activeTargetKey === target.key}
-              onSelect={() => onSelectTarget(target.key)}
-              upload={uploads[target.key]}
-              onUpload={(file) => { onSelectTarget(target.key); onUpload(target.key, file); }}
-              onUploadSample={() => { onSelectTarget(target.key); onUploadSample(target.key); }}
-              disabled={isBusy}
-            />
-          ))}
-
+        <AgentDockLayout targets={targets} activeTargetKey={activeTargetKey} onSelectTarget={onSelectTarget}
+          disabled={isBusy} mapRef={mapRef}
+          renderAgent={(props) => (
+            <PriorAgentCard {...props} upload={uploads[props.target.key]}
+              onUpload={(file) => { onSelectTarget(props.target.key); onUpload(props.target.key, file); }}
+              onUploadSample={() => { onSelectTarget(props.target.key); onUploadSample(props.target.key); }} />
+          )}>
           <section className="ht-s1-space-panel" aria-labelledby={`${tabId}-space-heading`}>
             <header className="ht-s1-space-header">
               <Layers3 className="ht-s1-space-watermark" aria-hidden="true" />
@@ -202,26 +105,9 @@ export function PriorImportWorkspace({
               </div>
             </header>
             <div className="ht-s1-space-body">
-              <div className="ht-s1-target-tabs" role="tablist" aria-label="切换先验目标">
-                {targets.map((target, index) => (
-                  <button
-                    key={target.key}
-                    id={`${tabId}-${target.key}`}
-                    type="button"
-                    role="tab"
-                    aria-selected={target.key === activeTargetKey}
-                    aria-controls={`${tabId}-space`}
-                    tabIndex={target.key === activeTargetKey ? 0 : -1}
-                    onClick={() => onSelectTarget(target.key)}
-                    onKeyDown={(event) => handleTabKeyDown(event, index)}
-                    disabled={isBusy}
-                    style={{ "--target-color": target.color } as CSSProperties}
-                  >
-                    <UploadStatusIcon upload={uploads[target.key]} />
-                    {target.shortLabel}
-                  </button>
-                ))}
-              </div>
+              <TargetTabs targets={targets} activeTargetKey={activeTargetKey} onSelectTarget={onSelectTarget}
+                disabled={isBusy} tabId={tabId} panelId={`${tabId}-space`} label="切换先验目标"
+                renderIcon={(target) => <UploadStatusIcon upload={uploads[target.key]} />} />
               <div ref={mapRef} className="ht-s1-map" id={`${tabId}-space`} role="tabpanel" aria-labelledby={`${tabId}-${activeTargetKey}`} tabIndex={0}>
                 {candidateMap}
               </div>
@@ -233,7 +119,7 @@ export function PriorImportWorkspace({
             </div>
           </section>
 
-        </div>
+        </AgentDockLayout>
 
         <PriorDataPreview key={activeTarget.key} target={activeTarget} csv={activeCsv} upload={activeUpload} />
       </div>
@@ -257,69 +143,6 @@ export function PriorImportWorkspace({
   );
 }
 
-function PriorAgentDisclosure({
-  target, index, open, onToggle, selected, onSelect, upload, onUpload, onUploadSample, disabled,
-}: {
-  target: HighThroughputTarget;
-  index: number;
-  open: boolean;
-  onToggle: () => void;
-  selected: boolean;
-  onSelect: () => void;
-  upload?: PriorDataUploadState;
-  onUpload: (file: File | null) => void;
-  onUploadSample: () => void;
-  disabled: boolean;
-}) {
-  const panelId = useId();
-  const toggleRef = useRef<HTMLButtonElement>(null);
-  const buttonLabel = `${open ? "收起" : "展开"} ${target.shortLabel} Agent`;
-  const ToggleIcon = index < 2
-    ? (open ? ChevronRight : ChevronLeft)
-    : (open ? ChevronLeft : ChevronRight);
-
-  function handleToggle() {
-    onToggle();
-    toggleRef.current?.focus({ preventScroll: true });
-  }
-
-  return (
-    <aside
-      className={cn("ht-s1-agent-disclosure", index < 2 ? "left" : "right", open && "expanded", selected && "selected")}
-      aria-label={`${target.shortLabel} Agent 面板`}
-      data-agent-theme={target.key}
-      style={{ "--target-color": target.color, "--agent-column": index < 2 ? 1 : 3, "--agent-row": index % 2 + 1 } as CSSProperties}
-    >
-      <button
-        ref={toggleRef}
-        type="button"
-        className="ht-s1-agent-toggle"
-        aria-expanded={open}
-        aria-controls={panelId}
-        aria-label={buttonLabel}
-        title={buttonLabel}
-        onClick={handleToggle}
-        disabled={disabled && !open}
-      >
-        <ToggleIcon aria-hidden="true" />
-      </button>
-      <div className="ht-s1-agent-flyout" id={panelId} hidden={!open}>
-        <PriorAgentCard
-          selectId={`${panelId}-select`}
-          index={index}
-          target={target}
-          upload={upload}
-          selected={selected}
-          onSelect={onSelect}
-          onUpload={onUpload}
-          onUploadSample={onUploadSample}
-          disabled={disabled}
-        />
-      </div>
-    </aside>
-  );
-}
-
 function PriorAgentCard({ selectId, index, target, upload, selected, onSelect, onUpload, onUploadSample, disabled }: {
   selectId: string;
   index: number;
@@ -332,7 +155,6 @@ function PriorAgentCard({ selectId, index, target, upload, selected, onSelect, o
   disabled: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const selectRef = useRef<HTMLButtonElement>(null);
   const statusId = useId();
   const state = uploadState(upload);
   const statusText = state === "ready" ? "先验已就绪" : state === "loading" ? "载入中…" : state === "error" ? "上传失败：文件不匹配" : "未上传";
@@ -341,42 +163,10 @@ function PriorAgentCard({ selectId, index, target, upload, selected, onSelect, o
     : state === "error" ? "请重新上传或使用样例"
     : "上传 CSV 或使用样例";
   const FileIcon = state === "pending" ? UploadCloud : state === "error" ? TriangleAlert : FileSpreadsheet;
-  const DirectionIcon = target.direction === "higher" ? ArrowUpRight : ArrowDownRight;
-  const PropertyIcon = AGENT_PROPERTY_ICONS[target.key];
-  const unitLabel = target.unit === "degC" ? "°C" : target.unit;
 
   return (
-    <article
-      className={cn("ht-s1-agent-card", selected && "selected")}
-      style={{ "--target-color": target.color } as CSSProperties}
-      data-disabled={disabled}
-      onClick={(event) => {
-        // Only the outer card selects; inset data panels and controls keep their own behavior.
-        if (disabled || (event.target as Element).closest(".ht-s1-agent-target, .ht-s1-upload-area, button, input, a, select, textarea, [role='button']")) return;
-        onSelect();
-        selectRef.current?.focus({ preventScroll: true });
-      }}
-    >
-      <header className="ht-s1-agent-header">
-        <PropertyIcon className="ht-s1-agent-watermark" aria-hidden="true" />
-        <div className="ht-s1-agent-meta">
-          <span className="ht-s1-agent-id">AGENT <b>{String(index + 1).padStart(2, "0")}</b></span>
-          <span className="ht-s1-agent-view-label">{selected ? "当前查看" : "先验导入"}</span>
-        </div>
-        <button ref={selectRef} type="button" id={selectId} className="ht-s1-agent-select" onClick={onSelect} aria-pressed={selected} aria-label={`查看 ${target.shortLabel} Agent`} disabled={disabled}>
-          <span className="ht-s1-agent-icon"><Bot aria-hidden="true" /></span>
-          <span><strong>{target.shortLabel} Agent</strong><small>{target.label}</small></span>
-          <ChevronRight aria-hidden="true" />
-        </button>
-      </header>
-      <div className="ht-s1-agent-body">
-        <div className="ht-s1-agent-target">
-          <div className="ht-s1-agent-target-label">
-            <span>目标阈值</span>
-            <small><DirectionIcon aria-hidden="true" />{target.direction === "higher" ? "越高越好" : "越低越好"}</small>
-          </div>
-          <strong><span className="ht-s1-target-operator">{target.direction === "higher" ? "≥" : "≤"}</span> {target.key === "modulus" ? target.target.toFixed(1) : target.target} <small>{unitLabel}</small></strong>
-        </div>
+    <AgentCardShell selectId={selectId} index={index} target={target} selected={selected}
+      onSelect={onSelect} disabled={disabled} stageLabel="先验导入">
         <div className={cn("ht-s1-upload-area", state)}>
           <input
             ref={inputRef}
@@ -428,8 +218,7 @@ function PriorAgentCard({ selectId, index, target, upload, selected, onSelect, o
         <div className={cn("ht-s1-agent-status", state)} id={statusId} role={state === "error" ? "alert" : "status"}>
           <UploadStatusIcon upload={upload} /><span>{statusText}</span>
         </div>
-      </div>
-    </article>
+    </AgentCardShell>
   );
 }
 
