@@ -823,6 +823,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const priorUploadTimersRef = useRef<Partial<Record<HighThroughputTargetKey, number>>>({});
   const stageTransitionTimerRef = useRef<number | null>(null);
   const previousStageRef = useRef(currentStageIndex);
+  const scrollRegionRef = useRef<HTMLElement | null>(null);
   const mapStageRef = useRef<HTMLDivElement | null>(null);
   const nextStepState = getStageCompletionState({
     currentStageIndex,
@@ -852,8 +853,9 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const isWorkbenchStage = currentStageIndex <= 1;
 
   useEffect(() => {
-    if (previousStageRef.current !== currentStageIndex && isWorkbenchStage) {
-      document.getElementById("ht-workbench-surface-title")?.focus();
+    if (previousStageRef.current !== currentStageIndex) {
+      if (scrollRegionRef.current) scrollRegionRef.current.scrollTop = 0;
+      if (isWorkbenchStage) document.getElementById("ht-workbench-surface-title")?.focus({ preventScroll: true });
     }
     previousStageRef.current = currentStageIndex;
   }, [currentStageIndex, isWorkbenchStage]);
@@ -1085,10 +1087,17 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function handlePriorDataUpload(targetKey: HighThroughputTargetKey, file: File | null) {
-    if (!file) {
-      return;
-    }
+    if (file) beginPriorDataImport(targetKey, file.name);
+  }
 
+  function handlePriorSampleUpload(targetKey: HighThroughputTargetKey) {
+    if (currentStageIndex !== 1 || stageTransition) return;
+    beginPriorDataImport(targetKey, scenario.doeCsvFiles[targetKey].fileName);
+  }
+
+  // Both entry points select built-in demo rows by filename, sharing the same
+  // loading timer and stale-result guard. No file contents or service are used.
+  function beginPriorDataImport(targetKey: HighThroughputTargetKey, fileName: string) {
     clearPriorUploadTimer(targetKey);
     const csvFile = scenario.doeCsvFiles[targetKey];
     const uploadedAt = new Intl.DateTimeFormat("zh-CN", {
@@ -1098,13 +1107,13 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       hour12: false,
     }).format(new Date());
 
-    if (file.name !== csvFile.fileName) {
+    if (fileName !== csvFile.fileName) {
       setPriorDataUploads((uploads) => ({
         ...uploads,
         [targetKey]: {
           targetKey,
-          fileName: file.name,
-          fileType: file.name.split(".").pop()?.toUpperCase() || "UNKNOWN",
+          fileName,
+          fileType: fileName.split(".").pop()?.toUpperCase() || "UNKNOWN",
           sampleCount: 0,
           fieldCount: 0,
           expectedFileName: csvFile.fileName,
@@ -1123,8 +1132,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       ...uploads,
       [targetKey]: {
         targetKey,
-        fileName: file.name,
-        fileType: file.name.split(".").pop()?.toUpperCase() || "CSV",
+        fileName,
+        fileType: fileName.split(".").pop()?.toUpperCase() || "CSV",
         sampleCount: csvFile.rows.length,
         fieldCount: 12,
         expectedFileName: csvFile.fileName,
@@ -1165,15 +1174,14 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   return (
     <div className={cn("high-throughput-demo", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page")}>
       {isWorkbenchStage ? <h1 className="ht-workbench-title">高通量优化演示</h1> : null}
-      <main className="ht-shell">
-        {isWorkbenchStage ? (
-          <ScenarioModuleToolbar
-            canReset={!stageTransition}
-            onReset={resetCurrentStageActions}
-            resetLabel={currentStageIndex === 0 ? "恢复默认场景参数" : "重置 S1 上传数据"}
-          />
-        ) : null}
-
+      {isWorkbenchStage ? (
+        <ScenarioModuleToolbar
+          canReset={!stageTransition}
+          onReset={resetCurrentStageActions}
+          resetLabel={currentStageIndex === 0 ? "恢复默认场景参数" : "重置 S1 上传数据"}
+        />
+      ) : null}
+      <main ref={scrollRegionRef} className="ht-shell ht-scroll-region">
         <section
           className={cn("ht-docx-board", isWorkbenchStage && "ht-workbench-board np-sw-accented-surface", currentStageIndex === 0 && "ht-s0-board", currentStageIndex === 1 && "ht-s1-board")}
           aria-labelledby={isWorkbenchStage ? "ht-workbench-surface-title" : undefined}
@@ -1205,6 +1213,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
               onSelectTarget={setActiveSpaceTargetKey}
               uploads={priorDataUploads}
               onUpload={handlePriorDataUpload}
+              onUploadSample={handlePriorSampleUpload}
               onBack={() => enterStage(0)}
               onNext={handleNextStep}
               canAdvance={displayedNextStepState.canAdvance}
@@ -2028,7 +2037,7 @@ function PropertySpaceCard({
             <stop offset="100%" stopColor={target.color} stopOpacity="0" />
           </radialGradient>
         </defs>
-        <rect x="0" y="0" width={MATERIAL_MAP_WIDTH} height={MATERIAL_MAP_HEIGHT} rx="3" fill="#fbfdff" />
+        <rect className="ht-property-space-backdrop" x="0" y="0" width={MATERIAL_MAP_WIDTH} height={MATERIAL_MAP_HEIGHT} rx="3" fill="#fbfdff" />
         <g className="ht-material-grid" aria-hidden="true">
           {Array.from({ length: 5 }, (_, index) => (
             <line key={`x-${index}`} x1={(index + 1) * 16} y1="0" x2={(index + 1) * 16} y2={MATERIAL_MAP_HEIGHT} />
@@ -2055,6 +2064,7 @@ function PropertySpaceCard({
         {projectedRenderedPoints.map((point, index) => (
           <circle
             key={point.candidateId}
+            className="ht-property-candidate-point"
             cx={point.x}
             cy={point.y}
             r={index % 11 === 0 ? "0.38" : "0.28"}

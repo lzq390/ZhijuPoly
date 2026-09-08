@@ -325,6 +325,17 @@ describe("AppShell 侧边栏", () => {
     expect(main?.firstElementChild?.classList.contains("h-full")).toBe(true);
   });
 
+  it("高通量演示使用页面内部滚动的无内边距满高容器", () => {
+    const view = renderShell("highThroughputWorkflowDemo");
+    const main = view.container.querySelector("main");
+
+    expect(main?.classList.contains("overflow-hidden")).toBe(true);
+    expect(main?.classList.contains("p-0")).toBe(true);
+    expect(main?.classList.contains("overflow-y-auto")).toBe(false);
+    expect(main?.firstElementChild?.classList.contains("h-full")).toBe(true);
+    expect(main?.firstElementChild?.classList.contains("gap-0")).toBe(true);
+  });
+
   it("聚合物生成使用无内边距的满高工作台容器", () => {
     const view = renderShell("polytaoGeneration");
     const main = view.container.querySelector("main");
