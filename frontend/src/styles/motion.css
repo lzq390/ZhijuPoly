@@ -1,18 +1,20 @@
 :root {
-  --np-motion-control: 120ms;
+  --np-motion-control: 200ms;
   --np-motion-module-exit: 400ms;
   --np-motion-module-gap: 200ms;
   --np-motion-module-enter: 400ms;
-  --np-motion-tab: 120ms;
-  --np-motion-enter: 160ms;
-  --np-motion-exit: 120ms;
-  --np-motion-drawer-enter: 200ms;
-  --np-motion-drawer-exit: 160ms;
-  --np-motion-backdrop: 140ms;
-  --np-motion-flip: 260ms;
+  --np-motion-tab: 300ms;
+  --np-motion-enter: 300ms;
+  --np-motion-exit: 240ms;
+  --np-motion-drawer-enter: 400ms;
+  --np-motion-drawer-exit: 320ms;
+  --np-motion-backdrop: 240ms;
+  --np-motion-flip: 400ms;
   --np-motion-feedback-delay: 120ms;
-  --np-ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
-  --np-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --np-motion-popover-distance: 8px;
+  --np-motion-drawer-distance: 20px;
+  --np-ease-enter: ease-in-out;
+  --np-ease-exit: ease-in-out;
   --np-ease-module: ease-in-out;
 }
 
@@ -21,7 +23,7 @@
 
 .np-motion-popover {
   opacity: 0;
-  transform: translateY(-4px);
+  transform: translateY(calc(-1 * var(--np-motion-popover-distance)));
   transition: opacity var(--np-motion-exit) var(--np-ease-exit), transform var(--np-motion-exit) var(--np-ease-exit);
 }
 .np-motion-popover[data-motion-active="true"] {
@@ -63,11 +65,14 @@
   .np-motion-popover,
   .np-structure-workbench .np-sw-popover,
   .np-structure-workbench .np-sw-drawer,
+  .np-structure-workbench .np-sw-workspace,
   .np-structure-workbench .np-sw-drawer-backdrop,
   .np-structure-workbench .np-sw-editor,
   .ks-detail-drawer,
+  .ks-workbench-column,
   .ks-drawer-backdrop,
   .polytao-parameter-panel,
+  .polytao-workbench-shell,
   .polytao-structure-flip-inner {
     transition: none !important;
     animation: none !important;

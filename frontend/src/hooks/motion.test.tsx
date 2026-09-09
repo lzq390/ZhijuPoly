@@ -54,7 +54,9 @@ describe("motion presence", () => {
     view.rerender(<Presence open />);
     tick(110);
     expect(screen.getByTestId("panel").dataset.motionPhase).toBe("entering");
-    tick(150);
+    tick(249);
+    expect(screen.getByTestId("panel").dataset.motionPhase).toBe("entering");
+    tick(1);
     expect(screen.getByTestId("panel").dataset.motionPhase).toBe("open");
   });
   it("handles close-before-first-frame and runtime reduced motion without waiting", () => {
@@ -68,9 +70,67 @@ describe("motion presence", () => {
     view.unmount();
     expect(vi.getTimerCount()).toBe(0);
   });
+  it("measures the fallback from the browser's transition start, not a delayed React commit", () => {
+    const view = render(<Presence open />);
+    view.rerender(<Presence open={false} />);
+    tick(250);
+    const event = new Event("transitionrun", { bubbles: true });
+    Object.defineProperty(event, "propertyName", { value: "opacity" });
+    fireEvent(screen.getByTestId("panel"), event);
+    tick(299);
+    expect(screen.getByTestId("panel").dataset.motionPhase).toBe("exiting");
+    tick(1);
+    expect(screen.queryByTestId("panel")).toBeNull();
+  });
+  it("settles a backgrounded panel even before its first entering frame", () => {
+    const view = render(<Presence open={false} />);
+    view.rerender(<Presence open />);
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    fireEvent(document, new Event("visibilitychange"));
+    expect(screen.getByTestId("panel").dataset.motionPhase).toBe("open");
+    expect(screen.getByTestId("panel").dataset.motionActive).toBe("true");
+    view.rerender(<Presence open={false} />);
+    expect(screen.queryByTestId("panel")).toBeNull();
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe("tab content motion", () => {
+  it("starts each kept-alive target at zero and leaves it visible if animation is unavailable", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "animate");
+    const targets: HTMLElement[] = [];
+    const animate = vi.fn(function (this: HTMLElement) {
+      targets.push(this);
+      return { cancel: vi.fn(), onfinish: null };
+    });
+    Object.defineProperty(HTMLElement.prototype, "animate", { configurable: true, value: animate });
+    function Tabs({ tab }: { tab: string }) {
+      const ref = useRef<HTMLDivElement | null>(null);
+      useContentMotion(ref, tab, "tab", ".active");
+      return <div ref={ref}>{["a", "b"].map((id) => <section key={id} data-testid={id} className={tab === id ? "active" : ""} hidden={tab !== id}><input defaultValue={id} /></section>)}</div>;
+    }
+    try {
+      const view = render(<Tabs tab="a" />);
+      const first = screen.getByTestId("a");
+      view.rerender(<Tabs tab="b" />);
+      view.rerender(<Tabs tab="a" />);
+      expect(targets).toEqual([screen.getByTestId("b"), first]);
+      expect(animate.mock.calls).toEqual([
+        [[{ opacity: "0" }, { opacity: 1 }], { duration: 300, easing: "ease-in-out" }],
+        [[{ opacity: "0" }, { opacity: 1 }], { duration: 300, easing: "ease-in-out" }]
+      ]);
+      animate.mockImplementation(() => { throw new Error("animation unavailable"); });
+      expect(() => view.rerender(<Tabs tab="b" />)).not.toThrow();
+      expect(screen.getByTestId("b").hidden).toBe(false);
+      expect(screen.getByTestId("b").style.opacity).toBe("");
+      expect(screen.getByTestId("a")).toBe(first);
+    } finally {
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, "animate", descriptor);
+      else Reflect.deleteProperty(HTMLElement.prototype, "animate");
+    }
+  });
+
   it.each(["tab"] as const)("uses scoped %s defaults, skips unchanged content and cancels rapid changes/reduced motion", (token) => {
     const animations: { cancel: ReturnType<typeof vi.fn> }[] = [];
     const animate = vi.fn(() => { const animation = { cancel: vi.fn() }; animations.push(animation); return animation as unknown as Animation; });
@@ -89,15 +149,15 @@ describe("tab content motion", () => {
       view.rerender(<Content module="b" />);
       view.rerender(<Content module="b" />);
       expect(animate).toHaveBeenCalledTimes(1);
-      const expectedTiming = { duration: 120, easing: "cubic-bezier(0.22, 1, 0.36, 1)" };
+      const expectedTiming = { duration: 300, easing: "ease-in-out" };
       expect(animate).toHaveBeenNthCalledWith(1,
-        [{ opacity: "0.88" }, { opacity: 1 }], expectedTiming);
-      // Model an in-flight interpolated opacity: a new target must continue
-      // from this value, not jump back to the stronger module entry opacity.
-      frame.parentElement!.style.opacity = "0.84";
+        [{ opacity: "0" }, { opacity: 1 }], expectedTiming);
+      // A rapidly selected new tab must not inherit an almost-finished fade.
+      const computedStyle = vi.spyOn(window, "getComputedStyle").mockReturnValue({ opacity: "0.98", getPropertyValue: () => "" } as unknown as CSSStyleDeclaration);
       view.rerender(<Content module="c" />);
       expect(animations[0].cancel).toHaveBeenCalledOnce();
-      expect(animate).toHaveBeenNthCalledWith(2, [{ opacity: "0.84" }, { opacity: 1 }], expectedTiming);
+      expect(animate).toHaveBeenNthCalledWith(2, [{ opacity: "0" }, { opacity: 1 }], expectedTiming);
+      computedStyle.mockRestore();
       expect(screen.getByTitle("retained editor")).toBe(frame);
       preferReduced();
       expect(animations[1].cancel).toHaveBeenCalledOnce();
@@ -119,16 +179,17 @@ describe("visual flip lock", () => {
       <button onClick={() => { if (flip.start()) setFace((value) => !value); }}>flip</button>
     </div>;
   }
-  it("locks through the 260ms visual duration and filters child events", () => {
+  it("locks through the 400ms visual duration and filters child events", () => {
     render(<Flip />);
     const button = screen.getByText("flip");
     const panel = screen.getByTestId("flip");
     fireEvent.click(button);
-    tick(180);
+    tick(399);
     fireEvent.click(button);
     expect(panel.dataset.face).toBe("true");
     end(button, "transform");
     expect(panel.dataset.busy).toBe("true");
+    tick(1);
     end(panel, "transform");
     expect(panel.dataset.busy).toBe("false");
     fireEvent.click(button);

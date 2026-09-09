@@ -19,6 +19,7 @@ export function useMotionPresence<T extends HTMLElement = HTMLDivElement>(
   const [active, setActive] = useState(open);
   const phaseRef = useRef(phase);
   const finishRef = useRef<(() => void) | null>(null);
+  const armFallbackRef = useRef<(() => void) | null>(null);
 
   useLayoutEffect(() => {
     let frame = 0;
@@ -33,20 +34,31 @@ export function useMotionPresence<T extends HTMLElement = HTMLDivElement>(
       setPhase(target);
       setActive(open);
       finishRef.current = null;
+      armFallbackRef.current = null;
     };
-    if (reduced || phaseRef.current === target) {
+    if (reduced || document.hidden || phaseRef.current === target) {
       finish();
       return;
     }
     const wasClosed = phaseRef.current === "closed";
     phaseRef.current = open ? "entering" : "exiting";
     setPhase(phaseRef.current);
+    finishRef.current = finish;
+    armFallbackRef.current = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(finish, motionDuration(ref.current, open ? enter : exit) + 60);
+    };
+    const element = ref.current;
+    const transitionRun = (event: globalThis.TransitionEvent) => {
+      // Rearm from the browser's actual start when iframe/layout work delayed it.
+      if (event.target === element && event.propertyName === property) armFallbackRef.current?.();
+    };
+    element?.addEventListener("transitionrun", transitionRun);
     // An entering node needs one painted closed frame. Reversals start directly
     // from the current interpolated CSS value instead of jumping back to zero.
     const start = () => {
       setActive(open);
-      finishRef.current = finish;
-      timer = window.setTimeout(finish, motionDuration(ref.current, open ? enter : exit) + 60);
+      armFallbackRef.current?.();
     };
     if (open && wasClosed) {
       frame = window.requestAnimationFrame(() => {
@@ -57,19 +69,29 @@ export function useMotionPresence<T extends HTMLElement = HTMLDivElement>(
       cancelled = true;
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timer);
+      element?.removeEventListener("transitionrun", transitionRun);
       finishRef.current = null;
+      armFallbackRef.current = null;
     };
-  }, [open, reduced, enter, exit, ref]);
+  }, [open, reduced, enter, exit, ref, property]);
 
   const onTransitionEnd = useCallback((event: TransitionEvent<T>) => {
     if (event.target === ref.current && event.propertyName === property) finishRef.current?.();
   }, [property, ref]);
+  const finish = useCallback(() => finishRef.current?.(), []);
+
+  useLayoutEffect(() => {
+    const settleInBackground = () => { if (document.hidden) finish(); };
+    document.addEventListener("visibilitychange", settleInBackground);
+    return () => document.removeEventListener("visibilitychange", settleInBackground);
+  }, [finish]);
 
   return {
     ref,
     phase,
     present: open || phase !== "closed",
     active,
+    finish,
     motionProps: {
       "data-motion-phase": phase,
       "data-motion-active": active,

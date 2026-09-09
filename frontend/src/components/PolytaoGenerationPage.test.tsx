@@ -213,7 +213,7 @@ beforeEach(() => {
     configurable: true,
     value: vi.fn((media: string) => ({
       get matches() {
-        return twoKMatches;
+        return media.includes("min-width: 2000px") && twoKMatches;
       },
       media,
       onchange: null,
@@ -526,8 +526,14 @@ describe("PolytaoGenerationPage", () => {
     fireEvent.keyDown(separator, { key: "ArrowLeft" });
     expect(separator.getAttribute("aria-valuenow")).toBe("504");
 
-    fireEvent.click(within(screen.getByRole("dialog", { name: "聚合物生成结果" })).getByRole("button", { name: "关闭聚合物生成结果" }));
-    const reopen = screen.getByRole("button", { name: "打开聚合物生成结果" });
+    const drawer = screen.getByRole("dialog", { name: "聚合物生成结果" });
+    fireEvent.click(within(drawer).getByRole("button", { name: "关闭聚合物生成结果" }));
+    expect(drawer.dataset.motionPhase).toBe("exiting");
+    expect(screen.queryByRole("button", { name: "打开聚合物生成结果" })).toBeNull();
+    const event = new Event("transitionend", { bubbles: true });
+    Object.defineProperty(event, "propertyName", { value: "transform" });
+    fireEvent(drawer, event);
+    const reopen = await screen.findByRole("button", { name: "打开聚合物生成结果" });
     expect(reopen.classList.contains("is-visible")).toBe(true);
     expect(reopen.tabIndex).toBe(0);
     expect(separator.tabIndex).toBe(-1);
@@ -537,7 +543,8 @@ describe("PolytaoGenerationPage", () => {
     expect(separator.tabIndex).toBe(0);
 
     fireEvent.pointerDown(separator, { clientX: 900 });
-    expect(document.body.style.userSelect).toBe("none");
+    expect(view.container.querySelector(".polytao-page")?.classList.contains("is-resizing")).toBe(true);
+    expect(document.body.style.userSelect).toBe("");
     view.unmount();
     expect(document.body.style.userSelect).toBe("");
   });
@@ -557,13 +564,16 @@ describe("PolytaoGenerationPage", () => {
     const close = within(dialog).getByRole("button", { name: "关闭聚合物生成结果" });
     const last = within(dialog).getByRole("button", { name: "展开候选 1 SMILES" });
     close.focus();
-    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(last);
-    fireEvent.keyDown(window, { key: "Tab" });
+    fireEvent.keyDown(last, { key: "Tab" });
     expect(document.activeElement).toBe(close);
 
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(close, { key: "Escape" });
+    expect(document.querySelector(".polytao-page-scroll")?.hasAttribute("inert")).toBe(true);
+    expect(dialog.dataset.motionPhase).toBe("exiting");
     await waitFor(() => expect(dialog.getAttribute("aria-hidden")).toBe("true"));
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "参数配置" })));
+    expect(document.querySelector(".polytao-page-scroll")?.hasAttribute("inert")).toBe(false);
   });
 });

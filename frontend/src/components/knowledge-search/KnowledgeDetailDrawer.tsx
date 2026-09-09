@@ -1,6 +1,7 @@
 import { PanelRightOpen, X } from "lucide-react";
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -11,6 +12,7 @@ import { useMotionPresence } from "../../hooks/useMotionPresence";
 import { useDrawerResize } from "../../hooks/useDrawerResize";
 import { useModalFocus } from "../../hooks/useModalFocus";
 import { useContentMotion } from "../../hooks/useContentMotion";
+import { useDrawerMode } from "../../hooks/useDrawerMode";
 
 export type KnowledgeDrawerTab = {
   id: string;
@@ -151,6 +153,7 @@ export function KnowledgeDetailDrawer({
 }: KnowledgeDetailDrawerProps) {
   const presence = useMotionPresence<HTMLElement>(open, { enter: "drawerEnter", exit: "drawerExit", property: "transform" });
   const drawerRef = presence.ref;
+  const mode = useDrawerMode(drawerRef, { closest: ".ks-panel-layout" });
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -159,6 +162,8 @@ export function KnowledgeDetailDrawer({
   const [activeTab, setActiveTab] = useState(tabs[0]?.id ?? "");
   const mobile = useMobileDrawer();
   const resize = useDrawerResize({ width, minWidth: widthProfile.min, maxWidth: widthProfile.max, onWidthChange, enabled: open && !mobile });
+  useLayoutEffect(() => { if (resize.resizing) presence.finish(); }, [resize.resizing, presence.finish]);
+  useLayoutEffect(() => { presence.finish(); }, [mode, presence.finish]);
   useContentMotion(bodyRef, activeTab, "tab");
   useModalFocus({ active: mobile && presence.present, open, scopeRef: drawerRef, panelRef: drawerRef,
     initialFocusRef: closeButtonRef, onClose, ownerId: id });
@@ -262,8 +267,9 @@ export function KnowledgeDetailDrawer({
         ref={drawerRef}
         {...presence.motionProps}
         data-motion-present={presence.present}
+        data-drawer-mode={mode}
         id={id}
-        className={`ks-detail-drawer${presence.present ? " is-open" : ""}${resize.resizing ? " is-resizing" : ""}`}
+        className={`ks-detail-drawer${presence.present ? " is-open" : ""}${resize.resizing && open ? " is-resizing" : ""}`}
         style={{ "--ks-drawer-width": `${width}px` } as CSSProperties}
         role="dialog"
         aria-modal={mobile ? "true" : undefined}

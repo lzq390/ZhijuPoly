@@ -343,12 +343,12 @@ describe("AppShell 侧边栏", () => {
       expect(animateMock).toHaveBeenNthCalledWith(
         1,
         expect.any(Array),
-        expect.objectContaining({ duration: 160, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "both" })
+        expect.objectContaining({ duration: 300, easing: "ease-in-out", fill: "both" })
       );
       expect(animateMock).toHaveBeenNthCalledWith(
         2,
         expect.any(Array),
-        expect.objectContaining({ duration: 160, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "both" })
+        expect.objectContaining({ duration: 300, easing: "ease-in-out", fill: "both" })
       );
 
       act(() => scheduledCallbacks.forEach((callback) => callback()));
@@ -357,12 +357,12 @@ describe("AppShell 侧边栏", () => {
       expect(animateMock).toHaveBeenNthCalledWith(
         3,
         expect.any(Array),
-        expect.objectContaining({ duration: 120, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "both" })
+        expect.objectContaining({ duration: 240, easing: "ease-in-out", fill: "both" })
       );
       expect(animateMock).toHaveBeenNthCalledWith(
         4,
         expect.any(Array),
-        expect.objectContaining({ duration: 120, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "both" })
+        expect.objectContaining({ duration: 240, easing: "ease-in-out", fill: "both" })
       );
     } finally {
       view.unmount();

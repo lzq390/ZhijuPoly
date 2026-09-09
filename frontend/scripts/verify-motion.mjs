@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { checkDrawerSlide, checkDrawerReversal } from "./drawer-motion-probe.mjs";
 
 const { chromium } = await import(process.env.MOTION_PLAYWRIGHT_MODULE || "playwright");
 const base = process.env.MOTION_BASE_URL || "http://127.0.0.1:9001";
@@ -20,6 +21,13 @@ function knowledgeFixture(payload) {
       source_file: "motion-fixture.jsonl", source_row_number: 1, source_sequence: "MOTION-1", is_polymer_synthesis: "yes", judgement_reason: "Fixture",
       polymer_iupac: "polyimide", formulation: "dianhydride + diamine", catalyst: "", temperature: "80 °C", reaction_time: "4 h", solvent: "NMP", matched_terms: [payload.query], matched_fields: ["Polymer"] }] };
 }
+const polytaoStatusFixture = { enabled: true, available: true, worker_base_url_configured: true, worker_status: "ready", worker_mode: "local",
+  db_configured: true, db_ready: true, db_error: null, runtime_ready: true, runtime_error: null, active_jobs: 0, model_id: "polytao",
+  model_revision: "motion-fixture", default_params: {}, worker_version: "fixture", message: "Local browser fixture" };
+const polytaoJobFixture = { job_id: "motion-fixture", status: "completed", input_smiles: null, canonical_smiles: null, prompt: "fixture",
+  requested_count: 10, returned_count: 0, attempts: 1, progress_percent: 100, progress_stage: "completed", progress_message: "Fixture complete",
+  created_at: "2026-09-09T00:00:00Z", updated_at: "2026-09-09T00:00:00Z", error_message: null,
+  result: { prompt: "fixture", query_time_ms: 1, requested_count: 10, returned_count: 0, attempts: 1, filter_counter: {}, results: [] } };
 async function traceStart(page) {
   const client = await page.context().newCDPSession(page);
   await client.send("Tracing.start", { categories: "devtools.timeline,blink.user_timing,toplevel", transferMode: "ReturnAsStream" });
@@ -36,15 +44,55 @@ async function traceStart(page) {
     await client.send("IO.close", { handle: stream });
     await writeFile(resolve(output, `${name}.trace.json`), data);
     const events = JSON.parse(data).traceEvents;
+    const slides = events.filter(event => event.name?.startsWith("np-drawer-slide-") && event.name.endsWith(":start")).map(start => {
+      const end = events.find(event => event.name === start.name.replace(":start", ":end"));
+      const layouts = events.filter(event => end && event.name === "Layout" && event.ph === "X" && event.ts >= start.ts && event.ts <= end.ts);
+      return { name: start.name, durationMs: end ? Math.round((end.ts - start.ts) / 1000) : null,
+        layoutEvents: layouts.length, layoutMs: Math.round(layouts.reduce((total, event) => total + (event.dur || 0), 0) / 1000) };
+    });
     await client.detach();
     return { layoutEvents: events.filter((event) => event.name === "Layout" && event.ph === "X").length,
-      layoutMs: Math.round(events.filter((event) => event.name === "Layout" && event.ph === "X").reduce((sum, event) => sum + (event.dur || 0), 0) / 1000) };
+      layoutMs: Math.round(events.filter((event) => event.name === "Layout" && event.ph === "X").reduce((sum, event) => sum + (event.dur || 0), 0) / 1000), drawerSlides: slides };
   };
 }
 async function settle(page, selector) {
   await page.waitForFunction((selector) => document.querySelector(selector)?.getAttribute("data-motion-phase") === "open", selector);
 }
 async function phase(page, name) { await page.evaluate((name) => { window.__motionPhase = name; performance.mark(name); }, name); }
+// Check actual intermediate frames, not merely the presence of duration tokens.
+async function checkLocalFade(page, selector, action, duration, to) {
+  await page.evaluate((selector) => {
+    const probe = { frames: [], durations: [], running: true };
+    window.__localMotionProbe = probe;
+    const seen = new Set();
+    function sample() {
+      if (!probe.running) return;
+      const element = document.querySelector(selector);
+      if (element) {
+        probe.frames.push(Number(getComputedStyle(element).opacity));
+        for (const animation of element.getAnimations()) {
+          if (seen.has(animation)) continue;
+          seen.add(animation);
+          probe.durations.push(animation.effect.getTiming().duration);
+        }
+      }
+      requestAnimationFrame(sample);
+    }
+    requestAnimationFrame(sample);
+  }, selector);
+  await action();
+  await page.waitForFunction(({ selector, to }) => {
+    const element = document.querySelector(selector);
+    return element ? Number(getComputedStyle(element).opacity) === to : to === 0;
+  }, { selector, to });
+  const probe = await page.evaluate(() => {
+    window.__localMotionProbe.running = false;
+    return window.__localMotionProbe;
+  });
+  assert.ok(probe.durations.includes(duration), `${selector}: actual ${duration}ms animation`);
+  assert.ok(probe.frames.some((opacity) => opacity > .1 && opacity < .9), `${selector}: visible intermediate opacity`);
+  return { duration, intermediateFrames: probe.frames.filter((opacity) => opacity > .1 && opacity < .9).length, minimumOpacity: Math.min(...probe.frames) };
+}
 async function navigation(page, width, id) {
   if (width < 1024) await page.getByRole("button", { name: "打开导航", exact: true }).click();
   const root = page.locator(width < 1024 ? "#np-mobile-navigation" : ".np-sidebar-desktop");
@@ -84,13 +132,21 @@ try {
     .filter((viewport) => !process.env.MOTION_VIEWPORT || process.env.MOTION_VIEWPORT === String(viewport.width));
   for (const viewport of viewports) {
     const name = `${viewport.width}x${viewport.height}`;
-    const context = await browser.newContext({ viewport, reducedMotion: reducedControl ? "reduce" : "no-preference" });
+    const context = await browser.newContext({ viewport, reducedMotion: reducedControl ? "reduce" : "no-preference",
+      ...(process.env.MOTION_RECORD_VIDEO === "true" ? { recordVideo: { dir: resolve(output, "videos"), size: { width: Math.min(viewport.width, 1440), height: Math.min(viewport.height, 900) } } } : {}) });
+    let polytaoSubmits = 0;
     await context.route("**/*", async (route) => {
       const request = route.request();
       const url = new URL(request.url());
       if (url.origin !== new URL(base).origin) return route.abort();
       if (url.pathname.endsWith("/knowledge/search")) return route.fulfill({ json: knowledgeFixture(request.postDataJSON()) });
       if (url.pathname.endsWith("/monomer-retrosynthesis")) return route.fulfill({ json: { total: 0, candidates: [], input_smiles: "CCO", target_role: "auto" } });
+      if (url.pathname.endsWith("/polytao/status")) return route.fulfill({ json: polytaoStatusFixture });
+      if (url.pathname.endsWith("/polytao/jobs") && request.method() === "POST") {
+        polytaoSubmits++;
+        return route.fulfill({ json: { job_id: "motion-fixture", status: "submitted" } });
+      }
+      if (url.pathname.endsWith("/polytao/jobs/motion-fixture")) return route.fulfill({ json: polytaoJobFixture });
       if (!["GET", "HEAD"].includes(request.method())) return route.abort();
       return route.continue();
     });
@@ -133,7 +189,15 @@ try {
       assert.equal(await page.locator("[data-module-content]").getAttribute("data-module-content"), "structureWorkbench");
 
       await phase(page, "workbench-drawer");
-      await page.getByRole("button", { name: "功能参数", exact: true }).click();
+      const openParameters = () => page.getByRole("button", { name: "功能参数", exact: true }).click();
+      if (reducedControl) await openParameters();
+      else {
+        result.parameterEnter = await checkLocalFade(page, "#structure-module-panel", openParameters, 300, 1);
+        result.parameterExit = await checkLocalFade(page, "#structure-module-panel", () => page.getByRole("button", { name: "收起功能参数", exact: true }).click(), 240, 0);
+        await openParameters();
+        await settle(page, "#structure-module-panel");
+        assert.equal(await page.locator(".np-sw-editor").evaluate((element) => getComputedStyle(element).transitionDuration), "0.4s");
+      }
       await page.getByRole("button", { name: "设置单体逆合成反推参数" }).click();
       await page.getByRole("textbox", { name: "目标单体 SMILES" }).fill("CCO");
       await page.getByRole("button", { name: "运行反推", exact: true }).click();
@@ -142,14 +206,25 @@ try {
       result.workbenchMode = inline ? "inline" : "overlay";
       if (viewport.width >= 1024) assert.equal(await page.locator(".np-sidebar-desktop").evaluate((element) => element.inert), false, "Workbench result overlay must not block platform navigation");
       if (inline) result.workbenchResizedWidth = await checkDrag(page, ".np-sw-drawer");
-      const layoutBefore = await page.locator(".np-sw-layout").boundingBox();
-      await page.getByRole("button", { name: "关闭单体反推结果", exact: true }).click();
-      const layoutDuring = await page.locator(".np-sw-layout").boundingBox();
-      if (!reducedControl) {
-        if (inline) assert.ok(Math.abs(layoutBefore.width - layoutDuring.width) < 1, "Inline slot retained during exit");
-        assert.equal(await page.locator(".np-sw-drawer-layer").getAttribute("data-motion-present"), "true");
-      }
+      const workbenchSlide = { workspace: ".np-sw-workspace", drawer: ".np-sw-drawer", inline, reduced: reducedControl };
+      result.workbenchClose = await checkDrawerSlide(page, { ...workbenchSlide, open: false,
+        action: () => page.getByRole("button", { name: "关闭单体反推结果", exact: true }).click() });
       await page.getByRole("button", { name: "展开反推结果", exact: true }).waitFor();
+      result.workbenchOpen = await checkDrawerSlide(page, { ...workbenchSlide, open: true,
+        action: () => page.getByRole("button", { name: "展开反推结果", exact: true }).click() });
+      if (inline && !reducedControl) {
+        const handle = await page.locator('.np-sw-drawer [role="separator"]').boundingBox();
+        await page.mouse.move(handle.x + handle.width - 2, handle.y + handle.height / 2);
+        await page.mouse.down();
+        result.workbenchCloseWhileDragging = await checkDrawerSlide(page, { ...workbenchSlide, open: false,
+          action: () => page.getByRole("button", { name: "关闭单体反推结果", exact: true }).evaluate(button => button.click()) });
+        await page.mouse.up();
+        assert.equal(await page.locator(".np-sw-drawer-layer").evaluate(element => element.classList.contains("is-resizing")), false);
+      } else await page.getByRole("button", { name: "关闭单体反推结果", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".np-sw-drawer")?.dataset.motionPhase === "closed");
+      if (!reducedControl) result.workbenchReversal = await checkDrawerReversal(page, { workspace: ".np-sw-workspace", drawer: ".np-sw-drawer",
+        openAction: () => page.getByRole("button", { name: "展开反推结果", exact: true }).evaluate(button => button.click()),
+        closeAction: () => page.getByRole("button", { name: "关闭单体反推结果", exact: true }).evaluate(button => button.click()) });
 
       await phase(page, "module-navigation");
       await navigation(page, viewport.width, "knowledge");
@@ -157,20 +232,28 @@ try {
       await page.locator('.ks-search-surface button[type="submit"]').click();
       if (viewport.width < 900) await page.locator(".ks-result-card").first().click();
       await settle(page, ".ks-detail-drawer");
+      if (!reducedControl) {
+        result.detailTabFade = await checkLocalFade(page, ".ks-drawer-body", () => page.getByRole("tab", { name: "反应信息", exact: true }).click(), 300, 1);
+        assert.ok(result.detailTabFade.minimumOpacity < .1, "Each tab starts visibly transparent");
+      }
       await phase(page, "knowledge-drawer");
       if (viewport.width >= 900) result.knowledgeResizedWidth = await checkDrag(page, ".ks-detail-drawer");
-      const padding = await page.locator(".ks-panel-scroll").evaluate((element) => getComputedStyle(element).paddingRight);
-      await page.getByRole("button", { name: "关闭详情", exact: true }).click();
-      if (!reducedControl) assert.equal(await page.locator(".ks-panel-scroll").evaluate((element) => getComputedStyle(element).paddingRight), padding);
+      const knowledgeInline = await page.locator(".ks-detail-drawer").getAttribute("data-drawer-mode") === "inline";
+      const knowledgeSlide = { workspace: ".ks-workbench-column", drawer: ".ks-detail-drawer", inline: knowledgeInline, reduced: reducedControl };
+      result.knowledgeClose = await checkDrawerSlide(page, { ...knowledgeSlide, open: false,
+        action: () => page.getByRole("button", { name: "关闭详情", exact: true }).click() });
       await page.locator(".ks-drawer-reopen").waitFor();
-      await page.locator(".ks-drawer-reopen").click();
-      await settle(page, ".ks-detail-drawer");
+      result.knowledgeOpen = await checkDrawerSlide(page, { ...knowledgeSlide, open: true,
+        action: () => page.locator(".ks-drawer-reopen").click() });
       await page.screenshot({ path: resolve(output, `${name}-knowledge.png`) });
       await page.getByRole("button", { name: "关闭详情", exact: true }).click();
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page.waitForFunction(() => document.querySelector(".ks-detail-drawer")?.getAttribute("data-motion-phase") === "closed");
       result.runtimeReducedMotion = true;
       await page.emulateMedia({ reducedMotion: reducedControl ? "reduce" : "no-preference" });
+      if (!reducedControl) result.knowledgeReversal = await checkDrawerReversal(page, { workspace: ".ks-workbench-column", drawer: ".ks-detail-drawer",
+        openAction: () => page.locator(".ks-drawer-reopen").evaluate(button => button.click()),
+        closeAction: () => page.getByRole("button", { name: "关闭详情", exact: true }).evaluate(button => button.click()) });
 
       if (viewport.width < 1024) {
         await phase(page, "mobile-navigation");
@@ -184,6 +267,33 @@ try {
         assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "打开导航");
         result.mobileFocus = true;
       }
+
+      await phase(page, "polytao-drawer");
+      await navigation(page, viewport.width, "polytaoGeneration");
+      await page.getByRole("button", { name: "载入示例", exact: true }).click();
+      await page.getByRole("button", { name: "参数配置", exact: true }).click();
+      await page.getByRole("button", { name: "开始生成", exact: true }).click();
+      await settle(page, ".polytao-detail-drawer");
+      const polytaoInline = await page.locator(".polytao-detail-drawer").getAttribute("data-drawer-mode") === "inline";
+      if (polytaoInline) result.polytaoResizedWidth = await checkDrag(page, ".polytao-detail-drawer");
+      const polytaoSlide = { workspace: ".polytao-workbench-shell", drawer: ".polytao-detail-drawer", inline: polytaoInline, reduced: reducedControl };
+      const closePolytao = () => page.locator('.polytao-detail-drawer button[aria-label="关闭聚合物生成结果"]').click();
+      result.polytaoClose = await checkDrawerSlide(page, { ...polytaoSlide, open: false, action: closePolytao });
+      assert.equal(await page.locator(".polytao-page-scroll").evaluate(element => element.inert), false);
+      result.polytaoOpen = await checkDrawerSlide(page, { ...polytaoSlide, open: true,
+        action: () => page.getByRole("button", { name: "打开聚合物生成结果", exact: true }).click() });
+      await page.screenshot({ path: resolve(output, `${name}-polytao.png`) });
+      await closePolytao();
+      if (!polytaoInline && !reducedControl) assert.equal(await page.locator(".polytao-page-scroll").evaluate(element => element.inert), true, "Overlay blocks click-through throughout exit");
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.waitForFunction(() => document.querySelector(".polytao-detail-drawer")?.dataset.motionPhase === "closed");
+      assert.equal(await page.locator(".polytao-page-scroll").evaluate(element => element.inert), false);
+      await page.emulateMedia({ reducedMotion: reducedControl ? "reduce" : "no-preference" });
+      if (!reducedControl) result.polytaoReversal = await checkDrawerReversal(page, { workspace: ".polytao-workbench-shell", drawer: ".polytao-detail-drawer",
+        openAction: () => page.getByRole("button", { name: "打开聚合物生成结果", exact: true }).evaluate(button => button.click()),
+        closeAction: () => page.locator('.polytao-detail-drawer button[aria-label="关闭聚合物生成结果"]').evaluate(button => button.click()) });
+      assert.equal(polytaoSubmits, 1, "Opening/closing/sliding results must not submit or replay a job");
+      result.polytaoJobSubmits = polytaoSubmits;
       result.longTasks = await page.evaluate(() => window.__motionLongTasks.filter((entry) => entry.phase !== "load"));
       result.frames = await page.evaluate(() => {
         const values = window.__motionFrames.map((frame) => frame.duration).sort((a, b) => a - b);
@@ -211,6 +321,7 @@ try {
       if (finishTrace) result.trace = await finishTrace(`${name}-failure`).catch(() => null);
     }
     results.push(result);
+    if (page.video()) result.video = await page.video().path();
     console.log(JSON.stringify(result));
     await context.close();
   }

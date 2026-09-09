@@ -398,7 +398,7 @@
   box-shadow: 0 22px 60px rgba(15, 23, 42, 0.17);
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-4px);
+  transform: translateY(calc(-1 * var(--np-motion-popover-distance)));
   transform-origin: top right;
   transition: opacity var(--np-motion-exit) var(--np-ease-exit), transform var(--np-motion-exit) var(--np-ease-exit);
 }
@@ -1148,7 +1148,7 @@
   background: rgba(15, 23, 42, 0.3);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 180ms ease;
+  transition: opacity var(--np-motion-backdrop) var(--np-ease-exit);
 }
 
 .polytao-detail-drawer {
@@ -1167,14 +1167,23 @@
     linear-gradient(180deg, #f8fbfe, #fafcff 58%, #f5f8fc);
   box-shadow: -18px 0 48px rgba(65, 92, 120, 0.13);
   opacity: 0;
-  transform: translateX(102%);
-  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1), opacity 160ms ease;
+  visibility: hidden;
+  transform: translateX(var(--polytao-drawer-travel, calc(100% + 32px)));
+  transition: transform var(--np-motion-drawer-exit) var(--np-ease-exit), opacity var(--np-motion-drawer-exit) var(--np-ease-exit);
 }
 
-.polytao-detail-drawer.is-open {
+.polytao-detail-drawer.is-open { visibility: visible; }
+
+.polytao-detail-drawer[data-motion-active="true"] {
   opacity: 1;
   transform: translateX(0);
+  transition-duration: var(--np-motion-drawer-enter);
+  transition-timing-function: var(--np-ease-enter);
 }
+
+.polytao-detail-drawer[data-motion-phase="exiting"] { pointer-events: none; }
+.polytao-detail-drawer:is([data-motion-phase="open"], [data-motion-phase="closed"]) { transition: none; }
+.polytao-page.is-resizing .polytao-detail-drawer { transition: none; user-select: none; }
 
 .polytao-drawer-resizer {
   position: absolute;
@@ -1779,16 +1788,6 @@
   color: var(--polytao-success);
 }
 
-@media (min-width: 1280px) {
-  .polytao-page.is-drawer-open {
-    padding-right: calc(var(--polytao-drawer-width) + 24px);
-  }
-
-  .polytao-page.is-drawer-open .polytao-page-heading {
-    right: calc(var(--polytao-drawer-width) + 24px);
-  }
-}
-
 @media (max-width: 1120px) {
   .polytao-structure-source {
     grid-template-columns: minmax(300px, 1fr) minmax(270px, 1fr);
@@ -1821,7 +1820,7 @@
     transform: translateY(12px) scale(0.98);
   }
 
-  .polytao-detail-drawer.is-open {
+  .polytao-detail-drawer[data-motion-active="true"] {
     transform: none;
   }
 
@@ -2064,7 +2063,13 @@
   --polytao-shadow-sm: 0 5px 15px rgba(30, 64, 175, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.88);
   --polytao-shadow-md: 0 22px 58px rgba(30, 64, 175, 0.09), 0 2px 8px rgba(15, 23, 42, 0.035), inset 0 1px 0 rgba(255, 255, 255, 0.92);
   container: polytao-page / inline-size;
-  overflow: hidden;
+  --polytao-drawer-edge: var(--np-material-discovery-title-left, 24px);
+  --polytao-drawer-gap: 12px;
+  --polytao-workspace-max-width: 1040px;
+  --polytao-pair-width: min(calc(100cqw - 2 * var(--polytao-drawer-edge)), calc(var(--polytao-workspace-max-width) + var(--polytao-drawer-width) + var(--polytao-drawer-gap)));
+  /* The inner page-scroll owns scrolling. A translated/focused offscreen drawer
+     must not scroll this outer frame horizontally while it enters. */
+  overflow: clip;
   padding: 0;
   color: var(--polytao-ink);
   background-color: var(--polytao-bg-app);
@@ -2097,12 +2102,30 @@
   scrollbar-color: #c4d1df transparent;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
-  transition: padding-right 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: none;
 }
 
-.polytao-page.is-drawer-inline.is-drawer-open > .polytao-page-scroll {
-  padding-right: calc(var(--polytao-drawer-width) + 24px);
+.polytao-page.is-drawer-inline .polytao-workbench-shell {
+  width: calc(var(--polytao-pair-width) - var(--polytao-drawer-width) - var(--polytao-drawer-gap));
+  margin-left: calc((100cqw - var(--polytao-pair-width) + var(--polytao-drawer-width) + var(--polytao-drawer-gap)) / 2 - var(--polytao-drawer-edge));
+  margin-right: 0;
+  transform: translateX(0);
+  transition: none;
 }
+
+.polytao-page.is-drawer-inline[data-drawer-active="true"] .polytao-workbench-shell {
+  transform: translateX(calc((var(--polytao-drawer-width) + var(--polytao-drawer-gap)) / -2));
+}
+
+.polytao-page.is-drawer-inline[data-drawer-phase="entering"] .polytao-workbench-shell {
+  transition: transform var(--np-motion-drawer-enter) var(--np-ease-enter);
+}
+
+.polytao-page.is-drawer-inline[data-drawer-phase="exiting"] .polytao-workbench-shell {
+  transition: transform var(--np-motion-drawer-exit) var(--np-ease-exit);
+}
+
+.polytao-page.is-resizing .polytao-workbench-shell { transition: none; }
 
 .polytao-page.is-drawer-open .polytao-page-heading {
   right: auto;
@@ -2615,12 +2638,15 @@
 }
 
 .polytao-drawer-backdrop.is-overlay.is-open {
-  opacity: 1;
   pointer-events: auto;
 }
 
+.polytao-drawer-backdrop[data-motion-active="false"] { opacity: 0; }
+.polytao-drawer-backdrop.is-overlay[data-motion-active="true"] { opacity: 1; }
+
 .polytao-detail-drawer {
   position: absolute;
+  transform: translateX(var(--polytao-drawer-travel, calc(100% + 32px)));
   width: var(--polytao-drawer-width);
   border-left-color: rgba(51, 83, 126, 0.2);
   color: var(--polytao-ink);
@@ -2629,8 +2655,9 @@
 }
 
 .polytao-detail-drawer.is-inline {
+  --polytao-drawer-travel: calc(100% + (100cqw - var(--polytao-pair-width)) / 2 + 32px);
   top: 0;
-  right: 0;
+  right: calc((100cqw - var(--polytao-pair-width)) / 2);
   bottom: 0;
 }
 
@@ -2642,11 +2669,10 @@
   border: 1px solid var(--polytao-border);
   border-radius: 14px;
   overflow: hidden;
-  transform: translateY(12px) scale(0.985);
 }
 
-.polytao-detail-drawer.is-overlay.is-open {
-  transform: none;
+.polytao-detail-drawer[data-motion-active="true"] {
+  transform: translateX(0);
 }
 
 .polytao-drawer-header {
@@ -2926,16 +2952,14 @@
 
 @media (min-width: 2000px) and (min-height: 1120px) {
   .polytao-page {
+    --polytao-drawer-gap: 18px;
+    --polytao-workspace-max-width: 1560px;
     background-size: auto, auto, 48px 48px, 48px 48px, auto;
     font-size: 18px;
   }
 
   .polytao-page-scroll {
     padding: 36px 36px 120px;
-  }
-
-  .polytao-page.is-drawer-inline.is-drawer-open > .polytao-page-scroll {
-    padding-right: calc(var(--polytao-drawer-width) + 36px);
   }
 
   .polytao-page-heading {

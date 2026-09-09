@@ -64,6 +64,25 @@ afterEach(() => {
 });
 
 describe("WorkbenchDrawerShell", () => {
+  it("拖宽中关闭会清理拖动，并恢复正常退场而不是瞬间回中", async () => {
+    containerWidth = 1400;
+    render(<DrawerHarness />);
+    fireEvent.click(screen.getByRole("button", { name: "运行预测" }));
+    const drawer = screen.getByRole("dialog", { name: "性质预测结果" });
+    await waitFor(() => expect(drawer.dataset.motionPhase).toBe("open"));
+    const separator = screen.getByRole("separator");
+    fireEvent.pointerDown(separator, { button: 0, pointerId: 1, clientX: 1000 });
+    expect(document.querySelector(".np-sw-drawer-layer.is-resizing")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "关闭性质预测结果" }));
+    expect(document.querySelector(".np-sw-drawer-layer.is-resizing")).toBeNull();
+    expect(drawer.dataset.motionPhase).toBe("exiting");
+    fireEvent.pointerMove(document, { pointerId: 1, clientX: 900 });
+    expect(separator.getAttribute("aria-valuenow")).toBe("380");
+    const event = new Event("transitionend", { bubbles: true });
+    Object.defineProperty(event, "propertyName", { value: "transform" });
+    fireEvent(drawer, event);
+    expect(screen.getByRole("button", { name: "展开预测结果" })).not.toBeNull();
+  });
   it("退出保留并排槽位，关闭中重开不被旧完成回调隐藏", async () => {
     containerWidth = 1400;
     render(<DrawerHarness />);

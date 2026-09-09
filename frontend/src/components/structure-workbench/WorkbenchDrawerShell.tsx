@@ -2,8 +2,8 @@ import { X } from "lucide-react";
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
-  useState,
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode
@@ -11,6 +11,7 @@ import {
 import { useMotionPresence } from "../../hooks/useMotionPresence";
 import { useDrawerResize } from "../../hooks/useDrawerResize";
 import { useModalFocus } from "../../hooks/useModalFocus";
+import { useDrawerMode } from "../../hooks/useDrawerMode";
 
 const DEFAULT_MIN_WIDTH = 320;
 const DEFAULT_MAX_WIDTH = 560;
@@ -77,20 +78,15 @@ export function WorkbenchDrawerShell({
   const reopenTriggerRef = useRef<HTMLElement | null>(null);
   const restoreFocusFrameRef = useRef<number | null>(null);
   const wasPresent = useRef(false);
-  const [isOverlay, setIsOverlay] = useState(true);
+  const mode = useDrawerMode(layerRef, { closest: ".np-structure-workbench", inlineMinWidth: overlayContainerWidth });
+  const isOverlay = mode === "overlay";
   const resize = useDrawerResize({ width, minWidth, maxWidth, onWidthChange, enabled: open && !isOverlay });
   useModalFocus({ active: presence.present && isOverlay, open, scopeRef: layerRef, panelRef: drawerRef, onClose, global: false });
 
-  useEffect(() => {
-    const root = layerRef.current?.closest<HTMLElement>(".np-structure-workbench");
-    if (!root) return;
-    const update = () => setIsOverlay(root.getBoundingClientRect().width < overlayContainerWidth);
-    update();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(update);
-    observer.observe(root);
-    return () => observer.disconnect();
-  }, [overlayContainerWidth]);
+  // A drag or responsive mode change is an immediate layout operation, never a
+  // second position transition trailing behind the pointer/new viewport.
+  useLayoutEffect(() => { if (resize.resizing) presence.finish(); }, [resize.resizing, presence.finish]);
+  useLayoutEffect(() => { presence.finish(); }, [mode, presence.finish]);
 
   useEffect(() => {
     if (restoreFocusFrameRef.current !== null) {
@@ -146,9 +142,11 @@ export function WorkbenchDrawerShell({
     <>
       <div
         ref={layerRef}
-        className={`np-sw-drawer-layer${presence.present ? " is-open" : ""}${isOverlay ? " is-overlay" : ""}${resize.resizing ? " is-resizing" : ""}`}
+        className={`np-sw-drawer-layer${presence.present ? " is-open" : ""}${isOverlay ? " is-overlay" : ""}${resize.resizing && open ? " is-resizing" : ""}`}
         data-motion-present={presence.present}
         data-motion-active={presence.active}
+        data-motion-phase={presence.phase}
+        data-drawer-mode={mode}
         style={style}
         aria-hidden={!presence.present}
       >

@@ -11,17 +11,28 @@ export function useContentMotion(ref: RefObject<HTMLElement | null>, identity: s
     const element = selector ? ref.current?.querySelector<HTMLElement>(selector) : ref.current;
     const changed = previous.current !== identity;
     previous.current = identity;
-    const opacity = animationRef.current && element ? getComputedStyle(element).opacity : contentMotionStartOpacity[token];
-    animationRef.current?.cancel();
+    const previousAnimation = animationRef.current;
+    if (previousAnimation) {
+      previousAnimation.onfinish = null;
+      previousAnimation.cancel();
+    }
     animationRef.current = null;
     if (!changed || reduced || !element || typeof element.animate !== "function") return;
-    const animation = element.animate([{ opacity }, { opacity: 1 }], {
-      duration: motionDuration(element, token), easing: motionEasing(element, "enter")
-    });
-    animationRef.current = animation;
-    animation.onfinish = () => {
-      if (animationRef.current === animation) animationRef.current = null;
-    };
+    // A changed identity means new visible content, even if its DOM is reused.
+    // Do not inherit the previous tab's near-complete opacity (or read opacity
+    // from another kept-alive panel selected by the new selector).
+    try {
+      const animation = element.animate([{ opacity: contentMotionStartOpacity[token] }, { opacity: 1 }], {
+        duration: motionDuration(element, token), easing: motionEasing(element, "enter")
+      });
+      animationRef.current = animation;
+      animation.onfinish = () => {
+        if (animationRef.current === animation) animationRef.current = null;
+      };
+    } catch {
+      // Opacity is not written inline: an unsupported animation leaves the
+      // existing tab visible and interactive, with no business state changes.
+    }
   }, [identity, reduced, ref, token, selector]);
   useLayoutEffect(() => () => { animationRef.current?.cancel(); }, []);
 }
