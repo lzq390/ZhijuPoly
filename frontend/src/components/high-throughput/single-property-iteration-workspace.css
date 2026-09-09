@@ -1,4 +1,4 @@
-/* S3 only: S0–S2 keep their geometry and S4–S6 keep the legacy presentation. */
+/* S3 only: other workbench stages and the legacy S5–S6 views keep their geometry. */
 .ht-s3-page .ht-scroll-region { scroll-padding-block: 12px calc(var(--ht-s3-footer-height, 120px) + 12px); }
 .ht-s3-stage { container: ht-s1 / inline-size; }
 /* The additional decision evidence makes S3 cards taller. Bound each outside

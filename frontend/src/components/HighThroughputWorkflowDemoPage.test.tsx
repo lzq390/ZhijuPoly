@@ -659,7 +659,7 @@ describe("HighThroughputWorkflowDemoPage S1", () => {
       visited.add(previous);
       expect(view.container.querySelector(".ht-scroll-region")).toBe(scrollRegion);
       expect(scrollRegion.querySelector(".ht-docx-board")).not.toBeNull();
-      if (previous === "S2" || previous === "S3") {
+      if (previous === "S2" || previous === "S3" || previous === "S4") {
         expect(view.container.querySelector(".ht-workbench-toolbar")).not.toBeNull();
         expect(view.container.querySelectorAll(".ht-property-grid-detail")).toHaveLength(1);
       } else {
@@ -669,6 +669,7 @@ describe("HighThroughputWorkflowDemoPage S1", () => {
       const confirm = screen.queryByRole("button", { name: previous === "S2" || previous === "S3" ? /^确认本批 [84] 项验证值$/ : /^确认本(轮|步)实测值$/ });
       const next = previous === "S2" ? screen.getByRole<HTMLButtonElement>("button", { name: "进入 S3" })
         : previous === "S3" ? screen.getByRole<HTMLButtonElement>("button", { name: /^(进入 R2|进入收敛|进入 S4 候选输出)$/ })
+        : previous === "S4" ? screen.getByRole<HTMLButtonElement>("button", { name: "进入 S5 多目标配比搜索" })
         : view.container.querySelector<HTMLButtonElement>(".ht-next-step-control")!;
       if (confirm) {
         expect(next.disabled).toBe(true);

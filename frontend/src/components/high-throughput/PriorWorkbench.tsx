@@ -186,7 +186,7 @@ export function AgentCardShell({ selectId, index, target, selected, onSelect, di
   );
 }
 
-export function TargetTabs({ targets, activeTargetKey, onSelectTarget, disabled, tabId, panelId, label, renderIcon }: {
+export function TargetTabs({ targets, activeTargetKey, onSelectTarget, disabled, tabId, panelId, label, renderIcon, renderContent, getTabLabel }: {
   targets: HighThroughputTarget[];
   activeTargetKey: HighThroughputTargetKey;
   onSelectTarget: (key: HighThroughputTargetKey) => void;
@@ -195,6 +195,8 @@ export function TargetTabs({ targets, activeTargetKey, onSelectTarget, disabled,
   panelId: string;
   label: string;
   renderIcon: (target: HighThroughputTarget) => ReactNode;
+  renderContent?: (target: HighThroughputTarget) => ReactNode;
+  getTabLabel?: (target: HighThroughputTarget) => string;
 }) {
   function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     if (disabled) return;
@@ -217,6 +219,7 @@ export function TargetTabs({ targets, activeTargetKey, onSelectTarget, disabled,
           id={`${tabId}-${target.key}`}
           type="button"
           role="tab"
+          aria-label={getTabLabel?.(target)}
           aria-selected={target.key === activeTargetKey}
           aria-controls={panelId}
           tabIndex={target.key === activeTargetKey ? 0 : -1}
@@ -225,8 +228,7 @@ export function TargetTabs({ targets, activeTargetKey, onSelectTarget, disabled,
           disabled={disabled}
           style={{ "--target-color": target.color } as CSSProperties}
         >
-          {renderIcon(target)}
-          {target.shortLabel}
+          {renderContent ? renderContent(target) : <>{renderIcon(target)}{target.shortLabel}</>}
         </button>
       ))}
     </div>

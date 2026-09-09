@@ -1,0 +1,151 @@
+/* S4 is an output handoff, not another validation round. Keep all new layout
+   rules scoped here; S0–S3 and the legacy S5–S6 views retain their geometry. */
+.ht-s4-page .ht-scroll-region { scroll-padding-block: 12px calc(var(--ht-s4-footer-height, 110px) + 12px); }
+.ht-s1-stage.ht-s4-stage { --target-color: #2563eb; container: ht-s1 ht-s4 / inline-size; }
+.ht-s4-summary-status, .ht-s4-section-caption { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--ht-muted); font-size: var(--ht-s0-type-caption); }
+.ht-s4-summary-status svg, .ht-s4-section-caption svg { width: 14px; height: 14px; flex: none; color: var(--ht-primary); }
+.ht-s4-summary-status b, .ht-s4-section-caption b { font-family: var(--font-mono); font-size: inherit; font-weight: 600; color: var(--ht-text); }
+.ht-s4-output-tabs { padding: 14px; }
+.ht-s4-stage .ht-s4-output-tabs .ht-s1-target-tabs { gap: 10px; padding: 0; border: 0; box-shadow: none; background: transparent; }
+.ht-s4-stage .ht-s4-output-tabs .ht-s1-target-tabs button { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 8px; padding: 14px; border: 1px solid var(--panel-line); border-radius: 9px; text-align: left; background: linear-gradient(135deg, #fff, var(--panel-soft)); }
+.ht-s4-stage .ht-s4-output-tabs .ht-s1-target-tabs button[aria-selected="true"] { border-color: var(--panel-action); background: linear-gradient(135deg, #fff, var(--panel-wash)); box-shadow: inset 0 3px 0 var(--panel-action), 0 4px 12px rgba(31, 53, 80, 0.065); }
+.ht-s4-output-card-title { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.ht-s4-output-card-title > b { display: grid; flex: none; width: 28px; height: 28px; place-items: center; border: 1px solid var(--panel-line); border-radius: 7px; background: #fff; font-family: var(--font-mono); font-size: var(--ht-s0-type-label); font-weight: 600; }
+.ht-s4-output-card-title > strong { min-width: 0; font-family: var(--font-heading); font-size: var(--ht-s0-type-panel); font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.ht-s4-output-card-title > svg { width: 17px; height: 17px; flex: none; margin-left: auto; }
+.ht-s4-output-card-id { color: var(--ht-text); font-family: var(--font-mono); font-size: var(--ht-s0-type-label); font-weight: 600; overflow-wrap: anywhere; }
+.ht-s4-output-card-description { color: var(--ht-muted); font-size: var(--ht-s0-type-caption); font-weight: 400; }
+.ht-s4-output-card-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px; margin-top: 2px; }
+.ht-s4-output-card-value b, .ht-s4-property-value b { font-family: var(--font-mono); font-size: 20px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.ht-s4-output-card-value small { color: var(--ht-muted); font-family: var(--font-body); font-size: var(--ht-s0-type-caption); font-weight: 400; }
+.ht-s4-attainment { display: inline-flex; align-items: center; gap: 5px; color: #9b5e2a; font-family: var(--font-body); font-size: var(--ht-s0-type-caption); font-weight: 400; }
+.ht-s4-attainment svg { width: 13px; height: 13px; flex: none; }
+.ht-s4-attainment.met { color: #16805a; }
+.ht-s4-output-card-value + .ht-s4-attainment { margin-top: auto; padding-top: 6px; border-top: 1px solid var(--panel-line); }
+
+.ht-s4-detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 330px; align-items: start; gap: 16px; min-width: 0; padding: 16px; }
+.ht-s4-detail-main { display: grid; min-width: 0; gap: 14px; }
+.ht-s4-candidate-focus { display: grid; min-width: 0; gap: 12px; }
+.ht-s4-candidate-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; color: var(--ht-muted); font-size: var(--ht-s0-type-label); }
+.ht-s4-candidate-heading strong { color: var(--panel-ink); font-family: var(--font-mono); font-size: var(--ht-s0-type-section); font-weight: 600; overflow-wrap: anywhere; }
+.ht-s4-candidate-facts { display: grid; gap: 5px; color: var(--ht-muted); font-size: var(--ht-s0-type-caption); overflow-wrap: anywhere; }
+.ht-s4-candidate-facts b { margin-left: 4px; color: var(--ht-muted-strong); font-family: var(--font-mono); font-weight: 500; }
+.ht-s4-candidate-facts > span > span { margin-left: 4px; color: var(--ht-muted-strong); }
+.ht-s4-property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; min-width: 0; }
+.ht-s4-property { display: grid; min-width: 0; align-content: start; gap: 8px; border: 1px solid color-mix(in srgb, var(--property-color) 20%, #e3eaf2); border-radius: 8px; padding: 12px; background: linear-gradient(145deg, #fff, color-mix(in srgb, var(--property-color) 3%, #fff)); }
+.ht-s4-property-label { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; color: color-mix(in srgb, var(--property-color) 65%, #10243c); font-size: var(--ht-s0-type-label); }
+.ht-s4-property-label strong { font-weight: 600; }
+.ht-s4-property-label svg { width: 14px; height: 14px; flex: none; }
+.ht-s4-property-label > span { margin-left: auto; color: var(--ht-muted); font-size: var(--ht-s0-type-caption); }
+.ht-workbench-page .ht-s4-property-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; color: var(--ht-text); }
+.ht-s4-property-value > span { color: var(--ht-muted); font-size: var(--ht-s0-type-caption); }
+.ht-s4-property-threshold { color: var(--ht-muted); font-size: var(--ht-s0-type-caption); overflow-wrap: anywhere; }
+.ht-s4-property-threshold b { font-family: var(--font-mono); font-weight: 600; }
+.ht-s4-provenance { display: grid; gap: 9px; border: 1px solid var(--ht-border); border-radius: 8px; padding: 12px; background: var(--ht-section-background); color: var(--ht-muted); font-size: var(--ht-s0-type-caption); }
+.ht-s4-provenance > div { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; }
+.ht-s4-provenance svg { width: 14px; height: 14px; flex: none; color: var(--panel-action); }
+.ht-s4-provenance b, .ht-s4-provenance strong { color: var(--ht-text); font-family: var(--font-mono); font-size: inherit; font-weight: 600; overflow-wrap: anywhere; }
+.ht-s4-provenance small { font-size: inherit; }
+.ht-workbench-page .ht-s4-provenance p { border-top: 1px solid var(--ht-border); padding-top: 8px; color: var(--ht-muted); font-size: var(--ht-s0-type-caption); line-height: 1.6; }
+
+/* Reuse the scientific surface, not its S1 Agent-dock grid placement. */
+.ht-s4-stage .ht-s4-position-panel { min-width: 0; grid-column: auto; grid-row: auto; }
+.ht-s4-stage .ht-s4-position-panel .ht-s1-space-header { min-height: 0; padding: 12px; }
+.ht-s4-stage .ht-s4-position-panel h4 { margin: 0; color: var(--ht-section-title); font-family: var(--font-heading); font-size: var(--ht-s0-type-panel); font-weight: 700; line-height: 1.4; }
+.ht-s4-stage .ht-s4-position-panel .ht-s1-space-body { gap: 10px; padding: 12px; }
+.ht-s4-stage .ht-s4-position-map .ht-property-space-card.large,
+.ht-s4-stage .ht-s4-position-map .ht-property-space-card.large > svg { min-height: 0; height: auto; }
+.ht-s4-stage .ht-s4-position-map .ht-property-space-card.large { --plot-corner-inset: 6px; --plot-corner-size: 10px; }
+.ht-s4-position-panel .ht-s1-map-legend { gap: 5px 9px; }
+.ht-s4-position-panel .ht-s1-map-legend svg { width: 12px; height: 12px; color: var(--panel-ink); }
+.ht-s4-map-note { width: 100%; padding-top: 5px; border-top: 1px solid #dce5ee; }
+.ht-s4-map-point[role="button"] { cursor: pointer; }
+.ht-s4-map-point .ht-s4-map-hit { fill: transparent; stroke: none; filter: none; }
+.ht-s4-map-backup { fill: #fff; stroke: var(--target-color); stroke-width: 0.6; }
+.ht-s4-map-point .ht-s4-map-selection { fill: none; stroke: var(--ht-text); stroke-width: 0.35; stroke-dasharray: 0.7 0.45; filter: none; }
+.ht-s4-map-point:focus-visible { outline: none; }
+.ht-s4-map-point:focus-visible .ht-s4-map-hit { stroke: var(--ht-primary); stroke-width: 0.5; }
+.ht-s4-candidate-list { display: grid; gap: 7px; min-width: 0; }
+.ht-s4-stage .ht-s4-candidate-list button { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: var(--ht-s0-control-height); border: 1px solid var(--panel-line); border-radius: 7px; padding: 9px; background: #fff; color: var(--panel-ink); text-align: left; font-family: var(--font-body); font-size: var(--ht-s0-type-label); }
+.ht-s4-stage .ht-s4-candidate-list button:hover:not(:disabled) { background: var(--panel-soft); }
+.ht-s4-stage .ht-s4-candidate-list button[aria-pressed="true"] { border-color: var(--panel-action); background: var(--panel-soft); box-shadow: inset 3px 0 0 var(--panel-action); }
+.ht-s4-candidate-list button > svg { width: 15px; height: 15px; flex: none; }
+.ht-s4-candidate-list button > span { display: grid; min-width: 0; gap: 3px; }
+.ht-s4-candidate-list strong, .ht-s4-candidate-list b { font-family: var(--font-mono); font-size: inherit; font-weight: 600; overflow-wrap: anywhere; }
+.ht-s4-candidate-list small { color: var(--ht-muted); font-size: var(--ht-s0-type-caption); }
+.ht-s4-candidate-list .ht-s4-list-value { margin-left: auto; text-align: right; }
+/* Structure disclosure owns the full row, so expansion cannot leave an empty
+   right column. Keep the upper property grid 2×2 at desktop and native 2K. */
+.ht-s4-structure-slot { grid-column: 1 / -1; min-width: 0; }
+.ht-s4-structure-slot .ht-s2-structure-fields dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ht-s4-structure-slot .ht-s2-structure-fields dl > div { display: flex; min-width: 0; flex-direction: column; }
+.ht-s4-structure-slot .ht-s2-structure-fields dl > div:first-child { grid-column: 1 / -1; }
+.ht-s4-structure-slot .ht-s2-structure-fields dd { flex: 1; }
+.ht-s4-stage .ht-s4-footer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px 16px; }
+.ht-s4-stage .ht-s4-footer > button { min-height: var(--ht-s0-control-height); }
+.ht-workbench-page .ht-s4-handoff-status { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 6px; color: var(--ht-muted); font-size: var(--ht-s0-type-caption); }
+.ht-s4-handoff-status svg { width: 14px; height: 14px; flex: none; }
+.ht-s4-stage button:disabled { cursor: not-allowed; }
+
+@container ht-s4 (min-width: 900px) {
+  /* Share the upper row's height: property cards absorb the small difference,
+     keeping provenance and the position panel on the same bottom baseline. */
+  .ht-s4-detail-main, .ht-s4-stage .ht-s4-position-panel { align-self: stretch; }
+  .ht-s4-detail-main { grid-template-rows: minmax(0, 1fr) auto; }
+  .ht-s4-candidate-focus { grid-template-rows: auto auto minmax(0, 1fr); }
+}
+@container ht-s4 (max-width: 899px) {
+  .ht-s4-detail-layout { grid-template-columns: minmax(0, 1fr); }
+  .ht-s4-stage .ht-s4-position-panel .ht-s1-space-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ht-s4-position-map { grid-column: 1; grid-row: 1; }
+  .ht-s4-position-panel .ht-s1-map-legend { grid-column: 1; grid-row: 2; }
+  .ht-s4-candidate-list { grid-column: 2; grid-row: 1 / 3; align-content: start; }
+  .ht-s4-stage .ht-s4-footer { grid-template-columns: auto minmax(0, 1fr); }
+  .ht-s4-footer > .ht-s1-primary-button { grid-column: 1 / -1; }
+}
+@container ht-s4 (max-width: 699px) {
+  .ht-s4-stage .ht-s4-output-tabs .ht-s1-target-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ht-s4-detail-layout { padding: 12px; gap: 12px; }
+  .ht-s4-structure-slot .ht-s2-structure-fields dl { grid-template-columns: minmax(0, 1fr); }
+}
+@container ht-s4 (max-width: 479px) {
+  .ht-s4-output-tabs { padding: 12px; }
+  .ht-s4-stage .ht-s4-output-tabs .ht-s1-target-tabs button { gap: 7px; padding: 11px; }
+  .ht-s4-output-card-title { gap: 5px; }
+  .ht-s4-output-card-title > svg { display: none; }
+  .ht-s4-stage .ht-s4-position-panel .ht-s1-space-body { grid-template-columns: minmax(0, 1fr); }
+  .ht-s4-position-panel .ht-s1-map-legend, .ht-s4-candidate-list { grid-column: auto; grid-row: auto; }
+  .ht-s4-property-grid { grid-template-columns: minmax(0, 1fr); }
+  .ht-s4-footer .ht-s1-secondary-button { padding-inline: 6px; gap: 4px; }
+  .ht-s4-stage .ht-s4-footer { padding: 12px; gap: 10px 8px; }
+}
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .ht-s4-summary-status, .ht-s4-section-caption { gap: 8px; }
+  .ht-s4-summary-status svg, .ht-s4-section-caption svg { width: 18px; height: 18px; }
+  .ht-s4-output-tabs { padding: 22px; }
+  .ht-s4-stage .ht-s4-output-tabs .ht-s1-target-tabs { gap: 16px; }
+  .ht-s4-stage .ht-s4-output-tabs .ht-s1-target-tabs button { gap: 11px; padding: 20px; border-radius: 12px; }
+  .ht-s4-output-card-title { gap: 10px; }
+  .ht-s4-output-card-title > b { width: 38px; height: 38px; border-radius: 9px; }
+  .ht-s4-output-card-title > svg { width: 23px; height: 23px; }
+  .ht-s4-output-card-value b, .ht-s4-property-value b { font-size: 26px; }
+  .ht-s4-attainment svg { width: 16px; height: 16px; }
+  .ht-s4-detail-layout { grid-template-columns: minmax(0, 1fr) 420px; gap: 22px; padding: 22px; }
+  .ht-s4-detail-main { gap: 20px; }
+  .ht-s4-candidate-focus { gap: 16px; }
+  .ht-s4-property-grid { gap: 14px; }
+  .ht-s4-property { gap: 10px; padding: 16px; border-radius: 11px; }
+  .ht-s4-property-label svg { width: 18px; height: 18px; }
+  .ht-s4-provenance { gap: 12px; padding: 16px; border-radius: 11px; }
+  .ht-s4-provenance svg { width: 18px; height: 18px; }
+  .ht-s4-stage .ht-s4-position-panel .ht-s1-space-header { padding: 16px; }
+  .ht-s4-stage .ht-s4-position-panel .ht-s1-space-body { gap: 14px; padding: 16px; }
+  .ht-s4-position-panel .ht-s1-map-legend svg { width: 16px; height: 16px; }
+  .ht-s4-candidate-list { gap: 10px; }
+  .ht-s4-stage .ht-s4-candidate-list button { gap: 10px; padding: 12px; border-radius: 9px; }
+  .ht-s4-candidate-list button > svg { width: 20px; height: 20px; }
+  .ht-s4-handoff-status svg { width: 18px; height: 18px; }
+  @container ht-s4 (max-width: 899px) {
+    .ht-s4-detail-layout { grid-template-columns: minmax(0, 1fr); }
+  }
+}

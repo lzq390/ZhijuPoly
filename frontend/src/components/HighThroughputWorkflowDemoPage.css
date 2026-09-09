@@ -183,7 +183,6 @@
 .ht-material-map-panel,
 .ht-property-space-board-panel,
 .ht-agent-panel,
-.ht-candidate-output-panel,
 .ht-formulation-panel,
 .ht-final-formulation-panel,
 .ht-ratio-search-panel,
@@ -2511,7 +2510,6 @@
   line-height: 1.55;
 }
 
-.ht-candidate-output-panel,
 .ht-formulation-panel {
   display: grid;
   gap: 16px;
@@ -2526,181 +2524,6 @@
   opacity: 1;
 }
 
-.ht-candidate-output-grid {
-  align-items: start;
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(2, minmax(320px, 1fr));
-}
-
-.ht-candidate-output-grid article {
-  background: #f8fafc;
-  border: 1px solid var(--ht-border);
-  border-radius: 8px;
-  min-width: 0;
-  padding: 12px;
-}
-
-.ht-candidate-output-focus {
-  align-items: stretch;
-  border-left: 4px solid var(--target-color) !important;
-  display: grid;
-  gap: 8px 14px;
-  grid-template-columns: 92px minmax(0, 1fr);
-  grid-template-rows: repeat(2, 46px);
-}
-
-.ht-candidate-output-focus > span {
-  align-items: center;
-  background: color-mix(in srgb, var(--target-color) 12%, #ffffff);
-  border-radius: 999px;
-  color: var(--target-color);
-  display: inline-flex;
-  font-weight: 950;
-  grid-column: 1;
-  grid-row: 1;
-  height: 36px;
-  justify-content: center;
-  width: 36px;
-}
-
-.ht-candidate-output-focus > div {
-  align-self: center;
-  grid-column: 1;
-  grid-row: 2;
-  min-width: 0;
-}
-
-.ht-candidate-output-focus strong {
-  color: var(--ht-text);
-  display: block;
-  font-size: 1.18rem;
-  font-weight: 950;
-}
-
-.ht-candidate-output-focus em {
-  color: var(--ht-muted-strong);
-  display: block;
-  font-size: 0.78rem;
-  font-style: normal;
-  font-weight: 850;
-}
-
-.ht-candidate-output-focus dl {
-  align-self: stretch;
-  display: grid;
-  gap: 8px;
-  grid-column: 2;
-  grid-row: 1 / 3;
-  grid-auto-rows: 46px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: 0;
-}
-
-.ht-candidate-output-focus dl div {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  display: grid;
-  gap: 2px;
-  min-height: 0;
-  padding: 6px 8px;
-}
-
-.ht-candidate-output-focus dt,
-.ht-candidate-output-focus dd {
-  margin: 0;
-}
-
-.ht-candidate-output-focus dt {
-  color: #64748b;
-  font-size: 0.68rem;
-  font-weight: 850;
-}
-
-.ht-candidate-output-focus dd {
-  color: var(--ht-text);
-  font-size: 0.78rem;
-  font-weight: 920;
-}
-
-.ht-candidate-output-backups {
-  align-items: stretch;
-  align-self: start;
-  display: grid;
-  gap: 8px 14px;
-  grid-template-columns: 92px minmax(0, 1fr);
-  grid-template-rows: repeat(2, 46px);
-}
-
-.ht-candidate-output-backup-label {
-  display: contents;
-  min-width: 0;
-}
-
-.ht-candidate-output-backup-label > span {
-  align-items: center;
-  background: color-mix(in srgb, var(--target-color) 12%, #ffffff);
-  border-radius: 999px;
-  color: var(--target-color);
-  display: inline-flex;
-  grid-column: 1;
-  grid-row: 1;
-  height: 36px;
-  justify-content: center;
-  align-self: start;
-  width: 36px;
-}
-
-.ht-candidate-output-backup-label strong {
-  align-self: center;
-  color: var(--ht-text);
-  font-size: 0.92rem;
-  font-weight: 950;
-  grid-column: 1;
-  grid-row: 2;
-  line-height: 1.2;
-}
-
-.ht-candidate-output-backup-list {
-  align-self: stretch;
-  display: grid;
-  gap: 8px;
-  grid-column: 2;
-  grid-row: 1 / 3;
-  grid-auto-rows: 46px;
-}
-
-.ht-candidate-output-backup-list > span {
-  align-items: center;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-  padding: 6px 8px;
-}
-
-.ht-candidate-output-backups b {
-  color: var(--target-color);
-  font-size: 0.78rem;
-  font-weight: 950;
-  line-height: 1.15;
-}
-
-.ht-candidate-output-backups em {
-  color: #64748b;
-  font-size: 0.7rem;
-  font-style: normal;
-  font-weight: 850;
-  line-height: 1.15;
-  min-width: 0;
-  text-align: right;
-}
 
 .ht-ratio-search-panel {
   display: grid;
@@ -3851,7 +3674,6 @@
   .ht-setup-grid,
   .ht-workbench,
   .ht-agent-list,
-  .ht-candidate-output-grid,
   .ht-formulation-grid,
   .ht-ratio-search-grid,
   .ht-property-space-grid,
@@ -3991,7 +3813,7 @@
   }
 }
 
-/* Shared S0–S3 frame — aligned with the platform research workbench. */
+/* Shared S0–S4 frame — aligned with the platform research workbench. */
 .high-throughput-demo.ht-workbench-page {
   --ht-s0-column: 1040px;
   --ht-s0-type-label: 12px;

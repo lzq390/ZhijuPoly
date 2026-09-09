@@ -29,6 +29,7 @@ import { WorkbenchSelect } from "./structure-workbench/WorkbenchSelect";
 import { PriorImportWorkspace } from "./high-throughput/PriorImportWorkspace";
 import { PriorHotspotWorkspace } from "./high-throughput/PriorHotspotWorkspace";
 import { SinglePropertyIterationWorkspace } from "./high-throughput/SinglePropertyIterationWorkspace";
+import { CandidateOutputWorkspace } from "./high-throughput/CandidateOutputWorkspace";
 import { formatIterationValue, type IterationTargetSummary } from "./high-throughput/iteration-model";
 import { fallbackCandidateSmiles, validationNumber } from "./high-throughput/prior-hotspot-model";
 import type { PriorDataUploadState, PriorDataUploadsState, RecommendationSelection, RecommendationValidationValues } from "./high-throughput/types";
@@ -814,7 +815,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const displayedNextStepState = stageTransition
     ? { canAdvance: false, label: "处理中", hint: stageTransition.message }
     : nextStepState;
-  const isWorkbenchStage = currentStageIndex <= 3;
+  const isWorkbenchStage = currentStageIndex <= 4;
   const isIterationReview = currentStageIndex === 3 && viewIterationRoundIndex < activeIterationRoundIndex;
 
   useEffect(() => {
@@ -925,7 +926,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     }
 
     if (currentStageIndex === 4) {
-      runStageTransition("汇总 p1-p4 组分池，正在进入比例搜索...", STAGE_TRANSITION_MS, () => enterStage(5));
+      runStageTransition("沿用预设 p1–p4 组分池，正在进入配比搜索…", STAGE_TRANSITION_MS, () => enterStage(5));
       return;
     }
 
@@ -1172,20 +1173,20 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   return (
-    <div className={cn("high-throughput-demo", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page", currentStageIndex === 2 && "ht-s2-page", currentStageIndex === 3 && "ht-s3-page")}>
+    <div className={cn("high-throughput-demo", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page", currentStageIndex === 2 && "ht-s2-page", currentStageIndex === 3 && "ht-s3-page", currentStageIndex === 4 && "ht-s4-page")}>
       {isWorkbenchStage ? <h1 className="ht-workbench-title">高通量优化演示</h1> : null}
       {isWorkbenchStage ? (
         <ScenarioModuleToolbar
           canReset={!stageTransition}
           onReset={resetCurrentStageActions}
-          showReset={!isIterationReview}
+          showReset={!isIterationReview && currentStageIndex !== 4}
           resetText={currentStageIndex === 3 ? activeIterationRoundIndex === 2 ? "重演 S3" : "重置本批" : "重置"}
           resetLabel={currentStageIndex === 0 ? "恢复默认场景参数" : currentStageIndex === 1 ? "重置 S1 上传数据" : currentStageIndex === 2 ? "重置 S2 验证值" : activeIterationRoundIndex === 2 ? "重演 S3" : "重置本批验证值"}
         />
       ) : null}
       <main ref={scrollRegionRef} className="ht-shell ht-scroll-region">
         <section
-          className={cn("ht-docx-board", isWorkbenchStage && "ht-workbench-board np-sw-accented-surface", currentStageIndex === 0 && "ht-s0-board", (currentStageIndex >= 1 && currentStageIndex <= 3) && "ht-s1-board", currentStageIndex === 2 && "ht-s2-board", currentStageIndex === 3 && "ht-s3-board")}
+          className={cn("ht-docx-board", isWorkbenchStage && "ht-workbench-board np-sw-accented-surface", currentStageIndex === 0 && "ht-s0-board", (currentStageIndex >= 1 && currentStageIndex <= 4) && "ht-s1-board", currentStageIndex === 2 && "ht-s2-board", currentStageIndex === 3 && "ht-s3-board", currentStageIndex === 4 && "ht-s4-board")}
           aria-labelledby={isWorkbenchStage ? "ht-workbench-surface-title" : undefined}
         >
           {isWorkbenchStage ? <ScenarioSurfaceHeader stageIndex={currentStageIndex} /> : null}
@@ -1275,6 +1276,19 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
                   onSelectRecommendation={onSelect} interactionDisabled={Boolean(stageTransition)} />
               )}
             />
+          ) : currentStageIndex === 4 ? (
+            <CandidateOutputWorkspace
+              targets={scenario.targets.map((target) => getConfiguredTarget(target.key, confirmedSetup))}
+              candidateTotal={confirmedSetup.candidateTotal} materialType={confirmedSetup.materialType} representation={confirmedSetup.representation}
+              activeTargetKey={activeSpaceTargetKey} onSelectTarget={setActiveSpaceTargetKey} validationValues={recommendationValidationValues}
+              onBack={() => { if (!stageTransition) enterStage(3); }} onNext={handleNextStep}
+              canAdvance={displayedNextStepState.canAdvance} transitionMessage={stageTransition?.message ?? null}
+              renderCandidateMap={(summary, selectedId, onSelect) => (
+                <PropertySpaceCard stageIndex={4} target={summary.target} variant="large" showSummary={false}
+                  interactionDisabled={Boolean(stageTransition)} outputPreview={{ outputId: summary.output.id,
+                    candidateIds: summary.candidates.map((candidate) => candidate.id), selectedId, onSelect }} />
+              )}
+            />
           ) : (
             <>
               <div className="ht-docx-map-stage" ref={mapStageRef}>
@@ -1353,8 +1367,6 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
                   validationRequiredCount={activeValidationRequirements.length}
                   onConfirmValidationGroup={confirmCurrentValidationGroup}
                 />
-              ) : currentStageIndex === 4 ? (
-                <CandidateOutputPanel activeTargetKey={activeSpaceTargetKey} confirmedSetup={confirmedSetup} />
               ) : currentStageIndex === 5 ? (
                 <RatioSearchPanel
                   activeStepIndex={activeRatioSearchStepIndex}
@@ -1638,15 +1650,16 @@ function ScenarioSurfaceHeader({ stageIndex }: { stageIndex: number }) {
   const isPrior = stageIndex === 1;
   const isHotspot = stageIndex === 2;
   const isIteration = stageIndex === 3;
+  const isOutput = stageIndex === 4;
   return (
     <header className="ht-workbench-header">
       <div className="ht-workbench-heading">
         <span className="ht-workbench-mark">
-          {isHotspot || isIteration ? <BrainCircuit aria-hidden="true" /> : isPrior ? <TestTube2 aria-hidden="true" /> : <FlaskConical aria-hidden="true" />}
+          {isOutput ? <FileCheck2 aria-hidden="true" /> : isHotspot || isIteration ? <BrainCircuit aria-hidden="true" /> : isPrior ? <TestTube2 aria-hidden="true" /> : <FlaskConical aria-hidden="true" />}
         </span>
         <div>
-          <h2 id="ht-workbench-surface-title" tabIndex={-1}>{isIteration ? "单性质迭代与验证回流" : isHotspot ? "先验热点与推荐验证" : isPrior ? "正交实验与先验导入" : "材料体系与目标设置"}</h2>
-          <p>{isIteration ? "逐轮验证推荐点，对照回流记录与预设路径，查看单性质收敛结果。" : isHotspot ? "查看四个性质的初始热点，编辑并确认本批推荐点的演示验证值。" : isPrior ? "为四个性质 Agent 导入 DOE 样例，查看候选分布与先验数据。" : "设置材料体系、候选空间与优化目标。"}</p>
+          <h2 id="ht-workbench-surface-title" tabIndex={-1}>{isOutput ? "单性质候选输出" : isIteration ? "单性质迭代与验证回流" : isHotspot ? "先验热点与推荐验证" : isPrior ? "正交实验与先验导入" : "材料体系与目标设置"}</h2>
+          <p>{isOutput ? "查看四个固定输出组分的性质、结构与备选，衔接多目标配比搜索。" : isIteration ? "逐轮验证推荐点，对照回流记录与预设路径，查看单性质收敛结果。" : isHotspot ? "查看四个性质的初始热点，编辑并确认本批推荐点的演示验证值。" : isPrior ? "为四个性质 Agent 导入 DOE 样例，查看候选分布与先验数据。" : "设置材料体系、候选空间与优化目标。"}</p>
         </div>
       </div>
     </header>
@@ -1992,6 +2005,7 @@ function PropertySpaceCard({
   interactionDisabled = false,
   iterationSummary,
   reviewMode = false,
+  outputPreview,
 }: {
   stageIndex: number;
   target: HighThroughputTarget;
@@ -2005,9 +2019,11 @@ function PropertySpaceCard({
   interactionDisabled?: boolean;
   iterationSummary?: IterationTargetSummary;
   reviewMode?: boolean;
+  outputPreview?: { outputId: string; candidateIds: string[]; selectedId: string; onSelect: (id: string) => void };
 }) {
   const plotGridId = useId();
-  const isWorkbenchPlot = !showSummary && variant === "large" && stageIndex >= 1 && stageIndex <= 3;
+  const isWorkbenchPlot = !showSummary && variant === "large" && stageIndex >= 1 && stageIndex <= 4;
+  const isOutputPlot = stageIndex === 4 && Boolean(outputPreview);
   const space = getPropertySpace(target.key);
   const activeRounds = highThroughputDemoScenario.roundsByTarget[target.key];
   const activeRoundIndex = clamp(iterationRoundIndex, 0, activeRounds.length - 1);
@@ -2023,13 +2039,14 @@ function PropertySpaceCard({
   const showPriorDoe = stageIndex >= 2 || (stageIndex === 1 && isPriorReady);
   const priorIds = showPriorDoe ? space.priorCandidateIds : [];
   const measuredPriorIds = stageIndex >= 2 ? space.priorCandidateIds : [];
-  const currentBestId = iterationSummary ? iterationSummary.recordBest?.candidate.id ?? "" : propertySpaceCurrentBestId(stageIndex, space, target, iterationRoundIndex, validationValues);
+  const currentBestId = isOutputPlot ? outputPreview!.outputId : iterationSummary ? iterationSummary.recordBest?.candidate.id ?? "" : propertySpaceCurrentBestId(stageIndex, space, target, iterationRoundIndex, validationValues);
   const currentBest = currentBestId ? getCandidate(currentBestId) : undefined;
   const specialIds = new Set([
     ...priorIds,
     ...measuredPriorIds,
     ...roundIds.testedIds,
     ...roundIds.recommendedIds,
+    ...(outputPreview?.candidateIds ?? []),
     currentBestId,
   ].filter(Boolean));
   const renderedPoints = stageIndex >= 1
@@ -2080,6 +2097,11 @@ function PropertySpaceCard({
       selectRecommendation(candidateId);
     }
   };
+  const canInspectOutput = isOutputPlot && !interactionDisabled;
+  const selectOutput = (candidateId: string) => { if (canInspectOutput) outputPreview?.onSelect(candidateId); };
+  const handleOutputKeyDown = (event: KeyboardEvent<SVGGElement>, candidateId: string) => {
+    if (canInspectOutput && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); selectOutput(candidateId); }
+  };
 
   return (
     <article className={cn("ht-property-space-card", variant)} style={{ "--target-color": target.color } as CSSProperties}>
@@ -2095,9 +2117,9 @@ function PropertySpaceCard({
         </div>
       ) : null}
 
-      <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role={stageIndex === 2 || iterationSummary ? "group" : "img"}
+      <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role={stageIndex === 2 || iterationSummary || isOutputPlot ? "group" : "img"}
         data-surface-snapshot={iterationSummary ? surface?.id : undefined}
-        aria-label={iterationSummary ? `${target.shortLabel} ${iterationRoundIndex === 2 ? "收敛" : `R${iterationRoundIndex + 1}`} 回流记录与预设热点` : stageIndex === 2 ? `${target.shortLabel} 先验热点与推荐点` : `${target.shortLabel} single-property optimization space`}>
+        aria-label={isOutputPlot ? `${target.shortLabel} 固定输出与备选位置图` : iterationSummary ? `${target.shortLabel} ${iterationRoundIndex === 2 ? "收敛" : `R${iterationRoundIndex + 1}`} 回流记录与预设热点` : stageIndex === 2 ? `${target.shortLabel} 先验热点与推荐点` : `${target.shortLabel} single-property optimization space`}>
         <defs>
           <radialGradient id={`ht-property-gradient-${target.key}-${surface?.id ?? "none"}`} cx="50%" cy="50%" r="55%">
             <stop offset="0%" stopColor={target.color} stopOpacity="0.82" />
@@ -2152,7 +2174,7 @@ function PropertySpaceCard({
           </circle>
         ))}
         {space.candidatePoints
-          .filter((point) => priorSet.has(point.candidateId))
+          .filter((point) => !isOutputPlot && priorSet.has(point.candidateId))
           .map((point) => {
             const projectedPoint = projectSpacePoint(point);
             return (
@@ -2170,7 +2192,7 @@ function PropertySpaceCard({
             );
           })}
         {space.candidatePoints
-          .filter((point) => measuredSet.has(point.candidateId) && !priorSet.has(point.candidateId))
+          .filter((point) => !isOutputPlot && measuredSet.has(point.candidateId) && !priorSet.has(point.candidateId))
           .map((point) => {
             const projectedPoint = projectSpacePoint(point);
             const returnedRecord = iterationSummary?.returnedRecords.find((record) => record.candidate.id === point.candidateId);
@@ -2226,16 +2248,35 @@ function PropertySpaceCard({
               </g>
             );
           })}
+        {isOutputPlot ? space.candidatePoints.filter((point) => point.candidateId !== currentBestId && outputPreview!.candidateIds.includes(point.candidateId)).map((point) => {
+          const projected = projectSpacePoint(point);
+          const selected = outputPreview!.selectedId === point.candidateId;
+          return <g key={`output-backup-${point.candidateId}`} className="ht-s4-map-point" transform={`translate(${projected.x} ${projected.y})`}
+            data-candidate-id={point.candidateId} role="button" tabIndex={canInspectOutput ? 0 : -1} aria-disabled={!canInspectOutput}
+            aria-label={`在位置图查看 ${point.candidateId} 备选`} aria-pressed={selected}
+            onClick={() => selectOutput(point.candidateId)} onKeyDown={(event) => handleOutputKeyDown(event, point.candidateId)}>
+            <circle className="ht-s4-map-hit" r="4" /><rect className="ht-s4-map-backup" x="-1.15" y="-1.15" width="2.3" height="2.3" rx="0.15" />
+            {selected ? <circle className="ht-s4-map-selection" r="2.7" /> : null}
+            <title>{point.candidateId} · Top-k 备选 · 仅供比较，不替换输出</title>
+          </g>;
+        }) : null}
         {currentBestId ? (
           space.candidatePoints
             .filter((point) => point.candidateId === currentBestId)
             .map((point) => {
               const projectedPoint = projectSpacePoint(point);
               return (
-                <g key={`best-${point.candidateId}`} className="ht-current-best-marker" data-candidate-id={point.candidateId} transform={`translate(${projectedPoint.x} ${projectedPoint.y})`}>
+                <g key={`best-${point.candidateId}`} className={cn("ht-current-best-marker", isOutputPlot && "ht-s4-map-point")} data-candidate-id={point.candidateId} transform={`translate(${projectedPoint.x} ${projectedPoint.y})`}
+                  role={isOutputPlot ? "button" : undefined} tabIndex={isOutputPlot ? canInspectOutput ? 0 : -1 : undefined}
+                  aria-disabled={isOutputPlot ? !canInspectOutput : undefined} aria-pressed={isOutputPlot ? outputPreview!.selectedId === point.candidateId : undefined}
+                  aria-label={isOutputPlot ? `在位置图查看 ${point.candidateId} 固定输出` : undefined}
+                  onClick={isOutputPlot ? () => selectOutput(point.candidateId) : undefined}
+                  onKeyDown={isOutputPlot ? (event) => handleOutputKeyDown(event, point.candidateId) : undefined}>
+                  {isOutputPlot ? <><title>{point.candidateId} · S4 固定输出 · 不随备选选择改变</title><circle className="ht-s4-map-hit" r="4" /></> : null}
                   {iterationSummary?.recordBest ? <title>{point.candidateId} · 回流记录最优 · {iterationSummary.recordBest.source} · {formatIterationValue(target, iterationSummary.recordBest.value)} {target.unit === "degC" ? "°C" : target.unit}</title> : null}
                   <circle r="1.65" />
                   <path d="M 0 -2.2 L 0.56 -0.64 L 2.15 -0.64 L 0.86 0.28 L 1.34 1.86 L 0 0.9 L -1.34 1.86 L -0.86 0.28 L -2.15 -0.64 L -0.56 -0.64 Z" />
+                  {isOutputPlot && outputPreview!.selectedId === point.candidateId ? <circle className="ht-s4-map-selection" r="2.7" /> : null}
                 </g>
               );
             })
@@ -3158,82 +3199,6 @@ function AgentPanel({
   );
 }
 
-function CandidateOutputPanel({
-  activeTargetKey,
-  confirmedSetup,
-}: {
-  activeTargetKey: HighThroughputTargetKey;
-  confirmedSetup: ConfirmedSetup;
-}) {
-  const scenario = highThroughputDemoScenario;
-  const target = getConfiguredTarget(activeTargetKey, confirmedSetup);
-  const space = getPropertySpace(activeTargetKey);
-  const component = scenario.formulation.components.find((item) => item.sourceTargetKey === activeTargetKey);
-  const agent = scenario.agents.find((item) => item.targetKey === activeTargetKey);
-  const outputCandidate = getCandidate(space.currentBestId);
-  const backupIds = (agent?.topCandidateIds ?? []).filter((candidateId) => candidateId !== space.currentBestId);
-  const outputLabel = component?.id ?? "p?";
-  const outputDescription = component?.description ?? "单性质收敛候选";
-
-  return (
-    <section className="ht-candidate-output-panel" style={{ "--target-color": target.color } as CSSProperties}>
-      <div className="ht-panel-header">
-        <div>
-          <span className="ht-kicker">S4 Single-property Candidate Output</span>
-          <h2>{target.shortLabel}{" -> "}{outputLabel} 候选输出</h2>
-        </div>
-        <span className="ht-simulation-badge compact">来自 S3 收敛空间</span>
-      </div>
-
-      <div className="ht-candidate-output-grid">
-        <article className="ht-candidate-output-focus">
-          <span>{outputLabel}</span>
-          <div>
-            <strong>{space.currentBestId}</strong>
-            <em>{outputDescription}</em>
-          </div>
-          <dl>
-            <div>
-              <dt>来源空间</dt>
-              <dd>{target.shortLabel} / {target.label}</dd>
-            </div>
-            <div>
-              <dt>目标</dt>
-              <dd>{targetThresholdLabel(target)}</dd>
-            </div>
-            <div>
-              <dt>当前值</dt>
-              <dd>{candidateValue(outputCandidate, target)}</dd>
-            </div>
-            <div>
-              <dt>目标差距</dt>
-              <dd>{targetGapLabel(outputCandidate, target)}</dd>
-            </div>
-          </dl>
-        </article>
-
-        <article className="ht-candidate-output-backups">
-          <div className="ht-candidate-output-backup-label">
-            <span><Target aria-hidden="true" size={16} /></span>
-            <strong>Top-k 备选</strong>
-          </div>
-          <div className="ht-candidate-output-backup-list">
-            {backupIds.map((candidateId) => {
-              const candidate = getCandidate(candidateId);
-              return (
-                <span key={candidateId}>
-                  <b>{candidateId}</b>
-                  <em>{candidateValue(candidate, target)} / {targetGapLabel(candidate, target)}</em>
-                </span>
-              );
-            })}
-          </div>
-        </article>
-
-      </div>
-    </section>
-  );
-}
 
 function RatioSearchPanel({
   activeStepIndex,
