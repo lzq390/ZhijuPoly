@@ -219,7 +219,7 @@ describe("KnowledgeSearch", () => {
     expect(resizer.getAttribute("aria-valuenow")).toBe("390");
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "知识记录详情" })).toBeNull();
-    const reopenButton = screen.getByRole("button", { name: "查看记录详情" });
+    const reopenButton = await screen.findByRole("button", { name: "查看记录详情" });
     expect(reopenButton.classList.contains("is-vertical")).toBe(true);
     fireEvent.click(reopenButton);
     expect(screen.getByRole("dialog", { name: "知识记录详情" })).not.toBeNull();
@@ -300,6 +300,7 @@ describe("KnowledgeSearch", () => {
     expect(screen.queryByText(/Reliability|可靠度|78/)).toBeNull();
 
     fireEvent.keyDown(window, { key: "Escape" });
+    await act(async () => { await vi.advanceTimersByTimeAsync(240); });
     expect(screen.getByRole("button", { name: "查看记录详情" }).classList.contains("is-vertical")).toBe(true);
   });
 

@@ -64,6 +64,24 @@ afterEach(() => {
 });
 
 describe("WorkbenchDrawerShell", () => {
+  it("退出保留并排槽位，关闭中重开不被旧完成回调隐藏", async () => {
+    containerWidth = 1400;
+    render(<DrawerHarness />);
+    const trigger = screen.getByRole("button", { name: "运行预测" });
+    fireEvent.click(trigger);
+    const drawer = screen.getByRole("dialog", { name: "性质预测结果" });
+    await waitFor(() => expect(drawer.dataset.motionPhase).toBe("open"));
+    fireEvent.click(screen.getByRole("button", { name: "关闭性质预测结果" }));
+    expect(drawer.dataset.motionPhase).toBe("exiting");
+    expect(document.querySelector(".np-sw-drawer-layer")?.getAttribute("data-motion-present")).toBe("true");
+    expect(screen.queryByRole("button", { name: "展开预测结果" })).toBeNull();
+    fireEvent.click(trigger);
+    await waitFor(() => expect(drawer.dataset.motionPhase).toBe("open"));
+    expect(screen.getByRole("dialog", { name: "性质预测结果" })).toBe(drawer);
+    expect(drawer.hasAttribute("inert")).toBe(false);
+    expect(drawer.querySelector(".np-sw-drawer__body")?.hasAttribute("aria-live")).toBe(false);
+  });
+
   it("覆盖模式循环焦点，Escape 关闭并恢复触发器焦点", async () => {
     render(<DrawerHarness />);
     const trigger = screen.getByRole("button", { name: "运行预测" });
@@ -74,6 +92,7 @@ describe("WorkbenchDrawerShell", () => {
     const dialog = screen.getByRole("dialog", { name: "性质预测结果" });
     expect(dialog.hasAttribute("inert")).toBe(false);
     expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(trigger.hasAttribute("inert")).toBe(false);
     expect(document.querySelector(".np-sw-drawer-layer")?.classList.contains("is-overlay")).toBe(true);
     const close = screen.getByRole("button", { name: "关闭性质预测结果" });
     const last = screen.getByRole("button", { name: "最后一个结果操作" });

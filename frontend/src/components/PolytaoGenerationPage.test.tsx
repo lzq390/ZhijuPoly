@@ -416,6 +416,20 @@ describe("PolytaoGenerationPage", () => {
     const preview3D = screen.getByTestId("structure-preview-3d");
     expect(preview3D.textContent).toBe("CCO");
     expect(preview3D.getAttribute("data-background-color")).toBe("#f7fbff");
+    const flip = document.querySelector(".polytao-structure-flip-inner")!;
+    const finishFlip = () => {
+      const event = new Event("transitionend", { bubbles: true });
+      Object.defineProperty(event, "propertyName", { value: "transform" });
+      fireEvent(flip, event);
+    };
+    expect(screen.getByRole("button", { name: "返回 2D" })).toHaveProperty("disabled", true);
+    finishFlip();
+    fireEvent.click(screen.getByRole("button", { name: "返回 2D" }));
+    expect(preview3D.isConnected).toBe(true);
+    finishFlip();
+    fireEvent.click(screen.getByRole("button", { name: "查看 3D" }));
+    expect(screen.getByTestId("structure-preview-3d")).toBe(preview3D);
+    expect(api.fetchStructure2D).toHaveBeenCalledTimes(1);
   });
 
   it("invalidates the cached 2D preview when the shared structure changes", async () => {

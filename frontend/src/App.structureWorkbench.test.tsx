@@ -307,6 +307,10 @@ describe("App 结构工作台挂载与导航", () => {
 
     deferred.resolve?.();
     await screen.findByTestId("knowledge");
+    expect(screen.queryByTitle("Tg 逆向设计结构编辑器")).toBeNull();
+    // A deep link has never opened StructureWorkbench: history navigation
+    // must not mount a new hidden canvas or retain reverse design implicitly.
+    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(0);
   });
 
   it("等待中的侧栏目标会被更新的 popstate 目标取消", async () => {

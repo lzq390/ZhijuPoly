@@ -1,5 +1,6 @@
 import { Database, FileText, Globe2 } from "lucide-react";
-import { useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
+import { useContentMotion } from "../hooks/useContentMotion";
 import "../styles/knowledge-retrieval.css";
 import { LocalKnowledgePanel } from "./knowledge-search/LocalKnowledgePanel";
 import { MaterialDiscoveryPageTitle } from "./MaterialDiscoveryPageTitle";
@@ -27,6 +28,8 @@ const MODES: Array<{
 
 export function KnowledgeSearch({ initialQuery = "", initialTerms = [] }: KnowledgeSearchProps) {
   const [mode, setMode] = useState<KnowledgeMode>("local");
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  useContentMotion(stageRef, mode, "tab", ".ks-mode-panel.is-active .ks-results-surface");
   const [visitedModes, setVisitedModes] = useState<Set<KnowledgeMode>>(() => new Set(["local"]));
 
   function activateMode(nextMode: KnowledgeMode) {
@@ -96,7 +99,7 @@ export function KnowledgeSearch({ initialQuery = "", initialTerms = [] }: Knowle
         </div>
       </header>
 
-      <div className="ks-mode-stage">
+      <div ref={stageRef} className="ks-mode-stage">
         <section
           id="knowledge-panel-local"
           className={`ks-mode-panel${mode === "local" ? " is-active" : ""}`}

@@ -1,5 +1,6 @@
 import { LoaderCircle, Search, SlidersHorizontal, Sparkles, X } from "lucide-react";
 import type { RefObject } from "react";
+import { useMotionPresence } from "../../hooks/useMotionPresence";
 import type { TgAssistantSession } from "../../hooks/useTgAssistant";
 import type { ReverseDesignTgRequest } from "../../types";
 import { TgAssistantPanel } from "../TgAssistantPanel";
@@ -49,8 +50,10 @@ export function ReverseDesignUtilityPanels({
   onRequestChange,
   onSearch
 }: ReverseDesignUtilityPanelsProps) {
+  const parameterPresence = useMotionPresence(openPanel === "parameters", { elementRef: parameterPanelRef });
+  const assistantPresence = useMotionPresence(openPanel === "assistant", { elementRef: assistantPanelRef });
   return (
-    <div className={`np-sw-utility-layer${openPanel ? " is-open" : ""}`} aria-hidden={!openPanel}>
+    <div className={`np-sw-utility-layer${parameterPresence.present || assistantPresence.present ? " is-open" : ""}`} aria-hidden={!openPanel}>
       <button
         type="button"
         className="np-sw-utility-backdrop"
@@ -61,6 +64,7 @@ export function ReverseDesignUtilityPanels({
 
       <section
         ref={parameterPanelRef}
+        {...parameterPresence.motionProps}
         id="tg-parameter-panel"
         className={`np-sw-popover np-sw-popover--modules np-tg-parameters${openPanel === "parameters" ? " is-open" : ""}`}
         role="dialog"
@@ -155,7 +159,7 @@ export function ReverseDesignUtilityPanels({
 
           <footer className="np-tg-parameters__footer">
             <span>搜索会使用当前已同步的画板结构</span>
-            <button type="submit" className="np-sw-primary-button" disabled={!canSearch}>
+            <button type="submit" className="np-sw-primary-button" disabled={!canSearch} aria-busy={searching}>
               {searching ? <LoaderCircle className="np-sw-spin" aria-hidden="true" /> : <Search aria-hidden="true" />}
               {searching ? "搜索中" : "运行搜索"}
             </button>
@@ -165,6 +169,7 @@ export function ReverseDesignUtilityPanels({
 
       <section
         ref={assistantPanelRef}
+        {...assistantPresence.motionProps}
         id="tg-assistant-panel"
         className={`np-sw-popover np-sw-popover--assistant np-tg-assistant-panel${openPanel === "assistant" ? " is-open" : ""}`}
         role="dialog"

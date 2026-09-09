@@ -1,3 +1,4 @@
+import { useMotionPresence } from "../../hooks/useMotionPresence";
 import { Check, Database, FlaskConical, LoaderCircle, Search, X } from "lucide-react";
 import type { FormEvent, RefObject } from "react";
 import type { SmilesLookupTable } from "../../types";
@@ -22,8 +23,9 @@ export function DatabaseQueryParameters({
   onTableChange,
   onSubmit
 }: DatabaseQueryParametersProps) {
+  const presence = useMotionPresence(open, { elementRef: panelRef });
   return (
-    <div className={`np-sw-utility-layer${open ? " is-open" : ""}`} aria-hidden={!open}>
+    <div className={`np-sw-utility-layer${presence.present ? " is-open" : ""}`} aria-hidden={!open}>
       <button
         type="button"
         className="np-sw-utility-backdrop"
@@ -33,6 +35,7 @@ export function DatabaseQueryParameters({
       />
       <section
         ref={panelRef}
+        {...presence.motionProps}
         id="database-query-parameters"
         className={`np-sw-popover np-sw-popover--modules np-dq-parameters${open ? " is-open" : ""}`}
         role="dialog"
@@ -84,7 +87,7 @@ export function DatabaseQueryParameters({
 
           <footer className="np-dq-parameters__footer">
             <span><FlaskConical aria-hidden="true" /> Canonical SMILES 精确匹配</span>
-            <button type="submit" className="np-sw-primary-button" disabled={submitting}>
+            <button type="submit" className="np-sw-primary-button" disabled={submitting} aria-busy={submitting}>
               {submitting ? <LoaderCircle className="np-sw-spin" /> : <Search aria-hidden="true" />}
               {submitting ? "正在准备" : "运行查询"}
             </button>

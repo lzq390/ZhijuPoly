@@ -41,6 +41,7 @@ import {
 import { useKetcher } from "./hooks/useKetcher";
 import { useQuery } from "./hooks/useQuery";
 import { useTgAssistant } from "./hooks/useTgAssistant";
+import { useModuleTransition, type ModuleNavigationRequest } from "./hooks/useModuleTransition";
 import { standardizeSmiles } from "./services/api";
 import { getMonomerDftJobIdFromSearch, getMonomerDftPath } from "./lib/monomerDftRouting";
 import { getMonomerMdJobIdFromSearch, getMonomerMdPath } from "./lib/monomerMdRouting";
@@ -86,6 +87,18 @@ type AppRoute = {
   datasetKey: DatasetKey | null;
   labDataView?: LabDataView;
 };
+
+type AppNavigationRequest = ModuleNavigationRequest & {
+  route: AppRoute;
+  history: "push" | "none";
+  knowledge?: { query: string; terms: string[] };
+  jobId?: string | null;
+  onCommit?: () => void;
+};
+
+const canvasModules = new Set<ActiveModule>([
+  "structureWorkbench", "homopolymerPrediction", "explorer", "databaseQuery", "conditionalGeneration", "reverseDesign"
+]);
 
 type KnowledgeNavigationInput = string | KnowledgeNavigationRequest;
 type AgentWorkspaceView = "general" | "projects" | "project";
@@ -350,8 +363,8 @@ export default function App() {
   activeModuleRef.current = activeModule;
   const structureCanvasOwnerRef = useRef<StructureCanvasOwnerHandle | null>(null);
   const structureNavigationSyncRef = useRef<Promise<void> | null>(null);
-  const structureNavigationIntentRef = useRef(0);
-  const popstateRevisionRef = useRef(0);
+  const moduleContentRef = useRef<HTMLDivElement | null>(null);
+  const moduleMainRef = useRef<HTMLElement | null>(null);
   const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher();
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const tgAssistant = useTgAssistant();
@@ -459,13 +472,39 @@ export default function App() {
     return tracked;
   }, []);
 
-  const beforeStructureCanvasNavigation = useCallback(() => {
-    const intent = structureNavigationIntentRef.current + 1;
-    structureNavigationIntentRef.current = intent;
-    return syncStructureBeforeNavigation().then(
-      () => structureNavigationIntentRef.current === intent
-    );
-  }, [syncStructureBeforeNavigation]);
+  const moduleTransition = useModuleTransition<AppNavigationRequest>({
+    activeModule, contentRef: moduleContentRef, mainRef: moduleMainRef,
+    guard: () => canvasModules.has(activeModuleRef.current) ? syncStructureBeforeNavigation : undefined,
+    commit: (navigation, replaceUnseen) => {
+      const { route, href } = navigation;
+      const from = activeModuleRef.current;
+      let ownsEntry = false;
+      if (navigation.history === "push") {
+        if (`${normalizePath(window.location.pathname)}${window.location.search}` !== href) {
+          if (replaceUnseen) window.history.replaceState(route, "", href);
+          else window.history.pushState(route, "", href);
+          ownsEntry = true;
+        }
+      } else if ([LEGACY_POLYTAO_ROUTE, LEGACY_DATABASE_FILTER_ROUTE].includes(normalizePath(window.location.pathname))) {
+        window.history.replaceState(route, "", href);
+      }
+      if (navigation.knowledge) {
+        setKnowledgeInitialQuery(navigation.knowledge.query);
+        setKnowledgeInitialTerms(navigation.knowledge.terms);
+        // Preserve the original keep-alive policy: the explicit knowledge
+        // entry from reverse design retains it; popstate only updates query
+        // props and must not introduce an extra retained workspace.
+        if (navigation.source !== "history") setPreserveReverseDesignForKnowledge(from === "reverseDesign");
+      }
+      if (route.module === "monomerMdSimulation") setMonomerMdJobId(navigation.jobId ?? null);
+      if (route.module === "monomerDft") setMonomerDftJobId(navigation.jobId ?? null);
+      applyRoute(route);
+      activeModuleRef.current = route.module;
+      if (navigation.source !== "state") window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      navigation.onCommit?.();
+      return ownsEntry;
+    }
+  });
 
   useEffect(() => {
     if (typeof window === "undefined" || !("scrollRestoration" in window.history)) {
@@ -499,17 +538,12 @@ export default function App() {
     }
   }
 
-  function navigate(route: AppRoute) {
-    const path = pathFromRoute(route);
-
-    if (typeof window !== "undefined") {
-      if (normalizePath(window.location.pathname) !== path) {
-        window.history.pushState(route, "", path);
-      }
-      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-    }
-
-    applyRoute(route);
+  function navigate(route: AppRoute, extra: Partial<Omit<AppNavigationRequest, "route" | "target">> = {}) {
+    const item = [...standaloneModules, ...moduleGroups.flatMap((group) => group.items)].find((candidate) => candidate.id === route.module);
+    moduleTransition.request({
+      route, href: pathFromRoute(route), history: "push", source: "navigation", kind: "module",
+      ...extra, target: { id: route.module, label: item?.label ?? (route.module === "home" ? "通用会话" : "实验数据") }
+    });
   }
 
   useEffect(() => {
@@ -520,50 +554,21 @@ export default function App() {
 
   useEffect(() => {
     function handlePopState() {
-      structureNavigationIntentRef.current += 1;
       const route = routeFromPath(window.location.pathname);
       const pathname = window.location.pathname;
       const search = window.location.search;
-      const revision = popstateRevisionRef.current + 1;
-      popstateRevisionRef.current = revision;
-
-      const applyLatestRoute = () => {
-        if (popstateRevisionRef.current !== revision) return;
-        if (normalizePath(pathname) === LEGACY_POLYTAO_ROUTE) {
-          window.history.replaceState(route, "", POLYTAO_ROUTE);
-        } else if (normalizePath(pathname) === LEGACY_DATABASE_FILTER_ROUTE) {
-          window.history.replaceState(route, "", DATABASE_FILTER_ROUTE);
-        }
-        if (route.module === "knowledge") {
-          setKnowledgeInitialQuery(getKnowledgeQueryFromSearch(search));
-          setKnowledgeInitialTerms(getKnowledgeTermsFromSearch(search));
-        }
-        if (route.module === "monomerDft") {
-          setMonomerDftJobId(getMonomerDftJobIdFromSearch(search));
-        }
-        if (route.module === "monomerMdSimulation") {
-          setMonomerMdJobId(getMonomerMdJobIdFromSearch(search));
-        }
-        applyRoute(route);
-      };
-
-      if (
-        activeModuleRef.current === "structureWorkbench" ||
-        activeModuleRef.current === "homopolymerPrediction" ||
-        activeModuleRef.current === "explorer" ||
-        activeModuleRef.current === "databaseQuery" ||
-        activeModuleRef.current === "conditionalGeneration" ||
-        activeModuleRef.current === "reverseDesign"
-      ) {
-        void syncStructureBeforeNavigation().then(applyLatestRoute);
-      } else {
-        applyLatestRoute();
-      }
+      const canonical = normalizePath(pathname) === LEGACY_POLYTAO_ROUTE ? POLYTAO_ROUTE
+        : normalizePath(pathname) === LEGACY_DATABASE_FILTER_ROUTE ? DATABASE_FILTER_ROUTE : pathname;
+      navigate(route, {
+        href: `${canonical}${search}`, history: "none", source: "history",
+        knowledge: route.module === "knowledge" ? { query: getKnowledgeQueryFromSearch(search), terms: getKnowledgeTermsFromSearch(search) } : undefined,
+        jobId: route.module === "monomerDft" ? getMonomerDftJobIdFromSearch(search) : getMonomerMdJobIdFromSearch(search)
+      });
     }
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, [syncStructureBeforeNavigation]);
+  }, [moduleTransition.request]);
 
   useEffect(() => {
     if (activeModule !== "knowledge" || knowledgeInitialTerms.length === 0) return;
@@ -595,30 +600,14 @@ export default function App() {
     navigate({ module: "mdSimulationDemo", datasetKey: null });
   }
 
-  function openMonomerMdSimulation(jobId: string | null = null) {
+  function openMonomerMdSimulation(jobId: string | null = null, source: "navigation" | "state" = "navigation") {
     const route = { module: "monomerMdSimulation", datasetKey: null } satisfies AppRoute;
-    const path = getMonomerMdPath(jobId);
-    if (typeof window !== "undefined") {
-      if (`${normalizePath(window.location.pathname)}${window.location.search}` !== path) {
-        window.history.pushState(route, "", path);
-      }
-      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-    }
-    setMonomerMdJobId(jobId);
-    applyRoute(route);
+    navigate(route, { href: getMonomerMdPath(jobId), jobId, source });
   }
 
-  function openMonomerDft(jobId: string | null = null) {
+  function openMonomerDft(jobId: string | null = null, source: "navigation" | "state" = "navigation") {
     const route = { module: "monomerDft", datasetKey: null } satisfies AppRoute;
-    const path = getMonomerDftPath(jobId);
-    if (typeof window !== "undefined") {
-      if (`${normalizePath(window.location.pathname)}${window.location.search}` !== path) {
-        window.history.pushState(route, "", path);
-      }
-      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-    }
-    setMonomerDftJobId(jobId);
-    applyRoute(route);
+    navigate(route, { href: getMonomerDftPath(jobId), jobId, source });
   }
 
   function openMonomerPolymerization() {
@@ -679,18 +668,7 @@ export default function App() {
     const queryString = searchParams.toString();
     const path = queryString ? `/knowledge?${queryString}` : "/knowledge";
 
-    setPreserveReverseDesignForKnowledge(activeModule === "reverseDesign");
-    setKnowledgeInitialQuery(trimmedQuery);
-    setKnowledgeInitialTerms(terms);
-
-    if (typeof window !== "undefined") {
-      if (`${normalizePath(window.location.pathname)}${window.location.search}` !== path) {
-        window.history.pushState(route, "", path);
-      }
-      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-    }
-
-    applyRoute(route);
+    navigate(route, { href: path, knowledge: { query: trimmedQuery, terms } });
   }
 
   function openLabData(view: LabDataView = "collect") {
@@ -754,20 +732,21 @@ export default function App() {
   }
 
   function openAgentProject(directory: string) {
-    navigate({ module: "home", datasetKey: null });
-    setAgentWorkspaceView("project");
-    projectBridge.openProject(directory);
+    navigate({ module: "home", datasetKey: null }, { kind: "command", onCommit: () => {
+      setAgentWorkspaceView("project");
+      projectBridge.openProject(directory);
+    } });
   }
 
   function browseAgentProjects() {
-    navigate({ module: "home", datasetKey: null });
-    setAgentWorkspaceView("projects");
-    projectBridge.browseProjects();
+    navigate({ module: "home", datasetKey: null }, { kind: "command", onCommit: () => {
+      setAgentWorkspaceView("projects");
+      projectBridge.browseProjects();
+    } });
   }
 
   function createAgentProject() {
-    navigate({ module: "home", datasetKey: null });
-    projectBridge.newProject();
+    navigate({ module: "home", datasetKey: null }, { kind: "command", onCommit: () => projectBridge.newProject() });
   }
 
   function setAgentProjectFavorite(directory: string, favorite: boolean) {
@@ -795,23 +774,26 @@ export default function App() {
   }
 
   function openGeneralWorkspace() {
-    navigate({ module: "home", datasetKey: null });
-    setAgentWorkspaceView("general");
-    setGeneralSessionSnapshot(null);
-    setAgentWorkspaceFrameUrl(agentWorkspaceRouteUrl("/"));
-    setAgentWorkspaceReloadKey((current) => current + 1);
+    navigate({ module: "home", datasetKey: null }, { kind: "command", onCommit: () => {
+      setAgentWorkspaceView("general");
+      setGeneralSessionSnapshot(null);
+      setAgentWorkspaceFrameUrl(agentWorkspaceRouteUrl("/"));
+      setAgentWorkspaceReloadKey((current) => current + 1);
+    } });
   }
 
   function createGeneralSession() {
-    navigate({ module: "home", datasetKey: null });
-    setAgentWorkspaceView("general");
-    generalSessionBridge.newSession();
+    navigate({ module: "home", datasetKey: null }, { kind: "command", onCommit: () => {
+      setAgentWorkspaceView("general");
+      generalSessionBridge.newSession();
+    } });
   }
 
   function openGeneralSession(sessionID: string) {
-    navigate({ module: "home", datasetKey: null });
-    setAgentWorkspaceView("general");
-    generalSessionBridge.openSession(sessionID);
+    navigate({ module: "home", datasetKey: null }, { kind: "command", onCommit: () => {
+      setAgentWorkspaceView("general");
+      generalSessionBridge.openSession(sessionID);
+    } });
   }
 
   const standaloneModules: AppShellModuleItem[] = [
@@ -1038,16 +1020,7 @@ export default function App() {
       onOpenGeneralSession={openGeneralSession}
       onRenameGeneralSession={(sessionID, title) => generalSessionBridge.renameSession(sessionID, title)}
       onDeleteGeneralSession={(sessionID) => generalSessionBridge.deleteSession(sessionID)}
-      beforeNavigate={
-        activeModule === "structureWorkbench" ||
-        activeModule === "homopolymerPrediction" ||
-        activeModule === "explorer" ||
-        activeModule === "databaseQuery" ||
-        activeModule === "conditionalGeneration" ||
-        activeModule === "reverseDesign"
-          ? beforeStructureCanvasNavigation
-          : undefined
-      }
+      moduleTransition={moduleTransition}
     >
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
         <AgentWorkspaceHomePage
@@ -1138,7 +1111,7 @@ export default function App() {
         <MonomerMdSimulationPage
           structure={structureWorkspace}
           initialJobId={monomerMdJobId}
-          onJobIdChange={openMonomerMdSimulation}
+          onJobIdChange={(jobId) => openMonomerMdSimulation(jobId, "state")}
           onEditStructure={openStructureWorkbench}
         />
       ) : null}
@@ -1147,7 +1120,7 @@ export default function App() {
         <MonomerDftPage
           structure={structureWorkspace}
           initialJobId={monomerDftJobId}
-          onJobIdChange={openMonomerDft}
+          onJobIdChange={(jobId) => openMonomerDft(jobId, "state")}
           onEditStructure={openStructureWorkbench}
         />
       ) : null}

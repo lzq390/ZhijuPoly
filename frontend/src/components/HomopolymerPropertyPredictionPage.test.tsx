@@ -254,7 +254,7 @@ describe("HomopolymerPropertyPredictionPage", () => {
     const panel = openParameters();
     fireEvent.click(within(panel).getByRole("checkbox", { name: /玻璃化转变温度/ }));
     fireEvent.click(within(panel).getByRole("button", { name: "收起预测参数" }));
-    fireEvent.click(screen.getByRole("button", { name: "展开预测结果" }));
+    fireEvent.click(await screen.findByRole("button", { name: "展开预测结果" }));
 
     expect(screen.getByText(/当前结构或性质选择已变化/)).toBeTruthy();
     expect(screen.getByText("123.46")).toBeTruthy();

@@ -99,7 +99,7 @@
   height: 100%;
   min-height: 0;
   margin: 0 auto;
-  transition: grid-template-columns 180ms ease;
+  transition: none;
 }
 
 .np-structure-workbench .np-sw-workspace {
@@ -157,7 +157,7 @@
   background: #fff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
   cursor: pointer;
-  transition: border-color 150ms ease, color 150ms ease, background-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+  transition: border-color var(--np-motion-control) var(--np-ease-enter), color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), box-shadow var(--np-motion-control) var(--np-ease-enter), transform var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-structure-workbench .np-sw-tool {
@@ -197,7 +197,7 @@
 
 .np-structure-workbench .np-sw-tool > svg {
   color: #52708e;
-  transition: color 150ms ease;
+  transition: color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-structure-workbench .np-sw-tool:hover:not(:disabled) {
@@ -216,7 +216,7 @@
 .np-structure-workbench .np-sw-secondary-button:active:not(:disabled),
 .np-structure-workbench .np-sw-primary-button:active:not(:disabled),
 .np-structure-workbench .np-sw-icon-button:active:not(:disabled) {
-  transform: translateY(1px);
+  filter: brightness(0.97);
 }
 
 .np-structure-workbench .np-sw-tool.is-active {
@@ -312,7 +312,7 @@
   transform: rotateY(0deg);
   transform-origin: 50% 50%;
   transform-style: preserve-3d;
-  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform var(--np-motion-flip) var(--np-ease-enter);
   will-change: transform;
 }
 
@@ -464,7 +464,7 @@
   background: #fff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
   cursor: pointer;
-  transition: border-color 150ms ease, color 150ms ease, background-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+  transition: border-color var(--np-motion-control) var(--np-ease-enter), color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), box-shadow var(--np-motion-control) var(--np-ease-enter), transform var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-structure-workbench .np-sw-smiles > button:hover:not(:disabled) {
@@ -539,6 +539,7 @@
 }
 
 .np-structure-workbench .np-sw-primary-button {
+  min-inline-size: 8.5em;
   border-color: var(--np-sw-blue);
   color: #fff;
   background: linear-gradient(135deg, var(--np-sw-blue), var(--np-sw-cyan));
@@ -597,16 +598,18 @@
   background: rgba(255, 255, 255, 0.98);
   box-shadow: 0 18px 48px rgba(15, 36, 63, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.9);
   opacity: 0;
-  transform: translateY(-6px) scale(0.99);
+  transform: translateY(-4px);
   transform-origin: top right;
   pointer-events: none;
-  transition: opacity 160ms ease, transform 160ms ease;
+  transition: opacity var(--np-motion-exit) var(--np-ease-exit), transform var(--np-motion-exit) var(--np-ease-exit);
 }
 
-.np-structure-workbench .np-sw-popover.is-open {
+.np-structure-workbench .np-sw-popover[data-motion-active="true"] {
   opacity: 1;
-  transform: translateY(0) scale(1);
+  transform: translateY(0);
   pointer-events: auto;
+  transition-duration: var(--np-motion-enter);
+  transition-timing-function: var(--np-ease-enter);
 }
 
 .np-structure-workbench .np-sw-popover--modules {
@@ -660,6 +663,7 @@
 
 .np-structure-workbench .np-sw-popover__header small,
 .np-structure-workbench .np-sw-drawer__header p {
+  min-height: 1.5em;
   display: block;
   margin: 2px 0 0;
   color: #71869d;
@@ -873,13 +877,12 @@
   font-weight: 750;
   line-height: 1.4;
   letter-spacing: -0.012em;
-  transition: color 160ms ease, letter-spacing 160ms ease;
+  transition: color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-structure-workbench .np-sw-module-tile:hover:not(:disabled) strong,
 .np-structure-workbench .np-sw-module-tile:focus-visible strong {
   color: var(--np-sw-blue-strong);
-  letter-spacing: 0;
 }
 
 .np-structure-workbench .np-sw-local-dot {
@@ -1220,14 +1223,11 @@
   z-index: 41;
   inset: 0;
   visibility: hidden;
-  opacity: 0;
   pointer-events: none;
-  transition: opacity 170ms ease, visibility 170ms ease;
 }
 
 .np-structure-workbench .np-sw-drawer-layer.is-open {
   visibility: visible;
-  opacity: 1;
   pointer-events: auto;
 }
 
@@ -1239,7 +1239,11 @@
   background: rgba(11, 31, 58, 0.18);
   backdrop-filter: blur(1.5px);
   cursor: default;
+  opacity: 0;
+  transition: opacity var(--np-motion-backdrop) var(--np-ease-exit);
 }
+
+.np-structure-workbench .np-sw-drawer-layer[data-motion-active="true"] .np-sw-drawer-backdrop { opacity: 1; }
 
 .np-structure-workbench .np-sw-drawer {
   position: absolute;
@@ -1256,13 +1260,20 @@
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.98);
   box-shadow: -18px 0 48px rgba(15, 36, 63, 0.15);
-  transform: translateX(20px);
-  transition: transform 180ms ease;
+  opacity: 0;
+  transform: translateX(12px);
+  transition: transform var(--np-motion-drawer-exit) var(--np-ease-exit), opacity var(--np-motion-drawer-exit) var(--np-ease-exit);
 }
 
-.np-structure-workbench .np-sw-drawer-layer.is-open .np-sw-drawer {
+.np-structure-workbench .np-sw-drawer[data-motion-active="true"] {
   transform: translateX(0);
+  opacity: 1;
+  transition-duration: var(--np-motion-drawer-enter);
+  transition-timing-function: var(--np-ease-enter);
 }
+
+.np-structure-workbench .np-sw-drawer-layer.is-resizing .np-sw-drawer { transition: none; user-select: none; }
+.np-structure-workbench .np-sw-drawer[data-motion-phase="exiting"] { pointer-events: none; }
 
 .np-structure-workbench .np-sw-drawer__resizer {
   position: absolute;
@@ -1560,12 +1571,12 @@
 }
 
 @container np-sw-workbench (min-width: 1280px) {
-  .np-structure-workbench .np-sw-page.has-open-drawer:has(.np-sw-drawer-layer.is-open:not(.is-overlay)) {
+  .np-structure-workbench .np-sw-page:has(.np-sw-drawer-layer.is-open:not(.is-overlay)) {
     padding-right: 24px;
     padding-left: 24px;
   }
 
-  .np-structure-workbench .np-sw-layout.has-open-drawer:has(.np-sw-drawer-layer.is-open:not(.is-overlay)) {
+  .np-structure-workbench .np-sw-layout:has(.np-sw-drawer-layer.is-open:not(.is-overlay)) {
     width: min(100%, calc(var(--np-sw-layout-max-width) + var(--np-sw-drawer-effective-width) + var(--np-sw-drawer-gap)));
     grid-template-columns: minmax(0, var(--np-sw-layout-max-width)) var(--np-sw-drawer-effective-width);
     grid-template-rows: minmax(0, 1fr);
@@ -1688,14 +1699,16 @@
     max-height: min(78vh, 680px);
     max-height: min(78dvh, 680px);
     border-radius: 14px;
-    transform: translateY(18px);
+    transform: translateY(12px);
     transform-origin: bottom center;
   }
 
-  .np-structure-workbench .np-sw-popover.is-open,
-  .np-structure-workbench .np-sw-drawer-layer.is-open .np-sw-drawer {
+  .np-structure-workbench .np-sw-popover[data-motion-active="true"],
+  .np-structure-workbench .np-sw-drawer[data-motion-active="true"] {
     transform: translateY(0);
   }
+
+  .np-structure-workbench .np-sw-popover:not([data-motion-active="true"]) { transform: translateY(4px); }
 
   .np-structure-workbench .np-sw-drawer__resizer {
     display: none;
@@ -1818,7 +1831,7 @@
     outline-offset: 3px;
   }
 
-  .np-structure-workbench .np-sw-page.has-open-drawer {
+  .np-structure-workbench .np-sw-page:has(.np-sw-drawer-layer.is-open) {
     padding-right: 36px;
     padding-left: 36px;
   }

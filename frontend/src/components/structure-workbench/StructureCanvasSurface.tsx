@@ -81,6 +81,7 @@ function ToolButton({
       aria-expanded={controls ? active : undefined}
       aria-controls={controls}
       disabled={disabled}
+      aria-busy={busy || undefined}
       onClick={onClick}
     >
       {busy ? <LoaderCircle className="np-sw-spin" aria-hidden="true" /> : icon}
@@ -199,7 +200,7 @@ export function StructureCanvasSurface({
       </header>
 
       <div className="np-sw-canvas-stage">
-        <div className={`np-sw-editor${canvas.isFlipped ? " is-flipped" : ""}`}>
+        <div ref={canvas.flipMotion?.ref} className={`np-sw-editor${canvas.isFlipped ? " is-flipped" : ""}`}>
           <div
             className={`np-sw-editor__layer np-sw-editor__layer--2d${canvas.isFlipped ? " is-hidden" : " is-visible"}`}
             aria-hidden={canvas.isFlipped}

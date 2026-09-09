@@ -10,6 +10,7 @@ import {
   X
 } from "lucide-react";
 import type { RefObject } from "react";
+import { useMotionPresence } from "../../hooks/useMotionPresence";
 import type { ConditionalGenerationTgRequest } from "../../types";
 
 export type ConditionalGenerationOpenPanel = "parameters" | "assistant" | null;
@@ -73,8 +74,10 @@ export function ConditionalGenerationUtilityPanels({
   onAssistantNew,
   onAssistantSend
 }: ConditionalGenerationUtilityPanelsProps) {
+  const parameterPresence = useMotionPresence(openPanel === "parameters", { elementRef: parameterPanelRef });
+  const assistantPresence = useMotionPresence(openPanel === "assistant", { elementRef: assistantPanelRef });
   return (
-    <div className={`np-sw-utility-layer${openPanel ? " is-open" : ""}`} aria-hidden={!openPanel}>
+    <div className={`np-sw-utility-layer${parameterPresence.present || assistantPresence.present ? " is-open" : ""}`} aria-hidden={!openPanel}>
       <button
         type="button"
         className="np-sw-utility-backdrop"
@@ -85,6 +88,7 @@ export function ConditionalGenerationUtilityPanels({
 
       <section
         ref={parameterPanelRef}
+        {...parameterPresence.motionProps}
         id="cg-parameter-panel"
         className={`np-sw-popover np-sw-popover--modules np-cg-parameters${openPanel === "parameters" ? " is-open" : ""}`}
         role="dialog"
@@ -213,7 +217,7 @@ export function ConditionalGenerationUtilityPanels({
                 重新检查服务
               </button>
             ) : <span />}
-            <button type="submit" className="np-sw-primary-button" disabled={!canSubmit}>
+            <button type="submit" className="np-sw-primary-button" disabled={!canSubmit} aria-busy={submitting}>
               {submitting ? <LoaderCircle className="np-sw-spin" /> : <Search aria-hidden="true" />}
               {submitting ? "生成中" : "运行生成"}
             </button>
@@ -223,6 +227,7 @@ export function ConditionalGenerationUtilityPanels({
 
       <section
         ref={assistantPanelRef}
+        {...assistantPresence.motionProps}
         id="cg-assistant-panel"
         className={`np-sw-popover np-sw-popover--assistant${openPanel === "assistant" ? " is-open" : ""}`}
         role="dialog"

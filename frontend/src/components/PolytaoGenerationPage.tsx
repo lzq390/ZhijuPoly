@@ -1,3 +1,5 @@
+import { useFlipMotion } from "../hooks/useFlipMotion";
+import { useMotionPresence } from "../hooks/useMotionPresence";
 import {
   Atom,
   Box,
@@ -253,6 +255,8 @@ export function PolytaoGenerationPage({
   const [parameterOpen, setParameterOpen] = useState(false);
   const [referenceOpen, setReferenceOpen] = useState(false);
   const [structureFlipped, setStructureFlipped] = useState(false);
+  const [hasActivated3D, setHasActivated3D] = useState(false);
+  const structureFlipMotion = useFlipMotion();
   const [referenceSmilesExpanded, setReferenceSmilesExpanded] = useState(false);
   const [referenceSvg, setReferenceSvg] = useState<string | null>(null);
   const [referenceSvgError, setReferenceSvgError] = useState<string | null>(null);
@@ -396,6 +400,8 @@ export function PolytaoGenerationPage({
 
   useEffect(() => {
     setStructureFlipped(false);
+    setHasActivated3D(false);
+    structureFlipMotion.finish();
     setReferenceSmilesExpanded(false);
     setReferenceSvg(null);
     setReferenceSvgError(null);
@@ -741,8 +747,13 @@ export function PolytaoGenerationPage({
                     type="button"
                     aria-pressed={structureFlipped}
                     aria-controls="polytao-structure-flip"
-                    disabled={!hasStructure}
-                    onClick={() => setStructureFlipped((flipped) => !flipped)}
+                    disabled={!hasStructure || structureFlipMotion.busy}
+                    aria-busy={structureFlipMotion.busy || undefined}
+                    onClick={() => {
+                      if (!structureFlipMotion.start()) return;
+                      setHasActivated3D(true);
+                      setStructureFlipped((flipped) => !flipped);
+                    }}
                   >
                     {structureFlipped ? <RotateCcw /> : <Box />}
                     {structureFlipped ? "返回 2D" : "查看 3D"}
@@ -754,8 +765,8 @@ export function PolytaoGenerationPage({
                     id="polytao-structure-flip"
                     className={`polytao-structure-flip${structureFlipped ? " is-flipped" : ""}`}
                   >
-                    <div className="polytao-structure-flip-inner">
-                      <div className="polytao-structure-face polytao-structure-face-front">
+                    <div ref={structureFlipMotion.ref} className="polytao-structure-flip-inner">
+                      <div className="polytao-structure-face polytao-structure-face-front" aria-hidden={structureFlipped} inert={structureFlipped}>
                         <span className="polytao-structure-face-label">2D 结构</span>
                         <div className="polytao-structure-canvas" aria-label="共享聚合物重复单元二维结构">
                           <ReferenceStructure2D
@@ -766,10 +777,10 @@ export function PolytaoGenerationPage({
                           />
                         </div>
                       </div>
-                      <div className="polytao-structure-face polytao-structure-face-back">
+                      <div className="polytao-structure-face polytao-structure-face-back" aria-hidden={!structureFlipped} inert={!structureFlipped}>
                         <span className="polytao-structure-face-label">3D 构象</span>
                         <div className="polytao-structure-3d-canvas" aria-label="共享结构三维构象">
-                          {structureFlipped && hasStructure ? (
+                          {hasActivated3D && hasStructure ? (
                             <StructurePreview3D
                               smiles={structure.smiles}
                               variant="bare"
@@ -1039,6 +1050,7 @@ function ParameterPanel({
   onSubmit: () => void;
 }) {
   let readinessTitle = "生成目标已就绪";
+  const presence = useMotionPresence<HTMLElement>(open);
   let readinessDetail = "15 项目标特征完整 · PolyTAO 可用";
   if (isLoading) {
     readinessTitle = "生成任务执行中";
@@ -1056,11 +1068,15 @@ function ParameterPanel({
 
   return (
     <section
+      ref={presence.ref}
+      {...presence.motionProps}
+      data-motion-present={presence.present}
       id="polytao-parameter-panel"
       className={`polytao-parameter-panel${open ? " is-open" : ""}`}
       role="dialog"
       aria-modal="false"
       aria-hidden={!open}
+      inert={!open}
       aria-labelledby="polytao-parameter-title"
     >
       <header className="polytao-parameter-panel-head">
@@ -1127,7 +1143,7 @@ function ParameterPanel({
           <strong>{readinessTitle}</strong>
           <span>{readinessDetail}</span>
         </div>
-        <button className="polytao-primary-button" type="button" disabled={!canSubmit} onClick={onSubmit}>
+        <button className="polytao-primary-button" type="button" disabled={!canSubmit} aria-busy={isLoading} onClick={onSubmit}>
           {isLoading ? <LoaderCircle className="polytao-spinner" /> : <Play />}
           {isLoading ? "正在生成" : "开始生成"}
         </button>

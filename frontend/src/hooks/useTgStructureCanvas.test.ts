@@ -35,6 +35,58 @@ afterEach(() => {
 });
 
 describe("Tg structure canvas wildcard protection", () => {
+  function textStructure(smiles: string) {
+    return { smiles, setSmiles: vi.fn(), iframeRef: { current: null }, setIsReady: vi.fn(),
+      getCurrentSmiles: vi.fn().mockResolvedValue(smiles) } as StructureWorkspaceContext;
+  }
+
+  it("空结构校验失败不启动翻转锁或等待视觉定时器", async () => {
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure: textStructure(""), onStructureChanged: vi.fn() }));
+    await act(async () => expect(await result.current.toggle3D()).toBe(false));
+    expect(result.current.isFlipping).toBe(false);
+    expect(result.current.isFlipped).toBe(false);
+    expect(result.current.flipMotion.locked.current).toBe(false);
+    unmount();
+  });
+
+  it("准备结构期间拒绝重复翻转，校验完成后才启动视觉锁", async () => {
+    let complete!: (value: { input_smiles: string; standardized_smiles: string }) => void;
+    apiMocks.standardizeSmiles.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+    const structure = textStructure("CC");
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+    act(() => result.current.updateSmilesDraft("CO"));
+    let first!: Promise<boolean>;
+    act(() => { first = result.current.toggle3D(); });
+    await act(async () => expect(await result.current.toggle3D()).toBe(false));
+    expect(result.current.isFlipping).toBe(true);
+    expect(result.current.flipMotion.busy).toBe(false);
+    await act(async () => {
+      complete({ input_smiles: "CO", standardized_smiles: "CO" });
+      expect(await first).toBe(true);
+    });
+    expect(apiMocks.standardizeSmiles).toHaveBeenCalledOnce();
+    expect(result.current.isFlipped).toBe(true);
+    expect(result.current.flipMotion.busy).toBe(true);
+    unmount();
+  });
+
+  it("准备过程中卸载不会在离页后启动翻转", async () => {
+    let complete!: (value: { input_smiles: string; standardized_smiles: string }) => void;
+    apiMocks.standardizeSmiles.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+    const structure = textStructure("CC");
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+    act(() => result.current.updateSmilesDraft("CO"));
+    let pending!: Promise<boolean>;
+    act(() => { pending = result.current.toggle3D(); });
+    await act(async () => {});
+    unmount();
+    await act(async () => {
+      complete({ input_smiles: "CO", standardized_smiles: "CO" });
+      expect(await pending).toBe(false);
+    });
+    expect(result.current.flipMotion.locked.current).toBe(false);
+  });
+
   it("adopts a valid PNG Blob-like value from a different iframe realm", async () => {
     const bytes = Uint8Array.from([
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00

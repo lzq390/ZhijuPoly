@@ -1,3 +1,4 @@
+import { useMotionPresence } from "../../hooks/useMotionPresence";
 import { BarChart3, Check, LoaderCircle, Sparkles, X } from "lucide-react";
 import type { FormEvent, RefObject } from "react";
 import {
@@ -26,6 +27,7 @@ export function HomopolymerPredictionParameters({
   onSelectedPropertiesChange,
   onSubmit
 }: HomopolymerPredictionParametersProps) {
+  const presence = useMotionPresence(open, { elementRef: panelRef });
   const selected = new Set(selectedProperties);
 
   function toggleProperty(property: PredictableProperty) {
@@ -47,7 +49,7 @@ export function HomopolymerPredictionParameters({
   }
 
   return (
-    <div className={`np-sw-utility-layer${open ? " is-open" : ""}`} aria-hidden={!open}>
+    <div className={`np-sw-utility-layer${presence.present ? " is-open" : ""}`} aria-hidden={!open}>
       <button
         type="button"
         className="np-sw-utility-backdrop"
@@ -57,6 +59,7 @@ export function HomopolymerPredictionParameters({
       />
       <section
         ref={panelRef}
+        {...presence.motionProps}
         id="homopolymer-prediction-parameters"
         className={`np-sw-popover np-sw-popover--modules np-hp-parameters${open ? " is-open" : ""}`}
         role="dialog"
@@ -146,6 +149,7 @@ export function HomopolymerPredictionParameters({
             </div>
             <button
               type="submit"
+              aria-busy={submitting}
               className="np-sw-primary-button"
               disabled={selectedProperties.length === 0}
             >

@@ -1,4 +1,5 @@
 import { Check, ChevronDown } from "lucide-react";
+import { useMotionPresence } from "../../hooks/useMotionPresence";
 import {
   useEffect,
   useRef,
@@ -34,6 +35,8 @@ export function WorkbenchSelect<T extends string>({
   ariaLabelledBy
 }: WorkbenchSelectProps<T>) {
   const [open, setOpen] = useState(false);
+  const presence = useMotionPresence<HTMLDivElement>(open);
+  const restoreAfterExit = useRef(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [opensUp, setOpensUp] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -85,9 +88,16 @@ export function WorkbenchSelect<T extends string>({
   }
 
   function closeMenu(restoreFocus = true) {
+    restoreAfterExit.current = restoreFocus;
     setOpen(false);
-    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus());
   }
+
+  useEffect(() => {
+    if (!presence.present && restoreAfterExit.current) {
+      restoreAfterExit.current = false;
+      triggerRef.current?.focus({ preventScroll: true });
+    }
+  }, [presence.present]);
 
   function choose(index: number) {
     const option = options[index];
@@ -177,8 +187,9 @@ export function WorkbenchSelect<T extends string>({
         <ChevronDown aria-hidden="true" />
       </button>
 
-      {open ? (
-        <div id={listboxId} className="np-sw-select__menu" role="listbox" aria-label={ariaLabel} aria-labelledby={ariaLabelledBy}>
+      {presence.present ? (
+        <div ref={presence.ref} {...presence.motionProps} id={listboxId} className="np-sw-select__menu np-motion-popover"
+          aria-hidden={!open} inert={!open} role="listbox" aria-label={ariaLabel} aria-labelledby={ariaLabelledBy}>
           {options.map((option, index) => {
             const selected = option.value === value;
             return (
