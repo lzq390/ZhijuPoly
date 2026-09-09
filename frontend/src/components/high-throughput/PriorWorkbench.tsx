@@ -139,8 +139,9 @@ function AgentDisclosure({ target, index, open, onToggle, selected, onSelect, di
   );
 }
 
-export function AgentCardShell({ selectId, index, target, selected, onSelect, disabled, stageLabel, children }: AgentCardProps & {
+export function AgentCardShell({ selectId, index, target, selected, onSelect, disabled, stageLabel, targetValueLabel, children }: AgentCardProps & {
   stageLabel: string;
+  targetValueLabel?: string;
   children: ReactNode;
 }) {
   const selectRef = useRef<HTMLButtonElement>(null);
@@ -177,7 +178,7 @@ export function AgentCardShell({ selectId, index, target, selected, onSelect, di
             <span>目标阈值</span>
             <small><DirectionIcon aria-hidden="true" />{target.direction === "higher" ? "越高越好" : "越低越好"}</small>
           </div>
-          <strong><span className="ht-s1-target-operator">{target.direction === "higher" ? "≥" : "≤"}</span> {target.key === "modulus" ? target.target.toFixed(1) : target.target} <small>{unitLabel}</small></strong>
+          <strong><span className="ht-s1-target-operator">{target.direction === "higher" ? "≥" : "≤"}</span> {targetValueLabel ?? (target.key === "modulus" ? target.target.toFixed(1) : target.target)} <small>{unitLabel}</small></strong>
         </div>
         {children}
       </div>

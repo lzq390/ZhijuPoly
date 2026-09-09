@@ -1,0 +1,85 @@
+/* Shared recommendation cards and structure disclosure. Keep S2 class names
+   to preserve its established DOM and geometry; the host scopes both stages. */
+.ht-s2-validation-threshold { color: var(--panel-ink); font-size: var(--ht-s0-type-caption); }
+.ht-s2-validation-threshold b { font-family: var(--font-mono); font-weight: 600; }
+.ht-s2-validation-body { display: grid; gap: 12px; min-width: 0; padding: 14px; background: linear-gradient(180deg, var(--panel-soft), #fff); }
+.ht-s2-candidate-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ht-s2-validation-candidate { min-width: 0; border: 1px solid var(--panel-line); border-radius: 9px; background: #fff; box-shadow: 0 3px 10px rgba(26, 52, 88, 0.035); transition: border-color 150ms ease, box-shadow 150ms ease; }
+.ht-s2-validation-candidate.selected { border-color: var(--panel-action); box-shadow: 0 0 0 1px color-mix(in srgb, var(--target-color) 16%, transparent), inset 0 2px 0 var(--panel-action); }
+.ht-validation-workspace .ht-s2-candidate-select { display: flex; width: 100%; min-width: 0; min-height: 64px; align-items: center; gap: 9px; border: 0; border-radius: 8px 8px 0 0; padding: 11px 12px; text-align: left; color: var(--panel-ink); background: linear-gradient(110deg, var(--panel-soft), #fff); }
+.ht-validation-workspace .ht-s2-candidate-select:hover:not(:disabled) { background: var(--panel-wash); }
+.ht-s2-candidate-select > span { min-width: 0; }
+.ht-s2-candidate-select > span:nth-child(2) { display: grid; gap: 3px; }
+.ht-s2-candidate-select strong { font-family: var(--font-mono); font-size: var(--ht-s0-type-label); font-weight: 600; overflow-wrap: anywhere; }
+.ht-s2-candidate-select small { color: var(--ht-muted); font-family: var(--font-mono); font-size: var(--ht-s0-type-caption); font-weight: 400; }
+.ht-s2-candidate-select > svg { width: 14px; height: 14px; flex: none; }
+.ht-s2-candidate-number { display: grid; width: 26px; height: 26px; flex: none; place-items: center; border: 1px solid var(--panel-line); border-radius: 6px; background: var(--panel-soft); font-family: var(--font-mono); font-size: var(--ht-s0-type-caption); }
+.ht-s2-predicted-value { margin-left: auto; font-size: var(--ht-s0-type-caption); }
+.ht-s2-predicted-value b { font-family: var(--font-mono); font-weight: 600; }
+.ht-s2-value-field { display: grid; gap: 7px; border-top: 1px solid var(--panel-line); padding: 11px 12px 12px; }
+.ht-s2-value-field > label { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; color: var(--ht-text); font-size: var(--ht-s0-type-label); font-weight: 600; }
+.ht-s2-value-field > label > span { color: var(--ht-muted); font-size: var(--ht-s0-type-caption); font-weight: 400; }
+.ht-s2-value-control { display: flex; align-items: center; gap: 8px; min-width: 0; border: 1px solid var(--panel-line); border-radius: 6px; padding-right: 10px; background: #fbfdff; }
+.ht-s2-value-control:focus-within { border-color: var(--panel-action); box-shadow: 0 0 0 2px color-mix(in srgb, var(--target-color) 15%, transparent); }
+.ht-validation-workspace .ht-s2-value-control input { width: 100%; min-width: 0; min-height: var(--ht-s0-control-height); border: 0; border-radius: 6px; padding: 8px 10px; outline: none; color: var(--ht-text); background: transparent; font-family: var(--font-mono); font-size: var(--ht-s0-type-label); font-weight: 500; }
+.ht-s2-value-control > span { flex: none; color: var(--ht-muted); font-size: var(--ht-s0-type-caption); }
+.ht-s2-value-control.invalid { border-color: #d57882; background: #fffafa; }
+.ht-workbench-page .ht-s2-field-error { display: flex; align-items: center; gap: 5px; color: #b42332; font-size: var(--ht-s0-type-caption); }
+.ht-s2-field-error > svg { width: 13px; height: 13px; flex: none; }
+.ht-validation-workspace :is(input, button):disabled { cursor: not-allowed; }
+
+.ht-s2-structure-detail { min-width: 0; border: 1px solid var(--panel-line); border-radius: 8px; background: #fafdff; }
+.ht-s2-structure-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 12px; }
+.ht-s2-structure-summary > div { min-width: 0; flex: 1 1 280px; }
+.ht-s2-structure-summary > div > span { color: var(--ht-text); font-size: var(--ht-s0-type-label); }
+.ht-s2-structure-summary strong { margin-left: 6px; font-family: var(--font-mono); font-weight: 600; }
+.ht-workbench-page .ht-s2-structure-summary p { margin-top: 4px; color: var(--ht-muted); font-size: var(--ht-s0-type-caption); overflow-wrap: anywhere; }
+.ht-s2-structure-summary p b { font-family: var(--font-mono); font-weight: 500; }
+.ht-s2-structure-fields { min-width: 0; border-top: 1px solid var(--panel-line); padding: 12px; }
+.ht-s2-structure-fields[hidden] { display: none; }
+.ht-workbench-page .ht-s2-structure-fields p { margin-bottom: 10px; color: var(--ht-muted); font-size: var(--ht-s0-type-caption); }
+.ht-s2-structure-fields dl { display: grid; gap: 12px; }
+.ht-s2-structure-fields dt { margin-bottom: 4px; color: var(--panel-ink); font-size: var(--ht-s0-type-caption); font-weight: 600; }
+.ht-s2-structure-fields dd { min-width: 0; margin: 0; border: 1px solid var(--panel-line); border-radius: 5px; padding: 8px 10px; background: #fff; }
+.ht-s2-structure-fields code { color: var(--ht-muted-strong); font-family: var(--font-mono); font-size: var(--ht-s0-type-caption); line-height: 1.6; white-space: normal; overflow-wrap: anywhere; }
+
+.ht-validation-single { grid-template-columns: minmax(0, 1fr); }
+.ht-validation-single .ht-s2-validation-candidate.selected { box-shadow: 0 0 0 1px color-mix(in srgb, var(--target-color) 16%, transparent); }
+.ht-validation-readonly-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; color: var(--ht-text); font-size: var(--ht-s0-type-label); font-weight: 600; }
+.ht-validation-readonly-label > span { color: var(--ht-muted); font-size: var(--ht-s0-type-caption); font-weight: 400; }
+.ht-validation-readonly-value { display: flex; min-height: var(--ht-s0-control-height); align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--panel-line); border-radius: 6px; padding: 8px 10px; background: var(--panel-soft); }
+.ht-validation-readonly-value strong { color: var(--panel-ink); font-family: var(--font-mono); font-size: var(--ht-s0-type-label); font-weight: 500; overflow-wrap: anywhere; }
+.ht-validation-readonly-value > span { color: var(--ht-muted); font-size: var(--ht-s0-type-caption); }
+
+@container ht-s1 (min-width: 700px) {
+  .ht-validation-single .ht-s2-validation-candidate { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ht-validation-single .ht-s2-candidate-select { border-radius: 8px 0 0 8px; }
+  .ht-validation-single .ht-s2-value-field { border-top: 0; border-left: 1px solid var(--panel-line); }
+}
+@container ht-s1 (max-width: 699px) {
+  .ht-s2-candidate-grid { grid-template-columns: minmax(0, 1fr); }
+  .ht-s2-validation-body { padding: 12px; }
+}
+@container ht-s1 (max-width: 479px) {
+  .ht-s2-structure-summary > div { flex-basis: 100%; }
+  .ht-s2-candidate-select .ht-s2-candidate-number { display: none; }
+}
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .ht-s2-validation-body { gap: 18px; padding: 20px 22px; }
+  .ht-s2-candidate-grid { gap: 18px; }
+  .ht-s2-validation-candidate { border-radius: 12px; }
+  .ht-validation-workspace .ht-s2-candidate-select { min-height: 86px; gap: 12px; padding: 16px 18px; border-radius: 11px 11px 0 0; }
+  .ht-s2-candidate-number { width: 36px; height: 36px; border-radius: 8px; }
+  .ht-s2-candidate-select > svg { width: 18px; height: 18px; }
+  .ht-s2-value-field { gap: 9px; padding: 16px 18px 18px; }
+  .ht-s2-value-control { gap: 10px; border-radius: 8px; padding-right: 14px; }
+  .ht-validation-workspace .ht-s2-value-control input { padding: 10px 14px; }
+  .ht-s2-structure-summary,
+  .ht-s2-structure-fields { padding: 18px; }
+  .ht-s2-structure-fields dl { gap: 16px; }
+  .ht-validation-readonly-value { border-radius: 8px; padding: 10px 14px; }
+  .ht-validation-single .ht-s2-candidate-select { border-radius: 11px 0 0 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ht-s2-validation-candidate { transition: none; }
+}

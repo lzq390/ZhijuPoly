@@ -7,6 +7,10 @@ import type { RecommendationValidationValues } from "./types";
 
 const candidateById = new Map(highThroughputDemoScenario.candidates.map((candidate) => [candidate.id, candidate]));
 
+export function getDemoCandidate(id: string) {
+  return candidateById.get(id);
+}
+
 function recommendationValidationKey(targetKey: HighThroughputTarget["key"], candidateId: string) {
   return `${targetKey}:${candidateId}`;
 }

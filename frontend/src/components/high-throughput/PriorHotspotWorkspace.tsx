@@ -1,10 +1,11 @@
-import { ArrowLeft, BadgeInfo, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, Layers3, LoaderCircle, Star, Target, TriangleAlert } from "lucide-react";
-import { type CSSProperties, type ReactNode, useId, useMemo, useRef, useState } from "react";
-import type { HighThroughputCandidate, HighThroughputTarget, HighThroughputTargetKey } from "../../constants/highThroughputDemoScenario";
+import { ArrowLeft, BadgeInfo, Check, CheckCircle2, ChevronRight, Circle, Layers3, LoaderCircle, Star, Target, TriangleAlert } from "lucide-react";
+import { type CSSProperties, type ReactNode, useId, useMemo, useRef } from "react";
+import type { HighThroughputTarget, HighThroughputTargetKey } from "../../constants/highThroughputDemoScenario";
 import { cn } from "../../lib/utils";
 import { AgentCardShell, AgentDockLayout, AGENT_PROPERTY_ICONS, TargetTabs } from "./PriorWorkbench";
-import { buildPriorHotspotSummary, displayTargetUnit, fallbackCandidateSmiles, formatPriorValue, validationNumber } from "./prior-hotspot-model";
+import { buildPriorHotspotSummary, displayTargetUnit, formatPriorValue } from "./prior-hotspot-model";
 import type { PriorDataUploadsState, RecommendationSelection, RecommendationValidationValues } from "./types";
+import { CandidateStructureDetails, RecommendationValidationCards } from "./RecommendationValidation";
 import "./prior-hotspot-workspace.css";
 
 type PriorHotspotWorkspaceProps = {
@@ -139,7 +140,7 @@ export function PriorHotspotWorkspace({ targets, candidateTotal, materialType, r
           </section>
         </AgentDockLayout>
 
-        <section className="ht-s1-preview ht-s2-validation" aria-labelledby={`${id}-validation-heading`} style={{ "--target-color": target.color } as CSSProperties}>
+        <section className="ht-s1-preview ht-s2-validation ht-validation-workspace" aria-labelledby={`${id}-validation-heading`} style={{ "--target-color": target.color } as CSSProperties}>
           <header className="ht-s1-preview-header">
             <div className="ht-s1-section-title"><span className="ht-s1-section-index">02</span><div>
               <h3 id={`${id}-validation-heading`}>{target.shortLabel} 推荐点验证</h3><p>已预填示例值，可修改；每目标 2 项，共 8 项，需整批确认</p>
@@ -147,37 +148,11 @@ export function PriorHotspotWorkspace({ targets, candidateTotal, materialType, r
             <span className="ht-s2-validation-threshold">目标 {target.direction === "higher" ? "≥" : "≤"} <b>{formatPriorValue(target, target.target)}</b> {displayTargetUnit(target)}</span>
           </header>
           <div className="ht-s2-validation-body">
-            <div className="ht-s2-candidate-grid" aria-label={`${target.shortLabel} 推荐验证点`}>
-              {recommendations.map((candidate, index) => {
-                const inputId = `${id}-${target.key}-${candidate.id}-value`;
-                const value = validationValues[`${target.key}:${candidate.id}`] ?? "";
-                const valid = validationNumber(validationValues, target.key, candidate.id) !== null;
-                return <article key={candidate.id} ref={(element) => { if (element) cardRefs.current.set(candidate.id, element); else cardRefs.current.delete(candidate.id); }}
-                  className={cn("ht-s2-validation-candidate", candidate.id === selected?.id && "selected")}>
-                  <button className="ht-s2-candidate-select" type="button" aria-pressed={candidate.id === selected?.id} disabled={isBusy}
-                    aria-label={`查看 ${candidate.id} 推荐详情`} onClick={() => onSelectRecommendation({ targetKey: target.key, candidateId: candidate.id })}>
-                    <span className="ht-s2-candidate-number">{String(index + 1).padStart(2, "0")}</span>
-                    <span><strong>{candidate.id}</strong><small>{candidate.monomerA} + {candidate.monomerB}</small></span>
-                    <span className="ht-s2-predicted-value">预测 <b>{formatPriorValue(target, candidate.scores[target.key])}</b> {displayTargetUnit(target)}</span>
-                    <ChevronRight aria-hidden="true" />
-                  </button>
-                  <div className="ht-s2-value-field">
-                    <label htmlFor={inputId}>演示验证值 <span>{valid ? "已填值 · 可编辑" : "待补值"}</span></label>
-                    <div className={cn("ht-s2-value-control", !valid && "invalid")}>
-                      <input id={inputId} type="number" inputMode="decimal" step={target.key === "modulus" ? "0.1" : "1"}
-                        value={value} disabled={isBusy} aria-label={`${candidate.id} ${target.shortLabel} 演示验证值`}
-                        aria-invalid={!valid} aria-describedby={!valid ? `${inputId}-error` : undefined}
-                        onFocus={() => { if (!isBusy) onSelectRecommendation({ targetKey: target.key, candidateId: candidate.id }); }}
-                        onChange={(event) => onValidationValueChange(target.key, candidate.id, event.currentTarget.value)} />
-                      <span>{displayTargetUnit(target)}</span>
-                    </div>
-                    {!valid ? <p className="ht-s2-field-error" id={`${inputId}-error`} role="alert"><TriangleAlert aria-hidden="true" />请输入有效数值后再确认本批</p> : null}
-                  </div>
-                </article>;
-              })}
-            </div>
-            {/* Keep this panel mounted while comparing candidates so its disclosure state survives selection changes. */}
-            {selected ? <CandidateStructureDetails candidate={selected} target={target} disabled={isBusy} /> : null}
+            <RecommendationValidationCards target={target} recommendations={recommendations} selectedId={selected?.id}
+              values={validationValues} disabled={isBusy} cardRefs={cardRefs}
+              onSelect={(candidateId) => onSelectRecommendation({ targetKey: target.key, candidateId })}
+              onChange={(candidateId, value) => onValidationValueChange(target.key, candidateId, value)} />
+            {selected ? <CandidateStructureDetails candidate={selected} sourceLabel={`S2 ${target.shortLabel} 预设推荐批次`} disabled={isBusy} /> : null}
           </div>
         </section>
       </div>
@@ -198,24 +173,4 @@ export function PriorHotspotWorkspace({ targets, candidateTotal, materialType, r
       </footer>
     </div>
   );
-}
-
-function CandidateStructureDetails({ candidate, target, disabled }: { candidate: HighThroughputCandidate; target: HighThroughputTarget; disabled: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  const id = useId();
-  const smiles = fallbackCandidateSmiles(candidate);
-  return <section className="ht-s2-structure-detail" aria-label={`${candidate.id} 候选详情`}>
-    <div className="ht-s2-structure-summary">
-      <div><span>当前候选 <strong>{candidate.id}</strong></span><p>来源：S2 {target.shortLabel} 预设推荐批次 · 结构类别：<span>{candidate.cluster}</span>
-        {candidate.sourcePiId !== undefined ? <> · PI 来源 <b>{candidate.sourcePiId}</b></> : null}</p></div>
-      <button type="button" className="ht-s1-detail-toggle" aria-expanded={expanded} aria-controls={id} disabled={disabled} onClick={() => setExpanded((value) => !value)}>
-        {expanded ? "收起结构详情" : "展开结构详情"}<ChevronDown aria-hidden="true" />
-      </button>
-    </div>
-    <div id={id} className="ht-s2-structure-fields" hidden={!expanded}>
-      <p>预设结构用于演示候选追踪，不代表真实实验产物。</p>
-      <dl>{[["Polymer SMILES", smiles.polymerSmiles], ["单体 A SMILES", smiles.monomerASmiles], ["单体 B SMILES", smiles.monomerBSmiles]].map(([label, value]) =>
-        <div key={label}><dt>{label}</dt><dd><code>{value}</code></dd></div>)}</dl>
-    </div>
-  </section>;
 }

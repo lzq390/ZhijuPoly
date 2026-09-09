@@ -224,6 +224,12 @@ describe("HighThroughputWorkflowDemoPage S1", () => {
     expect(panel.querySelector(".ht-s1-space-watermark")?.getAttribute("aria-hidden")).toBe("true");
     expect(panel.querySelectorAll(".ht-property-candidate-point").length).toBeGreaterThan(0);
     expect(panel.querySelector(".ht-property-space-backdrop")).not.toBeNull();
+    const detailGrid = panel.querySelector(".ht-property-grid-detail")!;
+    expect(detailGrid.getAttribute("aria-hidden")).toBe("true");
+    expect(detailGrid.getAttribute("pointer-events")).toBe("none");
+    const pattern = panel.querySelector("pattern")!;
+    expect(pattern.getAttribute("patternUnits")).toBe("userSpaceOnUse");
+    expect(detailGrid.getAttribute("fill")).toBe(`url(#${pattern.id})`);
     for (const target of highThroughputDemoScenario.targets) {
       fireEvent.click(screen.getByRole("tab", { name: target.shortLabel }));
       const focus = panel.querySelector<HTMLElement>(".ht-s1-space-focus")!;
@@ -653,10 +659,16 @@ describe("HighThroughputWorkflowDemoPage S1", () => {
       visited.add(previous);
       expect(view.container.querySelector(".ht-scroll-region")).toBe(scrollRegion);
       expect(scrollRegion.querySelector(".ht-docx-board")).not.toBeNull();
-      if (previous === "S2") expect(view.container.querySelector(".ht-workbench-toolbar")).not.toBeNull();
-      else expect(view.container.querySelector(".ht-workbench-toolbar")).toBeNull();
-      const confirm = screen.queryByRole("button", { name: previous === "S2" ? "确认本批 8 项验证值" : /^确认本(轮|步)实测值$/ });
+      if (previous === "S2" || previous === "S3") {
+        expect(view.container.querySelector(".ht-workbench-toolbar")).not.toBeNull();
+        expect(view.container.querySelectorAll(".ht-property-grid-detail")).toHaveLength(1);
+      } else {
+        expect(view.container.querySelector(".ht-workbench-toolbar")).toBeNull();
+        expect(view.container.querySelector(".ht-property-grid-detail")).toBeNull();
+      }
+      const confirm = screen.queryByRole("button", { name: previous === "S2" || previous === "S3" ? /^确认本批 [84] 项验证值$/ : /^确认本(轮|步)实测值$/ });
       const next = previous === "S2" ? screen.getByRole<HTMLButtonElement>("button", { name: "进入 S3" })
+        : previous === "S3" ? screen.getByRole<HTMLButtonElement>("button", { name: /^(进入 R2|进入收敛|进入 S4 候选输出)$/ })
         : view.container.querySelector<HTMLButtonElement>(".ht-next-step-control")!;
       if (confirm) {
         expect(next.disabled).toBe(true);

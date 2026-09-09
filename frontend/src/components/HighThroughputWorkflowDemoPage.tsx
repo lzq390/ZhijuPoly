@@ -28,6 +28,8 @@ import { cn } from "../lib/utils";
 import { WorkbenchSelect } from "./structure-workbench/WorkbenchSelect";
 import { PriorImportWorkspace } from "./high-throughput/PriorImportWorkspace";
 import { PriorHotspotWorkspace } from "./high-throughput/PriorHotspotWorkspace";
+import { SinglePropertyIterationWorkspace } from "./high-throughput/SinglePropertyIterationWorkspace";
+import { formatIterationValue, type IterationTargetSummary } from "./high-throughput/iteration-model";
 import { fallbackCandidateSmiles, validationNumber } from "./high-throughput/prior-hotspot-model";
 import type { PriorDataUploadState, PriorDataUploadsState, RecommendationSelection, RecommendationValidationValues } from "./high-throughput/types";
 import "../styles/structure-workbench.css";
@@ -773,6 +775,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const [setupResetToken, setSetupResetToken] = useState(0);
   const [activeSpaceTargetKey, setActiveSpaceTargetKey] = useState<HighThroughputTargetKey>("tg");
   const [activeIterationRoundIndex, setActiveIterationRoundIndex] = useState(0);
+  const [viewIterationRoundIndex, setViewIterationRoundIndex] = useState(0);
   const [activeRatioSearchStepIndex, setActiveRatioSearchStepIndex] = useState(0);
   const [priorDataUploads, setPriorDataUploads] = useState<PriorDataUploadsState>({});
   const [selectedRecommendation, setSelectedRecommendation] = useState<RecommendationSelection | null>(null);
@@ -811,7 +814,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const displayedNextStepState = stageTransition
     ? { canAdvance: false, label: "处理中", hint: stageTransition.message }
     : nextStepState;
-  const isWorkbenchStage = currentStageIndex <= 2;
+  const isWorkbenchStage = currentStageIndex <= 3;
+  const isIterationReview = currentStageIndex === 3 && viewIterationRoundIndex < activeIterationRoundIndex;
 
   useEffect(() => {
     if (previousStageRef.current !== currentStageIndex) {
@@ -837,7 +841,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       return;
     }
 
-    const recommendedIds = recommendationValidationIds(activeSpaceTargetKey, currentStageIndex, activeIterationRoundIndex);
+    const recommendedIds = recommendationValidationIds(activeSpaceTargetKey, currentStageIndex, viewIterationRoundIndex);
     setSelectedRecommendation((selection) => {
       if (
         selection &&
@@ -850,7 +854,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       const candidateId = recommendedIds[0];
       return candidateId ? { targetKey: activeSpaceTargetKey, candidateId } : null;
     });
-  }, [activeIterationRoundIndex, activeSpaceTargetKey, currentStageIndex]);
+  }, [viewIterationRoundIndex, activeSpaceTargetKey, currentStageIndex]);
 
   function clearPriorUploadTimer(targetKey: HighThroughputTargetKey) {
     const timerId = priorUploadTimersRef.current[targetKey];
@@ -868,7 +872,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     const nextIndex = clamp(index, 0, scenario.stages.length - 1);
     setCurrentStageIndex(nextIndex);
     if (nextIndex === 3) {
-      setActiveIterationRoundIndex(0);
+      setViewIterationRoundIndex(activeIterationRoundIndex);
     } else if (nextIndex === 4) {
       setActiveIterationRoundIndex(2);
     } else if (nextIndex === 5) {
@@ -891,7 +895,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function handleNextStep() {
-    if (!nextStepState.canAdvance || stageTransition) {
+    if (!nextStepState.canAdvance || stageTransition || isIterationReview) {
       return;
     }
 
@@ -908,11 +912,12 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     if (currentStageIndex === 3) {
       if (activeIterationRoundIndex < 2) {
         const message = activeIterationRoundIndex === 0
-          ? "回流本轮实测值，正在更新单性质模型与热点图..."
-          : "验证最终推荐点，正在确认当前最优稳定...";
-        runStageTransition(message, VALIDATION_FEEDBACK_MS, () =>
-          setActiveIterationRoundIndex((roundIndex) => clamp(roundIndex + 1, 0, 2)),
-        );
+          ? "正在演示验证回流，切换到 R2 预设热点…"
+          : "正在演示验证回流，汇总收敛记录与预设输出…";
+        runStageTransition(message, VALIDATION_FEEDBACK_MS, () => {
+          setActiveIterationRoundIndex(activeIterationRoundIndex + 1);
+          setViewIterationRoundIndex(activeIterationRoundIndex + 1);
+        });
         return;
       }
       runStageTransition("汇总四个收敛候选，正在生成 p1-p4 输出...", STAGE_TRANSITION_MS, () => enterStage(4));
@@ -963,7 +968,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function confirmCurrentValidationGroup() {
-    if (!activeValidationGroupKey || activeValidationMissingCount > 0 || stageTransition) {
+    if (!activeValidationGroupKey || activeValidationMissingCount > 0 || stageTransition || isIterationReview) {
       return;
     }
     setValidationConfirmations((confirmations) => ({
@@ -1005,12 +1010,13 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function resetCurrentStageActions() {
-    if (stageTransition) return;
+    if (stageTransition || isIterationReview) return;
     if (currentStageIndex === 0) {
       setConfirmedSetup(buildDefaultConfirmedSetup());
       setSetupResetToken((token) => token + 1);
       setActiveSpaceTargetKey("tg");
       setValidationConfirmations({});
+      invalidateIterationProgress();
       resetRatioValidationState();
       return;
     }
@@ -1020,20 +1026,29 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       setPriorDataUploads({});
       setSelectedRecommendation(null);
       setValidationConfirmations({});
+      invalidateIterationProgress();
       return;
     }
 
     if (currentStageIndex === 2) {
       resetValidationValues(getRequiredValidationIds(2));
       clearValidationConfirmation(2);
+      invalidateIterationProgress();
       setSelectedRecommendation({ targetKey: activeSpaceTargetKey, candidateId: recommendationValidationIds(activeSpaceTargetKey, 2)[0] });
       return;
     }
 
     if (currentStageIndex === 3) {
-      resetValidationValues(getRequiredValidationIds(3, activeIterationRoundIndex));
-      clearValidationConfirmation(3, activeIterationRoundIndex);
-      setSelectedRecommendation(null);
+      if (activeIterationRoundIndex === 2) {
+        if (!window.confirm("重新演示 S3？将恢复两轮共 12 项默认验证值并清除 S3 进度，保留 S0–S2 数据。")) return;
+        resetValidationValues([...getRequiredValidationIds(3, 0), ...getRequiredValidationIds(3, 1)]);
+        invalidateIterationProgress();
+      } else {
+        resetValidationValues(getRequiredValidationIds(3, activeIterationRoundIndex));
+        clearValidationConfirmation(3, activeIterationRoundIndex);
+      }
+      setSelectedRecommendation({ targetKey: activeSpaceTargetKey,
+        candidateId: recommendationValidationIds(activeSpaceTargetKey, 3, activeIterationRoundIndex === 2 ? 0 : activeIterationRoundIndex)[0] });
       return;
     }
 
@@ -1041,6 +1056,12 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       setActiveRatioSearchStepIndex(0);
       resetRatioValidationState();
     }
+  }
+
+  function invalidateIterationProgress() {
+    setActiveIterationRoundIndex(0);
+    setViewIterationRoundIndex(0);
+    setValidationConfirmations((confirmations) => ({ ...confirmations, "s3-round-1": false, "s3-round-2": false }));
   }
 
   function confirmSetup(setup: ConfirmedSetup) {
@@ -1052,6 +1073,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       setup.monomerACount !== confirmedSetup.monomerACount || setup.monomerBCount !== confirmedSetup.monomerBCount ||
       scenario.targets.some((target) => setup.targetValues[target.key] !== confirmedSetup.targetValues[target.key])) {
       clearValidationConfirmation(2);
+      invalidateIterationProgress();
     }
     setConfirmedSetup(setup);
     enterStage(1);
@@ -1071,6 +1093,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   function beginPriorDataImport(targetKey: HighThroughputTargetKey, fileName: string) {
     if (currentStageIndex !== 1 || stageTransition) return;
     clearValidationConfirmation(2);
+    invalidateIterationProgress();
     clearPriorUploadTimer(targetKey);
     const csvFile = scenario.doeCsvFiles[targetKey];
     const uploadedAt = new Intl.DateTimeFormat("zh-CN", {
@@ -1137,27 +1160,32 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function handleRecommendationValidationValueChange(targetKey: HighThroughputTargetKey, candidateId: string, value: string) {
-    if (stageTransition) return;
+    if (stageTransition || isIterationReview) return;
+    const key = recommendationValidationKey(targetKey, candidateId);
+    if (recommendationValidationValues[key] === value || !activeValidationRequirements.some((item) => item.targetKey === targetKey && item.candidateId === candidateId)) return;
     setRecommendationValidationValues((values) => ({
       ...values,
       [recommendationValidationKey(targetKey, candidateId)]: value,
     }));
     clearValidationConfirmation(currentStageIndex, activeIterationRoundIndex);
+    if (currentStageIndex === 2) invalidateIterationProgress();
   }
 
   return (
-    <div className={cn("high-throughput-demo", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page", currentStageIndex === 2 && "ht-s2-page")}>
+    <div className={cn("high-throughput-demo", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page", currentStageIndex === 2 && "ht-s2-page", currentStageIndex === 3 && "ht-s3-page")}>
       {isWorkbenchStage ? <h1 className="ht-workbench-title">高通量优化演示</h1> : null}
       {isWorkbenchStage ? (
         <ScenarioModuleToolbar
           canReset={!stageTransition}
           onReset={resetCurrentStageActions}
-          resetLabel={currentStageIndex === 0 ? "恢复默认场景参数" : currentStageIndex === 1 ? "重置 S1 上传数据" : "重置 S2 验证值"}
+          showReset={!isIterationReview}
+          resetText={currentStageIndex === 3 ? activeIterationRoundIndex === 2 ? "重演 S3" : "重置本批" : "重置"}
+          resetLabel={currentStageIndex === 0 ? "恢复默认场景参数" : currentStageIndex === 1 ? "重置 S1 上传数据" : currentStageIndex === 2 ? "重置 S2 验证值" : activeIterationRoundIndex === 2 ? "重演 S3" : "重置本批验证值"}
         />
       ) : null}
       <main ref={scrollRegionRef} className="ht-shell ht-scroll-region">
         <section
-          className={cn("ht-docx-board", isWorkbenchStage && "ht-workbench-board np-sw-accented-surface", currentStageIndex === 0 && "ht-s0-board", (currentStageIndex === 1 || currentStageIndex === 2) && "ht-s1-board", currentStageIndex === 2 && "ht-s2-board")}
+          className={cn("ht-docx-board", isWorkbenchStage && "ht-workbench-board np-sw-accented-surface", currentStageIndex === 0 && "ht-s0-board", (currentStageIndex >= 1 && currentStageIndex <= 3) && "ht-s1-board", currentStageIndex === 2 && "ht-s2-board", currentStageIndex === 3 && "ht-s3-board")}
           aria-labelledby={isWorkbenchStage ? "ht-workbench-surface-title" : undefined}
         >
           {isWorkbenchStage ? <ScenarioSurfaceHeader stageIndex={currentStageIndex} /> : null}
@@ -1226,6 +1254,25 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
                   variant="large" showSummary={false} validationValues={recommendationValidationValues}
                   selectedRecommendation={selectedRecommendation} onSelectRecommendation={onSelect}
                   interactionDisabled={Boolean(stageTransition)} />
+              )}
+            />
+          ) : currentStageIndex === 3 ? (
+            <SinglePropertyIterationWorkspace
+              targets={scenario.targets.map((target) => getConfiguredTarget(target.key, confirmedSetup))}
+              candidateTotal={confirmedSetup.candidateTotal} materialType={confirmedSetup.materialType} representation={confirmedSetup.representation}
+              activeTargetKey={activeSpaceTargetKey} onSelectTarget={setActiveSpaceTargetKey}
+              progressRound={activeIterationRoundIndex} viewRound={viewIterationRoundIndex}
+              onViewRound={(round) => { if (!stageTransition && round >= 0 && round <= activeIterationRoundIndex) setViewIterationRoundIndex(round); }}
+              selectedRecommendation={selectedRecommendation} onSelectRecommendation={setSelectedRecommendation}
+              validationValues={recommendationValidationValues} onValidationValueChange={handleRecommendationValidationValueChange}
+              validationConfirmed={Boolean(validationConfirmations[validationConfirmationKey(3, viewIterationRoundIndex) ?? ""])}
+              onConfirm={confirmCurrentValidationGroup} onBack={() => { if (!stageTransition) enterStage(2); }} onNext={handleNextStep}
+              canAdvance={displayedNextStepState.canAdvance} transitionMessage={stageTransition?.message ?? null}
+              renderCandidateMap={(summary, onSelect) => (
+                <PropertySpaceCard stageIndex={3} target={summary.target} variant="large" showSummary={false}
+                  iterationRoundIndex={viewIterationRoundIndex} iterationSummary={summary} reviewMode={isIterationReview}
+                  validationValues={recommendationValidationValues} selectedRecommendation={selectedRecommendation}
+                  onSelectRecommendation={onSelect} interactionDisabled={Boolean(stageTransition)} />
               )}
             />
           ) : (
@@ -1557,10 +1604,14 @@ function ScenarioModuleToolbar({
   canReset,
   onReset,
   resetLabel,
+  resetText = "重置",
+  showReset = true,
 }: {
   canReset: boolean;
   onReset: () => void;
   resetLabel: string;
+  resetText?: string;
+  showReset?: boolean;
 }) {
   return (
     <div className="ht-workbench-toolbar" aria-label="高通量优化演示状态">
@@ -1569,15 +1620,15 @@ function ScenarioModuleToolbar({
           <i aria-hidden="true" />
           <strong>固定演示</strong>
         </span>
-        <button
+        {showReset ? <button
           type="button"
           onClick={onReset}
           aria-label={resetLabel}
           disabled={!canReset}
         >
           <RotateCcw aria-hidden="true" />
-          重置
-        </button>
+          {resetText}
+        </button> : null}
       </div>
     </div>
   );
@@ -1586,15 +1637,16 @@ function ScenarioModuleToolbar({
 function ScenarioSurfaceHeader({ stageIndex }: { stageIndex: number }) {
   const isPrior = stageIndex === 1;
   const isHotspot = stageIndex === 2;
+  const isIteration = stageIndex === 3;
   return (
     <header className="ht-workbench-header">
       <div className="ht-workbench-heading">
         <span className="ht-workbench-mark">
-          {isHotspot ? <BrainCircuit aria-hidden="true" /> : isPrior ? <TestTube2 aria-hidden="true" /> : <FlaskConical aria-hidden="true" />}
+          {isHotspot || isIteration ? <BrainCircuit aria-hidden="true" /> : isPrior ? <TestTube2 aria-hidden="true" /> : <FlaskConical aria-hidden="true" />}
         </span>
         <div>
-          <h2 id="ht-workbench-surface-title" tabIndex={-1}>{isHotspot ? "先验热点与推荐验证" : isPrior ? "正交实验与先验导入" : "材料体系与目标设置"}</h2>
-          <p>{isHotspot ? "查看四个性质的初始热点，编辑并确认本批推荐点的演示验证值。" : isPrior ? "为四个性质 Agent 导入 DOE 样例，查看候选分布与先验数据。" : "设置材料体系、候选空间与优化目标。"}</p>
+          <h2 id="ht-workbench-surface-title" tabIndex={-1}>{isIteration ? "单性质迭代与验证回流" : isHotspot ? "先验热点与推荐验证" : isPrior ? "正交实验与先验导入" : "材料体系与目标设置"}</h2>
+          <p>{isIteration ? "逐轮验证推荐点，对照回流记录与预设路径，查看单性质收敛结果。" : isHotspot ? "查看四个性质的初始热点，编辑并确认本批推荐点的演示验证值。" : isPrior ? "为四个性质 Agent 导入 DOE 样例，查看候选分布与先验数据。" : "设置材料体系、候选空间与优化目标。"}</p>
         </div>
       </div>
     </header>
@@ -1938,6 +1990,8 @@ function PropertySpaceCard({
   onSelectRecommendation,
   showSummary = true,
   interactionDisabled = false,
+  iterationSummary,
+  reviewMode = false,
 }: {
   stageIndex: number;
   target: HighThroughputTarget;
@@ -1949,19 +2003,27 @@ function PropertySpaceCard({
   onSelectRecommendation?: (selection: RecommendationSelection) => void;
   showSummary?: boolean;
   interactionDisabled?: boolean;
+  iterationSummary?: IterationTargetSummary;
+  reviewMode?: boolean;
 }) {
+  const plotGridId = useId();
+  const isWorkbenchPlot = !showSummary && variant === "large" && stageIndex >= 1 && stageIndex <= 3;
   const space = getPropertySpace(target.key);
   const activeRounds = highThroughputDemoScenario.roundsByTarget[target.key];
   const activeRoundIndex = clamp(iterationRoundIndex, 0, activeRounds.length - 1);
-  const surface = propertySurfaceForStage(stageIndex, space, iterationRoundIndex);
-  const roundIds = propertyRoundIds(target.key, stageIndex, iterationRoundIndex);
+  const surface = iterationSummary ? iterationSummary.surface : propertySurfaceForStage(stageIndex, space, iterationRoundIndex);
+  const roundIds = iterationSummary ? {
+    testedIds: iterationSummary.returnedRecords.map((record) => record.candidate.id),
+    currentTestedIds: iterationSummary.round.testedIds,
+    recommendedIds: iterationSummary.recommendations.map((candidate) => candidate.id),
+  } : propertyRoundIds(target.key, stageIndex, iterationRoundIndex);
   const isPriorLoading = Boolean(priorDataUpload?.isLoading);
   const isPriorError = Boolean(priorDataUpload?.errorMessage);
   const isPriorReady = Boolean(priorDataUpload && !priorDataUpload.isLoading && !priorDataUpload.errorMessage);
   const showPriorDoe = stageIndex >= 2 || (stageIndex === 1 && isPriorReady);
   const priorIds = showPriorDoe ? space.priorCandidateIds : [];
   const measuredPriorIds = stageIndex >= 2 ? space.priorCandidateIds : [];
-  const currentBestId = propertySpaceCurrentBestId(stageIndex, space, target, iterationRoundIndex, validationValues);
+  const currentBestId = iterationSummary ? iterationSummary.recordBest?.candidate.id ?? "" : propertySpaceCurrentBestId(stageIndex, space, target, iterationRoundIndex, validationValues);
   const currentBest = currentBestId ? getCandidate(currentBestId) : undefined;
   const specialIds = new Set([
     ...priorIds,
@@ -2033,15 +2095,26 @@ function PropertySpaceCard({
         </div>
       ) : null}
 
-      <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role={stageIndex === 2 ? "group" : "img"} aria-label={stageIndex === 2 ? `${target.shortLabel} 先验热点与推荐点` : `${target.shortLabel} single-property optimization space`}>
+      <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role={stageIndex === 2 || iterationSummary ? "group" : "img"}
+        data-surface-snapshot={iterationSummary ? surface?.id : undefined}
+        aria-label={iterationSummary ? `${target.shortLabel} ${iterationRoundIndex === 2 ? "收敛" : `R${iterationRoundIndex + 1}`} 回流记录与预设热点` : stageIndex === 2 ? `${target.shortLabel} 先验热点与推荐点` : `${target.shortLabel} single-property optimization space`}>
         <defs>
           <radialGradient id={`ht-property-gradient-${target.key}-${surface?.id ?? "none"}`} cx="50%" cy="50%" r="55%">
             <stop offset="0%" stopColor={target.color} stopOpacity="0.82" />
             <stop offset="46%" stopColor={target.color} stopOpacity="0.32" />
             <stop offset="100%" stopColor={target.color} stopOpacity="0" />
           </radialGradient>
+          {isWorkbenchPlot ? (
+            <pattern id={plotGridId} width="4" height="4" patternUnits="userSpaceOnUse">
+              <path className="ht-property-grid-detail-line" d="M 4 0 H 0 V 4" fill="none" />
+            </pattern>
+          ) : null}
         </defs>
         <rect className="ht-property-space-backdrop" x="0" y="0" width={MATERIAL_MAP_WIDTH} height={MATERIAL_MAP_HEIGHT} rx="3" fill="#fbfdff" />
+        {isWorkbenchPlot ? (
+          <rect className="ht-property-grid-detail" width={MATERIAL_MAP_WIDTH} height={MATERIAL_MAP_HEIGHT}
+            rx="3" fill={`url(#${plotGridId})`} aria-hidden="true" pointerEvents="none" />
+        ) : null}
         <g className="ht-material-grid" aria-hidden="true">
           {Array.from({ length: 5 }, (_, index) => (
             <line key={`x-${index}`} x1={(index + 1) * 16} y1="0" x2={(index + 1) * 16} y2={MATERIAL_MAP_HEIGHT} />
@@ -2092,7 +2165,7 @@ function PropertySpaceCard({
                 height="1.64"
                 rx="0.2"
               >
-                <title>{point.candidateId} DOE prior</title>
+                <title>{point.candidateId} · DOE 先验</title>
               </rect>
             );
           })}
@@ -2100,6 +2173,7 @@ function PropertySpaceCard({
           .filter((point) => measuredSet.has(point.candidateId) && !priorSet.has(point.candidateId))
           .map((point) => {
             const projectedPoint = projectSpacePoint(point);
+            const returnedRecord = iterationSummary?.returnedRecords.find((record) => record.candidate.id === point.candidateId);
             return (
               <circle
                 key={`tested-${point.candidateId}`}
@@ -2107,7 +2181,9 @@ function PropertySpaceCard({
                 cx={projectedPoint.x}
                 cy={projectedPoint.y}
                 r={currentTestedSet.has(point.candidateId) ? "1.02" : "0.78"}
-              />
+              >
+                <title>{point.candidateId} · {returnedRecord ? `${returnedRecord.source} · 演示验证值 ${formatIterationValue(target, returnedRecord.value)} ${target.unit === "degC" ? "°C" : target.unit}` : `已回流 · ${candidateValueWithValidation(getCandidate(point.candidateId), target, validationValues)}`}</title>
+              </circle>
             );
           })}
         {space.candidatePoints
@@ -2121,8 +2197,8 @@ function PropertySpaceCard({
                 className={cn("ht-recommended-sample-node", canInspectRecommendation && "selectable", isSelected && "selected")}
                 role={canInspectRecommendation ? "button" : undefined}
                 tabIndex={canInspectRecommendation ? 0 : undefined}
-                aria-label={canInspectRecommendation ? stageIndex === 2 ? `查看 ${point.candidateId} 推荐点并编辑 ${target.shortLabel} 演示验证值` : `查看 ${point.candidateId} SMILES 并录入 ${target.shortLabel} 实测值` : undefined}
-                aria-pressed={stageIndex === 2 && canInspectRecommendation ? isSelected : undefined}
+                aria-label={canInspectRecommendation ? reviewMode ? `查看 ${point.candidateId} 推荐点及结构详情` : `查看 ${point.candidateId} 推荐点并编辑 ${target.shortLabel} 演示验证值` : undefined}
+                aria-pressed={canInspectRecommendation ? isSelected : undefined}
                 onClick={() => selectRecommendation(point.candidateId)}
                 onKeyDown={(event) => handleRecommendationKeyDown(event, point.candidateId)}
               >
@@ -2146,7 +2222,7 @@ function PropertySpaceCard({
                     r="1.88"
                   />
                 ) : null}
-                <title>{point.candidateId} 推荐验证点</title>
+                <title>{point.candidateId} · {iterationSummary ? `${iterationRoundIndex === 0 ? "R1" : "R2"} 预设推荐 · ${reviewMode ? "已确认，只读回看" : "本轮待回流"}` : "推荐验证点"}</title>
               </g>
             );
           })}
@@ -2156,7 +2232,8 @@ function PropertySpaceCard({
             .map((point) => {
               const projectedPoint = projectSpacePoint(point);
               return (
-                <g key={`best-${point.candidateId}`} className="ht-current-best-marker" transform={`translate(${projectedPoint.x} ${projectedPoint.y})`}>
+                <g key={`best-${point.candidateId}`} className="ht-current-best-marker" data-candidate-id={point.candidateId} transform={`translate(${projectedPoint.x} ${projectedPoint.y})`}>
+                  {iterationSummary?.recordBest ? <title>{point.candidateId} · 回流记录最优 · {iterationSummary.recordBest.source} · {formatIterationValue(target, iterationSummary.recordBest.value)} {target.unit === "degC" ? "°C" : target.unit}</title> : null}
                   <circle r="1.65" />
                   <path d="M 0 -2.2 L 0.56 -0.64 L 2.15 -0.64 L 0.86 0.28 L 1.34 1.86 L 0 0.9 L -1.34 1.86 L -0.86 0.28 L -2.15 -0.64 L -0.56 -0.64 Z" />
                 </g>
