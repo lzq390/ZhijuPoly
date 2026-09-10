@@ -188,6 +188,7 @@ export function AppShell({
   const isMdSimulationWorkbench = activeModule === "mdSimulationDemo";
   const isMonomerMdSimulationWorkbench = activeModule === "monomerMdSimulation";
   const isMonomerDftWorkbench = activeModule === "monomerDft";
+  const isHighThroughputWorkbench = activeModule === "highThroughputWorkflowDemo";
   const isSimilarityExplorerWorkbench = activeModule === "explorer";
   const isDatabaseQueryWorkbench = activeModule === "databaseQuery";
   const isDatabaseFilterWorkbench = activeModule === "databaseFilter";
@@ -206,6 +207,7 @@ export function AppShell({
     isMdSimulationWorkbench ||
     isMonomerMdSimulationWorkbench ||
     isMonomerDftWorkbench ||
+    isHighThroughputWorkbench ||
     isStructureWorkbench ||
     isReverseDesignWorkbench ||
     isConditionalGenerationWorkbench;
@@ -475,6 +477,7 @@ export function AppShell({
                     isMdSimulationWorkbench ||
                     isMonomerMdSimulationWorkbench ||
                     isMonomerDftWorkbench ||
+                    isHighThroughputWorkbench ||
                     isSimilarityExplorerWorkbench ||
                     isDatabaseQueryWorkbench ||
                     isDatabaseFilterWorkbench ||

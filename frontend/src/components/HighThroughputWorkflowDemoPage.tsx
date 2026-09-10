@@ -2,6 +2,7 @@ import {
   BadgeInfo,
   Bot,
   BrainCircuit,
+  Check,
   CheckCircle2,
   ChevronRight,
   FileCheck2,
@@ -13,7 +14,7 @@ import {
   TestTube2,
   UploadCloud,
 } from "lucide-react";
-import { type ChangeEvent, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ChangeEvent, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   highThroughputDemoScenario,
   type HighThroughputCandidate,
@@ -24,14 +25,25 @@ import {
   type HighThroughputTargetKey,
 } from "../constants/highThroughputDemoScenario";
 import { cn } from "../lib/utils";
+import { WorkbenchSelect } from "./structure-workbench/WorkbenchSelect";
+import { PriorImportWorkspace } from "./high-throughput/PriorImportWorkspace";
+import { PriorHotspotWorkspace } from "./high-throughput/PriorHotspotWorkspace";
+import { SinglePropertyIterationWorkspace } from "./high-throughput/SinglePropertyIterationWorkspace";
+import { CandidateOutputWorkspace } from "./high-throughput/CandidateOutputWorkspace";
+import { RatioSearchWorkspace } from "./high-throughput/RatioSearchWorkspace";
+import { FinalFormulationWorkspace } from "./high-throughput/FinalFormulationWorkspace";
+import { buildInitialRatioValidationValues, buildInitialRatioValidationConfirmations, ratioValidationMissingCount,
+  type RatioValidationValues, type RatioValidationConfirmationState } from "./high-throughput/ratio-search-model";
+import { formatIterationValue, type IterationTargetSummary } from "./high-throughput/iteration-model";
+import { fallbackCandidateSmiles, validationNumber } from "./high-throughput/prior-hotspot-model";
+import type { PriorDataUploadState, PriorDataUploadsState, RecommendationSelection, RecommendationValidationValues } from "./high-throughput/types";
+import "../styles/structure-workbench.css";
 import "./HighThroughputWorkflowDemoPage.css";
 
 type HighThroughputWorkflowDemoPageProps = {
   onBackHome: () => void;
 };
 
-type WeightState = Record<HighThroughputTargetKey, number>;
-type RatioMixCandidate = (typeof highThroughputDemoScenario.formulation.mixCandidates)[number];
 
 type ConfirmedSetup = {
   materialType: string;
@@ -44,33 +56,11 @@ type ConfirmedSetup = {
   targetValues: Record<HighThroughputTargetKey, number>;
 };
 
-type PriorDataUploadState = {
-  targetKey: HighThroughputTargetKey;
-  fileName: string;
-  fileType: string;
-  sampleCount: number;
-  fieldCount: number;
-  expectedFileName: string;
-  propertyColumn: string;
-  uploadedAt: string;
-  uploadToken: string;
-  isLoading: boolean;
-  errorMessage?: string;
-};
-
-type PriorDataUploadsState = Partial<Record<HighThroughputTargetKey, PriorDataUploadState>>;
-type RecommendationSelection = {
-  targetKey: HighThroughputTargetKey;
-  candidateId: string;
-};
-type RecommendationValidationValues = Record<string, string>;
 type RecommendationValidationRequirement = {
   targetKey: HighThroughputTargetKey;
   candidateId: string;
 };
 type ValidationConfirmationState = Record<string, boolean>;
-type RatioValidationValues = Record<string, Partial<Record<HighThroughputTargetKey, string>>>;
-type RatioValidationConfirmationState = Record<string, boolean>;
 type NextStepState = {
   canAdvance: boolean;
   label: string;
@@ -90,12 +80,6 @@ const MATERIAL_MAP_WIDTH = 100;
 const MATERIAL_MAP_HEIGHT = 48;
 const AGENT_DISPLAY_COLORS = ["#2563eb", "#16a34a", "#7c3aed", "#f97316"] as const;
 const AGENT_ACTION_LABELS = ["下一轮 3 个样本", "追加 3 个验证点", "筛选候选 Top-k", "更新局部推荐"] as const;
-const RATIO_SPACE_ANCHORS: Record<string, { x: number; y: number }> = {
-  p1: { x: 20, y: 12 },
-  p2: { x: 22, y: 36 },
-  p3: { x: 78, y: 13 },
-  p4: { x: 80, y: 37 },
-};
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -127,12 +111,6 @@ function candidateValue(candidate: HighThroughputCandidate | undefined, target: 
   return `${formatNumber(candidate.scores[target.key], digits)} ${target.unit}`;
 }
 
-function buildInitialWeights(): WeightState {
-  return Object.fromEntries(
-    highThroughputDemoScenario.targets.map((target) => [target.key, target.weight]),
-  ) as WeightState;
-}
-
 function buildDefaultConfirmedSetup(): ConfirmedSetup {
   const scenario = highThroughputDemoScenario;
 
@@ -152,10 +130,12 @@ function buildDefaultConfirmedSetup(): ConfirmedSetup {
 
 function buildTargetValueInputs(targetValues: Record<HighThroughputTargetKey, number>) {
   return Object.fromEntries(
-    highThroughputDemoScenario.targets.map((target) => [
-      target.key,
-      formatTargetValue(target, targetValues[target.key] ?? target.target),
-    ]),
+    highThroughputDemoScenario.targets.map((target) => {
+      const value = targetValues[target.key] ?? target.target;
+      // Number inputs need ungrouped, lossless values. Display rounding here
+      // would silently change confirmed thresholds when returning to S0.
+      return [target.key, target.key === "modulus" && Number.isInteger(value) ? value.toFixed(1) : String(value)];
+    }),
   ) as Record<HighThroughputTargetKey, string>;
 }
 
@@ -193,18 +173,6 @@ function uniqueItems<T>(items: T[]) {
   return Array.from(new Set(items));
 }
 
-function validationNumber(
-  validationValues: RecommendationValidationValues,
-  targetKey: HighThroughputTargetKey,
-  candidateId: string,
-) {
-  const rawValue = validationValues[recommendationValidationKey(targetKey, candidateId)];
-  if (rawValue === undefined || rawValue.trim() === "") {
-    return null;
-  }
-  const parsedValue = Number(rawValue);
-  return Number.isFinite(parsedValue) ? parsedValue : null;
-}
 
 function hasValidationValue(
   validationValues: RecommendationValidationValues,
@@ -214,56 +182,10 @@ function hasValidationValue(
   return validationNumber(validationValues, targetKey, candidateId) !== null;
 }
 
-function ratioValidationNumber(
-  validationValues: RatioValidationValues,
-  mixId: string,
-  targetKey: HighThroughputTargetKey,
-) {
-  const rawValue = validationValues[mixId]?.[targetKey];
-  if (rawValue === undefined || rawValue.trim() === "") {
-    return null;
-  }
-  const parsedValue = Number(rawValue);
-  return Number.isFinite(parsedValue) ? parsedValue : null;
-}
-
-function ratioValidationMissingCount(mixId: string, validationValues: RatioValidationValues) {
-  if (!mixId) {
-    return highThroughputDemoScenario.targets.length;
-  }
-  return highThroughputDemoScenario.targets.filter((target) =>
-    ratioValidationNumber(validationValues, mixId, target.key) === null,
-  ).length;
-}
-
 function isTargetCsvReady(upload: PriorDataUploadState | null | undefined) {
   return Boolean(upload && !upload.isLoading && !upload.errorMessage);
 }
 
-function fallbackCandidateSmiles(candidate: HighThroughputCandidate | undefined) {
-  if (!candidate) {
-    return {
-      polymerSmiles: "--",
-      monomerASmiles: "--",
-      monomerBSmiles: "--",
-    };
-  }
-
-  const monomerANumber = Number(candidate.monomerA.replace(/\D/g, "")) || 1;
-  const monomerBNumber = Number(candidate.monomerB.replace(/\D/g, "")) || 1;
-  const daSideChain = "C".repeat((monomerANumber % 10) + 1);
-  const daSecondChain = "C".repeat(Math.floor(monomerANumber / 10) + 1);
-  const dmSpacer = "C".repeat((monomerBNumber % 10) + 1);
-  const dmMethylPattern = "C".repeat(Math.floor(monomerBNumber / 10) + 1);
-  const aromaticBridge = `c1ccc(C(${daSideChain})(${daSecondChain})c2ccc(O)cc2)cc1`;
-  const diamineTail = `Nc1ccc(${dmSpacer}Oc2ccc(N)c(${dmMethylPattern})c2)cc1`;
-
-  return {
-    polymerSmiles: candidate.polymerSmiles ?? `*N(C(=O)c1ccc(${aromaticBridge})cc1C(=O)*)${diamineTail}`,
-    monomerASmiles: candidate.monomerASmiles ?? `O=C1OC(=O)c2ccc(${aromaticBridge})cc21`,
-    monomerBSmiles: candidate.monomerBSmiles ?? diamineTail,
-  };
-}
 
 function getAgentForCandidate(candidateId: string) {
   return highThroughputDemoScenario.agents.find(
@@ -393,63 +315,6 @@ function buildSvgPath(points: Array<{ x: number; y: number }>) {
     .join(" ");
 }
 
-function projectRatioPointFromRatios(ratios: Record<string, number>) {
-  return Object.entries(RATIO_SPACE_ANCHORS).reduce(
-    (point, [componentId, anchor]) => {
-      const ratio = ratios[componentId] ?? 0;
-      return {
-        x: point.x + anchor.x * ratio,
-        y: point.y + anchor.y * ratio,
-      };
-    },
-    { x: 0, y: 0 },
-  );
-}
-
-function projectRatioMixPoint(mix: RatioMixCandidate) {
-  return projectRatioPointFromRatios(mix.ratios);
-}
-
-function getSelectedRatioMix() {
-  const formulation = highThroughputDemoScenario.formulation;
-  return formulation.mixCandidates.find((mix) => mix.id === formulation.selectedMixId) ?? formulation.mixCandidates[formulation.mixCandidates.length - 1];
-}
-
-function defaultRatioMeasurementValue(mix: RatioMixCandidate, target: HighThroughputTarget) {
-  const formulation = highThroughputDemoScenario.formulation;
-  const finalOutcome = formulation.finalExplanation.targetOutcomes.find((outcome) => outcome.targetKey === target.key);
-  if (mix.id === formulation.selectedMixId && finalOutcome) {
-    return finalOutcome.predictedValue;
-  }
-
-  const achievement = mix.achievement[target.key] ?? 0;
-  const normalizedAchievement = clamp(achievement / 100, 0, 1);
-  const factor = target.direction === "lower"
-    ? 1.7 - normalizedAchievement * 0.85
-    : 0.58 + normalizedAchievement * 0.62;
-  return target.target * factor;
-}
-
-function buildInitialRatioValidationValues(): RatioValidationValues {
-  const scenario = highThroughputDemoScenario;
-  return Object.fromEntries(
-    scenario.formulation.mixCandidates.map((mix) => [
-      mix.id,
-      Object.fromEntries(
-        scenario.targets.map((target) => [
-          target.key,
-          formatTargetValue(target, defaultRatioMeasurementValue(mix, target)),
-        ]),
-      ) as Partial<Record<HighThroughputTargetKey, string>>,
-    ]),
-  );
-}
-
-function buildInitialRatioValidationConfirmations(): RatioValidationConfirmationState {
-  const seedMixId = highThroughputDemoScenario.formulation.searchSteps[0]?.proposedMixId;
-  return seedMixId ? { [seedMixId]: true } : {};
-}
-
 function getPropertySpace(targetKey: HighThroughputTargetKey) {
   return highThroughputDemoScenario.propertySpaces[targetKey];
 }
@@ -530,36 +395,6 @@ function targetGapLabelWithValidation(
   const gap = target.direction === "lower" ? target.target - value : value - target.target;
   const sign = gap > 0 ? "+" : "";
   return `${sign}${formatNumber(gap, targetValueDigits(target))}${target.unit}`;
-}
-
-function targetOutcomePasses(value: number, target: HighThroughputTarget) {
-  return target.direction === "lower" ? value <= target.target : value >= target.target;
-}
-
-function targetOutcomeMarginLabel(value: number, target: HighThroughputTarget) {
-  const margin = target.direction === "lower" ? target.target - value : value - target.target;
-  const formattedMargin = formatNumber(Math.abs(margin), targetValueDigits(target));
-  if (margin >= 0) {
-    return target.direction === "lower"
-      ? `低于目标 ${formattedMargin}${target.unit}`
-      : `高于目标 ${formattedMargin}${target.unit}`;
-  }
-  return target.direction === "lower"
-    ? `高于目标 ${formattedMargin}${target.unit}`
-    : `低于目标 ${formattedMargin}${target.unit}`;
-}
-
-function adjustedOutcomeAchievement(
-  outcome: { targetValue: number; achievement: number },
-  target: HighThroughputTarget,
-) {
-  const baselineTarget = outcome.targetValue || target.target || 1;
-  const configuredTarget = target.target || baselineTarget;
-  const adjustment = target.direction === "lower"
-    ? configuredTarget / baselineTarget
-    : baselineTarget / configuredTarget;
-
-  return Math.round(clamp(outcome.achievement * adjustment, 0, 100));
 }
 
 function propertySurfaceForStage(
@@ -800,10 +635,10 @@ function getStageCompletionState({
         ? `T${activeRatioSearchStepIndex + 1}`
         : "S6",
       hint: missingCount > 0
-        ? `请录入 ${proposedMixId} 的 ${missingCount} 个实测值`
+        ? `请填写 ${proposedMixId} 的 ${missingCount} 项演示验证值`
         : confirmed
-          ? activeRatioSearchStepIndex < lastStepIndex ? "实测值已回流，继续比例搜索" : "S5 最终配方已锁定"
-          : `请确认 ${proposedMixId} 实测值回流`,
+          ? activeRatioSearchStepIndex < lastStepIndex ? "本步已确认，可继续预设搜索" : "S5 预设最终配方已确认"
+          : `请确认 ${proposedMixId} 演示验证值`,
     };
   }
 
@@ -817,12 +652,13 @@ function getStageCompletionState({
 export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDemoPageProps) {
   const scenario = highThroughputDemoScenario;
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
-  const [weights, setWeights] = useState<WeightState>(() => buildInitialWeights());
   const [confirmedSetup, setConfirmedSetup] = useState<ConfirmedSetup>(() => buildDefaultConfirmedSetup());
   const [setupResetToken, setSetupResetToken] = useState(0);
   const [activeSpaceTargetKey, setActiveSpaceTargetKey] = useState<HighThroughputTargetKey>("tg");
   const [activeIterationRoundIndex, setActiveIterationRoundIndex] = useState(0);
+  const [viewIterationRoundIndex, setViewIterationRoundIndex] = useState(0);
   const [activeRatioSearchStepIndex, setActiveRatioSearchStepIndex] = useState(0);
+  const [viewRatioSearchStepIndex, setViewRatioSearchStepIndex] = useState(0);
   const [priorDataUploads, setPriorDataUploads] = useState<PriorDataUploadsState>({});
   const [selectedRecommendation, setSelectedRecommendation] = useState<RecommendationSelection | null>(null);
   const [recommendationValidationValues, setRecommendationValidationValues] = useState<RecommendationValidationValues>(() => buildInitialRecommendationValidationValues());
@@ -832,7 +668,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const [stageTransition, setStageTransition] = useState<StageTransitionState | null>(null);
   const priorUploadTimersRef = useRef<Partial<Record<HighThroughputTargetKey, number>>>({});
   const stageTransitionTimerRef = useRef<number | null>(null);
-  const mapStageRef = useRef<HTMLDivElement | null>(null);
+  const previousStageRef = useRef(currentStageIndex);
+  const scrollRegionRef = useRef<HTMLElement | null>(null);
   const nextStepState = getStageCompletionState({
     currentStageIndex,
     activeIterationRoundIndex,
@@ -858,6 +695,17 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   const displayedNextStepState = stageTransition
     ? { canAdvance: false, label: "处理中", hint: stageTransition.message }
     : nextStepState;
+  const isWorkbenchStage = currentStageIndex <= 6;
+  const isIterationReview = currentStageIndex === 3 && viewIterationRoundIndex < activeIterationRoundIndex;
+  const isRatioReview = currentStageIndex === 5 && viewRatioSearchStepIndex < activeRatioSearchStepIndex;
+
+  useEffect(() => {
+    if (previousStageRef.current !== currentStageIndex) {
+      if (scrollRegionRef.current) scrollRegionRef.current.scrollTop = 0;
+      if (isWorkbenchStage) document.getElementById("ht-workbench-surface-title")?.focus({ preventScroll: true });
+    }
+    previousStageRef.current = currentStageIndex;
+  }, [currentStageIndex, isWorkbenchStage]);
 
   useEffect(() => () => {
     Object.values(priorUploadTimersRef.current).forEach((timerId) => {
@@ -875,7 +723,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       return;
     }
 
-    const recommendedIds = recommendationValidationIds(activeSpaceTargetKey, currentStageIndex, activeIterationRoundIndex);
+    const recommendedIds = recommendationValidationIds(activeSpaceTargetKey, currentStageIndex, viewIterationRoundIndex);
     setSelectedRecommendation((selection) => {
       if (
         selection &&
@@ -888,7 +736,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       const candidateId = recommendedIds[0];
       return candidateId ? { targetKey: activeSpaceTargetKey, candidateId } : null;
     });
-  }, [activeIterationRoundIndex, activeSpaceTargetKey, currentStageIndex]);
+  }, [viewIterationRoundIndex, activeSpaceTargetKey, currentStageIndex]);
 
   function clearPriorUploadTimer(targetKey: HighThroughputTargetKey) {
     const timerId = priorUploadTimersRef.current[targetKey];
@@ -906,11 +754,11 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     const nextIndex = clamp(index, 0, scenario.stages.length - 1);
     setCurrentStageIndex(nextIndex);
     if (nextIndex === 3) {
-      setActiveIterationRoundIndex(0);
+      setViewIterationRoundIndex(activeIterationRoundIndex);
     } else if (nextIndex === 4) {
       setActiveIterationRoundIndex(2);
     } else if (nextIndex === 5) {
-      setActiveRatioSearchStepIndex(0);
+      setViewRatioSearchStepIndex(activeRatioSearchStepIndex);
     } else if (nextIndex === 6) {
       setActiveRatioSearchStepIndex(scenario.formulation.searchSteps.length - 1);
     }
@@ -929,7 +777,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function handleNextStep() {
-    if (!nextStepState.canAdvance || stageTransition) {
+    if (!nextStepState.canAdvance || stageTransition || isIterationReview || isRatioReview) {
       return;
     }
 
@@ -939,18 +787,19 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     }
 
     if (currentStageIndex === 2) {
-      runStageTransition("实验结果回流中，正在生成第一轮单性质模型...", VALIDATION_FEEDBACK_MS, () => enterStage(3));
+      runStageTransition("正在演示验证回流，准备进入 S3 单性质迭代…", VALIDATION_FEEDBACK_MS, () => enterStage(3));
       return;
     }
 
     if (currentStageIndex === 3) {
       if (activeIterationRoundIndex < 2) {
         const message = activeIterationRoundIndex === 0
-          ? "回流本轮实测值，正在更新单性质模型与热点图..."
-          : "验证最终推荐点，正在确认当前最优稳定...";
-        runStageTransition(message, VALIDATION_FEEDBACK_MS, () =>
-          setActiveIterationRoundIndex((roundIndex) => clamp(roundIndex + 1, 0, 2)),
-        );
+          ? "正在演示验证回流，切换到 R2 预设热点…"
+          : "正在演示验证回流，汇总收敛记录与预设输出…";
+        runStageTransition(message, VALIDATION_FEEDBACK_MS, () => {
+          setActiveIterationRoundIndex(activeIterationRoundIndex + 1);
+          setViewIterationRoundIndex(activeIterationRoundIndex + 1);
+        });
         return;
       }
       runStageTransition("汇总四个收敛候选，正在生成 p1-p4 输出...", STAGE_TRANSITION_MS, () => enterStage(4));
@@ -958,19 +807,20 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
     }
 
     if (currentStageIndex === 4) {
-      runStageTransition("汇总 p1-p4 组分池，正在进入比例搜索...", STAGE_TRANSITION_MS, () => enterStage(5));
+      runStageTransition("沿用预设 p1–p4 组分池，正在进入配比搜索…", STAGE_TRANSITION_MS, () => enterStage(5));
       return;
     }
 
     if (currentStageIndex === 5) {
       const lastStepIndex = scenario.formulation.searchSteps.length - 1;
       if (activeRatioSearchStepIndex < lastStepIndex) {
-        runStageTransition("评估邻域比例，正在更新模拟退火路径...", RATIO_SEARCH_FEEDBACK_MS, () =>
-          setActiveRatioSearchStepIndex((stepIndex) => clamp(stepIndex + 1, 0, lastStepIndex)),
-        );
+        runStageTransition("正在演示验证回流，切换到下一步预设比例…", RATIO_SEARCH_FEEDBACK_MS, () => {
+          setActiveRatioSearchStepIndex(activeRatioSearchStepIndex + 1);
+          setViewRatioSearchStepIndex(activeRatioSearchStepIndex + 1);
+        });
         return;
       }
-      runStageTransition("锁定最终配方，正在生成解释结果...", STAGE_TRANSITION_MS, () => enterStage(6));
+      runStageTransition("正在演示验证回流，准备展示预设最终配方…", STAGE_TRANSITION_MS, () => enterStage(6));
       return;
     }
 
@@ -1001,7 +851,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function confirmCurrentValidationGroup() {
-    if (!activeValidationGroupKey || activeValidationMissingCount > 0) {
+    if (!activeValidationGroupKey || activeValidationMissingCount > 0 || stageTransition || isIterationReview) {
       return;
     }
     setValidationConfirmations((confirmations) => ({
@@ -1016,7 +866,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function handleRatioValidationValueChange(targetKey: HighThroughputTargetKey, value: string) {
-    if (!activeRatioMixId) {
+    if (!activeRatioMeasurementRequired || !activeRatioMixId || stageTransition || isRatioReview || ratioValidationValues[activeRatioMixId]?.[targetKey] === value) {
       return;
     }
     setRatioValidationValues((values) => ({
@@ -1033,7 +883,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function confirmCurrentRatioValidation() {
-    if (!activeRatioMeasurementRequired || !activeRatioMixId || activeRatioValidationMissingCount > 0) {
+    if (!activeRatioMeasurementRequired || !activeRatioMixId || activeRatioValidationMissingCount > 0 || stageTransition || isRatioReview) {
       return;
     }
     setRatioValidationConfirmations((confirmations) => ({
@@ -1043,11 +893,13 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function resetCurrentStageActions() {
+    if (stageTransition || isIterationReview || isRatioReview) return;
     if (currentStageIndex === 0) {
       setConfirmedSetup(buildDefaultConfirmedSetup());
       setSetupResetToken((token) => token + 1);
       setActiveSpaceTargetKey("tg");
       setValidationConfirmations({});
+      invalidateIterationProgress();
       resetRatioValidationState();
       return;
     }
@@ -1057,39 +909,101 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       setPriorDataUploads({});
       setSelectedRecommendation(null);
       setValidationConfirmations({});
+      invalidateIterationProgress();
       return;
     }
 
     if (currentStageIndex === 2) {
       resetValidationValues(getRequiredValidationIds(2));
       clearValidationConfirmation(2);
-      setSelectedRecommendation(null);
+      invalidateIterationProgress();
+      setSelectedRecommendation({ targetKey: activeSpaceTargetKey, candidateId: recommendationValidationIds(activeSpaceTargetKey, 2)[0] });
       return;
     }
 
     if (currentStageIndex === 3) {
-      resetValidationValues(getRequiredValidationIds(3, activeIterationRoundIndex));
-      clearValidationConfirmation(3, activeIterationRoundIndex);
-      setSelectedRecommendation(null);
+      if (activeIterationRoundIndex === 2) {
+        if (!window.confirm("重新演示 S3？将恢复两轮共 12 项默认验证值并清除 S3 进度，保留 S0–S2 数据。")) return;
+        resetValidationValues([...getRequiredValidationIds(3, 0), ...getRequiredValidationIds(3, 1)]);
+        invalidateIterationProgress();
+      } else {
+        resetValidationValues(getRequiredValidationIds(3, activeIterationRoundIndex));
+        clearValidationConfirmation(3, activeIterationRoundIndex);
+        invalidateRatioProgress();
+      }
+      setSelectedRecommendation({ targetKey: activeSpaceTargetKey,
+        candidateId: recommendationValidationIds(activeSpaceTargetKey, 3, activeIterationRoundIndex === 2 ? 0 : activeIterationRoundIndex)[0] });
       return;
     }
 
     if (currentStageIndex === 5) {
-      setActiveRatioSearchStepIndex(0);
+      if (!window.confirm("重新演示 S5？将恢复各步默认验证值并清除 S5 确认与进度，保留 S0–S4 数据。")) return;
+      invalidateRatioProgress();
       resetRatioValidationState();
     }
   }
 
+  function invalidateRatioProgress() {
+    setActiveRatioSearchStepIndex(0);
+    setViewRatioSearchStepIndex(0);
+    setRatioValidationConfirmations(buildInitialRatioValidationConfirmations());
+  }
+
+  function restartDemo() {
+    if (stageTransition || !window.confirm("重新开始整个演示？将清除 S0–S6 的场景设置、上传数据、验证记录、确认与进度，恢复默认场景并返回 S0。")) return;
+    clearAllPriorUploadTimers();
+    setConfirmedSetup(buildDefaultConfirmedSetup());
+    setSetupResetToken((token) => token + 1);
+    setPriorDataUploads({});
+    setSelectedRecommendation(null);
+    setActiveSpaceTargetKey("tg");
+    setRecommendationValidationValues(buildInitialRecommendationValidationValues());
+    setValidationConfirmations({});
+    setActiveIterationRoundIndex(0);
+    setViewIterationRoundIndex(0);
+    setActiveRatioSearchStepIndex(0);
+    setViewRatioSearchStepIndex(0);
+    resetRatioValidationState();
+    enterStage(0);
+  }
+
+  function invalidateIterationProgress() {
+    setActiveIterationRoundIndex(0);
+    setViewIterationRoundIndex(0);
+    setValidationConfirmations((confirmations) => ({ ...confirmations, "s3-round-1": false, "s3-round-2": false }));
+    invalidateRatioProgress();
+  }
+
   function confirmSetup(setup: ConfirmedSetup) {
+    // Going back alone preserves confirmation; a genuinely changed scene requires a new review.
+    const targetsChanged = setup.selectedTargetKeys.length !== confirmedSetup.selectedTargetKeys.length ||
+      setup.selectedTargetKeys.some((key) => !confirmedSetup.selectedTargetKeys.includes(key));
+    if (targetsChanged || setup.materialType !== confirmedSetup.materialType ||
+      setup.monomerSystem !== confirmedSetup.monomerSystem || setup.representation !== confirmedSetup.representation ||
+      setup.monomerACount !== confirmedSetup.monomerACount || setup.monomerBCount !== confirmedSetup.monomerBCount ||
+      scenario.targets.some((target) => setup.targetValues[target.key] !== confirmedSetup.targetValues[target.key])) {
+      clearValidationConfirmation(2);
+      invalidateIterationProgress();
+    }
     setConfirmedSetup(setup);
     enterStage(1);
   }
 
   function handlePriorDataUpload(targetKey: HighThroughputTargetKey, file: File | null) {
-    if (!file) {
-      return;
-    }
+    if (file) beginPriorDataImport(targetKey, file.name);
+  }
 
+  function handlePriorSampleUpload(targetKey: HighThroughputTargetKey) {
+    if (currentStageIndex !== 1 || stageTransition) return;
+    beginPriorDataImport(targetKey, scenario.doeCsvFiles[targetKey].fileName);
+  }
+
+  // Both entry points select built-in demo rows by filename, sharing the same
+  // loading timer and stale-result guard. No file contents or service are used.
+  function beginPriorDataImport(targetKey: HighThroughputTargetKey, fileName: string) {
+    if (currentStageIndex !== 1 || stageTransition) return;
+    clearValidationConfirmation(2);
+    invalidateIterationProgress();
     clearPriorUploadTimer(targetKey);
     const csvFile = scenario.doeCsvFiles[targetKey];
     const uploadedAt = new Intl.DateTimeFormat("zh-CN", {
@@ -1099,13 +1013,13 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       hour12: false,
     }).format(new Date());
 
-    if (file.name !== csvFile.fileName) {
+    if (fileName !== csvFile.fileName) {
       setPriorDataUploads((uploads) => ({
         ...uploads,
         [targetKey]: {
           targetKey,
-          fileName: file.name,
-          fileType: file.name.split(".").pop()?.toUpperCase() || "UNKNOWN",
+          fileName,
+          fileType: fileName.split(".").pop()?.toUpperCase() || "UNKNOWN",
           sampleCount: 0,
           fieldCount: 0,
           expectedFileName: csvFile.fileName,
@@ -1124,8 +1038,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
       ...uploads,
       [targetKey]: {
         targetKey,
-        fileName: file.name,
-        fileType: file.name.split(".").pop()?.toUpperCase() || "CSV",
+        fileName,
+        fileType: fileName.split(".").pop()?.toUpperCase() || "CSV",
         sampleCount: csvFile.rows.length,
         fieldCount: 12,
         expectedFileName: csvFile.fileName,
@@ -1156,23 +1070,36 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   function handleRecommendationValidationValueChange(targetKey: HighThroughputTargetKey, candidateId: string, value: string) {
+    if (stageTransition || isIterationReview) return;
+    const key = recommendationValidationKey(targetKey, candidateId);
+    if (recommendationValidationValues[key] === value || !activeValidationRequirements.some((item) => item.targetKey === targetKey && item.candidateId === candidateId)) return;
     setRecommendationValidationValues((values) => ({
       ...values,
       [recommendationValidationKey(targetKey, candidateId)]: value,
     }));
     clearValidationConfirmation(currentStageIndex, activeIterationRoundIndex);
+    if (currentStageIndex === 2) invalidateIterationProgress();
+    if (currentStageIndex === 3) invalidateRatioProgress();
   }
 
   return (
-    <div className="high-throughput-demo">
-      <main className="ht-shell">
-        <section className="ht-docx-board">
-          <ScenarioHeader
-            confirmedSetup={confirmedSetup}
-            onConfirmSetup={confirmSetup}
-            isConfirmed={currentStageIndex > 0}
-            resetToken={setupResetToken}
-          />
+    <div className={cn("high-throughput-demo", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page", currentStageIndex === 2 && "ht-s2-page", currentStageIndex === 3 && "ht-s3-page", currentStageIndex === 4 && "ht-s4-page", currentStageIndex === 5 && "ht-s5-page", currentStageIndex === 6 && "ht-s6-page")}>
+      {isWorkbenchStage ? <h1 className="ht-workbench-title">高通量优化演示</h1> : null}
+      {isWorkbenchStage ? (
+        <ScenarioModuleToolbar
+          canReset={!stageTransition}
+          onReset={resetCurrentStageActions}
+          showReset={!isIterationReview && !isRatioReview && currentStageIndex !== 4 && currentStageIndex !== 6}
+          resetText={currentStageIndex === 5 ? "重演 S5" : currentStageIndex === 3 ? activeIterationRoundIndex === 2 ? "重演 S3" : "重置本批" : "重置"}
+          resetLabel={currentStageIndex === 5 ? "重演 S5" : currentStageIndex === 0 ? "恢复默认场景参数" : currentStageIndex === 1 ? "重置 S1 上传数据" : currentStageIndex === 2 ? "重置 S2 验证值" : activeIterationRoundIndex === 2 ? "重演 S3" : "重置本批验证值"}
+        />
+      ) : null}
+      <main ref={scrollRegionRef} className="ht-shell ht-scroll-region">
+        <section
+          className={cn("ht-docx-board", isWorkbenchStage && "ht-workbench-board np-sw-accented-surface", currentStageIndex === 0 && "ht-s0-board", (currentStageIndex >= 1 && currentStageIndex <= 6) && "ht-s1-board", currentStageIndex === 2 && "ht-s2-board", currentStageIndex === 3 && "ht-s3-board", currentStageIndex === 4 && "ht-s4-board", currentStageIndex === 5 && "ht-s5-board", currentStageIndex === 6 && "ht-s6-board")}
+          aria-labelledby={isWorkbenchStage ? "ht-workbench-surface-title" : undefined}
+        >
+          {isWorkbenchStage ? <ScenarioSurfaceHeader stageIndex={currentStageIndex} /> : null}
 
           <FlowControlBar
             currentStageIndex={currentStageIndex}
@@ -1180,100 +1107,113 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
             onNextStep={handleNextStep}
             onResetStage={resetCurrentStageActions}
             canResetStage={!stageTransition && [0, 1, 2, 3, 5].includes(currentStageIndex)}
+            navigationOnly={isWorkbenchStage}
           />
 
-          <div className="ht-docx-map-stage" ref={mapStageRef}>
-            <AgentOrbitPanel
-              stageIndex={currentStageIndex}
-              side="left"
+          {currentStageIndex === 0 ? (
+            <ScenarioHeader
               confirmedSetup={confirmedSetup}
+              onConfirmSetup={confirmSetup}
+              resetToken={setupResetToken}
+            />
+          ) : currentStageIndex === 1 ? (
+            <PriorImportWorkspace
+              targets={scenario.targets.map((target) => getConfiguredTarget(target.key, confirmedSetup))}
+              candidateTotal={confirmedSetup.candidateTotal}
+              materialType={confirmedSetup.materialType}
+              representation={confirmedSetup.representation}
               activeTargetKey={activeSpaceTargetKey}
               onSelectTarget={setActiveSpaceTargetKey}
-              iterationRoundIndex={activeIterationRoundIndex}
-              priorDataUploads={priorDataUploads}
-              onPriorDataUpload={handlePriorDataUpload}
-            />
-
-            <div className="ht-map-column">
-              {currentStageIndex <= 4 ? (
-                <PropertySpaceBoard
-                  stageIndex={currentStageIndex}
-                  confirmedSetup={confirmedSetup}
-                  activeTargetKey={activeSpaceTargetKey}
-                  onActiveTargetChange={setActiveSpaceTargetKey}
-                  iterationRoundIndex={activeIterationRoundIndex}
-                  priorDataUploads={priorDataUploads}
-                  validationValues={recommendationValidationValues}
-                  selectedRecommendation={selectedRecommendation}
-                  onSelectRecommendation={setSelectedRecommendation}
-                />
-              ) : (
-                <RatioAnnealingMap
-                  stageIndex={currentStageIndex}
-                  activeStepIndex={activeRatioSearchStepIndex}
-                  confirmedSetup={confirmedSetup}
-                  activeStepValidationConfirmed={activeRatioValidationConfirmed}
+              uploads={priorDataUploads}
+              onUpload={handlePriorDataUpload}
+              onUploadSample={handlePriorSampleUpload}
+              onBack={() => enterStage(0)}
+              onNext={handleNextStep}
+              canAdvance={displayedNextStepState.canAdvance}
+              transitionMessage={stageTransition?.message ?? null}
+              candidateMap={(
+                <PropertySpaceCard
+                  stageIndex={1}
+                  target={getConfiguredTarget(activeSpaceTargetKey, confirmedSetup)}
+                  variant="large"
+                  priorDataUpload={priorDataUploads[activeSpaceTargetKey] ?? null}
+                  showSummary={false}
                 />
               )}
-            </div>
-
-            <AgentOrbitPanel
-              stageIndex={currentStageIndex}
-              side="right"
-              confirmedSetup={confirmedSetup}
+            />
+          ) : currentStageIndex === 2 ? (
+            <PriorHotspotWorkspace
+              targets={scenario.targets.map((target) => getConfiguredTarget(target.key, confirmedSetup))}
+              candidateTotal={confirmedSetup.candidateTotal}
+              materialType={confirmedSetup.materialType}
+              representation={confirmedSetup.representation}
+              uploads={priorDataUploads}
               activeTargetKey={activeSpaceTargetKey}
               onSelectTarget={setActiveSpaceTargetKey}
-              iterationRoundIndex={activeIterationRoundIndex}
-              priorDataUploads={priorDataUploads}
-              onPriorDataUpload={handlePriorDataUpload}
-            />
-
-            {currentStageIndex <= 4 ? (
-              <AgentAttentionOverlay
-                stageIndex={currentStageIndex}
-                iterationRoundIndex={activeIterationRoundIndex}
-                stageRef={mapStageRef}
-              />
-            ) : null}
-            {stageTransition ? (
-              <div className="ht-stage-transition-overlay" role="status" aria-live="polite">
-                <span>实验流程处理中</span>
-                <strong>{stageTransition.message}</strong>
-              </div>
-            ) : null}
-          </div>
-
-          {currentStageIndex <= 3 ? (
-            <ExperimentPriorPanel
-              stageIndex={currentStageIndex}
-              activeTargetKey={activeSpaceTargetKey}
-              priorDataUploads={priorDataUploads}
-              iterationRoundIndex={activeIterationRoundIndex}
               selectedRecommendation={selectedRecommendation}
               onSelectRecommendation={setSelectedRecommendation}
               validationValues={recommendationValidationValues}
               onValidationValueChange={handleRecommendationValidationValueChange}
               validationConfirmed={activeValidationConfirmed}
-              validationMissingCount={activeValidationMissingCount}
-              validationRequiredCount={activeValidationRequirements.length}
-              onConfirmValidationGroup={confirmCurrentValidationGroup}
+              onConfirm={confirmCurrentValidationGroup}
+              onBack={() => enterStage(1)}
+              onNext={handleNextStep}
+              canAdvance={displayedNextStepState.canAdvance}
+              transitionMessage={stageTransition?.message ?? null}
+              renderCandidateMap={(onSelect) => (
+                <PropertySpaceCard stageIndex={2} target={getConfiguredTarget(activeSpaceTargetKey, confirmedSetup)}
+                  variant="large" showSummary={false} validationValues={recommendationValidationValues}
+                  selectedRecommendation={selectedRecommendation} onSelectRecommendation={onSelect}
+                  interactionDisabled={Boolean(stageTransition)} />
+              )}
+            />
+          ) : currentStageIndex === 3 ? (
+            <SinglePropertyIterationWorkspace
+              targets={scenario.targets.map((target) => getConfiguredTarget(target.key, confirmedSetup))}
+              candidateTotal={confirmedSetup.candidateTotal} materialType={confirmedSetup.materialType} representation={confirmedSetup.representation}
+              activeTargetKey={activeSpaceTargetKey} onSelectTarget={setActiveSpaceTargetKey}
+              progressRound={activeIterationRoundIndex} viewRound={viewIterationRoundIndex}
+              onViewRound={(round) => { if (!stageTransition && round >= 0 && round <= activeIterationRoundIndex) setViewIterationRoundIndex(round); }}
+              selectedRecommendation={selectedRecommendation} onSelectRecommendation={setSelectedRecommendation}
+              validationValues={recommendationValidationValues} onValidationValueChange={handleRecommendationValidationValueChange}
+              validationConfirmed={Boolean(validationConfirmations[validationConfirmationKey(3, viewIterationRoundIndex) ?? ""])}
+              onConfirm={confirmCurrentValidationGroup} onBack={() => { if (!stageTransition) enterStage(2); }} onNext={handleNextStep}
+              canAdvance={displayedNextStepState.canAdvance} transitionMessage={stageTransition?.message ?? null}
+              renderCandidateMap={(summary, onSelect) => (
+                <PropertySpaceCard stageIndex={3} target={summary.target} variant="large" showSummary={false}
+                  iterationRoundIndex={viewIterationRoundIndex} iterationSummary={summary} reviewMode={isIterationReview}
+                  validationValues={recommendationValidationValues} selectedRecommendation={selectedRecommendation}
+                  onSelectRecommendation={onSelect} interactionDisabled={Boolean(stageTransition)} />
+              )}
             />
           ) : currentStageIndex === 4 ? (
-            <CandidateOutputPanel activeTargetKey={activeSpaceTargetKey} confirmedSetup={confirmedSetup} />
+            <CandidateOutputWorkspace
+              targets={scenario.targets.map((target) => getConfiguredTarget(target.key, confirmedSetup))}
+              candidateTotal={confirmedSetup.candidateTotal} materialType={confirmedSetup.materialType} representation={confirmedSetup.representation}
+              activeTargetKey={activeSpaceTargetKey} onSelectTarget={setActiveSpaceTargetKey} validationValues={recommendationValidationValues}
+              onBack={() => { if (!stageTransition) enterStage(3); }} onNext={handleNextStep}
+              canAdvance={displayedNextStepState.canAdvance} transitionMessage={stageTransition?.message ?? null}
+              renderCandidateMap={(summary, selectedId, onSelect) => (
+                <PropertySpaceCard stageIndex={4} target={summary.target} variant="large" showSummary={false}
+                  interactionDisabled={Boolean(stageTransition)} outputPreview={{ outputId: summary.output.id,
+                    candidateIds: summary.candidates.map((candidate) => candidate.id), selectedId, onSelect }} />
+              )}
+            />
           ) : currentStageIndex === 5 ? (
-            <RatioSearchPanel
-              activeStepIndex={activeRatioSearchStepIndex}
-              confirmedSetup={confirmedSetup}
-              ratioValidationValues={ratioValidationValues}
-              validationConfirmed={activeRatioValidationConfirmed}
-              validationMissingCount={activeRatioValidationMissingCount}
-              onValidationValueChange={handleRatioValidationValueChange}
-              onConfirmValidation={confirmCurrentRatioValidation}
+            <RatioSearchWorkspace
+              targets={scenario.targets.map((target) => getConfiguredTarget(target.key, confirmedSetup))}
+              progressStep={activeRatioSearchStepIndex} viewStep={viewRatioSearchStepIndex}
+              onViewStep={(step) => { if (!stageTransition && step >= 0 && step <= activeRatioSearchStepIndex) setViewRatioSearchStepIndex(step); }}
+              validationValues={ratioValidationValues} confirmations={ratioValidationConfirmations}
+              onValidationValueChange={handleRatioValidationValueChange} onConfirm={confirmCurrentRatioValidation}
+              onBack={() => { if (!stageTransition && !isRatioReview) enterStage(4); }} onNext={handleNextStep}
+              canAdvance={displayedNextStepState.canAdvance} transitionMessage={stageTransition?.message ?? null}
             />
           ) : (
-            <FinalFormulationPanel
-              weights={weights}
-              confirmedSetup={confirmedSetup}
+            <FinalFormulationWorkspace
+              targets={scenario.targets.map((target) => getConfiguredTarget(target.key, confirmedSetup))}
+              onBack={() => { if (!stageTransition) enterStage(5); }}
+              onRestart={restartDemo}
             />
           )}
         </section>
@@ -1285,12 +1225,10 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
 function ScenarioHeader({
   confirmedSetup,
   onConfirmSetup,
-  isConfirmed,
   resetToken,
 }: {
   confirmedSetup: ConfirmedSetup;
   onConfirmSetup: (setup: ConfirmedSetup) => void;
-  isConfirmed: boolean;
   resetToken: number;
 }) {
   const scenario = highThroughputDemoScenario;
@@ -1300,7 +1238,6 @@ function ScenarioHeader({
   const [candidateA, setCandidateA] = useState(String(confirmedSetup.monomerACount));
   const [candidateB, setCandidateB] = useState(String(confirmedSetup.monomerBCount));
   const [selectedTargetKeys, setSelectedTargetKeys] = useState<HighThroughputTargetKey[]>(confirmedSetup.selectedTargetKeys);
-  const [focusedTargetKey, setFocusedTargetKey] = useState<HighThroughputTargetKey>("tg");
   const [targetValues, setTargetValues] = useState<Record<HighThroughputTargetKey, string>>(
     () => buildTargetValueInputs(confirmedSetup.targetValues),
   );
@@ -1318,7 +1255,6 @@ function ScenarioHeader({
   }, [confirmedSetup, resetToken]);
 
   function handleTargetClick(targetKey: HighThroughputTargetKey) {
-    setFocusedTargetKey(targetKey);
     setSelectedTargetKeys((current) => {
       if (current.includes(targetKey)) {
         return current.filter((key) => key !== targetKey);
@@ -1355,43 +1291,58 @@ function ScenarioHeader({
 
   return (
     <section className="ht-scenario-panel" aria-label="材料与目标设置">
-      <div className="ht-scenario-title">
-        <FlaskConical aria-hidden="true" size={22} />
-        <div>
-          <span className="ht-kicker">Material & Target Setup</span>
-          <h2>材料体系与目标设置</h2>
-        </div>
+      <div className="ht-workbench-demo-note">
+        <BadgeInfo aria-hidden="true" size={16} />
+        <span><strong>交互说明：</strong>保留任务设置输入用于演示配置过程；候选数据、推荐批次与后续搜索路径仍采用预设场景。</span>
       </div>
 
       <div className="ht-setup-grid">
         <div className="ht-setup-section">
-          <SetupControl icon={<Layers3 aria-hidden="true" size={20} />} label="Material type">
-            <select value={materialType} onChange={(event) => setMaterialType(event.currentTarget.value)}>
-              <option value="Polyimide">Polyimide</option>
-            </select>
+          <SetupSectionHeading
+            index="01"
+            title="材料体系"
+            description="定义聚合物类别与单体组合方式"
+          />
+          <SetupControl icon={<Layers3 aria-hidden="true" size={20} />} label="材料类型" htmlFor="ht-material-type">
+            <WorkbenchSelect
+              id="ht-material-type"
+              ariaLabel="材料类型"
+              value={materialType}
+              options={[{ value: "Polyimide", label: "Polyimide", description: "聚酰亚胺（PI）薄膜" }]}
+              onChange={setMaterialType}
+            />
           </SetupControl>
 
-          <SetupControl icon={<FlaskConical aria-hidden="true" size={20} />} label="Monomer system">
-            <select value={monomerSystem} onChange={(event) => setMonomerSystem(event.currentTarget.value)}>
-              <option value="Diamine + Dianhydride">Diamine + Dianhydride</option>
-            </select>
+          <SetupControl icon={<FlaskConical aria-hidden="true" size={20} />} label="单体体系" htmlFor="ht-monomer-system">
+            <WorkbenchSelect
+              id="ht-monomer-system"
+              ariaLabel="单体体系"
+              value={monomerSystem}
+              options={[{ value: "Diamine + Dianhydride", label: "Diamine + Dianhydride", description: "二胺与二酐组合" }]}
+              onChange={setMonomerSystem}
+            />
           </SetupControl>
         </div>
 
         <div className="ht-setup-section middle">
-          <SetupControl icon={<Layers3 aria-hidden="true" size={20} />} label="Candidate space">
+          <SetupSectionHeading
+            index="02"
+            title="候选空间"
+            description="设置组合规模与二维空间表征"
+          />
+          <SetupControl icon={<Layers3 aria-hidden="true" size={20} />} label="候选空间">
             <div className="ht-candidate-space-inputs">
               <input
-                aria-label="Candidate monomer A count"
+                aria-label="单体 A 候选数量"
                 inputMode="numeric"
                 min="0"
                 type="number"
                 value={candidateA}
                 onChange={(event) => setCandidateA(event.currentTarget.value)}
               />
-              <span aria-hidden="true">x</span>
+              <span aria-hidden="true">×</span>
               <input
-                aria-label="Candidate monomer B count"
+                aria-label="单体 B 候选数量"
                 inputMode="numeric"
                 min="0"
                 type="number"
@@ -1401,94 +1352,185 @@ function ScenarioHeader({
             </div>
           </SetupControl>
 
-          <SetupControl icon={<BrainCircuit aria-hidden="true" size={20} />} label="Representation">
-            <select value={representation} onChange={(event) => setRepresentation(event.currentTarget.value)}>
-              <option value="PolyBERT">PolyBERT</option>
-            </select>
+          <SetupControl icon={<BrainCircuit aria-hidden="true" size={20} />} label="空间表征" htmlFor="ht-representation">
+            <WorkbenchSelect
+              id="ht-representation"
+              ariaLabel="空间表征"
+              value={representation}
+              options={[{ value: "PolyBERT", label: "PolyBERT", description: "聚合物表征的二维投影" }]}
+              onChange={setRepresentation}
+            />
           </SetupControl>
         </div>
 
         <div className="ht-setup-section targets">
-          <div className="ht-setup-row">
-            <span className="ht-setup-icon">
-              <Target aria-hidden="true" size={20} />
-            </span>
-            <div className="ht-setup-field">
-              <span className="ht-setup-label">Target properties</span>
+          <SetupSectionHeading
+            index="03"
+            title="优化目标"
+            description="选择目标性质并调整演示阈值"
+          />
+          <div className="ht-s0-target-controls">
+            <SetupControl icon={<Target aria-hidden="true" size={20} />} label="目标性质">
               <div className="ht-property-buttons">
                 {scenario.targets.map((target) => (
                   <button
                     key={target.key}
                     type="button"
                     aria-pressed={selectedTargetKeys.includes(target.key)}
+                    title={target.label}
                     onClick={() => handleTargetClick(target.key)}
                     style={{ "--target-color": target.color } as CSSProperties}
                   >
+                    <Check aria-hidden="true" className="ht-target-check" />
                     <span>{target.shortLabel}</span>
                   </button>
                 ))}
               </div>
-            </div>
-          </div>
+            </SetupControl>
 
-          <div className="ht-setup-row">
-            <span className="ht-setup-icon">
-              <BadgeInfo aria-hidden="true" size={20} />
-            </span>
-            <div className="ht-setup-field">
-              <span className="ht-setup-label">Target values</span>
+            <SetupControl icon={<BadgeInfo aria-hidden="true" size={20} />} label="目标阈值">
               <div className="ht-target-value-inputs">
                 {selectedTargets.length > 0 ? selectedTargets.map((target) => (
                   <label key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
                     <span>{target.shortLabel}</span>
+                    <span
+                      id={`ht-target-direction-${target.key}`}
+                      className="ht-target-direction"
+                    >
+                      <span aria-hidden="true">{target.direction === "higher" ? "≥" : "≤"}</span>
+                      <span className="sr-only">{target.direction === "higher" ? "不低于" : "不超过"}</span>
+                    </span>
                     <input
-                      aria-label={`${target.shortLabel} target value`}
+                      aria-label={`${target.shortLabel} 目标值`}
+                      aria-describedby={`ht-target-direction-${target.key} ht-target-unit-${target.key}`}
                       inputMode="decimal"
                       step={target.key === "modulus" ? "0.1" : "1"}
                       type="number"
                       value={targetValues[target.key]}
-                      onFocus={() => setFocusedTargetKey(target.key)}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
                         setTargetValues((current) => ({
                           ...current,
-                          [target.key]: event.currentTarget.value,
-                        }))
-                      }
+                          [target.key]: value,
+                        }));
+                      }}
                     />
+                    <span id={`ht-target-unit-${target.key}`} className="ht-target-unit">
+                      {target.unit === "degC" ? "°C" : target.unit}
+                    </span>
                   </label>
                 )) : <span className="ht-target-empty">请选择目标性质</span>}
               </div>
-            </div>
+            </SetupControl>
           </div>
         </div>
       </div>
 
       <div className="ht-setup-actions">
         <div className="ht-setup-summary">
-          <span>Candidate space preview</span>
+          <span>候选空间预览</span>
           <strong>
-            {candidateA || "0"} x {candidateB || "0"} = {formatNumber(candidateTotalPreview)}
+            {candidateA || "0"} × {candidateB || "0"} = {formatNumber(candidateTotalPreview)}
           </strong>
-          <em>{selectedTargets.length} target properties selected</em>
+          <em>已选择 {selectedTargets.length} 个目标性质</em>
         </div>
-        <button type="button" className="ht-confirm-setup-button" onClick={handleConfirmSetup} disabled={isConfirmed}>
-          {isConfirmed ? <CheckCircle2 aria-hidden="true" size={17} /> : <ChevronRight aria-hidden="true" size={17} />}
-          {isConfirmed ? "任务设置已确认" : "确认任务设置，生成候选空间"}
+        <button type="button" className="ht-confirm-setup-button" onClick={handleConfirmSetup}>
+          确认场景设置，进入 S1
+          <ChevronRight aria-hidden="true" size={17} />
         </button>
       </div>
     </section>
   );
 }
 
-function SetupControl({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
+function ScenarioModuleToolbar({
+  canReset,
+  onReset,
+  resetLabel,
+  resetText = "重置",
+  showReset = true,
+}: {
+  canReset: boolean;
+  onReset: () => void;
+  resetLabel: string;
+  resetText?: string;
+  showReset?: boolean;
+}) {
   return (
-    <div className="ht-setup-row">
-      <span className="ht-setup-icon">{icon}</span>
-      <span className="ht-setup-field">
-        <span className="ht-setup-label">{label}</span>
-        {children}
-      </span>
+    <div className="ht-workbench-toolbar" aria-label="高通量优化演示状态">
+      <div className="ht-workbench-actions">
+        <span role="status">
+          <i aria-hidden="true" />
+          <strong>固定演示</strong>
+        </span>
+        {showReset ? <button
+          type="button"
+          onClick={onReset}
+          aria-label={resetLabel}
+          disabled={!canReset}
+        >
+          <RotateCcw aria-hidden="true" />
+          {resetText}
+        </button> : null}
+      </div>
     </div>
+  );
+}
+
+function ScenarioSurfaceHeader({ stageIndex }: { stageIndex: number }) {
+  const isPrior = stageIndex === 1;
+  const isHotspot = stageIndex === 2;
+  const isIteration = stageIndex === 3;
+  const isOutput = stageIndex === 4;
+  const isRatioSearch = stageIndex === 5;
+  const isFinal = stageIndex === 6;
+  return (
+    <header className="ht-workbench-header">
+      <div className="ht-workbench-heading">
+        <span className="ht-workbench-mark">
+          {isFinal ? <CheckCircle2 aria-hidden="true" /> : isRatioSearch ? <SlidersHorizontal aria-hidden="true" /> : isOutput ? <FileCheck2 aria-hidden="true" /> : isHotspot || isIteration ? <BrainCircuit aria-hidden="true" /> : isPrior ? <TestTube2 aria-hidden="true" /> : <FlaskConical aria-hidden="true" />}
+        </span>
+        <div>
+          <h2 id="ht-workbench-surface-title" tabIndex={-1}>{isFinal ? "最终配方与结果解释" : isRatioSearch ? "多目标配比搜索" : isOutput ? "单性质候选输出" : isIteration ? "单性质迭代与验证回流" : isHotspot ? "先验热点与推荐验证" : isPrior ? "正交实验与先验导入" : "材料体系与目标设置"}</h2>
+          <p>{isFinal ? "查看锁定配方、四目标模拟结果与组分来源，为下一轮真实实验验证提供候选。" : isRatioSearch ? "固定 p1–p4 组分，逐步查看模拟退火决策与配方验证回流。" : isOutput ? "查看四个固定输出组分的性质、结构与备选，衔接多目标配比搜索。" : isIteration ? "逐轮验证推荐点，对照回流记录与预设路径，查看单性质收敛结果。" : isHotspot ? "查看四个性质的初始热点，编辑并确认本批推荐点的演示验证值。" : isPrior ? "为四个性质 Agent 导入 DOE 样例，查看候选分布与先验数据。" : "设置材料体系、候选空间与优化目标。"}</p>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function SetupControl({ icon, label, htmlFor, children }: { icon: ReactNode; label: string; htmlFor?: string; children: ReactNode }) {
+  const labelId = useId();
+  return (
+    <div className="ht-setup-row" role="group" aria-labelledby={labelId}>
+      <div className="ht-setup-label">
+        <span className="ht-setup-icon">{icon}</span>
+        {htmlFor ? <label id={labelId} htmlFor={htmlFor}>{label}</label> : <span id={labelId}>{label}</span>}
+      </div>
+      <div className="ht-setup-field">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function SetupSectionHeading({
+  index,
+  title,
+  description,
+}: {
+  index: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <header className="ht-s0-section-heading">
+      <span>{index}</span>
+      <div>
+        <h3>{title}</h3>
+        <p>{description}</p>
+      </div>
+    </header>
   );
 }
 
@@ -1508,41 +1550,45 @@ function FlowControlBar({
   onNextStep,
   onResetStage,
   canResetStage,
+  navigationOnly = false,
 }: {
   currentStageIndex: number;
   nextStepState: NextStepState;
   onNextStep: () => void;
   onResetStage: () => void;
   canResetStage: boolean;
+  navigationOnly?: boolean;
 }) {
   const stages = highThroughputDemoScenario.stages;
 
   return (
     <section className="ht-flow-control-bar" aria-label="演示播放控制">
-      <div className="ht-flow-next">
-        <div className="ht-flow-next-actions">
-          <button
-            type="button"
-            className="ht-primary-control ht-next-step-control"
-            onClick={onNextStep}
-            disabled={!nextStepState.canAdvance}
-          >
-            {nextStepState.label}
-            <ChevronRight aria-hidden="true" size={16} />
-          </button>
-          <button
-            type="button"
-            className="ht-icon-button ht-stage-reset-button"
-            onClick={onResetStage}
-            aria-label="重置当前阶段"
-            title={canResetStage ? "重置当前阶段" : "当前阶段无可重置动作"}
-            disabled={!canResetStage}
-          >
-            <RotateCcw aria-hidden="true" size={15} />
-          </button>
+      {currentStageIndex !== 0 && !navigationOnly ? (
+        <div className="ht-flow-next">
+          <div className="ht-flow-next-actions">
+            <button
+              type="button"
+              className="ht-primary-control ht-next-step-control"
+              onClick={onNextStep}
+              disabled={!nextStepState.canAdvance}
+            >
+              {nextStepState.label}
+              <ChevronRight aria-hidden="true" size={16} />
+            </button>
+            <button
+              type="button"
+              className="ht-icon-button ht-stage-reset-button"
+              onClick={onResetStage}
+              aria-label="重置当前阶段"
+              title={canResetStage ? "重置当前阶段" : "当前阶段无可重置动作"}
+              disabled={!canResetStage}
+            >
+              <RotateCcw aria-hidden="true" size={15} />
+            </button>
+          </div>
+          <span>{nextStepState.hint}</span>
         </div>
-        <span>{nextStepState.hint}</span>
-      </div>
+      ) : null}
       <nav className="ht-flow-steps" aria-label="S0 到 S6 演示阶段">
         {stages.map((stage, index) => {
           const state = index < currentStageIndex
@@ -1788,6 +1834,11 @@ function PropertySpaceCard({
   validationValues = {},
   selectedRecommendation = null,
   onSelectRecommendation,
+  showSummary = true,
+  interactionDisabled = false,
+  iterationSummary,
+  reviewMode = false,
+  outputPreview,
 }: {
   stageIndex: number;
   target: HighThroughputTarget;
@@ -1797,25 +1848,38 @@ function PropertySpaceCard({
   validationValues?: RecommendationValidationValues;
   selectedRecommendation?: RecommendationSelection | null;
   onSelectRecommendation?: (selection: RecommendationSelection) => void;
+  showSummary?: boolean;
+  interactionDisabled?: boolean;
+  iterationSummary?: IterationTargetSummary;
+  reviewMode?: boolean;
+  outputPreview?: { outputId: string; candidateIds: string[]; selectedId: string; onSelect: (id: string) => void };
 }) {
+  const plotGridId = useId();
+  const isWorkbenchPlot = !showSummary && variant === "large" && stageIndex >= 1 && stageIndex <= 4;
+  const isOutputPlot = stageIndex === 4 && Boolean(outputPreview);
   const space = getPropertySpace(target.key);
   const activeRounds = highThroughputDemoScenario.roundsByTarget[target.key];
   const activeRoundIndex = clamp(iterationRoundIndex, 0, activeRounds.length - 1);
-  const surface = propertySurfaceForStage(stageIndex, space, iterationRoundIndex);
-  const roundIds = propertyRoundIds(target.key, stageIndex, iterationRoundIndex);
+  const surface = iterationSummary ? iterationSummary.surface : propertySurfaceForStage(stageIndex, space, iterationRoundIndex);
+  const roundIds = iterationSummary ? {
+    testedIds: iterationSummary.returnedRecords.map((record) => record.candidate.id),
+    currentTestedIds: iterationSummary.round.testedIds,
+    recommendedIds: iterationSummary.recommendations.map((candidate) => candidate.id),
+  } : propertyRoundIds(target.key, stageIndex, iterationRoundIndex);
   const isPriorLoading = Boolean(priorDataUpload?.isLoading);
   const isPriorError = Boolean(priorDataUpload?.errorMessage);
   const isPriorReady = Boolean(priorDataUpload && !priorDataUpload.isLoading && !priorDataUpload.errorMessage);
   const showPriorDoe = stageIndex >= 2 || (stageIndex === 1 && isPriorReady);
   const priorIds = showPriorDoe ? space.priorCandidateIds : [];
   const measuredPriorIds = stageIndex >= 2 ? space.priorCandidateIds : [];
-  const currentBestId = propertySpaceCurrentBestId(stageIndex, space, target, iterationRoundIndex, validationValues);
+  const currentBestId = isOutputPlot ? outputPreview!.outputId : iterationSummary ? iterationSummary.recordBest?.candidate.id ?? "" : propertySpaceCurrentBestId(stageIndex, space, target, iterationRoundIndex, validationValues);
   const currentBest = currentBestId ? getCandidate(currentBestId) : undefined;
   const specialIds = new Set([
     ...priorIds,
     ...measuredPriorIds,
     ...roundIds.testedIds,
     ...roundIds.recommendedIds,
+    ...(outputPreview?.candidateIds ?? []),
     currentBestId,
   ].filter(Boolean));
   const renderedPoints = stageIndex >= 1
@@ -1848,6 +1912,7 @@ function PropertySpaceCard({
           ? "Prior DOE Surface"
           : surface?.label ?? "Round surface";
   const canInspectRecommendation =
+    !interactionDisabled &&
     (stageIndex === 2 || stageIndex === 3) &&
     recommendedSet.size > 0 &&
     Boolean(onSelectRecommendation);
@@ -1865,28 +1930,46 @@ function PropertySpaceCard({
       selectRecommendation(candidateId);
     }
   };
+  const canInspectOutput = isOutputPlot && !interactionDisabled;
+  const selectOutput = (candidateId: string) => { if (canInspectOutput) outputPreview?.onSelect(candidateId); };
+  const handleOutputKeyDown = (event: KeyboardEvent<SVGGElement>, candidateId: string) => {
+    if (canInspectOutput && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); selectOutput(candidateId); }
+  };
 
   return (
     <article className={cn("ht-property-space-card", variant)} style={{ "--target-color": target.color } as CSSProperties}>
-      <div className="ht-property-space-head">
-        <div>
-          <span>{target.shortLabel} Space</span>
-          <strong>{target.label}</strong>
+      {showSummary ? (
+        <div className="ht-property-space-head">
+          <div>
+            <span>{target.shortLabel} Space</span>
+            <strong>{target.label}</strong>
+          </div>
+          <b className={cn(stageIndex === 3 && "ht-property-round-label")} data-tooltip={stageLabel} tabIndex={stageIndex === 3 ? 0 : undefined}>
+            <span>{stageLabel}</span>
+          </b>
         </div>
-        <b className={cn(stageIndex === 3 && "ht-property-round-label")} data-tooltip={stageLabel} tabIndex={stageIndex === 3 ? 0 : undefined}>
-          <span>{stageLabel}</span>
-        </b>
-      </div>
+      ) : null}
 
-      <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role="img" aria-label={`${target.shortLabel} single-property optimization space`}>
+      <svg viewBox={`0 0 ${MATERIAL_MAP_WIDTH} ${MATERIAL_MAP_HEIGHT}`} role={stageIndex === 2 || iterationSummary || isOutputPlot ? "group" : "img"}
+        data-surface-snapshot={iterationSummary ? surface?.id : undefined}
+        aria-label={isOutputPlot ? `${target.shortLabel} 固定输出与备选位置图` : iterationSummary ? `${target.shortLabel} ${iterationRoundIndex === 2 ? "收敛" : `R${iterationRoundIndex + 1}`} 回流记录与预设热点` : stageIndex === 2 ? `${target.shortLabel} 先验热点与推荐点` : `${target.shortLabel} single-property optimization space`}>
         <defs>
           <radialGradient id={`ht-property-gradient-${target.key}-${surface?.id ?? "none"}`} cx="50%" cy="50%" r="55%">
             <stop offset="0%" stopColor={target.color} stopOpacity="0.82" />
             <stop offset="46%" stopColor={target.color} stopOpacity="0.32" />
             <stop offset="100%" stopColor={target.color} stopOpacity="0" />
           </radialGradient>
+          {isWorkbenchPlot ? (
+            <pattern id={plotGridId} width="4" height="4" patternUnits="userSpaceOnUse">
+              <path className="ht-property-grid-detail-line" d="M 4 0 H 0 V 4" fill="none" />
+            </pattern>
+          ) : null}
         </defs>
-        <rect x="0" y="0" width={MATERIAL_MAP_WIDTH} height={MATERIAL_MAP_HEIGHT} rx="3" fill="#fbfdff" />
+        <rect className="ht-property-space-backdrop" x="0" y="0" width={MATERIAL_MAP_WIDTH} height={MATERIAL_MAP_HEIGHT} rx="3" fill="#fbfdff" />
+        {isWorkbenchPlot ? (
+          <rect className="ht-property-grid-detail" width={MATERIAL_MAP_WIDTH} height={MATERIAL_MAP_HEIGHT}
+            rx="3" fill={`url(#${plotGridId})`} aria-hidden="true" pointerEvents="none" />
+        ) : null}
         <g className="ht-material-grid" aria-hidden="true">
           {Array.from({ length: 5 }, (_, index) => (
             <line key={`x-${index}`} x1={(index + 1) * 16} y1="0" x2={(index + 1) * 16} y2={MATERIAL_MAP_HEIGHT} />
@@ -1913,6 +1996,7 @@ function PropertySpaceCard({
         {projectedRenderedPoints.map((point, index) => (
           <circle
             key={point.candidateId}
+            className="ht-property-candidate-point"
             cx={point.x}
             cy={point.y}
             r={index % 11 === 0 ? "0.38" : "0.28"}
@@ -1923,7 +2007,7 @@ function PropertySpaceCard({
           </circle>
         ))}
         {space.candidatePoints
-          .filter((point) => priorSet.has(point.candidateId))
+          .filter((point) => !isOutputPlot && priorSet.has(point.candidateId))
           .map((point) => {
             const projectedPoint = projectSpacePoint(point);
             return (
@@ -1936,14 +2020,15 @@ function PropertySpaceCard({
                 height="1.64"
                 rx="0.2"
               >
-                <title>{point.candidateId} DOE prior</title>
+                <title>{point.candidateId} · DOE 先验</title>
               </rect>
             );
           })}
         {space.candidatePoints
-          .filter((point) => measuredSet.has(point.candidateId) && !priorSet.has(point.candidateId))
+          .filter((point) => !isOutputPlot && measuredSet.has(point.candidateId) && !priorSet.has(point.candidateId))
           .map((point) => {
             const projectedPoint = projectSpacePoint(point);
+            const returnedRecord = iterationSummary?.returnedRecords.find((record) => record.candidate.id === point.candidateId);
             return (
               <circle
                 key={`tested-${point.candidateId}`}
@@ -1951,7 +2036,9 @@ function PropertySpaceCard({
                 cx={projectedPoint.x}
                 cy={projectedPoint.y}
                 r={currentTestedSet.has(point.candidateId) ? "1.02" : "0.78"}
-              />
+              >
+                <title>{point.candidateId} · {returnedRecord ? `${returnedRecord.source} · 演示验证值 ${formatIterationValue(target, returnedRecord.value)} ${target.unit === "degC" ? "°C" : target.unit}` : `已回流 · ${candidateValueWithValidation(getCandidate(point.candidateId), target, validationValues)}`}</title>
+              </circle>
             );
           })}
         {space.candidatePoints
@@ -1965,7 +2052,8 @@ function PropertySpaceCard({
                 className={cn("ht-recommended-sample-node", canInspectRecommendation && "selectable", isSelected && "selected")}
                 role={canInspectRecommendation ? "button" : undefined}
                 tabIndex={canInspectRecommendation ? 0 : undefined}
-                aria-label={canInspectRecommendation ? `查看 ${point.candidateId} SMILES 并录入 ${target.shortLabel} 实测值` : undefined}
+                aria-label={canInspectRecommendation ? reviewMode ? `查看 ${point.candidateId} 推荐点及结构详情` : `查看 ${point.candidateId} 推荐点并编辑 ${target.shortLabel} 演示验证值` : undefined}
+                aria-pressed={canInspectRecommendation ? isSelected : undefined}
                 onClick={() => selectRecommendation(point.candidateId)}
                 onKeyDown={(event) => handleRecommendationKeyDown(event, point.candidateId)}
               >
@@ -1989,36 +2077,60 @@ function PropertySpaceCard({
                     r="1.88"
                   />
                 ) : null}
-                <title>{point.candidateId} 推荐验证点</title>
+                <title>{point.candidateId} · {iterationSummary ? `${iterationRoundIndex === 0 ? "R1" : "R2"} 预设推荐 · ${reviewMode ? "已确认，只读回看" : "本轮待回流"}` : "推荐验证点"}</title>
               </g>
             );
           })}
+        {isOutputPlot ? space.candidatePoints.filter((point) => point.candidateId !== currentBestId && outputPreview!.candidateIds.includes(point.candidateId)).map((point) => {
+          const projected = projectSpacePoint(point);
+          const selected = outputPreview!.selectedId === point.candidateId;
+          return <g key={`output-backup-${point.candidateId}`} className="ht-s4-map-point" transform={`translate(${projected.x} ${projected.y})`}
+            data-candidate-id={point.candidateId} role="button" tabIndex={canInspectOutput ? 0 : -1} aria-disabled={!canInspectOutput}
+            aria-label={`在位置图查看 ${point.candidateId} 备选`} aria-pressed={selected}
+            onClick={() => selectOutput(point.candidateId)} onKeyDown={(event) => handleOutputKeyDown(event, point.candidateId)}>
+            <circle className="ht-s4-map-hit" r="4" /><rect className="ht-s4-map-backup" x="-1.15" y="-1.15" width="2.3" height="2.3" rx="0.15" />
+            {selected ? <circle className="ht-s4-map-selection" r="2.7" /> : null}
+            <title>{point.candidateId} · Top-k 备选 · 仅供比较，不替换输出</title>
+          </g>;
+        }) : null}
         {currentBestId ? (
           space.candidatePoints
             .filter((point) => point.candidateId === currentBestId)
             .map((point) => {
               const projectedPoint = projectSpacePoint(point);
               return (
-                <g key={`best-${point.candidateId}`} className="ht-current-best-marker" transform={`translate(${projectedPoint.x} ${projectedPoint.y})`}>
+                <g key={`best-${point.candidateId}`} className={cn("ht-current-best-marker", isOutputPlot && "ht-s4-map-point")} data-candidate-id={point.candidateId} transform={`translate(${projectedPoint.x} ${projectedPoint.y})`}
+                  role={isOutputPlot ? "button" : undefined} tabIndex={isOutputPlot ? canInspectOutput ? 0 : -1 : undefined}
+                  aria-disabled={isOutputPlot ? !canInspectOutput : undefined} aria-pressed={isOutputPlot ? outputPreview!.selectedId === point.candidateId : undefined}
+                  aria-label={isOutputPlot ? `在位置图查看 ${point.candidateId} 固定输出` : undefined}
+                  onClick={isOutputPlot ? () => selectOutput(point.candidateId) : undefined}
+                  onKeyDown={isOutputPlot ? (event) => handleOutputKeyDown(event, point.candidateId) : undefined}>
+                  {isOutputPlot ? <><title>{point.candidateId} · S4 固定输出 · 不随备选选择改变</title><circle className="ht-s4-map-hit" r="4" /></> : null}
+                  {iterationSummary?.recordBest ? <title>{point.candidateId} · 回流记录最优 · {iterationSummary.recordBest.source} · {formatIterationValue(target, iterationSummary.recordBest.value)} {target.unit === "degC" ? "°C" : target.unit}</title> : null}
                   <circle r="1.65" />
                   <path d="M 0 -2.2 L 0.56 -0.64 L 2.15 -0.64 L 0.86 0.28 L 1.34 1.86 L 0 0.9 L -1.34 1.86 L -0.86 0.28 L -2.15 -0.64 L -0.56 -0.64 Z" />
+                  {isOutputPlot && outputPreview!.selectedId === point.candidateId ? <circle className="ht-s4-map-selection" r="2.7" /> : null}
                 </g>
               );
             })
         ) : null}
       </svg>
 
-      <div className="ht-property-space-meta">
-        <span>DOE <b>{priorSet.size}</b></span>
-        <span>已测 <b>{measuredSet.size}</b></span>
-        <span>推荐 <b>{recommendedSet.size}</b></span>
-        <span>热点 <b>{surfaceLabel}</b></span>
-      </div>
-      <div className="ht-property-space-best">
-        <span>当前最优</span>
-        <strong>{currentBestId || "--"}</strong>
-        <em>{candidateValueWithValidation(currentBest, target, validationValues)} / gap {targetGapLabelWithValidation(currentBest, target, validationValues)}</em>
-      </div>
+      {showSummary ? (
+        <>
+          <div className="ht-property-space-meta">
+            <span>DOE <b>{priorSet.size}</b></span>
+            <span>已测 <b>{measuredSet.size}</b></span>
+            <span>推荐 <b>{recommendedSet.size}</b></span>
+            <span>热点 <b>{surfaceLabel}</b></span>
+          </div>
+          <div className="ht-property-space-best">
+            <span>当前最优</span>
+            <strong>{currentBestId || "--"}</strong>
+            <em>{candidateValueWithValidation(currentBest, target, validationValues)} / gap {targetGapLabelWithValidation(currentBest, target, validationValues)}</em>
+          </div>
+        </>
+      ) : null}
     </article>
   );
 }
@@ -2382,237 +2494,6 @@ function DoeCsvPreviewPanel({
   );
 }
 
-function RatioAnnealingMap({
-  stageIndex,
-  activeStepIndex,
-  confirmedSetup,
-  activeStepValidationConfirmed = true,
-}: {
-  stageIndex: number;
-  activeStepIndex: number;
-  confirmedSetup: ConfirmedSetup;
-  activeStepValidationConfirmed?: boolean;
-}) {
-  const scenario = highThroughputDemoScenario;
-  const formulation = scenario.formulation;
-  const finalExplanation = formulation.finalExplanation;
-  const isFinalStage = stageIndex >= 6;
-  const steps = formulation.searchSteps;
-  const activeIndex = isFinalStage ? steps.length - 1 : clamp(activeStepIndex, 0, steps.length - 1);
-  const activeStep = steps[activeIndex];
-  const mixById = new Map(formulation.mixCandidates.map((mix) => [mix.id, mix]));
-  const decisionVisible = isFinalStage || activeIndex === 0 || activeStepValidationConfirmed;
-  const visibleMixes = activeStep.mixCandidateIds
-    .map((mixId) => mixById.get(mixId))
-    .filter((mix): mix is RatioMixCandidate => Boolean(mix));
-  const pathMixIds = decisionVisible
-    ? activeStep.acceptedPathIds
-    : steps[Math.max(activeIndex - 1, 0)]?.acceptedPathIds ?? activeStep.acceptedPathIds;
-  const acceptedPathMixes = pathMixIds
-    .map((mixId) => mixById.get(mixId))
-    .filter((mix): mix is RatioMixCandidate => Boolean(mix));
-  const previousStep = steps[Math.max(activeIndex - 1, 0)] ?? activeStep;
-  const rawCurrentMix = mixById.get(activeStep.currentMixId) ?? visibleMixes[0] ?? formulation.mixCandidates[0];
-  const previousMix = mixById.get(activeStep.previousMixId) ?? rawCurrentMix;
-  const proposedMix = mixById.get(activeStep.proposedMixId) ?? rawCurrentMix;
-  const rawBestMix = mixById.get(activeStep.currentBestId) ?? rawCurrentMix;
-  const previousBestMix = mixById.get(previousStep.currentBestId) ?? rawCurrentMix;
-  const currentMix = decisionVisible ? rawCurrentMix : previousMix;
-  const currentBestMix = decisionVisible ? rawBestMix : previousBestMix;
-  const selectedMix = mixById.get(formulation.selectedMixId) ?? currentBestMix;
-  const focusMix = isFinalStage ? selectedMix : currentBestMix;
-  const focusPoint = projectRatioMixPoint(focusMix);
-  const currentPoint = projectRatioMixPoint(currentMix);
-  const previousPoint = projectRatioMixPoint(previousMix);
-  const proposedPoint = projectRatioMixPoint(proposedMix);
-  const selectedPoint = projectRatioMixPoint(selectedMix);
-  const visibleMixIdSet = new Set(visibleMixes.map((mix) => mix.id));
-  const pathPoints = acceptedPathMixes.map(projectRatioMixPoint);
-  const selectedRatioLabel = formulation.components
-    .map((component) => ratioPercent(selectedMix.ratios[component.id] ?? 0))
-    .join(" / ");
-  const finalPassCount = finalExplanation.targetOutcomes.filter((outcome) =>
-    targetOutcomePasses(outcome.predictedValue, getConfiguredTarget(outcome.targetKey, confirmedSetup)),
-  ).length;
-  const finalTargetStatus = `${finalPassCount}/${finalExplanation.targetOutcomes.length} 达标`;
-  const rejectedMixIdSet = new Set(
-    steps
-      .slice(0, decisionVisible ? activeIndex + 1 : activeIndex)
-      .filter((step) => !step.accepted)
-      .map((step) => step.proposedMixId),
-  );
-  const ratioGridPoints = [];
-
-  for (let p1 = 0; p1 <= 10; p1 += 1) {
-    for (let p2 = 0; p2 <= 10 - p1; p2 += 1) {
-      for (let p3 = 0; p3 <= 10 - p1 - p2; p3 += 1) {
-        const p4 = 10 - p1 - p2 - p3;
-        ratioGridPoints.push({
-          id: `${p1}-${p2}-${p3}-${p4}`,
-          point: projectRatioPointFromRatios({
-            p1: p1 / 10,
-            p2: p2 / 10,
-            p3: p3 / 10,
-            p4: p4 / 10,
-          }),
-        });
-      }
-    }
-  }
-
-  return (
-    <section className={cn("ht-material-map-panel ht-ratio-annealing-map-panel", isFinalStage && "final")}>
-      <div className="ht-panel-header">
-        <div>
-          <span className="ht-kicker">{isFinalStage ? "最终配方结果" : "四组分比例性能地形"}</span>
-          <h2>{isFinalStage ? "最终推荐配方位置" : "模拟退火比例性能地形"}</h2>
-        </div>
-        <div className="ht-space-status-group">
-          <span className="ht-unified-space-badge">
-            比例步长 {formulation.ratioGrid.step.toFixed(1)} / {formulation.ratioGrid.candidateCount} 个候选
-          </span>
-          <span className="ht-generated-space-badge">
-            {isFinalStage ? `最终配方 ${selectedMix.id}` : "模拟退火路径"}
-          </span>
-        </div>
-      </div>
-
-      <div className="ht-map-canvas ht-ratio-annealing-canvas" aria-label={isFinalStage ? "S6 最终推荐配方位置图" : "S5 模拟退火比例搜索图"}>
-        <svg viewBox="0 0 100 48" role="img">
-          <title>{isFinalStage ? "S6 最终推荐配方位置" : "S5 模拟退火比例性能地形"}</title>
-          <defs>
-            <filter id="ht-ratio-terrain-blur" x="-25%" y="-25%" width="150%" height="150%">
-              <feGaussianBlur stdDeviation="2.9" />
-            </filter>
-            <radialGradient id="ht-ratio-performance-gradient" cx="50%" cy="50%" r="58%">
-              <stop offset="0%" stopColor="#0891b2" stopOpacity="0.58" />
-              <stop offset="48%" stopColor="#67e8f9" stopOpacity="0.3" />
-              <stop offset="100%" stopColor="#ecfeff" stopOpacity="0" />
-            </radialGradient>
-            <marker id="ht-ratio-path-arrow" markerHeight="5" markerWidth="5" orient="auto" refX="4.2" refY="2.5">
-              <path d="M0,0 L5,2.5 L0,5 z" />
-            </marker>
-          </defs>
-
-          <rect className="ht-ratio-map-bg" x="0.6" y="0.8" width="98.8" height="46.4" rx="2.3" />
-          <g className="ht-material-grid" aria-hidden="true">
-            {[18, 34, 50, 66, 82].map((x) => <line key={`v-${x}`} x1={x} y1="5" x2={x} y2="43" />)}
-            {[10, 19, 28, 37].map((y) => <line key={`h-${y}`} x1="8" y1={y} x2="92" y2={y} />)}
-          </g>
-
-          <g className="ht-ratio-grid-points" aria-label="0.1 比例网格候选">
-            {ratioGridPoints.map(({ id, point }) => (
-              <circle key={id} cx={point.x} cy={point.y} r="0.34" />
-            ))}
-          </g>
-
-          <g className="ht-ratio-performance-layer" aria-label={isFinalStage ? "最终配方达成区域" : "模拟目标地形"}>
-            <ellipse cx={focusPoint.x} cy={focusPoint.y} rx="24" ry="13.5" />
-            <ellipse cx={focusPoint.x + 2.2} cy={focusPoint.y - 0.8} rx="13.2" ry="7.2" />
-          </g>
-
-          <g className="ht-ratio-anchor-layer" aria-label="p1-p4 比例锚点">
-            {formulation.components.map((component) => {
-              const anchor = RATIO_SPACE_ANCHORS[component.id];
-              if (!anchor) {
-                return null;
-              }
-
-              return (
-                <g key={component.id} className="ht-ratio-anchor" style={{ "--component-color": component.color } as CSSProperties}>
-                  <rect x={anchor.x - 4.35} y={anchor.y - 2.25} width="8.7" height="4.5" rx="1.1" />
-                  <text x={anchor.x} y={anchor.y + 0.58} textAnchor="middle">{component.id}</text>
-                  <title>{`${component.id} 组分锚点，不是退火候选点`}</title>
-                </g>
-              );
-            })}
-          </g>
-
-          {pathPoints.length > 1 ? (
-            <path
-              className={cn("ht-ratio-annealing-path", isFinalStage && "final")}
-              d={buildSvgPath(pathPoints)}
-              markerEnd={isFinalStage ? undefined : "url(#ht-ratio-path-arrow)"}
-            />
-          ) : null}
-
-          {!isFinalStage && previousMix.id !== proposedMix.id ? (
-            <path
-              className={cn(
-                "ht-ratio-proposal-line",
-                decisionVisible ? activeStep.accepted ? "accepted" : "rejected" : "pending",
-              )}
-              d={buildSvgPath([previousPoint, proposedPoint])}
-            />
-          ) : null}
-
-          <g className="ht-ratio-mix-layer" aria-label={isFinalStage ? "最终配方候选" : "退火搜索候选"}>
-            {visibleMixes.map((mix) => {
-              const point = projectRatioMixPoint(mix);
-              const isVisible = visibleMixIdSet.has(mix.id);
-              const isCurrent = mix.id === currentMix.id;
-              const isBest = mix.id === currentBestMix.id;
-              const isProposed = !isFinalStage && mix.id === proposedMix.id;
-              const isRejected = rejectedMixIdSet.has(mix.id);
-              const isSelected = isFinalStage && mix.id === selectedMix.id;
-              const mixTitle = isFinalStage
-                ? `${mix.id} / p1 ${ratioPercent(mix.ratios.p1 ?? 0)}, p2 ${ratioPercent(mix.ratios.p2 ?? 0)}, p3 ${ratioPercent(mix.ratios.p3 ?? 0)}, p4 ${ratioPercent(mix.ratios.p4 ?? 0)}`
-                : `${mix.id} 综合 ${mix.score} / p1 ${ratioPercent(mix.ratios.p1 ?? 0)}, p2 ${ratioPercent(mix.ratios.p2 ?? 0)}, p3 ${ratioPercent(mix.ratios.p3 ?? 0)}, p4 ${ratioPercent(mix.ratios.p4 ?? 0)}`;
-
-              return (
-                <g
-                  key={mix.id}
-                  className={cn(
-                    "ht-ratio-mix-node",
-                    isVisible && "visible",
-                    isProposed && "proposed",
-                    isRejected && "rejected",
-                    isCurrent && "current",
-                    isBest && "best",
-                    isSelected && "selected",
-                  )}
-                >
-                  <circle cx={point.x} cy={point.y} r={isSelected ? 1.95 : isRejected ? 1.45 : isCurrent || isBest ? 1.65 : 1.05} />
-                  {isCurrent || isBest || isSelected || isProposed || isRejected ? (
-                    <text x={point.x + 2.1} y={point.y - 1.8}>{mix.id}</text>
-                  ) : null}
-                  <title>{mixTitle}</title>
-                </g>
-              );
-            })}
-          </g>
-
-          {isFinalStage ? (
-            <g className="ht-ratio-selected-star" transform={`translate(${selectedPoint.x} ${selectedPoint.y})`} aria-label="最终推荐配方">
-              <path d="M0 -3.3 L0.76 -1 L3.14 -1 L1.2 0.42 L1.92 2.74 L0 1.35 L-1.92 2.74 L-1.2 0.42 L-3.14 -1 L-0.76 -1 Z" />
-            </g>
-          ) : (
-            <g className="ht-ratio-current-ring" transform={`translate(${currentPoint.x} ${currentPoint.y})`} aria-label="当前退火配方">
-              <circle r="3.2" />
-            </g>
-          )}
-        </svg>
-
-        {isFinalStage ? (
-          <div className="ht-ratio-map-summary final">
-            <span><b>最终配方</b>{selectedMix.id}</span>
-            <span><b>目标状态</b>{finalTargetStatus}</span>
-            <span><b>配方比例</b>{selectedRatioLabel}</span>
-            <span><b>下一步</b>{finalExplanation.nextStep}</span>
-          </div>
-        ) : (
-          <div className="ht-ratio-map-summary">
-            <span><b>温度</b>{activeStep.coolingLabel}</span>
-            <span><b>扰动</b>{previousMix.id} {"->"} {proposedMix.id}</span>
-            <span><b>决策</b>{decisionVisible ? activeStep.decisionLabel : "等待实测回流"}</span>
-            <span><b>当前最优</b>{currentBestMix.id} / {currentBestMix.score}</span>
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
 function AgentOrbitPanel({
   stageIndex,
   side,
@@ -2917,517 +2798,5 @@ function AgentPanel({
         })}
       </div>
     </aside>
-  );
-}
-
-function CandidateOutputPanel({
-  activeTargetKey,
-  confirmedSetup,
-}: {
-  activeTargetKey: HighThroughputTargetKey;
-  confirmedSetup: ConfirmedSetup;
-}) {
-  const scenario = highThroughputDemoScenario;
-  const target = getConfiguredTarget(activeTargetKey, confirmedSetup);
-  const space = getPropertySpace(activeTargetKey);
-  const component = scenario.formulation.components.find((item) => item.sourceTargetKey === activeTargetKey);
-  const agent = scenario.agents.find((item) => item.targetKey === activeTargetKey);
-  const outputCandidate = getCandidate(space.currentBestId);
-  const backupIds = (agent?.topCandidateIds ?? []).filter((candidateId) => candidateId !== space.currentBestId);
-  const outputLabel = component?.id ?? "p?";
-  const outputDescription = component?.description ?? "单性质收敛候选";
-
-  return (
-    <section className="ht-candidate-output-panel" style={{ "--target-color": target.color } as CSSProperties}>
-      <div className="ht-panel-header">
-        <div>
-          <span className="ht-kicker">S4 Single-property Candidate Output</span>
-          <h2>{target.shortLabel}{" -> "}{outputLabel} 候选输出</h2>
-        </div>
-        <span className="ht-simulation-badge compact">来自 S3 收敛空间</span>
-      </div>
-
-      <div className="ht-candidate-output-grid">
-        <article className="ht-candidate-output-focus">
-          <span>{outputLabel}</span>
-          <div>
-            <strong>{space.currentBestId}</strong>
-            <em>{outputDescription}</em>
-          </div>
-          <dl>
-            <div>
-              <dt>来源空间</dt>
-              <dd>{target.shortLabel} / {target.label}</dd>
-            </div>
-            <div>
-              <dt>目标</dt>
-              <dd>{targetThresholdLabel(target)}</dd>
-            </div>
-            <div>
-              <dt>当前值</dt>
-              <dd>{candidateValue(outputCandidate, target)}</dd>
-            </div>
-            <div>
-              <dt>目标差距</dt>
-              <dd>{targetGapLabel(outputCandidate, target)}</dd>
-            </div>
-          </dl>
-        </article>
-
-        <article className="ht-candidate-output-backups">
-          <div className="ht-candidate-output-backup-label">
-            <span><Target aria-hidden="true" size={16} /></span>
-            <strong>Top-k 备选</strong>
-          </div>
-          <div className="ht-candidate-output-backup-list">
-            {backupIds.map((candidateId) => {
-              const candidate = getCandidate(candidateId);
-              return (
-                <span key={candidateId}>
-                  <b>{candidateId}</b>
-                  <em>{candidateValue(candidate, target)} / {targetGapLabel(candidate, target)}</em>
-                </span>
-              );
-            })}
-          </div>
-        </article>
-
-      </div>
-    </section>
-  );
-}
-
-function RatioSearchPanel({
-  activeStepIndex,
-  confirmedSetup,
-  ratioValidationValues,
-  validationConfirmed,
-  validationMissingCount,
-  onValidationValueChange,
-  onConfirmValidation,
-}: {
-  activeStepIndex: number;
-  confirmedSetup: ConfirmedSetup;
-  ratioValidationValues: RatioValidationValues;
-  validationConfirmed: boolean;
-  validationMissingCount: number;
-  onValidationValueChange: (targetKey: HighThroughputTargetKey, value: string) => void;
-  onConfirmValidation: () => void;
-}) {
-  const scenario = highThroughputDemoScenario;
-  const formulation = scenario.formulation;
-  const steps = formulation.searchSteps;
-  const activeIndex = clamp(activeStepIndex, 0, steps.length - 1);
-  const activeStep = steps[activeIndex];
-  const mixById = new Map(formulation.mixCandidates.map((mix) => [mix.id, mix]));
-  const visibleMixes = activeStep.mixCandidateIds
-    .map((mixId) => mixById.get(mixId))
-    .filter((mix): mix is NonNullable<typeof mix> => Boolean(mix));
-  const currentMix = mixById.get(activeStep.currentMixId) ?? visibleMixes[0] ?? formulation.mixCandidates[0];
-  const currentBestMix = mixById.get(activeStep.currentBestId) ?? currentMix;
-  const previousMix = mixById.get(activeStep.previousMixId) ?? currentMix;
-  const proposedMix = mixById.get(activeStep.proposedMixId) ?? currentMix;
-  const selectedMix = mixById.get(formulation.selectedMixId) ?? currentBestMix;
-  const measurementRequired = activeIndex > 0;
-  const decisionVisible = !measurementRequired || validationConfirmed;
-  const displayCurrentMix = decisionVisible ? currentMix : previousMix;
-  const previousBestMix = mixById.get(steps[Math.max(activeIndex - 1, 0)]?.currentBestId) ?? currentBestMix;
-  const displayBestMix = decisionVisible ? currentBestMix : previousBestMix;
-  const displayAchievementMix = decisionVisible ? currentMix : proposedMix;
-  const displayedEvaluatedCount = decisionVisible
-    ? activeStep.evaluatedCount
-    : steps[Math.max(activeIndex - 1, 0)]?.evaluatedCount ?? activeStep.evaluatedCount;
-  const deltaLabel = `${activeStep.deltaScore > 0 ? "+" : ""}${activeStep.deltaScore}`;
-  const acceptanceLabel = `${Math.round(activeStep.acceptanceProbability * 100)}%`;
-  const validationStatus = !measurementRequired
-    ? "初始解已知"
-    : validationMissingCount > 0
-      ? `待补 ${validationMissingCount} 项`
-      : validationConfirmed
-        ? "实测已回流"
-        : "待确认回流";
-
-  return (
-    <section className="ht-ratio-search-panel">
-      <div className="ht-panel-header">
-        <div>
-          <span className="ht-kicker">S5 Formulation Ratio Search</span>
-          <h2>四组分模拟退火比例搜索</h2>
-        </div>
-        <span className="ht-simulation-badge compact">p1-p4 from S4 output</span>
-      </div>
-
-      <div className="ht-ratio-search-grid">
-        <div className="ht-component-pool">
-          <SectionTitle icon={<Target aria-hidden="true" size={17} />} title="S4 输入组分池" />
-          <div className="ht-component-list">
-            {formulation.components.map((component) => {
-              const target = getTarget(component.sourceTargetKey);
-              const convergedCandidateId = getPropertySpace(component.sourceTargetKey).currentBestId;
-              return (
-                <article key={component.id} className="ht-component-row active locked" style={{ "--target-color": component.color } as CSSProperties}>
-                  <span>{component.id}</span>
-                  <div>
-                    <strong>{component.label}</strong>
-                    <em>{convergedCandidateId} / {target.shortLabel} from S4 output</em>
-                  </div>
-                  <b>{component.description}</b>
-                </article>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="ht-mix-candidate-panel">
-          <div className="ht-ratio-step-control readonly" aria-label="S5 ratio search step">
-            <div>
-              <span>{activeStep.label}</span>
-              <strong>{activeStep.title}</strong>
-            </div>
-          </div>
-          <div className="ht-annealing-step-timeline" aria-label="Simulated annealing event timeline">
-            {steps.map((step, index) => {
-              const stepDecisionVisible = index < activeIndex || (index === activeIndex && decisionVisible);
-              return (
-                <span
-                  key={step.id}
-                  aria-current={index === activeIndex ? "step" : undefined}
-                  className={cn(
-                    stepDecisionVisible ? step.accepted ? "accepted" : "rejected" : "pending",
-                    index === activeIndex && "active",
-                  )}
-                >
-                  <span>{step.label}</span>
-                  <b>{step.coolingLabel}</b>
-                </span>
-              );
-            })}
-          </div>
-
-          <article className={cn("ht-annealing-decision-card", decisionVisible ? activeStep.accepted ? "accepted" : "rejected" : "pending")}>
-            <div className="ht-annealing-move-grid">
-              <div className="ht-annealing-mix-card">
-                <span>当前解</span>
-                <strong>{previousMix.id}</strong>
-                <RatioStackedBar mix={previousMix} components={formulation.components} />
-                <em>综合 {previousMix.score}</em>
-              </div>
-              <div className="ht-annealing-mix-card proposed">
-                <span>邻域扰动</span>
-                <strong>{proposedMix.id}</strong>
-                <RatioStackedBar mix={proposedMix} components={formulation.components} />
-                <em>{decisionVisible ? `综合 ${proposedMix.score}` : "待实测"}</em>
-              </div>
-              <div className="ht-annealing-mix-card">
-                <span>决策后当前解</span>
-                <strong>{displayCurrentMix.id}</strong>
-                <RatioStackedBar mix={displayCurrentMix} components={formulation.components} />
-                <em>{decisionVisible ? activeStep.accepted ? "accepted" : "kept previous" : "待决策"}</em>
-              </div>
-            </div>
-
-            <div className="ht-annealing-metrics">
-              <span><b>温度 T</b>{activeStep.temperature.toFixed(2)}</span>
-              <span><b>Δscore</b>{decisionVisible ? deltaLabel : "--"}</span>
-              <span><b>接受概率</b>{decisionVisible ? acceptanceLabel : "--"}</span>
-              <span><b>结果</b>{decisionVisible ? activeStep.decisionLabel : "等待实测"}</span>
-            </div>
-
-          </article>
-        </div>
-
-        <div className="ht-mix-preview-panel ht-annealing-status-panel">
-          <SectionTitle icon={<TestTube2 aria-hidden="true" size={17} />} title="退火状态回流" />
-          <div className="ht-ratio-status-compact">
-            <div className={cn("ht-current-mix-card", decisionVisible ? activeStep.accepted ? "accepted" : "rejected" : "pending")}>
-              <span>{decisionVisible ? activeStep.actionLabel : <>等待配方<br />实测</>}</span>
-              <strong>{decisionVisible ? activeStep.accepted ? currentMix.id : `${proposedMix.id} rejected` : proposedMix.id}</strong>
-              <RatioStackedBar mix={decisionVisible ? activeStep.accepted ? currentMix : proposedMix : proposedMix} components={formulation.components} showLabels orientation="vertical" />
-            </div>
-            <div className={cn("ht-ratio-measurement-box", validationConfirmed && "confirmed")}>
-              <div className="ht-ratio-measurement-head">
-                <span>配方实测回流</span>
-                <strong>{proposedMix.id}</strong>
-                <b>{validationStatus}</b>
-              </div>
-              {measurementRequired ? (
-                <>
-                  <div className="ht-ratio-measurement-grid">
-                    {scenario.targets.map((target) => {
-                      const configuredTarget = getConfiguredTarget(target.key, confirmedSetup);
-                      return (
-                        <label key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
-                          <span>{target.shortLabel}</span>
-                          <div>
-                            <input
-                              type="number"
-                              step={target.key === "modulus" ? "0.1" : "1"}
-                              value={ratioValidationValues[proposedMix.id]?.[target.key] ?? ""}
-                              onChange={(event) => onValidationValueChange(target.key, event.target.value)}
-                              aria-label={`${proposedMix.id} ${target.shortLabel} 实测值`}
-                            />
-                            <em>{configuredTarget.unit}</em>
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={onConfirmValidation}
-                    disabled={validationMissingCount > 0 || validationConfirmed}
-                  >
-                    {validationConfirmed ? "已确认" : "确认本步实测值"}
-                  </button>
-                </>
-              ) : (
-                <p>初始化 mix-0 作为已知起点，下一步开始对邻域配方做实测回流。</p>
-              )}
-            </div>
-          </div>
-          <div className="ht-ratio-status-bottom">
-            <div className="ht-mix-score-grid">
-              <span>已评估 <b>{displayedEvaluatedCount}/{formulation.ratioGrid.candidateCount}</b></span>
-              <span>当前解 <b>{displayCurrentMix.id}</b></span>
-              <span>当前最优 <b>{displayBestMix.id}</b></span>
-            </div>
-            <div className="ht-achievement-preview" aria-label={`${displayAchievementMix.id} property achievement`}>
-              {scenario.targets.map((target) => {
-                const value = displayAchievementMix.achievement[target.key];
-                return (
-                  <div key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
-                    <span>{target.shortLabel}</span>
-                    <b>{value}%</b>
-                    <i><em style={{ width: `${value}%` }} /></i>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function FinalFormulationPanel({
-  weights,
-  confirmedSetup,
-}: {
-  weights: WeightState;
-  confirmedSetup: ConfirmedSetup;
-}) {
-  const scenario = highThroughputDemoScenario;
-  const formulation = scenario.formulation;
-  const finalExplanation = formulation.finalExplanation;
-  const selectedMix = getSelectedRatioMix();
-  const targetOutcomes = finalExplanation.targetOutcomes.map((outcome) => {
-    const target = getConfiguredTarget(outcome.targetKey, confirmedSetup);
-    return {
-      ...outcome,
-      target,
-      achievement: adjustedOutcomeAchievement(outcome, target),
-      pass: targetOutcomePasses(outcome.predictedValue, target),
-    };
-  });
-  const displayedAchievement = Object.fromEntries(
-    targetOutcomes.map((outcome) => [outcome.targetKey, outcome.achievement]),
-  ) as Record<HighThroughputTargetKey, number>;
-  const passedOutcomeCount = targetOutcomes.filter((outcome) => outcome.pass).length;
-
-  return (
-    <section className="ht-final-formulation-panel ht-formulation-panel active">
-      <div className="ht-panel-header">
-        <div>
-          <span className="ht-kicker">S6 最终解释</span>
-          <h2>最终推荐配方解释</h2>
-        </div>
-        <span className="ht-simulation-badge compact">来自 S5 锁定结果 {selectedMix.id}</span>
-      </div>
-
-      <div className="ht-formulation-grid">
-        <div className="ht-selected-mix-panel ht-final-ratio-panel">
-          <SectionTitle icon={<Layers3 aria-hidden="true" size={17} />} title="最终配方比例" />
-          <article className="ht-selected-mix-card">
-            <span>S6 最终配方</span>
-            <strong>{selectedMix.id}</strong>
-            <RatioStackedBar mix={selectedMix} components={formulation.components} showLabels />
-          </article>
-          <div className="ht-ratio-bars">
-            {formulation.components.map((component) => (
-              <div key={component.id}>
-                <span>{component.id}</span>
-                <b style={{ width: `${(selectedMix.ratios[component.id] ?? 0) * 100}%`, background: component.color }} />
-                <strong>{ratioPercent(selectedMix.ratios[component.id] ?? 0)}</strong>
-              </div>
-            ))}
-          </div>
-
-          <SectionTitle icon={<Target aria-hidden="true" size={17} />} title="来源追踪" />
-          <div className="ht-source-trace-list">
-            {finalExplanation.sourceTrace.map((trace) => {
-              const component = formulation.components.find((item) => item.id === trace.componentId);
-              const target = getTarget(trace.targetKey);
-              return (
-                <article key={trace.componentId} className="ht-source-trace-row" style={{ "--target-color": component?.color ?? target.color } as CSSProperties}>
-                  <span>{trace.componentId}</span>
-                  <div>
-                    <strong>{trace.componentId} ← {trace.agentLabel} ← {trace.candidateId}</strong>
-                    <em>{target.shortLabel} / {trace.sourceStage} / {ratioPercent(trace.ratio)}</em>
-                  </div>
-                  <b>{component?.description ?? target.shortLabel}</b>
-                </article>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="ht-result-panel ht-final-outcome-panel">
-          <SectionTitle icon={<TestTube2 aria-hidden="true" size={17} />} title="目标达成" />
-          <div className="ht-score-box">
-            <span>目标状态</span>
-            <strong>{`${passedOutcomeCount}/${targetOutcomes.length} 达标`}</strong>
-          </div>
-          <div className="ht-target-outcome-grid">
-            {targetOutcomes.map((outcome) => {
-              const target = outcome.target;
-              return (
-                <article key={outcome.targetKey} style={{ "--target-color": target.color } as CSSProperties}>
-                  <div>
-                    <span>{target.shortLabel}</span>
-                    <b>{outcome.pass ? "达标" : "待优化"}</b>
-	                  </div>
-	                  <strong>{formatTargetValue(target, outcome.predictedValue)} {target.unit}</strong>
-	                  <em>目标 {targetThresholdLabel(target)} / {targetOutcomeMarginLabel(outcome.predictedValue, target)}</em>
-	                </article>
-	              );
-	            })}
-          </div>
-          <div className="ht-radar-card">
-            <span>综合评分雷达</span>
-            <RadarChart achievement={displayedAchievement} />
-          </div>
-        </div>
-
-        <div className="ht-final-summary-panel">
-          <SectionTitle icon={<CheckCircle2 aria-hidden="true" size={17} />} title="推荐结论" />
-          <article className="ht-final-summary-card">
-            <strong>{finalExplanation.summary}</strong>
-            <span>{finalExplanation.nextStep}</span>
-            <p>推荐配方作为下一轮真实实验验证候选。</p>
-          </article>
-
-          <SectionTitle icon={<SlidersHorizontal aria-hidden="true" size={17} />} title="解释权重 / 目标约束" />
-          <div className="ht-constraint-list">
-            {scenario.targets.map((baseTarget) => {
-              const target = getConfiguredTarget(baseTarget.key, confirmedSetup);
-              return (
-                <article key={target.key} style={{ "--target-color": target.color } as CSSProperties}>
-                  <span>{target.shortLabel}</span>
-                  <b>{weights[target.key]}</b>
-                  <em>{targetThresholdLabel(target)}</em>
-                </article>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function ratioPercent(value: number) {
-  return `${Math.round(value * 100)}%`;
-}
-
-function RatioStackedBar({
-  mix,
-  components,
-  showLabels = false,
-  orientation = "horizontal",
-}: {
-  mix: (typeof highThroughputDemoScenario.formulation.mixCandidates)[number];
-  components: typeof highThroughputDemoScenario.formulation.components;
-  showLabels?: boolean;
-  orientation?: "horizontal" | "vertical";
-}) {
-  return (
-    <div className={cn("ht-stacked-ratio-bar", orientation === "vertical" && "vertical")} aria-label={`${mix.id} 组分比例`}>
-      {components.map((component) => {
-        const ratio = mix.ratios[component.id] ?? 0;
-        return (
-          <span
-            key={component.id}
-            style={{
-              "--component-color": component.color,
-              width: orientation === "vertical" ? undefined : ratioPercent(ratio),
-              height: orientation === "vertical" ? ratioPercent(ratio) : undefined,
-            } as CSSProperties}
-            title={`${component.id} ${ratioPercent(ratio)}`}
-          >
-            {showLabels && ratio > 0 ? <b>{component.id} {ratioPercent(ratio)}</b> : null}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-function SectionTitle({ icon, title }: { icon: ReactNode; title: string }) {
-  return (
-    <div className="ht-section-title">
-      {icon}
-      <span>{title}</span>
-    </div>
-  );
-}
-
-function RadarChart({
-  achievement = highThroughputDemoScenario.formulation.achievement,
-}: {
-  achievement?: Record<HighThroughputTargetKey, number>;
-}) {
-  const scenario = highThroughputDemoScenario;
-  const center = { x: 50, y: 50 };
-  const radius = 34;
-  const axes = scenario.targets.map((target, index) => {
-    const angle = -Math.PI / 2 + (index / scenario.targets.length) * Math.PI * 2;
-    const value = achievement[target.key] / 100;
-    return {
-      target,
-      outer: {
-        x: center.x + Math.cos(angle) * radius,
-        y: center.y + Math.sin(angle) * radius,
-      },
-      value: {
-        x: center.x + Math.cos(angle) * radius * value,
-        y: center.y + Math.sin(angle) * radius * value,
-      },
-    };
-  });
-  const polygonPoints = axes.map((axis) => `${axis.value.x},${axis.value.y}`).join(" ");
-
-  return (
-    <svg className="ht-radar" viewBox="0 0 100 100" role="img" aria-label="综合评分雷达图">
-      <title>综合评分雷达图</title>
-      {[0.35, 0.7, 1].map((scale) => (
-        <polygon
-          key={scale}
-          points={axes.map((axis) => `${center.x + (axis.outer.x - center.x) * scale},${center.y + (axis.outer.y - center.y) * scale}`).join(" ")}
-          fill="none"
-          stroke="#dbe4ee"
-          strokeWidth="0.8"
-        />
-      ))}
-      {axes.map((axis) => (
-        <g key={axis.target.key}>
-          <line x1={center.x} y1={center.y} x2={axis.outer.x} y2={axis.outer.y} stroke="#cbd5e1" strokeWidth="0.8" />
-          <text x={axis.outer.x} y={axis.outer.y} textAnchor="middle" dominantBaseline="middle">
-            {axis.target.shortLabel}
-          </text>
-        </g>
-      ))}
-      <polygon points={polygonPoints} fill="#0f766e" opacity="0.2" stroke="#0f766e" strokeWidth="1.5" />
-    </svg>
   );
 }
