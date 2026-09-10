@@ -13,6 +13,26 @@ afterEach(() => {
 });
 
 describe("HighThroughputWorkflowDemoPage S0", () => {
+  it.each([
+    ["小数", ["250.25", "27.75", "26.75", "2.91"]],
+    ["千位数", ["1250", "1000", "1000", "1000.0"]],
+    ["微小值", ["1e-25", "1e-25", "1e-25", "1e-25"]],
+  ])("返回 S0 保留%s阈值，不舍入或将千位分隔符写入数值输入", (_label, values) => {
+    const view = render(<HighThroughputWorkflowDemoPage onBackHome={() => undefined} />);
+    highThroughputDemoScenario.targets.forEach((target, index) => {
+      fireEvent.change(screen.getByRole("spinbutton", { name: `${target.shortLabel} 目标值` }), { target: { value: values[index] } });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "确认场景设置，进入 S1" }));
+    expect(view.container.querySelector('[data-agent-theme="modulus"] .ht-s1-agent-target')?.textContent)
+      .toContain(values[3] === "1000.0" ? "1,000.0" : values[3]);
+    fireEvent.click(screen.getByRole("button", { name: "返回 S0 场景设置" }));
+    highThroughputDemoScenario.targets.forEach((target, index) => {
+      const input = screen.getByRole<HTMLInputElement>("spinbutton", { name: `${target.shortLabel} 目标值` });
+      expect(input.value).toBe(values[index]);
+      expect(input.valueAsNumber).toBe(Number(values[index]));
+    });
+  });
+
   it("将场景设置作为独立首阶段，并保留可交互的演示输入", () => {
     const view = render(<HighThroughputWorkflowDemoPage onBackHome={() => undefined} />);
 
@@ -663,13 +683,14 @@ describe("HighThroughputWorkflowDemoPage S1", () => {
         expect(view.container.querySelector(".ht-workbench-toolbar")).not.toBeNull();
         expect(view.container.querySelectorAll(".ht-property-grid-detail")).toHaveLength(1);
       } else {
-        expect(view.container.querySelector(".ht-workbench-toolbar")).toBeNull();
+        expect(view.container.querySelector(".ht-workbench-toolbar")).not.toBeNull();
         expect(view.container.querySelector(".ht-property-grid-detail")).toBeNull();
       }
-      const confirm = screen.queryByRole("button", { name: previous === "S2" || previous === "S3" ? /^确认本批 [84] 项验证值$/ : /^确认本(轮|步)实测值$/ });
+      const confirm = screen.queryByRole("button", { name: previous === "S2" || previous === "S3" ? /^确认本批 [84] 项验证值$/ : /^确认本步 4 项验证值$/ });
       const next = previous === "S2" ? screen.getByRole<HTMLButtonElement>("button", { name: "进入 S3" })
         : previous === "S3" ? screen.getByRole<HTMLButtonElement>("button", { name: /^(进入 R2|进入收敛|进入 S4 候选输出)$/ })
         : previous === "S4" ? screen.getByRole<HTMLButtonElement>("button", { name: "进入 S5 多目标配比搜索" })
+        : previous === "S5" ? view.container.querySelector<HTMLButtonElement>(".ht-s5-footer .ht-s1-primary-button")!
         : view.container.querySelector<HTMLButtonElement>(".ht-next-step-control")!;
       if (confirm) {
         expect(next.disabled).toBe(true);

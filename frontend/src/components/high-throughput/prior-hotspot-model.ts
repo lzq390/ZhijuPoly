@@ -58,6 +58,9 @@ export function displayTargetUnit(target: HighThroughputTarget) {
 }
 
 export function formatPriorValue(target: HighThroughputTarget, value: number) {
+  // Configured thresholds and edited records may have more precision than the
+  // preset values. Keep comparisons and their visible values consistent.
+  if (!Number.isInteger(value)) return String(value);
   return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: target.key === "modulus" ? 1 : 0,
     maximumFractionDigits: target.key === "modulus" ? 1 : 0,

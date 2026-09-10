@@ -2,6 +2,7 @@ import { ArrowDownRight, ArrowUpRight, Bot, ChevronLeft, ChevronRight, Gauge, Mo
 import { type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject, useId, useLayoutEffect, useRef, useState } from "react";
 import type { HighThroughputTarget, HighThroughputTargetKey } from "../../constants/highThroughputDemoScenario";
 import { cn } from "../../lib/utils";
+import { formatPriorValue } from "./prior-hotspot-model";
 import "./prior-import-workspace.css";
 
 // Retain the established S1 class names so both stages share identical geometry and theme.
@@ -178,7 +179,7 @@ export function AgentCardShell({ selectId, index, target, selected, onSelect, di
             <span>目标阈值</span>
             <small><DirectionIcon aria-hidden="true" />{target.direction === "higher" ? "越高越好" : "越低越好"}</small>
           </div>
-          <strong><span className="ht-s1-target-operator">{target.direction === "higher" ? "≥" : "≤"}</span> {targetValueLabel ?? (target.key === "modulus" ? target.target.toFixed(1) : target.target)} <small>{unitLabel}</small></strong>
+          <strong><span className="ht-s1-target-operator">{target.direction === "higher" ? "≥" : "≤"}</span> {targetValueLabel ?? formatPriorValue(target, target.target)} <small>{unitLabel}</small></strong>
         </div>
         {children}
       </div>

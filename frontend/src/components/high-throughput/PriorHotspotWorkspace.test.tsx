@@ -37,6 +37,25 @@ function returnToS2() {
 }
 
 describe("S2 先验热点与推荐验证", () => {
+  it("四目标的小数阈值在摘要、Agent 和验证区保持精度，展示与达标判断一致", () => {
+    const thresholds = ["250.25", "27.75", "27.25", "2.91"];
+    const view = enterS2(() => {
+      scenario.targets.forEach((target, index) => {
+        fireEvent.change(screen.getByRole("spinbutton", { name: `${target.shortLabel} 目标值` }), { target: { value: thresholds[index] } });
+      });
+    });
+    scenario.targets.forEach((target, index) => {
+      fireEvent.click(screen.getByRole("tab", { name: target.shortLabel }));
+      const threshold = `${target.direction === "higher" ? "≥" : "≤"} ${thresholds[index]}`;
+      expect(view.container.querySelector(".ht-s2-best-summary")?.textContent).toContain(`目标 ${threshold}`);
+      expect(view.container.querySelector(".ht-s2-validation-threshold")?.textContent).toContain(`目标 ${threshold}`);
+      expect(view.container.querySelector(".ht-s2-threshold-state")?.textContent).toBe("尚未达到场景阈值");
+      const agent = view.container.querySelector(`[data-agent-theme="${target.key}"]`)!;
+      expect(agent.querySelector(".ht-s1-agent-target")?.textContent).toContain(threshold);
+      expect(agent.querySelector(".ht-s2-agent-analysis")?.textContent).toContain("尚未达到场景阈值");
+    });
+  });
+
   it("继承工作台框架、唯一滚动区和演示说明，默认收起四个 Agent", () => {
     const view = enterS2();
     expect(screen.getByRole("heading", { level: 1, name: "高通量优化演示" })).not.toBeNull();

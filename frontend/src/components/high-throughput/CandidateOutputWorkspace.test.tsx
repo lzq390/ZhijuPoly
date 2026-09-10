@@ -167,8 +167,8 @@ describe("S4 候选输出工作台", () => {
     expect(activeId()).toBe("PI-2842");
     tick(900);
     expect(view.container.querySelector(".ht-s4-stage")).toBeNull();
-    expect(view.container.querySelector(".ht-ratio-search-panel")).not.toBeNull();
-    const pool = view.container.querySelector(".ht-formulation-component-list") ?? view.container.querySelector(".ht-ratio-search-panel");
+    expect(view.container.querySelector(".ht-s5-stage")).not.toBeNull();
+    const pool = view.container.querySelector(".ht-s5-components");
     for (const component of scenario.formulation.components) expect(pool?.textContent).toContain(component.candidateId);
     expect(view.scroll.style.getPropertyValue("--ht-s4-footer-height")).toBe("");
     expect(view.scroll.scrollTop).toBe(0);

@@ -13,7 +13,7 @@ const RETURN_SOURCES = ["S2 验证回流", "R1 验证回流", "R2 验证回流"]
 // Editable records may have more precision than the preset integer/0.1 values.
 // Never display a rounded threshold or record that disagrees with the comparison.
 export function formatIterationValue(target: HighThroughputTarget, value: number) {
-  return Number.isInteger(value) ? formatPriorValue(target, value) : String(value);
+  return formatPriorValue(target, value);
 }
 
 export function buildIterationSummary(target: HighThroughputTarget, viewRound: number, values: RecommendationValidationValues) {

@@ -290,6 +290,33 @@ describe("S3 单性质迭代工作台", () => {
     }
   });
 
+  it("小数阈值场景返回 S0 后不修改再确认，保留 S2 确认和 S3 轮次进度", () => {
+    enterS3(() => {
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Tg 目标值" }), { target: { value: "300.25" } });
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Modulus 目标值" }), { target: { value: "3.01" } });
+    });
+    change("PI-2326", "777.25");
+    toR2();
+    change("PI-1013", "888.25");
+    click("确认本批 4 项验证值");
+    click("返回 S2 推荐验证");
+    click("返回 S1 先验导入");
+    click("返回 S0 场景设置");
+    expect(screen.getByRole<HTMLInputElement>("spinbutton", { name: "Tg 目标值" }).value).toBe("300.25");
+    expect(screen.getByRole<HTMLInputElement>("spinbutton", { name: "Modulus 目标值" }).value).toBe("3.01");
+    click("确认场景设置，进入 S1");
+    expect(button("确认先验，进入 S2").disabled).toBe(false);
+    click("确认先验，进入 S2"); tick(900);
+    expect(button("进入 S3").disabled).toBe(false);
+    click("进入 S3"); tick();
+    expect(state().progressRound).toBe("1");
+    expect(state().viewRound).toBe("1");
+    expect(button("进入收敛").disabled).toBe(false);
+    expect(input("PI-1013").value).toBe("888.25");
+    click("R1 已完成");
+    expect(document.querySelector(".ht-validation-readonly-value")?.textContent).toContain("777.25");
+  });
+
   it("当前批重置不改已回流批次；重演原生弹窗取消与确认分别保留和恢复 12 项", () => {
     const view = enterS3(); const r1Default = input().value;
     change("PI-2326", "777"); toR2(); const r2Default = input("PI-1013").value;

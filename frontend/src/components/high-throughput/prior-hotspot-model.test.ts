@@ -41,6 +41,9 @@ describe("S2 先验摘要", () => {
     expect(displayTargetUnit(scenario.targets[0])).toBe("°C");
     const modulus = scenario.targets.find((target) => target.key === "modulus")!;
     expect(formatPriorValue(modulus, 3)).toBe("3.0");
+    expect(formatPriorValue(modulus, 2.91)).toBe("2.91");
+    expect(formatPriorValue(scenario.targets[0], 250.25)).toBe("250.25");
+    expect(formatPriorValue(scenario.targets[0], 1e-25)).toBe("1e-25");
     expect(scenario.targets[0].unit).toBe("degC");
   });
 });
