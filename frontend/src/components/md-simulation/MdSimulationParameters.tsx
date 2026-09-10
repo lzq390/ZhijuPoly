@@ -1,3 +1,4 @@
+import { useMotionPresence } from "../../hooks/useMotionPresence";
 import {
   Boxes,
   LoaderCircle,
@@ -101,10 +102,11 @@ export function MdSimulationParameters({
   onSubmit,
   onReset,
 }: MdSimulationParametersProps) {
+  const presence = useMotionPresence(open, { elementRef: panelRef });
   const forcefieldError = errors.forcefield;
   return (
     <div
-      className={`np-sw-utility-layer${open ? " is-open" : ""}`}
+      className={`np-sw-utility-layer${presence.present ? " is-open" : ""}`}
       aria-hidden={!open}
     >
       <button
@@ -116,6 +118,7 @@ export function MdSimulationParameters({
       />
       <section
         ref={panelRef}
+        {...presence.motionProps}
         id="md-simulation-parameters"
         className={`np-sw-popover np-sw-popover--modules np-md-parameters${open ? " is-open" : ""}`}
         role="dialog"
@@ -249,6 +252,7 @@ export function MdSimulationParameters({
               </button>
               <button
                 type="submit"
+                aria-busy={submitting}
                 className="np-sw-primary-button"
                 disabled={!canRun}
               >

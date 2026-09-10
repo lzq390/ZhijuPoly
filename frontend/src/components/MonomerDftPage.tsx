@@ -1,3 +1,4 @@
+import { useContentMotion } from "../hooks/useContentMotion";
 import {
   Activity,
   Atom,
@@ -665,6 +666,8 @@ export function MonomerDftPage({
 }: MonomerDftPageProps) {
   const dft = useMonomerDftJob({ initialJobId, onJobIdChange });
   const [activeTab, setActiveTab] = useState<PrimaryTab>(initialJobId ? "results" : "config");
+  const tabContentRef = useRef<HTMLDivElement | null>(null);
+  useContentMotion(tabContentRef, activeTab, "tab");
   const [smilesDraft, setSmilesDraft] = useState(structure.smiles);
   const [calculationType, setCalculationType] = useState<MonomerDftCalculationType>("single_point");
   const [modelId, setModelId] = useState<MonomerDftModelName | "">("");
@@ -1106,6 +1109,7 @@ export function MonomerDftPage({
 
               <section
                 id={`monomer-dft-main-panel-${activeTab}`}
+                ref={tabContentRef}
                 role="tabpanel"
                 aria-labelledby={`monomer-dft-main-tab-${activeTab}`}
                 className="np-dft-main-panel"

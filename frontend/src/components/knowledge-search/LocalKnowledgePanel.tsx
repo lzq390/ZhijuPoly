@@ -347,6 +347,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
                 <button
                   className="ks-button is-primary"
                   type="submit"
+                  aria-busy={searchState.isLoading}
                   disabled={
                     !query.trim() ||
                     Boolean(parsedExpression.error) ||
@@ -355,7 +356,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
                   }
                 >
                   {searchState.isLoading ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <Search aria-hidden="true" />}
-                  运行检索
+                  {searchState.isLoading ? "检索中" : "运行检索"}
                 </button>
               </form>
 
@@ -403,7 +404,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
             <header className="ks-results-header">
               <div className="ks-results-summary">
                 <h2>{searchState.data ? "本地检索结果" : "准备检索本地知识库"}</h2>
-                <p>{searchState.isLoading ? "正在查询 PostgreSQL 知识库…" : resultCountLabel}</p>
+                <p role="status" aria-live="polite" aria-atomic="true">{searchState.isLoading ? "正在查询 PostgreSQL 知识库…" : resultCountLabel}</p>
               </div>
               {searchState.data ? (
                 <button className="ks-button" type="button" onClick={() => void navigator.clipboard?.writeText(searchState.data?.query || "")}>

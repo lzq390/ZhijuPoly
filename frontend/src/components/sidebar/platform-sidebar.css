@@ -272,7 +272,7 @@
   text-align: left;
   background: transparent;
   cursor: pointer;
-  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+  transition: color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), border-color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-sidebar-group__trigger:hover:not(:disabled) {
@@ -328,7 +328,7 @@
   flex: none;
   color: var(--np-sidebar-text-muted);
   transform: rotate(-90deg);
-  transition: transform 150ms ease;
+  transition: transform var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-sidebar-group__trigger[data-expanded="true"] .np-sidebar-group__chevron,
@@ -364,7 +364,7 @@
   text-align: left;
   background: transparent;
   cursor: pointer;
-  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+  transition: color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), border-color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-sidebar-module:hover,
@@ -393,7 +393,7 @@
   border-radius: 7px;
   color: var(--np-sidebar-text-secondary);
   background: transparent;
-  transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease;
+  transition: color var(--np-motion-control) var(--np-ease-enter), border-color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-sidebar-module__icon svg {
@@ -441,7 +441,7 @@
   color: #173552;
   background: rgba(239, 246, 255, 0.42);
   box-shadow: none;
-  transition: color 150ms ease, background-color 150ms ease, border-left-color 150ms ease;
+  transition: color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), border-left-color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-sidebar-module--primary-workspace:hover,
@@ -490,7 +490,7 @@
   font-size: 15px;
   font-weight: 730;
   line-height: 20px;
-  transition: color 150ms ease;
+  transition: color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-sidebar-module--primary-workspace[data-active="true"] .np-sidebar-module__label {
@@ -544,7 +544,7 @@
   text-align: left;
   background: transparent;
   cursor: pointer;
-  transition: color 150ms ease;
+  transition: color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-sidebar-section__title-button:hover {
@@ -608,7 +608,7 @@
   color: var(--np-sidebar-text-secondary);
   background: transparent;
   cursor: pointer;
-  transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease;
+  transition: color var(--np-motion-control) var(--np-ease-enter), border-color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-sidebar__icon-button:hover:not(:disabled) {
@@ -705,7 +705,7 @@
   border: 1px solid transparent;
   border-radius: 8px;
   color: var(--np-sidebar-text);
-  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+  transition: color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), border-color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-sidebar-list-item:hover {
@@ -764,7 +764,7 @@
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
-  transition: color 150ms ease, background-color 150ms ease, opacity 150ms ease;
+  transition: color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), opacity var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-sidebar-list-item:hover .np-sidebar-list-item__action,
@@ -909,7 +909,7 @@
   color: var(--np-sidebar-text);
   background: rgba(255, 255, 255, 0.82);
   font-size: 13px;
-  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+  transition: border-color var(--np-motion-control) var(--np-ease-enter), box-shadow var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .np-sidebar-search input::placeholder {
@@ -1090,7 +1090,11 @@
   background: rgba(11, 31, 58, 0.36);
   backdrop-filter: blur(2px);
   cursor: default;
+  opacity: 0;
+  transition: opacity var(--np-motion-backdrop) var(--np-ease-exit);
 }
+
+.np-sidebar-mobile-layer[data-motion-active="true"] .np-sidebar-mobile-backdrop { opacity: 1; }
 
 .np-sidebar-mobile-panel {
   position: relative;
@@ -1100,19 +1104,37 @@
   outline: 0;
   background: var(--np-sidebar-bg);
   box-shadow: 18px 0 42px rgba(11, 31, 58, 0.2);
-  animation: np-sidebar-drawer-in 180ms ease-out;
+  opacity: 0;
+  transform: translateX(calc(-1 * var(--np-motion-drawer-distance)));
+  transition: transform var(--np-motion-drawer-exit) var(--np-ease-exit), opacity var(--np-motion-drawer-exit) var(--np-ease-exit);
 }
 
-@keyframes np-sidebar-drawer-in {
-  from {
-    transform: translateX(-12px);
-    opacity: 0.72;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
+.np-sidebar-mobile-panel[data-motion-active="true"] {
+  transform: translateX(0);
+  opacity: 1;
+  transition-duration: var(--np-motion-drawer-enter);
+  transition-timing-function: var(--np-ease-enter);
 }
+
+.np-sidebar-mobile-panel[data-motion-phase="exiting"] { pointer-events: none; }
+
+.np-sidebar-module[data-pending="true"] {
+  outline: 1px solid var(--np-sidebar-border);
+  outline-offset: -1px;
+  background-color: rgba(48, 100, 164, 0.08);
+}
+.np-sidebar-navigation-status {
+  flex: 0 0 28px;
+  min-height: 28px;
+  padding: 4px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--np-sidebar-text-secondary);
+  font-size: 11px;
+}
+.np-sidebar-pending-spinner { animation: np-sidebar-pending 800ms linear infinite; }
+@keyframes np-sidebar-pending { to { transform: rotate(360deg); } }
 
 @media (hover: none) {
   .np-sidebar-list-item__action {

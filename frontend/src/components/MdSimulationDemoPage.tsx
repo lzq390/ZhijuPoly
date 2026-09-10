@@ -1,3 +1,4 @@
+import { useContentMotion } from "../hooks/useContentMotion";
 import {
   Activity,
   Atom,
@@ -157,6 +158,8 @@ export function MdSimulationDemoPage({
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [hasAttempt, setHasAttempt] = useState(false);
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("input");
+  const tabContentRef = useRef<HTMLDivElement | null>(null);
+  useContentMotion(tabContentRef, workspaceTab, "tab");
   const [parametersOpen, setParametersOpen] = useState(false);
   const [attemptSnapshot, setAttemptSnapshot] =
     useState<MdDemoRunRequest | null>(null);
@@ -409,7 +412,7 @@ export function MdSimulationDemoPage({
                   className="np-md-workbench-surface np-sw-accented-surface"
                   aria-label="MD 模拟主工作区"
                 >
-                  <div className="np-md-workspace-view">
+                  <div ref={tabContentRef} className="np-md-workspace-view">
                     {workspaceTab === "input" ? (
                       <section
                         id="md-simulation-input-panel"

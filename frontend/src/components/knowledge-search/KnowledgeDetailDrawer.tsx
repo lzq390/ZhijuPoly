@@ -1,13 +1,18 @@
 import { PanelRightOpen, X } from "lucide-react";
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode
 } from "react";
+import { useMotionPresence } from "../../hooks/useMotionPresence";
+import { useDrawerResize } from "../../hooks/useDrawerResize";
+import { useModalFocus } from "../../hooks/useModalFocus";
+import { useContentMotion } from "../../hooks/useContentMotion";
+import { useDrawerMode } from "../../hooks/useDrawerMode";
 
 export type KnowledgeDrawerTab = {
   id: string;
@@ -146,99 +151,64 @@ export function KnowledgeDetailDrawer({
   onClose,
   onOpen
 }: KnowledgeDetailDrawerProps) {
-  const drawerRef = useRef<HTMLElement | null>(null);
+  const presence = useMotionPresence<HTMLElement>(open, { enter: "drawerEnter", exit: "drawerExit", property: "transform" });
+  const drawerRef = presence.ref;
+  const mode = useDrawerMode(drawerRef, { closest: ".ks-panel-layout" });
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const wasOpenRef = useRef(false);
   const [everOpened, setEverOpened] = useState(open);
   const [activeTab, setActiveTab] = useState(tabs[0]?.id ?? "");
-  const [resizing, setResizing] = useState(false);
-  const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
   const mobile = useMobileDrawer();
+  const resize = useDrawerResize({ width, minWidth: widthProfile.min, maxWidth: widthProfile.max, onWidthChange, enabled: open && !mobile });
+  useLayoutEffect(() => { if (resize.resizing) presence.finish(); }, [resize.resizing, presence.finish]);
+  useLayoutEffect(() => { presence.finish(); }, [mode, presence.finish]);
+  useContentMotion(bodyRef, activeTab, "tab");
+  useModalFocus({ active: mobile && presence.present, open, scopeRef: drawerRef, panelRef: drawerRef,
+    initialFocusRef: closeButtonRef, onClose, ownerId: id });
 
   useEffect(() => {
     setActiveTab(tabs[0]?.id ?? "");
   }, [contentKey]);
 
   useEffect(() => {
-    if (open && !wasOpenRef.current) {
+    let frame = 0;
+    if (presence.present && !wasOpenRef.current) {
       returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setEverOpened(true);
-      window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+      frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
     }
-    if (!open && wasOpenRef.current) {
-      window.requestAnimationFrame(() => returnFocusRef.current?.focus());
+    if (!presence.present && wasOpenRef.current) {
+      frame = window.requestAnimationFrame(() => {
+        const target = returnFocusRef.current;
+        if (target?.isConnected && !target.closest('[inert], [aria-hidden="true"]')) target.focus({ preventScroll: true });
+      });
     }
-    wasOpenRef.current = open;
-  }, [open]);
+    wasOpenRef.current = presence.present;
+    return () => window.cancelAnimationFrame(frame);
+  }, [presence.present]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || mobile) return;
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
+      // Hidden, kept-alive knowledge modes must not consume another mode's Escape.
+      let ancestor = drawerRef.current?.parentElement;
+      while (ancestor) {
+        if (ancestor.hidden || ancestor.getAttribute("aria-hidden") === "true" || getComputedStyle(ancestor).display === "none") return;
+        ancestor = ancestor.parentElement;
+      }
+      if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();
         onClose();
         return;
-      }
-      if (!mobile || event.key !== "Tab" || !drawerRef.current) return;
-
-      const focusable = Array.from(
-        drawerRef.current.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-        )
-      ).filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [mobile, onClose, open]);
-
-  useEffect(() => {
-    if (!resizing) return;
-
-    function handlePointerMove(event: PointerEvent) {
-      if (!dragState.current) return;
-      onWidthChange(
-        clamp(
-          dragState.current.startWidth + dragState.current.startX - event.clientX,
-          widthProfile.min,
-          widthProfile.max
-        )
-      );
-    }
-
-    function stopResize() {
-      dragState.current = null;
-      setResizing(false);
-    }
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", stopResize);
-    window.addEventListener("pointercancel", stopResize);
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", stopResize);
-      window.removeEventListener("pointercancel", stopResize);
-    };
-  }, [onWidthChange, resizing, widthProfile]);
-
-  function startResize(event: ReactPointerEvent<HTMLDivElement>) {
-    if (mobile) return;
-    event.preventDefault();
-    dragState.current = { startX: event.clientX, startWidth: width };
-    setResizing(true);
-  }
 
   function resizeWithKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -269,14 +239,18 @@ export function KnowledgeDetailDrawer({
   return (
     <>
       <button
-        className={`ks-drawer-backdrop${open && mobile ? " is-open" : ""}`}
+        className="ks-drawer-backdrop"
+        data-motion-present={presence.present && mobile}
+        data-motion-active={presence.active && mobile}
+        data-modal-owner={id}
+        aria-hidden="true"
         type="button"
-        tabIndex={open && mobile ? 0 : -1}
+        tabIndex={-1}
         aria-label="关闭详情抽屉"
         onClick={onClose}
       />
 
-      {everOpened && !open && showReopen ? (
+      {everOpened && !presence.present && showReopen ? (
         <button
           className={`ks-drawer-reopen${verticalReopen ? " is-vertical" : ""}`}
           type="button"
@@ -291,14 +265,18 @@ export function KnowledgeDetailDrawer({
 
       <aside
         ref={drawerRef}
+        {...presence.motionProps}
+        data-motion-present={presence.present}
+        data-drawer-mode={mode}
         id={id}
-        className={`ks-detail-drawer${open ? " is-open" : ""}${resizing ? " is-resizing" : ""}`}
+        className={`ks-detail-drawer${presence.present ? " is-open" : ""}${resize.resizing && open ? " is-resizing" : ""}`}
         style={{ "--ks-drawer-width": `${width}px` } as CSSProperties}
         role="dialog"
         aria-modal={mobile ? "true" : undefined}
         aria-labelledby={titleId}
         aria-hidden={!open}
         inert={!open}
+        tabIndex={-1}
       >
         <div
           className="ks-drawer-resizer"
@@ -309,7 +287,7 @@ export function KnowledgeDetailDrawer({
           aria-valuemin={widthProfile.min}
           aria-valuemax={widthProfile.max}
           aria-valuenow={Math.round(width)}
-          onPointerDown={startResize}
+          onPointerDown={resize.onPointerDown}
           onKeyDown={resizeWithKeyboard}
         />
 
@@ -345,7 +323,7 @@ export function KnowledgeDetailDrawer({
           </div>
         ) : null}
 
-        <div className="ks-drawer-body">{selectedTab?.content ?? children}</div>
+        <div ref={bodyRef} className="ks-drawer-body">{selectedTab?.content ?? children}</div>
         {footer ? <footer className="ks-drawer-footer">{footer}</footer> : null}
       </aside>
     </>

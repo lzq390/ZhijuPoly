@@ -1,0 +1,80 @@
+:root {
+  --np-motion-control: 200ms;
+  --np-motion-module-exit: 400ms;
+  --np-motion-module-gap: 200ms;
+  --np-motion-module-enter: 400ms;
+  --np-motion-tab: 300ms;
+  --np-motion-enter: 300ms;
+  --np-motion-exit: 240ms;
+  --np-motion-drawer-enter: 400ms;
+  --np-motion-drawer-exit: 320ms;
+  --np-motion-backdrop: 240ms;
+  --np-motion-flip: 400ms;
+  --np-motion-feedback-delay: 120ms;
+  --np-motion-popover-distance: 8px;
+  --np-motion-drawer-distance: 20px;
+  --np-ease-enter: ease-in-out;
+  --np-ease-exit: ease-in-out;
+  --np-ease-module: ease-in-out;
+}
+
+/* The module coordinator owns this node's opacity exclusively via WAAPI. */
+[data-module-content] { transition: none; }
+
+.np-motion-popover {
+  opacity: 0;
+  transform: translateY(calc(-1 * var(--np-motion-popover-distance)));
+  transition: opacity var(--np-motion-exit) var(--np-ease-exit), transform var(--np-motion-exit) var(--np-ease-exit);
+}
+.np-motion-popover[data-motion-active="true"] {
+  opacity: 1;
+  transform: translateY(0);
+  transition-duration: var(--np-motion-enter);
+  transition-timing-function: var(--np-ease-enter);
+}
+.np-motion-popover[data-motion-phase="closed"] { visibility: hidden; pointer-events: none; }
+.np-motion-popover[data-motion-phase="exiting"] { pointer-events: none; }
+
+.np-motion-control {
+  transition-property: color, background-color, border-color, box-shadow, opacity;
+  transition-duration: var(--np-motion-control);
+  transition-timing-function: var(--np-ease-enter);
+}
+
+/* Keep final transforms (notably the 3D face) intact. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --np-motion-control: 0ms;
+    --np-motion-module-exit: 0ms;
+    --np-motion-module-gap: 0ms;
+    --np-motion-module-enter: 0ms;
+    --np-motion-tab: 0ms;
+    --np-motion-enter: 0ms;
+    --np-motion-exit: 0ms;
+    --np-motion-drawer-enter: 0ms;
+    --np-motion-drawer-exit: 0ms;
+    --np-motion-backdrop: 0ms;
+    --np-motion-flip: 0ms;
+  }
+
+  /* The legacy global .01/1ms duration overrides must not leave a frame at
+     the old transform while JavaScript has already settled the visual state. */
+  [data-module-content],
+  .np-sidebar-mobile-panel,
+  .np-sidebar-mobile-backdrop,
+  .np-motion-popover,
+  .np-structure-workbench .np-sw-popover,
+  .np-structure-workbench .np-sw-drawer,
+  .np-structure-workbench .np-sw-workspace,
+  .np-structure-workbench .np-sw-drawer-backdrop,
+  .np-structure-workbench .np-sw-editor,
+  .ks-detail-drawer,
+  .ks-workbench-column,
+  .ks-drawer-backdrop,
+  .polytao-parameter-panel,
+  .polytao-workbench-shell,
+  .polytao-structure-flip-inner {
+    transition: none !important;
+    animation: none !important;
+  }
+}

@@ -441,7 +441,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
                 <label className="ks-field"><span>材料名称 <small>Material</small></span><span className="ks-input-with-icon"><Search aria-hidden="true" /><input value={material} onChange={(event) => setMaterial(event.target.value)} placeholder="例如 PLA、polyimide" aria-label="在线检索材料名称" autoComplete="off" /></span></label>
                 <label className="ks-field"><span>抽取模式</span><select value={mode} onChange={(event) => setMode(event.target.value as OnlineKnowledgeMode)} aria-label="在线检索抽取模式"><option value="property">性质–条件关系</option><option value="synthesis">合成方法</option></select></label>
                 <label className="ks-field"><span>论文上限</span><input type="number" min={1} max={2000} value={maxPapers} onChange={(event) => setMaxPapers(Number(event.target.value))} aria-label="在线检索论文上限" /></label>
-                <button className="ks-button is-primary" type="submit" disabled={!canSearch}>{searchState.isLoading ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <Search aria-hidden="true" />}开始检索</button>
+                <button className="ks-button is-primary" type="submit" disabled={!canSearch} aria-busy={searchState.isLoading}>{searchState.isLoading ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <Search aria-hidden="true" />}{searchState.isLoading ? "检索中" : "开始检索"}</button>
               </form>
 
               <div className="ks-meta-row">
@@ -455,7 +455,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
 
           <section className="ks-surface ks-results-surface" aria-busy={searchState.isLoading}>
             <header className="ks-results-header">
-              <div className="ks-results-summary"><h2>{data?.mode === "synthesis" ? "在线合成记录" : "在线性质关系"}</h2><p>{searchState.isLoading ? "异步任务运行中，切换知识模式后状态仍会保留" : data ? `${data.totalPapers} 篇处理论文 · ${resultCount} 条展示记录` : "外部文献聚合与模型结构化抽取"}</p></div>
+              <div className="ks-results-summary"><h2>{data?.mode === "synthesis" ? "在线合成记录" : "在线性质关系"}</h2><p role="status" aria-live="polite" aria-atomic="true">{searchState.isLoading ? "异步任务运行中，切换知识模式后状态仍会保留" : data ? `${data.totalPapers} 篇处理论文 · ${resultCount} 条展示记录` : "外部文献聚合与模型结构化抽取"}</p></div>
               <div className="ks-results-actions">
                 <button className="ks-button" type="button" onClick={() => { setDrawerView("history"); setDrawerOpen(true); }}><History aria-hidden="true" />检索历史 <b>{searchState.history.length}</b></button>
                 <button className="ks-button" type="button" disabled={!data?.dataframe.length} onClick={() => void handleExportCsv()}><Download aria-hidden="true" />导出 CSV</button>

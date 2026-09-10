@@ -33,10 +33,6 @@
   padding-left: var(--np-material-discovery-title-left);
 }
 
-.np-material-discovery-page.polytao-page.is-drawer-inline.is-drawer-open > .polytao-page-scroll {
-  padding-right: calc(var(--polytao-drawer-width) + var(--np-material-discovery-title-left));
-}
-
 .np-material-discovery-page.polytao-page .polytao-page-heading {
   min-height: var(--np-material-discovery-title-line-height);
   margin-bottom: var(--np-material-discovery-title-gap);

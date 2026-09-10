@@ -16,6 +16,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import type { FormEvent, RefObject } from "react";
+import { useMotionPresence } from "../../hooks/useMotionPresence";
 import type {
   MonomerRetrosynthesisResponse,
   MonomerRetrosynthesisTargetRole
@@ -192,6 +193,8 @@ export function StructureUtilityPanels({
   onAssistantNew,
   onAssistantSend
 }: StructureUtilityPanelsProps) {
+  const modules = useMotionPresence(openPanel === "modules", { elementRef: modulePanelRef });
+  const assistant = useMotionPresence(openPanel === "assistant", { elementRef: assistantPanelRef });
   const assistantTaskStatus = isRetrosynthesizing
     ? "反推运行中"
     : retroError
@@ -201,7 +204,7 @@ export function StructureUtilityPanels({
         : "反推待运行";
 
   return (
-    <div className={`np-sw-utility-layer${openPanel ? " is-open" : ""}`} aria-hidden={!openPanel}>
+    <div className={`np-sw-utility-layer${modules.present || assistant.present ? " is-open" : ""}`} aria-hidden={!openPanel}>
       <button
         type="button"
         className="np-sw-utility-backdrop"
@@ -212,6 +215,7 @@ export function StructureUtilityPanels({
 
       <section
         ref={modulePanelRef}
+        {...modules.motionProps}
         id="structure-module-panel"
         className={`np-sw-popover np-sw-popover--modules${openPanel === "modules" ? " is-open" : ""}`}
         role="dialog"
@@ -364,6 +368,7 @@ export function StructureUtilityPanels({
 
       <section
         ref={assistantPanelRef}
+        {...assistant.motionProps}
         id="structure-assistant-panel"
         className={`np-sw-popover np-sw-popover--assistant${openPanel === "assistant" ? " is-open" : ""}`}
         role="dialog"

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AppShell,
@@ -12,6 +12,7 @@ import type { OpenScienceProjectSummary } from "../lib/openScienceProjectBridge"
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -188,6 +189,124 @@ function getProjectButton(directory: string): HTMLButtonElement {
 }
 
 describe("AppShell 侧边栏", () => {
+  it("外壳不在路由提交后额外淡入或移动标题，保留原内容节点", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "animate");
+    const targets: HTMLElement[] = [];
+    const animate = vi.fn(function (this: HTMLElement) {
+      targets.push(this);
+      return { cancel: vi.fn(), onfinish: null };
+    });
+    Object.defineProperty(HTMLElement.prototype, "animate", { configurable: true, value: animate });
+    const action = vi.fn();
+    const shell = (activeModule: string) => (
+      <AppShell
+        activeModule={activeModule}
+        standaloneModules={createStandaloneModules(activeModule)}
+        moduleGroups={createModuleGroups(activeModule)}
+        onOpenHome={action}
+        projects={[]}
+        activeProjectDirectory={null}
+        isProjectBridgeReady
+        onOpenProject={action}
+        onBrowseProjects={action}
+        onNewProject={action}
+        onSetProjectFavorite={action}
+        onArchiveProject={action}
+        isGeneralWorkspaceActive
+        generalSessions={[]}
+        activeGeneralSessionID={null}
+        isGeneralSessionBridgeReady
+        onOpenGeneralWorkspace={action}
+        onNewGeneralSession={action}
+        onOpenGeneralSession={action}
+        onRenameGeneralSession={action}
+        onDeleteGeneralSession={action}
+      >
+        <h1>模块标题</h1>
+        <div data-module-entrance="toolbar"><button>模块操作</button></div>
+        <iframe title="保活画板" />
+      </AppShell>
+    );
+    try {
+      const view = render(shell("knowledge"));
+      const content = view.container.querySelector("[data-module-content]");
+      const frame = screen.getByTitle("保活画板");
+      expect(animate).not.toHaveBeenCalled();
+      view.rerender(shell("structureWorkbench"));
+      expect(animate).not.toHaveBeenCalled();
+      expect(targets).toEqual([]);
+      expect(view.container.querySelector("[data-module-content]")).toBe(content);
+      expect(screen.getByTitle("保活画板")).toBe(frame);
+      view.rerender(shell("structureWorkbench"));
+      expect(animate).not.toHaveBeenCalled();
+      view.unmount();
+    } finally {
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, "animate", descriptor);
+      else Reflect.deleteProperty(HTMLElement.prototype, "animate");
+    }
+  });
+
+  it("运行中启用减少动态效果会取消滚动条动画，保留静态滚动反馈", () => {
+    let reduce = false;
+    const listeners = new Set<() => void>();
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      get matches() { return query.includes("prefers-reduced-motion") && reduce; },
+      addEventListener: (_event: string, callback: () => void) => { if (query.includes("prefers-reduced-motion")) listeners.add(callback); },
+      removeEventListener: (_event: string, callback: () => void) => listeners.delete(callback)
+    }));
+    const view = renderShell("labData");
+    const main = view.container.querySelector("main")!;
+    const cancel = vi.fn();
+    const animate = vi.fn(() => ({ cancel, onfinish: null }));
+    Object.defineProperty(main, "animate", { value: animate });
+    fireEvent.scroll(main);
+    expect(animate).toHaveBeenCalledOnce();
+    act(() => { reduce = true; listeners.forEach((listener) => listener()); });
+    expect(cancel).toHaveBeenCalledOnce();
+    fireEvent.scroll(main);
+    expect(main.hasAttribute("data-scrollbar-active")).toBe(true);
+    expect(animate).toHaveBeenCalledOnce();
+  });
+
+  it("待切换目标立即标记，延迟播报且当前高亮不提前改变", async () => {
+    vi.useFakeTimers();
+    let complete!: () => void;
+    const groups = createModuleGroups("knowledge");
+    const guard = vi.fn(() => new Promise<void>((resolve) => { complete = resolve; }));
+    renderShell("knowledge", { moduleGroups: groups, beforeNavigate: guard });
+    const target = screen.getByRole("button", { name: "数据库查询" });
+    fireEvent.click(target);
+    expect(target.getAttribute("data-pending")).toBe("true");
+    expect(screen.getByRole("button", { name: "知识检索" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByText("正在切换到数据库查询…")).toBeNull();
+    act(() => vi.advanceTimersByTime(120));
+    expect(screen.getByText("正在切换到数据库查询…")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "结构工作台" }));
+    fireEvent.click(target);
+    await act(async () => complete());
+    expect(guard).toHaveBeenCalledOnce();
+    expect(groups[0].items[1].onClick).toHaveBeenCalledOnce();
+    expect(target.hasAttribute("data-pending")).toBe(false);
+  });
+
+  it("移动导航的 Tab 环包含所属项目 Portal 菜单", async () => {
+    renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "打开导航" }));
+    const dialog = screen.getByRole("dialog", { name: "平台导航" });
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "关闭导航" })));
+    fireEvent.click(within(dialog).getByRole("button", { name: "展开项目" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "打开 Alpha 项目菜单" }));
+    const menu = screen.getByRole("menu", { name: "Alpha 项目操作" });
+    expect(menu.getAttribute("data-modal-owner")).toBe("np-mobile-navigation");
+    const last = within(menu).getByRole("menuitem", { name: "归档项目" });
+    last.focus();
+    expect(document.activeElement).toBe(last);
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(dialog.querySelector("button"));
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
   it("统一为页面内容区和侧边栏滚动区启用自动显隐状态", () => {
     const view = renderShell("labData");
     const main = view.container.querySelector("main");
@@ -224,12 +343,12 @@ describe("AppShell 侧边栏", () => {
       expect(animateMock).toHaveBeenNthCalledWith(
         1,
         expect.any(Array),
-        expect.objectContaining({ duration: 160, easing: "ease-out", fill: "both" })
+        expect.objectContaining({ duration: 300, easing: "ease-in-out", fill: "both" })
       );
       expect(animateMock).toHaveBeenNthCalledWith(
         2,
         expect.any(Array),
-        expect.objectContaining({ duration: 160, easing: "ease-out", fill: "both" })
+        expect.objectContaining({ duration: 300, easing: "ease-in-out", fill: "both" })
       );
 
       act(() => scheduledCallbacks.forEach((callback) => callback()));
@@ -238,12 +357,12 @@ describe("AppShell 侧边栏", () => {
       expect(animateMock).toHaveBeenNthCalledWith(
         3,
         expect.any(Array),
-        expect.objectContaining({ duration: 240, easing: "ease-in", fill: "both" })
+        expect.objectContaining({ duration: 240, easing: "ease-in-out", fill: "both" })
       );
       expect(animateMock).toHaveBeenNthCalledWith(
         4,
         expect.any(Array),
-        expect.objectContaining({ duration: 240, easing: "ease-in", fill: "both" })
+        expect.objectContaining({ duration: 240, easing: "ease-in-out", fill: "both" })
       );
     } finally {
       view.unmount();
@@ -627,7 +746,7 @@ describe("AppShell 侧边栏", () => {
     expect(onOpenProject).not.toHaveBeenCalled();
   });
 
-  it("项目菜单支持 Escape 和点击外部关闭并恢复触发按钮焦点", () => {
+  it("项目菜单支持 Escape 和点击外部关闭并恢复触发按钮焦点", async () => {
     renderShell();
     fireEvent.click(screen.getByRole("button", { name: "展开项目" }));
 
@@ -637,7 +756,7 @@ describe("AppShell 侧边栏", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu", { name: "Alpha 项目操作" })).toBeNull();
-    expect(document.activeElement).toBe(trigger);
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
 
     fireEvent.click(trigger);
     fireEvent.pointerDown(document.body);
@@ -728,7 +847,7 @@ describe("AppShell 侧边栏", () => {
     expect(onOpenGeneralWorkspace).toHaveBeenCalledTimes(1);
   });
 
-  it("移动抽屉可由菜单、关闭按钮和背景控制，并恢复菜单按钮焦点", () => {
+  it("移动抽屉可由菜单、关闭按钮和背景控制，并恢复菜单按钮焦点", async () => {
     renderShell();
 
     const menuButton = screen.getByRole("button", { name: "打开导航" });
@@ -738,19 +857,21 @@ describe("AppShell 侧边栏", () => {
     const dialog = screen.getByRole("dialog", { name: "平台导航" });
     const closeButton = within(dialog).getByRole("button", { name: "关闭导航" });
     expect(menuButton.getAttribute("aria-expanded")).toBe("true");
-    expect(document.activeElement).toBe(closeButton);
+    await waitFor(() => expect(document.activeElement).toBe(closeButton));
 
     fireEvent.click(closeButton);
-    expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull();
+    expect(dialog.getAttribute("data-motion-phase")).toBe("exiting");
+    expect(document.querySelector(".np-app-shell__body")?.hasAttribute("inert")).toBe(true);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull());
     expect(document.activeElement).toBe(menuButton);
 
     fireEvent.click(menuButton);
     fireEvent.click(screen.getByRole("button", { name: "关闭导航背景" }));
-    expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull());
     expect(document.activeElement).toBe(menuButton);
   });
 
-  it("移动抽屉支持 Escape 关闭并恢复菜单按钮焦点", () => {
+  it("移动抽屉支持 Escape 关闭并恢复菜单按钮焦点", async () => {
     renderShell();
 
     const menuButton = screen.getByRole("button", { name: "打开导航" });
@@ -758,11 +879,11 @@ describe("AppShell 侧边栏", () => {
     expect(screen.getByRole("dialog", { name: "平台导航" })).not.toBeNull();
 
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull());
     expect(document.activeElement).toBe(menuButton);
   });
 
-  it("移动抽屉中的项目菜单优先处理 Escape，不会连带关闭抽屉", () => {
+  it("移动抽屉中的项目菜单优先处理 Escape，不会连带关闭抽屉", async () => {
     renderShell();
 
     fireEvent.click(screen.getByRole("button", { name: "打开导航" }));
@@ -777,13 +898,13 @@ describe("AppShell 侧边栏", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu", { name: "Alpha 项目操作" })).toBeNull();
     expect(screen.getByRole("dialog", { name: "平台导航" })).not.toBeNull();
-    expect(document.activeElement).toBe(projectMenuButton);
+    await waitFor(() => expect(document.activeElement).toBe(projectMenuButton));
 
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull());
   });
 
-  it("移动抽屉完成模块导航后关闭，且业务回调只执行一次", () => {
+  it("移动抽屉完成模块导航后关闭，且业务回调只执行一次", async () => {
     const onOpenKnowledge = vi.fn();
     const groups = createModuleGroups();
     const knowledge = groups[0]?.items[0];
@@ -799,10 +920,11 @@ describe("AppShell 侧边栏", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "知识检索" }));
 
     expect(onOpenKnowledge).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull());
+    expect(document.activeElement?.tagName).toBe("MAIN");
   });
 
-  it("桌面和移动侧边栏共享分组、项目展开与会话搜索状态", () => {
+  it("桌面和移动侧边栏共享分组、项目展开与会话搜索状态", async () => {
     renderShell();
 
     fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
@@ -842,13 +964,14 @@ describe("AppShell 侧边栏", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: "收起项目" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "关闭导航" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull());
     expect(screen.getByRole("button", { name: "展开项目" })).not.toBeNull();
     expect(
       (screen.getByRole("searchbox", { name: "搜索会话" }) as HTMLInputElement).value
     ).toBe("新的");
   });
 
-  it("视口切换到桌面时自动关闭移动抽屉", () => {
+  it("视口切换到桌面时自动关闭移动抽屉", async () => {
     let viewportListener: ((event: MediaQueryListEvent) => void) | null = null;
     vi.stubGlobal(
       "matchMedia",
@@ -857,7 +980,7 @@ describe("AppShell 侧边栏", () => {
         media,
         onchange: null,
         addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
-          viewportListener = listener;
+          if (media === "(min-width: 1024px)") viewportListener = listener;
         },
         removeEventListener: vi.fn(),
         addListener: vi.fn(),
@@ -873,7 +996,7 @@ describe("AppShell 侧边栏", () => {
       const listener = viewportListener as ((event: MediaQueryListEvent) => void) | null;
       listener?.({ matches: true } as MediaQueryListEvent);
     });
-    expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "平台导航" })).toBeNull());
   });
 
   it("长项目名和长会话名保持完整数据并由条目负责截断", () => {

@@ -1,3 +1,4 @@
+import { useMotionPresence } from "../../hooks/useMotionPresence";
 import { Check, FlaskConical, LoaderCircle, Search, SlidersHorizontal, X } from "lucide-react";
 import type { FormEvent, RefObject } from "react";
 import { PREDICT_PROPERTY_CATALOG } from "../../constants/predictableProperties";
@@ -54,11 +55,12 @@ export function SimilarityExplorerParameters({
   onSelectedPropertyChange,
   onSubmit
 }: SimilarityExplorerParametersProps) {
+  const presence = useMotionPresence(open, { elementRef: panelRef });
   const thresholdValid = Number.isFinite(similarityThreshold) && similarityThreshold >= 0 && similarityThreshold <= 1;
   const topKValid = Number.isInteger(topK) && topK >= 1 && topK <= 100;
 
   return (
-    <div className={`np-sw-utility-layer${open ? " is-open" : ""}`} aria-hidden={!open}>
+    <div className={`np-sw-utility-layer${presence.present ? " is-open" : ""}`} aria-hidden={!open}>
       <button
         type="button"
         className="np-sw-utility-backdrop"
@@ -68,6 +70,7 @@ export function SimilarityExplorerParameters({
       />
       <section
         ref={panelRef}
+        {...presence.motionProps}
         id="polymer-similarity-parameters"
         className={`np-sw-popover np-sw-popover--modules np-se-parameters${open ? " is-open" : ""}`}
         role="dialog"
@@ -197,6 +200,7 @@ export function SimilarityExplorerParameters({
             </span>
             <button
               type="submit"
+              aria-busy={submitting}
               className="np-sw-primary-button"
               disabled={submitting || !thresholdValid || !topKValid}
             >
