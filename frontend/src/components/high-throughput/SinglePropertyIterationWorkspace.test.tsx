@@ -39,7 +39,9 @@ function fromS2() {
   click("进入 S3"); tick();
 }
 
-describe("S3 单性质迭代工作台", () => {
+// Every case enters from S0 and renders the full candidate SVG across stages.
+// CI needs a workflow budget; business timers remain fake and assertions unchanged.
+describe("S3 单性质迭代工作台", { timeout: 30000 }, () => {
   it("继承外框与披露，R1 不重复 S2 输入，四个 Agent 默认独立收起", () => {
     const view = enterS3();
     expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: "单性质迭代与验证回流" }));

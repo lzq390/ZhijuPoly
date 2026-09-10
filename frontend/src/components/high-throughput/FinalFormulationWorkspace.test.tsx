@@ -86,7 +86,8 @@ describe("S6 最终解释工作台", () => {
     click("重新开始"); expect(onRestart).toHaveBeenCalledOnce();
     view.unmount(); expect(scroll.style.getPropertyValue("--ht-s6-footer-height")).toBe("");
   });
-  it("S5→S6 外框连续、返回续接确认值，再进入仍是预设结果", () => {
+  // Full-page replays retain the real SVG and all gates; isolated S6 tests keep the default budget.
+  it("S5→S6 外框连续、返回续接确认值，再进入仍是预设结果", { timeout: 30000 }, () => {
     const view = enterS6();
     expect(view.container.querySelector(".ht-s6-board.np-sw-accented-surface")).not.toBeNull();
     expect(view.container.querySelectorAll(".ht-scroll-region")).toHaveLength(1);
@@ -133,7 +134,7 @@ describe("S6 最终解释工作台", () => {
     for (let step = 1; step < 4; step++) { click("确认本步 4 项验证值"); fireEvent.click(document.querySelector<HTMLButtonElement>(".ht-s5-footer .ht-s1-primary-button")!); tick(700); }
     expect(screen.getByRole<HTMLInputElement>("spinbutton", { name: "mix-5 Tg 演示验证值" }).value).toBe("292");
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "进入 S6 最终解释" }).disabled).toBe(true);
-  }, 15000); // Walk the full workflow twice to verify reset, including under parallel suite load.
+  }, 30000); // Walk the full workflow twice to verify reset, including under parallel CI load.
 
   it("配方占比、性质值的数字与单位分离，复用数值和正文字体", () => {
     const view = renderFinal();

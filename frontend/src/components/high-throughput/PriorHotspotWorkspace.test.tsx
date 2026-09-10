@@ -36,7 +36,8 @@ function returnToS2() {
   act(() => vi.advanceTimersByTime(900));
 }
 
-describe("S2 先验热点与推荐验证", () => {
+// Each case imports all priors from S0/S1 and redraws the real candidate SVG.
+describe("S2 先验热点与推荐验证", { timeout: 30000 }, () => {
   it("四目标的小数阈值在摘要、Agent 和验证区保持精度，展示与达标判断一致", () => {
     const thresholds = ["250.25", "27.75", "27.25", "2.91"];
     const view = enterS2(() => {

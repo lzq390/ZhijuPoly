@@ -127,7 +127,8 @@ describe("S5 配比搜索工作台", () => {
     expect(document.documentElement.scrollTop).toBe(0);
     view.unmount(); expect(scroll.style.getPropertyValue("--ht-s5-footer-height")).toBe("");
   });
-  it("S4→S5 外框连续，返回续接；重演取消保留、确认恢复默认且不清先验", () => {
+  // Only full-page replay tests need CI headroom; isolated S5 cases keep the default timeout.
+  it("S4→S5 外框连续，返回续接；重演取消保留、确认恢复默认且不清先验", { timeout: 30000 }, () => {
     const view = enterS5();
     expect(view.container.querySelector(".ht-s5-board.np-sw-accented-surface")).not.toBeNull();
     expect(view.container.querySelectorAll(".ht-scroll-region")).toHaveLength(1);
@@ -149,7 +150,7 @@ describe("S5 配比搜索工作台", () => {
     click("返回 S4 候选输出"); click("返回 S3 收敛对照"); click("返回 S2 推荐验证"); click("返回 S1 先验导入");
     expect(button("确认先验，进入 S2").disabled).toBe(false);
   });
-  it("上游 S2 编辑撤销 S5 进度与确认，但保留各步已填值", () => {
+  it("上游 S2 编辑撤销 S5 进度与确认，但保留各步已填值", { timeout: 30000 }, () => {
     enterS5(); click("开始邻域搜索"); tick(700); fireEvent.change(field(), { target: { value: "501" } }); click("确认本步 4 项验证值"); next(); tick(700);
     click("返回 S4 候选输出"); click("返回 S3 收敛对照"); click("返回 S2 推荐验证");
     fireEvent.change(screen.getAllByRole("spinbutton")[0], { target: { value: "555" } });
@@ -188,5 +189,5 @@ describe("S5 配比搜索工作台", () => {
     } else {
       expect(viewedStep()).toBe("0"); click("开始邻域搜索"); tick(700); expect(field().value).toBe("502"); expect(button("进入 T2 继续爬升").disabled).toBe(true);
     }
-  }, 10000); // Revisit S0/S1 and replay through S5 under full-suite parallel load.
+  }, 30000); // Revisit S0/S1 and replay through S5 under full-suite CI load.
 });

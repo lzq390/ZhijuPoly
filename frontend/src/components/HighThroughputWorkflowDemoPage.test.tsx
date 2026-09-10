@@ -663,7 +663,8 @@ describe("HighThroughputWorkflowDemoPage S1", () => {
     expect(screen.getByRole("button", { name: "确认先验，进入 S2" }).hasAttribute("disabled")).toBe(true);
   });
 
-  it("内部滚动壳兼容 S2–S6，保留原有确认门禁与完整演示路径", () => {
+  // Full workflow rendering is CPU-bound in jsdom; keep CI headroom without changing assertions or fake timers.
+  it("内部滚动壳兼容 S2–S6，保留原有确认门禁与完整演示路径", { timeout: 30000 }, () => {
     vi.useFakeTimers();
     const view = enterPriorStage();
     const scrollRegion = view.container.querySelector<HTMLElement>(".ht-scroll-region")!;

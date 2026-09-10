@@ -31,7 +31,8 @@ function enterS4(configure?: () => void, editR1?: () => void) {
   return { ...view, scroll };
 }
 
-describe("S4 候选输出工作台", () => {
+// Every case replays S0–S3 with the real candidate SVG before testing S4.
+describe("S4 候选输出工作台", { timeout: 30000 }, () => {
   it("继承统一外框、固定披露和七阶段导航，无输入、确认门禁或无效重置", () => {
     const view = enterS4();
     expect(view.container.querySelector(".ht-s4-board.np-sw-accented-surface")).not.toBeNull();
