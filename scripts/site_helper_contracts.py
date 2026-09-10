@@ -255,6 +255,7 @@ ACTIVE_JOB_FIELDS_V1 = frozenset(
     }
 )
 ACTIVE_JOB_FIELDS_V2 = ACTIVE_JOB_FIELDS_V1 | {"monomer_dft"}
+ACTIVE_JOB_FIELDS_V3 = ACTIVE_JOB_FIELDS_V2 | {"polymerization_batch"}
 BUSINESS_MUTABLE_TABLES = (
     ("online_knowledge", "history"),
     ("online_knowledge", "jobs"),
@@ -266,6 +267,12 @@ POST_0013_BUSINESS_MUTABLE_TABLES = (
     ("monomer_dft", "jobs"),
     ("monomer_dft", "job_attempts"),
     ("monomer_dft", "artifacts"),
+)
+POST_0016_BUSINESS_MUTABLE_TABLES = (
+    ("polymerization_batch", "imports"),
+    ("polymerization_batch", "jobs"),
+    ("polymerization_batch", "chunks"),
+    ("polymerization_batch", "worker_status"),
 )
 MUTABLE_AUDIT_GOVERNED_SCHEMAS = (
     "core",
@@ -280,6 +287,7 @@ MUTABLE_AUDIT_GOVERNED_SCHEMAS = (
     "monomer_dft",
     "online_knowledge",
     "pi",
+    "polymerization_batch",
 )
 MUTABLE_AUDIT_LO_MUTATORS = (
     "pg_catalog.lo_creat(integer)",
@@ -463,6 +471,7 @@ CANONICAL_MIGRATION_LEDGER = (
         "0015_property_filter_performance",
         "e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732",
     ),
+    ('0016_monomer_polymerization_batch', 'c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976'),
 )
 
 HELPERS: dict[str, dict[str, str]] = {
@@ -830,10 +839,10 @@ def validate_active_jobs(document: object) -> dict[str, Any]:
     }:
         raise SiteHelperContractError("active-jobs evidence has an invalid shape")
     version = document.get("active_jobs_schema_version", 1)
-    if isinstance(version, bool) or version not in {1, 2}:
+    if isinstance(version, bool) or version not in {1, 2, 3}:
         raise SiteHelperContractError("active-jobs evidence schema is unsupported")
     _require_bool(document, "ingress_isolated", True)
-    expected = ACTIVE_JOB_FIELDS_V2 if version == 2 else ACTIVE_JOB_FIELDS_V1
+    expected = {1: ACTIVE_JOB_FIELDS_V1, 2: ACTIVE_JOB_FIELDS_V2, 3: ACTIVE_JOB_FIELDS_V3}[version]
     jobs = document.get("active_jobs")
     if not isinstance(jobs, dict) or set(jobs) != set(expected):
         raise SiteHelperContractError("active-jobs evidence categories differ")
@@ -5167,6 +5176,7 @@ def _validate_mutable_ledger(records: object) -> list[dict[str, str]]:
         13,
         14,
         15,
+        16,
     }:
         raise SiteHelperContractError(
             "mutable-data audit migration ledger is not a governed B/F state"
@@ -5625,8 +5635,9 @@ def _validate_mutable_audit_role_security(
             for record in governed_schemas
         ]
         not in [
-            list(required_schema_names),
-            list(MUTABLE_AUDIT_GOVERNED_SCHEMAS),
+            [name for name in names if name != optional]
+            for names in (required_schema_names, MUTABLE_AUDIT_GOVERNED_SCHEMAS)
+            for optional in (None, "polymerization_batch")
         ]
     ):
         raise SiteHelperContractError(
@@ -5984,18 +5995,22 @@ def _validate_mutable_data_audit(
     dft_ready = "0013_monomer_dft_jobs" in versions
     md_queue_ready = "0014_monomer_md_task_queue_cancel" in versions
     property_filter_ready = "0015_property_filter_performance" in versions
+    batch_ready = "0016_monomer_polymerization_batch" in versions
     contract_applied = "0012_drop_polytao_jobs" in versions
     business_relations = (
         BUSINESS_MUTABLE_TABLES + POST_0013_BUSINESS_MUTABLE_TABLES
     )
+    # Historical evidence remains byte-for-byte verifiable. New captures also
+    # enumerate the optional batch tables before 0016; after 0016 they are required.
+    if batch_ready or len(document.get("business_tables", [])) == len(business_relations) + len(POST_0016_BUSINESS_MUTABLE_TABLES):
+        business_relations += POST_0016_BUSINESS_MUTABLE_TABLES
+    if batch_ready and "polymerization_batch" not in {record["schema"] for record in role_security["governed_schemas"]}:
+        raise SiteHelperContractError("batch audit schema authority is incomplete")
     business_tables = _validate_table_inventory(
         document.get("business_tables"),
         business_relations,
-        absent_relations=(
-            frozenset()
-            if dft_ready
-            else frozenset(POST_0013_BUSINESS_MUTABLE_TABLES)
-        ),
+        absent_relations=(frozenset() if dft_ready else frozenset(POST_0013_BUSINESS_MUTABLE_TABLES))
+            | (frozenset() if batch_ready else frozenset(POST_0016_BUSINESS_MUTABLE_TABLES)),
     )
     if dft_ready:
         for record in business_tables:

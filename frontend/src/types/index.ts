@@ -926,6 +926,7 @@ export type MonomerPolymerizationResponse = {
 };
 
 export type MonomerPolymerizationStatusResponse = {
+  batch?: import("./polymerizationBatch").BatchCapability | null;
   enabled: boolean;
   available: boolean;
   default_target_class: MonomerPolymerizationTargetClass;

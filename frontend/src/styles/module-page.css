@@ -1,0 +1,61 @@
+@import "./workbench-theme.css";
+
+/* Only the fifteen native workbenches opt into this layout. The root owns
+   header space; each existing body keeps its own scrolling and overlays. */
+.np-module-page {
+  --np-page-title-left: 20px;
+  --np-page-title-top: 22px;
+  --np-page-title-size: 20px;
+  --np-page-title-line-height: 30px;
+  --np-page-title-gap: 10px;
+  --np-page-header-height: calc(var(--np-page-title-top) + var(--np-page-title-line-height) + var(--np-page-title-gap));
+  box-sizing: border-box;
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  padding-top: var(--np-page-header-height);
+  overflow: hidden;
+}
+
+.np-module-page > .np-module-page-header {
+  position: absolute;
+  z-index: 20;
+  inset: 0 0 auto;
+  box-sizing: border-box;
+  height: var(--np-page-header-height);
+  padding: var(--np-page-title-top) var(--np-page-title-left) var(--np-page-title-gap);
+}
+
+.np-module-page .np-module-page-header .np-module-page-title {
+  margin: 0;
+  padding: 0;
+  color: var(--np-theme-ink);
+  font-family: var(--font-heading);
+  font-size: var(--np-page-title-size);
+  font-weight: 750;
+  line-height: var(--np-page-title-line-height);
+  letter-spacing: -0.02em;
+}
+
+.np-module-page-body {
+  min-width: 0;
+  min-height: 0;
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-module-page {
+    --np-page-title-left: 36px;
+    --np-page-title-top: 30px;
+    --np-page-title-size: 28px;
+    --np-page-title-line-height: 42px;
+    --np-page-title-gap: 12px;
+  }
+}
+
+@media (max-width: 899px) {
+  .np-module-page {
+    --np-page-title-left: 16px;
+    --np-page-title-top: 20px;
+  }
+}

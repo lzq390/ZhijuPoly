@@ -5,6 +5,7 @@ name: nexpoly
 # also rejects image references that are not immutable sha256 digests.
 x-production-environment: &production-environment
   WEB_CONCURRENCY: "1"
+  MONOMER_POLYMERIZATION_BATCH_STORAGE_ROOT: /app/.runtime/monomer-polymerization-batch
   APP_POSTGRES_DSN: "${APP_POSTGRES_DSN:?APP_POSTGRES_DSN is required}"
   PI_POSTGRES_DSN: "${PI_POSTGRES_DSN:?PI_POSTGRES_DSN is required}"
   LAB_DATA_POSTGRES_DSN: "${LAB_DATA_POSTGRES_DSN:?LAB_DATA_POSTGRES_DSN is required}"
@@ -70,6 +71,7 @@ services:
         required: true
     environment: *production-environment
     volumes: !override
+      - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-polymerization-batch:/app/.runtime/monomer-polymerization-batch:rw
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/backend-data:/app/backend/data:ro
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/database:/app/database:ro
       - ${NEXPOLY_ASSET_ROOT:?NEXPOLY_ASSET_ROOT is required}/model:/app/model:ro
@@ -87,6 +89,22 @@ services:
         read_only: false
         bind:
           create_host_path: false
+    depends_on: !override
+      lab-postgres:
+        condition: service_healthy
+
+  polymerization-batch-worker:
+    image: "${NEXPOLY_BACKEND_IMAGE:?NEXPOLY_BACKEND_IMAGE must be an image digest}"
+    build: !reset null
+    env_file: !override
+      - path: "${NEXPOLY_APP_ENV_FILE:?NEXPOLY_APP_ENV_FILE is required}"
+        required: true
+    environment:
+      <<: *production-environment
+      GPU_PRELOAD_MODE: lazy
+      GPU_BROKER_ENABLED: "false"
+    volumes: !override
+      - ${NEXPOLY_RUNTIME_ROOT:?NEXPOLY_RUNTIME_ROOT is required}/state/monomer-polymerization-batch:/app/.runtime/monomer-polymerization-batch:rw
     depends_on: !override
       lab-postgres:
         condition: service_healthy

@@ -1,1 +1,3 @@
 backend/migrations/postgres/*.sql text eol=lf
+# Preserve downloadable CSV bytes and their published checksums (UTF-8 BOM/CRLF).
+frontend/public/samples/monomer-polymerization-batch/*.csv -text whitespace=cr-at-eol

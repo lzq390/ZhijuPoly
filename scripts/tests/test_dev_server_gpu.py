@@ -424,6 +424,47 @@ gpu_session_up
             up_branch.index("build_backend_image"),
         )
 
+    def test_cpu_batch_worker_starts_after_migrations_and_stops_before_database(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        case = source[source.index('case "${1:-up}" in'):]
+        harness = r'''
+set -euo pipefail
+GPU_SESSION_PYTHON=fake_session
+GPU_SESSION_CONTROLLER=unused
+COMPOSE=(fake_compose)
+fake_session() { echo '{"status":"stopped"}'; }
+fake_compose() { printf 'compose:%s\n' "$*"; }
+validate_asset_release() { :; }
+prepare_canary_state_directory() { :; }
+prepare_worker_runtime_directories() { :; }
+prepare_dft_runtime_directories() { :; }
+build_backend_image() { :; }
+gpu_operator_up() { :; }
+gpu_operator_stop() { :; }
+run_dev_migrations() { echo migrations; }
+wait_backend_configured() { :; }
+verify_backend_drift() { :; }
+worker_stop() { :; }
+'''
+        for command in ("up", "stop", "down"):
+            with self.subTest(command=command):
+                result = subprocess.run(
+                    ["bash", "-c", harness + case, "batch-lifecycle-harness", command],
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = result.stdout.splitlines()
+                if command == "up":
+                    started = next(i for i, call in enumerate(calls) if "polymerization-batch-worker" in call)
+                    self.assertLess(calls.index("migrations"), started)
+                    self.assertIn("--wait", calls[started])
+                    self.assertIn("--force-recreate", calls[started])
+                    self.assertLess(started, calls.index("compose:up -d --no-deps frontend-dev"))
+                else:
+                    stopped = calls.index("compose:stop backend frontend-dev polymerization-batch-worker")
+                    database_stop = "compose:stop lab-postgres" if command == "stop" else "compose:down"
+                    self.assertLess(stopped, calls.index(database_stop))
+
     def test_explicit_contract_command_archives_full_database_and_removed_table(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         start = source.index("run_dev_contract_migration() {")

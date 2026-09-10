@@ -120,6 +120,18 @@
           "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
         }
       ]
+    },
+    {
+      "version": "0016_monomer_polymerization_batch",
+      "kind": "expand",
+      "epoch": 2,
+      "checksum": "c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976",
+      "requires_contracts": [
+        {
+          "version": "0012_drop_polytao_jobs",
+          "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+        }
+      ]
     }
   ]
 }

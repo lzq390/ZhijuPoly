@@ -722,7 +722,7 @@ run_dev_contract_migration() {
     return 1
   }
 
-  "${COMPOSE[@]}" stop frontend-dev backend
+  "${COMPOSE[@]}" stop frontend-dev backend polymerization-batch-worker
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-$(date +%s%N)"
   archive_dir="$ROOT_DIR/.runtime/contract-archives/0012/$stamp"
   mkdir -p "$archive_dir"
@@ -2728,13 +2728,14 @@ case "${1:-up}" in
     "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
     wait_backend_configured
     verify_backend_drift
+    "${COMPOSE[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 120 polymerization-batch-worker
     "${COMPOSE[@]}" up -d --no-deps frontend-dev
     ;;
   stop)
     "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status | python3 -c \
       'import json, sys; value=json.load(sys.stdin); assert value.get("status") == "stopped", "use gpu-session-down for an active GPU session"'
     gpu_operator_stop
-    "${COMPOSE[@]}" stop backend frontend-dev
+    "${COMPOSE[@]}" stop backend frontend-dev polymerization-batch-worker
     worker_stop
     "${COMPOSE[@]}" stop lab-postgres
     ;;
@@ -2742,7 +2743,7 @@ case "${1:-up}" in
     "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status | python3 -c \
       'import json, sys; value=json.load(sys.stdin); assert value.get("status") == "stopped", "use gpu-session-down for an active GPU session"'
     gpu_operator_stop
-    "${COMPOSE[@]}" stop backend frontend-dev
+    "${COMPOSE[@]}" stop backend frontend-dev polymerization-batch-worker
     worker_stop
     "${COMPOSE[@]}" down
     ;;

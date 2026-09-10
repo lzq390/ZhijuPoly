@@ -115,7 +115,7 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             temporary = Path(raw)
             app_env = temporary / "app.env"
-            app_env.write_text("ONLINE_KNOWLEDGE_API_KEY=\n", encoding="utf-8")
+            app_env.write_text("ONLINE_KNOWLEDGE_API_KEY=\nMONOMER_POLYMERIZATION_BATCH_ENABLED=true\n", encoding="utf-8")
             environment = os.environ.copy()
             environment.update(
                 {
@@ -144,12 +144,25 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             document = json.loads(result.stdout)
-            for service in ("postgres-init", "backend", "nginx"):
+            for service in ("postgres-init", "backend", "nginx", "polymerization-batch-worker"):
                 self.assertNotIn("build", document["services"][service])
             self.assertEqual(document["services"]["backend"]["image"], DIGEST_A)
             self.assertEqual(document["services"]["nginx"]["image"], DIGEST_B)
             self.assertEqual(document["services"]["lab-postgres"]["ports"][0]["host_ip"], "127.0.0.1")
             backend = document["services"]["backend"]
+            worker = document["services"]["polymerization-batch-worker"]
+            self.assertEqual(worker["image"], DIGEST_A)
+            self.assertEqual(worker["environment"]["MONOMER_POLYMERIZATION_BATCH_ENABLED"], "true")
+            self.assertEqual(backend["environment"]["MONOMER_POLYMERIZATION_BATCH_ENABLED"], "true")
+            self.assertNotIn("gpus", worker)
+            # Settings accepts only lazy/required; disabling the GPU broker and
+            # device visibility keeps this worker on CPU without an invalid mode.
+            self.assertEqual(worker["environment"]["GPU_PRELOAD_MODE"], "lazy")
+            self.assertEqual(worker["environment"]["GPU_BROKER_ENABLED"], "false")
+            self.assertEqual(worker["environment"]["NVIDIA_VISIBLE_DEVICES"], "none")
+            batch_target = "/app/.runtime/monomer-polymerization-batch"
+            batch_volume = next(item for item in backend["volumes"] if item["target"] == batch_target)
+            self.assertEqual(next(item for item in worker["volumes"] if item["target"] == batch_target), batch_volume)
             self.assertEqual(backend["environment"]["WEB_CONCURRENCY"], "1")
             self.assertEqual(backend["environment"]["GEN_JOB_WORKERS"], "1")
             self.assertEqual(backend["environment"]["POLYTAO_JOB_THREADS"], "1")

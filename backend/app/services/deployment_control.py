@@ -196,18 +196,20 @@ def count_active_postgres_jobs(connection: Any) -> ActiveJobSummary:
             "monomer DFT deployment schema is invalid: "
             f"{dft_schema.reason}"
         )
+    version = 1
     if dft_schema.state is MonomerDftSchemaState.READY:
-        counts["monomer_dft"] = _count_statuses(
-            connection,
-            "monomer_dft",
-            "jobs",
-            statuses=MONOMER_DFT_ACTIVE_STATUSES,
-        )
-        return ActiveJobSummary(
-            counts=counts,
-            active_jobs_schema_version=2,
-        )
-    return ActiveJobSummary(counts=counts, active_jobs_schema_version=1)
+        counts["monomer_dft"] = _count_statuses(connection, "monomer_dft", "jobs", statuses=MONOMER_DFT_ACTIVE_STATUSES)
+        version = 2
+    if _table_exists(connection, "polymerization_batch", "jobs"):
+        if version != 2:
+            raise RuntimeError("batch deployment schema requires monomer DFT schema")
+        # Queued and checkpointed jobs are restartable. Only an execution that
+        # has not released/fenced its token blocks deployment drain.
+        counts["polymerization_batch"] = int(connection.execute(
+            "SELECT count(*) AS count FROM polymerization_batch.jobs WHERE execution_token IS NOT NULL"
+        ).fetchone()["count"])
+        version = 3
+    return ActiveJobSummary(counts=counts, active_jobs_schema_version=version)
 
 
 def count_in_memory_jobs(app: Any) -> ActiveJobSummary:

@@ -63,6 +63,7 @@ categories_v1 = (
     "inflight_api_writes",
 )
 categories_v2 = (*categories_v1, "monomer_dft")
+categories_v3 = (*categories_v2, "polymerization_batch")
 with open(sys.argv[1], encoding="utf-8") as source:
     document = json.load(source)
 required_fields = {"ingress_isolated", "active_jobs", "active_total"}
@@ -76,12 +77,12 @@ schema_version = document.get("active_jobs_schema_version", 1)
 if (
     isinstance(schema_version, bool)
     or not isinstance(schema_version, int)
-    or schema_version not in {1, 2}
+    or schema_version not in {1, 2, 3}
 ):
     raise SystemExit("bootstrap probe returned an unsupported schema version")
 if document["ingress_isolated"] is not True:
     raise SystemExit("bootstrap probe did not confirm isolated ingress")
-categories = categories_v2 if schema_version == 2 else categories_v1
+categories = {1: categories_v1, 2: categories_v2, 3: categories_v3}[schema_version]
 if not isinstance(jobs, dict) or set(jobs) != set(categories):
     raise SystemExit("bootstrap probe did not cover every active-job category")
 if any(isinstance(jobs[name], bool) or not isinstance(jobs[name], int) or jobs[name] < 0 for name in categories):

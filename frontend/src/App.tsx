@@ -711,7 +711,7 @@ export default function App() {
         openMonomerDft();
         break;
       case "monomerPolymerization":
-        openMonomerPolymerization();
+        navigate({ module: "monomerPolymerization", datasetKey: null }, { href: "/monomer-polymerization?mode=single" });
         break;
       case "reverseDesign":
         openReverseDesign();
@@ -886,7 +886,7 @@ export default function App() {
         {
           id: "monomerPolymerization",
           label: "单体正向聚合",
-          description: "用 SMiPoly 规则对一个或两个单体生成少量聚合物候选。",
+          description: "上传单体表批量生成聚合物候选，也可逐对聚合。",
           route: "/monomer-polymerization",
           icon: <FlaskConical className="h-4 w-4" />,
           isActive: activeModule === "monomerPolymerization",

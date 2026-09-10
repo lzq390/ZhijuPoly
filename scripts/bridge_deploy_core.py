@@ -110,6 +110,9 @@ PROPERTY_FILTER_MIGRATION_RECORD = {
 PROPERTY_FILTER_AUTHORITY_MANIFEST_SHA256 = (
     "sha256:0c1ccfe4bc4515b4558e33b3c06524c6d79451a51b0bc1d2e1e14ec4a50ad26b"
 )
+BATCH_MIGRATION = {'version': '0016_monomer_polymerization_batch', 'checksum': 'c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976'}
+BATCH_MIGRATION_RECORD = {'version': '0016_monomer_polymerization_batch', 'kind': 'expand', 'epoch': 2, 'checksum': 'c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976', 'requires_contracts': [{'version': '0012_drop_polytao_jobs', 'checksum': 'c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728'}]}
+BATCH_AUTHORITY_MANIFEST_SHA256 = 'sha256:a6fdee13e6b57fbd264aa498e2b438e5dd50fac8b6bee34561665a33ca871fc8'
 TOKEN_STATUSES = {
     "reserved",
     "prepared",
@@ -279,6 +282,7 @@ def expected_migration_registry(
         policy_authority,
         queue_authority,
         [*queue_authority, PROPERTY_FILTER_MIGRATION_RECORD],
+        [*queue_authority, PROPERTY_FILTER_MIGRATION_RECORD, BATCH_MIGRATION_RECORD],
     ):
         raise BridgeDeployError(
             "bridge authority manifest is not the unique B plus "
