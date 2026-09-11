@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useKnowledgeSearch } from "../../hooks/useKnowledgeSearch";
+import { useKnowledgeObservation } from "../../hooks/useKnowledgeObservation";
 import {
   knowledgeSearchGroupsFromTerms,
   normalizeKnowledgeSearchGroups,
@@ -210,6 +211,7 @@ function ResultSkeletons() {
 
 export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], modeNavigation }: LocalKnowledgePanelProps) {
   const searchState = useKnowledgeSearch();
+  const observeKnowledge = useKnowledgeObservation(searchState.data?.search_id);
   const [query, setQuery] = useState(() => {
     const groups = knowledgeSearchGroupsFromTerms(initialTerms);
     return groups.length ? serializeKnowledgeSearchGroups(groups) : initialQuery;
@@ -463,6 +465,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
                           onClick={() => {
                             setSelectedId(record.knowledge_id);
                             setDrawerOpen(true);
+                            observeKnowledge(record.knowledge_id, "result_card");
                           }}
                         >
                           <span className="ks-card-topline">
@@ -538,6 +541,11 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
         subtitle={selectedRecord ? `#${selectedRecord.knowledge_id} · 本地知识库` : "选择结果后查看"}
         icon={<BookOpenText aria-hidden="true" />}
         tabs={drawerTabs}
+        onTabChange={(tabId) => {
+          if (tabId === "reaction" && selectedRecord) {
+            observeKnowledge(selectedRecord.knowledge_id, "reaction_tab");
+          }
+        }}
         footer={selectedRecord ? (
           <><span><Clock3 aria-hidden="true" />记录 {selectedRecord.knowledge_id} · 可追溯字段完整</span><button className="ks-button" type="button" onClick={() => void navigator.clipboard?.writeText(`${selectedRecord.source_file}:${selectedRecord.source_row_number}`)}><Copy aria-hidden="true" />复制定位</button></>
         ) : undefined}
@@ -547,7 +555,10 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
         widthProfile={widthProfile}
         onWidthChange={setDrawerWidth}
         onClose={() => setDrawerOpen(false)}
-        onOpen={() => setDrawerOpen(true)}
+        onOpen={() => {
+          setDrawerOpen(true);
+          if (selectedRecord) observeKnowledge(selectedRecord.knowledge_id, "drawer_reopen");
+        }}
       />
     </div>
   );

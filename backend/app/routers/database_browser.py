@@ -65,8 +65,6 @@ from app.services.postgres_database_browser import (
     search_property_filter_records_postgres,
     source_file_status,
 )
-from app.services.smiles_utils import normalize
-from app.services.structure_2d import generate_2d_svg
 
 
 router = APIRouter(prefix="/api/v1/database-browser", tags=["database-browser"])
@@ -241,6 +239,8 @@ def _postgres_dataset_summaries(connection) -> list[DatasetSummaryItem]:
 
 
 def _normalize_query_smiles(smiles: str) -> str:
+    from app.services.smiles_utils import normalize
+
     try:
         return normalize(smiles)
     except ValueError as exc:
@@ -249,6 +249,8 @@ def _normalize_query_smiles(smiles: str) -> str:
 
 @lru_cache(maxsize=512)
 def _lookup_structure_svg(smiles: str, canonical_smiles: str | None) -> str | None:
+    from app.services.structure_2d import generate_2d_svg
+
     return generate_2d_svg(canonical_smiles or smiles)
 
 

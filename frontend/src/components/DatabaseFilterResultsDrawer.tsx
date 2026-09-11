@@ -25,6 +25,7 @@ import type {
   PropertyFilterSearchResult
 } from "../types";
 import type { SubmittedPropertyFilter } from "../hooks/usePropertyFilter";
+import { usePropertyFilterObservation } from "../hooks/usePropertyFilterObservation";
 import { WorkbenchDrawerShell } from "./structure-workbench/WorkbenchDrawerShell";
 
 export type DatabaseFilterDrawerProfile = {
@@ -197,18 +198,26 @@ const CopyButton = memo(function CopyButton({ value, label }: { value: string; l
 const SmilesDetails = memo(function SmilesDetails({
   value,
   label,
+  onOpen,
   secondary = false
 }: {
   value: string;
   label: string;
+  onOpen: () => void;
   secondary?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const wasExpanded = useRef(false);
 
   return (
     <details
       className={`dbf-smiles-details${secondary ? " is-secondary" : ""}`}
-      onToggle={(event) => setExpanded(event.currentTarget.open)}
+      onToggle={(event) => {
+        const open = event.currentTarget.open;
+        setExpanded(open);
+        if (open && !wasExpanded.current) onOpen();
+        wasExpanded.current = open;
+      }}
     >
       <summary>
         <span className="dbf-smiles-summary-label">
@@ -310,10 +319,16 @@ const RecordMetadata = memo(function RecordMetadata({ record }: { record: Proper
   );
 });
 
-function MeasurementDetails({ records }: { records: PropertyFilterRecord[] }) {
+function MeasurementDetails({ records, onOpen }: { records: PropertyFilterRecord[]; onOpen: () => void }) {
   const [expanded, setExpanded] = useState(false);
+  const wasExpanded = useRef(false);
   return (
-    <details onToggle={(event) => setExpanded(event.currentTarget.open)}>
+    <details onToggle={(event) => {
+      const open = event.currentTarget.open;
+      setExpanded(open);
+      if (open && !wasExpanded.current) onOpen();
+      wasExpanded.current = open;
+    }}>
       <summary>
         记录详情{records.length > 1 ? ` · ${records.length} 条测量` : ""}
         <ChevronDown aria-hidden="true" />
@@ -338,12 +353,17 @@ function MeasurementDetails({ records }: { records: PropertyFilterRecord[] }) {
 const ResultCard = memo(function ResultCard({
   result,
   rank,
+  searchId,
+  resultIndex,
   submitted
 }: {
   result: PropertyFilterSearchResult;
   rank: number;
+  searchId?: string;
+  resultIndex: number;
   submitted: SubmittedPropertyFilter;
 }) {
+  const observe = usePropertyFilterObservation(searchId, resultIndex);
   const groupedRecords = useMemo(() => groupRecords(result), [result]);
   const primarySmiles = result.canonical_smiles || result.smiles || "";
   const sameSmiles = Boolean(result.smiles && result.canonical_smiles && result.smiles === result.canonical_smiles);
@@ -361,6 +381,7 @@ const ResultCard = memo(function ResultCard({
       {primarySmiles ? (
         <SmilesDetails
           value={primarySmiles}
+          onOpen={() => observe({ source: "smiles", smiles_field: result.canonical_smiles ? "canonical_smiles" : "smiles" })}
           label={sameSmiles ? "SMILES / canonical SMILES" : result.canonical_smiles ? "canonical SMILES" : "SMILES"}
         />
       ) : (
@@ -368,7 +389,8 @@ const ResultCard = memo(function ResultCard({
       )}
 
       {result.smiles && result.canonical_smiles && !sameSmiles ? (
-        <SmilesDetails value={result.smiles} label="SMILES" secondary />
+        <SmilesDetails value={result.smiles} label="SMILES" secondary
+          onOpen={() => observe({ source: "smiles", smiles_field: "smiles" })} />
       ) : null}
 
       <div className="dbf-condition-values">
@@ -381,7 +403,8 @@ const ResultCard = memo(function ResultCard({
                 <span>{condition.expression}</span>
                 <strong>{primaryRecord ? displayRecordValue(primaryRecord) : "暂无匹配值"}</strong>
               </div>
-              {primaryRecord ? <MeasurementDetails records={records} /> : null}
+              {primaryRecord ? <MeasurementDetails records={records}
+                onOpen={() => observe({ source: "measurement_details", filter_index: conditionIndex })} /> : null}
             </div>
           );
         })}
@@ -405,8 +428,10 @@ const ResultList = memo(function ResultList({
     <div className="dbf-result-list">
       {data.results.map((result, index) => (
         <ResultCard
-          key={`${result.canonical_smiles || result.smiles || "record"}-${index}`}
+          key={`${data.search_id ?? ""}-${result.canonical_smiles || result.smiles || "record"}-${index}`}
           result={result}
+          searchId={data.search_id}
+          resultIndex={index}
           rank={(page - 1) * pageSize + index + 1}
           submitted={submitted}
         />

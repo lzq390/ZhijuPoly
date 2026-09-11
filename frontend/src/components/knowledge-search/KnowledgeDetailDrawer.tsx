@@ -33,6 +33,7 @@ type KnowledgeDetailDrawerProps = {
   onWidthChange: (width: number) => void;
   onClose: () => void;
   onOpen: () => void;
+  onTabChange?: (tabId: string) => void;
 };
 
 type KnowledgeDrawerWidthProfile = {
@@ -144,7 +145,8 @@ export function KnowledgeDetailDrawer({
   widthProfile,
   onWidthChange,
   onClose,
-  onOpen
+  onOpen,
+  onTabChange
 }: KnowledgeDetailDrawerProps) {
   const drawerRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -249,6 +251,12 @@ export function KnowledgeDetailDrawer({
     );
   }
 
+  function selectTab(tabId: string) {
+    if (tabId === (tabs.find((tab) => tab.id === activeTab) ?? tabs[0])?.id) return;
+    setActiveTab(tabId);
+    onTabChange?.(tabId);
+  }
+
   function changeTabWithKeyboard(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || tabs.length < 2) return;
     event.preventDefault();
@@ -257,7 +265,7 @@ export function KnowledgeDetailDrawer({
     else if (event.key === "End") nextIndex = tabs.length - 1;
     else nextIndex = (index + (event.key === "ArrowLeft" ? -1 : 1) + tabs.length) % tabs.length;
     const nextTab = tabs[nextIndex];
-    setActiveTab(nextTab.id);
+    selectTab(nextTab.id);
     window.requestAnimationFrame(() => {
       drawerRef.current?.querySelector<HTMLButtonElement>(`[data-ks-drawer-tab="${nextTab.id}"]`)?.focus();
     });
@@ -336,7 +344,7 @@ export function KnowledgeDetailDrawer({
                 role="tab"
                 aria-selected={selectedTab?.id === tab.id}
                 tabIndex={selectedTab?.id === tab.id ? 0 : -1}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => selectTab(tab.id)}
                 onKeyDown={(event) => changeTabWithKeyboard(event, index)}
               >
                 {tab.label}

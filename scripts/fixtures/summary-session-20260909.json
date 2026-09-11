@@ -1,0 +1,279 @@
+{
+  "provenance": {
+    "kind": "reconstructed_from_trace_and_original_import_samples",
+    "recording_id": "2187d677-7dcf-47de-86e5-67c2bfa026bc",
+    "reason": "Server configuration reload discarded the original in-memory recording.",
+    "timestamp_semantics": "HTTP request arrival times from trace; original event append timestamps unavailable.",
+    "article_verification": "Original import sample titles, abstract lengths and recorded prefixes match historical trace. Full abstracts were not logged.",
+    "original_samples_sha256": "5144fff4d3e78d3166ba949c46be16372fb17ebc392515fb827d29213df19c69"
+  },
+  "recording": {
+    "recording_id": "2187d677-7dcf-47de-86e5-67c2bfa026bc",
+    "status": "stopped",
+    "events": [
+      {
+        "event": "search.completed",
+        "search_id": "3d1206649542474d980a310f9b00e50a",
+        "query": "polyimide|absorbance",
+        "groups": [
+          {
+            "terms": [
+              "polyimide",
+              "absorbance"
+            ]
+          }
+        ],
+        "page": 1,
+        "page_size": 20,
+        "total": 2,
+        "results": [
+          {
+            "knowledge_id": 1,
+            "title_zh": null,
+            "title_en": "Preparation and Characterization of Colorless and Transparent Polyimide Films With Excellent Thermal Stability for Flexible Displays",
+            "source_file": "2026-01-18-4f0ca442db595d2af512120a0b5cecdc.pdf",
+            "abstract_characters": 1335,
+            "abstract_preview": "Colorless and transparent polyimide films (CPIs) have gained widespread attention as a crucial substrate material for flexible organic light-emitting diode (OLE"
+          },
+          {
+            "knowledge_id": 2,
+            "title_zh": null,
+            "title_en": "Simultaneous pH–rate profiles applied to the two step consecutive sequence A→B→C: a theoretical analysis and experimental verification",
+            "source_file": "perkinII-2000.pdf",
+            "abstract_characters": 982,
+            "abstract_preview": "The absorbance extremum method introduced to resolve the rate constant–reaction step ambiguity problem in two step consecutive reactions is applied to cases whe"
+          }
+        ],
+        "sequence": 1,
+        "time": "2026-09-09T10:12:33.320245+00:00"
+      },
+      {
+        "event": "article.opened",
+        "search_id": "3d1206649542474d980a310f9b00e50a",
+        "knowledge_id": 2,
+        "source": "result_card",
+        "query": "polyimide|absorbance",
+        "recording_id": "2187d677-7dcf-47de-86e5-67c2bfa026bc",
+        "title_en": "Simultaneous pH–rate profiles applied to the two step consecutive sequence A→B→C: a theoretical analysis and experimental verification",
+        "title_zh": null,
+        "abstract_characters": 982,
+        "article": {
+          "knowledge_id": 2,
+          "source_file": "perkinII-2000.pdf",
+          "source_row_number": 1,
+          "source_sequence": "PDF page 1, abstract",
+          "title_en": "Simultaneous pH–rate profiles applied to the two step consecutive sequence A→B→C: a theoretical analysis and experimental verification",
+          "abstract": "The absorbance extremum method introduced to resolve the rate constant–reaction step ambiguity problem in two step consecutive reactions is applied to cases where the rate constant in each step is pseudo first order and dependent on catalyst concentration. In particular, acid and base catalyzed reactions of substrates in aqueous solution are examined. Resultant simultaneous pH–rate profile functions are treated in the context of the ambiguity problem and a detailed account of the possible interactions between pH–rate profiles is also given. The merits of this method include its general scope, its applicability to reactions for which it may be experimentally difficult to resolve the ambiguity assignment by other means, and its use of rate data acquired from original kinetic traces without requiring additional information. The theoretical analysis is verified and tested experimentally for the hydration of fluorenylideneketene in dilute aqueous perchloric acid solutions."
+        },
+        "sequence": 2,
+        "time": "2026-09-09T10:12:36.594493+00:00"
+      },
+      {
+        "event": "article.reaction_viewed",
+        "search_id": "3d1206649542474d980a310f9b00e50a",
+        "knowledge_id": 2,
+        "source": "reaction_tab",
+        "query": "polyimide|absorbance",
+        "recording_id": "2187d677-7dcf-47de-86e5-67c2bfa026bc",
+        "title_en": "Simultaneous pH–rate profiles applied to the two step consecutive sequence A→B→C: a theoretical analysis and experimental verification",
+        "title_zh": null,
+        "abstract_characters": 982,
+        "reaction_info": {
+          "analysis": null,
+          "judgement_reason": null,
+          "polymer_iupac": null,
+          "formulation": null,
+          "catalyst": null,
+          "temperature": null,
+          "reaction_time": null,
+          "solvent": null
+        },
+        "article": {
+          "knowledge_id": 2,
+          "source_file": "perkinII-2000.pdf",
+          "source_row_number": 1,
+          "source_sequence": "PDF page 1, abstract",
+          "title_en": "Simultaneous pH–rate profiles applied to the two step consecutive sequence A→B→C: a theoretical analysis and experimental verification",
+          "abstract": "The absorbance extremum method introduced to resolve the rate constant–reaction step ambiguity problem in two step consecutive reactions is applied to cases where the rate constant in each step is pseudo first order and dependent on catalyst concentration. In particular, acid and base catalyzed reactions of substrates in aqueous solution are examined. Resultant simultaneous pH–rate profile functions are treated in the context of the ambiguity problem and a detailed account of the possible interactions between pH–rate profiles is also given. The merits of this method include its general scope, its applicability to reactions for which it may be experimentally difficult to resolve the ambiguity assignment by other means, and its use of rate data acquired from original kinetic traces without requiring additional information. The theoretical analysis is verified and tested experimentally for the hydration of fluorenylideneketene in dilute aqueous perchloric acid solutions."
+        },
+        "sequence": 3,
+        "time": "2026-09-09T10:12:38.943701+00:00"
+      },
+      {
+        "event": "article.opened",
+        "search_id": "3d1206649542474d980a310f9b00e50a",
+        "knowledge_id": 1,
+        "source": "result_card",
+        "query": "polyimide|absorbance",
+        "recording_id": "2187d677-7dcf-47de-86e5-67c2bfa026bc",
+        "title_en": "Preparation and Characterization of Colorless and Transparent Polyimide Films With Excellent Thermal Stability for Flexible Displays",
+        "title_zh": null,
+        "abstract_characters": 1335,
+        "article": {
+          "knowledge_id": 1,
+          "source_file": "2026-01-18-4f0ca442db595d2af512120a0b5cecdc.pdf",
+          "source_row_number": 1,
+          "source_sequence": "PDF page 1, abstract",
+          "title_en": "Preparation and Characterization of Colorless and Transparent Polyimide Films With Excellent Thermal Stability for Flexible Displays",
+          "abstract": "Colorless and transparent polyimide films (CPIs) have gained widespread attention as a crucial substrate material for flexible organic light-emitting diode (OLED) displays. This study discusses the synthesis of a series of CPI films (CPI-X) featuring novel structures, using diamine monomers containing highly electronegative sulfone groups (m-BAPS), dianhydride monomers with fluoroalkyl groups (6FDA), and dianhydride monomers with noncoplanar structures (a-BPDA). The successful synthesis of the CPI films was confirmed through FTIR, 1H NMR, and XRD. The optical properties were optimized by adjusting the ratio of dianhydride monomers, and UV–vis tests indicated that the CPI-6 film exhibited superior transmittance, reaching 86% at 450 nm. Notably, these films displayed excellent thermal stability, with a maximum thermal decomposition temperature at 5% weight loss of 476.2°C, which may be attributed to the synergistic interaction between the two dianhydrides achieving an optimal thermodynamic balance between molecular packing density and free volume. Additionally, the CPI-6 film demonstrated exceptional folding endurance, showing no significant surface changes after 10,000 folding cycles. In summary, this study provides a novel and effective structural design for high-performance CPIs in the flexible electronics field."
+        },
+        "sequence": 4,
+        "time": "2026-09-09T10:12:45.985639+00:00"
+      },
+      {
+        "event": "search.completed",
+        "search_id": "95d38ab95fea4cf69d672a379f597b6f",
+        "query": "CPI",
+        "groups": [
+          {
+            "terms": [
+              "CPI"
+            ]
+          }
+        ],
+        "page": 1,
+        "page_size": 20,
+        "total": 1,
+        "results": [
+          {
+            "knowledge_id": 1,
+            "title_zh": null,
+            "title_en": "Preparation and Characterization of Colorless and Transparent Polyimide Films With Excellent Thermal Stability for Flexible Displays",
+            "source_file": "2026-01-18-4f0ca442db595d2af512120a0b5cecdc.pdf",
+            "abstract_characters": 1335,
+            "abstract_preview": "Colorless and transparent polyimide films (CPIs) have gained widespread attention as a crucial substrate material for flexible organic light-emitting diode (OLE"
+          }
+        ],
+        "sequence": 5,
+        "time": "2026-09-09T10:13:00.131531+00:00"
+      },
+      {
+        "event": "article.reaction_viewed",
+        "search_id": "95d38ab95fea4cf69d672a379f597b6f",
+        "knowledge_id": 1,
+        "source": "reaction_tab",
+        "query": "CPI",
+        "recording_id": "2187d677-7dcf-47de-86e5-67c2bfa026bc",
+        "title_en": "Preparation and Characterization of Colorless and Transparent Polyimide Films With Excellent Thermal Stability for Flexible Displays",
+        "title_zh": null,
+        "abstract_characters": 1335,
+        "reaction_info": {
+          "analysis": null,
+          "judgement_reason": null,
+          "polymer_iupac": null,
+          "formulation": null,
+          "catalyst": null,
+          "temperature": null,
+          "reaction_time": null,
+          "solvent": null
+        },
+        "article": {
+          "knowledge_id": 1,
+          "source_file": "2026-01-18-4f0ca442db595d2af512120a0b5cecdc.pdf",
+          "source_row_number": 1,
+          "source_sequence": "PDF page 1, abstract",
+          "title_en": "Preparation and Characterization of Colorless and Transparent Polyimide Films With Excellent Thermal Stability for Flexible Displays",
+          "abstract": "Colorless and transparent polyimide films (CPIs) have gained widespread attention as a crucial substrate material for flexible organic light-emitting diode (OLED) displays. This study discusses the synthesis of a series of CPI films (CPI-X) featuring novel structures, using diamine monomers containing highly electronegative sulfone groups (m-BAPS), dianhydride monomers with fluoroalkyl groups (6FDA), and dianhydride monomers with noncoplanar structures (a-BPDA). The successful synthesis of the CPI films was confirmed through FTIR, 1H NMR, and XRD. The optical properties were optimized by adjusting the ratio of dianhydride monomers, and UV–vis tests indicated that the CPI-6 film exhibited superior transmittance, reaching 86% at 450 nm. Notably, these films displayed excellent thermal stability, with a maximum thermal decomposition temperature at 5% weight loss of 476.2°C, which may be attributed to the synergistic interaction between the two dianhydrides achieving an optimal thermodynamic balance between molecular packing density and free volume. Additionally, the CPI-6 film demonstrated exceptional folding endurance, showing no significant surface changes after 10,000 folding cycles. In summary, this study provides a novel and effective structural design for high-performance CPIs in the flexible electronics field."
+        },
+        "sequence": 6,
+        "time": "2026-09-09T10:13:03.687395+00:00"
+      },
+      {
+        "event": "property_filter.search_completed",
+        "filters": [
+          {
+            "filter_type": "standardized",
+            "property_key": "tg",
+            "canonical_unit": "C",
+            "min_value": 158,
+            "max_value": 245
+          }
+        ],
+        "search_id": "a022221daedd412db0101ceba06e55a7",
+        "query": "",
+        "page": 1,
+        "page_size": 25,
+        "matched_records": 2,
+        "sequence": 7,
+        "time": "2026-09-09T10:13:13.664700+00:00"
+      },
+      {
+        "event": "property_filter.smiles_viewed",
+        "search_id": "a022221daedd412db0101ceba06e55a7",
+        "result_index": 0,
+        "source": "smiles",
+        "query": "",
+        "page": 1,
+        "page_size": 25,
+        "filters": [
+          {
+            "filter_type": "standardized",
+            "property_key": "tg",
+            "canonical_unit": "C",
+            "property_name": null,
+            "property_unit_clean": null,
+            "min_value": 158.0,
+            "max_value": 245.0
+          }
+        ],
+        "polymer_name": "POC-B 演示材料",
+        "smiles_field": "smiles",
+        "smiles_value": "*CC(C)*",
+        "recording_id": "2187d677-7dcf-47de-86e5-67c2bfa026bc",
+        "sequence": 8,
+        "time": "2026-09-09T10:13:15.762403+00:00"
+      },
+      {
+        "event": "property_filter.measurements_viewed",
+        "search_id": "a022221daedd412db0101ceba06e55a7",
+        "result_index": 0,
+        "source": "measurement_details",
+        "query": "",
+        "page": 1,
+        "page_size": 25,
+        "filters": [
+          {
+            "filter_type": "standardized",
+            "property_key": "tg",
+            "canonical_unit": "C",
+            "property_name": null,
+            "property_unit_clean": null,
+            "min_value": 158.0,
+            "max_value": 245.0
+          }
+        ],
+        "polymer_name": "POC-B 演示材料",
+        "filter_index": 0,
+        "records": [
+          {
+            "filter_record_id": 9000004,
+            "source_row_number": 4,
+            "polymer_name": "POC-B 演示材料",
+            "smiles": "*CC(C)*",
+            "canonical_smiles": null,
+            "property_category": "Others",
+            "property_name": "Glass transition temperature",
+            "property_value": "240.0",
+            "property_value_num": 240.0,
+            "property_unit_raw": "C",
+            "property_unit_clean": "C",
+            "property_key": "tg",
+            "property_label": "玻璃化转变温度",
+            "canonical_value": 240.0,
+            "canonical_unit": "C",
+            "unit_conversion_status": null,
+            "value_origin": "synthetic_poc",
+            "label_source": "synthetic_poc",
+            "reliable_score": null,
+            "soft_quality_flags": "Synthetic POC demo data; not experimental measurements or literature evidence.",
+            "duplicate_flag": null,
+            "filter_index": 0
+          }
+        ],
+        "recording_id": "2187d677-7dcf-47de-86e5-67c2bfa026bc",
+        "sequence": 9,
+        "time": "2026-09-09T10:13:16.107742+00:00"
+      }
+    ]
+  }
+}

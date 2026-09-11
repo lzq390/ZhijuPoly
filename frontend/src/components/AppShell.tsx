@@ -42,6 +42,7 @@ type AppShellProps = {
   onDeleteGeneralSession: (sessionID: string) => void;
   beforeNavigate?: () => Promise<void | boolean>;
   children: ReactNode;
+  recordingControls?: ReactNode;
 };
 
 const BEFORE_NAVIGATE_TIMEOUT_MS = 1500;
@@ -166,6 +167,7 @@ export function AppShell({
   onRenameGeneralSession,
   onDeleteGeneralSession,
   beforeNavigate,
+  recordingControls,
   children
 }: AppShellProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -461,6 +463,7 @@ export function AppShell({
           onOpen={() => setIsMobileMenuOpen(true)}
         />
 
+        {recordingControls}
         <main
           className={
             isHome

@@ -985,6 +985,7 @@ export type KnowledgeSearchGroup = {
 };
 
 export type KnowledgeSearchRequest = {
+  recording_id?: string;
   query: string;
   top_k: number;
   page?: number;
@@ -1017,6 +1018,8 @@ export type KnowledgeDocumentResult = {
 };
 
 export type KnowledgeSearchResponse = {
+  // Only the isolated POC backend returns a snapshot ID for observations.
+  search_id?: string;
   query: string;
   groups: KnowledgeSearchGroup[];
   terms: string[];
@@ -1031,6 +1034,48 @@ export type KnowledgeNavigationRequest = {
   query: string;
   groups?: KnowledgeSearchGroup[];
   terms?: string[];
+};
+
+export type KnowledgeObservationRequest = {
+  recording_id?: string;
+  search_id: string;
+  knowledge_id: number;
+  source: "result_card" | "drawer_reopen" | "reaction_tab";
+};
+
+export type KnowledgeRecordingEvent = {
+  sequence: number;
+  time: string;
+  event: "search.completed" | "search.failed" | "article.opened" | "article.reaction_viewed"
+    | "property_filter.search_completed" | "property_filter.search_failed"
+    | "property_filter.measurements_viewed" | "property_filter.smiles_viewed";
+  query: string;
+  search_id?: string;
+  source?: KnowledgeObservationRequest["source"] | PropertyFilterObservationRequest["source"];
+  filters?: PropertyFilterCondition[];
+  matched_records?: number;
+  polymer_name?: string | null;
+  records?: PropertyFilterRecord[];
+  smiles_field?: "smiles" | "canonical_smiles";
+  smiles_value?: string;
+  page?: number;
+  total?: number;
+  status_code?: number;
+  article?: KnowledgeDocumentResult;
+};
+
+export type KnowledgeRecording = {
+  recording_id: string;
+  status: "stopped";
+  started_at: string;
+  ended_at: string;
+  events: KnowledgeRecordingEvent[];
+};
+
+export type KnowledgeRecordingSummary = {
+  recording_id: string;
+  summary: string;
+  generated: boolean;
 };
 
 export type OnlineKnowledgeMode = "synthesis" | "property";
@@ -1634,6 +1679,7 @@ export type PropertyFilterCondition = {
 };
 
 export type PropertyFilterSearchRequest = {
+  recording_id?: string;
   filters: PropertyFilterCondition[];
   q?: string;
   page?: number;
@@ -1674,6 +1720,7 @@ export type PropertyFilterSearchResult = {
 };
 
 export type PropertyFilterSearchResponse = {
+  search_id?: string;
   query: string;
   page: number;
   page_size: number;
@@ -1685,6 +1732,15 @@ export type PropertyFilterSearchResponse = {
   source_message: string | null;
   results: PropertyFilterSearchResult[];
 };
+
+export type PropertyFilterObservationRequest = {
+  recording_id?: string;
+  search_id: string;
+  result_index: number;
+} & (
+  | { source: "measurement_details"; filter_index: number }
+  | { source: "smiles"; smiles_field: "smiles" | "canonical_smiles" }
+);
 
 export type DftMoleculeBrowserRecord = {
   mol_id: string;

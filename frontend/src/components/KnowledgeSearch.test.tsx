@@ -7,10 +7,25 @@ import type {
   KnowledgeSearchResponse,
   OnlineKnowledgeSearchResponse
 } from "../types";
-import { KnowledgeSearch } from "./KnowledgeSearch";
+import { KnowledgeSearch as KnowledgeSearchPage } from "./KnowledgeSearch";
+import { useState, type ComponentProps } from "react";
+import { KnowledgeRecordingProvider } from "../hooks/useKnowledgeRecording";
+import { KnowledgeRecordingControls } from "./knowledge-search/KnowledgeRecordingControls";
+
+function KnowledgeSearch(props: ComponentProps<typeof KnowledgeSearchPage>) {
+  const [local, setLocal] = useState(true);
+  return <KnowledgeRecordingProvider>
+    <KnowledgeRecordingControls localMode={local} />
+    <KnowledgeSearchPage {...props} onLocalModeChange={setLocal} />
+  </KnowledgeRecordingProvider>;
+}
 
 const apiMocks = vi.hoisted(() => ({
   searchKnowledge: vi.fn(),
+  postKnowledgeObservation: vi.fn(),
+  startKnowledgeRecording: vi.fn(),
+  stopKnowledgeRecording: vi.fn(),
+  summarizeKnowledgeRecording: vi.fn(),
   fetchConfig: vi.fn(),
   fetchHistory: vi.fn(),
   createJob: vi.fn(),
@@ -25,6 +40,10 @@ vi.mock("../services/api", async () => {
   return {
     ...actual,
     searchKnowledge: apiMocks.searchKnowledge,
+    postKnowledgeObservation: apiMocks.postKnowledgeObservation,
+    startKnowledgeRecording: apiMocks.startKnowledgeRecording,
+    stopKnowledgeRecording: apiMocks.stopKnowledgeRecording,
+    summarizeKnowledgeRecording: apiMocks.summarizeKnowledgeRecording,
     fetchOnlineKnowledgeDefaultConfig: apiMocks.fetchConfig,
     fetchOnlineKnowledgeHistory: apiMocks.fetchHistory,
     createOnlineKnowledgeJob: apiMocks.createJob,
@@ -109,6 +128,13 @@ const onlineResult: OnlineKnowledgeSearchResponse = {
 beforeEach(() => {
   Object.values(apiMocks).forEach((mock) => mock.mockReset());
   apiMocks.searchKnowledge.mockImplementation((payload: KnowledgeSearchRequest) => Promise.resolve(localResponse(payload)));
+  apiMocks.postKnowledgeObservation.mockResolvedValue({ event: "article.opened" });
+  apiMocks.startKnowledgeRecording.mockImplementation((recording_id: string) => Promise.resolve({ recording_id }));
+  apiMocks.stopKnowledgeRecording.mockResolvedValue({
+    recording_id: "recording", status: "stopped", started_at: "2026-09-09T01:00:00Z",
+    ended_at: "2026-09-09T01:01:00Z", events: []
+  });
+  apiMocks.summarizeKnowledgeRecording.mockResolvedValue({ summary: "本次查看了文献 #1。", generated: true });
   apiMocks.fetchConfig.mockResolvedValue({ base_url: "https://models.example/v1", model: "extractor", max_papers: 20, has_server_api_key: true });
   apiMocks.fetchHistory.mockResolvedValue({ history: [] });
   apiMocks.createJob.mockResolvedValue({ job_id: "online-job", status: "pending" });
@@ -153,6 +179,202 @@ afterEach(() => {
 });
 
 describe("KnowledgeSearch", () => {
+  it("输入框与组合键不触发，空白区域 adad 开始且重复触发不清空记录", async () => {
+    render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    expect((screen.getByRole("button", { name: "开始记录" }) as HTMLButtonElement).disabled).toBe(false);
+    const input = screen.getByRole("searchbox", { name: "本地知识库检索词" });
+    for (const key of "adad") fireEvent.keyDown(input, { key });
+    for (const key of "adad") fireEvent.keyDown(window, { key, ctrlKey: true });
+    for (const key of "adad") fireEvent.keyDown(window, { key, isComposing: true });
+    for (const key of "adad") fireEvent.keyDown(window, { key, repeat: true });
+    for (const key of "abab") fireEvent.keyDown(window, { key });
+    input.focus();
+    for (const key of "adad") fireEvent.keyDown(window, { key });
+    expect(apiMocks.startKnowledgeRecording).not.toHaveBeenCalled();
+    input.blur();
+    for (const key of "adad") fireEvent.keyDown(window, { key });
+    await screen.findByRole("button", { name: "正在记录 · 总结" });
+    for (const key of "adad") fireEvent.keyDown(window, { key });
+    expect(apiMocks.startKnowledgeRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it("仅本地模式识别 adad，切换模式和离开页面不会残留触发序列或监听", async () => {
+    const view = render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    for (const key of "ad") fireEvent.keyDown(window, { key });
+    fireEvent.click(screen.getByRole("tab", { name: "在线文献" }));
+    for (const key of "adad") fireEvent.keyDown(window, { key });
+    expect(apiMocks.startKnowledgeRecording).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "本地知识库" }));
+    for (const key of "ad") fireEvent.keyDown(window, { key });
+    expect(apiMocks.startKnowledgeRecording).not.toHaveBeenCalled();
+    fireEvent.blur(window);
+    for (const key of "adad") fireEvent.keyDown(window, { key });
+    await screen.findByRole("button", { name: "正在记录 · 总结" });
+    view.unmount();
+    for (const key of "adad") fireEvent.keyDown(window, { key });
+    expect(apiMocks.startKnowledgeRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it("同一记录关联搜索和查看，等待上报完成再结束并只显示总结", async () => {
+    apiMocks.searchKnowledge.mockImplementation((payload: KnowledgeSearchRequest) => Promise.resolve({
+      ...localResponse(payload), search_id: "search-recorded"
+    }));
+    const article = localResponse({ query: "polyimide", top_k: 20 }).results[0];
+    apiMocks.stopKnowledgeRecording.mockResolvedValue({
+      recording_id: "recording", status: "stopped", started_at: "2026-09-09T01:00:00Z",
+      ended_at: "2026-09-09T01:01:00Z", events: [
+        { sequence: 1, time: "2026-09-09T01:00:01Z", event: "search.completed", query: "polyimide", total: 1, page: 1 },
+        { sequence: 2, time: "2026-09-09T01:00:02Z", event: "article.reaction_viewed", query: "polyimide", article }
+      ]
+    });
+    render(<KnowledgeSearch onBackHome={vi.fn()} initialQuery="polyimide" />);
+    await screen.findByRole("dialog", { name: "知识记录详情" });
+    expect(apiMocks.searchKnowledge.mock.calls[0][0].recording_id).toBeUndefined();
+    for (const key of "adad") fireEvent.keyDown(window, { key });
+    await screen.findByRole("button", { name: "正在记录 · 总结" });
+    const recordingId = apiMocks.startKnowledgeRecording.mock.calls[0][0];
+    fireEvent.click(screen.getByRole("button", { name: "运行检索" }));
+    await waitFor(() => expect(apiMocks.searchKnowledge).toHaveBeenLastCalledWith(
+      expect.objectContaining({ recording_id: recordingId }), expect.any(AbortSignal)));
+    await screen.findByRole("dialog", { name: "知识记录详情" });
+    let resolve!: (value: object) => void;
+    apiMocks.postKnowledgeObservation.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    fireEvent.click(screen.getByRole("tab", { name: "反应信息" }));
+    expect(apiMocks.postKnowledgeObservation).toHaveBeenLastCalledWith({
+      search_id: "search-recorded", knowledge_id: 17525, source: "reaction_tab", recording_id: recordingId
+    });
+    expect((screen.getByRole("button", { name: "正在记录 · 总结" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => resolve({ event: "article.reaction_viewed" }));
+    fireEvent.click(screen.getByRole("button", { name: "正在记录 · 总结" }));
+    const summary = within(await screen.findByRole("dialog", { name: "本次浏览总结" }));
+    expect(await summary.findByText("本次查看了文献 #1。")).not.toBeNull();
+    expect(summary.queryByText(/查看对应内容|个操作|关联检索/)).toBeNull();
+    expect(apiMocks.stopKnowledgeRecording).toHaveBeenCalledWith(recordingId);
+    fireEvent.click(screen.getByRole("button", { name: /聚酰亚胺的合成方法/ }));
+    expect(apiMocks.postKnowledgeObservation.mock.lastCall?.[0].recording_id).toBeUndefined();
+  });
+
+  it("结束失败可重试同一记录，等待重试时不混入新操作", async () => {
+    apiMocks.stopKnowledgeRecording.mockRejectedValueOnce(new Error("offline"));
+    render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    for (const key of "adad") fireEvent.keyDown(window, { key });
+    fireEvent.click(await screen.findByRole("button", { name: "正在记录 · 总结" }));
+    await screen.findByRole("button", { name: "重试结束记录" });
+    const input = screen.getByRole("searchbox", { name: "本地知识库检索词" });
+    fireEvent.change(input, { target: { value: "polyimide" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行检索" }));
+    await waitFor(() => expect(apiMocks.searchKnowledge).toHaveBeenCalled());
+    expect(apiMocks.searchKnowledge.mock.lastCall?.[0].recording_id).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "重试结束记录" }));
+    await screen.findByText("本次查看了文献 #1。");
+    expect(apiMocks.stopKnowledgeRecording.mock.calls[0]).toEqual(apiMocks.stopKnowledgeRecording.mock.calls[1]);
+  });
+
+  it("结束后自动生成总结，失败保留记录并用同一记录重试", async () => {
+    let reject!: (reason: Error) => void;
+    apiMocks.summarizeKnowledgeRecording.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    for (const key of "adad") fireEvent.keyDown(window, { key });
+    fireEvent.click(await screen.findByRole("button", { name: "正在记录 · 总结" }));
+    const generating = await screen.findByRole("button", { name: "查看生成进度" });
+    expect((generating as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole("dialog", { name: "本次浏览总结" })).not.toBeNull();
+    await act(async () => reject(new Error("模型暂时不可用")));
+    fireEvent.click(await screen.findByRole("button", { name: "重试总结" }));
+    await screen.findByText("本次查看了文献 #1。");
+    expect(apiMocks.stopKnowledgeRecording).toHaveBeenCalledTimes(1);
+    expect(apiMocks.summarizeKnowledgeRecording.mock.calls[0]).toEqual(apiMocks.summarizeKnowledgeRecording.mock.calls[1]);
+    expect(screen.queryByText(/尚未生成 AI 总结/)).toBeNull();
+  });
+
+  it("只在主动点击和重新打开时通知，并关联当前结果的检索 ID", async () => {
+    apiMocks.searchKnowledge.mockImplementation((payload: KnowledgeSearchRequest) => Promise.resolve({
+      ...localResponse(payload), search_id: `search-${payload.page || 1}`
+    }));
+    render(<KnowledgeSearch onBackHome={vi.fn()} initialQuery="polyimide" />);
+    await screen.findByRole("dialog", { name: "知识记录详情" });
+    expect(apiMocks.postKnowledgeObservation).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /聚酰亚胺的合成方法/ }));
+    await waitFor(() => expect(apiMocks.postKnowledgeObservation).toHaveBeenLastCalledWith({
+      search_id: "search-1", knowledge_id: 17525, source: "result_card"
+    }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "查看记录详情" }));
+    await waitFor(() => expect(apiMocks.postKnowledgeObservation).toHaveBeenLastCalledWith({
+      search_id: "search-1", knowledge_id: 17525, source: "drawer_reopen"
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("17526"));
+    expect(apiMocks.postKnowledgeObservation).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button", { name: /聚酰亚胺的合成方法/ }));
+    await waitFor(() => expect(apiMocks.postKnowledgeObservation).toHaveBeenLastCalledWith({
+      search_id: "search-2", knowledge_id: 17526, source: "result_card"
+    }));
+  });
+
+  it("后端没有提供检索 ID 时保持普通详情行为且不发送通知", async () => {
+    render(<KnowledgeSearch onBackHome={vi.fn()} initialQuery="polyimide" />);
+    await screen.findByRole("dialog", { name: "知识记录详情" });
+    fireEvent.click(screen.getByRole("button", { name: /聚酰亚胺的合成方法/ }));
+    fireEvent.click(screen.getByRole("tab", { name: "反应信息" }));
+    expect(apiMocks.postKnowledgeObservation).not.toHaveBeenCalled();
+  });
+
+  it("主动切入反应信息才通知，支持键盘切换并关联换页后的文献", async () => {
+    apiMocks.searchKnowledge.mockImplementation((payload: KnowledgeSearchRequest) => Promise.resolve({
+      ...localResponse(payload), search_id: `search-${payload.page || 1}`
+    }));
+    render(<KnowledgeSearch onBackHome={vi.fn()} initialQuery="polyimide" />);
+    await screen.findByRole("dialog", { name: "知识记录详情" });
+    expect(apiMocks.postKnowledgeObservation).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "反应信息" }));
+    expect(screen.getByText("dianhydride + diamine")).not.toBeNull();
+    expect(apiMocks.postKnowledgeObservation).toHaveBeenLastCalledWith({
+      search_id: "search-1", knowledge_id: 17525, source: "reaction_tab"
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "反应信息" }));
+    fireEvent.click(screen.getByRole("tab", { name: "原文与溯源" }));
+    expect(apiMocks.postKnowledgeObservation).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(screen.getByRole("tab", { name: "原文与溯源" }), { key: "ArrowLeft" });
+    expect(screen.getByRole("tab", { name: "反应信息" }).getAttribute("aria-selected")).toBe("true");
+    expect(apiMocks.postKnowledgeObservation).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("17526"));
+    expect(apiMocks.postKnowledgeObservation).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("tab", { name: "反应信息" }));
+    expect(apiMocks.postKnowledgeObservation).toHaveBeenLastCalledWith({
+      search_id: "search-2", knowledge_id: 17526, source: "reaction_tab"
+    });
+  });
+
+  it("反应信息通知失败仍展示配方且不自动重试", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    apiMocks.searchKnowledge.mockImplementation((payload: KnowledgeSearchRequest) => Promise.resolve({
+      ...localResponse(payload), search_id: "search-reaction-failure"
+    }));
+    apiMocks.postKnowledgeObservation.mockRejectedValue(new Error("offline"));
+    render(<KnowledgeSearch onBackHome={vi.fn()} initialQuery="polyimide" />);
+    await screen.findByRole("dialog", { name: "知识记录详情" });
+    fireEvent.click(screen.getByRole("tab", { name: "反应信息" }));
+    expect(screen.getByText("dianhydride + diamine")).not.toBeNull();
+    await waitFor(() => expect(console.warn).toHaveBeenCalled());
+    expect(apiMocks.postKnowledgeObservation).toHaveBeenCalledTimes(1);
+  });
+
+  it("通知失败不阻止查看文章详情", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    apiMocks.searchKnowledge.mockImplementation((payload: KnowledgeSearchRequest) => Promise.resolve({
+      ...localResponse(payload), search_id: "search-failed-notification"
+    }));
+    apiMocks.postKnowledgeObservation.mockRejectedValue(new Error("offline"));
+    render(<KnowledgeSearch onBackHome={vi.fn()} initialQuery="polyimide" />);
+    await screen.findByRole("dialog", { name: "知识记录详情" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: /聚酰亚胺的合成方法/ }));
+    expect(screen.getByRole("dialog", { name: "知识记录详情" })).not.toBeNull();
+    await waitFor(() => expect(console.warn).toHaveBeenCalled());
+  });
+
   it("解析符号化 AND/OR、展示实时预览并阻止不完整表达式", async () => {
     const writeText = vi.fn();
     Object.defineProperty(navigator, "clipboard", {

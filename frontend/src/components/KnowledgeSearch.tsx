@@ -1,5 +1,5 @@
 import { Database, FileText, Globe2 } from "lucide-react";
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import "../styles/knowledge-retrieval.css";
 import { LocalKnowledgePanel } from "./knowledge-search/LocalKnowledgePanel";
 import { MaterialDiscoveryPageTitle } from "./MaterialDiscoveryPageTitle";
@@ -10,6 +10,7 @@ type KnowledgeSearchProps = {
   onBackHome: () => void;
   initialQuery?: string;
   initialTerms?: string[];
+  onLocalModeChange?: (local: boolean) => void;
 };
 
 type KnowledgeMode = "local" | "online" | "pdf";
@@ -25,9 +26,10 @@ const MODES: Array<{
   { id: "pdf", label: "PDF 相似度", icon: FileText, demo: true }
 ];
 
-export function KnowledgeSearch({ initialQuery = "", initialTerms = [] }: KnowledgeSearchProps) {
+export function KnowledgeSearch({ initialQuery = "", initialTerms = [], onLocalModeChange }: KnowledgeSearchProps) {
   const [mode, setMode] = useState<KnowledgeMode>("local");
   const [visitedModes, setVisitedModes] = useState<Set<KnowledgeMode>>(() => new Set(["local"]));
+  useEffect(() => { onLocalModeChange?.(mode === "local"); }, [mode, onLocalModeChange]);
 
   function activateMode(nextMode: KnowledgeMode) {
     setMode(nextMode);

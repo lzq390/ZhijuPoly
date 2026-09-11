@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KnowledgeRecordingProvider } from "./hooks/useKnowledgeRecording";
+import { KnowledgeRecordingControls } from "./components/knowledge-search/KnowledgeRecordingControls";
 import {
   Activity,
   Atom,
@@ -315,6 +317,11 @@ function getKnowledgeQueryFromSearch(search: string) {
 }
 
 export default function App() {
+  return <KnowledgeRecordingProvider><AppContent /></KnowledgeRecordingProvider>;
+}
+
+function AppContent() {
+  const [knowledgeLocalMode, setKnowledgeLocalMode] = useState(true);
   const [activeModule, setActiveModule] = useState<ActiveModule>(() => getInitialRoute().module);
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<DatasetKey | null>(() => getInitialRoute().datasetKey);
   const [labDataView, setLabDataView] = useState<LabDataView>(() => getInitialRoute().labDataView ?? "collect");
@@ -1012,6 +1019,8 @@ export default function App() {
 
   return (
     <AppShell
+      recordingControls={<KnowledgeRecordingControls global scopeKey={activeModule}
+        localMode={activeModule === "databaseFilter" || (activeModule === "knowledge" && knowledgeLocalMode)} />}
       activeModule={activeModule}
       fullBleed={isFullBleedModule}
       standaloneModules={standaloneModules}
@@ -1105,6 +1114,7 @@ export default function App() {
 
       {activeModule === "knowledge" ? (
         <KnowledgeSearch
+          onLocalModeChange={setKnowledgeLocalMode}
           onBackHome={() => navigate({ module: "home", datasetKey: null })}
           initialQuery={knowledgeInitialQuery}
           initialTerms={knowledgeInitialTerms}
