@@ -36,6 +36,29 @@ source .runtime/knowledge-summary/.venv/bin/activate
   --output-file backend/requirements-knowledge-poc.lock
 ```
 
+## 轻量后端测试 CI
+
+`ci.yml` 的 `lightweight-backend-tests` 任务使用 Python 3.11 和现有 `backend/requirements-knowledge-poc.lock`，按哈希安装依赖，设置 `PYTHONPATH=backend` 并使用 pytest。该任务纳入 `ci-gate`，失败会阻止总检查通过。
+
+- 收集 `scripts/tests/` 顶层的 `test_*_poc_*.py` 与 `test_lightweight_*.py`；前者兼容现有 POC 测试，后续通用轻量测试使用后者命名，无需逐个修改 CI。
+- 原 unittest 任务排除相同两类文件；没有找到轻量测试时 CI 显式失败，避免空跑。当前收集 6 个文件、35 项测试。
+- 适用范围：可仅靠该锁文件运行、模拟数据库和模型调用的后端测试。需要 RDKit、GPU、真实数据库或外部模型凭据的测试继续进入对应专用任务，不因文件名迁入本任务。当前不启动数据库服务，不配置模型密钥。
+- 仍复用 POC 锁文件，未新增或升级依赖。真实模型的耗时/质量评测脚本不进入 CI。
+
+已有轻量环境时，在仓库根目录用 Bash 复现：
+
+```bash
+mapfile -t tests < <(
+  find scripts/tests -maxdepth 1 -type f \
+    \( -name 'test_*_poc_*.py' -o -name 'test_lightweight_*.py' \) -print | sort
+)
+PYTHONPATH=backend .runtime/knowledge-summary/.venv/bin/python -m pytest "${tests[@]}" -q
+python3 -m unittest scripts.tests.test_validate_workflows
+python3 scripts/ci/validate_workflows.py
+```
+
+2026-09-11 验证：在 codex-lab 的临时源码副本中，不复制 `.env`，用全新 Python 3.11 环境按哈希安装锁定的 21 个包（本地验证通过 uv 离线缓存安装，CI 使用 pip），确认无 RDKit/Torch/NumPy；执行工作流中的测试命令，35 项通过。工作流策略回归 73 项通过，actionlint v1.7.7、工作流策略与依赖锁校验通过。GitHub Actions 云端运行仍待推送后的结果。
+
 ## 独立 POC 数据库
 
 - Compose 文件：`docker-compose.knowledge-poc.yml`，项目名 `zhijupoly_knowledge_poc`；独立使用，不与全平台 Compose 文件叠加。

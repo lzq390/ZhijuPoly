@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import unittest
 
 from scripts.ci import validate_workflows as policy
@@ -41,6 +42,50 @@ PULL_DEPLOY_CONTROLLER_TEXT = (
 
 
 class StructuredWorkflowPolicyTests(unittest.TestCase):
+    def test_lightweight_backend_tests_have_a_locked_pytest_job_and_gate(self) -> None:
+        failures: list[str] = []
+        policy.validate_lightweight_backend_tests(CI_TEXT, failures)
+        self.assertEqual(failures, [])
+
+    def test_lightweight_tests_cannot_leak_into_unittest_or_skip_pytest(self) -> None:
+        for pattern in ("test_*_poc_*.py", "test_lightweight_*.py"):
+            for needle in (f"! -name '{pattern}'", f"-name '{pattern}'"):
+                with self.subTest(needle=needle):
+                    job_name = "script-tests" if needle.startswith("!") else "lightweight-backend-tests"
+                    job = policy.workflow_job_body(CI_TEXT, job_name, [])
+                    self.assertIsNotNone(job)
+                    self.assertIn(needle, job)
+                    changed = CI_TEXT.replace(job, job.replace(needle, "", 1), 1)
+                    failures: list[str] = []
+                    policy.validate_lightweight_backend_tests(changed, failures)
+                    self.assertTrue(failures)
+
+    def test_lightweight_test_failure_must_block_ci_gate(self) -> None:
+        changed = CI_TEXT.replace("      - lightweight-backend-tests\n", "", 1)
+        failures: list[str] = []
+        policy.validate_lightweight_backend_tests(changed, failures)
+        self.assertTrue(any("ci-gate" in failure for failure in failures), failures)
+
+    def test_new_lightweight_modules_are_collected_once_without_editing_ci(self) -> None:
+        names = {"test_future_poc_routes.py", "test_lightweight_future.py", "test_regular_script.py"}
+        with tempfile.TemporaryDirectory() as directory:
+            tests = Path(directory) / "scripts/tests"
+            tests.mkdir(parents=True)
+            for name in names:
+                (tests / name).touch()
+            selected = {}
+            for job_name in ("script-tests", "lightweight-backend-tests"):
+                job = policy.workflow_job_body(CI_TEXT, job_name, [])
+                command = re.search(r"find scripts/tests.*?-print \| sort", job, re.DOTALL)
+                self.assertIsNotNone(command)
+                result = subprocess.run(
+                    ["bash", "-e", "-o", "pipefail", "-c", command.group()],
+                    cwd=directory, check=True, capture_output=True, text=True,
+                )
+                selected[job_name] = {Path(path).name for path in result.stdout.splitlines()}
+            self.assertEqual(selected["lightweight-backend-tests"], names - {"test_regular_script.py"})
+            self.assertEqual(selected["script-tests"], {"test_regular_script.py"})
+
     def test_adopted_git_permission_documentation_is_complete(self) -> None:
         failures: list[str] = []
         policy.validate_adopted_permission_documentation_text(
