@@ -22,6 +22,14 @@ export function useKnowledgeRecording() {
   return useContext(RecordingContext);
 }
 
+function createRecordingId(): string {
+  const browserCrypto = globalThis.crypto;
+  if (typeof browserCrypto?.randomUUID === "function") return browserCrypto.randomUUID();
+  if (typeof browserCrypto?.getRandomValues !== "function") throw new Error("当前浏览器无法生成记录 ID");
+  // Public HTTP pages can use getRandomValues even when randomUUID is unavailable.
+  return Array.from(browserCrypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export function KnowledgeRecordingProvider({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const phaseRef = useRef<Phase>("idle");
@@ -40,10 +48,11 @@ export function KnowledgeRecordingProvider({ children }: { children: ReactNode }
 
   const start = useCallback(async () => {
     if (!["idle", "stopped"].includes(phaseRef.current)) return;
-    if (phaseRef.current === "stopped" || !idRef.current) idRef.current = crypto.randomUUID();
-    changePhase("starting");
     setError(null);
     try {
+      if (phaseRef.current === "stopped") idRef.current = undefined;
+      if (!idRef.current) idRef.current = createRecordingId();
+      changePhase("starting");
       const response = await startKnowledgeRecording(idRef.current);
       if (response.status === "stopped") throw new Error("该记录已结束，请刷新后重新开始");
       setResult(null);

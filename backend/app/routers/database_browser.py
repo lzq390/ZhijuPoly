@@ -9,6 +9,7 @@ from time import perf_counter
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from psycopg.errors import QueryCanceled
+from starlette.concurrency import run_in_threadpool
 
 from app.config import PROJECT_ROOT
 from app.models import (
@@ -40,6 +41,7 @@ from app.models import (
     StructurePropertyRecord,
 )
 from app.postgres_database import PostgresUnavailableError
+from app.recording_models import RecordedFilterSearchRequest, RecordedFilterSearchResponse
 from app.services.analytics_snapshot_store import load_analytics_snapshot, save_analytics_snapshot
 from app.services.property_filter_catalog import (
     PropertyFilterCatalog,
@@ -722,8 +724,18 @@ def get_property_filter_histogram(
     )
 
 
-@router.post("/property-filter/search", response_model=PropertyFilterSearchResponse)
-def search_property_filter(
+@router.post("/property-filter/search", response_model=RecordedFilterSearchResponse)
+async def search_property_filter(
+    request_body: RecordedFilterSearchRequest,
+    request: Request,
+    response: Response,
+) -> RecordedFilterSearchResponse:
+    return await request.app.state.browsing_recording.filter_search(
+        request_body, lambda: run_in_threadpool(_search_property_filter_sync, request_body, request, response)
+    )
+
+
+def _search_property_filter_sync(
     request_body: PropertyFilterSearchRequest,
     request: Request,
     response: Response,

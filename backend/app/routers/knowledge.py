@@ -12,6 +12,7 @@ from app.models import (
     KnowledgeSearchResponse,
 )
 from app.postgres_database import PostgresUnavailableError
+from app.recording_models import RecordedKnowledgeSearchRequest, RecordedKnowledgeSearchResponse
 from app.services.knowledge_search import (
     KnowledgeSearchExpressionError,
     best_abstract_snippet_query,
@@ -27,12 +28,17 @@ router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
 POSTGRES_ONLY_DETAIL = "Postgres runtime is required; set STRUCTURED_DATA_BACKEND=postgres."
 
 
-@router.post("/search", response_model=KnowledgeSearchResponse)
+@router.post("/search", response_model=RecordedKnowledgeSearchResponse)
 async def search_knowledge(
-    request_body: KnowledgeSearchRequest,
+    request_body: RecordedKnowledgeSearchRequest,
     request: Request,
-) -> KnowledgeSearchResponse:
-    return await run_in_threadpool(_search_knowledge_sync, request_body, request.app)
+) -> RecordedKnowledgeSearchResponse:
+    # Existing Python callers still use the original request model.
+    if not isinstance(request_body, RecordedKnowledgeSearchRequest):
+        request_body = RecordedKnowledgeSearchRequest(**request_body.model_dump())
+    return await request.app.state.browsing_recording.search(
+        request_body, lambda: run_in_threadpool(_search_knowledge_sync, request_body, request.app)
+    )
 
 
 def _search_knowledge_sync(

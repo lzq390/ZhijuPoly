@@ -22,7 +22,7 @@ def client(monkeypatch):
                             property_name="Tg", property_value=str(value), canonical_value=value,
                             canonical_unit="C", filter_index=0)
                         for i, value in [(1, 180), (2, 190)]])])
-    monkeypatch.setattr("app.knowledge_poc.search_property_filter", search)
+    monkeypatch.setattr("app.routers.database_browser._search_property_filter_sync", search)
     with make_client() as current:
         yield current
 
@@ -92,7 +92,7 @@ def test_mixed_recording_freezes_both_modules_and_summarizes_only_viewed_content
         evidence.append(build_summary_evidence(events))
         return {"summary": "跨模块总结", "generated": True}
 
-    monkeypatch.setattr("app.knowledge_poc.generate_knowledge_summary", summarize)
+    monkeypatch.setattr("app.services.browsing_recording.generate_knowledge_summary", summarize)
     search(client, "before")
     start(client, "mixed")
     article = client.post("/api/v1/knowledge/search", json={"query": "polyimide", "recording_id": "mixed"}).json()
@@ -147,7 +147,7 @@ def test_stop_waits_for_recorded_filter_and_retains_failure(client, monkeypatch)
         assert release.wait(5)
         raise HTTPException(503, "unavailable")
 
-    monkeypatch.setattr("app.knowledge_poc.search_property_filter", slow)
+    monkeypatch.setattr("app.routers.database_browser._search_property_filter_sync", slow)
     start(client, "one")
     with ThreadPoolExecutor() as pool:
         task = pool.submit(client.post, PATH + "/search", json={"filters": [FILTER], "recording_id": "one"})
