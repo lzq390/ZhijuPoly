@@ -21,6 +21,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent
 } from "react";
 import { createPortal } from "react-dom";
+import { useModuleTransitioning } from "../../hooks/ModuleTransitionContext";
 import type {
   MonomerMdJobListQuery,
   MonomerMdJobPageResponse,
@@ -215,11 +216,13 @@ function TaskFilterSelect({
   onChange: (value: string) => void;
 }) {
   const menuId = useId();
+  const transitioning = useModuleTransitioning();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
   const selected = options.find((option) => option.value === value) ?? options[0];
+  useEffect(() => { if (transitioning) setOpen(false); }, [transitioning]);
 
   const updateMenuPosition = useCallback(() => {
     const trigger = triggerRef.current;
@@ -237,7 +240,7 @@ function TaskFilterSelect({
   }, [options.length]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || transitioning) return;
     updateMenuPosition();
     const focusFrame = window.requestAnimationFrame(() => {
       const selectedOption = menuRef.current?.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]');
@@ -263,7 +266,7 @@ function TaskFilterSelect({
       window.removeEventListener("resize", updateMenuPosition);
       document.removeEventListener("scroll", updateMenuPosition, true);
     };
-  }, [open, updateMenuPosition]);
+  }, [open, transitioning, updateMenuPosition]);
 
   function handleTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -288,11 +291,12 @@ function TaskFilterSelect({
     optionButtons[nextIndex]?.focus();
   }
 
-  const menu = open && menuStyle ? (
+  const menu = open && !transitioning && menuStyle ? (
     <div
       ref={menuRef}
       id={menuId}
       className="np-mmd-filter-menu"
+      data-module-owned-portal="true"
       role="listbox"
       aria-label={ariaLabel}
       style={menuStyle}

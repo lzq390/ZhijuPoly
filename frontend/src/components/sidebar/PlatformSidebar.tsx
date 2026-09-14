@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Ellipsis,
   Folder,
+  LoaderCircle,
   MessageSquare,
   Plus,
   Search,
@@ -13,6 +14,8 @@ import {
   Trash2,
   X
 } from "lucide-react";
+import type { NavigationTarget } from "../../hooks/useGuardedNavigation";
+import { useMotionPresence } from "../../hooks/useMotionPresence";
 import type { OpenScienceGeneralSessionSummary } from "../../lib/openScienceGeneralSessionBridge";
 import type { OpenScienceProjectSummary } from "../../lib/openScienceProjectBridge";
 import {
@@ -42,7 +45,9 @@ type PlatformSidebarProps = {
   standaloneModules: AppShellModuleItem[];
   moduleGroups: AppShellModuleGroup[];
   onOpenHome: () => void;
-  onNavigate: (action: () => void) => void;
+  onNavigate: (action: () => void, target?: NavigationTarget) => void;
+  pendingTarget?: NavigationTarget | null;
+  showPending?: boolean;
   expandedGroupIds: ReadonlySet<AppShellModuleGroup["id"]>;
   onToggleGroup: (groupId: AppShellModuleGroup["id"]) => void;
   projects: OpenScienceProjectSummary[];
@@ -77,6 +82,8 @@ export function PlatformSidebar({
   moduleGroups,
   onOpenHome,
   onNavigate,
+  pendingTarget,
+  showPending,
   expandedGroupIds,
   onToggleGroup,
   projects,
@@ -132,6 +139,8 @@ export function PlatformSidebar({
           expandedGroupIds={expandedGroupIds}
           onToggleGroup={onToggleGroup}
           onNavigate={onNavigate}
+          pendingTarget={pendingTarget}
+          showPending={showPending}
         />
 
         <SidebarProjectSection
@@ -163,6 +172,9 @@ export function PlatformSidebar({
           generalSessionQuery={generalSessionQuery}
           onGeneralSessionQueryChange={onGeneralSessionQueryChange}
         />
+      </div>
+      <div className="np-sidebar-navigation-status" role="status" aria-live="polite" aria-atomic="true">
+        {showPending && pendingTarget ? `正在切换到${pendingTarget.label}…` : ""}
       </div>
     </div>
   );
@@ -219,13 +231,17 @@ function SidebarModuleNavigation({
   moduleGroups,
   expandedGroupIds,
   onToggleGroup,
-  onNavigate
+  onNavigate,
+  pendingTarget,
+  showPending
 }: {
   standaloneModules: AppShellModuleItem[];
   moduleGroups: AppShellModuleGroup[];
   expandedGroupIds: ReadonlySet<AppShellModuleGroup["id"]>;
   onToggleGroup: (groupId: AppShellModuleGroup["id"]) => void;
-  onNavigate: (action: () => void) => void;
+  onNavigate: PlatformSidebarProps["onNavigate"];
+  pendingTarget?: NavigationTarget | null;
+  showPending?: boolean;
 }) {
   return (
     <nav className="np-sidebar__modules" aria-label="业务模块">
@@ -237,6 +253,8 @@ function SidebarModuleNavigation({
               item={item}
               primaryWorkspace={item.id === "structureWorkbench"}
               onNavigate={onNavigate}
+              pending={pendingTarget?.id === item.id}
+              showPending={showPending}
             />
           ))}
         </div>
@@ -275,7 +293,8 @@ function SidebarModuleNavigation({
               {isExpanded ? (
                 <div className="np-sidebar-group__items">
                   {group.items.map((item) => (
-                    <SidebarModuleButton key={item.id} item={item} onNavigate={onNavigate} />
+                    <SidebarModuleButton key={item.id} item={item} onNavigate={onNavigate}
+                      pending={pendingTarget?.id === item.id} showPending={showPending} />
                   ))}
                 </div>
               ) : null}
@@ -290,26 +309,32 @@ function SidebarModuleNavigation({
 function SidebarModuleButton({
   item,
   primaryWorkspace = false,
-  onNavigate
+  onNavigate,
+  pending = false,
+  showPending = false
 }: {
   item: AppShellModuleItem;
   primaryWorkspace?: boolean;
-  onNavigate: (action: () => void) => void;
+  onNavigate: PlatformSidebarProps["onNavigate"];
+  pending?: boolean;
+  showPending?: boolean;
 }) {
   return (
     <button
       type="button"
       data-module-id={item.id}
       data-active={item.isActive ? "true" : "false"}
+      data-pending={pending || undefined}
+      aria-busy={pending || undefined}
       data-primary-workspace={primaryWorkspace ? "true" : undefined}
       aria-current={item.isActive ? "page" : undefined}
       aria-label={primaryWorkspace ? item.label : undefined}
       title={item.description}
       className={`np-sidebar-module${primaryWorkspace ? " np-sidebar-module--primary-workspace" : ""}`}
-      onClick={() => onNavigate(item.onClick)}
+      onClick={() => onNavigate(item.onClick, { id: item.id, label: item.label })}
     >
       <span className="np-sidebar-module__icon" aria-hidden="true">
-        {item.icon}
+        {pending && showPending ? <LoaderCircle className="np-sidebar-pending-spinner" /> : item.icon}
       </span>
       <span className="np-sidebar-module__label">{item.label}</span>
     </button>
@@ -679,12 +704,14 @@ function ProjectListItem({
   onArchive: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuPresence = useMotionPresence<HTMLDivElement>(menuOpen);
+  const restoreMenuFocus = useRef(false);
   const [menuPosition, setMenuPosition] = useState({
     top: PROJECT_MENU_MARGIN,
     left: PROJECT_MENU_MARGIN
   });
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = menuPresence.ref;
   const menuId = useId();
 
   function positionMenu() {
@@ -710,11 +737,16 @@ function ProjectListItem({
   }
 
   function closeMenu(restoreFocus = false) {
+    restoreMenuFocus.current = restoreFocus;
     setMenuOpen(false);
-    if (restoreFocus) {
-      triggerRef.current?.focus();
-    }
   }
+
+  useLayoutEffect(() => {
+    if (!menuPresence.present && restoreMenuFocus.current) {
+      restoreMenuFocus.current = false;
+      triggerRef.current?.focus({ preventScroll: true });
+    }
+  }, [menuPresence.present]);
 
   useLayoutEffect(() => {
     if (!menuOpen) {
@@ -785,14 +817,18 @@ function ProjectListItem({
     items[next]?.focus();
   }
 
-  const menu = menuOpen
+  const menu = menuPresence.present
     ? createPortal(
         <div
           id={menuId}
           ref={menuRef}
+          {...menuPresence.motionProps}
+          data-modal-owner={triggerRef.current?.closest("#np-mobile-navigation") ? "np-mobile-navigation" : undefined}
+          aria-hidden={!menuOpen}
+          inert={!menuOpen}
           role="menu"
           aria-label={`${project.name} 项目操作`}
-          className="np-sidebar-project-menu"
+          className="np-sidebar-project-menu np-motion-popover"
           style={{ top: menuPosition.top, left: menuPosition.left }}
           onKeyDown={handleMenuKeyDown}
         >

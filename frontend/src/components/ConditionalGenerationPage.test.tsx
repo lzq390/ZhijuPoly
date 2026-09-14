@@ -226,7 +226,7 @@ describe("ConditionalGenerationPage Tg workbench reuse", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "关闭候选结果" }));
     expect(document.querySelector(".cg-results-drawer")?.getAttribute("aria-hidden")).toBe("true");
-    expect(screen.getByRole("button", { name: "展开条件生成候选" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "展开条件生成候选" })).toBeTruthy();
   });
 
   it("closes flyouts and the result drawer with Escape", async () => {
@@ -242,7 +242,9 @@ describe("ConditionalGenerationPage Tg workbench reuse", () => {
     });
 
     fireEvent.click(parameterButton);
-    fireEvent.click(screen.getByRole("button", { name: "运行生成" }));
+    const submit = screen.getByRole("button", { name: "运行生成" });
+    submit.focus();
+    fireEvent.click(submit);
     await waitFor(() => {
       expect(document.querySelector(".cg-results-drawer")?.getAttribute("aria-hidden")).toBe("false");
     });

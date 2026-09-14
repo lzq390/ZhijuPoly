@@ -1,6 +1,13 @@
 import type { ReactNode, RefObject } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Menu, MessageSquare } from "lucide-react";
+import { ModuleTransitionContext } from "../hooks/ModuleTransitionContext";
+import type { ModuleTransitionView } from "../hooks/useModuleTransition";
+import { useGuardedNavigation } from "../hooks/useGuardedNavigation";
+import { useModalFocus } from "../hooks/useModalFocus";
+import { useMotionPresence } from "../hooks/useMotionPresence";
+import { useReducedMotion } from "../hooks/useReducedMotion";
+import { motionDuration, motionEasing } from "../lib/motion";
 import type { OpenScienceGeneralSessionSummary } from "../lib/openScienceGeneralSessionBridge";
 import type { OpenScienceProjectSummary } from "../lib/openScienceProjectBridge";
 import { useDevGpuSessionControl } from "./GpuSessionButton";
@@ -41,74 +48,16 @@ type AppShellProps = {
   onRenameGeneralSession: (sessionID: string, title: string) => void;
   onDeleteGeneralSession: (sessionID: string) => void;
   beforeNavigate?: () => Promise<void | boolean>;
+  moduleTransition?: ModuleTransitionView;
   children: ReactNode;
   recordingControls?: ReactNode;
 };
 
-const BEFORE_NAVIGATE_TIMEOUT_MS = 1500;
 const SCROLLBAR_HIDE_DELAY_MS = 700;
-const SCROLLBAR_FADE_IN_MS = 160;
-const SCROLLBAR_FADE_OUT_MS = 240;
 const SCROLLBAR_HIDDEN_THUMB_COLOR = "rgba(88, 112, 141, 0)";
 const SCROLLBAR_ACTIVE_THUMB_COLOR = "rgba(88, 112, 141, 0.5)";
-
-function waitForNavigationGuard(beforeNavigate: () => Promise<void | boolean>) {
-  return new Promise<boolean>((resolve) => {
-    let settled = false;
-    let timeout: number | null = null;
-    const finish = (shouldNavigate = true) => {
-      if (settled) return;
-      settled = true;
-      if (timeout !== null) window.clearTimeout(timeout);
-      resolve(shouldNavigate);
-    };
-    let guard: Promise<void | boolean>;
-    try {
-      guard = beforeNavigate();
-    } catch {
-      finish();
-      return;
-    }
-    timeout = window.setTimeout(() => finish(true), BEFORE_NAVIGATE_TIMEOUT_MS);
-    guard.then((result) => finish(result !== false), () => finish(true));
-  });
-}
-
-type MobileSidebarDrawerProps = {
-  open: boolean;
-  onBackdropClick: () => void;
-  children: ReactNode;
-};
-
-function MobileSidebarDrawer({
-  open,
-  onBackdropClick,
-  children
-}: MobileSidebarDrawerProps) {
-  if (!open) {
-    return null;
-  }
-
-  return (
-    <div className="np-sidebar-mobile-layer">
-      <button
-        type="button"
-        aria-label="关闭导航背景"
-        className="np-sidebar-mobile-backdrop"
-        onClick={onBackdropClick}
-      />
-      <aside
-        id="np-mobile-navigation"
-        role="dialog"
-        aria-modal="true"
-        aria-label="平台导航"
-        className="np-sidebar-mobile-panel"
-      >
-        {children}
-      </aside>
-    </div>
-  );
-}
+const noTransitionSubscription = () => () => {};
+const noTransitionSnapshot = () => null;
 
 function MobileSidebarHeader({
   menuButtonRef,
@@ -168,15 +117,43 @@ export function AppShell({
   onDeleteGeneralSession,
   beforeNavigate,
   recordingControls,
+  moduleTransition,
   children
 }: AppShellProps) {
+  useSyncExternalStore(moduleTransition?.subscribe ?? noTransitionSubscription,
+    moduleTransition?.getSnapshot ?? noTransitionSnapshot, moduleTransition?.getSnapshot ?? noTransitionSnapshot);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isProjectExpanded, setIsProjectExpanded] = useState(false);
   const [generalSessionQuery, setGeneralSessionQuery] = useState("");
   const mobileMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const mobileCloseButtonRef = useRef<HTMLButtonElement | null>(null);
-  const navigationPendingRef = useRef(false);
   const appShellRef = useRef<HTMLDivElement | null>(null);
+  const localMainRef = useRef<HTMLElement | null>(null);
+  const localContentRef = useRef<HTMLDivElement | null>(null);
+  const mainRef = moduleTransition?.mainRef ?? localMainRef;
+  const contentRef = moduleTransition?.contentRef ?? localContentRef;
+  const mobileLayerRef = useRef<HTMLDivElement | null>(null);
+  const mobilePresence = useMotionPresence<HTMLElement>(isMobileMenuOpen, { enter: "drawerEnter", exit: "drawerExit", property: "transform" });
+  const mobileFocusDestination = useRef<"menu" | "content">("menu");
+  const wasMobilePresent = useRef(false);
+  const reducedMotion = useReducedMotion();
+  const fallbackNavigation = useGuardedNavigation({
+    beforeNavigate: moduleTransition ? undefined : beforeNavigate, activeModule, containerRef: appShellRef,
+    onCommit: () => {
+      mobileFocusDestination.current = "content";
+      setIsMobileMenuOpen(false);
+    }
+  });
+  const navigation = moduleTransition ?? fallbackNavigation;
+  const handleNavigate = moduleTransition ? (action: () => void) => action() : fallbackNavigation.navigate;
+  useLayoutEffect(() => {
+    moduleTransition?.setCovered(mobilePresence.present);
+  }, [moduleTransition?.setCovered, mobilePresence.present]);
+  useLayoutEffect(() => {
+    if (!moduleTransition?.exitRevision) return;
+    mobileFocusDestination.current = "content";
+    setIsMobileMenuOpen(false);
+  }, [moduleTransition?.exitRevision]);
   const scrollbarHideTimersRef = useRef<Map<HTMLElement, number>>(new Map());
   const scrollbarAnimationsRef = useRef<Map<HTMLElement, Animation>>(new Map());
   const gpuSessionControl = useDevGpuSessionControl(DEV_GPU_SESSION_CONTROL_ENABLED);
@@ -190,6 +167,7 @@ export function AppShell({
   const isMdSimulationWorkbench = activeModule === "mdSimulationDemo";
   const isMonomerMdSimulationWorkbench = activeModule === "monomerMdSimulation";
   const isMonomerDftWorkbench = activeModule === "monomerDft";
+  const isHighThroughputWorkbench = activeModule === "highThroughputWorkflowDemo";
   const isSimilarityExplorerWorkbench = activeModule === "explorer";
   const isDatabaseQueryWorkbench = activeModule === "databaseQuery";
   const isDatabaseFilterWorkbench = activeModule === "databaseFilter";
@@ -208,6 +186,7 @@ export function AppShell({
     isMdSimulationWorkbench ||
     isMonomerMdSimulationWorkbench ||
     isMonomerDftWorkbench ||
+    isHighThroughputWorkbench ||
     isStructureWorkbench ||
     isReverseDesignWorkbench ||
     isConditionalGenerationWorkbench;
@@ -219,11 +198,17 @@ export function AppShell({
   );
 
   const closeMobileMenu = useCallback((restoreFocus: boolean) => {
+    if (restoreFocus || !moduleTransition) navigation.cancel();
+    mobileFocusDestination.current = restoreFocus ? "menu" : "content";
     setIsMobileMenuOpen(false);
-    if (restoreFocus) {
-      mobileMenuButtonRef.current?.focus();
-    }
-  }, []);
+  }, [navigation.cancel, Boolean(moduleTransition)]);
+
+  useModalFocus({
+    active: mobilePresence.present, open: isMobileMenuOpen,
+    scopeRef: mobileLayerRef, panelRef: mobilePresence.ref,
+    initialFocusRef: mobileCloseButtonRef, ownerId: "np-mobile-navigation",
+    onClose: () => closeMobileMenu(true)
+  });
 
   useEffect(() => {
     if (!activeGroupId) {
@@ -247,27 +232,13 @@ export function AppShell({
   }, [isGeneralWorkspaceActive]);
 
   useEffect(() => {
-    if (!isMobileMenuOpen) {
-      return;
+    if (!mobilePresence.present && wasMobilePresent.current &&
+        (mobileFocusDestination.current === "menu" || !moduleTransition || moduleTransition.phase === "idle")) {
+      const target = mobileFocusDestination.current === "menu" ? mobileMenuButtonRef.current : mainRef.current;
+      target?.focus({ preventScroll: true });
     }
-
-    mobileCloseButtonRef.current?.focus();
-
-    function handleKeyDown(event: globalThis.KeyboardEvent) {
-      if (
-        event.key !== "Escape" ||
-        event.defaultPrevented ||
-        document.querySelector(".np-sidebar-project-menu")
-      ) {
-        return;
-      }
-      event.preventDefault();
-      closeMobileMenu(true);
-    }
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [closeMobileMenu, isMobileMenuOpen]);
+    wasMobilePresent.current = mobilePresence.present;
+  }, [mobilePresence.present, moduleTransition?.phase]);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") {
@@ -277,13 +248,13 @@ export function AppShell({
     const desktopMedia = window.matchMedia("(min-width: 1024px)");
     function handleViewportChange(event: MediaQueryListEvent) {
       if (event.matches) {
-        setIsMobileMenuOpen(false);
+        closeMobileMenu(false);
       }
     }
 
     desktopMedia.addEventListener("change", handleViewportChange);
     return () => desktopMedia.removeEventListener("change", handleViewportChange);
-  }, []);
+  }, [closeMobileMenu]);
 
   useEffect(() => {
     const appShell = appShellRef.current;
@@ -309,7 +280,7 @@ export function AppShell({
         scrollRegion.removeAttribute("data-scrollbar-active");
       }
 
-      if (typeof scrollRegion.animate !== "function") return;
+      if (reducedMotion || typeof scrollRegion.animate !== "function") return;
       const targetColor = visible
         ? SCROLLBAR_ACTIVE_THUMB_COLOR
         : SCROLLBAR_HIDDEN_THUMB_COLOR;
@@ -327,8 +298,8 @@ export function AppShell({
             { "--np-scrollbar-thumb-color": targetColor }
           ],
           {
-            duration: visible ? SCROLLBAR_FADE_IN_MS : SCROLLBAR_FADE_OUT_MS,
-            easing: visible ? "ease-out" : "ease-in",
+            duration: motionDuration(scrollRegion, visible ? "enter" : "exit"),
+            easing: motionEasing(scrollRegion, visible ? "enter" : "exit"),
             fill: "both"
           }
         );
@@ -372,27 +343,7 @@ export function AppShell({
       scrollbarAnimations.forEach((animation) => animation.cancel());
       scrollbarAnimations.clear();
     };
-  }, []);
-
-  function handleNavigate(action: () => void) {
-    closeMobileMenu(false);
-    if (!beforeNavigate) {
-      action();
-      return;
-    }
-    if (navigationPendingRef.current) {
-      return;
-    }
-
-    navigationPendingRef.current = true;
-    void waitForNavigationGuard(beforeNavigate).then((shouldNavigate) => {
-      try {
-        if (shouldNavigate) action();
-      } finally {
-        navigationPendingRef.current = false;
-      }
-    });
-  }
+  }, [reducedMotion]);
 
   function handleToggleGroup(groupId: AppShellModuleGroup["id"]) {
     setExpandedGroupIds((current) => {
@@ -409,8 +360,10 @@ export function AppShell({
   const sharedSidebarProps = {
     standaloneModules,
     moduleGroups,
-    onOpenHome: () => handleNavigate(onOpenHome),
+    onOpenHome: () => handleNavigate(onOpenHome, { id: "home", label: "首页" }),
     onNavigate: handleNavigate,
+    pendingTarget: navigation.pendingTarget,
+    showPending: navigation.showPending,
     expandedGroupIds,
     onToggleGroup: handleToggleGroup,
     projects,
@@ -444,17 +397,18 @@ export function AppShell({
         <PlatformSidebar {...sharedSidebarProps} gpuStatusId="gpu-session-status-desktop" />
       </aside>
 
-      <MobileSidebarDrawer
-        open={isMobileMenuOpen}
-        onBackdropClick={() => closeMobileMenu(true)}
-      >
-        <PlatformSidebar
-          {...sharedSidebarProps}
-          gpuStatusId="gpu-session-status-mobile"
-          closeButtonRef={mobileCloseButtonRef}
-          onClose={() => closeMobileMenu(true)}
-        />
-      </MobileSidebarDrawer>
+      {mobilePresence.present ? (
+        <div ref={mobileLayerRef} className="np-sidebar-mobile-layer" data-motion-active={mobilePresence.active}>
+          <button type="button" aria-label="关闭导航背景" tabIndex={-1}
+            className="np-sidebar-mobile-backdrop" onClick={() => closeMobileMenu(true)} />
+          <aside ref={mobilePresence.ref} {...mobilePresence.motionProps}
+            id="np-mobile-navigation" role="dialog" aria-modal="true" aria-label="平台导航"
+            tabIndex={-1} className="np-sidebar-mobile-panel">
+            <PlatformSidebar {...sharedSidebarProps} gpuStatusId="gpu-session-status-mobile"
+              closeButtonRef={mobileCloseButtonRef} onClose={() => closeMobileMenu(true)} />
+          </aside>
+        </div>
+      ) : null}
 
       <div className="np-app-shell__body">
         <MobileSidebarHeader
@@ -465,6 +419,9 @@ export function AppShell({
 
         {recordingControls}
         <main
+          ref={mainRef}
+          tabIndex={-1}
+          aria-busy={moduleTransition ? moduleTransition.phase !== "idle" : undefined}
           className={
             isHome
               ? "min-h-0 flex-1 overflow-hidden"
@@ -478,6 +435,7 @@ export function AppShell({
                     isMdSimulationWorkbench ||
                     isMonomerMdSimulationWorkbench ||
                     isMonomerDftWorkbench ||
+                    isHighThroughputWorkbench ||
                     isSimilarityExplorerWorkbench ||
                     isDatabaseQueryWorkbench ||
                     isDatabaseFilterWorkbench ||
@@ -491,6 +449,9 @@ export function AppShell({
           }
         >
           <div
+            ref={contentRef}
+            data-module-content={activeModule}
+            data-module-phase={moduleTransition?.phase ?? "idle"}
             className={
               isHome
                 ? "h-full"
@@ -501,7 +462,9 @@ export function AppShell({
                   ].join(" ")
             }
           >
-            {children}
+            <ModuleTransitionContext.Provider value={moduleTransition?.blocked ?? false}>
+              {children}
+            </ModuleTransitionContext.Provider>
           </div>
         </main>
       </div>

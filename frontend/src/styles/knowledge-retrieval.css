@@ -385,12 +385,17 @@
 }
 
 .ks-panel-layout {
+  container: np-knowledge-panel / inline-size;
+  --ks-drawer-edge: 24px;
+  --ks-drawer-gap: 12px;
+  --ks-workspace-max-width: 1040px;
+  --ks-pair-width: min(calc(100cqw - 2 * var(--ks-drawer-edge)), calc(var(--ks-workspace-max-width) + var(--ks-drawer-width) + var(--ks-drawer-gap)));
   position: relative;
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: clip;
 }
 
 .ks-panel-scroll {
@@ -402,7 +407,7 @@
   scrollbar-color: rgba(100, 126, 156, 0.28) transparent;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
-  transition: padding-right 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: none;
 }
 
 .ks-panel-scroll::-webkit-scrollbar,
@@ -583,7 +588,7 @@
   color: #102a46;
   background: #fbfdff;
   box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.025);
-  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+  transition: border-color var(--np-motion-control) var(--np-ease-enter), box-shadow var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .ks-field select {
@@ -635,7 +640,7 @@
   background: #fff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
   cursor: pointer;
-  transition: border-color 150ms ease, color 150ms ease, background-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+  transition: border-color var(--np-motion-control) var(--np-ease-enter), color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), box-shadow var(--np-motion-control) var(--np-ease-enter), transform var(--np-motion-control) var(--np-ease-enter);
 }
 
 .ks-button {
@@ -666,6 +671,7 @@
 }
 
 .ks-button.is-primary {
+  min-inline-size: 8.5em;
   border-color: #2563eb;
   color: #fff;
   background: linear-gradient(135deg, #2563eb, #0891b2);
@@ -887,7 +893,7 @@
   background: #fff;
   box-shadow: 0 2px 8px rgba(25, 55, 92, 0.035);
   cursor: pointer;
-  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease, transform 150ms ease;
+  transition: border-color var(--np-motion-control) var(--np-ease-enter), box-shadow var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), transform var(--np-motion-control) var(--np-ease-enter);
 }
 
 .ks-result-card::before,
@@ -901,14 +907,13 @@
   background: linear-gradient(180deg, #2563eb, #06b6d4);
   content: "";
   opacity: 0;
-  transition: opacity 150ms ease;
+  transition: opacity var(--np-motion-control) var(--np-ease-enter);
 }
 
 .ks-result-card:hover,
 .ks-paper-card:hover {
   border-color: rgba(37, 99, 235, 0.32);
   box-shadow: 0 8px 22px rgba(25, 55, 92, 0.075);
-  transform: translateY(-1px);
 }
 
 .ks-result-card.is-selected,
@@ -1567,7 +1572,7 @@
   text-align: left;
   background: linear-gradient(135deg, rgba(239, 246, 255, 0.75), rgba(236, 254, 255, 0.54));
   cursor: pointer;
-  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+  transition: border-color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), box-shadow var(--np-motion-control) var(--np-ease-enter);
 }
 
 .ks-pdf-dropzone:hover,
@@ -1663,7 +1668,7 @@
   text-align: left;
   background: #fff;
   cursor: pointer;
-  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease, transform 150ms ease;
+  transition: border-color var(--np-motion-control) var(--np-ease-enter), box-shadow var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), transform var(--np-motion-control) var(--np-ease-enter);
 }
 
 .ks-paper-thumb {
@@ -1757,15 +1762,24 @@
   border-left: 1px solid rgba(51, 83, 126, 0.22);
   background: rgba(255, 255, 255, 0.98);
   box-shadow: -18px 0 48px rgba(15, 36, 63, 0.15);
-  transform: translateX(calc(100% + 28px));
+  opacity: 0;
+  transform: translateX(var(--ks-drawer-travel, calc(100% + 32px)));
   visibility: hidden;
-  transition: transform 230ms cubic-bezier(0.22, 1, 0.36, 1), visibility 230ms;
+  transition: transform var(--np-motion-drawer-exit) var(--np-ease-exit), opacity var(--np-motion-drawer-exit) var(--np-ease-exit);
 }
 
 .ks-detail-drawer.is-open {
-  transform: translateX(0);
   visibility: visible;
 }
+
+.ks-detail-drawer[data-motion-active="true"] {
+  transform: translateX(0);
+  opacity: 1;
+  transition-duration: var(--np-motion-drawer-enter);
+  transition-timing-function: var(--np-ease-enter);
+}
+.ks-detail-drawer[data-motion-phase="exiting"] { pointer-events: none; }
+.ks-detail-drawer:is([data-motion-phase="open"], [data-motion-phase="closed"]) { transition: none; }
 
 .ks-detail-drawer.is-resizing {
   transition: none;
@@ -1793,7 +1807,7 @@
   background: rgba(77, 112, 150, 0.28);
   content: "";
   transform: translateY(-50%);
-  transition: background-color 150ms ease;
+  transition: background-color var(--np-motion-control) var(--np-ease-enter);
 }
 
 .ks-drawer-resizer:hover::after,
@@ -2169,18 +2183,13 @@
   position: absolute;
   z-index: 38;
   inset: 0;
-  display: none;
+  visibility: hidden;
+  pointer-events: none;
   border: 0;
   background: rgba(7, 20, 37, 0.42);
   opacity: 0;
   cursor: pointer;
-  transition: opacity 180ms ease;
-}
-
-@media (min-width: 1280px) {
-  .ks-panel-layout.is-drawer-open .ks-panel-scroll {
-    padding-right: calc(var(--ks-drawer-width) + 22px);
-  }
+  transition: opacity var(--np-motion-backdrop) var(--np-ease-exit);
 }
 
 @media (max-width: 1080px) {
@@ -2233,10 +2242,11 @@
     display: none;
   }
 
-  .ks-drawer-backdrop.is-open {
-    display: block;
-    opacity: 1;
+  .ks-drawer-backdrop[data-motion-present="true"] {
+    visibility: visible;
+    pointer-events: auto;
   }
+  .ks-drawer-backdrop[data-motion-active="true"] { opacity: 1; }
 
   .ks-drawer-reopen span {
     display: none;
@@ -2936,7 +2946,6 @@
   border-color: rgba(59, 130, 246, 0.32);
   background: linear-gradient(112deg, #fff, #f5faff);
   box-shadow: 0 14px 34px rgba(30, 64, 175, 0.105);
-  transform: translateY(-2px);
 }
 
 .ks-result-card.is-selected {
@@ -3183,11 +3192,38 @@
   background: linear-gradient(100deg, #fff, #f7fbff);
 }
 
-@media (min-width: 1280px) {
-  .ks-panel-layout.is-drawer-open .ks-panel-scroll {
-    padding-right: calc(var(--ks-drawer-width) + 24px);
-    padding-left: 24px;
-  }
+.ks-panel-layout:has(.ks-detail-drawer[data-drawer-mode="inline"]) .ks-panel-scroll {
+  padding-right: var(--ks-drawer-edge);
+  padding-left: var(--ks-drawer-edge);
+}
+
+.ks-panel-layout:has(.ks-detail-drawer[data-drawer-mode="inline"]) .ks-workbench-column {
+  width: calc(var(--ks-pair-width) - var(--ks-drawer-width) - var(--ks-drawer-gap));
+  /* Explicit centering in the panel keeps a stable scrollbar gutter from
+     shifting the pair's center when the drawer opens. */
+  margin-left: calc((100cqw - var(--ks-pair-width) + var(--ks-drawer-width) + var(--ks-drawer-gap)) / 2 - var(--ks-drawer-edge));
+  margin-right: 0;
+  transform: translateX(0);
+  transition: none;
+}
+
+.ks-panel-layout:has(.ks-detail-drawer[data-drawer-mode="inline"][data-motion-active="true"]) .ks-workbench-column {
+  transform: translateX(calc((var(--ks-drawer-width) + var(--ks-drawer-gap)) / -2));
+}
+
+.ks-panel-layout:has(.ks-detail-drawer[data-drawer-mode="inline"][data-motion-phase="entering"]) .ks-workbench-column {
+  transition: transform var(--np-motion-drawer-enter) var(--np-ease-enter);
+}
+
+.ks-panel-layout:has(.ks-detail-drawer[data-drawer-mode="inline"][data-motion-phase="exiting"]) .ks-workbench-column {
+  transition: transform var(--np-motion-drawer-exit) var(--np-ease-exit);
+}
+
+.ks-panel-layout:has(.ks-detail-drawer.is-resizing) .ks-workbench-column { transition: none; }
+
+.ks-panel-layout .ks-detail-drawer[data-drawer-mode="inline"] {
+  right: calc((100cqw - var(--ks-pair-width)) / 2);
+  --ks-drawer-travel: calc(100% + (100cqw - var(--ks-pair-width)) / 2 + 32px);
 }
 
 @media (max-width: 1160px) {
@@ -3515,9 +3551,10 @@
     padding: 84px 36px 124px;
   }
 
-  .ks-panel-layout.is-drawer-open .ks-panel-scroll {
-    padding-right: calc(var(--ks-drawer-width) + 36px);
-    padding-left: 36px;
+  .ks-panel-layout {
+    --ks-drawer-edge: 36px;
+    --ks-drawer-gap: 18px;
+    --ks-workspace-max-width: 1560px;
   }
 
   .ks-workbench-column {

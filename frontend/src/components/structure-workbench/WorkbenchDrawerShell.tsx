@@ -2,13 +2,16 @@ import { X } from "lucide-react";
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
-  useState,
   type CSSProperties,
   type KeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode
 } from "react";
+import { useMotionPresence } from "../../hooks/useMotionPresence";
+import { useDrawerResize } from "../../hooks/useDrawerResize";
+import { useModalFocus } from "../../hooks/useModalFocus";
+import { useDrawerMode } from "../../hooks/useDrawerMode";
 
 const DEFAULT_MIN_WIDTH = 320;
 const DEFAULT_MAX_WIDTH = 560;
@@ -17,14 +20,6 @@ const OVERLAY_CONTAINER_WIDTH = 1280;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-function focusableElements(container: HTMLElement) {
-  return Array.from(
-    container.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-  ).filter((element) => !element.hasAttribute("inert") && element.getAttribute("aria-hidden") !== "true");
 }
 
 type WorkbenchDrawerShellProps = {
@@ -76,115 +71,61 @@ export function WorkbenchDrawerShell({
 }: WorkbenchDrawerShellProps) {
   const titleId = useId();
   const layerRef = useRef<HTMLDivElement | null>(null);
-  const drawerRef = useRef<HTMLElement | null>(null);
+  const presence = useMotionPresence<HTMLElement>(open, { enter: "drawerEnter", exit: "drawerExit", property: "transform" });
+  const drawerRef = presence.ref;
   const reopenRef = useRef<HTMLButtonElement | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const reopenTriggerRef = useRef<HTMLElement | null>(null);
   const restoreFocusFrameRef = useRef<number | null>(null);
-  const onCloseRef = useRef(onClose);
-  const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
-  const [isOverlay, setIsOverlay] = useState(true);
-  onCloseRef.current = onClose;
+  const wasPresent = useRef(false);
+  const mode = useDrawerMode(layerRef, { closest: ".np-structure-workbench", inlineMinWidth: overlayContainerWidth });
+  const isOverlay = mode === "overlay";
+  const resize = useDrawerResize({ width, minWidth, maxWidth, onWidthChange, enabled: open && !isOverlay });
+  useModalFocus({ active: presence.present && isOverlay, open, scopeRef: layerRef, panelRef: drawerRef, onClose, global: false });
+
+  // A drag or responsive mode change is an immediate layout operation, never a
+  // second position transition trailing behind the pointer/new viewport.
+  useLayoutEffect(() => { if (resize.resizing) presence.finish(); }, [resize.resizing, presence.finish]);
+  useLayoutEffect(() => { presence.finish(); }, [mode, presence.finish]);
 
   useEffect(() => {
-    const root = layerRef.current?.closest<HTMLElement>(".np-structure-workbench");
-    if (!root) return;
-    const update = () => setIsOverlay(root.getBoundingClientRect().width < overlayContainerWidth);
-    update();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(update);
-    observer.observe(root);
-    return () => observer.disconnect();
-  }, [overlayContainerWidth]);
-
-  useEffect(() => {
-    function handlePointerMove(event: PointerEvent) {
-      const state = resizeStateRef.current;
-      if (!state) return;
-      onWidthChange(clamp(state.startWidth + state.startX - event.clientX, minWidth, maxWidth));
-    }
-    function stopResize() {
-      resizeStateRef.current = null;
-    }
-    document.addEventListener("pointermove", handlePointerMove);
-    document.addEventListener("pointerup", stopResize);
-    document.addEventListener("pointercancel", stopResize);
-    return () => {
-      document.removeEventListener("pointermove", handlePointerMove);
-      document.removeEventListener("pointerup", stopResize);
-      document.removeEventListener("pointercancel", stopResize);
-      resizeStateRef.current = null;
-    };
-  }, [maxWidth, minWidth, onWidthChange]);
-
-  useEffect(() => {
-    if (!open) return;
     if (restoreFocusFrameRef.current !== null) {
       window.cancelAnimationFrame(restoreFocusFrameRef.current);
       restoreFocusFrameRef.current = null;
     }
-    restoreFocusRef.current = reopenTriggerRef.current
-      ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
-    reopenTriggerRef.current = null;
-    return () => {
+    if (presence.present && !wasPresent.current) {
+      restoreFocusRef.current = reopenTriggerRef.current
+        ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      reopenTriggerRef.current = null;
+    }
+    if (!presence.present && wasPresent.current) {
       const restoreTarget = restoreFocusRef.current;
       restoreFocusFrameRef.current = window.requestAnimationFrame(() => {
         restoreFocusFrameRef.current = null;
         const hiddenAncestor = restoreTarget?.closest<HTMLElement>("[inert], [aria-hidden='true']");
-        if (restoreTarget?.isConnected && !hiddenAncestor) restoreTarget.focus();
-        else reopenRef.current?.focus();
+        if (restoreTarget?.isConnected && restoreTarget !== document.body && !hiddenAncestor) restoreTarget.focus({ preventScroll: true });
+        else reopenRef.current?.focus({ preventScroll: true });
       });
-    };
-  }, [open]);
+    }
+    wasPresent.current = presence.present;
+    return () => { if (restoreFocusFrameRef.current !== null) window.cancelAnimationFrame(restoreFocusFrameRef.current); };
+  }, [presence.present]);
 
   useEffect(() => {
     if (open && restoreFocusTarget) restoreFocusRef.current = restoreFocusTarget;
   }, [open, restoreFocusTarget]);
 
   useEffect(() => {
-    if (!open || !isOverlay) return;
-    // Let the originating pointer event finish its default focus before entering the modal.
-    let frame = window.requestAnimationFrame(() => {
-      frame = window.requestAnimationFrame(() => {
-        drawerRef.current?.querySelector<HTMLElement>("button:not([disabled]), [tabindex='0']")?.focus();
-      });
-    });
-
+    if (!open || isOverlay) return;
     function handleKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !event.defaultPrevented && drawerRef.current?.contains(document.activeElement)) {
         event.preventDefault();
-        onCloseRef.current();
-        return;
-      }
-      if (!isOverlay || event.key !== "Tab" || !drawerRef.current) return;
-      const focusable = focusableElements(drawerRef.current);
-      if (!focusable.length) {
-        event.preventDefault();
-        drawerRef.current.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
+        onClose();
       }
     }
-
     document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isOverlay, open]);
-
-  function startResize(event: ReactPointerEvent<HTMLDivElement>) {
-    event.preventDefault();
-    resizeStateRef.current = { startX: event.clientX, startWidth: width };
-  }
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isOverlay, open, onClose, drawerRef]);
 
   function resizeWithKeyboard(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -201,9 +142,13 @@ export function WorkbenchDrawerShell({
     <>
       <div
         ref={layerRef}
-        className={`np-sw-drawer-layer${open ? " is-open" : ""}${isOverlay ? " is-overlay" : ""}`}
+        className={`np-sw-drawer-layer${presence.present ? " is-open" : ""}${isOverlay ? " is-overlay" : ""}${resize.resizing && open ? " is-resizing" : ""}`}
+        data-motion-present={presence.present}
+        data-motion-active={presence.active}
+        data-motion-phase={presence.phase}
+        data-drawer-mode={mode}
         style={style}
-        aria-hidden={!open}
+        aria-hidden={!presence.present}
       >
         <button
           type="button"
@@ -214,6 +159,7 @@ export function WorkbenchDrawerShell({
         />
         <aside
           ref={drawerRef}
+          {...presence.motionProps}
           className={`np-sw-drawer${drawerClassName ? ` ${drawerClassName}` : ""}`}
           role="dialog"
           aria-modal={isOverlay ? "true" : "false"}
@@ -231,7 +177,7 @@ export function WorkbenchDrawerShell({
             aria-valuemin={minWidth}
             aria-valuemax={maxWidth}
             aria-valuenow={width}
-            onPointerDown={startResize}
+            onPointerDown={resize.onPointerDown}
             onKeyDown={resizeWithKeyboard}
           />
           <header className="np-sw-drawer__header">
@@ -239,20 +185,20 @@ export function WorkbenchDrawerShell({
               <span>{headerIcon}</span>
               <div>
                 <h2 id={titleId}>{title}</h2>
-                <p>{status}</p>
+                <p role="status" aria-live="polite" aria-atomic="true">{status}</p>
               </div>
             </div>
             <button type="button" className="np-sw-icon-button" aria-label={closeLabel} onClick={onClose}>
               <X aria-hidden="true" />
             </button>
           </header>
-          <div className="np-sw-drawer__body" aria-live="polite">
+          <div className="np-sw-drawer__body">
             {children}
           </div>
         </aside>
       </div>
 
-      {hasRun && !open ? (
+      {hasRun && !presence.present ? (
         <button
           ref={reopenRef}
           type="button"

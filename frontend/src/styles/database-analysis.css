@@ -61,10 +61,6 @@
 }
 .np-database-analysis .np-sw-workspace.has-dataset-modal { z-index: 60; }
 
-.np-database-analysis .np-sw-layout.has-open-drawer:has(.np-sw-drawer-layer.is-open:not(.is-overlay)) {
-  grid-template-columns: minmax(0, var(--np-sw-layout-max-width)) var(--np-sw-drawer-effective-width);
-}
-
 .np-database-analysis .dba-module-toolbar {
   position: relative;
   z-index: 20;
@@ -1020,7 +1016,6 @@
   }
 
   .np-database-analysis .np-sw-page { padding: 84px 36px 36px; }
-  .np-database-analysis .np-sw-page.has-open-drawer:has(.np-sw-drawer-layer.is-open:not(.is-overlay)) { padding-right: 36px; padding-left: 36px; }
   .np-database-analysis .np-sw-page-title { top: 30px; left: 36px; font-size: 28px; line-height: 42px; }
   .np-database-analysis .np-sw-workspace { gap: 18px; }
   .np-database-analysis .dba-module-toolbar { min-height: 54px; gap: 12px; }

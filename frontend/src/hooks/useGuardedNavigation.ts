@@ -1,0 +1,93 @@
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { motionDuration } from "../lib/motion";
+
+export type NavigationTarget = { id: string; label: string };
+const GUARD_TIMEOUT_MS = 1500;
+
+export function waitForGuard(guard: () => Promise<void | boolean>) {
+  let cancel = () => {};
+  const promise = new Promise<boolean>((resolve) => {
+    let settled = false;
+    let timer: number | undefined;
+    const finish = (allowed: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      resolve(allowed);
+    };
+    cancel = () => finish(false);
+    timer = window.setTimeout(() => finish(true), GUARD_TIMEOUT_MS);
+    try { Promise.resolve(guard()).then((value) => finish(value !== false), () => finish(true)); }
+    catch { finish(true); }
+  });
+  return { promise, cancel: () => cancel() };
+}
+
+export function useGuardedNavigation({ beforeNavigate, onCommit, activeModule, containerRef }: {
+  beforeNavigate?: () => Promise<void | boolean>;
+  onCommit: () => void;
+  activeModule: string;
+  containerRef: RefObject<HTMLElement | null>;
+}) {
+  const [pendingTarget, setPendingTarget] = useState<NavigationTarget | null>(null);
+  const [showPending, setShowPending] = useState(false);
+  const pending = useRef<{
+    action: () => void; target?: NavigationTarget; cancel: () => void;
+  } | null>(null);
+  const commitRef = useRef(onCommit);
+  commitRef.current = onCommit;
+  const cancel = useCallback(() => {
+    pending.current?.cancel();
+    pending.current = null;
+    setPendingTarget(null);
+    setShowPending(false);
+  }, []);
+  useEffect(() => {
+    setShowPending(false);
+    if (!pendingTarget) return;
+    const timer = window.setTimeout(() => setShowPending(true), motionDuration(containerRef.current, "feedbackDelay"));
+    return () => window.clearTimeout(timer);
+  }, [pendingTarget, containerRef]);
+  useEffect(() => { cancel(); }, [activeModule, cancel]);
+  useEffect(() => {
+    window.addEventListener("popstate", cancel);
+    return () => {
+      window.removeEventListener("popstate", cancel);
+      pending.current?.cancel();
+      pending.current = null;
+    };
+  }, [cancel]);
+
+  function navigate(action: () => void, target?: NavigationTarget) {
+    const current = pending.current;
+    if (current) {
+      // Commands are single-shot, never queued/replayed as navigation targets.
+      if (current.target && target) {
+        current.action = action;
+        current.target = target;
+        setPendingTarget(target);
+      }
+      return;
+    }
+    if (!beforeNavigate) {
+      action();
+      commitRef.current();
+      return;
+    }
+    const wait = waitForGuard(beforeNavigate);
+    const request = { action, target, cancel: wait.cancel };
+    pending.current = request;
+    setPendingTarget(target ?? null);
+    void wait.promise.then((allowed) => {
+      if (pending.current !== request) return;
+      pending.current = null;
+      setPendingTarget(null);
+      setShowPending(false);
+      if (allowed) {
+        request.action();
+        commitRef.current();
+      }
+    });
+  }
+  return { navigate, cancel, pendingTarget, showPending };
+}

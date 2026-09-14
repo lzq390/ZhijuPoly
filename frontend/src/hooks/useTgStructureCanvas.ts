@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useFlipMotion } from "./useFlipMotion";
 import { recognizeStructureImage, standardizeSmiles } from "../services/api";
 import type { StructureWorkspaceContext } from "../types";
 
@@ -290,7 +291,9 @@ export function useTgStructureCanvas({
   const importAbortRef = useRef<AbortController | null>(null);
   const canvasImageCacheRef = useRef<CanvasImageCache | null>(null);
   const canonicalSmilesCacheRef = useRef(new Map<string, Promise<string | null>>());
-  const flipTimerRef = useRef<number | null>(null);
+  const flipMotion = useFlipMotion();
+  const preparing3DRef = useRef(false);
+  const mountedRef = useRef(true);
   const copyTimerRef = useRef<number | null>(null);
   const smilesDraftRef = useRef(structure.smiles);
   const smilesDraftRevisionRef = useRef(0);
@@ -304,7 +307,8 @@ export function useTgStructureCanvas({
   const [isEditorReady, setIsEditorReady] = useState(false);
   const [editorLoadRevision, setEditorLoadRevision] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
-  const [isFlipping, setIsFlipping] = useState(false);
+  const [isPreparing3D, setIsPreparing3D] = useState(false);
+  const isFlipping = isPreparing3D || flipMotion.busy;
   const [isImportingImage, setIsImportingImage] = useState(false);
   const [isLoadingStructure, setIsLoadingStructure] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -336,10 +340,14 @@ export function useTgStructureCanvas({
   useEffect(() => () => {
     canvasImageCacheRef.current = null;
     canonicalSmilesCacheRef.current.clear();
-    if (flipTimerRef.current !== null) window.clearTimeout(flipTimerRef.current);
     if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
     if (smilesDraftTimerRef.current !== null) window.clearTimeout(smilesDraftTimerRef.current);
     smilesDraftRevisionRef.current += 1;
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; preparing3DRef.current = false; };
   }, []);
 
   function getKetcher() {
@@ -1010,32 +1018,34 @@ export function useTgStructureCanvas({
   }
 
   async function toggle3D() {
-    if (isFlipping || isImportingImage || isClearing || isSyncing) {
+    if (preparing3DRef.current || flipMotion.locked.current || isImportingImage || isClearing || isSyncing) {
       return false;
     }
-    if (!(await flushSmilesDraft())) {
-      setFeedback("请先修正当前 SMILES，再切换 3D 构象。");
-      return false;
-    }
-    setIsFlipping(true);
+    preparing3DRef.current = true;
+    setIsPreparing3D(true);
     try {
+      const valid = await flushSmilesDraft();
+      if (!mountedRef.current) return false;
+      if (!valid) {
+        setFeedback("请先修正当前 SMILES，再切换 3D 构象。");
+        return false;
+      }
       if (!isFlipped) {
         const nextSmiles = getKetcher()
           ? await syncSmilesFromCanvas({ preserveExisting: true })
           : smilesRef.current.trim();
+        if (!mountedRef.current) return false;
         if (!nextSmiles) {
           setFeedback("请先绘制或导入聚合物结构。");
           return false;
         }
       }
+      flipMotion.start();
       setIsFlipped((current) => !current);
       return true;
     } finally {
-      if (flipTimerRef.current !== null) window.clearTimeout(flipTimerRef.current);
-      flipTimerRef.current = window.setTimeout(() => {
-        flipTimerRef.current = null;
-        setIsFlipping(false);
-      }, 180);
+      preparing3DRef.current = false;
+      if (mountedRef.current) setIsPreparing3D(false);
     }
   }
 
@@ -1264,6 +1274,7 @@ export function useTgStructureCanvas({
     isEditorReady,
     isFlipped,
     isFlipping,
+    flipMotion,
     isImportingImage,
     isLoadingStructure,
     isClearing,

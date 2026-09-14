@@ -299,7 +299,7 @@ describe("KnowledgeSearch", () => {
       search_id: "search-1", knowledge_id: 17525, source: "result_card"
     }));
     fireEvent.keyDown(window, { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "查看记录详情" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看记录详情" }));
     await waitFor(() => expect(apiMocks.postKnowledgeObservation).toHaveBeenLastCalledWith({
       search_id: "search-1", knowledge_id: 17525, source: "drawer_reopen"
     }));
@@ -441,7 +441,7 @@ describe("KnowledgeSearch", () => {
     expect(resizer.getAttribute("aria-valuenow")).toBe("390");
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "知识记录详情" })).toBeNull();
-    const reopenButton = screen.getByRole("button", { name: "查看记录详情" });
+    const reopenButton = await screen.findByRole("button", { name: "查看记录详情" });
     expect(reopenButton.classList.contains("is-vertical")).toBe(true);
     fireEvent.click(reopenButton);
     expect(screen.getByRole("dialog", { name: "知识记录详情" })).not.toBeNull();
@@ -521,7 +521,13 @@ describe("KnowledgeSearch", () => {
     expect(screen.getByText("已选中")).not.toBeNull();
     expect(screen.queryByText(/Reliability|可靠度|78/)).toBeNull();
 
+    const drawer = document.querySelector("#knowledge-panel-online .ks-detail-drawer")!;
     fireEvent.keyDown(window, { key: "Escape" });
+    expect(drawer.getAttribute("data-motion-phase")).toBe("exiting");
+    expect(screen.queryByRole("button", { name: "查看记录详情" })).toBeNull();
+    const exitComplete = new Event("transitionend", { bubbles: true });
+    Object.defineProperty(exitComplete, "propertyName", { value: "transform" });
+    fireEvent(drawer, exitComplete);
     expect(screen.getByRole("button", { name: "查看记录详情" }).classList.contains("is-vertical")).toBe(true);
   });
 

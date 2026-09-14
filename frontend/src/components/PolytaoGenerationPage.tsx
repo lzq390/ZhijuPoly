@@ -1,3 +1,8 @@
+import { useFlipMotion } from "../hooks/useFlipMotion";
+import { useMotionPresence } from "../hooks/useMotionPresence";
+import { useDrawerMode } from "../hooks/useDrawerMode";
+import { useDrawerResize } from "../hooks/useDrawerResize";
+import { useModalFocus } from "../hooks/useModalFocus";
 import {
   Atom,
   Box,
@@ -23,6 +28,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -253,18 +259,18 @@ export function PolytaoGenerationPage({
   const [parameterOpen, setParameterOpen] = useState(false);
   const [referenceOpen, setReferenceOpen] = useState(false);
   const [structureFlipped, setStructureFlipped] = useState(false);
+  const [hasActivated3D, setHasActivated3D] = useState(false);
+  const structureFlipMotion = useFlipMotion();
   const [referenceSmilesExpanded, setReferenceSmilesExpanded] = useState(false);
   const [referenceSvg, setReferenceSvg] = useState<string | null>(null);
   const [referenceSvgError, setReferenceSvgError] = useState<string | null>(null);
   const [isReferenceSvgLoading, setIsReferenceSvgLoading] = useState(false);
   const [hasGenerationAttempt, setHasGenerationAttempt] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerMode, setDrawerMode] = useState<DrawerMode>("inline");
   const [isTwoK, setIsTwoK] = useState(isTwoKViewport);
   const [drawerWidth, setDrawerWidth] = useState(() =>
     isTwoKViewport() ? TWO_K_DRAWER_DEFAULT_WIDTH : DRAWER_DEFAULT_WIDTH
   );
-  const [isDrawerResizing, setIsDrawerResizing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const pageRef = useRef<HTMLDivElement | null>(null);
   const parameterAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -273,9 +279,15 @@ export function PolytaoGenerationPage({
   const drawerReopenRef = useRef<HTMLButtonElement | null>(null);
   const drawerRef = useRef<HTMLElement | null>(null);
   const drawerReturnFocusRef = useRef<HTMLElement | null>(null);
-  const drawerResizeCleanupRef = useRef<(() => void) | null>(null);
+  const drawerWasPresentRef = useRef(false);
   const toastTimerRef = useRef<number | null>(null);
   const drawerProfile = isTwoK ? TWO_K_DRAWER_PROFILE : STANDARD_DRAWER_PROFILE;
+  const drawerMode = useDrawerMode(pageRef, { inlineMinWidth: DRAWER_INLINE_MIN_WIDTH, fallback: "inline" });
+  const drawerPresence = useMotionPresence(drawerOpen, { enter: "drawerEnter", exit: "drawerExit", property: "transform", elementRef: drawerRef });
+  const drawerResize = useDrawerResize({ width: drawerWidth, minWidth: drawerProfile.min, maxWidth: drawerProfile.max,
+    onWidthChange: setDrawerWidth, enabled: drawerOpen && drawerMode === "inline" });
+  useLayoutEffect(() => { if (drawerResize.resizing) drawerPresence.finish(); }, [drawerResize.resizing, drawerPresence.finish]);
+  useLayoutEffect(() => { drawerPresence.finish(); }, [drawerMode, drawerPresence.finish]);
   const previousDrawerProfileRef = useRef<DrawerProfile>(drawerProfile);
   const hasStructure = structure.smiles.trim().length > 0;
   const filledCount = useMemo(
@@ -337,7 +349,6 @@ export function PolytaoGenerationPage({
       if (toastTimerRef.current !== null) {
         window.clearTimeout(toastTimerRef.current);
       }
-      drawerResizeCleanupRef.current?.();
     };
   }, []);
 
@@ -369,33 +380,9 @@ export function PolytaoGenerationPage({
   }, [drawerProfile]);
 
   useEffect(() => {
-    const page = pageRef.current;
-    if (!page) {
-      return;
-    }
-
-    const updateMode = (width: number) => {
-      if (width > 0) {
-        setDrawerMode(width >= DRAWER_INLINE_MIN_WIDTH ? "inline" : "overlay");
-      }
-    };
-    const measure = () => updateMode(page.getBoundingClientRect().width);
-    measure();
-
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", measure);
-      return () => window.removeEventListener("resize", measure);
-    }
-
-    const observer = new ResizeObserver((entries) => {
-      updateMode(entries[0]?.contentRect.width ?? 0);
-    });
-    observer.observe(page);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
     setStructureFlipped(false);
+    setHasActivated3D(false);
+    structureFlipMotion.finish();
     setReferenceSmilesExpanded(false);
     setReferenceSvg(null);
     setReferenceSvgError(null);
@@ -453,15 +440,24 @@ export function PolytaoGenerationPage({
 
   const closeDrawer = useCallback(() => {
     setDrawerOpen(false);
-    window.requestAnimationFrame(() => {
+  }, []);
+
+  useEffect(() => {
+    let frame = 0;
+    if (!drawerPresence.present && drawerWasPresentRef.current) frame = window.requestAnimationFrame(() => {
       const returnTarget = drawerReturnFocusRef.current;
-      if (returnTarget?.isConnected) {
-        returnTarget.focus();
+      if (returnTarget?.isConnected && !returnTarget.closest('[inert], [aria-hidden="true"]')) {
+        returnTarget.focus({ preventScroll: true });
       } else {
-        drawerReopenRef.current?.focus();
+        drawerReopenRef.current?.focus({ preventScroll: true });
       }
     });
-  }, []);
+    drawerWasPresentRef.current = drawerPresence.present;
+    return () => window.cancelAnimationFrame(frame);
+  }, [drawerPresence.present]);
+
+  useModalFocus({ active: drawerPresence.present && drawerMode === "overlay", open: drawerOpen,
+    scopeRef: drawerRef, panelRef: drawerRef, initialFocusRef: drawerCloseRef, onClose: closeDrawer, global: false });
 
   const openDrawer = useCallback(() => {
     drawerReturnFocusRef.current =
@@ -471,39 +467,16 @@ export function PolytaoGenerationPage({
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
-      if (
-        event.key === "Tab" &&
-        drawerOpen &&
-        drawerMode === "overlay" &&
-        drawerRef.current
-      ) {
-        const focusable = Array.from(
-          drawerRef.current.querySelectorAll<HTMLElement>(
-            'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
-          )
-        ).filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
-        if (focusable.length === 0) {
-          return;
-        }
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && (document.activeElement === first || !drawerRef.current.contains(document.activeElement))) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && (document.activeElement === last || !drawerRef.current.contains(document.activeElement))) {
-          event.preventDefault();
-          first.focus();
-        }
-        return;
-      }
-      if (event.key !== "Escape") {
+      if (event.key !== "Escape" || event.defaultPrevented || pageRef.current?.closest('[data-module-transitioning="true"]')) {
         return;
       }
       if (parameterOpen) {
+        event.preventDefault();
         closeParameterPanel(true);
         return;
       }
       if (drawerOpen) {
+        event.preventDefault();
         closeDrawer();
       }
     };
@@ -583,36 +556,6 @@ export function PolytaoGenerationPage({
     });
   }
 
-  function beginDrawerResize(event: ReactPointerEvent<HTMLDivElement>) {
-    event.preventDefault();
-    drawerResizeCleanupRef.current?.();
-    const startX = event.clientX;
-    const startWidth = drawerWidth;
-    const previousUserSelect = document.body.style.userSelect;
-    setIsDrawerResizing(true);
-    document.body.style.userSelect = "none";
-
-    const handleMove = (moveEvent: PointerEvent) => {
-      setDrawerWidth(clamp(startWidth + startX - moveEvent.clientX, drawerProfile.min, drawerProfile.max));
-    };
-    const cleanupResize = () => {
-      document.body.style.userSelect = previousUserSelect;
-      window.removeEventListener("pointermove", handleMove);
-      window.removeEventListener("pointerup", handleEnd);
-      window.removeEventListener("pointercancel", handleEnd);
-      drawerResizeCleanupRef.current = null;
-    };
-    const handleEnd = () => {
-      cleanupResize();
-      setIsDrawerResizing(false);
-    };
-
-    drawerResizeCleanupRef.current = cleanupResize;
-    window.addEventListener("pointermove", handleMove);
-    window.addEventListener("pointerup", handleEnd);
-    window.addEventListener("pointercancel", handleEnd);
-  }
-
   function handleDrawerResizeKey(event: React.KeyboardEvent<HTMLDivElement>) {
     let nextWidth = drawerWidth;
     if (event.key === "ArrowLeft") {
@@ -637,12 +580,14 @@ export function PolytaoGenerationPage({
   return (
     <div
       ref={pageRef}
-      className={`polytao-page np-material-discovery-page is-drawer-${drawerMode}${drawerOpen ? " is-drawer-open" : ""}`}
+      className={`polytao-page np-material-discovery-page is-drawer-${drawerMode}${drawerPresence.present ? " is-drawer-open" : ""}${drawerResize.resizing && drawerOpen ? " is-resizing" : ""}`}
+      data-drawer-phase={drawerPresence.phase}
+      data-drawer-active={drawerPresence.active}
       style={pageStyle}
     >
       <div
         className="polytao-page-scroll"
-        inert={drawerOpen && drawerMode === "overlay"}
+        inert={drawerPresence.present && drawerMode === "overlay"}
       >
         <header className="polytao-page-heading">
           <MaterialDiscoveryPageTitle>聚合物生成</MaterialDiscoveryPageTitle>
@@ -741,8 +686,13 @@ export function PolytaoGenerationPage({
                     type="button"
                     aria-pressed={structureFlipped}
                     aria-controls="polytao-structure-flip"
-                    disabled={!hasStructure}
-                    onClick={() => setStructureFlipped((flipped) => !flipped)}
+                    disabled={!hasStructure || structureFlipMotion.busy}
+                    aria-busy={structureFlipMotion.busy || undefined}
+                    onClick={() => {
+                      if (!structureFlipMotion.start()) return;
+                      setHasActivated3D(true);
+                      setStructureFlipped((flipped) => !flipped);
+                    }}
                   >
                     {structureFlipped ? <RotateCcw /> : <Box />}
                     {structureFlipped ? "返回 2D" : "查看 3D"}
@@ -754,8 +704,8 @@ export function PolytaoGenerationPage({
                     id="polytao-structure-flip"
                     className={`polytao-structure-flip${structureFlipped ? " is-flipped" : ""}`}
                   >
-                    <div className="polytao-structure-flip-inner">
-                      <div className="polytao-structure-face polytao-structure-face-front">
+                    <div ref={structureFlipMotion.ref} className="polytao-structure-flip-inner">
+                      <div className="polytao-structure-face polytao-structure-face-front" aria-hidden={structureFlipped} inert={structureFlipped}>
                         <span className="polytao-structure-face-label">2D 结构</span>
                         <div className="polytao-structure-canvas" aria-label="共享聚合物重复单元二维结构">
                           <ReferenceStructure2D
@@ -766,10 +716,10 @@ export function PolytaoGenerationPage({
                           />
                         </div>
                       </div>
-                      <div className="polytao-structure-face polytao-structure-face-back">
+                      <div className="polytao-structure-face polytao-structure-face-back" aria-hidden={!structureFlipped} inert={!structureFlipped}>
                         <span className="polytao-structure-face-label">3D 构象</span>
                         <div className="polytao-structure-3d-canvas" aria-label="共享结构三维构象">
-                          {structureFlipped && hasStructure ? (
+                          {hasActivated3D && hasStructure ? (
                             <StructurePreview3D
                               smiles={structure.smiles}
                               variant="bare"
@@ -894,10 +844,11 @@ export function PolytaoGenerationPage({
       {hasGenerationAttempt ? (
         <ResultsDrawer
           open={drawerOpen}
+          presence={drawerPresence}
           mode={drawerMode}
           width={drawerWidth}
           profile={drawerProfile}
-          isResizing={isDrawerResizing}
+          isResizing={drawerResize.resizing}
           data={polytao.data}
           job={polytao.job}
           error={polytao.error}
@@ -912,7 +863,7 @@ export function PolytaoGenerationPage({
           onOpen={openDrawer}
           onRetry={() => void handleSubmit()}
           onRefreshRuntime={() => void polytao.refreshStatus()}
-          onResizeStart={beginDrawerResize}
+          onResizeStart={drawerResize.onPointerDown}
           onResizeKeyDown={handleDrawerResizeKey}
           onCopy={(value) => {
             void copyText(value, "候选 SMILES 已复制");
@@ -1039,6 +990,7 @@ function ParameterPanel({
   onSubmit: () => void;
 }) {
   let readinessTitle = "生成目标已就绪";
+  const presence = useMotionPresence<HTMLElement>(open);
   let readinessDetail = "15 项目标特征完整 · PolyTAO 可用";
   if (isLoading) {
     readinessTitle = "生成任务执行中";
@@ -1056,11 +1008,15 @@ function ParameterPanel({
 
   return (
     <section
+      ref={presence.ref}
+      {...presence.motionProps}
+      data-motion-present={presence.present}
       id="polytao-parameter-panel"
       className={`polytao-parameter-panel${open ? " is-open" : ""}`}
       role="dialog"
       aria-modal="false"
       aria-hidden={!open}
+      inert={!open}
       aria-labelledby="polytao-parameter-title"
     >
       <header className="polytao-parameter-panel-head">
@@ -1127,7 +1083,7 @@ function ParameterPanel({
           <strong>{readinessTitle}</strong>
           <span>{readinessDetail}</span>
         </div>
-        <button className="polytao-primary-button" type="button" disabled={!canSubmit} onClick={onSubmit}>
+        <button className="polytao-primary-button" type="button" disabled={!canSubmit} aria-busy={isLoading} onClick={onSubmit}>
           {isLoading ? <LoaderCircle className="polytao-spinner" /> : <Play />}
           {isLoading ? "正在生成" : "开始生成"}
         </button>
@@ -1176,6 +1132,7 @@ function SamplingField({
 
 type ResultsDrawerProps = {
   open: boolean;
+  presence: ReturnType<typeof useMotionPresence<HTMLElement>>;
   mode: DrawerMode;
   width: number;
   profile: DrawerProfile;
@@ -1201,6 +1158,7 @@ type ResultsDrawerProps = {
 
 function ResultsDrawer({
   open,
+  presence,
   mode,
   width,
   profile,
@@ -1227,7 +1185,8 @@ function ResultsDrawer({
     if (!open) {
       return;
     }
-    window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+    const frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
   }, [closeButtonRef, open]);
 
   const completedWithoutData = job?.status === "completed" && !data;
@@ -1251,7 +1210,8 @@ function ResultsDrawer({
   return (
     <>
       <button
-        className={`polytao-drawer-backdrop${mode === "overlay" ? " is-overlay" : ""}${open ? " is-open" : ""}`}
+        className={`polytao-drawer-backdrop${mode === "overlay" ? " is-overlay" : ""}${presence.present ? " is-open" : ""}`}
+        data-motion-active={presence.active}
         type="button"
         aria-label="关闭聚合物生成结果"
         aria-hidden={!open || mode !== "overlay"}
@@ -1260,19 +1220,22 @@ function ResultsDrawer({
       />
       <button
         ref={reopenButtonRef}
-        className={`polytao-drawer-reopen${open ? "" : " is-visible"}`}
+        className={`polytao-drawer-reopen${presence.present ? "" : " is-visible"}`}
         type="button"
         aria-label="打开聚合物生成结果"
         title="打开聚合物生成结果"
-        aria-hidden={open}
-        tabIndex={open ? -1 : 0}
+        aria-hidden={presence.present}
+        tabIndex={presence.present ? -1 : 0}
         onClick={onOpen}
       >
         <PanelRightOpen />
       </button>
       <aside
         ref={drawerRef}
-        className={`polytao-detail-drawer is-${mode}${open ? " is-open" : ""}`}
+        {...presence.motionProps}
+        data-motion-present={presence.present}
+        data-drawer-mode={mode}
+        className={`polytao-detail-drawer is-${mode}${presence.present ? " is-open" : ""}`}
         role="dialog"
         aria-modal={mode === "overlay"}
         aria-labelledby="polytao-drawer-title"
@@ -1299,7 +1262,7 @@ function ResultsDrawer({
             <div className="polytao-drawer-copy">
               <span className="polytao-drawer-eyebrow">PolyTAO Output</span>
               <h2 id="polytao-drawer-title">聚合物生成结果</h2>
-              <p>{subtitle}</p>
+              <p role="status" aria-live="polite" aria-atomic="true">{subtitle}</p>
             </div>
           </div>
           <button
@@ -1313,7 +1276,7 @@ function ResultsDrawer({
           </button>
         </header>
 
-        <div className="polytao-drawer-body" aria-live="polite">
+        <div className="polytao-drawer-body">
           {isLoading ? <DrawerProgress job={job} /> : null}
           {!isLoading && error ? (
             <DrawerState
