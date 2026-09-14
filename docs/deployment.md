@@ -175,6 +175,39 @@ the same reviewed plan digest:
 If NexPoly moves to HTTPS, an HTTP iframe on `9011` will be blocked as mixed
 content and OpenScience must gain an HTTPS endpoint before activation.
 
+### OpenScience Backend model adapter configuration
+
+Backend model configuration is separate from the UI image release above. The
+Luna override in [openscience-luna-responses.merge.json](../ops/config/openscience-luna-responses.merge.json)
+is a credential-free merge fragment, not a complete production configuration.
+Its only leaf assignment is:
+
+```text
+provider.lab-openai-compatible.models.gpt-5.6-luna.provider.npm = "@ai-sdk/openai"
+```
+
+Use a JSONC-aware editor to merge this leaf into the existing model object,
+preserving comments, credentials and all other settings. Do not replace the
+entire configuration or shallow-merge the top-level provider object. This
+override does not change the gateway, capability declarations, model limits,
+default Sol selection, auxiliary Luna selection, or the existing medium/low
+reasoning policy. The private runtime configuration is not tracked here.
+
+The validated configuration rollback uses the existing single-file mount:
+confirm the service is idle and the maintenance entry is active, stop Backend,
+restore the original configuration bytes in place and fsync, then start the
+original container. Preserve inode, ownership and permissions; do not replace
+session data, business files or the database. The UI image release controller
+does not perform this Backend configuration operation.
+
+The private operation record under
+`<runtime-root>/manual-operations/openscience-luna-fix-20260914t023410z/OPERATIONS.md`
+contains the operation-specific checks and recovery commands. Publicly tracked
+evidence is limited to the merge fragment and the
+[2026-09-14 acceptance record](verification/openscience-luna-acceptance-20260914.md),
+whose observations end at 15:03 Beijing time. A configuration change needs its
+own current validation; that historical record is not a live health check.
+
 ### Development tunnel proxy
 
 All OpenAI-compatible clients use the optional `AI_PROXY_URL` setting: online

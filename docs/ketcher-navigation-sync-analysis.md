@@ -17,7 +17,7 @@
 
 第三例用 DOM 观察精确触发第二次侧栏点击，没有人为延迟 SDK。触发失败时，记录为 `dirty=false`、`mutationDepth=0`、草稿与共享 SMILES 一致、文档版本与最后有效快照版本一致。因而这次“最新修改未能同步”属于误报。
 
-四例最终导出的 SMILES 都是 CCO，最终诊断没有未处理页面异常。它们不代表截图中完整聚合物的性能测量，也不替代修复后的全量回归。完整调用轨迹、浏览器版本及源码摘要见 [验证数据](/data/lzq/gith/nexpoly-dev/docs/verification/ketcher-navigation-sync-analysis.json)。
+四例最终导出的 SMILES 都是 CCO，最终诊断没有未处理页面异常。它们不代表截图中完整聚合物的性能测量，也不替代修复后的全量回归。完整调用轨迹、浏览器版本及源码摘要见 [验证数据](verification/ketcher-navigation-sync-analysis.json)。
 
 **原因一：将初始化状态当成保存失败**
 
@@ -29,7 +29,7 @@
 4. `saveSnapshot()` 只允许读取 `ready` 编辑器；`loading` 会立即返回失败。
 5. App 把所有非 `saved` 结果交给恢复逻辑，销毁实例、增加 `mountKey`、恢复最后快照并显示同一条警告。
 
-对应代码为 [未就绪判定](/data/lzq/gith/nexpoly-dev/frontend/src/structure/workspace.ts:299)、[App 的统一失败处理](/data/lzq/gith/nexpoly-dev/frontend/src/App.tsx:400)、[恢复与提示](/data/lzq/gith/nexpoly-dev/frontend/src/structure/workspace.ts:354)。
+对应代码为 [未就绪判定](../frontend/src/structure/workspace.ts)、[App 的统一失败处理](../frontend/src/App.tsx)、[恢复与提示](../frontend/src/structure/workspace.ts)。
 
 这里缺少的语义是：“刚挂载的编辑器只是共享文档的恢复目标，目前没有需要从它抢救的新修改。”正常更换页面本来就会清理旧实例，错误恢复又触发了一次挂载更新，增加了无必要的重建。
 
@@ -37,7 +37,7 @@
 
 **原因二：导航取消只取消了路由等待，未取消恢复副作用**
 
-[模块过渡取消逻辑](/data/lzq/gith/nexpoly-dev/frontend/src/hooks/useModuleTransition.ts:297) 会调用 `wait.cancel()`；[通用 guard](/data/lzq/gith/nexpoly-dev/frontend/src/hooks/useGuardedNavigation.ts:7) 仅将等待结果设为不允许导航，没有把取消信号传给 App 的保存事务。
+[模块过渡取消逻辑](../frontend/src/hooks/useModuleTransition.ts) 会调用 `wait.cancel()`；[通用 guard](../frontend/src/hooks/useGuardedNavigation.ts) 仅将等待结果设为不允许导航，没有把取消信号传给 App 的保存事务。
 
 App 内部的保存 Promise 和 1.5 秒定时器因此继续存在。`finish()` 只检查自身是否已经结束，没有检查导航是否已取消、是否仍属于原编辑器。导出较慢时，即使用户决定留在原页，它仍调用 `recoverForNavigation()`。
 
@@ -109,7 +109,7 @@ SDK 四包、补丁、锁文件、原生 loader、动画参数及 ready 判定�
 
 两种模式的普通模块保活往返均未新增 Worker。这是本次修复的加载回归，不是重新执行三轮交替基线性能实验；不据此宣称跨机器加速比例或首次冷加载收益。
 
-完整版本摘要和验收结果见 [修复验证数据](/data/lzq/gith/nexpoly-dev/docs/verification/ketcher-navigation-fix.json)。原始日志及截图位于 `/tmp/nexpoly-navigation-fix-walx2ghp/`，临时目录不保证长期保留。新增浏览器回归可在前端目录执行：
+完整版本摘要和验收结果见 [修复验证数据](verification/ketcher-navigation-fix.json)。原始日志及截图位于 `/tmp/nexpoly-navigation-fix-walx2ghp/`，临时目录不保证长期保留。新增浏览器回归可在前端目录执行：
 
 ```bash
 STRUCTURE_BASE_URL=http://127.0.0.1:9001 node scripts/verify-structure-navigation.mjs

@@ -40,7 +40,13 @@ Standalone 为每个结构服务创建独立 Worker，将 14 个请求方法串�
 
 官方 CSS 懒加载并限定在编辑器及所属弹层。原生实现按真实容器尺寸工作，缩放补偿仅用于 iframe。快捷键、复制粘贴和右键处理受实例可见性及事件来源限制；拖拽开始后允许跨出画板。焦点使用局部元素与 preventScroll，没有宿主全局原型补丁。
 
+入口加载失败时，CSS 重试必须收集本轮全部失败资源，不能只重试 Vite preload helper 抛出的第一个错误，也不能仅凭失败链接存在 `sheet` 就跳过恢复。并发消费者共享重试，保留链接属性与 nonce，已成功替换的样式不重复替换。传递依赖失败仍不能保证全部在原文档恢复，见[加载与重试限制](ketcher-refresh-optimization.md)。
+
+路由拆包后的镜像校验沿 manifest 的静态依赖闭包检查业务消费者、配置值及资源可访问性；不能假设业务代码都在 HTML 入口包，也不能从无关资源推断配置生效。
+
 补丁来源和更新要求见 [补丁维护说明](../frontend/patches/README.md)。原始阻塞问题保留在 [历史分析](ketcher-native-blockers-analysis.md)，当前验收记录见 [SDK 门禁](ketcher-sdk-compatibility.md) 和 `docs/verification/ketcher-*`。
+
+2026-09-14 的依赖审查记录为 15 个节点，其中 9 个是旧锁文件同版本的开发依赖、6 个属于 SDK 依赖链。Draft.js 实际使用受影响的 Immutable，旧 iframe 包也包含相同的 `toObject` 实现；当时未建立新增的有害产品利用链，不能表述为无漏洞。这是历史快照，不是当前漏洞扫描结果。兼容升级与导入数据限制需单独验证，不应直接用 `audit fix` 升级 Ketcher 并破坏 r3 补丁。
 
 ## 构建与复验
 
@@ -65,3 +71,5 @@ npm run test:structure-engines
 Docker 使用 `--build-arg VITE_STRUCTURE_EDITOR_ENGINE=react|iframe`；补丁及校验脚本在 npm ci 前复制。非法引擎值直接报错。构建输出 `structure-editor.json` 记录引擎、SDK/补丁/锁文件摘要和资源列表。React 运行时不得请求旧静态应用；iframe 构建不得包含原生 SDK 和其 CSS。
 
 本次只交付代码与验证，不自动发布。第一次原生版本上线且完整运行一个正常发布周期、没有发生回退后，再另行清理 iframe 实现、旧静态应用和回退配置。
+
+截至 `4793ce7`，160ms 文档提交等待仍在，Worker 预热和 Macro 按需初始化尚未实现。启动动态 import 已开始 SDK 求值，挂载时才创建服务与 Worker；不能把已有模块求值重复计算为待优化收益。功能与交付验收不证明加载快于旧 9000，后续容器对照的范围见[加载实验分析](ketcher-refresh-beyond-iframe-analysis.md)。

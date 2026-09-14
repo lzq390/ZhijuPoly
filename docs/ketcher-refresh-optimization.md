@@ -1,10 +1,12 @@
 # 画板刷新性能优化
 
+文中标注的本地证据仅用于定位当时的检查，不随仓库交付；仓库内文件仍使用相对链接。
+
 核验日期：2026-09-11。实施范围为开发环境 9001，保留业务源码热更新和 React 原生画板；9000 作为只读生产对照。
 
 **已更新开发环境 9001，并完成实际端口复验。9000 的容器、镜像与启动时间均保持不变。**
 
-本次交付 33 个前端文件，完整工作区源码与已测冻结版本一致；热更新探针的临时改动已恢复。实际 9001 的六个画板入口完成拖动、SMILES 导出、清空与资源隔离检查，另通过 11 项启动/失败重试/历史/热更新检查及压缩协议检查。主机 Node 为 v22.23.2，开发容器为 v22.23.0。详见[部署核验](/tmp/nexpoly-refresh-implementation-_us4x7i5/delivery-result.json)。
+本次交付 33 个前端文件，完整工作区源码与已测冻结版本一致；热更新探针的临时改动已恢复。实际 9001 的六个画板入口完成拖动、SMILES 导出、清空与资源隔离检查，另通过 11 项启动/失败重试/历史/热更新检查及压缩协议检查。主机 Node 为 v22.23.2，开发容器为 v22.23.0。详见部署核验（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5/delivery-result.json`）。
 
 ## 原因与 iframe 对照
 
@@ -110,7 +112,7 @@
 | 页面样式 | 15 个业务页面、1440 宽度的 49 项几何检查通过；画板尺寸另由两种引擎完整流程和抽屉回归覆盖；`pages-1440/report.json` |
 | 压缩协议 | gzip/Brotli 字节等价、ETag、304、Vary、HEAD、Range、过期依赖拒绝、源码与 HMR 旁路通过；`compression-final.log` |
 
-上述文件统一位于本次[验证目录](/tmp/nexpoly-refresh-implementation-_us4x7i5)。最终构建用 `--emptyOutDir` 清理独立输出目录后生成，避免旧文件混入资源隔离结果。
+上述文件统一位于本次验证目录（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5`）。最终构建用 `--emptyOutDir` 清理独立输出目录后生成，避免旧文件混入资源隔离结果。
 
 试跑和回归阶段的失败同样保留：Chrome 151 在强制内容编码的 CDP 设置下崩溃，最终协议改用正常协商；原有 favicon 404 保留在网络记录及字节数中，不作为画板资源失败；错误重试的浏览器缓存和构建导出接口问题已修复；历史检查等待导航完成后再断言稳定历史项，快速取消另行验证。
 
@@ -120,17 +122,17 @@
 
 ## 数据与复现
 
-- [验证摘要与逐样本指标](/data/lzq/gith/nexpoly-dev/docs/verification/ketcher-refresh-optimization.json)：包含 420 个正式/隔离样本的指标及所有验收判定。
-- [持久化浏览器原始记录](/tmp/nexpoly-refresh-implementation-_us4x7i5/performance-final-preload/samples.json)与[判定结果](/tmp/nexpoly-refresh-implementation-_us4x7i5/performance-final-preload/result.json)。
-- [隔离上下文原始记录](/tmp/nexpoly-refresh-implementation-_us4x7i5/performance-isolated/samples.json)与[判定结果](/tmp/nexpoly-refresh-implementation-_us4x7i5/performance-isolated/result.json)。
-- [冻结源码校验](/tmp/nexpoly-refresh-implementation-_us4x7i5/source-snapshots-preload.json)、[测量后未变更校验](/tmp/nexpoly-refresh-implementation-_us4x7i5/source-freeze-verification.json)、[本次改动的独立差异](/tmp/nexpoly-refresh-implementation-_us4x7i5/implementation-review.diff)。
-- [实际 9001 六入口](/tmp/nexpoly-refresh-implementation-_us4x7i5/delivery-entries/result.json)、[热更新与重试](/tmp/nexpoly-refresh-implementation-_us4x7i5/delivery-interactions/result.json)、[压缩协议](/tmp/nexpoly-refresh-implementation-_us4x7i5/delivery-compression.log)。
+- [验证摘要与逐样本指标](verification/ketcher-refresh-optimization.json)：包含 420 个正式/隔离样本的指标及所有验收判定。
+- 持久化浏览器原始记录（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5/performance-final-preload/samples.json`）与判定结果（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5/performance-final-preload/result.json`）。
+- 隔离上下文原始记录（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5/performance-isolated/samples.json`）与判定结果（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5/performance-isolated/result.json`）。
+- 冻结源码校验（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5/source-snapshots-preload.json`）、测量后未变更校验（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5/source-freeze-verification.json`）、本次改动的独立差异（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5/implementation-review.diff`）。
+- 实际 9001 六入口（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5/delivery-entries/result.json`）、热更新与重试（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5/delivery-interactions/result.json`）、压缩协议（本地证据：`/tmp/nexpoly-refresh-implementation-_us4x7i5/delivery-compression.log`）。
 
 完整目录为 `/tmp/nexpoly-refresh-implementation-_us4x7i5`，包含优化前源码、已测实现、全部失败与中断记录、截图和构建日志。名称含 `final` 的早期试跑同样保留；最终采用的批次为 `performance-final-preload`，源码摘要为 `source-snapshots-preload.json`。部署前的原文件备份位于 `delivery-backup/frontend`。
 
 临时对照服务和预览服务已停止，所有记录与源码副本保留。复测时须先在该目录的 `baseline/frontend` 与 `optimized/frontend` 分别启动 Vite 5911/5912，代理目标设置为 `http://127.0.0.1:18000`，再运行下述测量脚本。
 
-关键实现：[路由](/data/lzq/gith/nexpoly-dev/frontend/src/routing.ts)、[页面加载](/data/lzq/gith/nexpoly-dev/frontend/src/pages.ts)、[启动入口](/data/lzq/gith/nexpoly-dev/frontend/src/main.tsx)、[失败重试](/data/lzq/gith/nexpoly-dev/frontend/src/retryModuleImport.ts)、[开发响应压缩](/data/lzq/gith/nexpoly-dev/frontend/build/development-compression.ts)、[开发入口预加载](/data/lzq/gith/nexpoly-dev/frontend/build/development-entry-preload.ts)。
+关键实现：[路由](../frontend/src/routing.ts)、[页面加载](../frontend/src/pages.ts)、[启动入口](../frontend/src/main.tsx)、[失败重试](../frontend/src/retryModuleImport.ts)、[开发响应压缩](../frontend/build/development-compression.ts)、[开发入口预加载](../frontend/build/development-entry-preload.ts)。
 
 `frontend/scripts/verify-structure-refresh-performance.mjs` 可通过 `REFRESH_BASELINE_URL`、`REFRESH_OPTIMIZED_URL`、`REFRESH_ROUNDS`、`REFRESH_ROUTES`、`REFRESH_CONTEXT`、`REFRESH_OUTPUT` 和 `STRUCTURE_CHROMIUM_PATH` 复现。默认参数为六入口、10 轮、持久化上下文。隔离上下文使用 `REFRESH_CONTEXT=isolated`，应与普通浏览器结果分别报告。
 

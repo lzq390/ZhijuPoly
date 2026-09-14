@@ -1,5 +1,7 @@
 # 四项剩余原因能否解释慢刷新，以及超越9000的路径
 
+文中标注的本地证据与安装后的 SDK 源码仅用于定位当时的检查，不随仓库交付；仓库内验证汇总仍使用相对链接。
+
 2026-09-14。本轮为分析与隔离原型实验，未修改产品前端源码、未更新9001、未操作9000部署。业务源码HMR、原生画板方向及现有160ms提交检查均保留。
 
 **四项确实命中了重要成本，但不是四笔可以相加的独立耗时。隐藏大分子初始化和开发React造成主线程长任务，长任务又拖延Worker初始消息；文档恢复部分与这些工作重叠。此外，App、SDK和Worker启动偏晚，是要超越9000必须同时解决的前段约束。**
@@ -26,7 +28,7 @@
 
 这些是原型数据，不能宣称原方案“暖刷新至少改善30%”的UI目标已经达到。10个样本的最近秩P95是最大值，能暴露本批慢样本，不能替代长期尾延迟保证。
 
-原始记录：[40个正式样本及请求](/tmp/nexpoly-refresh-beyond-9000-20260914/combined-empty/results.json)；[汇总与逐样本指标](/data/lzq/gith/nexpoly-dev/docs/verification/ketcher-refresh-beyond-iframe-analysis.json)。
+原始记录：40个正式样本及请求（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/combined-empty/results.json`）；[汇总与逐样本指标](verification/ketcher-refresh-beyond-iframe-analysis.json)。
 
 ## 2. 四项原因的权重与关系应如何修正
 
@@ -46,7 +48,7 @@
 
 因此，“减少Macro/React长任务”和“缩短Worker握手”不是两份独立收益。组合原型已经把这条尾段压到接近9000后，再针对WASM启动计算投入，优先级应低于提前整个启动链。
 
-详见[上一轮精确版本时间线分析](/data/lzq/gith/nexpoly-dev/docs/ketcher-refresh-residual-analysis.md)。
+详见[上一轮精确版本时间线分析](ketcher-refresh-residual-analysis.md)。
 
 ### 开发React：重要放大因素，收益随其他优化改变
 
@@ -58,13 +60,13 @@
 
 ### 文档恢复：真实的次级成本，不能按整段直接扣除
 
-[workspace初始化](/data/lzq/gith/nexpoly-dev/frontend/src/structure/workspace.ts:194)对初始空文档仍调用clear和settle；[原生会话](/data/lzq/gith/nexpoly-dev/frontend/src/structure/nativeSession.ts:122)还检查清空后的KET，[提交等待](/data/lzq/gith/nexpoly-dev/frontend/src/structure/editor.ts:108)有两个80ms等待。历史恢复阶段约514ms，部分时间在等Worker或调度，不能再独立承诺节省514ms。
+[workspace初始化](../frontend/src/structure/workspace.ts)对初始空文档仍调用clear和settle；[原生会话](../frontend/src/structure/nativeSession.ts)还检查清空后的KET，[提交等待](../frontend/src/structure/editor.ts)有两个80ms等待。历史恢复阶段约514ms，部分时间在等Worker或调度，不能再独立承诺节省514ms。
 
 本轮组合首次Worker回复→UI可用的逐样本P50约305ms，旧9000约176ms；这一尾段仍值得精简，但小于前段启动差距。即使把组合每个样本直接减去160ms，UI P50也仍约1.973秒，比本批9000慢约0.564秒。该算式仅检验“删除等待足不足够”，不代表允许删除检查。
 
 ## 3. 新补证：单体库还影响每次转换与实际操作响应
 
-隐藏Macro的代价不限于首次界面。当前[standalone转换入口](/data/lzq/gith/nexpoly-dev/frontend/node_modules/ketcher-standalone/dist/main.js:871)在每次convert时，都会序列化现有CoreEditor的整份单体库，传入Worker。对应WASM C++入口每次转换创建IndigoSession，并重新加载所传库；底层解析JSON并建立模板对象。
+隐藏Macro的代价不限于首次界面。当前standalone转换入口（本地 SDK 源码：`frontend/node_modules/ketcher-standalone/dist/main.js:871`）在每次convert时，都会序列化现有CoreEditor的整份单体库，传入Worker。对应WASM C++入口每次转换创建IndigoSession，并重新加载所传库；底层解析JSON并建立模板对象。
 
 版本已核对：本地standalone依赖固定Indigo1.36.0，实际嵌入WASM版本串为`1.36.0.0-g85e2a6d74`，与引用源码提交一致。[对应转换实现](https://github.com/epam/Indigo/blob/85e2a6d744b2c8aa18f2f6c94c28dedcdf9638fd/api/wasm/indigo-ketcher/indigo-ketcher.cpp#L592)、[库加载实现](https://github.com/epam/Indigo/blob/85e2a6d744b2c8aa18f2f6c94c28dedcdf9638fd/api/c/indigo/src/indigo_molecule.cpp#L635)。
 
@@ -79,7 +81,7 @@
 
 后续要维持“曾进入Macro后的小分子操作”也快，需要对可证明无需库的转换按需传库，或在Worker/WASM侧按库版本复用解析对象。仅缓存主线程JSON无法消除WASM内每次重建；缓存对象需处理IndigoSession句柄寿命和库版本失效。仅按当前UI是小分子模式就去掉库会误伤自定义单体、HELM/序列和宏结构，必须保留格式语义。
 
-[完整源码链、精确版本证据及边界](/tmp/nexpoly-refresh-beyond-9000-20260914/restore-fastpath-analysis.md)。
+完整源码链、精确版本证据及边界（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/restore-fastpath-analysis.md`）。
 
 ## 4. 要超越9000，必须同时前移UI和Worker启动
 
@@ -103,7 +105,7 @@
 
 1. **先完成真实Macro按需初始化及转换语义覆盖。** 保留小分子真实服务就绪；模式切换、HELM/宏KET、直接formatter导入、自定义单体入口统一经过可重试的能力初始化。已经验证较大净收益，先解决原型中模式Promise挂起问题。
 2. **建立不依赖React/App挂载的轻量化学服务启动入口。** 初始画板URL可在轻启动层识别；预初始化租约拥有唯一Worker，SDK挂载后原子接管同一实例。业务页面继续HMR，文档写入和可见画布仍由现有workspace/session控制。取消导航、StrictMode丢弃、初始化失败、超时和未接管都要销毁；普通路由不启动。不能创建一个预热Worker后再创建正式Worker。
-3. **继续前移SDK求值完成和必要UI挂载，精简首屏路径。** 旧生产root原型的[HTML modulepreload](/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend/build/island-poc-preload.ts:13)预加载模块而不执行；但[main.tsx](/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend/src/main.tsx:8)随后主动预加载runtime，其[顶层import](/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend/src/components/structure-workbench/KetcherReactRuntime.tsx:13)已经执行生产SDK并等待CSS，与App加载并行。仍待可见画板的[effect调用mount](/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend/src/components/structure-workbench/KetcherReactRuntime.tsx:25)后，才[创建provider及其服务](/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend/island-sdk-entry.tsx:23)并启动Worker，不能将旧原型描述成一直只预取而不执行。后续需要分别验证更早的模块执行、服务启动和UI挂载，重功能按需分块。可将Worker/WASM拆为独立版本资源，让轻服务入口无需解析整个React/编辑器包；直接拆资源本身的暖刷新收益仍要单测。业务模块不为了预打包而牺牲HMR。
+3. **继续前移SDK求值完成和必要UI挂载，精简首屏路径。** 旧生产root原型的HTML modulepreload（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend/build/island-poc-preload.ts:13`）预加载模块而不执行；但main.tsx（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend/src/main.tsx:8`）随后主动预加载runtime，其顶层import（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend/src/components/structure-workbench/KetcherReactRuntime.tsx:13`）已经执行生产SDK并等待CSS，与App加载并行。仍待可见画板的effect调用mount（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend/src/components/structure-workbench/KetcherReactRuntime.tsx:25`）后，才创建provider及其服务（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend/island-sdk-entry.tsx:23`）并启动Worker，不能将旧原型描述成一直只预取而不执行。后续需要分别验证更早的模块执行、服务启动和UI挂载，重功能按需分块。可将Worker/WASM拆为独立版本资源，让轻服务入口无需解析整个React/编辑器包；直接拆资源本身的暖刷新收益仍要单测。业务模块不为了预打包而牺牲HMR。
 4. **增加有证据的新空会话快速路径，并减少重复转换。** 只有当前session/revision确为初始空文档、无待处理写入，并取得有效空KET证据，才省掉重复clear和相关等待；否则走现有恢复。保持ready前订阅、错误回退和完整快照。非空结构用可靠提交完成信号和内容校验优化，不靠任意减小定时器。
 
 第4项的反例是SDK会读取URL `moll`并发起不等待的自动导入；“新实例+workspace空”不等于没有初始化写入。仅文字、图形和标注也不能靠空SMILES判断为空。必须收口或排除这些路径，防止以丢失内容换速度。
@@ -126,17 +128,17 @@
 
 - lazy Macro的CCO导入、SMILES/KET/Molfile/PNG导出、首次Macro切入切回、HELM及宿主直接KET formatter恢复已通过定向验证。高级monomer wizard等全部公开入口尚未完成兼容性覆盖。
 - 组合烟测发现：HELM导入后直接调用`switchToMoleculesMode()`可能挂起。已有测试覆盖的是先进入Macro再切回，不能将新失败归为组合独有退化。失败日志保留，未为了测量修补或隐藏。因此不能把本PoC直接部署。
-- 初次测试脚本曾错误假设共享CCO跨整页刷新持久化。实际[workspace生命周期设计](/data/lzq/gith/nexpoly-dev/frontend/src/structure/workspace.ts:34)只在一次App生命周期内保留，实际9000、9001和组合均刷新为空。已停止该场景；13个断言失败和3个预热记录完整保留，标为不适用的测试，不混入上述40个正式样本，不当成产品回归。非空验证采用App内切页恢复。
-- 最终App内非空验证完成10个往返、共20次所有者切换，均恢复CCO；真实鼠标拖动后KET坐标改变，活动Worker始终为1，旧实例写入均以AbortError拒绝，普通页面没有新增SDK实例，无pageerror。[完整记录](/tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/navigation-final.json)。首个探针把已释放的canvas空引用当成对象，保留失败记录后仅修正探针重测，未修改PoC。
+- 初次测试脚本曾错误假设共享CCO跨整页刷新持久化。实际[workspace生命周期设计](../frontend/src/structure/workspace.ts)只在一次App生命周期内保留，实际9000、9001和组合均刷新为空。已停止该场景；13个断言失败和3个预热记录完整保留，标为不适用的测试，不混入上述40个正式样本，不当成产品回归。非空验证采用App内切页恢复。
+- 最终App内非空验证完成10个往返、共20次所有者切换，均恢复CCO；真实鼠标拖动后KET坐标改变，活动Worker始终为1，旧实例写入均以AbortError拒绝，普通页面没有新增SDK实例，无pageerror。完整记录（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/navigation-final.json`）。首个探针把已释放的canvas空引用当成对象，保留失败记录后仅修正探针重测，未修改PoC。
 - 生产root还需要完整错误边界、portal/样式、HMR、快速导航、失败重试及SDK版本发布验证。定向构建/烟测不替代全产品发布验收。
 - 本轮不宣称冷启动、禁缓存刷新、低端CPU、复杂宏结构及全部六入口的性能目标已通过；普通页资源隔离和共享所有者转换另有功能烟测记录。
 
 主要产物：
 
-- [正式统计、所有逐样本指标、预热和失效场景记录](/data/lzq/gith/nexpoly-dev/docs/verification/ketcher-refresh-beyond-iframe-analysis.json)。
-- [5环境筛选原始记录](/tmp/nexpoly-refresh-beyond-9000-20260914/screening-base/results.json)、[正式40次对照](/tmp/nexpoly-refresh-beyond-9000-20260914/combined-empty/results.json)、[无效非空刷新场景说明](/tmp/nexpoly-refresh-beyond-9000-20260914/combined-cco/scenario-status.json)。
-- [测量脚本](/tmp/nexpoly-refresh-beyond-9000-20260914/compare-functional.mjs)、[统计脚本](/tmp/nexpoly-refresh-beyond-9000-20260914/summarize-evidence.py)。
-- [lazy Macro补丁与限制](/tmp/nexpoly-refresh-beyond-9000-20260914/lazy-macro/README.md)、[SDK补丁](/tmp/nexpoly-refresh-beyond-9000-20260914/lazy-macro/SDK-lazy-macro.patch)、[生产SDK原型](/tmp/nexpoly-refresh-beyond-9000-20260914/island/POC.md)。
-- [组合烟测含失败](/tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/smoke-results.json)、[所有者与普通页面补测](/tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/smoke-lifecycle.json)。
+- [正式统计、所有逐样本指标、预热和失效场景记录](verification/ketcher-refresh-beyond-iframe-analysis.json)。
+- 5环境筛选原始记录（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/screening-base/results.json`）、正式40次对照（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/combined-empty/results.json`）、无效非空刷新场景说明（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/combined-cco/scenario-status.json`）。
+- 测量脚本（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/compare-functional.mjs`）、统计脚本（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/summarize-evidence.py`）。
+- lazy Macro补丁与限制（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/lazy-macro/README.md`）、SDK补丁（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/lazy-macro/SDK-lazy-macro.patch`）、生产SDK原型（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/island/POC.md`）。
+- 组合烟测含失败（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/smoke-results.json`）、所有者与普通页面补测（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/smoke-lifecycle.json`）。
 
-已检查424个产品前端文件与此前冻结版本一致。实际9000/9001容器ID、镜像和启动时间保持不变。原有SDK的11个制品、4个补丁验证通过，两个实际端口HTTP均为200。5个本轮临时服务均已停止，浏览器已关闭。本轮只新增分析文档和验证汇总；临时原型及其失败记录保留用于评审。[最终环境核验](/tmp/nexpoly-refresh-beyond-9000-20260914/final-environment.json)。
+已检查424个产品前端文件与此前冻结版本一致。实际9000/9001容器ID、镜像和启动时间保持不变。原有SDK的11个制品、4个补丁验证通过，两个实际端口HTTP均为200。5个本轮临时服务均已停止，浏览器已关闭。本轮只新增分析文档和验证汇总；临时原型及其失败记录保留用于评审。最终环境核验（本地证据：`/tmp/nexpoly-refresh-beyond-9000-20260914/final-environment.json`）。

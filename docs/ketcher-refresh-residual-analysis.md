@@ -1,12 +1,14 @@
 # 9001 画板刷新剩余性能差距复核
 
+文中标注的本地证据与安装后的 SDK 源码仅用于定位当时的检查，不随仓库交付；仓库内验证汇总仍使用相对链接。
+
 核验日期：2026-09-14。9000、9001 均只读；本轮未修改产品源码、重启这两个服务或部署优化。诊断改动全部位于独立 `/tmp` 副本。
 
 **9001 仍明显慢于9000，已复现；上次优化仍然有效。剩余重点已从全量业务模块下载，转向隐藏大分子编辑器的主线程长任务、由此拖延的Worker初始消息投递，以及开发React和文档恢复成本。仅继续压缩、预取，不能解决当前大部分差距。**
 
 ## 1. 当前环境与同源码对照
 
-工作区424个已测前端文件与9月11日最终冻结版本逐一哈希一致，源码摘要为 `2d0ac6ef2c4cb45bc6e9398d4ccdabe3a9f08340adf7de5eaaf23e9e8f66ee01`。9001实际HTML保留三个开发入口预加载，页面懒加载与SDK预取仍在运行；容器、镜像、启动时间与上次交付后相同。9000仍是原镜像。详见[当前源码核验](/tmp/nexpoly-refresh-residual-20260914/current-source-verification.json)。
+工作区424个已测前端文件与9月11日最终冻结版本逐一哈希一致，源码摘要为 `2d0ac6ef2c4cb45bc6e9398d4ccdabe3a9f08340adf7de5eaaf23e9e8f66ee01`。9001实际HTML保留三个开发入口预加载，页面懒加载与SDK预取仍在运行；容器、镜像、启动时间与上次交付后相同。9000仍是原镜像。详见当前源码核验（本地证据：`/tmp/nexpoly-refresh-residual-20260914/current-source-verification.json`）。
 
 本轮复用该冻结源码已验证的两种生产构建，分别启动临时预览5922、5923，避免用不同业务源码解释差距。主测量采用结构工作台，四个版本各测本机及模拟远程普通刷新10轮，共80个正式样本；全部通过空文档读取、CCO导入/模型提交/SMILES导出和清空验证。
 
@@ -46,13 +48,13 @@
 
 ### 2.1 小分子画布建立后，还要等隐藏的大分子编辑器
 
-[当前SDK入口](/data/lzq/gith/nexpoly-dev/frontend/src/components/structure-workbench/KetcherReactRuntime.tsx:20)使用完整的Ketcher `Editor`。本地3.8 SDK的行为是：
+[当前SDK入口](../frontend/src/components/structure-workbench/KetcherReactRuntime.tsx)使用完整的Ketcher `Editor`。本地3.8 SDK的行为是：
 
 - 小分子实例创建并设置`ketcherId`后，才触发内部宏分子模块的动态导入。
 - 大分子编辑器容器默认`display:none`，仍会挂载、建立CoreEditor、解析单体库并构建UI。
 - 最外层`onInit`等待小分子、大分子编辑器都存在，宿主此时才开始恢复共享文档。
 
-对应实现见[ketcher-react Editor](/data/lzq/gith/nexpoly-dev/frontend/node_modules/ketcher-react/dist/index.js:37610)、[完整onInit条件](/data/lzq/gith/nexpoly-dev/frontend/node_modules/ketcher-react/dist/index.js:37675)。这是真实的隐藏功能初始化依赖，并非仅有CSS遮挡。
+对应实现见ketcher-react Editor（本地 SDK 源码：`frontend/node_modules/ketcher-react/dist/index.js:37610`）、完整onInit条件（本地 SDK 源码：`frontend/node_modules/ketcher-react/dist/index.js:37675`）。这是真实的隐藏功能初始化依赖，并非仅有CSS遮挡。
 
 独立诊断副本添加`performance.mark`后，严格模式5个暖样本中：小分子初始化完成到宿主onInit，中位数约**865ms**；其中宏模块求值完成到宿主onInit约734ms。单体库首次解析/转换约216ms，其余还有React UI、调度与effect处理。这些区间与Worker初始化部分重叠，不能全部当作可直接节省的时间。
 
@@ -79,11 +81,11 @@
 
 ### 2.3 文档恢复不仅是160ms定时器
 
-[宿主onInit](/data/lzq/gith/nexpoly-dev/frontend/src/components/structure-workbench/ReactStructureEditor.tsx:76)之后才执行[workspace恢复](/data/lzq/gith/nexpoly-dev/frontend/src/structure/workspace.ts:154)。新空文档也执行清空、KET导出确认、两个80ms提交等待，随后订阅结构变化并发布ready。
+[宿主onInit](../frontend/src/components/structure-workbench/ReactStructureEditor.tsx)之后才执行[workspace恢复](../frontend/src/structure/workspace.ts)。新空文档也执行清空、KET导出确认、两个80ms提交等待，随后订阅结构变化并发布ready。
 
 独立严格模式诊断的恢复阶段中位数约514ms，其中两个提交等待约160ms，其余包括清空/转换、服务响应、KET确认和调度。旧生产对空共享文档读取SMILES成功后便可开放编辑；当前实现承担了更多恢复和一致性保证。
 
-[清空结果校验](/data/lzq/gith/nexpoly-dev/frontend/src/structure/nativeSession.ts:122)与[提交等待](/data/lzq/gith/nexpoly-dev/frontend/src/structure/editor.ts:108)不能直接删除。应研究确定的新空会话是否能减少重复清空、复用服务初始化结果，以及可靠的实际提交完成条件。非空文档、布局恢复、异常和快速导航必须维持同样正确性标准。250ms居中和首次自动保存均在ready之后，不属于本轮ready关键路径。
+[清空结果校验](../frontend/src/structure/nativeSession.ts)与[提交等待](../frontend/src/structure/editor.ts)不能直接删除。应研究确定的新空会话是否能减少重复清空、复用服务初始化结果，以及可靠的实际提交完成条件。非空文档、布局恢复、异常和快速导航必须维持同样正确性标准。250ms居中和首次自动保存均在ready之后，不属于本轮ready关键路径。
 
 ### 2.4 关键新增原因：主线程长任务还挡住了Worker的初始消息
 
@@ -99,7 +101,7 @@
 
 Chromium **151.0.7922.34** 的实现解释了这个现象：Worker脚本尚未被父线程确认完成时，早期`postMessage`进入队列；Worker求值完成后，把通知投递给父线程；父线程执行该通知后才放行早期消息。因此，即使Worker线程已空闲，父线程上的大任务也会拖延第一条请求。见[消息排队及放行实现](https://raw.githubusercontent.com/chromium/chromium/refs/tags/151.0.7922.34/third_party/blink/renderer/core/workers/dedicated_worker_messaging_proxy.cc)与[Worker完成通知回到父线程的实现](https://raw.githubusercontent.com/chromium/chromium/refs/tags/151.0.7922.34/third_party/blink/renderer/core/workers/dedicated_worker_object_proxy.cc)。
 
-源码确认这一机制，时间线中的长任务与idle区间与其一致；trace没有直接命名父线程的`DidEvaluateScript`回调，不能逐微秒把所有空闲归给单个内部任务。两份trace中的CPU profiler自身还各有约100ms启动开销，所以这组数据只用于解释原因，不与80个普通刷新样本混算。完整关联和CPU归因见[Worker启动分析](/tmp/nexpoly-refresh-residual-20260914/timeline/worker-startup-analysis.json)。
+源码确认这一机制，时间线中的长任务与idle区间与其一致；trace没有直接命名父线程的`DidEvaluateScript`回调，不能逐微秒把所有空闲归给单个内部任务。两份trace中的CPU profiler自身还各有约100ms启动开销，所以这组数据只用于解释原因，不与80个普通刷新样本混算。完整关联和CPU归因见Worker启动分析（本地证据：`/tmp/nexpoly-refresh-residual-20260914/timeline/worker-startup-analysis.json`）。
 
 这使优化方向更明确：减少或拆分SDK主线程长任务，也能改善Worker启动后的请求等待。把大分子模块更早下载，并不保证主线程能更早处理启动通知；不能把“已经创建Worker”视为已经建立有效并行。
 
@@ -128,11 +130,11 @@ Chromium **151.0.7922.34** 的实现解释了这个现象：Worker脚本尚未�
 
 ## 4. 证据与范围
 
-- [汇总、80个正式逐样本指标、诊断打点和CPU聚合](/data/lzq/gith/nexpoly-dev/docs/verification/ketcher-refresh-residual-analysis.json)。
-- [正式原始请求和阶段记录](/tmp/nexpoly-refresh-residual-20260914/comparison/results.json)、[正式统计](/tmp/nexpoly-refresh-residual-20260914/comparison/summary.json)。
-- [StrictMode诊断](/tmp/nexpoly-refresh-residual-20260914/diagnosis/results.json)、[内部预取实验](/tmp/nexpoly-refresh-residual-20260914/macro-experiment/results.json)、[Worker诊断](/tmp/nexpoly-refresh-residual-20260914/worker-diagnosis/results.json)。
-- [CPU profiles](/tmp/nexpoly-refresh-residual-20260914/cpu)、[Chrome时间线](/tmp/nexpoly-refresh-residual-20260914/timeline)。
-- [临时诊断差异](/tmp/nexpoly-refresh-residual-20260914/diagnostic/frontend/residual-instrumentation.patch)、[宏预取实验差异](/tmp/nexpoly-refresh-residual-20260914/macro-preload/frontend/residual-macro-preload.patch)。
+- [汇总、80个正式逐样本指标、诊断打点和CPU聚合](verification/ketcher-refresh-residual-analysis.json)。
+- 正式原始请求和阶段记录（本地证据：`/tmp/nexpoly-refresh-residual-20260914/comparison/results.json`）、正式统计（本地证据：`/tmp/nexpoly-refresh-residual-20260914/comparison/summary.json`）。
+- StrictMode诊断（本地证据：`/tmp/nexpoly-refresh-residual-20260914/diagnosis/results.json`）、内部预取实验（本地证据：`/tmp/nexpoly-refresh-residual-20260914/macro-experiment/results.json`）、Worker诊断（本地证据：`/tmp/nexpoly-refresh-residual-20260914/worker-diagnosis/results.json`）。
+- CPU profiles（本地证据：`/tmp/nexpoly-refresh-residual-20260914/cpu`）、Chrome时间线（本地证据：`/tmp/nexpoly-refresh-residual-20260914/timeline`）。
+- 临时诊断差异（本地证据：`/tmp/nexpoly-refresh-residual-20260914/diagnostic/frontend/residual-instrumentation.patch`）、宏预取实验差异（本地证据：`/tmp/nexpoly-refresh-residual-20260914/macro-preload/frontend/residual-macro-preload.patch`）。
 
 正式对照没有修改Blob Worker代码；独立StrictMode/Worker诊断注入了打点前缀，CPU/Chrome时间线也属于独立观测，不与正式80样本混算。宏预取实验使用相同SDK打点的两份副本，未注入Blob前缀。所有实验保留原始样本，未以删除失败或异常值改善统计。
 

@@ -19,7 +19,7 @@
 | GC 后 JS 堆，十进制 MB | 81.1 | 84.9 | 有波动，不据此外推 |
 | CDP 统计 DOM 节点 | 2139 | 5829 | 369 |
 
-卸载编辑器、删除证明页的全局实例引用并再次 GC 后，相关监听器仍存在。原始记录见 [兼容门禁摘要](/data/lzq/gith/nexpoly-dev/docs/verification/ketcher-native-gate.json)。堆数据只覆盖 JavaScript，不包括 WASM/WebGL 或浏览器进程总内存；DOM 数量也不等于页面上可见的节点数量。
+卸载编辑器、删除证明页的全局实例引用并再次 GC 后，相关监听器仍存在。原始记录见 [兼容门禁摘要](verification/ketcher-native-gate.json)。堆数据只覆盖 JavaScript，不包括 WASM/WebGL 或浏览器进程总内存；DOM 数量也不等于页面上可见的节点数量。
 
 全局监听器及其闭包可能继续持有旧编辑器、订阅、Redux store 和 SVG。页面消失后这些引用仍能保活旧对象；鼠标移动和窗口缩放还可能触发旧实例的处理逻辑。已确认的是资源累积，尚未测得可量化的卡顿、错误提交或结构丢失，不能把这些潜在影响写成已发生故障。
 
@@ -61,7 +61,7 @@ Vite 7 的开发依赖预构建与生产 define 转换不同。生产应用构�
 | 浏览器脚本临时提供 `process = { env: {} }` | 初始化成功，CCO 写入和读回成功 | 确认启动异常由缺失 process 引起 |
 | 在原 Vite 配置上仅追加 `define['process.env.NODE_DEBUG'] = '""'` | 初始化、CCO 读写、文字标注、内置 Miew 3D 通过，未捕获未处理异常 | 确认存在小范围配置修复路径 |
 
-最后一组证明页仍包裹 React.StrictMode。控制台还记录到两个跨组件渲染时 setState 的 React 警告，所以仅能报告开发模式启动和这些操作通过，不能报告 StrictMode 完整生命周期验收通过。无效输入探针的 SDK Promise 没有抛错，未覆盖 assert 的失败分支。完整诊断记录见 [process 分析结果](/data/lzq/gith/nexpoly-dev/docs/verification/ketcher-process-analysis.json)。
+最后一组证明页仍包裹 React.StrictMode。控制台还记录到两个跨组件渲染时 setState 的 React 警告，所以仅能报告开发模式启动和这些操作通过，不能报告 StrictMode 完整生命周期验收通过。无效输入探针的 SDK Promise 没有抛错，未覆盖 assert 的失败分支。完整诊断记录见 [process 分析结果](verification/ketcher-process-analysis.json)。
 
 最小诊断配置是在兼容分支已有配置上追加这一项，不是完整可交付的原生配置：
 
