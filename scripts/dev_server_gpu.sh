@@ -1122,7 +1122,7 @@ worker_cleanup_failed_launch() {
     worker_process_record terminate >/dev/null || return 1
   fi
   for _ in $(seq 1 20); do
-    if worker_process_record collect-dead >/dev/null 2>&1; then
+    if worker_process_record collect-dead --collect-socket >/dev/null 2>&1; then
       collected=true
       break
     fi
@@ -1133,13 +1133,6 @@ worker_cleanup_failed_launch() {
     return 1
   fi
   wait "$spawn_pid" 2>/dev/null || true
-  if [[ -e "$WORKER_SOCKET" || -L "$WORKER_SOCKET" ]]; then
-    [[ -S "$WORKER_SOCKET" && ! -L "$WORKER_SOCKET" ]] || {
-      echo "Refusing to collect an unsafe failed-launch Worker socket." >&2
-      return 1
-    }
-    rm -f -- "$WORKER_SOCKET"
-  fi
 }
 
 worker_up() {
@@ -1160,8 +1153,11 @@ worker_up() {
       echo "Dev monomer MD worker is already healthy."
       return 0
     fi
-    echo "Dev monomer MD worker record exists but its exact process/health identity is invalid; refusing to replace it." >&2
-    return 1
+    worker_process_record collect-dead --collect-socket >/dev/null || {
+      echo "Dev monomer MD worker record exists but its exact process/health identity is invalid; refusing to replace it." >&2
+      return 1
+    }
+    echo "Collected the exited development MD Worker's exact process record and socket."
   fi
   if [[ -e "$WORKER_SOCKET" || -L "$WORKER_SOCKET" ]]; then
     echo "Dev monomer MD socket path exists without a managed process record; inspect it before restarting." >&2
@@ -1215,7 +1211,9 @@ worker_up() {
     export NEXPOLY_GPU_DEVICE="1"
     export PATH="$(dirname "$WORKER_PYTHON"):$(dirname "$WORKER_BASE_PYTHON"):$PATH"
     export PYTHONPATH="$ROOT_DIR:$BYTEFF2_ROOT:$BYTEFF2_ROOT/submodules/bytemol${PYTHONPATH:+:$PYTHONPATH}"
-    exec nohup "$WORKER_PYTHON" -m uvicorn app.main:app --uds "$WORKER_SOCKET"
+    # Detach from the launcher's process group as well as its terminal. nohup
+    # alone still allows launcher-group cleanup to terminate a healthy Worker.
+    exec nohup setsid "$WORKER_PYTHON" -m uvicorn app.main:app --uds "$WORKER_SOCKET"
   ) >>"$WORKER_LOG_FILE" 2>&1 < /dev/null &
   local spawn_pid="$!" record_created=false worker_instance=""
   for _ in $(seq 1 50); do
@@ -1322,6 +1320,10 @@ worker_drain_stop() {
   fi
   local record expected_instance response pid
   if ! record="$(worker_process_record verify --require-instance 2>/dev/null)"; then
+    if worker_process_record collect-dead --collect-socket >/dev/null 2>&1; then
+      echo "Collected the exited development MD Worker during drain-stop."
+      return 0
+    fi
     worker_process_record verify >/dev/null || return 1
     expected_instance="$(worker_health_validate prebind)" || return 1
     worker_process_record bind-instance --instance-id "$expected_instance" >/dev/null || return 1
@@ -2057,7 +2059,7 @@ print(state + "\t" + session_id)
 
 gpu_session_controller_owns_recovery() {
   case "$1" in
-    startup-failed|broker-failed|contaminated|audit-failed|isolation-waiting|cleanup-blocked|gpu3-drift|recovered)
+    startup-failed|broker-failed|worker-failed|contaminated|audit-failed|isolation-waiting|cleanup-blocked|gpu3-drift|recovered)
       return 0
       ;;
     *)
@@ -2184,10 +2186,16 @@ gpu_session_up_rollback() {
       return "$original_status"
     fi
     if [[ -n "$session_id" ]]; then
-      local attempt stop_completed=false cpu_restored=false
+      local attempt stop_completed=false cpu_restored=false worker_cleanup_payload
+      # The controller may already be gone. This rollback owns only Workers
+      # created by this startup, whose source identity was captured on entry.
+      worker_cleanup_payload="$(python3 -c '
+import json, sys
+print(json.dumps(dict(zip(("session_id", "source_sha", "source_tree"), sys.argv[1:]))))
+' "$session_id" "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE")"
       for attempt in 1 2 3; do
         if NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1 \
-          gpu_session_stop_owned_internal; then
+          gpu_session_stop_owned_internal "$worker_cleanup_payload"; then
           stop_completed=true
           break
         fi
@@ -2346,6 +2354,34 @@ gpu_session_adopt_direct_start() {
   fi
 }
 
+gpu_session_stop_workers() {
+  (
+    # Workers belong to the activated session, which may predate the current
+    # checkout. Use that verified source identity for teardown only; startup
+    # and the replacement backend must still use the current checkout.
+    local payload="${1:-}" identity failed=0
+    if [[ -z "$payload" ]]; then
+      payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status)" || exit 1
+    fi
+    identity="$(printf '%s' "$payload" | python3 -c '
+import json, re, sys
+value = json.load(sys.stdin)
+if value.get("session_id") != sys.argv[1]:
+    raise SystemExit("Worker cleanup controller session changed")
+for key in ("source_sha", "source_tree"):
+    if not re.fullmatch(r"[0-9a-f]{40}", str(value.get(key))):
+        raise SystemExit("Worker cleanup source identity is invalid")
+print(value["source_sha"], value["source_tree"])
+' "$NEXPOLY_DEV_GPU_SESSION_ID")" || exit 1
+    read -r CURRENT_SOURCE_REVISION CURRENT_SOURCE_TREE <<< "$identity"
+    DFT_WORKER_VERSION="dev:${CURRENT_SOURCE_REVISION}:${CURRENT_SOURCE_TREE}:${DFT_WORKER_LOCK_SHA256}"
+    worker_drain_stop || failed=1
+    dft_worker_drain_stop || failed=1
+    dft_worker_assert_stopped_runtime || failed=1
+    exit "$failed"
+  )
+}
+
 gpu_session_status() {
   local payload state
   payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status)"
@@ -2386,7 +2422,7 @@ gpu_session_down() {
   fi
   if [[ "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" ]]; then
     case "$state" in
-      starting|startup-failed|broker-failed|isolation-waiting|cleanup-blocked|recovered)
+      starting|startup-failed|broker-failed|worker-failed|isolation-waiting|cleanup-blocked|recovered)
         "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" down --execute
         verify_gpu_session_stopped_runtime
         echo "Development backend restored to CPU-only idle mode."
@@ -2394,18 +2430,22 @@ gpu_session_down() {
         ;;
     esac
   fi
-  NEXPOLY_DEV_GPU_SESSION_ID="$(printf '%s' "$payload" | python3 -c 'import json, re, sys; value=json.load(sys.stdin); session=value.get("session_id"); assert value.get("status") in {"ready","plane-ready","stabilizing","contaminated","audit-failed","isolation-waiting","cleanup-blocked"} and isinstance(session,str) and re.fullmatch(r"[0-9a-f]{32}", session), value; print(session)')"
+  NEXPOLY_DEV_GPU_SESSION_ID="$(printf '%s' "$payload" | python3 -c 'import json, re, sys; value=json.load(sys.stdin); session=value.get("session_id"); assert value.get("status") in {"ready","worker-unavailable","plane-ready","stabilizing","contaminated","audit-failed","isolation-waiting","cleanup-blocked"} and isinstance(session,str) and re.fullmatch(r"[0-9a-f]{32}", session), value; print(session)')"
   export NEXPOLY_DEV_GPU_SESSION_ID
   "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" drain --execute >/dev/null
   gpu_backend_stop_exact_session
-  worker_drain_stop
-  dft_worker_drain_stop
+  # drain may let a lease-free controller exit before Worker cleanup begins.
+  # Retain its already verified identity instead of probing a stopped session.
+  gpu_session_stop_workers "$payload"
   NEXPOLY_DEV_CONFIG_HASH="$(compute_backend_config_hash)"
   export NEXPOLY_DEV_CONFIG_HASH
   "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
   wait_backend_configured
-  verify_backend_drift
   "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" down --execute
+  # An operator unit can own the controller's cgroup. Replace it only after
+  # the controller has finished cleaning its Broker and MPS resources.
+  gpu_operator_up
+  verify_backend_drift
   verify_gpu_session_stopped_runtime
   echo "Development backend restored to CPU-only idle mode."
 }
@@ -2417,9 +2457,7 @@ gpu_session_stop_owned_internal() {
   }
   local failed=0
   gpu_backend_stop_exact_session || failed=1
-  worker_drain_stop || failed=1
-  dft_worker_drain_stop || failed=1
-  dft_worker_assert_stopped_runtime || failed=1
+  gpu_session_stop_workers "${1:-}" || failed=1
   return "$failed"
 }
 

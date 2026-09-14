@@ -22,6 +22,153 @@ DEV_BUILDKIT_CONFIG = REPOSITORY_ROOT / "ops" / "config" / "buildkitd.dev.toml"
 
 
 class DevServerGpuScriptTests(unittest.TestCase):
+    def test_down_retains_worker_identity_after_a_lease_free_controller_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            controller = root / "controller.py"
+            log = root / "events"
+            drained = root / "drained"
+            payload = {
+                "status": "ready", "direct_start": True, "session_id": "d" * 32,
+                "source_sha": "a" * 40, "source_tree": "b" * 40,
+            }
+            controller.write_text(
+                "import json, os, pathlib, sys\n"
+                "command = sys.argv[1]\n"
+                "with open(os.environ['EVENT_LOG'], 'a') as log: log.write('controller:' + command + '\\n')\n"
+                "drained = pathlib.Path(os.environ['DRAINED'])\n"
+                "if command == 'drain': drained.touch()\n"
+                "print(json.dumps({'status': 'stopped'} if drained.exists() else "
+                + repr(payload) + "))\n"
+            )
+            functions = "\n".join(self._shell_function_source(name) for name in (
+                "gpu_session_adopt_direct_start", "gpu_session_stop_workers", "gpu_session_down",
+            ))
+            harness = f'''
+set -euo pipefail
+GPU_SESSION_PYTHON="$1"
+GPU_SESSION_CONTROLLER="$2"
+export EVENT_LOG="$3" DRAINED="$4"
+NEXPOLY_DEV_GPU_SESSION_EXECUTE=1
+DFT_WORKER_LOCK_SHA256=sha256:lock
+COMPOSE=(compose)
+event() {{ printf '%s\\n' "$*" >> "$EVENT_LOG"; }}
+compose() {{ event cpu-up; }}
+gpu_backend_stop_exact_session() {{ event backend-stop; }}
+worker_drain_stop() {{ event "md:$CURRENT_SOURCE_REVISION"; }}
+dft_worker_drain_stop() {{ event "dft:$DFT_WORKER_VERSION"; }}
+dft_worker_assert_stopped_runtime() {{ :; }}
+gpu_operator_up() {{ event operator-up; }}
+compute_backend_config_hash() {{ printf hash; }}
+wait_backend_configured() {{ event backend-healthy; }}
+verify_backend_drift() {{ :; }}
+verify_gpu_session_stopped_runtime() {{ event verified; }}
+{functions}
+gpu_session_down
+'''
+            completed = subprocess.run(
+                ["bash", "-c", harness, "down-race-test", sys.executable,
+                 str(controller), str(log), str(drained)], text=True, capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(log.read_text().splitlines(), [
+                "controller:status", "controller:drain", "backend-stop",
+                "md:" + "a" * 40,
+                "dft:dev:" + "a" * 40 + ":" + "b" * 40 + ":sha256:lock",
+                "cpu-up", "backend-healthy", "controller:down", "operator-up", "verified",
+            ])
+
+    def test_controller_cpu_recovery_does_not_restart_its_parent_operator(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            log = Path(raw) / "events"
+            function = self._shell_function_source("gpu_session_restore_cpu_internal")
+            completed = subprocess.run(
+                ["bash", "-c", f'''
+set -euo pipefail
+EVENT_LOG="$1"
+NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1
+COMPOSE=(compose)
+prepare_dft_runtime_directories() {{ :; }}
+gpu_operator_up() {{ echo unexpected-operator-restart >&2; return 99; }}
+compute_backend_config_hash() {{ printf hash; }}
+compose() {{ printf 'cpu-up\\n' >> "$EVENT_LOG"; }}
+wait_backend_configured() {{ printf 'healthy\\n' >> "$EVENT_LOG"; }}
+verify_backend_drift() {{ printf 'verified\\n' >> "$EVENT_LOG"; }}
+{function}
+gpu_session_restore_cpu_internal
+''', "cpu-recovery-test", str(log)], text=True, capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(log.read_text().splitlines(), ["cpu-up", "healthy", "verified"])
+
+    def test_worker_teardown_uses_only_the_same_controllers_original_source(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            controller = root / "controller.py"
+            controller.write_text("import json; print(json.dumps(" + repr({
+                "session_id": "d" * 32, "source_sha": "a" * 40, "source_tree": "b" * 40,
+            }) + "))\n")
+            log = root / "cleanup.log"
+            function = self._shell_function_source("gpu_session_stop_workers")
+            harness = f'''
+set -euo pipefail
+GPU_SESSION_PYTHON="$1"
+GPU_SESSION_CONTROLLER="$2"
+LOG="$3"
+NEXPOLY_DEV_GPU_SESSION_ID="$4"
+CURRENT_SOURCE_REVISION=current-checkout
+CURRENT_SOURCE_TREE=current-tree
+DFT_WORKER_LOCK_SHA256=sha256:lock
+worker_drain_stop() {{ printf '%s %s\\n' "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE" >> "$LOG"; }}
+dft_worker_drain_stop() {{ printf '%s\\n' "$DFT_WORKER_VERSION" >> "$LOG"; }}
+dft_worker_assert_stopped_runtime() {{ :; }}
+{function}
+gpu_session_stop_workers
+[[ "$CURRENT_SOURCE_REVISION" == current-checkout && "$CURRENT_SOURCE_TREE" == current-tree ]]
+'''
+            for session_id in ("d" * 32, "e" * 32):
+                with self.subTest(session_id=session_id):
+                    log.unlink(missing_ok=True)
+                    completed = subprocess.run(
+                        ["bash", "-c", harness, "source-cleanup", sys.executable,
+                         str(controller), str(log), session_id], text=True, capture_output=True,
+                    )
+                    if session_id == "d" * 32:
+                        self.assertEqual(completed.returncode, 0, completed.stderr)
+                        self.assertEqual(log.read_text().splitlines(), [
+                            "a" * 40 + " " + "b" * 40,
+                            "dev:" + "a" * 40 + ":" + "b" * 40 + ":sha256:lock",
+                        ])
+                    else:
+                        self.assertNotEqual(completed.returncode, 0)
+                        self.assertFalse(log.exists())
+
+    def test_md_drain_stop_collects_a_verified_dead_worker_without_contacting_it(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            record = Path(raw) / "worker.pid"
+            record.touch()
+            log = Path(raw) / "commands"
+            function = self._shell_function_source("worker_drain_stop")
+            completed = subprocess.run(
+                ["bash", "-c", f'''
+set -euo pipefail
+WORKER_PID_FILE="$1"
+COMMAND_LOG="$2"
+worker_process_record() {{
+  printf '%s\\n' "$*" >> "$COMMAND_LOG"
+  [[ "$*" == "collect-dead --collect-socket" ]]
+}}
+curl() {{ echo unexpected-health-request >&2; return 99; }}
+{function}
+worker_drain_stop
+''', "dead-md-test", str(record), str(log)],
+                text=True, capture_output=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(log.read_text().splitlines(), [
+                "verify --require-instance", "collect-dead --collect-socket",
+            ])
+
     def _shell_function_source(self, name: str) -> str:
         source = SCRIPT.read_text(encoding="utf-8")
         start = source.index(f"{name}() {{")
@@ -62,6 +209,9 @@ GPU_SESSION_PYTHON="$1"
 GPU_SESSION_CONTROLLER="ignored-controller-path"
 GPU_SESSION_ROLLBACK_ARMED=true
 NEXPOLY_DEV_GPU_SESSION_ID="$2"
+CURRENT_SOURCE_REVISION={'b' * 40}
+CURRENT_SOURCE_TREE={'c' * 40}
+DFT_WORKER_LOCK_SHA256=sha256:lock
 export FAKE_CONTROLLER_LOG="$3"
 FALLBACK_LOG="$4"
 ROOT_DIR="$5"
@@ -75,12 +225,21 @@ RESTORE_CALLS=0
 {self._shell_function_source("gpu_session_report_controller_failure")}
 {self._shell_function_source("gpu_session_controller_finish_recovery")}
 {self._shell_function_source("gpu_session_up_rollback")}
+{self._shell_function_source("gpu_session_stop_workers")}
+{self._shell_function_source("gpu_session_stop_owned_internal")}
 
-gpu_session_stop_owned_internal() {{
+gpu_backend_stop_exact_session() {{
   STOP_CALLS=$((STOP_CALLS + 1))
   printf '%s\n' stop-owned >> "$FALLBACK_LOG"
   (( STOP_CALLS > STOP_FAILURES ))
 }}
+worker_drain_stop() {{
+  [[ "$CURRENT_SOURCE_REVISION" == {'b' * 40} && "$CURRENT_SOURCE_TREE" == {'c' * 40} ]]
+}}
+dft_worker_drain_stop() {{
+  [[ "$DFT_WORKER_VERSION" == dev:{'b' * 40}:{'c' * 40}:sha256:lock ]]
+}}
+dft_worker_assert_stopped_runtime() {{ :; }}
 gpu_session_restore_cpu_internal() {{
   RESTORE_CALLS=$((RESTORE_CALLS + 1))
   printf '%s\n' restore-cpu >> "$FALLBACK_LOG"
@@ -659,7 +818,7 @@ printf '%s\n' "$NEXPOLY_DEV_GPU_DIRECT_START" > "$1"
             down.index("verify_backend_drift"),
         )
         self.assertIn(
-            "starting|startup-failed|broker-failed|isolation-waiting|"
+            "starting|startup-failed|broker-failed|worker-failed|isolation-waiting|"
             "cleanup-blocked|recovered",
             down,
         )

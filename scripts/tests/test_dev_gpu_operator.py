@@ -22,6 +22,25 @@ SOURCE_TREE = "b" * 40
 
 
 class DevGpuOperatorTests(unittest.TestCase):
+    def test_missing_md_is_recoverable_and_reports_controller_observation_time(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repository = Path(raw)
+            prepare_runtime(repository)
+            operator = DevGpuOperator(
+                repository=repository, source_sha=SOURCE_SHA, source_tree=SOURCE_TREE,
+            )
+            operation = operator._new_operation("ready", "previous startup")
+            operation["updated_at"] = "2026-08-26T00:00:00Z"
+            operator._operation = operation
+            for state in ("worker-unavailable", "worker-failed"):
+                with self.subTest(state=state):
+                    observed = operator._public_status_locked({
+                        "status": state, "updated_at": "2026-09-14T08:00:00Z",
+                    })
+                    self.assertEqual(observed["phase"], "recovering")
+                    self.assertTrue(observed["can_recover"])
+                    self.assertEqual(observed["updated_at"], "2026-09-14T08:00:00Z")
+
     def test_candidate_identity_allows_dirty_files_at_the_same_head_and_tree(
         self,
     ) -> None:
