@@ -24,6 +24,67 @@ async function startAndSummarize() {
   fireEvent.click(await screen.findByRole("button", { name: "正在记录 · 总结" }));
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+it.each([
+  { visibility: "打开", closed: false, outcome: "成功", failed: false },
+  { visibility: "关闭", closed: true, outcome: "成功", failed: false },
+  { visibility: "打开", closed: false, outcome: "失败", failed: true },
+  { visibility: "关闭", closed: true, outcome: "失败", failed: true },
+])("延迟请求完成且总结$outcome时，面板保持用户选择的$visibility状态", async ({ closed, failed }) => {
+  const starting = deferred<{ recording_id: string; status: string }>();
+  const stopping = deferred<{ recording_id: string; events: [] }>();
+  const summarizing = deferred<{ summary: string; generated: boolean }>();
+  api.start.mockReturnValueOnce(starting.promise);
+  api.stop.mockReturnValueOnce(stopping.promise);
+  api.summarize.mockReturnValueOnce(summarizing.promise);
+  mount();
+  const trigger = screen.getByRole("button", { name: "开始记录" });
+  fireEvent.click(trigger);
+  fireEvent.click(trigger);
+  expect(api.start).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await act(async () => starting.resolve({ recording_id: api.start.mock.calls[0][0], status: "recording" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "正在记录 · 总结" }));
+  expect(screen.getByRole("dialog", { name: "本次浏览总结" })).not.toBeNull();
+  expect(screen.getByText("正在整理本次记录")).not.toBeNull();
+  if (closed) fireEvent.click(screen.getByRole("button", { name: "关闭总结" }));
+  await act(async () => stopping.resolve({ recording_id: api.start.mock.calls[0][0], events: [] }));
+  expect(Boolean(screen.queryByRole("dialog"))).toBe(!closed);
+  if (!closed) expect(screen.getByText("正在整理本次阅读")).not.toBeNull();
+  await act(async () => {
+    if (failed) summarizing.reject(new Error("offline"));
+    else summarizing.resolve({ summary: "延迟完成的回顾", generated: true });
+  });
+  expect(Boolean(screen.queryByRole("dialog"))).toBe(!closed);
+  if (closed) fireEvent.click(screen.getByRole("button", { name: "查看总结" }));
+  const dialog = within(screen.getByRole("dialog", { name: "本次浏览总结" }));
+  if (failed) expect(dialog.getByRole("alert").textContent).toContain("offline");
+  else expect(dialog.getByText("延迟完成的回顾")).not.toBeNull();
+  expect(api.stop).toHaveBeenCalledTimes(1);
+  expect(api.summarize).toHaveBeenCalledTimes(1);
+});
+
+it("查看旧总结时开始新记录，立即收起面板且开始请求完成后保持关闭", async () => {
+  mount();
+  await startAndSummarize();
+  await screen.findByText("阅读收获。");
+  const starting = deferred<{ recording_id: string; status: string }>();
+  api.start.mockReturnValueOnce(starting.promise);
+  fireEvent.click(screen.getByRole("button", { name: "开始新记录" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await act(async () => starting.resolve({ recording_id: api.start.mock.calls[1][0], status: "recording" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("button", { name: "正在记录 · 总结" })).not.toBeNull();
+  expect(api.start.mock.calls[1][0]).not.toBe(api.start.mock.calls[0][0]);
+});
+
 it("点击开始记录后生成阅读总结，不展示调试操作清单", async () => {
   mount();
   const start = screen.getByRole("button", { name: "开始记录" });

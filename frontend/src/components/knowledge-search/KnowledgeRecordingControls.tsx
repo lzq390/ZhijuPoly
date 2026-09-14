@@ -9,6 +9,7 @@ export function KnowledgeRecordingControls({ localMode, global = false }: {
   const recording = useKnowledgeRecording();
   const start = recording?.start;
   const phase = recording?.phase;
+  // Only user actions change visibility; a delayed phase effect can override an open request.
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -19,10 +20,6 @@ export function KnowledgeRecordingControls({ localMode, global = false }: {
     setOpen(false);
     triggerRef.current?.focus();
   }, []);
-
-  useEffect(() => {
-    if (phase === "recording") setOpen(false);
-  }, [phase]);
 
   useEffect(() => {
     if (!open) return;
@@ -59,7 +56,10 @@ export function KnowledgeRecordingControls({ localMode, global = false }: {
   const sections = ["浏览线索", "阅读收获", "内容联系"];
   const handleClick = () => {
     if (phase === "idle") {
-      if (localMode) void start?.();
+      if (localMode) {
+        setOpen(false);
+        void start?.();
+      }
       return;
     }
     setOpen(true);
