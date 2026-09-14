@@ -1,25 +1,61 @@
 .np-monomer-polymerization {
   --np-sw-layout-max-width: 1040px;
   --np-sw-drawer-effective-width: var(--np-sw-drawer-width, 380px);
+  --np-mp-text-size: 12px;
+  --np-mp-label-size: 11px;
+  --np-mp-hint-size: 11px;
+  --np-mp-card-title-size: 12px;
+  --np-mp-select-size: 13px;
+  --np-mp-action-size: 12px;
+  --np-mp-compact-action-size: 11px;
+  --np-mp-control-height: 38px;
+  --np-mp-metric-size: 18px;
+  --np-mp-control-hover: #f0f7ff;
+  --np-mp-control-pressed: #e2edff;
+  --np-mp-control-selected: linear-gradient(110deg, #eaf2ff, #eefbff);
 }
 
-.np-monomer-polymerization .np-mp-page {
-  padding: 62px clamp(24px, 6vw, 160px) 24px;
-}
-
-.np-monomer-polymerization .np-sw-page-title {
-  top: 22px;
-  left: 20px;
-}
-
-.np-monomer-polymerization .np-mp-scroll-region {
-  height: 100%;
-  min-height: 0;
+.np-module-page.np-monomer-polymerization {
+  container-type: size;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 2px 3px 64px;
   scrollbar-gutter: stable;
+}
+
+.np-monomer-polymerization .np-mp-page {
+  height: auto;
+  overflow-x: clip;
+  overflow-y: visible;
+  padding: 0 clamp(24px, 6vw, 160px) 24px;
+}
+
+.np-monomer-polymerization .np-sw-layout,
+.np-monomer-polymerization .np-sw-workspace {
+  height: auto;
+  min-height: 0;
+}
+
+.np-monomer-polymerization .np-mp-content {
+  padding: 2px 3px 64px;
+}
+
+/* Keep single-run results within the page viewport as the form scrolls. */
+.np-monomer-polymerization .np-sw-drawer-layer {
+  align-self: start;
+  height: calc(100cqh - 24px);
+}
+
+.np-monomer-polymerization .np-sw-drawer-layer:not(.is-overlay),
+.np-monomer-polymerization .np-sw-drawer-layer.is-overlay {
+  position: sticky;
+  top: 12px;
+  height: calc(100cqh - 24px);
+}
+
+.np-monomer-polymerization .np-sw-layout:has(.np-sw-drawer-layer.is-overlay) > .np-sw-workspace,
+.np-monomer-polymerization .np-sw-drawer-layer.is-overlay {
+  grid-area: 1 / 1;
 }
 
 .np-monomer-polymerization .np-mp-module-toolbar {
@@ -43,10 +79,10 @@
 .np-monomer-polymerization .np-mp-surface {
   position: relative;
   overflow: hidden;
-  border: 1px solid rgba(37, 99, 235, 0.14);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: 0 12px 34px rgba(30, 64, 175, 0.075), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--np-theme-surface-border);
+  border-radius: var(--np-theme-surface-radius);
+  background: var(--np-theme-panel);
+  box-shadow: var(--np-theme-surface-shadow);
 }
 
 .np-monomer-polymerization .np-mp-surface__header {
@@ -159,11 +195,16 @@
   background: #f7faff;
 }
 
-.np-monomer-polymerization .np-mp-service-status > span.is-unavailable,
+.np-monomer-polymerization .np-mp-service-status > span.is-unavailable {
+  border-color: var(--np-theme-warning-border);
+  color: var(--np-theme-warning-text);
+  background: var(--np-theme-warning-soft);
+}
+
 .np-monomer-polymerization .np-mp-service-status > span.is-error {
-  border-color: rgba(245, 158, 11, 0.24);
-  color: #a15408;
-  background: #fffbeb;
+  border-color: var(--np-theme-danger-border);
+  color: var(--np-theme-danger-text);
+  background: var(--np-theme-danger-soft);
 }
 
 .np-monomer-polymerization .np-mp-service-status > button {
@@ -179,7 +220,7 @@
 
 .np-monomer-polymerization .np-mp-service-status > button:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
 .np-monomer-polymerization .np-mp-service-message {
@@ -263,13 +304,22 @@
   gap: 6px;
 }
 
-.np-monomer-polymerization .np-mp-field > span,
-.np-monomer-polymerization .np-mp-monomer__body > label {
+.np-monomer-polymerization .np-mp-field > span {
   color: #607995;
   font-family: var(--font-mono);
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.06em;
+}
+
+.np-monomer-polymerization .np-mp-monomer__body > label,
+.np-monomer-polymerization .np-mp-run-grid .np-mp-field > span {
+  color: var(--np-sw-muted);
+  font-family: var(--font-body);
+  font-size: var(--np-mp-label-size);
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: normal;
 }
 
 .np-monomer-polymerization .np-mp-field select,
@@ -307,7 +357,7 @@
 
 .np-monomer-polymerization .np-mp-field input[aria-invalid="true"],
 .np-monomer-polymerization .np-mp-monomer.has-error textarea {
-  border-color: rgba(220, 38, 38, 0.42);
+  border-color: var(--np-theme-danger-border);
 }
 
 .np-monomer-polymerization .np-mp-field > small {
@@ -563,8 +613,8 @@
   min-width: 0;
   gap: 7px;
   color: #6f849d;
-  font-size: 10.5px;
-  line-height: 1.45;
+  font-size: var(--np-mp-hint-size);
+  line-height: 1.5;
 }
 
 .np-monomer-polymerization .np-mp-ordinary-hint svg {
@@ -578,6 +628,47 @@
   color: #b45309;
   font-family: var(--font-mono);
   font-weight: 700;
+}
+
+.np-monomer-polymerization .np-mp-input-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 4px;
+  max-width: 100%;
+  margin-bottom: 16px;
+  border: 1px solid rgba(51, 83, 126, 0.14);
+  border-radius: 9px;
+  padding: 4px;
+  background: #f5f9fd;
+}
+
+.np-monomer-polymerization .np-mp-input-tabs button {
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 16px;
+  color: var(--np-sw-muted);
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.np-monomer-polymerization .np-mp-input-tabs button[aria-selected="true"] {
+  border-color: rgba(37, 99, 235, 0.36);
+  color: var(--np-sw-blue-strong);
+  background: var(--np-mp-control-selected);
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.1), inset 0 -2px 0 rgba(37, 99, 235, 0.28);
+}
+
+.np-monomer-polymerization .np-mp-input-tabs button:hover {
+  color: var(--np-sw-blue-strong);
+}
+
+.np-monomer-polymerization .np-mp-input-tabs button:focus-visible {
+  outline: var(--np-theme-focus-width) solid var(--np-theme-focus);
+  outline-offset: var(--np-theme-focus-offset);
 }
 
 .np-monomer-polymerization .np-mp-monomer-grid {
@@ -596,7 +687,7 @@
 }
 
 .np-monomer-polymerization .np-mp-monomer.has-error {
-  border-color: rgba(220, 38, 38, 0.28);
+  border-color: var(--np-theme-danger-border);
 }
 
 .np-monomer-polymerization .np-mp-monomer__header {
@@ -639,7 +730,9 @@
 
 .np-monomer-polymerization .np-mp-monomer__header h3 {
   color: #183553;
-  font-size: 12px;
+  font-family: var(--font-body);
+  font-size: var(--np-mp-card-title-size);
+  font-weight: 700;
   line-height: 1.3;
 }
 
@@ -705,7 +798,7 @@
 .np-monomer-polymerization .np-mp-compact-button {
   gap: 6px;
   padding: 0 9px;
-  font-size: 10px;
+  font-size: var(--np-mp-compact-action-size);
   font-weight: 700;
 }
 
@@ -725,7 +818,7 @@
 .np-monomer-polymerization .np-mp-compact-button:disabled,
 .np-monomer-polymerization .np-mp-icon-action:disabled {
   cursor: not-allowed;
-  opacity: 0.42;
+  opacity: 0.5;
 }
 
 .np-monomer-polymerization .np-mp-compact-button svg,
@@ -738,15 +831,15 @@
   min-height: 30px;
   margin: 7px 0 0;
   color: #758aa2;
-  font-size: 9.5px;
-  line-height: 1.45;
+  font-size: var(--np-mp-hint-size);
+  line-height: 1.5;
 }
 
 .np-monomer-polymerization .np-mp-field-error {
   margin: 5px 0 0;
   color: var(--np-sw-danger) !important;
-  font-size: 10.5px !important;
-  line-height: 1.45;
+  font-size: var(--np-mp-hint-size) !important;
+  line-height: 1.5;
 }
 
 .np-monomer-polymerization .np-mp-preview {
@@ -810,7 +903,7 @@
 }
 
 .np-monomer-polymerization .np-mp-preview__state.is-error {
-  color: #b45309;
+  color: var(--np-theme-warning-text);
 }
 
 .np-monomer-polymerization .np-mp-preview__state svg {
@@ -859,7 +952,7 @@
 
 .np-monomer-polymerization .np-mp-run-note p {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--np-mp-hint-size);
   line-height: 1.5;
 }
 
@@ -875,8 +968,69 @@
 
 .np-monomer-polymerization .np-mp-form-actions svg,
 .np-monomer-polymerization .np-mp-monomer-toolbar .np-sw-secondary-button svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
+}
+
+.np-monomer-polymerization :is(.np-sw-primary-button, .np-sw-secondary-button) {
+  font-family: var(--font-body);
+  font-size: var(--np-mp-action-size);
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.np-monomer-polymerization .np-mp-run-grid .np-mp-field > small {
+  font-size: var(--np-mp-hint-size);
+  line-height: 1.5;
+}
+
+/* Both modes share control feedback, including the file chooser and links. */
+.np-monomer-polymerization :is(.np-batch-panel button, .np-batch-download, .np-mp-input-tabs button, .np-mp-compact-button, .np-mp-icon-action, .np-sw-primary-button, .np-sw-secondary-button, .np-mp-service-status > button, .np-mp-class-picker__trigger),
+.np-monomer-polymerization .np-batch-upload input::file-selector-button {
+  transition: color var(--np-motion-control) var(--np-ease-enter), background-color var(--np-motion-control) var(--np-ease-enter), border-color var(--np-motion-control) var(--np-ease-enter), box-shadow var(--np-motion-control) var(--np-ease-enter), transform var(--np-motion-control) var(--np-ease-enter);
+}
+
+.np-monomer-polymerization :is(.np-batch-panel button, .np-batch-download, .np-mp-input-tabs button, .np-mp-compact-button, .np-mp-icon-action, .np-sw-secondary-button, .np-mp-service-status > button, .np-mp-class-picker__trigger):not(.np-sw-primary-button):not(:disabled):hover,
+.np-monomer-polymerization .np-batch-upload input::file-selector-button:hover {
+  border-color: rgba(37, 99, 235, 0.44);
+  color: var(--np-sw-blue-strong);
+  background: var(--np-mp-control-hover);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
+  text-decoration: none;
+}
+
+.np-monomer-polymerization :is(.np-mp-input-tabs button[aria-selected="true"], .np-batch-settings-toggle[aria-expanded="true"], .np-batch-job-toggle[aria-expanded="true"], .np-sw-select__trigger[aria-expanded="true"], .np-mp-class-picker__trigger[aria-expanded="true"], .np-batch-panel [role="option"][aria-selected="true"]):not(:disabled) {
+  border-color: rgba(37, 99, 235, 0.4);
+  color: var(--np-sw-blue-strong);
+  background: var(--np-mp-control-selected);
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.1), inset 0 0 0 1px rgba(255, 255, 255, 0.7);
+}
+
+.np-monomer-polymerization :is(.np-batch-panel button, .np-batch-download, .np-mp-input-tabs button, .np-mp-compact-button, .np-mp-icon-action, .np-sw-primary-button, .np-sw-secondary-button, .np-mp-service-status > button, .np-mp-class-picker__trigger):not(:disabled):active,
+.np-monomer-polymerization .np-batch-upload input::file-selector-button:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 5px rgba(22, 58, 110, 0.16);
+}
+
+.np-monomer-polymerization :is(.np-batch-panel button, .np-batch-download, .np-mp-input-tabs button, .np-mp-compact-button, .np-mp-icon-action, .np-sw-secondary-button, .np-mp-service-status > button, .np-mp-class-picker__trigger):not(.np-sw-primary-button):not(:disabled):active,
+.np-monomer-polymerization .np-batch-upload input::file-selector-button:active {
+  border-color: var(--np-sw-blue);
+  color: var(--np-sw-blue-strong);
+  background: var(--np-mp-control-pressed);
+}
+
+.np-monomer-polymerization :is(.np-batch-panel button, .np-batch-download, .np-mp-input-tabs button, .np-mp-compact-button, .np-mp-icon-action, .np-sw-primary-button, .np-sw-secondary-button, .np-mp-service-status > button, .np-mp-class-picker__trigger):focus-visible {
+  outline: var(--np-theme-focus-width) solid var(--np-theme-focus);
+  outline-offset: var(--np-theme-focus-offset);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.09);
+}
+
+.np-monomer-polymerization .np-batch-job-header > button[aria-busy="true"] {
+  border-color: rgba(37, 99, 235, 0.4);
+  color: var(--np-sw-blue-strong);
+  background: var(--np-mp-control-selected);
+  cursor: progress;
+  opacity: 1;
 }
 
 .np-monomer-polymerization .np-mp-drawer-toolbar {
@@ -1047,10 +1201,10 @@
   align-items: flex-start;
   gap: 7px;
   padding: 8px 9px;
-  border: 1px solid rgba(245, 158, 11, 0.2);
+  border: 1px solid var(--np-theme-warning-border);
   border-radius: 8px;
-  color: #92400e;
-  background: #fffbeb;
+  color: var(--np-theme-warning-text);
+  background: var(--np-theme-warning-soft);
   font-size: 10px;
   line-height: 1.5;
 }
@@ -1325,35 +1479,24 @@
   }
 
   .np-monomer-polymerization .np-mp-page {
-    height: 100%;
+    height: auto;
     min-height: 0;
-    overflow: hidden;
-    padding: 52px 0 0;
-  }
-
-  .np-monomer-polymerization .np-sw-page-title {
-    position: absolute;
-    top: 12px;
-    left: 14px;
     padding: 0;
-    font-size: 18px;
-    line-height: 30px;
   }
 
   .np-monomer-polymerization .np-sw-layout {
     width: calc(100% - 24px);
-    height: 100%;
+    height: auto;
     min-height: 0;
     margin: 0 auto;
   }
 
   .np-monomer-polymerization .np-sw-workspace {
-    height: 100%;
+    height: auto;
     min-height: 0;
   }
 
-  .np-monomer-polymerization .np-mp-scroll-region {
-    height: 100%;
+  .np-monomer-polymerization .np-mp-content {
     padding-bottom: 16px;
   }
 
@@ -1407,17 +1550,30 @@
   .np-monomer-polymerization {
     --np-sw-layout-max-width: 1560px;
     --np-sw-drawer-effective-width: var(--np-sw-drawer-width, 540px);
+    --np-mp-text-size: 17px;
+    --np-mp-label-size: 15px;
+    --np-mp-hint-size: 15px;
+    --np-mp-card-title-size: 17px;
+    --np-mp-select-size: 17px;
+    --np-mp-action-size: 18px;
+    --np-mp-compact-action-size: 15px;
+    --np-mp-control-height: 57px;
+    --np-mp-metric-size: 24px;
+  }
+
+  .np-monomer-polymerization .np-mp-input-tabs {
+    grid-template-columns: repeat(2, minmax(160px, 1fr));
+    margin-bottom: 22px;
+    padding: 5px;
+  }
+
+  .np-monomer-polymerization .np-mp-input-tabs button {
+    min-height: 44px;
+    font-size: 15px;
   }
 
   .np-monomer-polymerization .np-mp-page {
-    padding: 84px 36px 36px;
-  }
-
-  .np-monomer-polymerization .np-sw-page-title {
-    top: 30px;
-    left: 36px;
-    font-size: 28px;
-    line-height: 42px;
+    padding: 0 36px 36px;
   }
 
   .np-monomer-polymerization .np-mp-module-toolbar {
@@ -1430,13 +1586,13 @@
     width: min(270px, 22vw);
   }
 
-  .np-monomer-polymerization .np-mp-scroll-region {
+  .np-monomer-polymerization .np-mp-content {
     padding-bottom: 88px;
   }
 
   .np-monomer-polymerization .np-mp-surface {
-    border-radius: 20px;
-    box-shadow: 0 18px 50px rgba(30, 64, 175, 0.075), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+    border-radius: var(--np-theme-surface-radius);
+    box-shadow: var(--np-theme-surface-shadow);
   }
 
   .np-monomer-polymerization .np-mp-surface__header {
@@ -1521,8 +1677,7 @@
     gap: 18px;
   }
 
-  .np-monomer-polymerization .np-mp-field > span,
-  .np-monomer-polymerization .np-mp-monomer__body > label {
+  .np-monomer-polymerization .np-mp-field > span {
     font-size: 13.5px;
   }
 
@@ -1593,9 +1748,7 @@
 
   .np-monomer-polymerization .np-mp-requirement-card__metric > span,
   .np-monomer-polymerization .np-mp-requirement-card__copy > span,
-  .np-monomer-polymerization .np-mp-requirement-card p,
-  .np-monomer-polymerization .np-mp-monomer__hint,
-  .np-monomer-polymerization .np-mp-run-note p {
+  .np-monomer-polymerization .np-mp-requirement-card p {
     font-size: 15px;
   }
 
@@ -1605,10 +1758,6 @@
 
   .np-monomer-polymerization .np-mp-monomer-toolbar {
     margin-bottom: 15px;
-  }
-
-  .np-monomer-polymerization .np-mp-ordinary-hint {
-    font-size: 14px;
   }
 
   .np-monomer-polymerization .np-mp-monomer__header {
@@ -1621,10 +1770,6 @@
     height: 40px;
     border-radius: 11px;
     font-size: 18px;
-  }
-
-  .np-monomer-polymerization .np-mp-monomer__header h3 {
-    font-size: 17px;
   }
 
   .np-monomer-polymerization .np-mp-monomer__header p,
@@ -1742,10 +1887,32 @@
     margin-top: 22px;
     padding-top: 20px;
   }
+
+  .np-monomer-polymerization .np-mp-form-actions svg,
+  .np-monomer-polymerization .np-mp-monomer-toolbar .np-sw-secondary-button svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .np-monomer-polymerization .np-mp-compact-button,
+  .np-monomer-polymerization .np-mp-icon-action {
+    min-height: 40px;
+  }
+
+  .np-monomer-polymerization .np-mp-compact-button svg,
+  .np-monomer-polymerization .np-mp-icon-action svg {
+    width: 18px;
+    height: 18px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .np-monomer-polymerization .np-mp-skeleton-list i {
     animation: none;
+  }
+
+  .np-monomer-polymerization :is(button, .np-batch-download):active,
+  .np-monomer-polymerization .np-batch-upload input::file-selector-button:active {
+    transform: none !important;
   }
 }

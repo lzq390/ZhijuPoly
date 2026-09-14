@@ -7,7 +7,7 @@ export async function checkDrawerSlide(page, { workspace, drawer, action, open, 
     const panel = document.querySelector(drawer);
     const content = document.querySelector(workspace);
     const owner = panel.closest(".np-structure-workbench, .ks-panel-layout, .polytao-page");
-    const probe = { running: true, frames: [], durations: [], iframe: content?.querySelector("iframe") };
+    const probe = { running: true, frames: [], durations: [], editor: content?.querySelector("[data-structure-editor], iframe") };
     window.__drawerSlideProbe = probe;
     window.__drawerSlideSequence = (window.__drawerSlideSequence || 0) + 1;
     probe.mark = `np-drawer-slide-${window.__drawerSlideSequence}-${open ? "open" : "close"}`;
@@ -36,14 +36,14 @@ export async function checkDrawerSlide(page, { workspace, drawer, action, open, 
     const probe = window.__drawerSlideProbe;
     probe.running = false;
     performance.mark(`${probe.mark}:end`);
-    return { frames: probe.frames, durations: probe.durations, iframeRetained: !probe.iframe || probe.iframe === document.querySelector(workspace)?.querySelector("iframe") };
+    return { frames: probe.frames, durations: probe.durations, editorRetained: !probe.editor || probe.editor === document.querySelector(workspace)?.querySelector("[data-structure-editor], iframe") };
   }, { workspace });
   const { frames } = result;
   const first = frames[0], last = frames.at(-1);
   const between = (value, a, b) => value > Math.min(a, b) + 1 && value < Math.max(a, b) - 1;
   const workspaceFrames = frames.filter(frame => between(frame.x, first.x, last.x)).length;
   const drawerFrames = frames.filter(frame => between(frame.drawerX, first.drawerX, last.drawerX)).length;
-  assert.ok(result.iframeRetained, "Sliding must not remount the workspace iframe");
+  assert.ok(result.editorRetained, "Sliding must not remount the workspace editor");
   assert.ok(frames.every(frame => Math.abs(frame.width - first.width) < 1), "Workspace width must remain stable across drawer open/close");
   assert.ok(frames.every(frame => frame.sidebarX === first.sidebarX && frame.sidebarWidth === first.sidebarWidth), "Platform navigation must stay fixed");
   assert.ok(frames.every(frame => frame.ownerScroll === first.ownerScroll), "Focusing an entering drawer must not scroll the outer workspace frame");
@@ -59,7 +59,7 @@ export async function checkDrawerSlide(page, { workspace, drawer, action, open, 
     assert.ok(Math.abs(last.drawerX - first.drawerX) > 100, "Drawer must travel in/out, not just fade over 20px");
   }
   return { inline, workspaceDelta: Math.round(last.x - first.x), workspaceWidth: Math.round(first.width),
-    drawerTravel: Math.round(Math.abs(last.drawerX - first.drawerX)), workspaceFrames, drawerFrames, durations: result.durations, iframeRetained: result.iframeRetained };
+    drawerTravel: Math.round(Math.abs(last.drawerX - first.drawerX)), workspaceFrames, drawerFrames, durations: result.durations, editorRetained: result.editorRetained };
 }
 
 /** Reverse an opening transition before completion using the real close action. */

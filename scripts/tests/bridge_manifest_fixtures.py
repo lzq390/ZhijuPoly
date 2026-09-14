@@ -1,7 +1,7 @@
 """Exact frozen-B and current-F migration fixtures for bridge tests.
 
 The bridge is intentionally asymmetric: B ends at 0012 while F is the unique
-B-plus-0013/0014/0015 extension. Reading B from its pinned Git object prevents a
+B-plus-0013/0014/0015/0016 extension. Reading B from its pinned Git object prevents a
 current F checkout from being mistaken for the historical bridge target.
 """
 
@@ -23,7 +23,7 @@ B_MANIFEST_SHA256 = (
     "sha256:3f149c17e596c9dfe7c88245894c36e3e2d22ab67cf38375c84f2b1d7d7224fa"
 )
 F_MANIFEST_SHA256 = (
-    "sha256:0c1ccfe4bc4515b4558e33b3c06524c6d79451a51b0bc1d2e1e14ec4a50ad26b"
+    "sha256:a6fdee13e6b57fbd264aa498e2b438e5dd50fac8b6bee34561665a33ca871fc8"
 )
 FINAL_MIGRATION_RECORDS = [
     {
@@ -74,6 +74,7 @@ FINAL_MIGRATION_RECORDS = [
             }
         ],
     },
+    {'version': '0016_monomer_polymerization_batch', 'kind': 'expand', 'epoch': 2, 'checksum': 'c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976', 'requires_contracts': [{'version': '0012_drop_polytao_jobs', 'checksum': 'c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728'}]},
 ]
 
 
@@ -161,7 +162,7 @@ F_MANIFEST_RECORDS = _manifest_records(F_MANIFEST_PAYLOAD, label="current F")
 if F_MANIFEST_RECORDS != [*B_MANIFEST_RECORDS, *FINAL_MIGRATION_RECORDS]:
     raise RuntimeError(
         "current F migration manifest is not the unique frozen-B plus "
-        "0013/0014/0015 extension"
+        "0013/0014/0015/0016 extension"
     )
 
 

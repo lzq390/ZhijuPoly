@@ -1,3 +1,4 @@
+import { ModulePageHeader } from "./ModulePageHeader";
 import { useContentMotion } from "../hooks/useContentMotion";
 import {
   Activity,
@@ -668,7 +669,7 @@ export function MonomerDftPage({
   const [activeTab, setActiveTab] = useState<PrimaryTab>(initialJobId ? "results" : "config");
   const tabContentRef = useRef<HTMLDivElement | null>(null);
   useContentMotion(tabContentRef, activeTab, "tab");
-  const [smilesDraft, setSmilesDraft] = useState(structure.smiles);
+  const [smilesDraft, setSmilesDraft] = useState(structure.workspace.getSnapshot().draft);
   const [calculationType, setCalculationType] = useState<MonomerDftCalculationType>("single_point");
   const [modelId, setModelId] = useState<MonomerDftModelName | "">("");
   const [netChargeText, setNetChargeText] = useState("");
@@ -694,7 +695,7 @@ export function MonomerDftPage({
   );
 
   useEffect(() => {
-    setSmilesDraft(structure.smiles);
+    setSmilesDraft(structure.workspace.getSnapshot().draft);
   }, [structure.smiles]);
 
   useEffect(() => {
@@ -1028,10 +1029,9 @@ export function MonomerDftPage({
   const structureIssue = validationIssues.find((issue) => issue.field === "smiles")?.message ?? null;
 
   return (
-    <div className="np-structure-workbench np-monomer-dft" data-module="monomer-dft">
-      <div className="np-dft-page">
-        <h1 className="np-sw-page-title">单体 DFT</h1>
-
+    <div className="np-module-page np-structure-workbench np-monomer-dft" data-module="monomer-dft">
+      <ModulePageHeader>单体 DFT</ModulePageHeader>
+      <div className="np-dft-page np-module-page-body">
         <div className="np-dft-module-toolbar" aria-label="单体 DFT 服务状态">
           <div className="np-dft-service-status">
             <span className={`is-${serviceTone}`} role="status">

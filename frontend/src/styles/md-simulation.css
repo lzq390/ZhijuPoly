@@ -3,12 +3,7 @@
 }
 
 .np-md-simulation .np-md-page {
-  padding: 62px 0 0;
-}
-
-.np-md-simulation .np-sw-page-title {
-  top: 22px;
-  left: 20px;
+  padding: 0;
 }
 
 .np-md-simulation .np-md-scroll-region {
@@ -117,7 +112,7 @@
 
 .np-md-simulation .np-md-service-status > button:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
 .np-md-simulation .np-md-service-status svg {
@@ -134,11 +129,16 @@
   background: #f7faff;
 }
 
-.np-md-simulation .np-md-service-status > span.is-error,
 .np-md-simulation .np-md-service-status > span.is-unavailable {
-  border-color: rgba(245, 158, 11, 0.24);
-  color: #a15408;
-  background: #fffbeb;
+  border-color: var(--np-theme-warning-border);
+  color: var(--np-theme-warning-text);
+  background: var(--np-theme-warning-soft);
+}
+
+.np-md-simulation .np-md-service-status > span.is-error {
+  border-color: var(--np-theme-danger-border);
+  color: var(--np-theme-danger-text);
+  background: var(--np-theme-danger-soft);
 }
 
 .np-md-simulation .np-md-ready-dot {
@@ -153,10 +153,10 @@
 .np-md-simulation .np-md-workbench-surface {
   position: relative;
   overflow: hidden;
-  border: 1px solid rgba(37, 99, 235, 0.14);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: 0 12px 34px rgba(30, 64, 175, 0.075), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--np-theme-surface-border);
+  border-radius: var(--np-theme-surface-radius);
+  background: var(--np-theme-panel);
+  box-shadow: var(--np-theme-surface-shadow);
 }
 
 .np-md-simulation .np-md-workspace-navigation {
@@ -375,7 +375,7 @@
 .np-md-simulation .np-md-structure-input.has-error .np-md-structure-editor,
 .np-md-simulation .np-md-structure-input.has-error textarea,
 .np-md-simulation .np-md-field.has-error input {
-  border-color: rgba(220, 38, 38, 0.48);
+  border-color: var(--np-theme-danger-border);
 }
 
 .np-md-simulation .np-md-input-actions,
@@ -416,7 +416,7 @@
 .np-md-simulation .np-md-input-actions button:disabled,
 .np-md-simulation .np-md-distance-actions button:disabled {
   cursor: not-allowed;
-  opacity: 0.42;
+  opacity: 0.5;
 }
 
 .np-md-simulation .np-md-input-actions button svg,
@@ -452,7 +452,7 @@
 .np-md-simulation .np-md-inline-error {
   display: block;
   margin: 6px 0 0;
-  color: #dc2626;
+  color: var(--np-theme-danger-text);
   font-size: 11px;
   font-style: normal;
   line-height: 1.45;
@@ -514,7 +514,7 @@
 }
 
 .np-md-simulation .np-md-preview__state.is-error {
-  color: #b91c1c;
+  color: var(--np-theme-danger-text);
 }
 
 .np-md-simulation .np-md-preview__state svg {
@@ -585,7 +585,7 @@
 }
 
 .np-md-simulation .np-md-field.has-error .np-md-forcefield-select {
-  border-color: rgba(220, 38, 38, 0.48);
+  border-color: var(--np-theme-danger-border);
 }
 
 .np-md-simulation .np-md-number-input small {
@@ -995,19 +995,19 @@
   align-items: flex-start;
   gap: 7px;
   margin-bottom: 9px;
-  border: 1px solid rgba(245, 158, 11, 0.22);
+  border: 1px solid var(--np-theme-warning-border);
   border-radius: 8px;
   padding: 8px 9px;
-  color: #92400e;
-  background: #fffbeb;
+  color: var(--np-theme-warning-text);
+  background: var(--np-theme-warning-soft);
   font-size: 11px;
   line-height: 1.45;
 }
 
 .np-md-simulation .np-md-run-error {
-  border-color: rgba(220, 38, 38, 0.18);
-  color: #b91c1c;
-  background: #fef2f2;
+  border-color: var(--np-theme-danger-border);
+  color: var(--np-theme-danger-text);
+  background: var(--np-theme-danger-soft);
 }
 
 .np-md-simulation .np-md-stale-notice svg,
@@ -2607,7 +2607,7 @@
 }
 
 .np-md-simulation .np-md-forcefield-picker.has-error .np-md-forcefield-picker__trigger {
-  border-color: rgba(220, 38, 38, 0.48);
+  border-color: var(--np-theme-danger-border);
 }
 
 .np-md-simulation .np-md-forcefield-picker__icon {
@@ -3101,16 +3101,7 @@
     height: 100%;
     min-height: 0;
     overflow: hidden;
-    padding: 52px 0 0;
-  }
-
-  .np-md-simulation .np-sw-page-title {
-    position: absolute;
-    top: 12px;
-    left: 14px;
     padding: 0;
-    font-size: 18px;
-    line-height: 30px;
   }
 
   .np-md-simulation .np-sw-layout {
@@ -3169,19 +3160,12 @@
   }
 
   .np-md-simulation .np-md-page {
-    padding: 84px 0 0;
+    padding: 0;
   }
 
   .np-md-simulation .np-md-content-column,
   .np-md-simulation .np-md-module-toolbar {
     width: min(calc(100% - 72px), var(--np-sw-layout-max-width));
-  }
-
-  .np-md-simulation .np-sw-page-title {
-    top: 30px;
-    left: 36px;
-    font-size: 28px;
-    line-height: 42px;
   }
 
   .np-md-simulation .np-md-module-toolbar {
@@ -3423,8 +3407,8 @@
   }
 
   .np-md-simulation .np-md-workbench-surface {
-    border-radius: 20px;
-    box-shadow: 0 18px 50px rgba(30, 64, 175, 0.075), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+    border-radius: var(--np-theme-surface-radius);
+    box-shadow: var(--np-theme-surface-shadow);
   }
 
   .np-md-simulation .np-md-view-header {

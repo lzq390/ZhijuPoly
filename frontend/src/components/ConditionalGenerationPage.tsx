@@ -1,3 +1,4 @@
+import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal, Sparkles } from "lucide-react";
 import {
   forwardRef,
@@ -163,10 +164,7 @@ export const ConditionalGenerationPage = forwardRef<
   useImperativeHandle(
     forwardedRef,
     () => ({
-      async syncBeforeLeave() {
-        if (!(await canvas.flushSmilesDraft())) return;
-        await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
-      }
+      syncBeforeLeave: canvas.syncBeforeLeave
     }),
     [canvas]
   );
@@ -257,12 +255,12 @@ export const ConditionalGenerationPage = forwardRef<
 
   return (
     <div
-      className="np-structure-workbench np-conditional-generation"
+      className="np-module-page np-structure-workbench np-conditional-generation"
       data-module="conditional-generation"
       style={workbenchStyle}
     >
-      <div className={`np-sw-page${drawerOpen ? " has-open-drawer" : ""}`}>
-        <h1 className="np-sw-page-title">条件聚合物生成</h1>
+      <ModulePageHeader>条件聚合物生成</ModulePageHeader>
+      <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
             <StructureCanvasSurface

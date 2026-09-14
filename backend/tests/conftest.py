@@ -186,7 +186,11 @@ def reset_postgres_fixture(dsn: str) -> None:
               experimental.property_records,
               md.monomer_md_jobs,
               monomer_dft.jobs,
-              model_registry.assets
+              model_registry.assets,
+              polymerization_batch.imports,
+              polymerization_batch.jobs,
+              polymerization_batch.chunks,
+              polymerization_batch.worker_status
             RESTART IDENTITY CASCADE
             """
         )

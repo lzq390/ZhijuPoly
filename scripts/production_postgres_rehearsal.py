@@ -45,6 +45,14 @@ PG_DUMP_CLEANUP_SECONDS = 30
 MIGRATION_MANIFEST_FIELDS = frozenset(
     {"version", "kind", "epoch", "checksum", "requires_contracts"}
 )
+# Canonical records (all metadata included) of the reviewed 0001..0015/0016 manifests.
+# New migration histories require a separate review; this is not a latest-version gate.
+COMPATIBILITY_REHEARSAL_MANIFEST_SHA256 = (
+    "sha256:808461889b9aee16a16fc94b4526f01cf542108ac4e71e57a4d18c94ba580be3"
+)
+BATCH_REHEARSAL_MANIFEST_SHA256 = (
+    "sha256:6b9cd5778253c67cf47b1a9c549198a779d9db5d34eab131431af048db38ac3f"
+)
 
 
 def _load_controller() -> Any:
@@ -134,6 +142,35 @@ def _database_ledger_projection(manifest: object) -> list[dict[str, str]]:
             {"version": version, "checksum": str(record["checksum"])}
         )
     return projected
+
+
+def _reviewed_source_ledger(
+    manifest: object,
+    source_ledger: object,
+) -> list[dict[str, str]]:
+    """Accept only 0013->0015 and the reviewed 0015/0016 release paths."""
+
+    target_ledger = _database_ledger_projection(manifest)
+    if (
+        len(target_ledger) >= 3
+        and [record["version"] for record in target_ledger[-3:]]
+        == [
+            "0013_monomer_dft_jobs",
+            "0014_monomer_md_task_queue_cancel",
+            "0015_property_filter_performance",
+        ]
+    ):
+        candidates = [target_ledger[:-2]]
+        if _digest(manifest) == COMPATIBILITY_REHEARSAL_MANIFEST_SHA256:
+            candidates.append(target_ledger)
+    elif _digest(manifest) == BATCH_REHEARSAL_MANIFEST_SHA256:
+        candidates = [target_ledger[:-1], target_ledger]
+    else:
+        raise RehearsalError("prepared ledger is not an exact reviewed rehearsal target")
+    for candidate in candidates:
+        if source_ledger == candidate:
+            return candidate
+    raise RehearsalError("source ledger is not an exact reviewed rehearsal predecessor")
 
 
 def _sha256_file(path: Path) -> str:
@@ -964,17 +1001,7 @@ def build_plan(
     source = _source_database_evidence(container_id, inspect, user, database)
     migration_manifest = descriptor.get("migrations", {}).get("records")
     expected_ledger = _database_ledger_projection(migration_manifest)
-    _require(
-        len(expected_ledger) >= 2
-        and [record.get("version") for record in expected_ledger[-2:]]
-        == [
-            "0014_monomer_md_task_queue_cancel",
-            "0015_property_filter_performance",
-        ]
-        and source["ledger"] == expected_ledger[:-2]
-        and source["ledger"][-1].get("version") == "0013_monomer_dft_jobs",
-        "production source ledger is not the exact post-0013 predecessor",
-    )
+    _reviewed_source_ledger(migration_manifest, source["ledger"])
     _require(
         source["property_records"] == EXPECTED_PROPERTY_RECORDS,
         "production property record count differs from the reviewed 615159 baseline",
@@ -1319,6 +1346,14 @@ def _parse_migration_records(
     *,
     existing_count: int,
 ) -> list[dict[str, str]]:
+    ledger = _database_ledger_projection(manifest)
+    _require(
+        isinstance(existing_count, int)
+        and not isinstance(existing_count, bool)
+        and 0 < existing_count <= len(ledger),
+        "migration output source count is invalid",
+    )
+    _reviewed_source_ledger(manifest, ledger[:existing_count])
     lines = output.splitlines()
     _require(lines and all(line for line in lines), "migration output contains an empty record")
     _require(len(lines) == len(manifest), "migration output does not cover the exact target manifest")
@@ -1337,19 +1372,11 @@ def _parse_migration_records(
         expected_status = "skipped" if index < existing_count else "applied"
         _require(
             fields[1] == expected_status,
-            "migration output did not apply exactly 0014 then 0015",
+            "migration output statuses differ from the exact reviewed transition",
         )
         result.append(
             {"version": fields[0], "status": fields[1], "checksum": fields[2]}
         )
-    _require(
-        [record["version"] for record in result[-2:]]
-        == [
-            "0014_monomer_md_task_queue_cancel",
-            "0015_property_filter_performance",
-        ],
-        "migration output tail is not exact 0014/0015",
-    )
     return result
 
 
@@ -1576,17 +1603,12 @@ def validate_rehearsal_report(
 
     target_manifest = (descriptor.get("migrations") or {}).get("records")
     target_ledger = _database_ledger_projection(target_manifest)
+    source_before = report.get("source_before")
     _require(
-        isinstance(target_ledger, list)
-        and len(target_ledger) >= 2
-        and [entry.get("version") for entry in target_ledger[-2:]]
-        == [
-            "0014_monomer_md_task_queue_cancel",
-            "0015_property_filter_performance",
-        ],
-        "prepared ledger is not the exact reviewed 0014/0015 target",
+        isinstance(source_before, dict),
+        "rehearsal source-before evidence is invalid",
     )
-    source_ledger = target_ledger[:-2]
+    source_ledger = _reviewed_source_ledger(target_manifest, source_before.get("ledger"))
     source_fields = {
         "container_id",
         "image_id",
@@ -1600,7 +1622,6 @@ def validate_rehearsal_report(
         "ledger",
         "ledger_sha256",
     }
-    source_before = report.get("source_before")
     source_after = report.get("source_after")
     restored_before = report.get("restored_before")
     for label, source in (
@@ -1700,7 +1721,7 @@ def validate_rehearsal_report(
     _require(
         migration["records"] == expected_records
         and migration["output_sha256"] == _digest(expected_records),
-        "rehearsal did not apply exact ordered 0014/0015 migrations",
+        "rehearsal migration records differ from the exact reviewed transition",
     )
 
     timings = report.get("timings")
@@ -2298,7 +2319,7 @@ def run_rehearsal(
                 "--dsn",
                 rehearsal_dsn,
             ],
-            timeout=_remaining(migration_deadline, "0014/0015 migrations"),
+            timeout=_remaining(migration_deadline, "reviewed migrations"),
         )
         owned_migration = _owned_migration_container(
             migration_name,
@@ -2311,10 +2332,10 @@ def run_rehearsal(
         migration_id = owned_migration[0]
         migration = _run(
             ["docker", "start", "--attach", migration_id],
-            timeout=_remaining(migration_deadline, "0014/0015 migrations"),
+            timeout=_remaining(migration_deadline, "reviewed migrations"),
         )
         migration_seconds = time.monotonic() - migration_started
-        _require(migration_seconds <= MIGRATION_LIMIT_SECONDS, "0014/0015 exceeded 10 minutes")
+        _require(migration_seconds <= MIGRATION_LIMIT_SECONDS, "reviewed migrations exceeded 10 minutes")
         migrated_container = _owned_migration_container(
             migration_name,
             operation_id,
@@ -2338,7 +2359,7 @@ def run_rehearsal(
         expected_ledger = _database_ledger_projection(
             descriptor["migrations"]["records"]
         )
-        _require(after["ledger"] == expected_ledger, "rehearsed ledger does not equal target 0015")
+        _require(after["ledger"] == expected_ledger, "rehearsed ledger does not equal the reviewed target")
         _require(
             after["property_records"] == EXPECTED_PROPERTY_RECORDS,
             "production property record count differs from the reviewed baseline",

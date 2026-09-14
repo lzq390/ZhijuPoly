@@ -305,6 +305,8 @@ class MonomerPolymerizationStatusResponse(BaseModel):
     max_results_limit: int = Field(default=20, ge=1)
     message: str
 
+    batch: dict[str, Any] | None = None
+
 
 class SmilesLookupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)

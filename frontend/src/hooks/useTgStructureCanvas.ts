@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { shouldAdoptEditorSmiles, wildcardCount, type StructureEditorHandle } from "../structure/editor";
+export { shouldAdoptEditorSmiles, wildcardCount } from "../structure/editor";
 import { useFlipMotion } from "./useFlipMotion";
 import { recognizeStructureImage, standardizeSmiles } from "../services/api";
 import type { StructureWorkspaceContext } from "../types";
 
-type KetcherApi = NonNullable<Window["ketcher"]>;
+type KetcherApi = StructureEditorHandle;
 
 type KetcherSnapshot = {
+  ket: string;
   smiles: string;
   molfile: string;
 };
@@ -52,19 +55,6 @@ export type TgCanvasPeekState = {
   busy: boolean;
   revisionKey: string;
 };
-
-export function wildcardCount(value: string) {
-  return value.match(/\*/g)?.length ?? 0;
-}
-
-export function shouldAdoptEditorSmiles(sourceSmiles: string, editorSmiles: string) {
-  const normalizedEditor = editorSmiles.trim();
-  if (!normalizedEditor) {
-    return false;
-  }
-  const sourceWildcardCount = wildcardCount(sourceSmiles);
-  return sourceWildcardCount === 0 || wildcardCount(normalizedEditor) >= sourceWildcardCount;
-}
 
 export function isProtectedCanvasConsistent(sourceSmiles: string, editorSmiles: string) {
   const source = sourceSmiles.trim();
@@ -144,9 +134,8 @@ export async function adoptKetcherPng(value: unknown): Promise<Blob> {
   ) {
     throw new Error("Ketcher 返回的画板 PNG 已损坏。");
   }
-  // Ketcher lives in an iframe, so its Blob belongs to a different JavaScript
-  // realm and fails `instanceof window.Blob` in the React parent page. Rebuild
-  // it here to give downstream browser APIs a parent-realm Blob.
+  // The fallback editor returns a Blob from its own realm. Normalize either
+  // adapter's output for downstream host APIs after validating the PNG bytes.
   return new Blob([bytes], { type: "image/png" });
 }
 
@@ -286,8 +275,10 @@ export function useTgStructureCanvas({
   structure,
   onStructureChanged
 }: UseTgStructureCanvasOptions) {
+  const workspace = structure.workspace;
+  const document = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const smilesRef = useRef(structure.smiles);
+  const smilesRef = useRef(document.smiles);
   const importAbortRef = useRef<AbortController | null>(null);
   const canvasImageCacheRef = useRef<CanvasImageCache | null>(null);
   const canonicalSmilesCacheRef = useRef(new Map<string, Promise<string | null>>());
@@ -295,7 +286,7 @@ export function useTgStructureCanvas({
   const preparing3DRef = useRef(false);
   const mountedRef = useRef(true);
   const copyTimerRef = useRef<number | null>(null);
-  const smilesDraftRef = useRef(structure.smiles);
+  const smilesDraftRef = useRef(document.draft);
   const smilesDraftRevisionRef = useRef(0);
   const smilesDraftTimerRef = useRef<number | null>(null);
   const smilesDraftQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -304,8 +295,7 @@ export function useTgStructureCanvas({
     promise: Promise<boolean>;
   } | null>(null);
   const activeSmilesDraftRevisionRef = useRef<number | null>(null);
-  const [isEditorReady, setIsEditorReady] = useState(false);
-  const [editorLoadRevision, setEditorLoadRevision] = useState(0);
+  const isEditorReady = document.status === "ready";
   const [isFlipped, setIsFlipped] = useState(false);
   const [isPreparing3D, setIsPreparing3D] = useState(false);
   const isFlipping = isPreparing3D || flipMotion.busy;
@@ -315,27 +305,44 @@ export function useTgStructureCanvas({
   const [isSyncing, setIsSyncing] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  const [smilesDraft, setSmilesDraft] = useState(structure.smiles);
-  const [smilesDraftState, setSmilesDraftState] = useState<TgSmilesDraftState>("synced");
-  const [smilesDraftError, setSmilesDraftError] = useState<string | null>(null);
+  const [smilesDraft, setSmilesDraft] = useState(document.draft);
+  const [smilesDraftState, setSmilesDraftState] = useState<TgSmilesDraftState>(document.draftError ? "error" : document.draft === document.smiles ? "synced" : "pending");
+  const [smilesDraftError, setSmilesDraftError] = useState<string | null>(document.draftError);
 
   useEffect(() => {
-    const isActiveDraftUpdate =
-      activeSmilesDraftRevisionRef.current !== null &&
-      structure.smiles === smilesRef.current;
-    smilesRef.current = structure.smiles;
-    if (isActiveDraftUpdate) return;
-    if (structure.smiles === smilesDraftRef.current && smilesDraftState === "synced") return;
-    if (smilesDraftTimerRef.current !== null) {
-      window.clearTimeout(smilesDraftTimerRef.current);
-      smilesDraftTimerRef.current = null;
+    // A text-only page or timed-out navigation may leave a pending draft. Once
+    // its destination editor is ready, resume the same validated input path.
+    const saved = workspace.getSnapshot();
+    if (isEditorReady && saved.draft !== saved.smiles && !saved.draftError) {
+      updateSmilesDraft(saved.draft);
     }
+  }, [isEditorReady]);
+
+  useEffect(() => {
+    const previousSmiles = smilesRef.current;
+    smilesRef.current = document.smiles;
+    if (previousSmiles !== document.smiles) {
+      canvasImageCacheRef.current = null;
+      onStructureChanged();
+    }
+    if (activeSmilesDraftRevisionRef.current !== null && previousSmiles === document.smiles) return;
+    if (document.draft === smilesDraftRef.current) {
+      if (document.draftError) {
+        setSmilesDraftState("error");
+        setSmilesDraftError(document.draftError);
+      } else if (activeSmilesDraftRevisionRef.current === null) {
+        setSmilesDraftState(document.draft === document.smiles ? "synced" : "pending");
+        setSmilesDraftError(null);
+      }
+      return;
+    }
+    if (smilesDraftTimerRef.current !== null) window.clearTimeout(smilesDraftTimerRef.current);
     smilesDraftRevisionRef.current += 1;
-    smilesDraftRef.current = structure.smiles;
-    setSmilesDraft(structure.smiles);
-    setSmilesDraftState("synced");
-    setSmilesDraftError(null);
-  }, [structure.smiles]);
+    smilesDraftRef.current = document.draft;
+    setSmilesDraft(document.draft);
+    setSmilesDraftState(document.draftError ? "error" : document.draft === document.smiles ? "synced" : "pending");
+    setSmilesDraftError(document.draftError);
+  }, [document.smiles, document.draft, document.draftError]);
 
   useEffect(() => () => {
     canvasImageCacheRef.current = null;
@@ -351,38 +358,16 @@ export function useTgStructureCanvas({
   }, []);
 
   function getKetcher() {
-    return structure.iframeRef.current?.contentWindow?.ketcher;
-  }
-
-  function refreshKetcherFrame() {
-    const frameWindow = structure.iframeRef.current?.contentWindow;
-    if (!frameWindow) {
-      return;
-    }
-    const FrameEvent = (frameWindow as Window & typeof globalThis).Event;
-    frameWindow.dispatchEvent(new FrameEvent("resize"));
-    frameWindow.scrollTo(0, 0);
-  }
-
-  function handleEditorLoad() {
-    setIsEditorReady(false);
-    structure.setIsReady(false);
-    setEditorLoadRevision((current) => current + 1);
-  }
-
-  async function waitForKetcherCommit() {
-    await delay(80);
-    refreshKetcherFrame();
-    await delay(80);
+    return workspace.getEditor();
   }
 
   async function waitForKetcher(timeoutMs = 4000): Promise<KetcherApi | null> {
+    const current = workspace.guard();
     const startedAt = Date.now();
-    while (Date.now() - startedAt < timeoutMs) {
-      const ketcher = getKetcher();
-      if (ketcher && typeof ketcher.getSmiles === "function") {
-        return ketcher;
-      }
+    while (mountedRef.current && current() && Date.now() - startedAt < timeoutMs) {
+      const editor = getKetcher();
+      if (editor) return editor;
+      if (workspace.getSnapshot().status === "unmounted" || workspace.getSnapshot().status === "error") return null;
       await delay(120);
     }
     return null;
@@ -417,11 +402,12 @@ export function useTgStructureCanvas({
     return latest;
   }
 
-  function applySmiles(nextValue: string, notify = true) {
+  function applySmiles(nextValue: string, notify = true, editor?: KetcherApi) {
+    if (!mountedRef.current || (editor?.isCurrent && !editor.isCurrent())) return workspace.getSnapshot().smiles;
     const normalized = nextValue.trim();
     const changed = normalized !== smilesRef.current.trim();
     smilesRef.current = normalized;
-    structure.setSmiles(normalized);
+    workspace.commitSmiles(normalized);
     if (changed && notify) {
       canvasImageCacheRef.current = null;
       onStructureChanged();
@@ -449,17 +435,23 @@ export function useTgStructureCanvas({
     const fallbackSmiles = smilesRef.current.trim();
     let editorSmiles = fallbackSmiles;
     let molfile = "";
+    let ket = "";
+    try {
+      ket = await withTimeout(ketcher.getKet(), 1500);
+    } catch { /* Molfile remains a fallback for failed KET export. */ }
     try {
       editorSmiles = (await readEditorSmiles(ketcher)) || fallbackSmiles;
     } catch {
       editorSmiles = fallbackSmiles;
     }
-    try {
-      molfile = await readEditorMolfile(ketcher);
-    } catch {
-      molfile = "";
+    if (!ket) {
+      try {
+        molfile = await readEditorMolfile(ketcher);
+      } catch {
+        molfile = "";
+      }
     }
-    return { smiles: editorSmiles, molfile };
+    return { smiles: editorSmiles, molfile, ket };
   }
 
   async function clearEditor(ketcher: KetcherApi) {
@@ -470,7 +462,7 @@ export function useTgStructureCanvas({
     } else {
       throw new Error("结构编辑器无法清空画布。");
     }
-    await waitForKetcherCommit();
+    await ketcher.settle();
   }
 
   async function writeImageStructure(ketcher: KetcherApi, source: string) {
@@ -479,7 +471,7 @@ export function useTgStructureCanvas({
     }
     await clearEditor(ketcher);
     await ketcher.setMolecule(source);
-    await waitForKetcherCommit();
+    await ketcher.settle();
     const editorSmiles = await waitForEditorSmilesState(ketcher, Boolean, 1800);
     if (!editorSmiles) {
       throw new Error("Ketcher 未接受识别出的结构。");
@@ -520,17 +512,17 @@ export function useTgStructureCanvas({
   }
 
   async function restoreEditorSnapshot(ketcher: KetcherApi, snapshot: KetcherSnapshot) {
-    const source = snapshot.molfile || snapshot.smiles;
+    const source = snapshot.ket || snapshot.molfile || snapshot.smiles;
     if (!source) {
       await clearEditor(ketcher);
-      applySmiles("", false);
+      applySmiles("", false, ketcher);
       return;
     }
     if (typeof ketcher.setMolecule !== "function") {
       throw new Error("结构编辑器无法恢复原画布。");
     }
     await ketcher.setMolecule(source);
-    await waitForKetcherCommit();
+    await ketcher.settle();
     let restoredSmiles = snapshot.smiles;
     try {
       const editorSmiles = await waitForEditorSmilesState(ketcher, Boolean);
@@ -540,71 +532,8 @@ export function useTgStructureCanvas({
     } catch {
       restoredSmiles = snapshot.smiles;
     }
-    applySmiles(restoredSmiles, false);
+    applySmiles(restoredSmiles, false, ketcher);
   }
-
-  useEffect(() => {
-    let cancelled = false;
-    let attempts = 0;
-    let checking = false;
-
-    const checkEditor = async () => {
-      if (checking || cancelled) {
-        return;
-      }
-      checking = true;
-      attempts += 1;
-      try {
-        const ketcher = getKetcher();
-        if (!ketcher || typeof ketcher.getSmiles !== "function") {
-          return;
-        }
-
-        const sourceSmiles = smilesRef.current.trim();
-        const editorSmiles = await readEditorSmiles(ketcher);
-        if (!editorSmiles && sourceSmiles && typeof ketcher.setMolecule === "function") {
-          let loaded = false;
-          for (const candidate of getEditorLoadCandidates(sourceSmiles)) {
-            try {
-              await ketcher.setMolecule(candidate);
-              await waitForKetcherCommit();
-              loaded = true;
-              break;
-            } catch {
-              // Try the next Ketcher-compatible representation.
-            }
-          }
-          if (!loaded) {
-            setFeedback("共享结构暂时无法恢复到 2D 画布。");
-          }
-        }
-        if (!cancelled) {
-          setIsEditorReady(true);
-          structure.setIsReady(true);
-        }
-      } catch {
-        if (!cancelled && attempts >= 50) {
-          structure.setIsReady(false);
-        }
-      } finally {
-        checking = false;
-      }
-    };
-
-    void checkEditor();
-    const timer = window.setInterval(() => {
-      if (attempts >= 50 || isEditorReady) {
-        window.clearInterval(timer);
-        return;
-      }
-      void checkEditor();
-    }, 300);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [editorLoadRevision, isEditorReady, structure.iframeRef, structure.setIsReady]);
 
   useEffect(() => {
     return () => {
@@ -613,51 +542,19 @@ export function useTgStructureCanvas({
   }, []);
 
   async function syncSmilesFromCanvas(options: SyncOptions = {}) {
-    const ketcher = getKetcher();
-    if (!ketcher) {
-      structure.setIsReady(false);
-      if (!options.quiet) {
-        setFeedback("结构编辑器尚未就绪。");
-      }
-      return options.preserveExisting ? smilesRef.current.trim() : "";
-    }
-
     setIsSyncing(true);
     try {
-      const fallbackSmiles = smilesRef.current.trim();
-      const editorSmiles = await readEditorSmiles(ketcher);
-      if (editorSmiles) {
-        const nextSmiles = shouldAdoptEditorSmiles(fallbackSmiles, editorSmiles)
-          ? editorSmiles
-          : fallbackSmiles || editorSmiles;
-        applySmiles(nextSmiles);
-        structure.setIsReady(true);
-        if (!options.quiet) {
-          setFeedback(
-            nextSmiles === editorSmiles
-              ? "SMILES 已从 2D 画布同步。"
-              : "已保留含聚合物端基的共享 SMILES。"
-          );
-        }
-        return nextSmiles;
-      }
-      if (options.preserveExisting && fallbackSmiles) {
-        if (!options.quiet) {
-          setFeedback("2D 画布为空，继续使用当前共享 SMILES。");
-        }
-        return fallbackSmiles;
-      }
-      applySmiles("");
-      if (!options.quiet) {
-        setFeedback("2D 画布暂无可同步结构。");
-      }
-      return "";
+      const result = await workspace.saveSnapshot();
+      if (result.status !== "saved") throw new Error(result.message);
+      const value = workspace.getSnapshot().smiles;
+      const changed = value !== smilesRef.current;
+      smilesRef.current = value;
+      if (changed) onStructureChanged();
+      if (!options.quiet) setFeedback(value ? "SMILES 与画板布局已同步。" : "画板暂无可同步结构。");
+      return value;
     } catch (error) {
-      console.error("Failed to synchronize Tg Ketcher canvas", error);
-      if (!options.quiet) {
-        setFeedback("SMILES 同步失败，请检查结构画布。");
-      }
-      return options.preserveExisting ? smilesRef.current.trim() : "";
+      if (!options.quiet) setFeedback("画板同步失败，将保留上次成功的内容。");
+      return options.preserveExisting ? workspace.getSnapshot().smiles : "";
     } finally {
       setIsSyncing(false);
     }
@@ -666,7 +563,7 @@ export function useTgStructureCanvas({
   async function clearCanvas(options: CanvasMutationOptions = {}) {
     const ketcher = getKetcher();
     if (!ketcher) {
-      if (!structure.iframeRef.current) {
+      if (workspace.getSnapshot().status === "unmounted") {
         applySmiles("");
         setIsFlipped(false);
         setFeedback("共享 SMILES 已清空。");
@@ -677,18 +574,19 @@ export function useTgStructureCanvas({
     }
     if (options.isCurrent && !options.isCurrent()) return false;
     const previousFlipped = isFlipped;
-    const previousSnapshot = await captureEditorSnapshot(ketcher);
+    const finishMutation = workspace.beginMutation();
     setIsClearing(true);
     try {
+      const previousSnapshot = await captureEditorSnapshot(ketcher);
+      if (ketcher.isCurrent && !ketcher.isCurrent()) return false;
       await clearEditor(ketcher);
       if (options.isCurrent && !options.isCurrent()) {
         await restoreEditorSnapshot(ketcher, previousSnapshot);
         setIsFlipped(previousFlipped);
         return false;
       }
-      applySmiles("");
+      applySmiles("", true, ketcher);
       setIsFlipped(false);
-      structure.setIsReady(true);
       setFeedback("画布与共享 SMILES 已清空。");
       return true;
     } catch (error) {
@@ -696,6 +594,7 @@ export function useTgStructureCanvas({
       setFeedback(error instanceof Error ? error.message : "画布清空失败。");
       return false;
     } finally {
+      finishMutation();
       setIsClearing(false);
     }
   }
@@ -710,17 +609,19 @@ export function useTgStructureCanvas({
 
     const ketcher = await waitForKetcher();
     if (!ketcher) {
-      structure.setIsReady(false);
       setFeedback("结构编辑器尚未就绪，请稍后重试。");
       return false;
     }
 
     const previousFlipped = isFlipped;
-    const previousSnapshot = await captureEditorSnapshot(ketcher);
+    const finishMutation = workspace.beginMutation();
+    let previousSnapshot: KetcherSnapshot | null = null;
     setIsLoadingStructure(true);
     setFeedback("正在加载结构...");
 
     try {
+      previousSnapshot = await captureEditorSnapshot(ketcher);
+      if (ketcher.isCurrent && !ketcher.isCurrent()) return false;
       let editorSmiles = "";
       let lastError: unknown = null;
       for (const candidate of getEditorLoadCandidates(normalizedSource)) {
@@ -747,8 +648,7 @@ export function useTgStructureCanvas({
         ? editorSmiles
         : normalizedSource;
       setIsFlipped(false);
-      applySmiles(nextSmiles);
-      structure.setIsReady(true);
+      applySmiles(nextSmiles, true, ketcher);
       setFeedback(
         nextSmiles === editorSmiles
           ? "结构已加载到 2D 画布。"
@@ -759,9 +659,8 @@ export function useTgStructureCanvas({
       console.error("Failed to load structure into Tg Ketcher canvas", error);
       const message = error instanceof Error ? error.message : "结构加载失败。";
       try {
-        await restoreEditorSnapshot(ketcher, previousSnapshot);
+        if (previousSnapshot) await restoreEditorSnapshot(ketcher, previousSnapshot);
         setIsFlipped(previousFlipped);
-        structure.setIsReady(true);
         setFeedback(`${message} 已恢复原画布。`);
       } catch (restoreError) {
         console.error("Failed to restore Tg Ketcher canvas", restoreError);
@@ -769,6 +668,7 @@ export function useTgStructureCanvas({
       }
       return false;
     } finally {
+      finishMutation();
       setIsLoadingStructure(false);
     }
   }
@@ -777,6 +677,10 @@ export function useTgStructureCanvas({
     sourceSmiles: string,
     options: CanvasMutationOptions = {}
   ) {
+    const active = workspace.guard();
+    const sourceRevision = workspace.getSnapshot().revision;
+    const requestedCurrent = options.isCurrent;
+    options = { isCurrent: () => mountedRef.current && active() && (!requestedCurrent || requestedCurrent()) };
     const normalizedSource = sourceSmiles.trim();
     if (!normalizedSource) {
       throw new Error("请输入要应用的 SMILES。");
@@ -786,7 +690,7 @@ export function useTgStructureCanvas({
     }
 
     const result = await standardizeSmiles({ smiles: normalizedSource });
-    if (options.isCurrent && !options.isCurrent()) {
+    if ((options.isCurrent && !options.isCurrent()) || workspace.getSnapshot().revision !== sourceRevision) {
       return { applied: false, smiles: smilesRef.current.trim() };
     }
     const standardized = result.standardized_smiles.trim();
@@ -794,7 +698,7 @@ export function useTgStructureCanvas({
       ? standardized
       : normalizedSource;
 
-    if (!structure.iframeRef.current) {
+    if (workspace.getSnapshot().status === "unmounted") {
       if (options.isCurrent && !options.isCurrent()) {
         return { applied: false, smiles: smilesRef.current.trim() };
       }
@@ -816,7 +720,8 @@ export function useTgStructureCanvas({
   }
 
   async function runSmilesDraftSync(task: SmilesDraftSyncTask) {
-    const isCurrent = () => task.revision === smilesDraftRevisionRef.current;
+    const active = workspace.guard();
+    const isCurrent = () => mountedRef.current && active() && task.revision === smilesDraftRevisionRef.current;
     if (!isCurrent()) return false;
 
     activeSmilesDraftRevisionRef.current = task.revision;
@@ -835,6 +740,7 @@ export function useTgStructureCanvas({
           console.error("Failed to standardize editable structure SMILES", error);
           setSmilesDraftState("error");
           setSmilesDraftError("SMILES 无效或尚未完整，原画板未修改。");
+          workspace.setDraft(task.value, "SMILES 无效或尚未完整，原画板未修改。");
           return false;
         }
       }
@@ -843,12 +749,14 @@ export function useTgStructureCanvas({
       if (!applied) {
         setSmilesDraftState("error");
         setSmilesDraftError("结构未能同步到画板，请检查 SMILES 或编辑器状态。");
+        workspace.setDraft(task.value, "结构未能同步到画板，请检查 SMILES 或编辑器状态。");
         return false;
       }
 
       const nextValue = smilesRef.current.trim();
       smilesDraftRef.current = nextValue;
       setSmilesDraft(nextValue);
+      workspace.setDraft(nextValue);
       setSmilesDraftState("synced");
       setSmilesDraftError(null);
       return true;
@@ -898,6 +806,7 @@ export function useTgStructureCanvas({
     smilesDraftRevisionRef.current = revision;
     smilesDraftRef.current = nextValue;
     setSmilesDraft(nextValue);
+    workspace.setDraft(nextValue);
     setSmilesDraftError(null);
     if (nextValue.trim() === smilesRef.current.trim()) {
       setSmilesDraftState("synced");
@@ -919,6 +828,8 @@ export function useTgStructureCanvas({
     const revision = smilesDraftRevisionRef.current;
     const latest = latestSmilesDraftSyncRef.current;
     if (latest?.revision === revision) return latest.promise;
+    const saved = workspace.getSnapshot();
+    if (saved.draft === smilesDraftRef.current && saved.draftError) return false;
     if (smilesDraftRef.current.trim() === smilesRef.current.trim()) {
       await smilesDraftQueueRef.current;
       if (revision !== smilesDraftRevisionRef.current) return false;
@@ -930,15 +841,18 @@ export function useTgStructureCanvas({
   }
 
   async function cancelSmilesDraftSync() {
+    const current = workspace.guard();
     if (smilesDraftTimerRef.current !== null) {
       window.clearTimeout(smilesDraftTimerRef.current);
       smilesDraftTimerRef.current = null;
     }
     smilesDraftRevisionRef.current += 1;
     await smilesDraftQueueRef.current;
+    if (!mountedRef.current || !current()) return;
     const nextValue = smilesRef.current.trim();
     smilesDraftRef.current = nextValue;
     setSmilesDraft(nextValue);
+    workspace.setDraft(nextValue);
     setSmilesDraftState("synced");
     setSmilesDraftError(null);
   }
@@ -947,6 +861,7 @@ export function useTgStructureCanvas({
     const nextValue = smilesRef.current.trim();
     smilesDraftRef.current = nextValue;
     setSmilesDraft(nextValue);
+    workspace.setDraft(nextValue);
     setSmilesDraftState("synced");
     setSmilesDraftError(null);
   }
@@ -959,13 +874,13 @@ export function useTgStructureCanvas({
 
     const ketcher = await waitForKetcher();
     if (!ketcher) {
-      structure.setIsReady(false);
       setFeedback("结构编辑器尚未就绪，请稍后重试。");
       return false;
     }
 
     const previousFlipped = isFlipped;
-    const previousSnapshot = await captureEditorSnapshot(ketcher);
+    const finishMutation = workspace.beginMutation();
+    let previousSnapshot: KetcherSnapshot | null = null;
     const controller = new AbortController();
     importAbortRef.current?.abort();
     importAbortRef.current = controller;
@@ -973,7 +888,10 @@ export function useTgStructureCanvas({
     setFeedback("正在识别结构图片...");
 
     try {
+      previousSnapshot = await captureEditorSnapshot(ketcher);
+      if (controller.signal.aborted || (ketcher.isCurrent && !ketcher.isCurrent())) return false;
       const result = await recognizeStructureImage(file, controller.signal);
+      if (controller.signal.aborted || (ketcher.isCurrent && !ketcher.isCurrent())) return false;
       const molfile = result.molfile?.trim() ?? "";
       const recognizedSmiles = result.smiles.trim();
       if (!molfile && !recognizedSmiles) {
@@ -982,8 +900,7 @@ export function useTgStructureCanvas({
       setIsFlipped(false);
       setFeedback("正在写入 2D 画布...");
       const nextSmiles = await loadRecognizedStructure(ketcher, molfile, recognizedSmiles);
-      applySmiles(nextSmiles);
-      structure.setIsReady(true);
+      applySmiles(nextSmiles, true, ketcher);
       setFeedback(
         result.warnings.length > 0
           ? `图片结构已导入：${result.warnings[0]}`
@@ -997,9 +914,8 @@ export function useTgStructureCanvas({
       console.error("Failed to import structure image for Tg reverse design", error);
       const message = error instanceof Error ? error.message : "图片导入失败。";
       try {
-        await restoreEditorSnapshot(ketcher, previousSnapshot);
+        if (previousSnapshot) await restoreEditorSnapshot(ketcher, previousSnapshot);
         setIsFlipped(previousFlipped);
-        structure.setIsReady(true);
         setFeedback(`${message} 已恢复原画布。`);
       } catch (restoreError) {
         console.error("Failed to restore Tg Ketcher canvas", restoreError);
@@ -1007,6 +923,7 @@ export function useTgStructureCanvas({
       }
       return false;
     } finally {
+      finishMutation();
       if (importAbortRef.current === controller) {
         importAbortRef.current = null;
         setIsImportingImage(false);
@@ -1050,6 +967,7 @@ export function useTgStructureCanvas({
   }
 
   async function resolveSmilesForSearch() {
+    const current = workspace.guard();
     if (!(await flushSmilesDraft())) {
       setFeedback("请先修正当前 SMILES，再提交任务。");
       return "";
@@ -1063,12 +981,15 @@ export function useTgStructureCanvas({
       return "";
     }
     try {
+      const revision = workspace.getSnapshot().revision;
       const result = await standardizeSmiles({ smiles: synchronized });
+      if (!mountedRef.current || !current() || revision !== workspace.getSnapshot().revision) return "";
       const standardized = result.standardized_smiles.trim();
       const reliableSmiles = shouldAdoptEditorSmiles(synchronized, standardized)
         ? standardized
         : synchronized;
-      applySmiles(reliableSmiles);
+      workspace.commitSmiles(reliableSmiles, true);
+      smilesRef.current = reliableSmiles;
       return reliableSmiles;
     } catch (error) {
       console.error("Failed to standardize Tg search SMILES", error);
@@ -1195,7 +1116,7 @@ export function useTgStructureCanvas({
         editorReady: false,
         viewMode: isFlipped ? "3d" : "2d",
         busy: isBusy,
-        revisionKey: JSON.stringify([sharedSmiles, null, false, isFlipped, isBusy])
+        revisionKey: JSON.stringify([document.revision, document.dirty, sharedSmiles, null, false, isFlipped, isBusy])
       };
     }
     try {
@@ -1223,7 +1144,7 @@ export function useTgStructureCanvas({
         editorReady: isEditorReady,
         viewMode: isFlipped ? "3d" : "2d",
         busy: isBusy,
-        revisionKey: JSON.stringify([sharedIdentity, editorIdentity, isEditorReady, isFlipped, isBusy])
+        revisionKey: JSON.stringify([document.revision, document.dirty, sharedIdentity, editorIdentity, isEditorReady, isFlipped, isBusy])
       };
     } catch {
       return {
@@ -1234,9 +1155,26 @@ export function useTgStructureCanvas({
         editorReady: isEditorReady,
         viewMode: isFlipped ? "3d" : "2d",
         busy: isBusy,
-        revisionKey: JSON.stringify([sharedSmiles, "read-error", isEditorReady, isFlipped, isBusy])
+        revisionKey: JSON.stringify([document.revision, document.dirty, sharedSmiles, "read-error", isEditorReady, isFlipped, isBusy])
       };
     }
+  }
+
+  async function syncBeforeLeave(signal?: AbortSignal) {
+    const current = workspace.guard();
+    const active = () => mountedRef.current && current() && !signal?.aborted;
+    if (!active()) return { status: "failed" as const, message: "画板操作已失效。" };
+    // Restoration belongs to the shared document, not to a text import. In a
+    // locked incoming page, waiting for ready here can prevent restoration
+    // itself. Keep its draft for the next owner and save only actual edits.
+    if (workspace.getSnapshot().status === "loading") return workspace.saveForNavigation();
+    let revision: number;
+    do {
+      revision = smilesDraftRevisionRef.current;
+      await flushSmilesDraft();
+      if (!active()) return { status: "failed" as const, message: "画板操作已失效。" };
+    } while (revision !== smilesDraftRevisionRef.current);
+    return workspace.saveForNavigation();
   }
 
   async function copySmiles(sourceValue?: string) {
@@ -1270,7 +1208,6 @@ export function useTgStructureCanvas({
 
   return {
     fileInputRef,
-    handleEditorLoad,
     isEditorReady,
     isFlipped,
     isFlipping,
@@ -1288,6 +1225,7 @@ export function useTgStructureCanvas({
     smilesDraftError,
     updateSmilesDraft,
     flushSmilesDraft,
+    syncBeforeLeave,
     cancelSmilesDraftSync,
     adoptCanvasSmiles,
     loadStructure,

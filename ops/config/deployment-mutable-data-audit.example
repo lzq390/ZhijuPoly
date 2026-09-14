@@ -84,6 +84,10 @@ tables = (
         "polytao_present",
     ),
     ("monomer_dft", "jobs", "job_id", "dft_jobs_present"),
+    ("polymerization_batch", "imports", "id", "batch_imports_present"),
+    ("polymerization_batch", "jobs", "id", "batch_jobs_present"),
+    ("polymerization_batch", "chunks", "job_id, chunk_id", "batch_chunks_present"),
+    ("polymerization_batch", "worker_status", "singleton", "batch_worker_status_present"),
     (
         "monomer_dft",
         "job_attempts",
@@ -202,7 +206,8 @@ governed_schema_names(schema_name) AS (
         ('model_registry'),
         ('monomer_dft'),
         ('online_knowledge'),
-        ('pi')
+        ('pi'),
+        ('polymerization_batch')
 ),
 governed_schemas AS (
     SELECT namespace.oid, namespace.nspname
@@ -711,6 +716,10 @@ commands = [
     ),
 ]
 for variable, relation in (
+    ("batch_imports_present", "polymerization_batch.imports"),
+    ("batch_jobs_present", "polymerization_batch.jobs"),
+    ("batch_chunks_present", "polymerization_batch.chunks"),
+    ("batch_worker_status_present", "polymerization_batch.worker_status"),
     ("dft_jobs_present", "monomer_dft.jobs"),
     ("dft_job_attempts_present", "monomer_dft.job_attempts"),
     ("dft_artifacts_present", "monomer_dft.artifacts"),
@@ -922,6 +931,10 @@ business = (
     ("monomer_dft", "jobs"),
     ("monomer_dft", "job_attempts"),
     ("monomer_dft", "artifacts"),
+    ("polymerization_batch", "imports"),
+    ("polymerization_batch", "jobs"),
+    ("polymerization_batch", "chunks"),
+    ("polymerization_batch", "worker_status"),
 )
 static = (
     ("governance", "source_files"),

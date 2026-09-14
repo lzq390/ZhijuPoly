@@ -1,0 +1,397 @@
+{
+  "date": "2026-09-10",
+  "environment": "isolated PostgreSQL 16 test databases; Python 3.11/Linux; no production changes",
+  "rows_a": 100,
+  "rows_b": 100,
+  "unique_pairs": 10000,
+  "candidate_count": 19100,
+  "csv_equality_after_process_restart": {
+    "results.csv": "5987f1caa72588d63e30ae3b9be7b612ac1e920d74f9abe9341532b5d0246f69",
+    "pairs.csv": "f8e7448fea4e6d368588b08eeecb6ccdba9786e8568c8e98eb7c876ef05a970f",
+    "input_errors.csv": "d1d1b806448063dcd51dce8395d622b873dc4334dfc7e7eebc8b4e6d2ec16720",
+    "inputs_a.csv": "51de102fe4d18fde2ca1dfa24179d8942e908ee30cc1ce0fb705494db84fd7b2",
+    "inputs_b.csv": "f18ed4a13bf730d803e53466c866585f80eac5a6a2f8e5f641c19355c700ebfb"
+  },
+  "normal": {
+    "rows_a": 100,
+    "rows_b": 100,
+    "unique_pairs": 10000,
+    "preparation_seconds": 2.6830691788345575,
+    "elapsed_seconds_including_download_verification": 217.41976546496153,
+    "child_peak_rss_kib": 291932,
+    "parent_peak_rss_kib": 431136,
+    "csv_zip_bytes": 413714,
+    "xlsx_bytes": 1892832,
+    "engine": {
+      "code": {
+        "models.py": "3eb18a53b30e4d8b76a8acde833da1b20d3d6eb1111f8c6d72e6be0d9b8a3f61",
+        "tables.py": "4865b24ce57c1f96f26477a57ae8705502f8bef400d3cad814b67d2df7baba17",
+        "worker.py": "1c1b3e9fa97a1c58ddf8497335aa3ff22f04db0a7ed1c5f1736b739e9c7601ae",
+        "process.py": "8f8daff8e9b86a8ae79bd325122a1e6f02b8c6f69ea10d45f2033fae68a7deda",
+        "service.py": "0911850658191d82597031378c90d47a0df1c225cd7eab935e80b832bda60613",
+        "storage.py": "66cdab387fb0a07d40e04399b14d63e41ae4eca1da7a71d4009368fdcb4bd848",
+        "__init__.py": "c5983548d45786dfaf8e0a7f9052a90cbe5c2a781db2401c4ab908ade53a5197",
+        "chemistry.py": "f102b0c605ed8aa4251b89a9aadbf643de310369d4565de7ff623f0c8dccd5a0",
+        "execution.py": "fb30bc2ff2e446a87ec3a7ad810c3fffb2dcc3be8d201b52b9affa6909683946",
+        "exporting.py": "9781ae545552bd3279c41db2f3673a212fbd2f0f417c04bd47173931220b1948",
+        "repository.py": "68197ee918acb76ba96fc0a2080fafdefa2743eb0e14446a677b0cf0f243e6b6",
+        "smiles_utils.py": "8895099d52561005b8eba1b80accbebfbf85222419fd33441be44e5804a725ff",
+        "monomer_polymerization.py": "447a98afedcba5c65492fbf08e548138139aff5e8332cb80e17f8519a6f95af6"
+      },
+      "rdkit": "2023.9.1",
+      "rules": {
+        "ps_gen.pkl": "f7afda59e06dde39d1c4162d1cb51d135ec5af9265921df91ef68b71bedc3a42",
+        "ps_rxn.pkl": "add521ccf8590c1cff7b0366cc8fef1143cea9ec453a367129b079017e21e15d",
+        "mon_dic.json": "ce3041cb26671b500557e65dd0cdb2e05a04cd95f654131054e637d487eb8fec",
+        "mon_lst.json": "9fe46016dbe6e9d5eaa3904b16c928c6f48ba2818ccd2d3b0170bf9367d542f4",
+        "excl_lst.json": "7ff46e4d02b55468ef4425b9660ee740d5121d1595af445ac2f1fc46bace2607",
+        "mon_vals.json": "dacd425cd68a7e754b8828577f1ed05010f3b6e6852e72a6afd626d011f5f1d8",
+        "ps_class.json": "11040203b0a2eed051d79b73fc42f3c0973d711d6fd9be38ea086c169e0a4495",
+        "mon_dic_inv.json": "790891f2fed76d85c0942444275de26bbf26c5a381daf65230bb25a4c1ae9cd2"
+      },
+      "pandas": "2.2.3",
+      "smipoly": "1.1.2",
+      "fingerprint": "41c806b54dcfcecb3fe449b071cab38fac9bc23ec11df1ea1c9b4d9efced0d08",
+      "classification": {
+        "maxFG": 4,
+        "minFG": 2
+      },
+      "adapter_version": 1
+    },
+    "pair_statuses": {
+      "success": 10000
+    },
+    "units": [
+      {
+        "kind": "classify",
+        "seconds": 1.1185203474014997
+      },
+      {
+        "kind": "classify",
+        "seconds": 1.1187284756451845
+      },
+      {
+        "kind": "generate",
+        "seconds": 26.763948172330856
+      },
+      {
+        "kind": "generate",
+        "seconds": 19.44644151069224
+      },
+      {
+        "kind": "generate",
+        "seconds": 13.552398612722754
+      },
+      {
+        "kind": "generate",
+        "seconds": 2.118034156039357
+      },
+      {
+        "kind": "generate",
+        "seconds": 26.466562313959002
+      },
+      {
+        "kind": "generate",
+        "seconds": 19.23830248042941
+      },
+      {
+        "kind": "generate",
+        "seconds": 14.00148544833064
+      },
+      {
+        "kind": "generate",
+        "seconds": 2.1404152177274227
+      },
+      {
+        "kind": "generate",
+        "seconds": 26.896145274862647
+      },
+      {
+        "kind": "generate",
+        "seconds": 18.794644052162766
+      },
+      {
+        "kind": "generate",
+        "seconds": 13.412069259211421
+      },
+      {
+        "kind": "generate",
+        "seconds": 2.143245091661811
+      },
+      {
+        "kind": "generate",
+        "seconds": 4.019487028941512
+      },
+      {
+        "kind": "generate",
+        "seconds": 2.976589486002922
+      },
+      {
+        "kind": "generate",
+        "seconds": 2.3734801337122917
+      },
+      {
+        "kind": "generate",
+        "seconds": 1.1092426422983408
+      },
+      {
+        "kind": "export",
+        "seconds": 10.053938886150718
+      }
+    ]
+  },
+  "restart": {
+    "rows_a": 100,
+    "rows_b": 100,
+    "unique_pairs": 10000,
+    "preparation_seconds": 2.6950943749397993,
+    "worker_restarts": 1,
+    "status_p95_seconds": 0.03199254348874092,
+    "single_request_seconds_during_batch": 0.1262520793825388,
+    "elapsed_seconds_including_download_verification": 224.76008631661534,
+    "child_peak_rss_kib": 289844,
+    "parent_peak_rss_kib": 430840,
+    "csv_zip_bytes": 413714,
+    "xlsx_bytes": 1892830,
+    "engine": {
+      "code": {
+        "models.py": "3eb18a53b30e4d8b76a8acde833da1b20d3d6eb1111f8c6d72e6be0d9b8a3f61",
+        "tables.py": "4865b24ce57c1f96f26477a57ae8705502f8bef400d3cad814b67d2df7baba17",
+        "worker.py": "1c1b3e9fa97a1c58ddf8497335aa3ff22f04db0a7ed1c5f1736b739e9c7601ae",
+        "process.py": "8f8daff8e9b86a8ae79bd325122a1e6f02b8c6f69ea10d45f2033fae68a7deda",
+        "service.py": "0911850658191d82597031378c90d47a0df1c225cd7eab935e80b832bda60613",
+        "storage.py": "66cdab387fb0a07d40e04399b14d63e41ae4eca1da7a71d4009368fdcb4bd848",
+        "__init__.py": "c5983548d45786dfaf8e0a7f9052a90cbe5c2a781db2401c4ab908ade53a5197",
+        "chemistry.py": "f102b0c605ed8aa4251b89a9aadbf643de310369d4565de7ff623f0c8dccd5a0",
+        "execution.py": "fb30bc2ff2e446a87ec3a7ad810c3fffb2dcc3be8d201b52b9affa6909683946",
+        "exporting.py": "9781ae545552bd3279c41db2f3673a212fbd2f0f417c04bd47173931220b1948",
+        "repository.py": "68197ee918acb76ba96fc0a2080fafdefa2743eb0e14446a677b0cf0f243e6b6",
+        "smiles_utils.py": "8895099d52561005b8eba1b80accbebfbf85222419fd33441be44e5804a725ff",
+        "monomer_polymerization.py": "447a98afedcba5c65492fbf08e548138139aff5e8332cb80e17f8519a6f95af6"
+      },
+      "rdkit": "2023.9.1",
+      "rules": {
+        "ps_gen.pkl": "f7afda59e06dde39d1c4162d1cb51d135ec5af9265921df91ef68b71bedc3a42",
+        "ps_rxn.pkl": "add521ccf8590c1cff7b0366cc8fef1143cea9ec453a367129b079017e21e15d",
+        "mon_dic.json": "ce3041cb26671b500557e65dd0cdb2e05a04cd95f654131054e637d487eb8fec",
+        "mon_lst.json": "9fe46016dbe6e9d5eaa3904b16c928c6f48ba2818ccd2d3b0170bf9367d542f4",
+        "excl_lst.json": "7ff46e4d02b55468ef4425b9660ee740d5121d1595af445ac2f1fc46bace2607",
+        "mon_vals.json": "dacd425cd68a7e754b8828577f1ed05010f3b6e6852e72a6afd626d011f5f1d8",
+        "ps_class.json": "11040203b0a2eed051d79b73fc42f3c0973d711d6fd9be38ea086c169e0a4495",
+        "mon_dic_inv.json": "790891f2fed76d85c0942444275de26bbf26c5a381daf65230bb25a4c1ae9cd2"
+      },
+      "pandas": "2.2.3",
+      "smipoly": "1.1.2",
+      "fingerprint": "41c806b54dcfcecb3fe449b071cab38fac9bc23ec11df1ea1c9b4d9efced0d08",
+      "classification": {
+        "maxFG": 4,
+        "minFG": 2
+      },
+      "adapter_version": 1
+    },
+    "pair_statuses": {
+      "success": 10000
+    },
+    "units": [
+      {
+        "kind": "classify",
+        "attempts": 1,
+        "counts": {
+          "classification_errors": 0,
+          "classified_unique_monomers": 128
+        }
+      },
+      {
+        "kind": "classify",
+        "attempts": 1,
+        "counts": {
+          "classification_errors": 0,
+          "classified_unique_monomers": 72
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 1888,
+          "processed_pairs": 1024,
+          "computed_unique_pairs": 1024
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 2,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 1888,
+          "processed_pairs": 1024,
+          "computed_unique_pairs": 1024
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 1888,
+          "processed_pairs": 1024,
+          "computed_unique_pairs": 1024
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 236,
+          "processed_pairs": 128,
+          "computed_unique_pairs": 128
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 1952,
+          "processed_pairs": 1024,
+          "computed_unique_pairs": 1024
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 1952,
+          "processed_pairs": 1024,
+          "computed_unique_pairs": 1024
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 1952,
+          "processed_pairs": 1024,
+          "computed_unique_pairs": 1024
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 244,
+          "processed_pairs": 128,
+          "computed_unique_pairs": 128
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 2016,
+          "processed_pairs": 1024,
+          "computed_unique_pairs": 1024
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 2016,
+          "processed_pairs": 1024,
+          "computed_unique_pairs": 1024
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 2016,
+          "processed_pairs": 1024,
+          "computed_unique_pairs": 1024
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 252,
+          "processed_pairs": 128,
+          "computed_unique_pairs": 128
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 256,
+          "processed_pairs": 128,
+          "computed_unique_pairs": 128
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 256,
+          "processed_pairs": 128,
+          "computed_unique_pairs": 128
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 256,
+          "processed_pairs": 128,
+          "computed_unique_pairs": 128
+        }
+      },
+      {
+        "kind": "generate",
+        "attempts": 1,
+        "counts": {
+          "pair_errors": 0,
+          "candidate_count": 32,
+          "processed_pairs": 16,
+          "computed_unique_pairs": 16
+        }
+      },
+      {
+        "kind": "export",
+        "attempts": 1,
+        "counts": {}
+      }
+    ]
+  },
+  "notes": [
+    "Normal benchmark uses HTTP imports/jobs/downloads and a persisted worker executor with isolated chemistry children.",
+    "Restart benchmark kills and restarts the actual worker CLI during generation.",
+    "All five data CSVs have identical SHA256 after restart. XLSX rows were counted independently.",
+    "After the benchmark a guard was tightened to apply the total execution budget to normal export, with a separate regression test. This does not change chemical results.",
+    "Site rollout, immutable production image build and governed production rollback are not performed by this benchmark."
+  ],
+  "regressions": {
+    "batch_backend_tests_passed": 28,
+    "single_polymerization_tests_passed": 31,
+    "deployment_migration_backend_tests_passed": 78,
+    "deployment_and_compose_script_tests_passed": 366,
+    "frontend_tests_passed": 16,
+    "frontend_production_build": "passed",
+    "dependency_lock_validation": "passed",
+    "migration_checksums": "passed",
+    "git_diff_whitespace_check": "passed"
+  }
+}

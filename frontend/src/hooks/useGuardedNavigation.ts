@@ -2,29 +2,35 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { motionDuration } from "../lib/motion";
 
 export type NavigationTarget = { id: string; label: string };
+export type NavigationGuard = (signal: AbortSignal) => Promise<void | boolean>;
 const GUARD_TIMEOUT_MS = 1500;
 
-export function waitForGuard(guard: () => Promise<void | boolean>) {
+export function waitForGuard(guard: NavigationGuard) {
+  const controller = new AbortController();
   let cancel = () => {};
   const promise = new Promise<boolean>((resolve) => {
     let settled = false;
     let timer: number | undefined;
-    const finish = (allowed: boolean) => {
+    const finish = (allowed: boolean, reason?: DOMException) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timer);
+      // Deadline cleanup (including retiring an old editor) must finish before
+      // routing is released. Cancellation uses a different reason and never
+      // requests recovery of the page the user chose to keep.
+      if (reason) controller.abort(reason);
       resolve(allowed);
     };
-    cancel = () => finish(false);
-    timer = window.setTimeout(() => finish(true), GUARD_TIMEOUT_MS);
-    try { Promise.resolve(guard()).then((value) => finish(value !== false), () => finish(true)); }
+    cancel = () => finish(false, new DOMException("Navigation cancelled", "AbortError"));
+    timer = window.setTimeout(() => finish(true, new DOMException("Navigation timed out", "TimeoutError")), GUARD_TIMEOUT_MS);
+    try { Promise.resolve(guard(controller.signal)).then((value) => finish(value !== false), () => finish(true)); }
     catch { finish(true); }
   });
   return { promise, cancel: () => cancel() };
 }
 
 export function useGuardedNavigation({ beforeNavigate, onCommit, activeModule, containerRef }: {
-  beforeNavigate?: () => Promise<void | boolean>;
+  beforeNavigate?: NavigationGuard;
   onCommit: () => void;
   activeModule: string;
   containerRef: RefObject<HTMLElement | null>;

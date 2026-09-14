@@ -1,0 +1,53 @@
+{
+  "source_file": "/data/lzq/gith/SMiPoly/classified_monomers.csv",
+  "source_sha256": "4d5a7610b46cb6e52ce6edfc2e24b7a6a3df8ff90fff96db6670263b450e23c6",
+  "source_records": 16490,
+  "selection": "原始文件顺序，前 120 个有效且标准化后不重复的结构；二胺还要求 pridiamin=true；使用当前引擎重新确认分类。",
+  "counts": {
+    "diamines": {
+      "selected": 120,
+      "unique_valid_structures": 120,
+      "source_classified_rows": 14313,
+      "skipped_before_selection": {
+        "not_primary_diamine": 6,
+        "duplicate_structure": 6
+      },
+      "source_row_range": [
+        2,
+        145
+      ]
+    },
+    "dianhydrides": {
+      "selected": 120,
+      "unique_valid_structures": 120,
+      "source_classified_rows": 1268,
+      "skipped_before_selection": {
+        "duplicate_structure": 3
+      },
+      "source_row_range": [
+        15057,
+        15179
+      ]
+    }
+  },
+  "files": [
+    {
+      "name": "smipoly-diamines-120.csv",
+      "bytes": 11439,
+      "sha256": "b89be013a3d8799414ec80c94aa05473097493107ec29eef954076e389280a47"
+    },
+    {
+      "name": "smipoly-dianhydrides-120.csv",
+      "bytes": 12920,
+      "sha256": "f9f6e83cd29d01262d82fa190d08a710529e004ffd101e9c51e06a719d8a4bb6"
+    }
+  ],
+  "expected_pairs": 14400,
+  "encoding": "UTF-8 BOM",
+  "mapping": {
+    "smiles_column": "SMILES",
+    "id_column": "id",
+    "name_column": "name"
+  },
+  "target": "polyimide"
+}

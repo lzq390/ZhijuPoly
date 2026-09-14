@@ -319,13 +319,33 @@ jobs:
         env:
           VITE_AGENT_WORKSPACE_URL: https://workspace.ci.invalid/
         run: npm test
+      - name: Verify standalone Worker isolation
+        working-directory: frontend
+        run: npm run test:ketcher-worker
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+      - name: Verify shared editor and 3D resources
+        working-directory: frontend
+        run: npm run test:structure-resources
+      - name: Verify iframe build fallback
+        working-directory: frontend
+        env:
+          VITE_STRUCTURE_EDITOR_ENGINE: iframe
+        run: |
+          npm run build -- --outDir /tmp/nexpoly-iframe-build
+          npm run test:structure-resources -- /tmp/nexpoly-iframe-build
+      - name: Install browser for editor gates
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Verify native SDK and both editor engines in Chromium
+        working-directory: frontend
+        run: npm run test:structure-engines
       - name: Verify restrictive static-source permissions in the nginx image
         run: scripts/ci/test_frontend_image_permissions.sh
       - name: Verify the production OpenScience URL in the nginx image
         env:
+          FRONTEND_STRUCTURE_EDITOR_ENGINE: iframe
           FRONTEND_EXPECTED_WORKSPACE_URL: http://114.214.255.154:9011/
           FRONTEND_PERMISSION_IMAGE_TAG: nexpoly-frontend-production-workspace-smoke:local
         run: scripts/ci/test_frontend_image_permissions.sh
@@ -585,7 +605,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Run real B-schema through F/0013, F/0014 and F/0015 transition smoke
+      - name: Run real B-schema through F/0013 and F/0014 through F/0016 transition smoke
         run: scripts/ci/test_exact_b_bridge.sh
 
   openscience-overlay:

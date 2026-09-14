@@ -137,9 +137,9 @@
 }
 
 .np-tg-reverse-design .np-tg-parameter-status.is-error {
-  border-color: rgba(220, 38, 38, 0.2);
-  color: #b4233a;
-  background: rgba(254, 242, 242, 0.74);
+  border-color: var(--np-theme-danger-border);
+  color: var(--np-theme-danger-text);
+  background: var(--np-theme-danger-soft);
 }
 
 .np-tg-reverse-design .np-tg-parameters__footer {

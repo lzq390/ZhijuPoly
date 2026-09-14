@@ -1,3 +1,4 @@
+import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -9,6 +10,8 @@ import {
   StructureWorkbenchPage,
   type StructureWorkbenchHandle
 } from "./StructureWorkbenchPage";
+
+vi.mock("@structure-editor-engine", () => import("../test/structureEditorEngineMock"));
 
 const mocks = vi.hoisted(() => ({
   canvasState: { isFlipped: false },
@@ -53,6 +56,10 @@ vi.mock("../hooks/useTgStructureCanvas", () => ({
     clearCanvas: mocks.clearCanvas,
     importImageFile: mocks.importImageFile,
     syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
+    syncBeforeLeave: async () => {
+      await mocks.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
+      return { status: "saved" as const };
+    },
     toggle3D: mocks.toggle3D,
     copySmiles: mocks.copySmiles
   })
@@ -90,8 +97,7 @@ function makeStructure(smiles = "*CC*"): StructureWorkspaceContext {
   return {
     smiles,
     setSmiles: vi.fn(),
-    iframeRef: { current: null },
-    setIsReady: vi.fn(),
+    workspace: new StructureWorkspace(smiles),
     getCurrentSmiles: vi.fn().mockResolvedValue(smiles)
   };
 }
@@ -135,8 +141,7 @@ describe("StructureWorkbenchPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "加载结构" }));
     await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledWith(REVERSE_DESIGN_DEMO_SMILES));
 
-    fireEvent.load(screen.getByTitle("结构工作台结构编辑器"));
-    expect(mocks.handleEditorLoad).toHaveBeenCalledOnce();
+    expect(document.querySelector("[data-structure-editor]")).not.toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "3D构象" }));
     await waitFor(() => expect(mocks.toggle3D).toHaveBeenCalledOnce());

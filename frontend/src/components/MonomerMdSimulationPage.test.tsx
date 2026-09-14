@@ -1,3 +1,4 @@
+import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -109,8 +110,7 @@ function simulationState(overrides: Partial<Simulation> = {}): Simulation {
 const structure: StructureWorkspaceContext = {
   smiles: "",
   setSmiles: vi.fn(),
-  iframeRef: { current: null },
-  setIsReady: vi.fn(),
+  workspace: new StructureWorkspace(""),
   getCurrentSmiles: vi.fn().mockResolvedValue("")
 };
 

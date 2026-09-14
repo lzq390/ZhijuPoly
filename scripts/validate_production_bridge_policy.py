@@ -41,6 +41,9 @@ HEAD_BOUND_INPUTS = {
     "final_migration_sql": (
         "backend/migrations/postgres/0014_monomer_md_task_queue_cancel.sql"
     ),
+    "batch_migration_sql": (
+        "backend/migrations/postgres/0016_monomer_polymerization_batch.sql"
+    ),
     "media_authority_rules": (
         "ops/config/postgres-media-authority-rules.json"
     ),
@@ -74,10 +77,13 @@ TARGET_MANIFEST_SHA256 = (
     "sha256:3f149c17e596c9dfe7c88245894c36e3e2d22ab67cf38375c84f2b1d7d7224fa"
 )
 AUTHORITY_MANIFEST_SHA256 = (
-    "sha256:0c1ccfe4bc4515b4558e33b3c06524c6d79451a51b0bc1d2e1e14ec4a50ad26b"
+    "sha256:a6fdee13e6b57fbd264aa498e2b438e5dd50fac8b6bee34561665a33ca871fc8"
 )
 FINAL_MIGRATION_SQL_SHA256 = (
     "sha256:7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6"
+)
+BATCH_MIGRATION_SQL_SHA256 = (
+    "sha256:c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976"
 )
 MEDIA_AUTHORITY_RULES_SHA256 = (
     "sha256:80543b0e2a63e744c89c83c72d9977ac1978adf35f30444d3830d2b57fc50a12"
@@ -466,6 +472,13 @@ def validate_policy_payload(
     )
     if _sha256(migration_sql) != FINAL_MIGRATION_SQL_SHA256:
         raise ProductionBridgePolicyError("final 0014 SQL checksum differs")
+    batch_migration_sql = _git(
+        repository_root,
+        "show",
+        f"{authority_sha}:{HEAD_BOUND_INPUTS['batch_migration_sql']}",
+    )
+    if _sha256(batch_migration_sql) != BATCH_MIGRATION_SQL_SHA256:
+        raise ProductionBridgePolicyError("batch 0016 SQL checksum differs")
 
     expected_policy: dict[str, Any] = {
         "schema_version": bridge_core.POLICY_SCHEMA_VERSION,
@@ -552,6 +565,7 @@ def validate_policy_payload(
             "target_manifest_sha256": TARGET_MANIFEST_SHA256,
             "authority_manifest_sha256": AUTHORITY_MANIFEST_SHA256,
             "final_sql_sha256": FINAL_MIGRATION_SQL_SHA256,
+            "batch_sql_sha256": BATCH_MIGRATION_SQL_SHA256,
             "accepted_ledgers": accepted_ledgers,
         },
         "external_database_audit": {

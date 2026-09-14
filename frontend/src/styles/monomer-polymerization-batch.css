@@ -1,0 +1,136 @@
+.np-monomer-polymerization .np-batch-panel {
+  --np-batch-text-size: var(--np-mp-text-size);
+  --np-batch-hint-size: var(--np-mp-hint-size);
+  --np-batch-caption-size: var(--np-mp-hint-size);
+  --np-batch-heading-size: var(--np-mp-card-title-size);
+  --np-batch-action-size: var(--np-mp-action-size);
+  --np-batch-control-height: var(--np-mp-control-height);
+  --np-batch-metric-size: var(--np-mp-metric-size);
+  min-width: 0;
+  color: var(--np-sw-ink);
+  font-family: var(--font-body);
+  font-size: var(--np-batch-text-size);
+  line-height: 1.5;
+}
+.np-batch-actions, .np-batch-job-header, .np-batch-job-status, .np-batch-file header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.np-batch-panel button:where(:not(.np-sw-primary-button, [role="combobox"], [role="option"])), .np-batch-download { background: var(--np-theme-surface); color: #395570; border: 1px solid var(--np-theme-input-border); border-radius: 7px; min-height: var(--np-batch-control-height); padding: 8px 14px; font: inherit; font-size: var(--np-batch-action-size); font-weight: 700; }
+.np-batch-panel button, .np-batch-download { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.np-batch-panel button:where(:not(.np-sw-primary-button, [role="combobox"], [role="option"])):not(:disabled):hover, .np-batch-download:not(:disabled):hover { border-color: var(--np-theme-blue); }
+.np-batch-panel button:disabled { opacity: .5; cursor: not-allowed; }
+.np-batch-panel button:where(:not([role="combobox"], [role="option"])):focus-visible, .np-batch-panel a:focus-visible { outline: var(--np-theme-focus-width) solid var(--np-theme-focus); outline-offset: var(--np-theme-focus-offset); }
+.np-batch-panel h3 { font-family: var(--font-body); font-size: var(--np-batch-heading-size); font-weight: 700; line-height: 1.3; margin: 12px 0; }
+.np-batch-hint { font-size: var(--np-batch-hint-size); color: var(--np-sw-muted); line-height: 1.5; margin: 8px 0 14px; }
+.np-batch-file label, .np-batch-mapping-field label { display: flex; flex-direction: column; gap: 8px; color: var(--np-sw-muted); font-family: var(--font-body); font-size: var(--np-mp-label-size); font-weight: 500; line-height: 1.5; }
+.np-batch-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 12px; }
+.np-batch-file { border: 1px solid rgba(51, 83, 126, 0.16); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 12px; min-width: 0; background: var(--np-theme-surface); box-shadow: 0 5px 14px rgba(25, 55, 92, 0.035); }
+.np-batch-file header { gap: 8px; }
+.np-batch-file header.np-mp-monomer__header { margin: -12px -12px 0; border-radius: 9px 9px 0 0; }
+.np-batch-file header h3 { margin: 0; }
+.np-batch-templates { display: flex; gap: 10px; margin-left: auto; font-size: var(--np-batch-caption-size); }
+.np-batch-panel a { color: var(--np-theme-blue-strong); text-decoration: none; }
+.np-batch-panel .np-batch-download { color: var(--np-theme-blue-strong); }
+.np-batch-panel a:hover { text-decoration: underline; }
+.np-batch-upload { border: 1px dashed var(--np-theme-input-border); padding: 16px 12px; border-radius: 7px; background: color-mix(in srgb, var(--np-theme-blue) 3%, var(--np-theme-surface)); }
+.np-batch-upload input { max-width: 100%; font-size: var(--np-batch-text-size); }
+.np-batch-upload input::file-selector-button { margin-right: 10px; border: 1px solid var(--np-theme-input-border); border-radius: 6px; padding: 6px 10px; color: var(--np-sw-blue-strong); background: var(--np-theme-surface); font: inherit; cursor: pointer; }
+.np-batch-filename { font-size: var(--np-batch-text-size); overflow-wrap: anywhere; }
+.np-batch-import-summary { display: flex; flex-wrap: wrap; gap: 3px 12px; color: var(--np-sw-muted); font-size: var(--np-batch-hint-size); line-height: 1.5; }
+.np-batch-import-summary strong { color: #244461; font-weight: 600; overflow-wrap: anywhere; }
+.np-batch-import-settings, .np-batch-mapping-field { min-width: 0; }
+.np-batch-import-settings { margin-top: 12px; }
+.np-batch-import-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 12px; margin-top: 8px; }
+.np-batch-mapping-field { display: grid; gap: 7px; }
+.np-batch-panel .np-batch-settings-toggle { width: 100%; justify-content: flex-start; gap: 8px; min-height: var(--np-batch-control-height); border-radius: 9px; color: #607995; background: linear-gradient(180deg, #fff, #fbfdff); font-size: var(--np-mp-compact-action-size); text-align: left; }
+.np-batch-settings-toggle > span { flex: 1; }
+.np-batch-settings-toggle > svg { width: 15px; height: 15px; flex: none; color: var(--np-sw-blue-strong); }
+.np-batch-settings-toggle > svg:last-child { transition: transform var(--np-motion-control) var(--np-ease-enter); }
+.np-batch-panel .np-batch-import-settings.is-open > .np-batch-settings-toggle { border-color: rgba(37, 99, 235, 0.3); color: var(--np-sw-blue-strong); }
+.np-batch-import-settings.is-open > .np-batch-settings-toggle > svg:last-child { transform: rotate(180deg); }
+.np-batch-settings-fields { display: grid; min-width: 0; gap: 12px; padding: 12px; border: 1px solid rgba(51, 83, 126, 0.15); border-radius: 10px; background: #fbfdff; }
+.np-batch-settings-fields > h3, .np-batch-settings-fields > .np-batch-hint { margin: 0; }
+.np-batch-panel .np-sw-select { --np-select-label-size: var(--np-mp-select-size); }
+.np-batch-panel .np-sw-select__trigger { border-color: rgba(51, 83, 126, 0.2); border-radius: 9px; background: linear-gradient(180deg, #fff, #fbfdff); box-shadow: 0 1px 2px rgba(15, 36, 63, 0.035), inset 0 1px 0 rgba(255, 255, 255, 0.8); }
+.np-batch-panel .np-sw-select.is-open .np-sw-select__trigger { border-color: rgba(37, 99, 235, 0.58); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08), 0 5px 14px rgba(30, 75, 122, 0.08); }
+.np-batch-panel .np-sw-select__menu { border-color: rgba(51, 83, 126, 0.18); background: rgba(255, 255, 255, 0.985); box-shadow: 0 18px 42px rgba(20, 52, 88, 0.16), 0 3px 10px rgba(20, 52, 88, 0.08); backdrop-filter: blur(10px); }
+.np-batch-panel .np-sw-select__menu > button { color: #244461; }
+.np-batch-panel .np-sw-select__menu > button.is-selected { border-color: rgba(37, 99, 235, 0.17); background: linear-gradient(90deg, #eef5ff, #f3fbff); }
+.np-batch-panel .np-sw-select__menu > button.is-active:not(.is-selected) { border-color: rgba(37, 99, 235, 0.1); background: #f3f8ff; }
+.np-batch-panel .np-sw-select__menu > button > svg { display: none; }
+.np-batch-panel .np-sw-select__menu > button strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-batch-table-preview { min-width: 0; }
+.np-batch-table-preview h4 { margin: 0; font: inherit; font-weight: 600; }
+.np-batch-notice, .np-batch-error { display: flex; gap: 8px; align-items: flex-start; font-size: var(--np-batch-hint-size); padding: 12px; border-radius: 6px; line-height: 1.5; }
+.np-batch-notice > svg, .np-batch-error > svg { flex: none; }
+.np-batch-notice { color: var(--np-theme-warning-text); background: var(--np-theme-warning-soft); }
+.np-batch-error { color: var(--np-theme-danger-text); background: var(--np-theme-danger-soft); overflow-wrap: anywhere; }
+.np-batch-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); gap: 12px; margin: 18px 0; }
+.np-batch-metrics > div { border: 1px solid var(--np-theme-border-soft); padding: 14px; border-radius: 7px; display: flex; flex-direction: column; gap: 7px; }
+.np-batch-metrics span { color: var(--np-theme-muted); font-size: var(--np-mp-label-size); font-weight: 500; }
+.np-batch-metrics strong { font-family: inherit; font-size: var(--np-batch-metric-size); font-weight: 600; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.np-batch-panel details { font-size: var(--np-batch-hint-size); line-height: 1.5; }
+.np-batch-panel summary { cursor: pointer; color: var(--np-theme-blue-strong); }
+.np-batch-validation { margin: 18px 0; }
+.np-monomer-polymerization .np-batch-job { margin-top: 20px; overflow: visible; }
+.np-batch-job-window-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 22px; border-radius: inherit; background: linear-gradient(110deg, #fff, #f0f7ff 80%, #effcfd); }
+.np-batch-job.is-open .np-batch-job-window-header { border-bottom: 1px solid var(--np-theme-border-soft); border-bottom-right-radius: 0; border-bottom-left-radius: 0; }
+.np-batch-job-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.np-batch-job-heading > div { min-width: 0; }
+.np-batch-job-heading h3 { margin: 0; }
+.np-batch-job-mark { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 34px; height: 34px; border: 1px solid rgba(37, 99, 235, 0.16); border-radius: 9px; color: var(--np-theme-blue-strong); background: linear-gradient(135deg, #eef4ff, #eafcff); }
+.np-batch-job-mark svg { width: 18px; height: 18px; }
+.np-batch-job-summary { display: flex; flex-wrap: wrap; gap: 3px 10px; margin: 5px 0 0; color: var(--np-sw-muted); font-size: var(--np-batch-hint-size); line-height: 1.5; }
+.np-batch-job-summary strong { color: var(--np-theme-blue-strong); }
+.np-batch-task-feedback { display: inline-flex; align-items: center; gap: 8px; }
+.np-batch-task-feedback > svg { flex: none; }
+.np-batch-task-error { color: var(--np-theme-danger-text); overflow-wrap: anywhere; }
+.np-batch-panel .np-batch-job-toggle { flex: none; min-height: 34px; padding: 6px 10px; font-size: var(--np-mp-compact-action-size); }
+.np-batch-job-toggle svg { width: 15px; height: 15px; transition: transform var(--np-motion-control) var(--np-ease-enter); }
+.np-batch-job-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.np-batch-job-body { padding: 18px 22px; }
+.np-batch-job-body > :last-child { margin-bottom: 0; }
+.np-batch-job-header { justify-content: flex-end; align-items: flex-end; margin-bottom: 14px; }
+.np-batch-job-status { margin: 14px 0; font-size: var(--np-batch-text-size); }
+.np-batch-job-status strong { color: var(--np-theme-blue-strong); }
+.np-batch-job-id { overflow-wrap: anywhere; color: var(--np-theme-muted); font-size: var(--np-batch-hint-size); }
+.np-batch-job-times { display: flex; flex-wrap: wrap; gap: 4px 20px; font-variant-numeric: tabular-nums; }
+.np-batch-panel progress { width: 100%; height: 8px; accent-color: var(--np-theme-blue); }
+.np-batch-table-scroll { max-width: 100%; overflow: auto; margin-top: 12px; max-height: 320px; }
+.np-batch-panel table { border-collapse: collapse; width: 100%; font-size: var(--np-batch-text-size); }
+.np-batch-panel th, .np-batch-panel td { border-bottom: 1px solid var(--np-theme-border-soft); padding: 10px 12px; text-align: left; vertical-align: top; max-width: 320px; overflow-wrap: anywhere; }
+.np-batch-panel th { background: var(--np-theme-bg); color: var(--np-theme-muted); white-space: nowrap; position: sticky; top: 0; }
+.np-batch-actions { margin: 14px 0 0; font-size: var(--np-batch-text-size); }
+.np-batch-actions > button > svg, .np-batch-download > svg, .np-batch-job-header > button > svg { flex: none; width: 16px; height: 16px; }
+.np-batch-actions [role="status"] { display: inline-flex; align-items: center; gap: 8px; color: var(--np-theme-muted); }
+@media (max-width: 899px) {
+  .np-batch-inputs, .np-batch-import-details { grid-template-columns: 1fr; }
+  .np-batch-job-window-header { padding: 14px 16px; gap: 10px; }
+  .np-batch-job-body { padding: 16px; }
+}
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-batch-actions, .np-batch-job-header, .np-batch-job-status { gap: 16px; }
+  .np-batch-panel button:where(:not(.np-sw-primary-button, [role="combobox"], [role="option"])), .np-batch-download { padding: 10px 21px; }
+  .np-batch-panel .np-batch-settings-toggle { min-height: 50px; padding: 10px 14px; }
+  .np-batch-settings-toggle > svg { width: 20px; height: 20px; }
+  .np-batch-actions > button > svg, .np-batch-download > svg, .np-batch-job-header > button > svg { width: 22px; height: 22px; }
+  .np-batch-settings-fields { gap: 16px; padding: 16px; }
+  .np-batch-inputs, .np-batch-import-details { gap: 16px; }
+  .np-batch-import-settings { margin-top: 16px; }
+  .np-batch-import-details { margin-top: 12px; }
+  .np-batch-table-scroll { max-height: 360px; }
+  .np-batch-file { padding: 17px; gap: 16px; }
+  .np-batch-file header.np-mp-monomer__header { margin: -17px -17px 0; }
+  .np-batch-upload { padding: 20px 17px; }
+  .np-batch-metrics { gap: 16px; margin: 22px 0; }
+  .np-batch-metrics > div { padding: 18px; gap: 10px; }
+  .np-batch-notice, .np-batch-error { padding: 16px; }
+  .np-monomer-polymerization .np-batch-job { margin-top: 26px; }
+  .np-batch-job-window-header { padding: 22px 34px; gap: 24px; }
+  .np-batch-job-heading { gap: 15px; }
+  .np-batch-job-mark { width: 48px; height: 48px; border-radius: 12px; }
+  .np-batch-job-mark svg { width: 24px; height: 24px; }
+  .np-batch-panel .np-batch-job-toggle { min-height: 44px; padding: 8px 14px; }
+  .np-batch-job-toggle svg { width: 20px; height: 20px; }
+  .np-batch-job-summary { margin-top: 7px; gap: 4px 14px; }
+  .np-batch-job-body { padding: 26px 34px; }
+  .np-batch-panel progress { height: 10px; }
+}

@@ -21,11 +21,14 @@ router = APIRouter(prefix="/api/v1", tags=["monomer-polymerization"])
 @router.get("/monomer-polymerization/status", response_model=MonomerPolymerizationStatusResponse)
 async def monomer_polymerization_status(request: Request) -> MonomerPolymerizationStatusResponse:
     settings = request.app.state.settings
-    return await anyio.to_thread.run_sync(
+    response = await anyio.to_thread.run_sync(
         get_monomer_polymerization_status,
         settings.smipoly_enabled,
         limiter=request.app.state.smipoly_limiter,
     )
+
+    response.batch = await anyio.to_thread.run_sync(request.app.state.polymerization_batch.status)
+    return response
 
 
 @router.post("/monomer-polymerization", response_model=MonomerPolymerizationResponse)

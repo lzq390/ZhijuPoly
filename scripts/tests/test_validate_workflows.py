@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+import tempfile
 import unittest
 
 from scripts.ci import validate_workflows as policy
@@ -693,7 +695,7 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
 
         login = "Log in for the exact private B images"
         transition = (
-            "Run real B-schema through F/0013, F/0014 and F/0015 transition smoke"
+            "Run real B-schema through F/0013 and F/0014 through F/0016 transition smoke"
         )
         changed = CI_TEXT.replace(login, "TEMPORARY", 1)
         changed = changed.replace(transition, login, 1)
@@ -1502,6 +1504,101 @@ class ExactBTransitionPolicyTests(unittest.TestCase):
         failures: list[str] = []
         policy.validate_exact_b_transition(EXACT_B_TEXT, failures)
         self.assertEqual(failures, [])
+
+    def test_0013_prefix_extracts_exact_committed_manifest_and_sql(self) -> None:
+        section = EXACT_B_TEXT.split("prepare_f_0013_migrations() {", 1)[1]
+        program = section.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        migration_path = "backend/migrations/postgres"
+
+        def committed(name: str) -> bytes:
+            return subprocess.check_output(
+                ["git", "show", f"HEAD:{migration_path}/{name}"], cwd=ROOT
+            )
+
+        original = json.loads(committed("manifest.json"))
+        records = original["migrations"]
+        checkpoint = next(
+            index for index, record in enumerate(records)
+            if record["version"] == "0013_monomer_dft_jobs"
+        ) + 1
+        sql = {
+            f"{record['version']}.sql": committed(f"{record['version']}.sql")
+            for record in records
+        }
+        cases = {
+            "current": records,
+            "missing_0016": records[:-1],
+            "unexpected_0017": [*records, {"version": "0017_unreviewed"}],
+            "reordered_suffix": [*records[:checkpoint], *reversed(records[checkpoint:])],
+        }
+        for name, migrations in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                source = Path(temporary) / "source"
+                destination = Path(temporary) / "prefix"
+                source.mkdir()
+                destination.mkdir()
+                (source / "manifest.json").write_text(
+                    json.dumps({**original, "migrations": migrations}), encoding="utf-8"
+                )
+                for filename, content in sql.items():
+                    (source / filename).write_bytes(content)
+                result = subprocess.run(
+                    [sys.executable, "-", str(source), str(destination)],
+                    input=program,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=10,
+                )
+                if name != "current":
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse((destination / "manifest.json").exists())
+                    continue
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = {**original, "migrations": records[:checkpoint]}
+                self.assertEqual(
+                    json.loads((destination / "manifest.json").read_text()), expected
+                )
+                expected_sql = {f"{record['version']}.sql" for record in records[:checkpoint]}
+                self.assertEqual(
+                    {path.name for path in destination.iterdir()},
+                    expected_sql | {"manifest.json"},
+                )
+                for filename in expected_sql:
+                    self.assertEqual((destination / filename).read_bytes(), sql[filename])
+
+    def test_prefix_policy_rejects_omitted_0016(self) -> None:
+        changed = EXACT_B_TEXT.replace('    "0016_monomer_polymerization_batch",\n', "", 1)
+        failures: list[str] = []
+        policy.validate_exact_b_transition(changed, failures)
+        self.assertTrue(any("complete canonical 0014/0015/0016 suffix" in failure for failure in failures), failures)
+
+    def test_final_ledger_requires_exact_0016_and_checksum(self) -> None:
+        final_ledger = (
+            "0016_monomer_polymerization_batch:"
+            "c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976"
+        )
+        for replacement in (
+            "0015_property_filter_performance:"
+            "e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732",
+            "0016_monomer_polymerization_batch:" + "0" * 64,
+        ):
+            with self.subTest(replacement=replacement):
+                failures: list[str] = []
+                policy.validate_exact_b_transition(EXACT_B_TEXT.replace(final_ledger, replacement, 1), failures)
+                self.assertTrue(any("exact final 0016 ledger" in failure for failure in failures), failures)
+
+    def test_0016_transition_keeps_b_rejection_and_mutable_digest(self) -> None:
+        rejection = 'if run_backend_command "$B_BACKEND_IMAGE" "$B_DATABASE"'
+        digest = '[[ "$(pre_dft_mutable_digest "$B_DATABASE")" == "$b_transition_before" ]]'
+        final_start = EXACT_B_TEXT.index('b_transition_final_name=')
+        for control in (rejection, digest):
+            with self.subTest(control=control):
+                suffix = EXACT_B_TEXT[final_start:].replace(control, "removed-control", 1)
+                changed = EXACT_B_TEXT[:final_start] + suffix
+                failures: list[str] = []
+                policy.validate_exact_b_transition(changed, failures)
+                self.assertTrue(failures)
 
     def test_deleted_b_to_f_transition_cannot_pass_on_legacy_markers(self) -> None:
         start_marker = (

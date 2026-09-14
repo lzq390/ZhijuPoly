@@ -80,6 +80,7 @@ class SiteHelperContractTests(unittest.TestCase):
         categories = (
             set(CONTRACTS.BUSINESS_MUTABLE_TABLES)
             | set(CONTRACTS.POST_0013_BUSINESS_MUTABLE_TABLES)
+            | set(CONTRACTS.POST_0016_BUSINESS_MUTABLE_TABLES)
             | set(CONTRACTS.GOVERNED_CONTROL_TABLES)
             | set(CONTRACTS.STATIC_IMPORT_TABLES)
             | {
@@ -92,6 +93,7 @@ class SiteHelperContractTests(unittest.TestCase):
             for group in (
                 CONTRACTS.BUSINESS_MUTABLE_TABLES,
                 CONTRACTS.POST_0013_BUSINESS_MUTABLE_TABLES,
+                CONTRACTS.POST_0016_BUSINESS_MUTABLE_TABLES,
                 CONTRACTS.GOVERNED_CONTROL_TABLES,
                 CONTRACTS.STATIC_IMPORT_TABLES,
                 (
@@ -1261,7 +1263,7 @@ class SiteHelperContractTests(unittest.TestCase):
                 with self.assertRaises(CONTRACTS.SiteHelperContractError):
                     CONTRACTS.validate_monomer_dft_0013_creation(changed)
 
-    def test_mutable_role_accepts_optional_generation_schema_only(self) -> None:
+    def test_mutable_role_accepts_optional_generation_and_batch_schemas(self) -> None:
         with_generation = mutable_audit_role_security()
         without_generation = mutable_audit_role_security(
             include_generation=False
@@ -1276,10 +1278,10 @@ class SiteHelperContractTests(unittest.TestCase):
             ),
             without_generation,
         )
-        self.assertEqual(len(with_generation["governed_schemas"]), 12)
-        self.assertEqual(len(with_generation["default_privileges"]), 24)
-        self.assertEqual(len(without_generation["governed_schemas"]), 11)
-        self.assertEqual(len(without_generation["default_privileges"]), 22)
+        self.assertEqual(len(with_generation["governed_schemas"]), 13)
+        self.assertEqual(len(with_generation["default_privileges"]), 26)
+        self.assertEqual(len(without_generation["governed_schemas"]), 12)
+        self.assertEqual(len(without_generation["default_privileges"]), 24)
 
         missing_required = json.loads(json.dumps(with_generation))
         missing_required["governed_schemas"] = [

@@ -142,6 +142,22 @@ class ProductionBridgePolicyPinTests(unittest.TestCase):
             ["pre-0012", "post-0012", "post-0013"],
         )
         self.assertEqual(
+            evidence["migrations"]["accepted_ledgers"],
+            self.document["accepted_migration_ledgers"],
+        )
+        self.assertEqual(
+            evidence["migrations"]["authority_manifest_sha256"],
+            VALIDATOR.AUTHORITY_MANIFEST_SHA256,
+        )
+        self.assertEqual(
+            evidence["migrations"]["final_sql_sha256"],
+            VALIDATOR.FINAL_MIGRATION_SQL_SHA256,
+        )
+        self.assertEqual(
+            evidence["migrations"]["batch_sql_sha256"],
+            "sha256:" + VALIDATOR.bridge_core.BATCH_MIGRATION["checksum"],
+        )
+        self.assertEqual(
             evidence["external_database_audit"][
                 "media_authority_rules_sha256"
             ],
@@ -151,6 +167,61 @@ class ProductionBridgePolicyPinTests(unittest.TestCase):
             evidence["external_database_audit"]["audit_role_sql_sha256"],
             VALIDATOR.AUDIT_ROLE_SQL_SHA256,
         )
+
+    def test_current_authority_rejects_nonexact_0016_manifests(self) -> None:
+        authority_sha = VALIDATOR._head_commit(ROOT)
+        revision_path = (
+            f"{authority_sha}:backend/migrations/postgres/manifest.json"
+        )
+        manifest = json.loads(git(ROOT, "show", revision_path))
+        records = manifest["migrations"]
+        self.assertEqual(records[-1]["version"], "0016_monomer_polymerization_batch")
+        mutations = {
+            "missing-0016": records[:-1],
+            "changed-checksum": [*records[:-1], {**records[-1], "checksum": "0" * 64}],
+            "wrong-epoch": [*records[:-1], {**records[-1], "epoch": 1}],
+            "missing-contract": [*records[:-1], {**records[-1], "requires_contracts": []}],
+            "extra-migration": [*records, {**records[-1], "version": "0017_unreviewed"}],
+        }
+        original_git = VALIDATOR._git
+        for label, changed_records in mutations.items():
+            with self.subTest(mutation=label):
+                changed = payload({**manifest, "migrations": changed_records})
+
+                def changed_git(root, *arguments):
+                    if arguments == ("show", revision_path):
+                        return changed
+                    return original_git(root, *arguments)
+
+                with mock.patch.object(
+                    VALIDATOR, "_git", side_effect=changed_git
+                ), self.assertRaisesRegex(
+                    VALIDATOR.ProductionBridgePolicyError,
+                    "current F migration manifest differs",
+                ):
+                    self.validate(self.document)
+
+    def test_current_authority_rejects_batch_sql_drift(self) -> None:
+        authority_sha = VALIDATOR._head_commit(ROOT)
+        revision_path = (
+            f"{authority_sha}:backend/migrations/postgres/"
+            "0016_monomer_polymerization_batch.sql"
+        )
+        original_git = VALIDATOR._git
+
+        def changed_git(root, *arguments):
+            original = original_git(root, *arguments)
+            if arguments == ("show", revision_path):
+                return original + b"\nSELECT 1;\n"
+            return original
+
+        with mock.patch.object(
+            VALIDATOR, "_git", side_effect=changed_git
+        ), self.assertRaisesRegex(
+            VALIDATOR.ProductionBridgePolicyError,
+            "batch 0016 SQL checksum differs",
+        ):
+            self.validate(self.document)
 
     def test_arbitrary_full_historical_target_is_rejected_after_reseal(
         self,
@@ -396,6 +467,36 @@ class ProductionBridgeHeadBindingTests(unittest.TestCase):
                 self.assertEqual(bindings["policy"]["mode"], "100644")
 
                 (root / "policy.json").write_bytes(b'{"schema_version":2}\n')
+                with self.assertRaisesRegex(
+                    VALIDATOR.ProductionBridgePolicyError,
+                    "working-tree bytes differ",
+                ):
+                    VALIDATOR._snapshot_head_bound_inputs(root, authority_sha)
+
+    def test_batch_sql_is_bound_to_exact_head_bytes(self) -> None:
+        relative_path = (
+            "backend/migrations/postgres/0016_monomer_polymerization_batch.sql"
+        )
+        self.assertEqual(
+            VALIDATOR.HEAD_BOUND_INPUTS["batch_migration_sql"], relative_path
+        )
+        original = (ROOT / relative_path).read_bytes()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            authority_sha = self.make_repository(root, relative_path, original)
+            with mock.patch.object(
+                VALIDATOR,
+                "HEAD_BOUND_INPUTS",
+                {"batch_migration_sql": relative_path},
+            ):
+                bindings, _ = VALIDATOR._snapshot_head_bound_inputs(
+                    root, authority_sha
+                )
+                self.assertEqual(
+                    bindings["batch_migration_sql"]["sha256"],
+                    VALIDATOR.BATCH_MIGRATION_SQL_SHA256,
+                )
+                (root / relative_path).write_bytes(original + b"\nSELECT 1;\n")
                 with self.assertRaisesRegex(
                     VALIDATOR.ProductionBridgePolicyError,
                     "working-tree bytes differ",

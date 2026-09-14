@@ -933,8 +933,10 @@ MUTABLE_DATA_BUSINESS_TABLES = tuple(
     for schema, table in (
         _site_helper_contracts.BUSINESS_MUTABLE_TABLES
         + _site_helper_contracts.POST_0013_BUSINESS_MUTABLE_TABLES
+        + _site_helper_contracts.POST_0016_BUSINESS_MUTABLE_TABLES
     )
 )
+LEGACY_MUTABLE_DATA_BUSINESS_TABLES = MUTABLE_DATA_BUSINESS_TABLES[:-len(_site_helper_contracts.POST_0016_BUSINESS_MUTABLE_TABLES)]
 MUTABLE_DATA_GOVERNED_CONTROLS = tuple(
     f"{schema}.{table}"
     for schema, table in _site_helper_contracts.GOVERNED_CONTROL_TABLES
@@ -1042,8 +1044,10 @@ ACTIVE_JOB_FIELDS_V1 = frozenset(
     }
 )
 ACTIVE_JOB_FIELDS_V2 = ACTIVE_JOB_FIELDS_V1 | {"monomer_dft"}
+ACTIVE_JOB_FIELDS_V3 = ACTIVE_JOB_FIELDS_V2 | {"polymerization_batch"}
 PERSISTENT_JOB_FIELDS_V1 = frozenset({"monomer_md", "online_knowledge"})
 PERSISTENT_JOB_FIELDS_V2 = PERSISTENT_JOB_FIELDS_V1 | {"monomer_dft"}
+PERSISTENT_JOB_FIELDS_V3 = PERSISTENT_JOB_FIELDS_V2 | {"polymerization_batch"}
 FORBIDDEN_IN_TREE_RUNTIME_PATHS = (
     ".env",
     ".env.ai",
@@ -1234,6 +1238,7 @@ CURRENT_STATE_FIELDS = LEGACY_CURRENT_STATE_FIELDS | {
     "monomer_dft",
 }
 CURRENT_STATE_OPTIONAL_FIELDS = {
+    "post_queue_mutable_data_audits",
     "adoption_successor_lineage",
     "contract_mutable_data_audit",
     "final_mutable_data_audit",
@@ -3732,7 +3737,7 @@ def validate_mutable_data_contract(document: object) -> dict[str, Any]:
         or document.get("schema_version") != 6
         or document.get("evidence_schema_version") != 6
         or document.get("business_tables")
-        != list(MUTABLE_DATA_BUSINESS_TABLES)
+        not in [list(MUTABLE_DATA_BUSINESS_TABLES), list(LEGACY_MUTABLE_DATA_BUSINESS_TABLES)]
         or document.get("governed_controls")
         != list(MUTABLE_DATA_GOVERNED_CONTROLS)
         or document.get("static_tables")
@@ -3789,7 +3794,7 @@ def validate_mutable_data_evidence(document: object) -> dict[str, Any]:
     if [
         f"{record['schema']}.{record['table']}"
         for record in validated["business_tables"]
-    ] != list(MUTABLE_DATA_BUSINESS_TABLES):
+    ] not in [list(MUTABLE_DATA_BUSINESS_TABLES), list(LEGACY_MUTABLE_DATA_BUSINESS_TABLES)]:
         raise PullDeployError(
             "mutable-data audit selected unexpected business tables"
         )
@@ -4244,6 +4249,7 @@ def _derive_mutable_data_transition(
             "0013_monomer_dft_jobs",
             "0014_monomer_md_task_queue_cancel",
             "0015_property_filter_performance",
+            "0016_monomer_polymerization_batch",
         }
     ):
         migration = dict(after_ledger[-1])
@@ -4252,6 +4258,7 @@ def _derive_mutable_data_transition(
             "0013_monomer_dft_jobs": "expand-0013",
             "0014_monomer_md_task_queue_cancel": "expand-0014",
             "0015_property_filter_performance": "expand-0015",
+            "0016_monomer_polymerization_batch": "expand-0016",
         }[migration["version"]]
     elif (
         len(after_ledger) == len(before_ledger) + 2
@@ -4280,13 +4287,17 @@ def _derive_mutable_data_transition(
 
     before_business = _mutable_table_map(before["business_tables"])
     after_business = _mutable_table_map(after["business_tables"])
-    dft_relations = set(
-        MUTABLE_DATA_BUSINESS_TABLES[
-            -len(_site_helper_contracts.POST_0013_BUSINESS_MUTABLE_TABLES) :
-        ]
-    )
+    dft_relations = {f"{schema}.{table}" for schema, table in _site_helper_contracts.POST_0013_BUSINESS_MUTABLE_TABLES}
+    batch_relations = {f"{schema}.{table}" for schema, table in _site_helper_contracts.POST_0016_BUSINESS_MUTABLE_TABLES}
+    for relation in batch_relations:
+        before_business.setdefault(relation, {"state": "absent"})
+        after_business.setdefault(relation, {"state": "absent"})
     for relation in MUTABLE_DATA_BUSINESS_TABLES:
-        if (
+        if "0016_monomer_polymerization_batch" in migration_versions and relation in batch_relations:
+            created = after_business[relation]
+            if before_business[relation]["state"] != "absent" or created["state"] != "present" or created["row_count"] != 0:
+                raise PullDeployError("0016 did not create empty batch business relations")
+        elif (
             "0013_monomer_dft_jobs" in migration_versions
             and relation in dft_relations
         ):
@@ -4314,7 +4325,7 @@ def _derive_mutable_data_transition(
                 raise PullDeployError(
                     "0014 did not preserve the MD job table while expanding its schema"
                 )
-        elif before_business[relation] != after_business[relation]:
+        elif (before_business[relation].get("state") != "absent" or after_business[relation].get("state") != "absent") and before_business[relation] != after_business[relation]:
             raise PullDeployError(
                 f"mutable business table changed during deployment: {relation}"
             )
@@ -4460,6 +4471,35 @@ def _derive_mutable_data_transition(
     }
 
 
+def retained_post_queue_audits(previous: object, current_pair: object = None) -> list[dict[str, Any]]:
+    """Keep exact 0015/0016 expansion evidence across later code releases."""
+    state = previous if isinstance(previous, dict) else {}
+    retained = list(state.get("post_queue_mutable_data_audits", []))
+    for raw in (state.get("mutable_data_audit"), current_pair):
+        if not isinstance(raw, dict) or raw.get("transition", {}).get("kind") not in {"expand-0015", "expand-0016"}:
+            continue
+        pair = validate_mutable_data_pair(raw)
+        if not any(item["transition"]["kind"] == pair["transition"]["kind"] for item in retained):
+            retained.append(pair)
+    return retained
+
+
+def validate_post_queue_audits(raw: object, start_ledger: list, end_ledger: list) -> list[dict[str, Any]]:
+    if not isinstance(raw, list) or len(raw) > 2:
+        raise PullDeployError("post-queue expansion evidence is invalid")
+    ledger, validated = start_ledger, []
+    for index, record in enumerate(raw):
+        pair = validate_mutable_data_pair(record)
+        version = ("0015_property_filter_performance", "0016_monomer_polymerization_batch")[index]
+        if pair["transition"]["kind"] != ("expand-0015", "expand-0016")[index] or pair["before"]["migration_ledger"] != ledger or pair["after"]["migration_ledger"] != [*ledger, {"version": version, "checksum": dict(_site_helper_contracts.CANONICAL_MIGRATION_LEDGER)[version]}]:
+            raise PullDeployError("post-queue expansion evidence is not an exact ordered chain")
+        validated.append(pair)
+        ledger = pair["after"]["migration_ledger"]
+    if ledger != end_ledger:
+        raise PullDeployError("post-queue expansion evidence does not reach the live ledger")
+    return validated
+
+
 def _derive_bridge_mutable_data_transition(
     before: dict[str, Any],
     after: dict[str, Any],
@@ -4499,6 +4539,8 @@ def _derive_bridge_mutable_data_transition(
     after_business = _mutable_table_map(after["business_tables"])
     md_relation = "md.monomer_md_jobs"
     for relation in MUTABLE_DATA_BUSINESS_TABLES:
+        if relation not in before_business and relation not in after_business:
+            continue
         if relation == md_relation:
             prior = before_business[relation]
             observed = after_business[relation]
@@ -6105,6 +6147,7 @@ COMPATIBILITY_LEDGER_ORDER = (
     *_bridge_core.REQUIRED_LEDGER_ORDER,
     "post-0014",
     "post-0015",
+    "post-0016",
 )
 
 
@@ -6179,6 +6222,8 @@ def _normalize_compatibility_ledgers(
         raise PullDeployError(
             "migration compatibility 0015 boundary is invalid"
         )
+    if normalized[-1]["name"] == "post-0016" and normalized[-1]["terminal_version"] != _bridge_core.BATCH_MIGRATION["version"]:
+        raise PullDeployError("migration compatibility 0016 boundary is invalid")
     return normalized
 
 
@@ -6226,6 +6271,8 @@ def _match_compatibility_ledger(
             "checksum": terminal["checksum"],
         }
         != _bridge_core.PROPERTY_FILTER_MIGRATION
+        or matches[0]["name"] == "post-0016"
+        and {"version": terminal["version"], "checksum": terminal["checksum"]} != _bridge_core.BATCH_MIGRATION
     ):
         raise PullDeployError(
             "migration compatibility terminal checksum differs"
@@ -6249,7 +6296,7 @@ def canonical_ledger_history(
 
     if not isinstance(rows, list) or not isinstance(manifest, list):
         raise PullDeployError("migration manifest or ledger evidence is invalid")
-    if not rows or len(rows) > len(manifest) + 3:
+    if not rows or len(rows) > len(manifest) + 4:
         raise PullDeployError(
             "database migration ledger is empty or beyond the manifest"
         )
@@ -6274,7 +6321,13 @@ def canonical_ledger_history(
                     _bridge_core.QUEUE_MIGRATION,
                 ),
             )
-            extension, extension_record, predecessor = extensions[extension_index]
+            extensions = (*extensions, (_bridge_core.BATCH_MIGRATION, _bridge_core.BATCH_MIGRATION_RECORD, _bridge_core.PROPERTY_FILTER_MIGRATION))
+            # A rollback baseline may already know 0013/0014/0015. Select the
+            # exact next registered migration by its predecessor, not offset 0.
+            matching = [item for item in extensions if history and history[-1].get("version") == item[2]["version"]]
+            if len(matching) != 1:
+                raise PullDeployError("migration ledger has no registered successor")
+            extension, extension_record, predecessor = matching[0]
             if (
                 accepted_ledgers is None
                 or row != extension
@@ -6337,6 +6390,9 @@ def canonical_ledger_history(
                             expected_migration = (
                                 _bridge_core.PROPERTY_FILTER_MIGRATION
                             )
+                        elif state_name == "post-0015":
+                            expected_name = "post-0016"
+                            expected_migration = _bridge_core.BATCH_MIGRATION
                         else:
                             exact_successor = False
                             break
@@ -6447,11 +6503,11 @@ def validate_active_jobs_evidence(
     if (
         not isinstance(version, int)
         or isinstance(version, bool)
-        or version not in {1, 2}
+        or version not in {1, 2, 3}
     ):
         raise PullDeployError("Backend active-job schema version is unsupported")
     counts = document.get("active_jobs")
-    expected = ACTIVE_JOB_FIELDS_V1 if version == 1 else ACTIVE_JOB_FIELDS_V2
+    expected = {1: ACTIVE_JOB_FIELDS_V1, 2: ACTIVE_JOB_FIELDS_V2, 3: ACTIVE_JOB_FIELDS_V3}[version]
     if not isinstance(counts, dict) or set(counts) != expected:
         raise PullDeployError(
             "Backend active-job categories differ from the selected schema"
@@ -6506,16 +6562,14 @@ def validate_persistent_drain_evidence(
     if (
         not isinstance(version, int)
         or isinstance(version, bool)
-        or version not in {1, 2}
+        or version not in {1, 2, 3}
     ):
         raise PullDeployError(
             "persistent drain active-job schema version is unsupported"
         )
     counts = document.get("active_jobs")
     expected = (
-        PERSISTENT_JOB_FIELDS_V1
-        if version == 1
-        else PERSISTENT_JOB_FIELDS_V2
+        {1: PERSISTENT_JOB_FIELDS_V1, 2: PERSISTENT_JOB_FIELDS_V2, 3: PERSISTENT_JOB_FIELDS_V3}[version]
     )
     if not isinstance(counts, dict) or set(counts) != expected:
         raise PullDeployError("persistent drain job categories are invalid")
@@ -6557,10 +6611,10 @@ def validate_bootstrap_quiesce_evidence(
     if (
         not isinstance(version, int)
         or isinstance(version, bool)
-        or version not in {1, 2}
+        or version not in {1, 2, 3}
     ):
         raise PullDeployError("bootstrap active-job schema version is unsupported")
-    expected = ACTIVE_JOB_FIELDS_V1 if version == 1 else ACTIVE_JOB_FIELDS_V2
+    expected = {1: ACTIVE_JOB_FIELDS_V1, 2: ACTIVE_JOB_FIELDS_V2, 3: ACTIVE_JOB_FIELDS_V3}[version]
     counts = document.get("active_jobs")
     if (
         document.get("ingress_isolated") is not True
@@ -7168,6 +7222,7 @@ def build_migration_compatibility_state(
     *,
     code_manifest_sha256: object,
     migrations: object,
+    register_batch_successor: bool = False,
 ) -> dict[str, Any]:
     """Bind code and live ledger identities to the frozen B/F registry."""
 
@@ -7224,11 +7279,16 @@ def build_migration_compatibility_state(
                 expected_migration = _bridge_core.PROPERTY_FILTER_MIGRATION
                 if (
                     code_manifest
-                    != _bridge_core.PROPERTY_FILTER_AUTHORITY_MANIFEST_SHA256
+                    not in {_bridge_core.PROPERTY_FILTER_AUTHORITY_MANIFEST_SHA256, _bridge_core.BATCH_AUTHORITY_MANIFEST_SHA256}
                 ):
                     raise PullDeployError(
                         "0015 migration is not bound to its exact code manifest"
                     ) from exc
+            elif state_name == "post-0015":
+                successor_name = "post-0016"
+                expected_migration = _bridge_core.BATCH_MIGRATION
+                if code_manifest != _bridge_core.BATCH_AUTHORITY_MANIFEST_SHA256:
+                    raise PullDeployError("0016 migration is not bound to its exact code manifest") from exc
             else:
                 raise PullDeployError(
                     "migration history is outside the frozen B/F registry"
@@ -7317,6 +7377,21 @@ def build_migration_compatibility_state(
                 ),
             }
         )
+    if code_manifest == _bridge_core.BATCH_AUTHORITY_MANIFEST_SHA256 and "post-0016" not in {record["name"] for record in normalized}:
+        successor_ledger = list(migrations)
+        known = {record["version"] for record in successor_ledger}
+        for record, name in ((_bridge_core.QUEUE_MIGRATION_RECORD, "post-0014"), (_bridge_core.PROPERTY_FILTER_MIGRATION_RECORD, "post-0015"), (_bridge_core.BATCH_MIGRATION_RECORD, "post-0016")):
+            if record["version"] not in known:
+                successor_ledger.append(dict(record))
+            if name not in {item["name"] for item in normalized}:
+                normalized.append({"name": name, "manifest_sha256": code_manifest,
+                    "terminal_version": record["version"], "ledger_sha256": _bridge_core.migration_ledger_digest(successor_ledger)})
+    if register_batch_successor and code_manifest == _bridge_core.PROPERTY_FILTER_AUTHORITY_MANIFEST_SHA256 and ledger_state["name"] == "post-0015" and normalized[-1]["name"] == "post-0015":
+        # Written only by a new compatibility-baseline release. Historical
+        # states are not silently rewritten when they are merely validated.
+        normalized.append({"name": "post-0016", "manifest_sha256": _bridge_core.BATCH_AUTHORITY_MANIFEST_SHA256,
+            "terminal_version": _bridge_core.BATCH_MIGRATION["version"],
+            "ledger_sha256": _bridge_core.migration_ledger_digest([*migrations, _bridge_core.BATCH_MIGRATION_RECORD])})
     by_name = {record.get("name"): record for record in normalized}
     if set(by_name) != set(
         COMPATIBILITY_LEDGER_ORDER[: len(normalized)]
@@ -7332,8 +7407,8 @@ def build_migration_compatibility_state(
     )
     authority_manifest = require_digest(
         by_name.get(
-            "post-0015",
-            by_name.get("post-0014", by_name["post-0013"]),
+            "post-0016",
+            by_name.get("post-0015", by_name.get("post-0014", by_name["post-0013"])) ,
         ).get("manifest_sha256"),
         "current migration manifest",
     )
@@ -7344,7 +7419,7 @@ def build_migration_compatibility_state(
         }
         or (
             ledger_state["name"]
-            not in {"post-0013", "post-0014", "post-0015"}
+            not in {"post-0013", "post-0014", "post-0015", "post-0016"}
             and code_manifest != target_manifest
         )
     ):
@@ -10098,6 +10173,14 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
                 "current 0014 mutable-data evidence differs from migration history"
             )
         mutable_stage_pairs.append(queue_mutable_pair)
+    post_queue_pairs = []
+    if queue_mutable_pair is not None and (len(history_ledger) >= 16 or "post_queue_mutable_data_audits" in document):
+        raw_post_queue = document.get("post_queue_mutable_data_audits")
+        if raw_post_queue is None and mutable_pair["transition"]["kind"] == "expand-0015":
+            raw_post_queue = [mutable_pair]  # Historical 0015 state.
+        post_queue_pairs = validate_post_queue_audits(raw_post_queue,
+            queue_mutable_pair["after"]["migration_ledger"], history_ledger)
+        mutable_stage_pairs.extend(post_queue_pairs)
     if mutable_pair["transition"]["kind"] == "bridge-expand-to-0011":
         expected_bridge_ledger = [
             {"version": version, "checksum": checksum}
@@ -10197,7 +10280,8 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
             and (
                 queue_mutable_pair["after"]["migration_ledger"]
                 == history_ledger
-                or mutable_pair["transition"]["kind"] == "expand-0015"
+                or bool(post_queue_pairs)
+                or mutable_pair["transition"]["kind"] in {"expand-0015", "expand-0016"}
                 and mutable_pair["before"]["migration_ledger"]
                 == queue_mutable_pair["after"]["migration_ledger"]
                 and mutable_pair["after"]["migration_ledger"]
@@ -10290,7 +10374,7 @@ def validate_current_deployment_state(document: dict[str, Any]) -> dict[str, Any
         and migration_compatibility["code_manifest_sha256"]
         == migration_compatibility["target_manifest_sha256"]
         and migration_compatibility["ledger_state"]["name"]
-        in {"post-0013", "post-0014", "post-0015"}
+        in {"post-0013", "post-0014", "post-0015", "post-0016"}
     )
     if requires_retained_0013_provenance and rollback_provenance is None:
         raise PullDeployError(
@@ -12321,6 +12405,13 @@ class Lifecycle(Protocol):
     ) -> dict[str, Any]: ...
 
 class SystemLifecycle:
+    @staticmethod
+    def _batch_services(controller) -> tuple[str, ...]:
+        compose = controller.production_root / "docker-compose.yml"
+        if compose.is_file() and "  polymerization-batch-worker:" in compose.read_text(encoding="utf-8"):
+            return ("polymerization-batch-worker",)
+        return ()
+
     @staticmethod
     def _docker_exec(
         container_id: str,
@@ -15340,7 +15431,7 @@ class SystemLifecycle:
         if any(path.exists() or path.is_symlink() for path in sockets):
             raise PullDeployError("Worker UDS remained after source-reader stop")
         remaining = controller.runner.run(
-            self._compose(controller, "ps", "--quiet", "backend", "nginx"),
+            self._compose(controller, "ps", "--quiet", "backend", "nginx", *self._batch_services(controller)),
             cwd=controller.production_root,
             env=environment,
         )
@@ -15427,7 +15518,7 @@ class SystemLifecycle:
                 pass
         try:
             controller.runner.run(
-                self._compose(controller, "stop", "nginx", "backend"),
+                self._compose(controller, "stop", "nginx", "backend", *self._batch_services(controller)),
                 cwd=controller.production_root,
                 env=environment,
             )
@@ -15789,6 +15880,7 @@ class SystemLifecycle:
                 "300",
                 "--no-deps",
                 "backend",
+                *self._batch_services(controller),
             ),
             cwd=controller.production_root,
             env=environment,
@@ -15989,7 +16081,7 @@ class SystemLifecycle:
                 raise PullDeployError("monomer DFT systemd runtime identity differs")
 
         running: dict[str, Any] = {}
-        roles = [("backend", "backend")]
+        roles = [("backend", "backend"), *(("backend", name) for name in self._batch_services(controller))]
         if require_ingress:
             roles.append(("web", "nginx"))
         else:
@@ -16041,6 +16133,8 @@ class SystemLifecycle:
                 raise PullDeployError(
                     f"running {role} container differs from sealed image"
                 )
+            if service == "polymerization-batch-worker":
+                continue  # Verified against the same immutable Backend image.
             running[role] = {
                 "container_id": identities[0],
                 "image_id": record["image_id"],
@@ -24487,11 +24581,15 @@ class PullDeployController:
                 authority,
                 code_manifest_sha256=descriptor["migrations"]["sha256"],
                 migrations=state.get("migrations"),
+                register_batch_successor=any(item["name"] == "post-0016" for item in compatibility["accepted_migration_ledgers"]),
             )
             if compatibility != expected_compatibility:
                 raise PullDeployError(
                     "deployment compatibility registry differs from source authority"
                 )
+        if "post_queue_mutable_data_audits" in state and state.get("rollback_provenance") is None:
+            if state["post_queue_mutable_data_audits"] != retained_post_queue_audits(previous_state, state.get("mutable_data_audit")):
+                raise PullDeployError("post-queue migration evidence differs from sealed predecessor authority")
         return descriptor
 
     def _validate_rollback_state_provenance(
@@ -24553,6 +24651,7 @@ class PullDeployController:
                 "rollback source descriptor authority differs"
             )
         allowed_differences = {
+            "post_queue_mutable_data_audits",
             "migrations",
             "migration_compatibility",
             "database_backup",
@@ -24596,6 +24695,7 @@ class PullDeployController:
             "migration_compatibility",
             "final_mutable_data_audit",
             "final_external_database_audit",
+            "post_queue_mutable_data_audits",
         ):
             if state.get(field) != expected_semantics.get(field):
                 raise PullDeployError(
@@ -37210,6 +37310,7 @@ class PullDeployController:
                 compatibility_authority,
                 code_manifest_sha256=descriptor["migrations"]["sha256"],
                 migrations=migrations,
+                register_batch_successor=True,
             )
         active = validate_active_slot_record(load_private_json(self.active_slot_path))
         active_control = self.active_control_evidence()
@@ -37368,6 +37469,9 @@ class PullDeployController:
             state["final_mutable_data_audit"] = final_mutable_data_audit
         if queue_mutable_data_audit is not None:
             state["queue_mutable_data_audit"] = queue_mutable_data_audit
+        post_queue = retained_post_queue_audits(previous, mutable_pair)
+        if post_queue:
+            state["post_queue_mutable_data_audits"] = post_queue
         validate_current_state_adoption_lineage(
             state,
             descriptor=descriptor,
@@ -40256,7 +40360,7 @@ class PullDeployController:
             and compatibility["code_manifest_sha256"]
             == compatibility["target_manifest_sha256"]
             and compatibility["ledger_state"]["name"]
-            in {"post-0013", "post-0014", "post-0015"}
+            in {"post-0013", "post-0014", "post-0015", "post-0016"}
         )
         source_terminal = self._deployment_terminal_audit_binding(
             operation_id=current["operation_id"],
@@ -40359,7 +40463,13 @@ class PullDeployController:
                 )
         if current.get("migrations") == previous.get("migrations"):
             return rollback_state
-        if (
+        exact_batch_baseline = (
+            isinstance(previous_compatibility, dict) and isinstance(current_compatibility, dict)
+            and previous_compatibility.get("ledger_state", {}).get("name") == "post-0015"
+            and current_compatibility.get("ledger_state", {}).get("name") == "post-0016"
+            and current.get("migrations") == [*previous.get("migrations", []), _bridge_core.BATCH_MIGRATION_RECORD]
+        )
+        if not exact_batch_baseline and (
             not isinstance(previous_compatibility, dict)
             or not isinstance(current_compatibility, dict)
             or previous_compatibility.get("code_manifest_sha256")
@@ -40404,6 +40514,8 @@ class PullDeployController:
             rollback_state[field] = json.loads(
                 json.dumps(current[field])
             )
+        if current.get("post_queue_mutable_data_audits") is not None:
+            rollback_state["post_queue_mutable_data_audits"] = json.loads(json.dumps(current["post_queue_mutable_data_audits"]))
         return rollback_state
 
     def _recover_explicit_rollback(

@@ -1,0 +1,1280 @@
+diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher-react/dist/cjs/index.js
+--- a/node_modules/ketcher-react/dist/cjs/index.js
++++ b/node_modules/ketcher-react/dist/cjs/index.js
+@@ -150,2 +150,4 @@
+   var info = structService.info();
++  info.catch(function () {});
++  Object.defineProperty(info, "disposed", { get: function () { return structService.disposed; } });
+   return Object.assign(info, {
+@@ -521,2 +523,7 @@
+       Object.keys(this.listeners).forEach(function (en) {
++        var handler = _this2.listeners[en];
++        _this2.listeners[en] = function (event) {
++          if (_this2.disposed || !nexpolyOwnsEvent(el.parentElement, event)) return;
++          return handler(event);
++        };
+         _this2.target.addEventListener(en, _this2.listeners[en]);
+@@ -533,2 +540,4 @@
+       var _this3 = this;
++      this.disposed = true;
++      this.props.dispose?.();
+       Object.keys(this.listeners).forEach(function (en) {
+@@ -8774,3 +8783,3 @@
+     if (focusable) {
+-      dialogRef.current.focus();
++      nexpolyFocus(dialogRef.current);
+     }
+@@ -8778,3 +8787,3 @@
+       var _dialogRef$current;
+-      (_dialogRef$current = dialogRef.current) === null || _dialogRef$current === void 0 || (_dialogRef$current = _dialogRef$current.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _dialogRef$current === void 0 || _dialogRef$current.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0].focus();
++      (_dialogRef$current = dialogRef.current) === null || _dialogRef$current === void 0 || (_dialogRef$current = _dialogRef$current.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _dialogRef$current === void 0 || _dialogRef$current.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0]?.focus({ preventScroll: true });
+     };
+@@ -14879,2 +14888,3 @@
+       var state = getState();
++      if (!state.editor || state.editor.disposed) return;
+       state.editor.render.update();
+@@ -14886,2 +14896,3 @@
+     addEventListener('resize', onResize);
++    return function () { removeEventListener('resize', onResize); onResize.cancel(); };
+   };
+@@ -15031,2 +15042,3 @@
+   return function root(state, action) {
++    if (state?.editor?.disposed) return state;
+     switch (action.type) {
+@@ -15150,21 +15162,42 @@
+ var throttleMilliseconds = 100;
+-function useThrottleResizeObserver() {
+-  var options = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+-  var _useState = React.useState({
+-      height: undefined,
+-      width: undefined
+-    }),
+-    _useState2 = _slicedToArray__default["default"](_useState, 2),
+-    size = _useState2[0],
+-    setSize = _useState2[1];
+-  var onResize = React.useMemo(function () {
+-    return _.throttle(setSize, throttleMilliseconds);
+-  }, []);
+-  var _useResizeObserver = useResizeObserver__default["default"](_objectSpread$18({
+-      onResize: onResize
+-    }, options)),
+-    ref = _useResizeObserver.ref;
+-  return _objectSpread$18({
+-    ref: ref
+-  }, size);
++// A ref callback must not enqueue setState(null) while this nested root unmounts.
++// React Refresh otherwise re-registers the second, empty commit and retains it.
++function nexpolyUseInView(options) {
++  var state = React.useState(false);
++  var observation = React.useRef(null);
++  var ref = React.useCallback(function (element) {
++    observation.current?.disconnect();
++    observation.current = null;
++    if (!element) return;
++    var observer = new IntersectionObserver(function (entries) {
++      if (observation.current !== observer || !element.isConnected) return;
++      var entry = entries[0];
++      state[1](entry.isIntersecting && entry.intersectionRatio >= options.threshold);
++    }, options);
++    observation.current = observer;
++    observer.observe(element);
++  }, [options.threshold]);
++  React.useLayoutEffect(function () { return function () { ref(null); }; }, [ref]);
++  return [ref, state[0]];
++}
++function useThrottleResizeObserver(options = {}) {
++  var state = React.useState({ height: undefined, width: undefined });
++  var elementRef = React.useRef(null);
++  var ref = React.useCallback(function (element) { elementRef.current = element; }, []);
++  React.useLayoutEffect(function () {
++    var element = options.ref?.current || elementRef.current;
++    if (!element) return;
++    var active = true;
++    var onResize = _.throttle(function (size) {
++      if (active && element.isConnected && element.getClientRects().length) state[1](size);
++    }, throttleMilliseconds);
++    var observer = new ResizeObserver(function (entries) {
++      if (!active || !element.isConnected || !element.getClientRects().length) return;
++      var rect = entries[0]?.contentRect;
++      if (rect) onResize({ width: Math.round(rect.width), height: Math.round(rect.height) });
++    });
++    observer.observe(element);
++    return function () { active = false; observer.disconnect(); onResize.cancel(); };
++  }, [options.ref]);
++  return { ref: ref, ...state[0] };
+ }
+@@ -15252,10 +15285,6 @@
+   React.useEffect(function () {
+-    return function () {
+-      setScrollUp(false);
+-    };
++    setScrollUp(false);
+   }, [startInView]);
+   React.useEffect(function () {
+-    return function () {
+-      setScrollDown(false);
+-    };
++    setScrollDown(false);
+   }, [endInView]);
+@@ -15357,3 +15386,3 @@
+   var scrollRef = React.useRef(null);
+-  var _useInView = reactIntersectionObserver.useInView({
++  var _useInView = nexpolyUseInView({
+       threshold: 1
+@@ -15363,3 +15392,3 @@
+     startInView = _useInView2[1];
+-  var _useInView3 = reactIntersectionObserver.useInView({
++  var _useInView3 = nexpolyUseInView({
+       threshold: 1
+@@ -15651,3 +15680,3 @@
+     height = _useResizeObserver.height;
+-  var _useInView = reactIntersectionObserver.useInView({
++  var _useInView = nexpolyUseInView({
+       threshold: 1
+@@ -15657,3 +15686,3 @@
+     startInView = _useInView2[1];
+-  var _useInView3 = reactIntersectionObserver.useInView({
++  var _useInView3 = nexpolyUseInView({
+       threshold: 1
+@@ -20231,3 +20260,2 @@
+ 
+-var keydownListener = null;
+ function initKeydownListener(element) {
+@@ -20235,3 +20263,4 @@
+     var hotKeys = ketcherCore.initHotKeys(configWithNonViewOnlyActionsDisabled);
+-    keydownListener = function keydownListener(event) {
++    var keydownListener = function keydownListener(event) {
++      if (!nexpolyOwnsEvent(element, event)) return;
+       return keyHandle(dispatch, getState, hotKeys, event);
+@@ -20239,9 +20268,6 @@
+     element.addEventListener('keydown', keydownListener);
+-  };
+-}
+-function removeKeydownListener(element) {
+-  return function () {
+-    if (keydownListener) {
++    return function () {
+       element.removeEventListener('keydown', keydownListener);
+-    }
++      clearTimeout(getState().editor?.abbreviationLookupTimeoutId);
++    };
+   };
+@@ -20254,3 +20280,2 @@
+ }
+-var abbreviationLookupTimeoutId;
+ var ABBREVIATION_LOOKUP_TYPING_TIMEOUT = 1000;
+@@ -20277,4 +20302,4 @@
+       dispatch(showAbbreviationLookup(event.key));
+-      clearTimeout(abbreviationLookupTimeoutId);
+-      abbreviationLookupTimeoutId = undefined;
++      clearTimeout(editor.abbreviationLookupTimeoutId);
++      editor.abbreviationLookupTimeoutId = undefined;
+       var resetAction = ketcherCore.SettingsManager.getSettings().selectionTool;
+@@ -20284,5 +20309,5 @@
+     } else {
+-      abbreviationLookupTimeoutId = window.setTimeout(function () {
++      editor.abbreviationLookupTimeoutId = window.setTimeout(function () {
+         dispatch(closeAbbreviationLookup());
+-        abbreviationLookupTimeoutId = undefined;
++        editor.abbreviationLookupTimeoutId = undefined;
+       }, ABBREVIATION_LOOKUP_TYPING_TIMEOUT);
+@@ -20398,2 +20423,3 @@
+     formats: formats,
++    dispose: function () { debAction.cancel(); loadStruct.cancel(); },
+     focused: function focused() {
+@@ -20651,5 +20677,6 @@
+     if (typeof requestIdleCallback === 'function') {
+-      requestIdleCallback(function () {
++      var idle = requestIdleCallback(function () {
+         return onInitTmpls(ref.current, staticResourcesUrl);
+       });
++      return function () { cancelIdleCallback(idle); };
+     } else {
+@@ -24313,2 +24340,13 @@
+   _createClass__default["default"](HoverIcon, [{
++    key: "destroy",
++    value: function destroy() {
++      if (!this.editor) return;
++      var area = this.editor.render.clientArea;
++      document.removeEventListener('mousemove', this.onMouseMove);
++      area.removeEventListener('mouseover', this.onMouseMove);
++      area.removeEventListener('mouseleave', this.onMouseLeave);
++      this.element.remove();
++      this.element = this.editor = null;
++    }
++  }, {
+     key: "fill",
+@@ -24340,2 +24378,3 @@
+     value: function onMouseMove(event) {
++      if (!this.editor || this.editor.disposed || !nexpolyOwnsEvent(this.editor.render.clientArea, event)) return;
+       if (this.isShown || this.isOverLoader(event) && this.shouldBeShownWhenMouseBack) {
+@@ -25168,2 +25207,19 @@
+   _createClass__default["default"](Editor, [{
++    key: "destroy",
++    value: function destroy() {
++      if (this.destroyed) return;
++      this.destroyed = this.disposed = true;
++      this.domDisposers.splice(0).forEach(function (dispose) { dispose(); });
++      clearTimeout(this.abbreviationLookupTimeoutId);
++      clearTimeout(this._tool?.connectedPreviewTimeout);
++      this.hoverIcon.destroy();
++      Object.values(this.event).forEach(function (subscription) { subscription.handlers = []; });
++      this.render.disposed = true;
++      clearTimeout(this.render.updateTimer);
++      this.render.unobserveCanvasResize();
++      this.render.scrollbar.destroy();
++      this.render.paper.remove();
++      this.historyStack = [];
++    }
++  }, {
+     key: "isDitrty",
+@@ -26091,4 +26147,4 @@
+     value: function focusCliparea() {
+-      var cliparea = document.querySelector('.cliparea');
+-      cliparea === null || cliparea === void 0 || cliparea.focus();
++      var cliparea = this.render.clientArea.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)?.querySelector('.cliparea');
++      nexpolyFocus(cliparea);
+     }
+@@ -26194,3 +26250,21 @@
+ }
++function nexpolyFocus(element) {
++  if (!element || !element.isConnected || !element.getClientRects().length) return;
++  var active = document.activeElement;
++  var root = element.closest('[data-structure-editor]') || element.closest(KETCHER_ROOT_NODE_CSS_SELECTOR);
++  if (active && active !== document.body && !root?.contains(active) &&
++      (active.matches('input,textarea,select') || active.isContentEditable)) return;
++  element.focus({ preventScroll: true });
++}
++function nexpolyOwnsEvent(element, event) {
++  var root = element.closest?.('[data-structure-editor]') || element;
++  if (!element.isConnected || !element.getClientRects().length || !root.isConnected || !root.getClientRects().length || root.closest('[inert], [hidden]')) return false;
++  var target = event.target;
++  if (element.contains(target)) return true;
++  var popup = target?.closest?.('[data-ketcher-owner]');
++  return popup?.getAttribute('data-ketcher-owner') === root.getAttribute('data-ketcher-session');
++}
+ function domEventSetup(editor, clientArea) {
++  editor.domDisposers = [];
++  var dragging = false;
+   var trackedDomEvents = [{
+@@ -26234,6 +26308,13 @@
+     var subs = editor.event[eventName];
+-    target.addEventListener(eventName, function () {
+-      if (window.isPolymerEditorTurnedOn) return;
+-      subs.dispatch.apply(subs, arguments);
+-    });
++    var callback = function (event) {
++      if (editor.disposed || window.isPolymerEditorTurnedOn) return;
++      var owned = nexpolyOwnsEvent(clientArea, event);
++      if (eventName === 'mousedown' && owned) dragging = true;
++      var finishDrag = eventName === 'mouseup' || eventName === 'mouseleave';
++      if (!owned && !dragging) return;
++      if (finishDrag) dragging = false;
++      subs.dispatch(event);
++    };
++    target.addEventListener(eventName, callback);
++    editor.domDisposers.push(function () { target.removeEventListener(eventName, callback); subs.handlers = []; });
+     subs.add(function (event) {
+@@ -29553,3 +29634,3 @@
+       this.editorRef.current.removeEventListener('wheel', this.handleWheel);
+-      this.editor.render.unobserveCanvasResize();
++      this.editor.destroy();
+     }
+@@ -36963,3 +37044,3 @@
+       var _inputRef$current2;
+-      (_inputRef$current2 = inputRef.current) === null || _inputRef$current2 === void 0 || (_inputRef$current2 = _inputRef$current2.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _inputRef$current2 === void 0 || _inputRef$current2.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0].focus();
++      (_inputRef$current2 = inputRef.current) === null || _inputRef$current2 === void 0 || (_inputRef$current2 = _inputRef$current2.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _inputRef$current2 === void 0 || _inputRef$current2.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0]?.focus({ preventScroll: true });
+     };
+@@ -37166,4 +37247,2 @@
+ };
+-var pointerMoveListener = null;
+-var mouseDownListener = null;
+ function initMouseListener(element) {
+@@ -37171,6 +37250,8 @@
+     var throttledHandleMouseMove = _.throttle(handleMouseMove, MOUSE_MOVE_THROTTLE_TIMEOUT);
+-    pointerMoveListener = function pointerMoveListener(event) {
++    var pointerMoveListener = function pointerMoveListener(event) {
++      if (!nexpolyOwnsEvent(element, event)) return;
+       return throttledHandleMouseMove(dispatch, event);
+     };
+-    mouseDownListener = function mouseDownListener(event) {
++    var mouseDownListener = function mouseDownListener(event) {
++      if (!nexpolyOwnsEvent(element, event)) return;
+       var areBothLeftAndRightButtonsClicked = event.buttons === 3;
+@@ -37182,12 +37263,7 @@
+     element.addEventListener('mousedown', mouseDownListener, true);
+-  };
+-}
+-function removeMouseListeners(element) {
+-  return function () {
+-    if (pointerMoveListener) {
++    return function () {
+       element.removeEventListener('pointermove', pointerMoveListener);
+-    }
+-    if (mouseDownListener) {
+-      element.addEventListener('mousedown', mouseDownListener, true);
+-    }
++      element.removeEventListener('mousedown', mouseDownListener, true);
++      throttledHandleMouseMove.cancel();
++    };
+   };
+@@ -37217,5 +37293,5 @@
+   };
+-  store.dispatch(initKeydownListener(element));
+-  store.dispatch(initMouseListener(element));
+-  store.dispatch(initResize());
++  var disposeKeys = store.dispatch(initKeydownListener(element));
++  var disposeMouse = store.dispatch(initMouseListener(element));
++  var disposeResize = store.dispatch(initResize());
+   appRoot.render(jsxRuntime.jsx(reactRedux.Provider, {
+@@ -37243,4 +37319,6 @@
+   return function () {
+-    store.dispatch(removeKeydownListener(element));
+-    store.dispatch(removeMouseListeners(element));
++    disposeKeys();
++    disposeMouse();
++    disposeResize();
++    if (global.currentState?.editor === store.getState().editor) delete global.currentState;
+   };
+@@ -37284,21 +37362,16 @@
+     value: function reinitializeApi(ketcherId, structServiceProvider, setStructServiceToStore) {
+-      var _this = this;
+-      var oldStructService = this.structService;
+-      this.structService = createApi(structServiceProvider, ketcherCore.DefaultStructServiceOptions);
+-      this.structService.addKetcherId(ketcherId);
+-      window.addEventListener(STRUCT_SERVICE_INITIALIZED_EVENT, function () {
+-        var _oldStructService$des;
+-        oldStructService === null || oldStructService === void 0 || (_oldStructService$des = oldStructService.destroy) === null || _oldStructService$des === void 0 || _oldStructService$des.call(oldStructService);
+-        if (!_this.structService) {
+-          ketcherCore.KetcherLogger.warn('Structure service is not reinitialized');
+-          return;
+-        }
++      var builder = this;
++      var oldService = this.structService;
++      var service = this.structService = createApi(structServiceProvider, ketcherCore.DefaultStructServiceOptions);
++      service.addKetcherId(ketcherId);
++      service.info().then(function () {
++        if (builder.disposed || builder.structService !== service) { service.destroy?.(); return; }
+         var ketcher = ketcherCore.ketcherProvider.getKetcher(ketcherId);
+-        ketcher.reinitializeIndigo(_this.structService);
+-        IndigoProvider.setIndigo(_this.structService);
+-        setStructServiceToStore(_this.structService);
+-      }, {
+-        once: true
+-      });
+-      return this.structService;
++        if (!ketcher || ketcher.disposed) { service.destroy?.(); return; }
++        oldService?.destroy?.();
++        ketcher.reinitializeIndigo(service);
++        IndigoProvider.setIndigo(service);
++        setStructServiceToStore(service);
++      }).catch(function (error) { service.destroy?.(); if (!builder.disposed) console.error(error); });
++      return service;
+     }
+@@ -37376,2 +37449,3 @@
+       ketcherCore.ketcherProvider.addKetcherInstance(ketcher);
++      window.ketcher = ketcher;
+       return ketcher;
+@@ -37382,36 +37456,29 @@
+ 
+-function buildKetcherAsync(_x) {
+-  return _buildKetcherAsync.apply(this, arguments);
+-}
+-function _buildKetcherAsync() {
+-  _buildKetcherAsync = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee(_ref) {
+-    var element, appRoot, staticResourcesUrl, structServiceProvider, buttons, errorHandler, togglerComponent, customButtons, prevKetcherId, builder, structService, ketcher, _yield$builder$append, cleanup, setServer;
+-    return _regeneratorRuntime__default["default"].wrap(function _callee$(_context) {
+-      while (1) switch (_context.prev = _context.next) {
+-        case 0:
+-          element = _ref.element, appRoot = _ref.appRoot, staticResourcesUrl = _ref.staticResourcesUrl, structServiceProvider = _ref.structServiceProvider, buttons = _ref.buttons, errorHandler = _ref.errorHandler, togglerComponent = _ref.togglerComponent, customButtons = _ref.customButtons, prevKetcherId = _ref.ketcherId;
+-          builder = new KetcherBuilder();
+-          structService = builder.appendApiAsync(structServiceProvider);
+-          builder.appendServiceMode(structServiceProvider.mode);
+-          ketcher = builder.build();
+-          structService.addKetcherId(ketcher.id);
+-          _context.next = 8;
+-          return builder.appendUiAsync(prevKetcherId, ketcher.id, element, appRoot, staticResourcesUrl, errorHandler, buttons, togglerComponent, customButtons);
+-        case 8:
+-          _yield$builder$append = _context.sent;
+-          cleanup = _yield$builder$append.cleanup;
+-          setServer = _yield$builder$append.setServer;
+-          return _context.abrupt("return", {
+-            ketcher: ketcher,
+-            cleanup: cleanup,
+-            builder: builder,
+-            setServer: setServer
+-          });
+-        case 12:
+-        case "end":
+-          return _context.stop();
+-      }
+-    }, _callee);
+-  }));
+-  return _buildKetcherAsync.apply(this, arguments);
++async function buildKetcherAsync(props) {
++  var builder = new KetcherBuilder();
++  var service = builder.appendApiAsync(props.structServiceProvider);
++  builder.appendServiceMode(props.structServiceProvider.mode);
++  var ketcher = builder.build();
++  service.addKetcherId(ketcher.id);
++  props.onBuild(ketcher, builder);
++  var cleanup;
++  var abort;
++  try {
++    var result = await new Promise(function (resolve, reject) {
++      abort = function () { reject(new DOMException('Editor initialization disposed', 'AbortError')); };
++      props.signal.addEventListener('abort', abort, { once: true });
++      cleanup = initApp(props.ketcherId, ketcher.id, props.element, props.appRoot,
++        props.staticResourcesUrl, { buttons: props.buttons || {}, errorHandler: props.errorHandler || null,
++          version: '3.8.0', buildDate: '2025-10-17T11:21:57', buildNumber: '', customButtons: props.customButtons || [] },
++        service, resolve, props.togglerComponent);
++      props.onCleanup(cleanup);
++      if (props.signal.aborted) abort();
++    });
++    if (props.signal.aborted) throw new DOMException('Editor initialization disposed', 'AbortError');
++    result.editor.errorHandler = typeof props.errorHandler === 'function' ? props.errorHandler : function () {};
++    return { ketcher: ketcher, builder: builder, cleanup: cleanup, setServer: result.setServer };
++  } catch (error) {
++    ketcher.retire();
++    throw error;
++  } finally { props.signal.removeEventListener('abort', abort); }
+ }
+@@ -37426,74 +37493,61 @@
+ };
++// Serialize old root cleanup before creating another SDK root, including StrictMode.
++var nexpolyRootCleanup = Promise.resolve();
+ function MicromoleculesEditor(props) {
+-  var initPromiseRef = React.useRef(null);
+-  var appRootRef = React.useRef(null);
+-  var cleanupRef = React.useRef(null);
+-  var ketcherBuilderRef = React.useRef(null);
+-  var setServerRef = React.useRef(function () {});
+-  var structServiceProvider = props.structServiceProvider;
+   var rootElRef = React.useRef(null);
+-  var _useResizeObserver = useThrottleResizeObserver({
+-      ref: rootElRef
+-    }),
+-    height = _useResizeObserver.height,
+-    width = _useResizeObserver.width;
++  var active = React.useRef(null);
++  var latestProps = React.useRef(props);
++  latestProps.current = props;
++  var dimensions = useThrottleResizeObserver({ ref: rootElRef });
+   React.useEffect(function () {
+-    var _ketcherBuilderRef$cu;
+-    if (!props.ketcherId) {
+-      return;
+-    }
+-    (_ketcherBuilderRef$cu = ketcherBuilderRef.current) === null || _ketcherBuilderRef$cu === void 0 || _ketcherBuilderRef$cu.reinitializeApi(props.ketcherId, props.structServiceProvider, setServerRef.current);
+-  }, [structServiceProvider]);
+-  var initKetcher = function () {
+-    var _ref = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee() {
+-      var _initPromiseRef$curre;
+-      return _regeneratorRuntime__default["default"].wrap(function _callee$(_context) {
+-        while (1) switch (_context.prev = _context.next) {
+-          case 0:
+-            appRootRef.current = client.createRoot(rootElRef.current);
+-            initPromiseRef.current = buildKetcherAsync(_objectSpread$1(_objectSpread$1({}, props), {}, {
+-              element: rootElRef.current,
+-              appRoot: appRootRef.current
+-            }));
+-            (_initPromiseRef$curre = initPromiseRef.current) === null || _initPromiseRef$curre === void 0 || _initPromiseRef$curre.then(function (_ref2) {
+-              var _props$onSetKetcherId;
+-              var ketcher = _ref2.ketcher,
+-                cleanup = _ref2.cleanup,
+-                builder = _ref2.builder,
+-                setServer = _ref2.setServer;
+-              cleanupRef.current = cleanup;
+-              ketcherBuilderRef.current = builder;
+-              setServerRef.current = setServer;
+-              (_props$onSetKetcherId = props.onSetKetcherId) === null || _props$onSetKetcherId === void 0 || _props$onSetKetcherId.call(props, ketcher.id);
+-              if (typeof props.onInit === 'function' && ketcher) {
+-                props.onInit(ketcher);
+-                var ketcherInitEvent = new Event(ketcherInitEventName(ketcher.id));
+-                window.dispatchEvent(ketcherInitEvent);
+-              }
+-            });
+-          case 3:
+-          case "end":
+-            return _context.stop();
+-        }
+-      }, _callee);
+-    }));
+-    return function initKetcher() {
+-      return _ref.apply(this, arguments);
+-    };
+-  }();
++    var current = active.current;
++    if (current?.builder && current.provider !== props.structServiceProvider) {
++      current.provider = props.structServiceProvider;
++      current.builder.reinitializeApi(current.ketcher.id, current.provider, current.setServer);
++    }
++  }, [props.structServiceProvider]);
+   React.useEffect(function () {
+-    if (initPromiseRef.current === null) {
+-      initKetcher();
+-    } else {
+-      var _initPromiseRef$curre2;
+-      (_initPromiseRef$curre2 = initPromiseRef.current) === null || _initPromiseRef$curre2 === void 0 || _initPromiseRef$curre2["finally"](function () {
+-        initKetcher();
+-      });
+-    }
++    var record = { disposed: false, root: null, cleanup: null, ketcher: null, builder: null,
++      provider: props.structServiceProvider, controller: new AbortController() };
++    active.current = record;
++    var element = rootElRef.current;
++    var start = nexpolyRootCleanup.then(async function () {
++      if (record.disposed) return;
++      var appRoot = { render: function (view) {
++        if (record.disposed) return;
++        record.root = client.createRoot(element, { onUncaughtError: function (error) {
++          latestProps.current.errorHandler?.(error.message || String(error));
++          record.controller.abort();
++        } });
++        // Create and commit the nested root atomically. An initialization failure
++        // before render never registers an empty root with React Refresh.
++        ReactDOM__default["default"].flushSync(function () { record.root.render(view); });
++      } };
++      try {
++        var result = await buildKetcherAsync({ ...latestProps.current, element: element, appRoot: appRoot,
++          signal: record.controller.signal,
++          onBuild: function (ketcher, builder) { record.ketcher = ketcher; record.builder = builder; },
++          onCleanup: function (cleanup) { record.cleanup = cleanup; } });
++        if (record.disposed || active.current !== record) { result.ketcher.retire(); return; }
++        record.setServer = result.setServer;
++        latestProps.current.onSetKetcherId?.(result.ketcher.id);
++        latestProps.current.onInit?.(result.ketcher);
++        window.dispatchEvent(new Event(ketcherInitEventName(result.ketcher.id)));
++      } catch (error) {
++        if (!record.disposed) latestProps.current.errorHandler?.(error.message || String(error));
++      }
++    });
+     return function () {
+-      var _initPromiseRef$curre3;
+-      (_initPromiseRef$curre3 = initPromiseRef.current) === null || _initPromiseRef$curre3 === void 0 || _initPromiseRef$curre3.then(function () {
+-        var _cleanupRef$current, _appRootRef$current;
+-        (_cleanupRef$current = cleanupRef.current) === null || _cleanupRef$current === void 0 || _cleanupRef$current.call(cleanupRef);
+-        (_appRootRef$current = appRootRef.current) === null || _appRootRef$current === void 0 || _appRootRef$current.unmount();
++      record.disposed = true;
++      record.controller.abort();
++      record.ketcher?.retire();
++      if (record.builder) { record.builder.disposed = true; record.builder.structService?.destroy?.(); }
++      // Defer nested root unmount until React has finished the host commit.
++      nexpolyRootCleanup = Promise.all([nexpolyRootCleanup, start]).then(function () {
++        record.cleanup?.();
++        record.root?.unmount();
++        if (window.ketcher === record.ketcher) delete window.ketcher;
++        if (IndigoProvider.getIndigo() === record.ketcher?.structService) IndigoProvider.setIndigo(undefined);
++        record.root = record.cleanup = record.builder = record.ketcher = null;
++        if (active.current === record) active.current = null;
+       });
+@@ -37501,6 +37555,5 @@
+   }, []);
+-  return jsxRuntime.jsx("div", {
+-    ref: rootElRef,
+-    className: clsx__default["default"](KETCHER_ROOT_NODE_CLASS_NAME, styles.editor, _defineProperty__default["default"]({}, styles.small, height && height <= mediaSizes.smallHeight || width && width <= mediaSizes.smallWidth))
+-  });
++  return jsxRuntime.jsx('div', { ref: rootElRef,
++    className: clsx__default["default"](KETCHER_ROOT_NODE_CLASS_NAME, styles.editor,
++      { [styles.small]: dimensions.height && dimensions.height <= mediaSizes.smallHeight || dimensions.width && dimensions.width <= mediaSizes.smallWidth }) });
+ }
+@@ -37774,2 +37827 @@
+ exports.usePortalStyle = usePortalStyle;
+-//# sourceMappingURL=index.js.map
+diff --git a/node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js b/node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js
+--- a/node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js
++++ b/node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js
+@@ -6020,3 +6020,4 @@
+     },
+-    destroyEditor: function destroyEditor(state) {
++    destroyEditor: function destroyEditor(state, action) {
++      if (state.editor !== action.payload) return;
+       var _state$editor, _state$editor2;
+@@ -14180,4 +14181,5 @@
+ 
+-function useMacromoleculesHotkeys() {
++function useMacromoleculesHotkeys(canvasRef) {
+   React.useEffect(function () {
++    var canvas = canvasRef.current;
+     var HELP_LINK = process.env.HELP_LINK || 'master';
+@@ -14187,2 +14189,7 @@
+       var target = e.target;
++      var root = canvas?.closest('[data-structure-editor]') || canvas;
++      if (!canvas?.isConnected || !canvas.getClientRects().length || !root?.getClientRects().length ||
++          root.closest('[hidden], [inert], [aria-hidden="true"]') || !(target instanceof Element)) return;
++      var popup = target.closest('[data-ketcher-owner]');
++      if (!root.contains(target) && (!popup || popup.getAttribute('data-ketcher-owner') !== root.getAttribute('data-ketcher-session'))) return;
+       var isEditableTarget = !!(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('[contenteditable="true"]')));
+@@ -14470,2 +14477,3 @@
+   var activeOption = activeOptions[0];
++  React.useEffect(function () {
+   if (subMenuId && activeOption && activeOption !== lastActiveOption) {
+@@ -14476,2 +14484,3 @@
+   }
++  }, [dispatch, subMenuId, activeOption, lastActiveOption]);
+   var visibleItemId = activeItem !== null && activeItem !== void 0 ? activeItem : activeOption || lastActiveOption || options[0];
+@@ -19158,3 +19167,8 @@
+   });
+-  store.dispatch(initKetcherId(ketcherId));
++  var nexpolyInitialized = React.useState(null);
++  React.useLayoutEffect(function () {
++    store.dispatch(initKetcherId(ketcherId));
++    nexpolyInitialized[1](ketcherId);
++  }, [ketcherId]);
++  if (nexpolyInitialized[0] !== ketcherId) return null;
+   return jsxRuntime.jsx(reactRedux.Provider, {
+@@ -19226,4 +19240,5 @@
+     }));
++    var ownedEditor = selectEditor(store.getState());
+     return function () {
+-      dispatch(destroyEditor(null));
++      dispatch(destroyEditor(ownedEditor));
+     };
+@@ -19231,3 +19246,3 @@
+   useSetRnaPresets();
+-  useMacromoleculesHotkeys();
++  useMacromoleculesHotkeys(canvasRef);
+   React.useEffect(function () {
+@@ -19407,2 +19422 @@
+ exports["default"] = EditorContainer;
+-//# sourceMappingURL=index.modern-8e10d5ac.js.map
+diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-react/dist/index.js
+--- a/node_modules/ketcher-react/dist/index.js
++++ b/node_modules/ketcher-react/dist/index.js
+@@ -87,2 +87,4 @@
+   var info = structService.info();
++  info.catch(function () {});
++  Object.defineProperty(info, "disposed", { get: function () { return structService.disposed; } });
+   return Object.assign(info, {
+@@ -458,2 +460,7 @@
+       Object.keys(this.listeners).forEach(function (en) {
++        var handler = _this2.listeners[en];
++        _this2.listeners[en] = function (event) {
++          if (_this2.disposed || !nexpolyOwnsEvent(el.parentElement, event)) return;
++          return handler(event);
++        };
+         _this2.target.addEventListener(en, _this2.listeners[en]);
+@@ -470,2 +477,4 @@
+       var _this3 = this;
++      this.disposed = true;
++      this.props.dispose?.();
+       Object.keys(this.listeners).forEach(function (en) {
+@@ -8711,3 +8720,3 @@
+     if (focusable) {
+-      dialogRef.current.focus();
++      nexpolyFocus(dialogRef.current);
+     }
+@@ -8715,3 +8724,3 @@
+       var _dialogRef$current;
+-      (_dialogRef$current = dialogRef.current) === null || _dialogRef$current === void 0 || (_dialogRef$current = _dialogRef$current.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _dialogRef$current === void 0 || _dialogRef$current.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0].focus();
++      (_dialogRef$current = dialogRef.current) === null || _dialogRef$current === void 0 || (_dialogRef$current = _dialogRef$current.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _dialogRef$current === void 0 || _dialogRef$current.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0]?.focus({ preventScroll: true });
+     };
+@@ -14816,2 +14825,3 @@
+       var state = getState();
++      if (!state.editor || state.editor.disposed) return;
+       state.editor.render.update();
+@@ -14823,2 +14833,3 @@
+     addEventListener('resize', onResize);
++    return function () { removeEventListener('resize', onResize); onResize.cancel(); };
+   };
+@@ -14968,2 +14979,3 @@
+   return function root(state, action) {
++    if (state?.editor?.disposed) return state;
+     switch (action.type) {
+@@ -15087,21 +15099,42 @@
+ var throttleMilliseconds = 100;
+-function useThrottleResizeObserver() {
+-  var options = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+-  var _useState = useState({
+-      height: undefined,
+-      width: undefined
+-    }),
+-    _useState2 = _slicedToArray$1(_useState, 2),
+-    size = _useState2[0],
+-    setSize = _useState2[1];
+-  var onResize = useMemo(function () {
+-    return throttle$1(setSize, throttleMilliseconds);
+-  }, []);
+-  var _useResizeObserver = useResizeObserver(_objectSpread$18({
+-      onResize: onResize
+-    }, options)),
+-    ref = _useResizeObserver.ref;
+-  return _objectSpread$18({
+-    ref: ref
+-  }, size);
++// A ref callback must not enqueue setState(null) while this nested root unmounts.
++// React Refresh otherwise re-registers the second, empty commit and retains it.
++function nexpolyUseInView(options) {
++  var state = useState(false);
++  var observation = useRef(null);
++  var ref = useCallback(function (element) {
++    observation.current?.disconnect();
++    observation.current = null;
++    if (!element) return;
++    var observer = new IntersectionObserver(function (entries) {
++      if (observation.current !== observer || !element.isConnected) return;
++      var entry = entries[0];
++      state[1](entry.isIntersecting && entry.intersectionRatio >= options.threshold);
++    }, options);
++    observation.current = observer;
++    observer.observe(element);
++  }, [options.threshold]);
++  useLayoutEffect(function () { return function () { ref(null); }; }, [ref]);
++  return [ref, state[0]];
++}
++function useThrottleResizeObserver(options = {}) {
++  var state = useState({ height: undefined, width: undefined });
++  var elementRef = useRef(null);
++  var ref = useCallback(function (element) { elementRef.current = element; }, []);
++  useLayoutEffect(function () {
++    var element = options.ref?.current || elementRef.current;
++    if (!element) return;
++    var active = true;
++    var onResize = throttle$1(function (size) {
++      if (active && element.isConnected && element.getClientRects().length) state[1](size);
++    }, throttleMilliseconds);
++    var observer = new ResizeObserver(function (entries) {
++      if (!active || !element.isConnected || !element.getClientRects().length) return;
++      var rect = entries[0]?.contentRect;
++      if (rect) onResize({ width: Math.round(rect.width), height: Math.round(rect.height) });
++    });
++    observer.observe(element);
++    return function () { active = false; observer.disconnect(); onResize.cancel(); };
++  }, [options.ref]);
++  return { ref: ref, ...state[0] };
+ }
+@@ -15189,10 +15222,6 @@
+   useEffect(function () {
+-    return function () {
+-      setScrollUp(false);
+-    };
++    setScrollUp(false);
+   }, [startInView]);
+   useEffect(function () {
+-    return function () {
+-      setScrollDown(false);
+-    };
++    setScrollDown(false);
+   }, [endInView]);
+@@ -15294,3 +15323,3 @@
+   var scrollRef = useRef(null);
+-  var _useInView = useInView({
++  var _useInView = nexpolyUseInView({
+       threshold: 1
+@@ -15300,3 +15329,3 @@
+     startInView = _useInView2[1];
+-  var _useInView3 = useInView({
++  var _useInView3 = nexpolyUseInView({
+       threshold: 1
+@@ -15588,3 +15617,3 @@
+     height = _useResizeObserver.height;
+-  var _useInView = useInView({
++  var _useInView = nexpolyUseInView({
+       threshold: 1
+@@ -15594,3 +15623,3 @@
+     startInView = _useInView2[1];
+-  var _useInView3 = useInView({
++  var _useInView3 = nexpolyUseInView({
+       threshold: 1
+@@ -20168,3 +20197,2 @@
+ 
+-var keydownListener = null;
+ function initKeydownListener(element) {
+@@ -20172,3 +20200,4 @@
+     var hotKeys = initHotKeys(configWithNonViewOnlyActionsDisabled);
+-    keydownListener = function keydownListener(event) {
++    var keydownListener = function keydownListener(event) {
++      if (!nexpolyOwnsEvent(element, event)) return;
+       return keyHandle(dispatch, getState, hotKeys, event);
+@@ -20176,9 +20205,6 @@
+     element.addEventListener('keydown', keydownListener);
+-  };
+-}
+-function removeKeydownListener(element) {
+-  return function () {
+-    if (keydownListener) {
++    return function () {
+       element.removeEventListener('keydown', keydownListener);
+-    }
++      clearTimeout(getState().editor?.abbreviationLookupTimeoutId);
++    };
+   };
+@@ -20191,3 +20217,2 @@
+ }
+-var abbreviationLookupTimeoutId;
+ var ABBREVIATION_LOOKUP_TYPING_TIMEOUT = 1000;
+@@ -20214,4 +20239,4 @@
+       dispatch(showAbbreviationLookup(event.key));
+-      clearTimeout(abbreviationLookupTimeoutId);
+-      abbreviationLookupTimeoutId = undefined;
++      clearTimeout(editor.abbreviationLookupTimeoutId);
++      editor.abbreviationLookupTimeoutId = undefined;
+       var resetAction = SettingsManager.getSettings().selectionTool;
+@@ -20221,5 +20246,5 @@
+     } else {
+-      abbreviationLookupTimeoutId = window.setTimeout(function () {
++      editor.abbreviationLookupTimeoutId = window.setTimeout(function () {
+         dispatch(closeAbbreviationLookup());
+-        abbreviationLookupTimeoutId = undefined;
++        editor.abbreviationLookupTimeoutId = undefined;
+       }, ABBREVIATION_LOOKUP_TYPING_TIMEOUT);
+@@ -20335,2 +20360,3 @@
+     formats: formats,
++    dispose: function () { debAction.cancel(); loadStruct.cancel(); },
+     focused: function focused() {
+@@ -20588,5 +20614,6 @@
+     if (typeof requestIdleCallback === 'function') {
+-      requestIdleCallback(function () {
++      var idle = requestIdleCallback(function () {
+         return onInitTmpls(ref.current, staticResourcesUrl);
+       });
++      return function () { cancelIdleCallback(idle); };
+     } else {
+@@ -24250,2 +24277,13 @@
+   _createClass$2(HoverIcon, [{
++    key: "destroy",
++    value: function destroy() {
++      if (!this.editor) return;
++      var area = this.editor.render.clientArea;
++      document.removeEventListener('mousemove', this.onMouseMove);
++      area.removeEventListener('mouseover', this.onMouseMove);
++      area.removeEventListener('mouseleave', this.onMouseLeave);
++      this.element.remove();
++      this.element = this.editor = null;
++    }
++  }, {
+     key: "fill",
+@@ -24277,2 +24315,3 @@
+     value: function onMouseMove(event) {
++      if (!this.editor || this.editor.disposed || !nexpolyOwnsEvent(this.editor.render.clientArea, event)) return;
+       if (this.isShown || this.isOverLoader(event) && this.shouldBeShownWhenMouseBack) {
+@@ -25105,2 +25144,19 @@
+   _createClass$2(Editor, [{
++    key: "destroy",
++    value: function destroy() {
++      if (this.destroyed) return;
++      this.destroyed = this.disposed = true;
++      this.domDisposers.splice(0).forEach(function (dispose) { dispose(); });
++      clearTimeout(this.abbreviationLookupTimeoutId);
++      clearTimeout(this._tool?.connectedPreviewTimeout);
++      this.hoverIcon.destroy();
++      Object.values(this.event).forEach(function (subscription) { subscription.handlers = []; });
++      this.render.disposed = true;
++      clearTimeout(this.render.updateTimer);
++      this.render.unobserveCanvasResize();
++      this.render.scrollbar.destroy();
++      this.render.paper.remove();
++      this.historyStack = [];
++    }
++  }, {
+     key: "isDitrty",
+@@ -26028,4 +26084,4 @@
+     value: function focusCliparea() {
+-      var cliparea = document.querySelector('.cliparea');
+-      cliparea === null || cliparea === void 0 || cliparea.focus();
++      var cliparea = this.render.clientArea.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)?.querySelector('.cliparea');
++      nexpolyFocus(cliparea);
+     }
+@@ -26131,3 +26187,21 @@
+ }
++function nexpolyFocus(element) {
++  if (!element || !element.isConnected || !element.getClientRects().length) return;
++  var active = document.activeElement;
++  var root = element.closest('[data-structure-editor]') || element.closest(KETCHER_ROOT_NODE_CSS_SELECTOR);
++  if (active && active !== document.body && !root?.contains(active) &&
++      (active.matches('input,textarea,select') || active.isContentEditable)) return;
++  element.focus({ preventScroll: true });
++}
++function nexpolyOwnsEvent(element, event) {
++  var root = element.closest?.('[data-structure-editor]') || element;
++  if (!element.isConnected || !element.getClientRects().length || !root.isConnected || !root.getClientRects().length || root.closest('[inert], [hidden]')) return false;
++  var target = event.target;
++  if (element.contains(target)) return true;
++  var popup = target?.closest?.('[data-ketcher-owner]');
++  return popup?.getAttribute('data-ketcher-owner') === root.getAttribute('data-ketcher-session');
++}
+ function domEventSetup(editor, clientArea) {
++  editor.domDisposers = [];
++  var dragging = false;
+   var trackedDomEvents = [{
+@@ -26171,6 +26245,13 @@
+     var subs = editor.event[eventName];
+-    target.addEventListener(eventName, function () {
+-      if (window.isPolymerEditorTurnedOn) return;
+-      subs.dispatch.apply(subs, arguments);
+-    });
++    var callback = function (event) {
++      if (editor.disposed || window.isPolymerEditorTurnedOn) return;
++      var owned = nexpolyOwnsEvent(clientArea, event);
++      if (eventName === 'mousedown' && owned) dragging = true;
++      var finishDrag = eventName === 'mouseup' || eventName === 'mouseleave';
++      if (!owned && !dragging) return;
++      if (finishDrag) dragging = false;
++      subs.dispatch(event);
++    };
++    target.addEventListener(eventName, callback);
++    editor.domDisposers.push(function () { target.removeEventListener(eventName, callback); subs.handlers = []; });
+     subs.add(function (event) {
+@@ -29490,3 +29571,3 @@
+       this.editorRef.current.removeEventListener('wheel', this.handleWheel);
+-      this.editor.render.unobserveCanvasResize();
++      this.editor.destroy();
+     }
+@@ -36900,3 +36981,3 @@
+       var _inputRef$current2;
+-      (_inputRef$current2 = inputRef.current) === null || _inputRef$current2 === void 0 || (_inputRef$current2 = _inputRef$current2.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _inputRef$current2 === void 0 || _inputRef$current2.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0].focus();
++      (_inputRef$current2 = inputRef.current) === null || _inputRef$current2 === void 0 || (_inputRef$current2 = _inputRef$current2.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _inputRef$current2 === void 0 || _inputRef$current2.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0]?.focus({ preventScroll: true });
+     };
+@@ -37103,4 +37184,2 @@
+ };
+-var pointerMoveListener = null;
+-var mouseDownListener = null;
+ function initMouseListener(element) {
+@@ -37108,6 +37187,8 @@
+     var throttledHandleMouseMove = throttle$1(handleMouseMove, MOUSE_MOVE_THROTTLE_TIMEOUT);
+-    pointerMoveListener = function pointerMoveListener(event) {
++    var pointerMoveListener = function pointerMoveListener(event) {
++      if (!nexpolyOwnsEvent(element, event)) return;
+       return throttledHandleMouseMove(dispatch, event);
+     };
+-    mouseDownListener = function mouseDownListener(event) {
++    var mouseDownListener = function mouseDownListener(event) {
++      if (!nexpolyOwnsEvent(element, event)) return;
+       var areBothLeftAndRightButtonsClicked = event.buttons === 3;
+@@ -37119,12 +37200,7 @@
+     element.addEventListener('mousedown', mouseDownListener, true);
+-  };
+-}
+-function removeMouseListeners(element) {
+-  return function () {
+-    if (pointerMoveListener) {
++    return function () {
+       element.removeEventListener('pointermove', pointerMoveListener);
+-    }
+-    if (mouseDownListener) {
+-      element.addEventListener('mousedown', mouseDownListener, true);
+-    }
++      element.removeEventListener('mousedown', mouseDownListener, true);
++      throttledHandleMouseMove.cancel();
++    };
+   };
+@@ -37154,5 +37230,5 @@
+   };
+-  store.dispatch(initKeydownListener(element));
+-  store.dispatch(initMouseListener(element));
+-  store.dispatch(initResize());
++  var disposeKeys = store.dispatch(initKeydownListener(element));
++  var disposeMouse = store.dispatch(initMouseListener(element));
++  var disposeResize = store.dispatch(initResize());
+   appRoot.render(jsx(Provider, {
+@@ -37180,4 +37256,6 @@
+   return function () {
+-    store.dispatch(removeKeydownListener(element));
+-    store.dispatch(removeMouseListeners(element));
++    disposeKeys();
++    disposeMouse();
++    disposeResize();
++    if (global.currentState?.editor === store.getState().editor) delete global.currentState;
+   };
+@@ -37221,21 +37299,16 @@
+     value: function reinitializeApi(ketcherId, structServiceProvider, setStructServiceToStore) {
+-      var _this = this;
+-      var oldStructService = this.structService;
+-      this.structService = createApi(structServiceProvider, DefaultStructServiceOptions);
+-      this.structService.addKetcherId(ketcherId);
+-      window.addEventListener(STRUCT_SERVICE_INITIALIZED_EVENT, function () {
+-        var _oldStructService$des;
+-        oldStructService === null || oldStructService === void 0 || (_oldStructService$des = oldStructService.destroy) === null || _oldStructService$des === void 0 || _oldStructService$des.call(oldStructService);
+-        if (!_this.structService) {
+-          KetcherLogger.warn('Structure service is not reinitialized');
+-          return;
+-        }
++      var builder = this;
++      var oldService = this.structService;
++      var service = this.structService = createApi(structServiceProvider, DefaultStructServiceOptions);
++      service.addKetcherId(ketcherId);
++      service.info().then(function () {
++        if (builder.disposed || builder.structService !== service) { service.destroy?.(); return; }
+         var ketcher = ketcherProvider.getKetcher(ketcherId);
+-        ketcher.reinitializeIndigo(_this.structService);
+-        IndigoProvider.setIndigo(_this.structService);
+-        setStructServiceToStore(_this.structService);
+-      }, {
+-        once: true
+-      });
+-      return this.structService;
++        if (!ketcher || ketcher.disposed) { service.destroy?.(); return; }
++        oldService?.destroy?.();
++        ketcher.reinitializeIndigo(service);
++        IndigoProvider.setIndigo(service);
++        setStructServiceToStore(service);
++      }).catch(function (error) { service.destroy?.(); if (!builder.disposed) console.error(error); });
++      return service;
+     }
+@@ -37313,2 +37386,3 @@
+       ketcherProvider.addKetcherInstance(ketcher);
++      window.ketcher = ketcher;
+       return ketcher;
+@@ -37319,36 +37393,29 @@
+ 
+-function buildKetcherAsync(_x) {
+-  return _buildKetcherAsync.apply(this, arguments);
+-}
+-function _buildKetcherAsync() {
+-  _buildKetcherAsync = _asyncToGenerator( _regeneratorRuntime.mark(function _callee(_ref) {
+-    var element, appRoot, staticResourcesUrl, structServiceProvider, buttons, errorHandler, togglerComponent, customButtons, prevKetcherId, builder, structService, ketcher, _yield$builder$append, cleanup, setServer;
+-    return _regeneratorRuntime.wrap(function _callee$(_context) {
+-      while (1) switch (_context.prev = _context.next) {
+-        case 0:
+-          element = _ref.element, appRoot = _ref.appRoot, staticResourcesUrl = _ref.staticResourcesUrl, structServiceProvider = _ref.structServiceProvider, buttons = _ref.buttons, errorHandler = _ref.errorHandler, togglerComponent = _ref.togglerComponent, customButtons = _ref.customButtons, prevKetcherId = _ref.ketcherId;
+-          builder = new KetcherBuilder();
+-          structService = builder.appendApiAsync(structServiceProvider);
+-          builder.appendServiceMode(structServiceProvider.mode);
+-          ketcher = builder.build();
+-          structService.addKetcherId(ketcher.id);
+-          _context.next = 8;
+-          return builder.appendUiAsync(prevKetcherId, ketcher.id, element, appRoot, staticResourcesUrl, errorHandler, buttons, togglerComponent, customButtons);
+-        case 8:
+-          _yield$builder$append = _context.sent;
+-          cleanup = _yield$builder$append.cleanup;
+-          setServer = _yield$builder$append.setServer;
+-          return _context.abrupt("return", {
+-            ketcher: ketcher,
+-            cleanup: cleanup,
+-            builder: builder,
+-            setServer: setServer
+-          });
+-        case 12:
+-        case "end":
+-          return _context.stop();
+-      }
+-    }, _callee);
+-  }));
+-  return _buildKetcherAsync.apply(this, arguments);
++async function buildKetcherAsync(props) {
++  var builder = new KetcherBuilder();
++  var service = builder.appendApiAsync(props.structServiceProvider);
++  builder.appendServiceMode(props.structServiceProvider.mode);
++  var ketcher = builder.build();
++  service.addKetcherId(ketcher.id);
++  props.onBuild(ketcher, builder);
++  var cleanup;
++  var abort;
++  try {
++    var result = await new Promise(function (resolve, reject) {
++      abort = function () { reject(new DOMException('Editor initialization disposed', 'AbortError')); };
++      props.signal.addEventListener('abort', abort, { once: true });
++      cleanup = initApp(props.ketcherId, ketcher.id, props.element, props.appRoot,
++        props.staticResourcesUrl, { buttons: props.buttons || {}, errorHandler: props.errorHandler || null,
++          version: '3.8.0', buildDate: '2025-10-17T11:21:57', buildNumber: '', customButtons: props.customButtons || [] },
++        service, resolve, props.togglerComponent);
++      props.onCleanup(cleanup);
++      if (props.signal.aborted) abort();
++    });
++    if (props.signal.aborted) throw new DOMException('Editor initialization disposed', 'AbortError');
++    result.editor.errorHandler = typeof props.errorHandler === 'function' ? props.errorHandler : function () {};
++    return { ketcher: ketcher, builder: builder, cleanup: cleanup, setServer: result.setServer };
++  } catch (error) {
++    ketcher.retire();
++    throw error;
++  } finally { props.signal.removeEventListener('abort', abort); }
+ }
+@@ -37363,74 +37430,61 @@
+ };
++// Serialize old root cleanup before creating another SDK root, including StrictMode.
++var nexpolyRootCleanup = Promise.resolve();
+ function MicromoleculesEditor(props) {
+-  var initPromiseRef = useRef(null);
+-  var appRootRef = useRef(null);
+-  var cleanupRef = useRef(null);
+-  var ketcherBuilderRef = useRef(null);
+-  var setServerRef = useRef(function () {});
+-  var structServiceProvider = props.structServiceProvider;
+   var rootElRef = useRef(null);
+-  var _useResizeObserver = useThrottleResizeObserver({
+-      ref: rootElRef
+-    }),
+-    height = _useResizeObserver.height,
+-    width = _useResizeObserver.width;
++  var active = useRef(null);
++  var latestProps = useRef(props);
++  latestProps.current = props;
++  var dimensions = useThrottleResizeObserver({ ref: rootElRef });
+   useEffect(function () {
+-    var _ketcherBuilderRef$cu;
+-    if (!props.ketcherId) {
+-      return;
+-    }
+-    (_ketcherBuilderRef$cu = ketcherBuilderRef.current) === null || _ketcherBuilderRef$cu === void 0 || _ketcherBuilderRef$cu.reinitializeApi(props.ketcherId, props.structServiceProvider, setServerRef.current);
+-  }, [structServiceProvider]);
+-  var initKetcher = function () {
+-    var _ref = _asyncToGenerator( _regeneratorRuntime.mark(function _callee() {
+-      var _initPromiseRef$curre;
+-      return _regeneratorRuntime.wrap(function _callee$(_context) {
+-        while (1) switch (_context.prev = _context.next) {
+-          case 0:
+-            appRootRef.current = createRoot(rootElRef.current);
+-            initPromiseRef.current = buildKetcherAsync(_objectSpread$1(_objectSpread$1({}, props), {}, {
+-              element: rootElRef.current,
+-              appRoot: appRootRef.current
+-            }));
+-            (_initPromiseRef$curre = initPromiseRef.current) === null || _initPromiseRef$curre === void 0 || _initPromiseRef$curre.then(function (_ref2) {
+-              var _props$onSetKetcherId;
+-              var ketcher = _ref2.ketcher,
+-                cleanup = _ref2.cleanup,
+-                builder = _ref2.builder,
+-                setServer = _ref2.setServer;
+-              cleanupRef.current = cleanup;
+-              ketcherBuilderRef.current = builder;
+-              setServerRef.current = setServer;
+-              (_props$onSetKetcherId = props.onSetKetcherId) === null || _props$onSetKetcherId === void 0 || _props$onSetKetcherId.call(props, ketcher.id);
+-              if (typeof props.onInit === 'function' && ketcher) {
+-                props.onInit(ketcher);
+-                var ketcherInitEvent = new Event(ketcherInitEventName(ketcher.id));
+-                window.dispatchEvent(ketcherInitEvent);
+-              }
+-            });
+-          case 3:
+-          case "end":
+-            return _context.stop();
+-        }
+-      }, _callee);
+-    }));
+-    return function initKetcher() {
+-      return _ref.apply(this, arguments);
+-    };
+-  }();
++    var current = active.current;
++    if (current?.builder && current.provider !== props.structServiceProvider) {
++      current.provider = props.structServiceProvider;
++      current.builder.reinitializeApi(current.ketcher.id, current.provider, current.setServer);
++    }
++  }, [props.structServiceProvider]);
+   useEffect(function () {
+-    if (initPromiseRef.current === null) {
+-      initKetcher();
+-    } else {
+-      var _initPromiseRef$curre2;
+-      (_initPromiseRef$curre2 = initPromiseRef.current) === null || _initPromiseRef$curre2 === void 0 || _initPromiseRef$curre2["finally"](function () {
+-        initKetcher();
+-      });
+-    }
++    var record = { disposed: false, root: null, cleanup: null, ketcher: null, builder: null,
++      provider: props.structServiceProvider, controller: new AbortController() };
++    active.current = record;
++    var element = rootElRef.current;
++    var start = nexpolyRootCleanup.then(async function () {
++      if (record.disposed) return;
++      var appRoot = { render: function (view) {
++        if (record.disposed) return;
++        record.root = createRoot(element, { onUncaughtError: function (error) {
++          latestProps.current.errorHandler?.(error.message || String(error));
++          record.controller.abort();
++        } });
++        // Create and commit the nested root atomically. An initialization failure
++        // before render never registers an empty root with React Refresh.
++        ReactDOM.flushSync(function () { record.root.render(view); });
++      } };
++      try {
++        var result = await buildKetcherAsync({ ...latestProps.current, element: element, appRoot: appRoot,
++          signal: record.controller.signal,
++          onBuild: function (ketcher, builder) { record.ketcher = ketcher; record.builder = builder; },
++          onCleanup: function (cleanup) { record.cleanup = cleanup; } });
++        if (record.disposed || active.current !== record) { result.ketcher.retire(); return; }
++        record.setServer = result.setServer;
++        latestProps.current.onSetKetcherId?.(result.ketcher.id);
++        latestProps.current.onInit?.(result.ketcher);
++        window.dispatchEvent(new Event(ketcherInitEventName(result.ketcher.id)));
++      } catch (error) {
++        if (!record.disposed) latestProps.current.errorHandler?.(error.message || String(error));
++      }
++    });
+     return function () {
+-      var _initPromiseRef$curre3;
+-      (_initPromiseRef$curre3 = initPromiseRef.current) === null || _initPromiseRef$curre3 === void 0 || _initPromiseRef$curre3.then(function () {
+-        var _cleanupRef$current, _appRootRef$current;
+-        (_cleanupRef$current = cleanupRef.current) === null || _cleanupRef$current === void 0 || _cleanupRef$current.call(cleanupRef);
+-        (_appRootRef$current = appRootRef.current) === null || _appRootRef$current === void 0 || _appRootRef$current.unmount();
++      record.disposed = true;
++      record.controller.abort();
++      record.ketcher?.retire();
++      if (record.builder) { record.builder.disposed = true; record.builder.structService?.destroy?.(); }
++      // Defer nested root unmount until React has finished the host commit.
++      nexpolyRootCleanup = Promise.all([nexpolyRootCleanup, start]).then(function () {
++        record.cleanup?.();
++        record.root?.unmount();
++        if (window.ketcher === record.ketcher) delete window.ketcher;
++        if (IndigoProvider.getIndigo() === record.ketcher?.structService) IndigoProvider.setIndigo(undefined);
++        record.root = record.cleanup = record.builder = record.ketcher = null;
++        if (active.current === record) active.current = null;
+       });
+@@ -37438,6 +37492,5 @@
+   }, []);
+-  return jsx("div", {
+-    ref: rootElRef,
+-    className: clsx(KETCHER_ROOT_NODE_CLASS_NAME, styles.editor, _defineProperty$1({}, styles.small, height && height <= mediaSizes.smallHeight || width && width <= mediaSizes.smallWidth))
+-  });
++  return jsx('div', { ref: rootElRef,
++    className: clsx(KETCHER_ROOT_NODE_CLASS_NAME, styles.editor,
++      { [styles.small]: dimensions.height && dimensions.height <= mediaSizes.smallHeight || dimensions.width && dimensions.width <= mediaSizes.smallWidth }) });
+ }
+@@ -37668,2 +37721 @@
+ export { ACS_STYLE_DEFAULT_SETTINGS, Accordion$1 as Accordion, AmbiguousMonomerPreview, appContext as AppContext, ArrowScroll, Button, Container, Content, ContentLine, Dialog, Editor, Header$1 as Header, Icon, IconButton, IconButtonCustomIcon, IndigoProvider, InfoModal$1 as InfoModal, Input$2 as Input, KETCHER_ROOT_NODE_CLASS_NAME, KETCHER_ROOT_NODE_CSS_SELECTOR, MODES, MonomerName, PresetPosition, PreviewType, RatioBar, STRUCT_SERVICE_INITIALIZED_EVENT, STRUCT_SERVICE_NO_RENDER_INITIALIZED_EVENT, STRUCT_TYPE, StructRender, calculateAmbiguousMonomerPreviewLeft, calculateAmbiguousMonomerPreviewTop, calculateBondPreviewPosition, calculateMonomerPreviewTop, calculateNucleoElementPreviewTop, getIconName, ketcherInitEventName, preview, usePortalStyle };
+-//# sourceMappingURL=index.js.map
+diff --git a/node_modules/ketcher-react/dist/index.modern-c0bcdf82.js b/node_modules/ketcher-react/dist/index.modern-c0bcdf82.js
+--- a/node_modules/ketcher-react/dist/index.modern-c0bcdf82.js
++++ b/node_modules/ketcher-react/dist/index.modern-c0bcdf82.js
+@@ -5979,3 +5979,4 @@
+     },
+-    destroyEditor: function destroyEditor(state) {
++    destroyEditor: function destroyEditor(state, action) {
++      if (state.editor !== action.payload) return;
+       var _state$editor, _state$editor2;
+@@ -14139,4 +14140,5 @@
+ 
+-function useMacromoleculesHotkeys() {
++function useMacromoleculesHotkeys(canvasRef) {
+   useEffect(function () {
++    var canvas = canvasRef.current;
+     var HELP_LINK = process.env.HELP_LINK || 'master';
+@@ -14146,2 +14148,7 @@
+       var target = e.target;
++      var root = canvas?.closest('[data-structure-editor]') || canvas;
++      if (!canvas?.isConnected || !canvas.getClientRects().length || !root?.getClientRects().length ||
++          root.closest('[hidden], [inert], [aria-hidden="true"]') || !(target instanceof Element)) return;
++      var popup = target.closest('[data-ketcher-owner]');
++      if (!root.contains(target) && (!popup || popup.getAttribute('data-ketcher-owner') !== root.getAttribute('data-ketcher-session'))) return;
+       var isEditableTarget = !!(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('[contenteditable="true"]')));
+@@ -14429,2 +14436,3 @@
+   var activeOption = activeOptions[0];
++  React.useEffect(function () {
+   if (subMenuId && activeOption && activeOption !== lastActiveOption) {
+@@ -14435,2 +14443,3 @@
+   }
++  }, [dispatch, subMenuId, activeOption, lastActiveOption]);
+   var visibleItemId = activeItem !== null && activeItem !== void 0 ? activeItem : activeOption || lastActiveOption || options[0];
+@@ -19117,3 +19126,8 @@
+   });
+-  store.dispatch(initKetcherId(ketcherId));
++  var nexpolyInitialized = React.useState(null);
++  React.useLayoutEffect(function () {
++    store.dispatch(initKetcherId(ketcherId));
++    nexpolyInitialized[1](ketcherId);
++  }, [ketcherId]);
++  if (nexpolyInitialized[0] !== ketcherId) return null;
+   return jsx(Provider, {
+@@ -19185,4 +19199,5 @@
+     }));
++    var ownedEditor = selectEditor(store.getState());
+     return function () {
+-      dispatch(destroyEditor(null));
++      dispatch(destroyEditor(ownedEditor));
+     };
+@@ -19190,3 +19205,3 @@
+   useSetRnaPresets();
+-  useMacromoleculesHotkeys();
++  useMacromoleculesHotkeys(canvasRef);
+   useEffect(function () {
+@@ -19366,2 +19381 @@
+ export { EditorContainer as default };
+-//# sourceMappingURL=index.modern-c0bcdf82.js.map

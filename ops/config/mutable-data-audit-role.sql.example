@@ -195,7 +195,7 @@ BEGIN
         WHERE namespace.nspname = ANY(ARRAY[
             'core', 'dft', 'experimental', 'generation', 'governance',
             'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
-            'online_knowledge', 'pi'
+            'online_knowledge', 'pi', 'polymerization_batch'
         ]::text[])
         ORDER BY namespace.nspname
     LOOP
@@ -262,7 +262,7 @@ BEGIN
           AND namespace.nspname <> ALL(ARRAY[
               'core', 'dft', 'experimental', 'generation', 'governance',
               'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
-              'online_knowledge', 'pi'
+              'online_knowledge', 'pi', 'polymerization_batch'
           ]::text[])
         ORDER BY namespace.nspname
     LOOP
@@ -383,7 +383,7 @@ BEGIN
     WHERE nspname = ANY(ARRAY[
         'core', 'dft', 'experimental', 'generation', 'governance',
         'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
-        'online_knowledge', 'pi'
+        'online_knowledge', 'pi', 'polymerization_batch'
     ]::text[]);
 
     IF present_schema_count < 11 OR EXISTS (
@@ -392,7 +392,7 @@ BEGIN
         WHERE namespace.nspname = ANY(ARRAY[
             'core', 'dft', 'experimental', 'generation', 'governance',
             'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
-            'online_knowledge', 'pi'
+            'online_knowledge', 'pi', 'polymerization_batch'
         ]::text[])
           AND (
               NOT pg_catalog.has_schema_privilege(
@@ -424,7 +424,7 @@ BEGIN
           AND namespace.nspname <> ALL(ARRAY[
               'core', 'dft', 'experimental', 'generation', 'governance',
               'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
-              'online_knowledge', 'pi'
+              'online_knowledge', 'pi', 'polymerization_batch'
           ]::text[])
           AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
           AND pg_catalog.has_table_privilege(
@@ -441,7 +441,7 @@ BEGIN
           AND namespace.nspname <> ALL(ARRAY[
               'core', 'dft', 'experimental', 'generation', 'governance',
               'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
-              'online_knowledge', 'pi'
+              'online_knowledge', 'pi', 'polymerization_batch'
           ]::text[])
           AND CASE
               WHEN sequence.relkind = 'S' THEN
@@ -462,7 +462,7 @@ BEGIN
           AND namespace.nspname <> ALL(ARRAY[
               'core', 'dft', 'experimental', 'generation', 'governance',
               'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
-              'online_knowledge', 'pi'
+              'online_knowledge', 'pi', 'polymerization_batch'
           ]::text[])
           AND attribute.attnum > 0
           AND NOT attribute.attisdropped
@@ -482,7 +482,7 @@ BEGIN
         WHERE namespace.nspname = ANY(ARRAY[
             'core', 'dft', 'experimental', 'generation', 'governance',
             'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
-            'online_knowledge', 'pi'
+            'online_knowledge', 'pi', 'polymerization_batch'
         ]::text[])
           AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
           AND (
@@ -502,7 +502,7 @@ BEGIN
         WHERE namespace.nspname = ANY(ARRAY[
             'core', 'dft', 'experimental', 'generation', 'governance',
             'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
-            'online_knowledge', 'pi'
+            'online_knowledge', 'pi', 'polymerization_batch'
         ]::text[])
           AND CASE
               WHEN sequence.relkind = 'S' THEN (
@@ -560,7 +560,7 @@ BEGIN
               OR namespace.nspname <> ALL(ARRAY[
                   'core', 'dft', 'experimental', 'generation', 'governance',
                   'knowledge', 'lab', 'md', 'model_registry', 'monomer_dft',
-                  'online_knowledge', 'pi'
+                  'online_knowledge', 'pi', 'polymerization_batch'
               ]::text[])
               OR defaults.defaclobjtype NOT IN ('r', 'S')
               OR acl.privilege_type <> 'SELECT'

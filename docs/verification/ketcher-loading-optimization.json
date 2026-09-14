@@ -1,0 +1,4771 @@
+{
+  "date": "2026-09-11T03:39:26.366272+00:00",
+  "gitHead": "de6c52b51422a0173e40120836c93075db74ed0a",
+  "workingTree": "Existing unrelated changes preserved; frontend source differs from baseline only in the loader plus its helper/test.",
+  "node": "v22.23.2",
+  "baseline": {
+    "work": "/tmp/nexpoly-loading-optimization-jjdda010",
+    "baseline": "/tmp/nexpoly-loading-optimization-jjdda010/baseline",
+    "hashes": {
+      "src/components/structure-workbench/ReactStructureEditor.tsx": "a8e62cd49c52d24883d7d042a0c73a3b4dd4f6d3129490c73caefad855ffc14e",
+      "src/hooks/useModuleTransition.ts": "1fb9d4c2793df3d49cf6a21a7808400f99e1ebf68808b3745d07274843dc7568",
+      "src/structure/workspace.ts": "c066f1951cdee05b6fe4ec46926cd14fcb3ed0bad8eef1f7bc4252333f113192",
+      "package-lock.json": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+      "patches/ketcher-manifest.json": "d42e31c4dfa7ce5d97ca65a5568d84b5aa66c865045cda8eae4e75febb4a80a4"
+    }
+  },
+  "unchangedProtectedInputs": {
+    "src/hooks/useModuleTransition.ts": true,
+    "src/structure/workspace.ts": true,
+    "package-lock.json": true,
+    "patches/ketcher-manifest.json": true
+  },
+  "sourceHashes": {
+    "frontend/src/components/structure-workbench/ReactStructureEditor.tsx": "c02b9a0df0b71185a3ab9416cd965be8fbf3d4732314f9049ba6b72a8fc1dd88",
+    "frontend/src/components/structure-workbench/ReactStructureEditor.test.tsx": "2a251053c0cd4032faf97bfe5cb9e98d5064700c94e14109023bfc4cd2851a24",
+    "frontend/src/components/structure-workbench/loadKetcherRuntime.ts": "abb9d83aad2057a96676c6227e3cde8d768d663829ff146b8cf041c45da405c1",
+    "frontend/scripts/analyze-structure-module-loading.mjs": "2204c1342cba56b7b914fd5de49b2d035a09b5713720529483bcf4f79d343301",
+    "frontend/scripts/verify-structure-loading-performance.mjs": "3b4f62a34df9fe6364c6778f1ae3a39113cf814b962fcca974896f0d05941fdc",
+    "frontend/scripts/verify-structure-loading-interactions.mjs": "d64fef861cfec026a2f3bec5456d09186846a854ecfbf51b933a309f79ab1c34",
+    "frontend/scripts/verify-structure-workspace.mjs": "6752801724dc7be501c262072a1603846f6f2657071209e70f252217438ab339"
+  },
+  "builds": {
+    "baseline-dist": {
+      "engine": "react",
+      "sdk": "3.8.0",
+      "patch": "nexpoly-3.8.0-r3",
+      "patchHashes": {
+        "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+        "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+        "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+        "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+      },
+      "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+      "nativeAssets": [
+        "assets/KetcherReactRuntime-D1y9KbGV.css",
+        "assets/KetcherReactRuntime-CE_oiv9x.js",
+        "assets/index.modern-DgymyiYC.js",
+        "assets/index.modern-c0bcdf82-axHgPF5J.js"
+      ],
+      "assets": [
+        {
+          "path": "assets/index-PzoIyIyG.css",
+          "bytes": 919290,
+          "sha256": "6ca35e267357c195c5363956f7fef140e91a53db0b1e24e4f432e51250997246"
+        },
+        {
+          "path": "assets/KetcherReactRuntime-D1y9KbGV.css",
+          "bytes": 252352,
+          "sha256": "0d71443f1691584d3ca6cb30027bc653a975eeac069defd606296f38f9d200de"
+        },
+        {
+          "path": "assets/index-BY-e55We.js",
+          "bytes": 1226194,
+          "sha256": "79c8ab7971334b444dc756a85d55baa26ef97de56c2bbfa32e84672d8163dee3"
+        },
+        {
+          "path": "assets/KetcherReactRuntime-CE_oiv9x.js",
+          "bytes": 23204014,
+          "sha256": "acaaeaad157c17d29e85ef155316a25aed0e6fd165da423c402b7d3237e50307"
+        },
+        {
+          "path": "assets/index.modern-DgymyiYC.js",
+          "bytes": 1238778,
+          "sha256": "03dca49e5b71df3379c5f34fbd72f4584fc4c30f7c99b72c3a0c2c5902bb7e26"
+        },
+        {
+          "path": "assets/index.modern-c0bcdf82-axHgPF5J.js",
+          "bytes": 384294,
+          "sha256": "75961da535613f5c2cc7b798969653e02cf1cb92ab111647b14cc43afd0bd776"
+        }
+      ],
+      "metadata": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/baseline-dist/structure-editor.json",
+        "sha256": "ecc8e46610f2b47af9eebfd994331e978619d9f9ba49ff44dde245f536e0de27"
+      }
+    },
+    "optimized-dist": {
+      "engine": "react",
+      "sdk": "3.8.0",
+      "patch": "nexpoly-3.8.0-r3",
+      "patchHashes": {
+        "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+        "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+        "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+        "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+      },
+      "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+      "nativeAssets": [
+        "assets/KetcherReactRuntime-D1y9KbGV.css",
+        "assets/KetcherReactRuntime-BTm_UWOP.js",
+        "assets/index.modern-D7cYauKw.js",
+        "assets/index.modern-c0bcdf82-DIuQR1TJ.js"
+      ],
+      "assets": [
+        {
+          "path": "assets/index-PzoIyIyG.css",
+          "bytes": 919290,
+          "sha256": "6ca35e267357c195c5363956f7fef140e91a53db0b1e24e4f432e51250997246"
+        },
+        {
+          "path": "assets/KetcherReactRuntime-D1y9KbGV.css",
+          "bytes": 252352,
+          "sha256": "0d71443f1691584d3ca6cb30027bc653a975eeac069defd606296f38f9d200de"
+        },
+        {
+          "path": "assets/index-ClgJ1TZj.js",
+          "bytes": 1226762,
+          "sha256": "c88db0d35fb4a96a2da8fa0086a0dfab5cb2969286eadc177da56d4e16478d61"
+        },
+        {
+          "path": "assets/KetcherReactRuntime-BTm_UWOP.js",
+          "bytes": 23204014,
+          "sha256": "97ce544ff57b95bd1d0749030334eeeed14fa9ef536f766b0214a04d6196fdad"
+        },
+        {
+          "path": "assets/index.modern-D7cYauKw.js",
+          "bytes": 1238778,
+          "sha256": "e3181dbbbec868ae14a065188f1ed11c1d688a9dc26ac6c270212963ada23f3c"
+        },
+        {
+          "path": "assets/index.modern-c0bcdf82-DIuQR1TJ.js",
+          "bytes": 384294,
+          "sha256": "7ed1eb6801cbfa2f35fd9a8fa95330193d7b41d0deefcaf6b8fe86f81b68afc6"
+        }
+      ],
+      "metadata": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/optimized-dist/structure-editor.json",
+        "sha256": "e9863dfe6db2020698636511946307da7d62504f28f01cec80a3c29a8e6466dd"
+      }
+    },
+    "iframe-dist": {
+      "engine": "iframe",
+      "sdk": "3.7.0",
+      "patch": "nexpoly-3.8.0-r3",
+      "patchHashes": {
+        "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+        "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+        "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+        "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+      },
+      "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+      "nativeAssets": [],
+      "assets": [
+        {
+          "path": "assets/index-PzoIyIyG.css",
+          "bytes": 919290,
+          "sha256": "6ca35e267357c195c5363956f7fef140e91a53db0b1e24e4f432e51250997246"
+        },
+        {
+          "path": "assets/index-DXzFNXsL.js",
+          "bytes": 1218691,
+          "sha256": "062bfca441d0545cacfaf367e587a9f6a78ee48dd583fae104f96055f3d8ae81"
+        }
+      ],
+      "metadata": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/iframe-dist/structure-editor.json",
+        "sha256": "f3cf6a9720a398e7722cdc2f452e9a0213b82a73b7f8b41795e77bb9dd659573"
+      }
+    }
+  },
+  "validation": {
+    "unitTests": {
+      "files": 97,
+      "tests": 904,
+      "newLoaderTests": 15,
+      "passed": true,
+      "command": "npm test",
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/tests-delivery.log",
+        "sha256": "41c891f46d78d05f4e119ce55732a468ed0d286893a558961f9cf0ac71271929"
+      }
+    },
+    "reactBuild": {
+      "passed": true,
+      "command": "VITE_STRUCTURE_EDITOR_ENGINE=react npm run build -- --outDir <temporary output> --emptyOutDir",
+      "includes": "Patch verification, TypeScript, Vite",
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/build-delivery.log",
+        "sha256": "da3256c2bace9bdfad4009f46615039ddfae92106683020530c7b027773c03b1"
+      }
+    },
+    "iframeBuild": {
+      "passed": true,
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/iframe-build-final.log",
+        "sha256": "c62ac8335ab4b73536bdbd32d3aa5e3e3f8987a10bddcbf45f73c9ae4c2bce0a"
+      }
+    },
+    "resourceProbes": {
+      "reactFiles": 7,
+      "iframeFiles": 25,
+      "iframeNativeAssets": [],
+      "passed": true
+    },
+    "iframeSmoke": {
+      "engine": "iframe",
+      "requests": [
+        "http://127.0.0.1:4289/ketcher/index.html",
+        "http://127.0.0.1:4289/ketcher/polyprop-focus-guard.js",
+        "http://127.0.0.1:4289/ketcher/static/js/main.8617f334.js",
+        "http://127.0.0.1:4289/ketcher/static/css/main.748bd42d.css",
+        "http://127.0.0.1:4289/ketcher/static/js/78.fab565cc.chunk.js",
+        "http://127.0.0.1:4289/ketcher/static/js/159.6bd8317f.chunk.js",
+        "http://127.0.0.1:4289/ketcher/static/css/622.365fdd8e.chunk.css",
+        "http://127.0.0.1:4289/ketcher/static/js/622.a35444cf.chunk.js"
+      ],
+      "errors": [],
+      "smiles": "CCO",
+      "passed": true
+    }
+  },
+  "functional": {
+    "development": {
+      "workspace": {
+        "passed": true,
+        "engine": "react",
+        "sdk": "3.8.0",
+        "patch": "nexpoly-3.8.0-r3",
+        "reducedMotion": "no-preference",
+        "readyMs": 4430,
+        "viewports": [
+          {
+            "width": 390,
+            "height": 844,
+            "editor": {
+              "x": 15,
+              "y": 204,
+              "width": 360,
+              "height": 360
+            },
+            "atomVisible": true,
+            "atomHit": true,
+            "contextMenu": true
+          },
+          {
+            "width": 1024,
+            "height": 768,
+            "editor": {
+              "x": 267,
+              "y": 107,
+              "width": 738,
+              "height": 491.328125
+            },
+            "atomVisible": true,
+            "atomHit": true,
+            "contextMenu": true
+          },
+          {
+            "width": 2560,
+            "height": 1440,
+            "editor": {
+              "x": 684,
+              "y": 151,
+              "width": 1576,
+              "height": 1050
+            },
+            "atomVisible": true,
+            "atomHit": true,
+            "contextMenu": true
+          },
+          {
+            "width": 1440,
+            "height": 900,
+            "editor": {
+              "x": 365.796875,
+              "y": 107,
+              "width": 982,
+              "height": 644
+            },
+            "atomVisible": true,
+            "atomHit": true,
+            "contextMenu": true
+          }
+        ],
+        "realAtomDrag": true,
+        "layoutRoundTrip": true,
+        "annotationRoundTrip": true,
+        "explicitSync": true,
+        "external3D": true,
+        "failedImageRollback": true,
+        "invalidDraftRetained": true,
+        "navigationFallback": true,
+        "emptyRoundTrip": true,
+        "polymerEndGroups": true,
+        "png": {
+          "size": 1278,
+          "signature": [
+            137,
+            80,
+            78,
+            71,
+            13,
+            10,
+            26,
+            10
+          ]
+        },
+        "externalDftWrite": true,
+        "lifecycle": [
+          {
+            "cycle": 0,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 5272,
+            "JSHeapUsedSize": 121167336,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 1,
+            "workers": 1,
+            "JSEventListeners": 1732,
+            "Nodes": 5412,
+            "JSHeapUsedSize": 121384004,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 2,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 5272,
+            "JSHeapUsedSize": 121069844,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 3,
+            "workers": 1,
+            "JSEventListeners": 1732,
+            "Nodes": 5412,
+            "JSHeapUsedSize": 121856760,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 4,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 5272,
+            "JSHeapUsedSize": 121294048,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 5,
+            "workers": 1,
+            "JSEventListeners": 1732,
+            "Nodes": 5412,
+            "JSHeapUsedSize": 121984268,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 6,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 5272,
+            "JSHeapUsedSize": 121695832,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 7,
+            "workers": 1,
+            "JSEventListeners": 1732,
+            "Nodes": 5412,
+            "JSHeapUsedSize": 122259768,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 8,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 5272,
+            "JSHeapUsedSize": 121467096,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 9,
+            "workers": 1,
+            "JSEventListeners": 1732,
+            "Nodes": 5412,
+            "JSHeapUsedSize": 122190048,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 10,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 5272,
+            "JSHeapUsedSize": 121577236,
+            "retainedEditors": 0
+          }
+        ],
+        "clipboardShortcuts": true,
+        "deepLinks": [
+          "/structure-workbench",
+          "/database-query",
+          "/explorer",
+          "/homopolymer-property-prediction",
+          "/conditional-generation",
+          "/reverse-design"
+        ],
+        "errors": [],
+        "renderWarnings": [],
+        "missingResources": [],
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/workspace-development-final/result.json",
+          "sha256": "0ad75437cd49da46181832499b0d6f4058fab0182ac21a605e758a7b9febd2b7"
+        }
+      },
+      "interactions": {
+        "base": "http://127.0.0.1:5288",
+        "browser": "151.0.7922.34",
+        "errors": [],
+        "expectedFixtureErrors": [],
+        "checks": [
+          {
+            "name": "cold-module-start",
+            "request": {
+              "time": 1774.900001525879,
+              "phase": "blank"
+            },
+            "worker": {
+              "event": "worker",
+              "time": 2866.2000007629395,
+              "module": "structureWorkbench",
+              "phase": "idle"
+            }
+          },
+          {
+            "name": "transition-event-isolation-and-real-hit",
+            "blocked": {
+              "before": 3,
+              "after": 3,
+              "locked": true,
+              "popup": false,
+              "selection": 0,
+              "phase": "entering"
+            }
+          },
+          {
+            "name": "latest-navigation-target",
+            "singleWorker": true
+          },
+          {
+            "name": "reduced-motion"
+          },
+          {
+            "name": "host-input-focus-and-scroll"
+          },
+          {
+            "name": "late-sdk-transport-after-navigation",
+            "singleWorker": true
+          },
+          {
+            "name": "failed-initialization-retry",
+            "singleWorker": true
+          },
+          {
+            "name": "drawer-and-editor-retention",
+            "viewport": {
+              "width": 390,
+              "height": 844
+            },
+            "close": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 362,
+              "drawerTravel": 402,
+              "workspaceFrames": 0,
+              "drawerFrames": 14,
+              "durations": [
+                320
+              ],
+              "editorRetained": true
+            },
+            "open": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 362,
+              "drawerTravel": 402,
+              "workspaceFrames": 0,
+              "drawerFrames": 19,
+              "durations": [
+                400
+              ],
+              "editorRetained": true
+            }
+          },
+          {
+            "name": "drawer-and-editor-retention",
+            "viewport": {
+              "width": 1024,
+              "height": 768
+            },
+            "close": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 740,
+              "drawerTravel": 1036,
+              "workspaceFrames": 0,
+              "drawerFrames": 9,
+              "durations": [
+                320
+              ],
+              "editorRetained": true
+            },
+            "open": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 740,
+              "drawerTravel": 1036,
+              "workspaceFrames": 0,
+              "drawerFrames": 10,
+              "durations": [
+                400
+              ],
+              "editorRetained": true
+            }
+          },
+          {
+            "name": "drawer-and-editor-retention",
+            "viewport": {
+              "width": 1440,
+              "height": 900
+            },
+            "close": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 984,
+              "drawerTravel": 412,
+              "workspaceFrames": 0,
+              "drawerFrames": 8,
+              "durations": [
+                320
+              ],
+              "editorRetained": true
+            },
+            "open": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 984,
+              "drawerTravel": 412,
+              "workspaceFrames": 0,
+              "drawerFrames": 9,
+              "durations": [
+                400
+              ],
+              "editorRetained": true
+            }
+          },
+          {
+            "name": "drawer-and-editor-retention",
+            "viewport": {
+              "width": 2560,
+              "height": 1440
+            },
+            "close": {
+              "inline": true,
+              "workspaceDelta": 263,
+              "workspaceWidth": 1578,
+              "drawerTravel": 576,
+              "workspaceFrames": 6,
+              "drawerFrames": 6,
+              "durations": [
+                320
+              ],
+              "editorRetained": true
+            },
+            "open": {
+              "inline": true,
+              "workspaceDelta": -263,
+              "workspaceWidth": 1578,
+              "drawerTravel": 576,
+              "workspaceFrames": 8,
+              "drawerFrames": 9,
+              "durations": [
+                400
+              ],
+              "editorRetained": true
+            }
+          }
+        ],
+        "passed": true,
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/loading-interactions-development-final/result.json",
+          "sha256": "d6234abd0f6f9b20686c46eefe93fda8ea1088f46dc23c96fbde5cd198da107a"
+        }
+      }
+    },
+    "production": {
+      "workspace": {
+        "passed": true,
+        "engine": "react",
+        "sdk": "3.8.0",
+        "patch": "nexpoly-3.8.0-r3",
+        "reducedMotion": "no-preference",
+        "readyMs": 5113,
+        "viewports": [
+          {
+            "width": 390,
+            "height": 844,
+            "editor": {
+              "x": 15,
+              "y": 204,
+              "width": 360,
+              "height": 360
+            },
+            "atomVisible": true,
+            "atomHit": true,
+            "contextMenu": true
+          },
+          {
+            "width": 1024,
+            "height": 768,
+            "editor": {
+              "x": 267,
+              "y": 107,
+              "width": 738,
+              "height": 491.328125
+            },
+            "atomVisible": true,
+            "atomHit": true,
+            "contextMenu": true
+          },
+          {
+            "width": 2560,
+            "height": 1440,
+            "editor": {
+              "x": 684,
+              "y": 151,
+              "width": 1576,
+              "height": 1050
+            },
+            "atomVisible": true,
+            "atomHit": true,
+            "contextMenu": true
+          },
+          {
+            "width": 1440,
+            "height": 900,
+            "editor": {
+              "x": 365.796875,
+              "y": 107,
+              "width": 982,
+              "height": 644
+            },
+            "atomVisible": true,
+            "atomHit": true,
+            "contextMenu": true
+          }
+        ],
+        "realAtomDrag": true,
+        "layoutRoundTrip": true,
+        "annotationRoundTrip": true,
+        "explicitSync": true,
+        "external3D": true,
+        "failedImageRollback": true,
+        "invalidDraftRetained": true,
+        "navigationFallback": true,
+        "emptyRoundTrip": true,
+        "polymerEndGroups": true,
+        "png": {
+          "size": 1278,
+          "signature": [
+            137,
+            80,
+            78,
+            71,
+            13,
+            10,
+            26,
+            10
+          ]
+        },
+        "externalDftWrite": true,
+        "lifecycle": [
+          {
+            "cycle": 0,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 3825,
+            "JSHeapUsedSize": 89262652,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 1,
+            "workers": 1,
+            "JSEventListeners": 1732,
+            "Nodes": 3965,
+            "JSHeapUsedSize": 89396228,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 2,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 3825,
+            "JSHeapUsedSize": 89367740,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 3,
+            "workers": 1,
+            "JSEventListeners": 1732,
+            "Nodes": 3965,
+            "JSHeapUsedSize": 89462352,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 4,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 3825,
+            "JSHeapUsedSize": 89434848,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 5,
+            "workers": 1,
+            "JSEventListeners": 1732,
+            "Nodes": 3965,
+            "JSHeapUsedSize": 89532424,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 6,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 3825,
+            "JSHeapUsedSize": 89487244,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 7,
+            "workers": 1,
+            "JSEventListeners": 1732,
+            "Nodes": 3965,
+            "JSHeapUsedSize": 89603500,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 8,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 3825,
+            "JSHeapUsedSize": 89565580,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 9,
+            "workers": 1,
+            "JSEventListeners": 1732,
+            "Nodes": 3965,
+            "JSHeapUsedSize": 89662456,
+            "retainedEditors": 0
+          },
+          {
+            "cycle": 10,
+            "workers": 1,
+            "JSEventListeners": 1716,
+            "Nodes": 3825,
+            "JSHeapUsedSize": 89646508,
+            "retainedEditors": 0
+          }
+        ],
+        "clipboardShortcuts": true,
+        "deepLinks": [
+          "/structure-workbench",
+          "/database-query",
+          "/explorer",
+          "/homopolymer-property-prediction",
+          "/conditional-generation",
+          "/reverse-design"
+        ],
+        "errors": [],
+        "renderWarnings": [],
+        "missingResources": [],
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/workspace-production-final/result.json",
+          "sha256": "663ddfd20087d7fe93f27735e4d6b766e36c90bba28c24b1912c1b95b1f1c8e4"
+        }
+      },
+      "interactions": {
+        "base": "http://127.0.0.1:4288",
+        "browser": "151.0.7922.34",
+        "errors": [],
+        "expectedFixtureErrors": [],
+        "checks": [
+          {
+            "name": "cold-module-start",
+            "request": {
+              "time": 1439.2000007629395,
+              "phase": "blank"
+            },
+            "worker": {
+              "event": "worker",
+              "time": 3468.400001525879,
+              "module": "structureWorkbench",
+              "phase": "idle"
+            }
+          },
+          {
+            "name": "transition-event-isolation-and-real-hit",
+            "blocked": {
+              "before": 3,
+              "after": 3,
+              "locked": true,
+              "popup": false,
+              "selection": 0,
+              "phase": "entering"
+            }
+          },
+          {
+            "name": "latest-navigation-target",
+            "singleWorker": true
+          },
+          {
+            "name": "reduced-motion"
+          },
+          {
+            "name": "host-input-focus-and-scroll"
+          },
+          {
+            "name": "late-sdk-transport-after-navigation",
+            "singleWorker": true
+          },
+          {
+            "name": "failed-initialization-retry",
+            "singleWorker": true
+          },
+          {
+            "name": "drawer-and-editor-retention",
+            "viewport": {
+              "width": 390,
+              "height": 844
+            },
+            "close": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 362,
+              "drawerTravel": 402,
+              "workspaceFrames": 0,
+              "drawerFrames": 13,
+              "durations": [
+                320
+              ],
+              "editorRetained": true
+            },
+            "open": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 362,
+              "drawerTravel": 402,
+              "workspaceFrames": 0,
+              "drawerFrames": 17,
+              "durations": [
+                400
+              ],
+              "editorRetained": true
+            }
+          },
+          {
+            "name": "drawer-and-editor-retention",
+            "viewport": {
+              "width": 1024,
+              "height": 768
+            },
+            "close": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 740,
+              "drawerTravel": 1036,
+              "workspaceFrames": 0,
+              "drawerFrames": 8,
+              "durations": [
+                320
+              ],
+              "editorRetained": true
+            },
+            "open": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 740,
+              "drawerTravel": 1036,
+              "workspaceFrames": 0,
+              "drawerFrames": 10,
+              "durations": [
+                400
+              ],
+              "editorRetained": true
+            }
+          },
+          {
+            "name": "drawer-and-editor-retention",
+            "viewport": {
+              "width": 1440,
+              "height": 900
+            },
+            "close": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 984,
+              "drawerTravel": 412,
+              "workspaceFrames": 0,
+              "drawerFrames": 8,
+              "durations": [
+                320
+              ],
+              "editorRetained": true
+            },
+            "open": {
+              "inline": false,
+              "workspaceDelta": 0,
+              "workspaceWidth": 984,
+              "drawerTravel": 412,
+              "workspaceFrames": 0,
+              "drawerFrames": 11,
+              "durations": [
+                400
+              ],
+              "editorRetained": true
+            }
+          },
+          {
+            "name": "drawer-and-editor-retention",
+            "viewport": {
+              "width": 2560,
+              "height": 1440
+            },
+            "close": {
+              "inline": true,
+              "workspaceDelta": 263,
+              "workspaceWidth": 1578,
+              "drawerTravel": 576,
+              "workspaceFrames": 6,
+              "drawerFrames": 6,
+              "durations": [
+                320
+              ],
+              "editorRetained": true
+            },
+            "open": {
+              "inline": true,
+              "workspaceDelta": -263,
+              "workspaceWidth": 1578,
+              "drawerTravel": 576,
+              "workspaceFrames": 7,
+              "drawerFrames": 8,
+              "durations": [
+                400
+              ],
+              "editorRetained": true
+            }
+          }
+        ],
+        "passed": true,
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/loading-interactions-production-final/result.json",
+          "sha256": "f5fa6a47c9eb776bb579942689b5a619304f665fd28a32d5e684b0383619de58"
+        }
+      }
+    }
+  },
+  "performance": {
+    "date": "2026-09-11T03:35:26.210Z",
+    "browser": "151.0.7922.34",
+    "rounds": 3,
+    "perVariantPerMode": 30,
+    "sampling": "One predeclared six-owner warmup per browser context, retained separately; nearest-rank quantiles; matched mode and document; before/after order reversed in round2; real implementation, no overlap interception",
+    "comparisons": [
+      {
+        "mode": "development",
+        "baseline": {
+          "afterAnimationMs": {
+            "p50": 729.1999999999971,
+            "p95": 822.2000000000007
+          },
+          "idleMs": {
+            "p50": 1657.4000000000015,
+            "p95": 1718.199999999997
+          },
+          "interactiveMs": {
+            "p50": 2384,
+            "p95": 2534.600000000006
+          },
+          "samples": 30,
+          "visualFrameGapMs": {
+            "p50": 16.69999885559082,
+            "p95": 36,
+            "max": 170.10000038146973
+          },
+          "probeDurationMs": {
+            "p50": 0.10000038146972656,
+            "p95": 0.20000076293945312
+          },
+          "longTaskMs": {
+            "p50": 117,
+            "p95": 334,
+            "max": 356
+          },
+          "workersBeforeAnimationEnd": 0,
+          "samplesDetail": [
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1638.6000000000022,
+              "readyMs": 2460.800000000003,
+              "interactiveMs": 2460.800000000003,
+              "afterAnimationMs": 822.2000000000007,
+              "firstWorkerMs": 1645.9000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1657.5,
+              "readyMs": 2403,
+              "interactiveMs": 2403,
+              "afterAnimationMs": 745.5,
+              "firstWorkerMs": 1668.0999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1490.2000000000044,
+              "readyMs": 2292.5999999999985,
+              "interactiveMs": 2292.5999999999985,
+              "afterAnimationMs": 802.3999999999942,
+              "firstWorkerMs": 1497.4000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1506.0999999999985,
+              "readyMs": 2178,
+              "interactiveMs": 2178,
+              "afterAnimationMs": 671.9000000000015,
+              "firstWorkerMs": 1509.4000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 1696.5,
+              "readyMs": 2363.800000000003,
+              "interactiveMs": 2363.800000000003,
+              "afterAnimationMs": 667.3000000000029,
+              "firstWorkerMs": 1701.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1621.800000000003,
+              "readyMs": 2347.5999999999985,
+              "interactiveMs": 2347.5999999999985,
+              "afterAnimationMs": 725.7999999999956,
+              "firstWorkerMs": 1627.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1603.2999999999956,
+              "readyMs": 2267.199999999997,
+              "interactiveMs": 2267.199999999997,
+              "afterAnimationMs": 663.9000000000015,
+              "firstWorkerMs": 1608.2999999999956,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1642.4000000000015,
+              "readyMs": 2297.600000000006,
+              "interactiveMs": 2297.600000000006,
+              "afterAnimationMs": 655.2000000000044,
+              "firstWorkerMs": 1653,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1491.2000000000044,
+              "readyMs": 2193.5999999999985,
+              "interactiveMs": 2193.5999999999985,
+              "afterAnimationMs": 702.3999999999942,
+              "firstWorkerMs": 1496.0999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1657.4000000000015,
+              "readyMs": 2314.5999999999985,
+              "interactiveMs": 2314.5999999999985,
+              "afterAnimationMs": 657.1999999999971,
+              "firstWorkerMs": 1661.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1683.7999999999993,
+              "readyMs": 2477,
+              "interactiveMs": 2477,
+              "afterAnimationMs": 793.2000000000007,
+              "firstWorkerMs": 1695,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1618.6000000000022,
+              "readyMs": 2333.4000000000015,
+              "interactiveMs": 2333.4000000000015,
+              "afterAnimationMs": 714.7999999999993,
+              "firstWorkerMs": 1631.4000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1619,
+              "readyMs": 2428.0999999999985,
+              "interactiveMs": 2428.0999999999985,
+              "afterAnimationMs": 809.0999999999985,
+              "firstWorkerMs": 1629.7999999999956,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1665.7000000000044,
+              "readyMs": 2549.2000000000044,
+              "interactiveMs": 2549.2000000000044,
+              "afterAnimationMs": 883.5,
+              "firstWorkerMs": 1748.300000000003,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 1752.800000000003,
+              "readyMs": 2534.600000000006,
+              "interactiveMs": 2534.600000000006,
+              "afterAnimationMs": 781.8000000000029,
+              "firstWorkerMs": 1764,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1651,
+              "readyMs": 2439,
+              "interactiveMs": 2439,
+              "afterAnimationMs": 788,
+              "firstWorkerMs": 1661.699999999997,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1701.699999999997,
+              "readyMs": 2430.699999999997,
+              "interactiveMs": 2430.699999999997,
+              "afterAnimationMs": 729,
+              "firstWorkerMs": 1712.4000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1668,
+              "readyMs": 2391,
+              "interactiveMs": 2391,
+              "afterAnimationMs": 723,
+              "firstWorkerMs": 1678.800000000003,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1683,
+              "readyMs": 2377.5,
+              "interactiveMs": 2377.5,
+              "afterAnimationMs": 694.5,
+              "firstWorkerMs": 1695.800000000003,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1699.699999999997,
+              "readyMs": 2346.5,
+              "interactiveMs": 2346.5,
+              "afterAnimationMs": 646.8000000000029,
+              "firstWorkerMs": 1705.699999999997,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1581.5999999999985,
+              "readyMs": 2366.4000000000015,
+              "interactiveMs": 2366.4000000000015,
+              "afterAnimationMs": 784.8000000000029,
+              "firstWorkerMs": 1586.4000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1718.199999999997,
+              "readyMs": 2530,
+              "interactiveMs": 2530,
+              "afterAnimationMs": 811.8000000000029,
+              "firstWorkerMs": 1729,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1717,
+              "readyMs": 2403.9000000000015,
+              "interactiveMs": 2403.9000000000015,
+              "afterAnimationMs": 686.9000000000015,
+              "firstWorkerMs": 1727.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1636.5999999999985,
+              "readyMs": 2367.699999999997,
+              "interactiveMs": 2367.699999999997,
+              "afterAnimationMs": 731.0999999999985,
+              "firstWorkerMs": 1647.199999999997,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 1642.7000000000044,
+              "readyMs": 2384,
+              "interactiveMs": 2384,
+              "afterAnimationMs": 741.2999999999956,
+              "firstWorkerMs": 1651.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1673.699999999997,
+              "readyMs": 2469.699999999997,
+              "interactiveMs": 2469.699999999997,
+              "afterAnimationMs": 796,
+              "firstWorkerMs": 1680.3999999999942,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1684.5,
+              "readyMs": 2436.199999999997,
+              "interactiveMs": 2436.199999999997,
+              "afterAnimationMs": 751.6999999999971,
+              "firstWorkerMs": 1694.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1683.800000000003,
+              "readyMs": 2425,
+              "interactiveMs": 2425,
+              "afterAnimationMs": 741.1999999999971,
+              "firstWorkerMs": 1690.0999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1682.199999999997,
+              "readyMs": 2411.399999999994,
+              "interactiveMs": 2411.399999999994,
+              "afterAnimationMs": 729.1999999999971,
+              "firstWorkerMs": 1688.2999999999956,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1599.4000000000015,
+              "readyMs": 2266.800000000003,
+              "interactiveMs": 2266.800000000003,
+              "afterAnimationMs": 667.4000000000015,
+              "firstWorkerMs": 1605.300000000003,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            }
+          ]
+        },
+        "optimized": {
+          "afterAnimationMs": {
+            "p50": 0,
+            "p95": 0
+          },
+          "idleMs": {
+            "p50": 1856.699999999997,
+            "p95": 1962.699999999997
+          },
+          "interactiveMs": {
+            "p50": 1856.699999999997,
+            "p95": 1962.699999999997
+          },
+          "samples": 30,
+          "visualFrameGapMs": {
+            "p50": 16.69999885559082,
+            "p95": 72.39999961853027,
+            "max": 108.70000076293945
+          },
+          "probeDurationMs": {
+            "p50": 0.10000038146972656,
+            "p95": 0.40000152587890625
+          },
+          "longTaskMs": {
+            "p50": 78,
+            "p95": 313,
+            "max": 381
+          },
+          "workersBeforeAnimationEnd": 30,
+          "samplesDetail": [
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1806.0999999999985,
+              "readyMs": 1470,
+              "interactiveMs": 1806.0999999999985,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 795.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1859.2999999999993,
+              "readyMs": 1589.0999999999985,
+              "interactiveMs": 1859.2999999999993,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 964.7999999999993,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1817.800000000003,
+              "readyMs": 1445.9000000000015,
+              "interactiveMs": 1817.800000000003,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 815.1000000000022,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1921.4000000000015,
+              "readyMs": 1526.1000000000022,
+              "interactiveMs": 1921.4000000000015,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 958.9000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 2019,
+              "readyMs": 1695.2999999999993,
+              "interactiveMs": 2019,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 947.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1911,
+              "readyMs": 1589.4000000000015,
+              "interactiveMs": 1911,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 1008.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1870.3999999999942,
+              "readyMs": 1620.699999999997,
+              "interactiveMs": 1870.3999999999942,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 911.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1856.699999999997,
+              "readyMs": 1487.300000000003,
+              "interactiveMs": 1856.699999999997,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 938.3000000000029,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1837.800000000003,
+              "readyMs": 1467.5,
+              "interactiveMs": 1837.800000000003,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 915.6999999999971,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1858.7999999999956,
+              "readyMs": 1549,
+              "interactiveMs": 1858.7999999999956,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 899,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1797.5,
+              "readyMs": 1437.4000000000015,
+              "interactiveMs": 1797.5,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 847.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1848.1000000000022,
+              "readyMs": 1460.5,
+              "interactiveMs": 1848.1000000000022,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 860,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1860.0999999999985,
+              "readyMs": 1414.5,
+              "interactiveMs": 1860.0999999999985,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 763.0999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1788.5,
+              "readyMs": 1493.5999999999985,
+              "interactiveMs": 1788.5,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 880,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 1830.7999999999993,
+              "readyMs": 1515.2000000000007,
+              "interactiveMs": 1830.7999999999993,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 885.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1867.4000000000015,
+              "readyMs": 1555.4000000000015,
+              "interactiveMs": 1867.4000000000015,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 895.4000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1855.5999999999985,
+              "readyMs": 1512.7000000000044,
+              "interactiveMs": 1855.5999999999985,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 882.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1720.9000000000015,
+              "readyMs": 1406.300000000003,
+              "interactiveMs": 1720.9000000000015,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 876.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1717.0999999999985,
+              "readyMs": 1381.699999999997,
+              "interactiveMs": 1717.0999999999985,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 792.3000000000029,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1801.2000000000044,
+              "readyMs": 1534.2000000000044,
+              "interactiveMs": 1801.2000000000044,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 911.3000000000029,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1856.2999999999993,
+              "readyMs": 1456.9000000000015,
+              "interactiveMs": 1856.2999999999993,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 841.9000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1849.800000000003,
+              "readyMs": 1541.1000000000022,
+              "interactiveMs": 1849.800000000003,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 845.9000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1962.699999999997,
+              "readyMs": 1653.2999999999993,
+              "interactiveMs": 1962.699999999997,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 936,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1951.2000000000007,
+              "readyMs": 1543.2999999999993,
+              "interactiveMs": 1951.2000000000007,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 972.8999999999978,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 1938.9000000000015,
+              "readyMs": 1657.0999999999985,
+              "interactiveMs": 1938.9000000000015,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 966.1999999999971,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1917.0999999999985,
+              "readyMs": 1579.300000000003,
+              "interactiveMs": 1917.0999999999985,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 972.3000000000029,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1927.9000000000015,
+              "readyMs": 1642.199999999997,
+              "interactiveMs": 1927.9000000000015,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 944.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1847.199999999997,
+              "readyMs": 1593.7999999999956,
+              "interactiveMs": 1847.199999999997,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 938.6999999999971,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1868.9000000000015,
+              "readyMs": 1493.800000000003,
+              "interactiveMs": 1868.9000000000015,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 935.3000000000029,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1911.800000000003,
+              "readyMs": 1527.4000000000015,
+              "interactiveMs": 1911.800000000003,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 969.2000000000044,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            }
+          ]
+        },
+        "checks": {
+          "startsDuringTransition": true,
+          "loadingTailMedianZero": true,
+          "loadingTailP95": true,
+          "interactiveP50": true,
+          "interactiveP95": true,
+          "animationEndMedian": true
+        },
+        "passed": true
+      },
+      {
+        "mode": "production",
+        "baseline": {
+          "afterAnimationMs": {
+            "p50": 368.5,
+            "p95": 403.90000000000146
+          },
+          "idleMs": {
+            "p50": 1417.2000000000044,
+            "p95": 1483
+          },
+          "interactiveMs": {
+            "p50": 1788.8999999999978,
+            "p95": 1885.4000000000015
+          },
+          "samples": 30,
+          "visualFrameGapMs": {
+            "p50": 16.69999885559082,
+            "p95": 31,
+            "max": 93.9000015258789
+          },
+          "probeDurationMs": {
+            "p50": 0.10000038146972656,
+            "p95": 0.20000076293945312
+          },
+          "longTaskMs": {
+            "p50": 78,
+            "p95": 95,
+            "max": 129
+          },
+          "workersBeforeAnimationEnd": 0,
+          "samplesDetail": [
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1433.2999999999993,
+              "readyMs": 1812.2999999999993,
+              "interactiveMs": 1812.2999999999993,
+              "afterAnimationMs": 379,
+              "firstWorkerMs": 1437.6000000000022,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1416.3999999999978,
+              "readyMs": 1788.8999999999978,
+              "interactiveMs": 1788.8999999999978,
+              "afterAnimationMs": 372.5,
+              "firstWorkerMs": 1420.7999999999993,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1483,
+              "readyMs": 1886.9000000000015,
+              "interactiveMs": 1886.9000000000015,
+              "afterAnimationMs": 403.90000000000146,
+              "firstWorkerMs": 1489.300000000003,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1468.3999999999978,
+              "readyMs": 1846.5,
+              "interactiveMs": 1846.5,
+              "afterAnimationMs": 378.1000000000022,
+              "firstWorkerMs": 1472.8999999999978,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 1468,
+              "readyMs": 1863.199999999997,
+              "interactiveMs": 1863.199999999997,
+              "afterAnimationMs": 395.1999999999971,
+              "firstWorkerMs": 1473.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1500.800000000003,
+              "readyMs": 1885.4000000000015,
+              "interactiveMs": 1885.4000000000015,
+              "afterAnimationMs": 384.59999999999854,
+              "firstWorkerMs": 1505.300000000003,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1417.2000000000044,
+              "readyMs": 1803.4000000000015,
+              "interactiveMs": 1803.4000000000015,
+              "afterAnimationMs": 386.1999999999971,
+              "firstWorkerMs": 1421.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1418.199999999997,
+              "readyMs": 1817,
+              "interactiveMs": 1817,
+              "afterAnimationMs": 398.8000000000029,
+              "firstWorkerMs": 1422.7999999999956,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1482.4000000000015,
+              "readyMs": 1851.0999999999985,
+              "interactiveMs": 1851.0999999999985,
+              "afterAnimationMs": 368.6999999999971,
+              "firstWorkerMs": 1486.300000000003,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1416.7999999999956,
+              "readyMs": 1754.199999999997,
+              "interactiveMs": 1754.199999999997,
+              "afterAnimationMs": 337.40000000000146,
+              "firstWorkerMs": 1421.4000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1422.0999999999985,
+              "readyMs": 1781.3999999999978,
+              "interactiveMs": 1781.3999999999978,
+              "afterAnimationMs": 359.2999999999993,
+              "firstWorkerMs": 1426.2999999999993,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1449.0999999999985,
+              "readyMs": 1803.2999999999993,
+              "interactiveMs": 1803.2999999999993,
+              "afterAnimationMs": 354.2000000000007,
+              "firstWorkerMs": 1451.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1353.3999999999978,
+              "readyMs": 1714,
+              "interactiveMs": 1714,
+              "afterAnimationMs": 360.6000000000022,
+              "firstWorkerMs": 1358.3999999999978,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1406.5999999999985,
+              "readyMs": 1748.5999999999985,
+              "interactiveMs": 1748.5999999999985,
+              "afterAnimationMs": 342,
+              "firstWorkerMs": 1410.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 1407.7000000000007,
+              "readyMs": 1759.5000000000036,
+              "interactiveMs": 1759.5000000000036,
+              "afterAnimationMs": 351.8000000000029,
+              "firstWorkerMs": 1412,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1398.4000000000015,
+              "readyMs": 1694.5,
+              "interactiveMs": 1694.5,
+              "afterAnimationMs": 296.09999999999854,
+              "firstWorkerMs": 1400.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1402.800000000003,
+              "readyMs": 1748.5,
+              "interactiveMs": 1748.5,
+              "afterAnimationMs": 345.6999999999971,
+              "firstWorkerMs": 1406.800000000003,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1386.0999999999985,
+              "readyMs": 1733.4000000000015,
+              "interactiveMs": 1733.4000000000015,
+              "afterAnimationMs": 347.3000000000029,
+              "firstWorkerMs": 1390.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1399.5,
+              "readyMs": 1737.699999999997,
+              "interactiveMs": 1737.699999999997,
+              "afterAnimationMs": 338.1999999999971,
+              "firstWorkerMs": 1401.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1421.2000000000044,
+              "readyMs": 1794.9000000000015,
+              "interactiveMs": 1794.9000000000015,
+              "afterAnimationMs": 373.6999999999971,
+              "firstWorkerMs": 1430.300000000003,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1399.2999999999993,
+              "readyMs": 1767.7999999999993,
+              "interactiveMs": 1767.7999999999993,
+              "afterAnimationMs": 368.5,
+              "firstWorkerMs": 1404.0999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1417.2000000000007,
+              "readyMs": 1790.0999999999985,
+              "interactiveMs": 1790.0999999999985,
+              "afterAnimationMs": 372.8999999999978,
+              "firstWorkerMs": 1421.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1467.7999999999993,
+              "readyMs": 1823.7000000000007,
+              "interactiveMs": 1823.7000000000007,
+              "afterAnimationMs": 355.90000000000146,
+              "firstWorkerMs": 1472.2999999999993,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1384.2999999999993,
+              "readyMs": 1747.7999999999993,
+              "interactiveMs": 1747.7999999999993,
+              "afterAnimationMs": 363.5,
+              "firstWorkerMs": 1394.3999999999978,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 1433.4000000000015,
+              "readyMs": 1802.9000000000015,
+              "interactiveMs": 1802.9000000000015,
+              "afterAnimationMs": 369.5,
+              "firstWorkerMs": 1435.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1364.3999999999942,
+              "readyMs": 1778.7999999999956,
+              "interactiveMs": 1778.7999999999956,
+              "afterAnimationMs": 414.40000000000146,
+              "firstWorkerMs": 1367.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1384.0999999999985,
+              "readyMs": 1767.699999999997,
+              "interactiveMs": 1767.699999999997,
+              "afterAnimationMs": 383.59999999999854,
+              "firstWorkerMs": 1388.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1422.199999999997,
+              "readyMs": 1782.0999999999985,
+              "interactiveMs": 1782.0999999999985,
+              "afterAnimationMs": 359.90000000000146,
+              "firstWorkerMs": 1427,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1471.300000000003,
+              "readyMs": 1827.0999999999985,
+              "interactiveMs": 1827.0999999999985,
+              "afterAnimationMs": 355.79999999999563,
+              "firstWorkerMs": 1475.800000000003,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1418.0999999999985,
+              "readyMs": 1789.0999999999985,
+              "interactiveMs": 1789.0999999999985,
+              "afterAnimationMs": 371,
+              "firstWorkerMs": 1423.199999999997,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            }
+          ]
+        },
+        "optimized": {
+          "afterAnimationMs": {
+            "p50": 0,
+            "p95": 0
+          },
+          "idleMs": {
+            "p50": 1479.4000000000015,
+            "p95": 1530.5999999999985
+          },
+          "interactiveMs": {
+            "p50": 1479.4000000000015,
+            "p95": 1530.5999999999985
+          },
+          "samples": 30,
+          "visualFrameGapMs": {
+            "p50": 16.69999885559082,
+            "p95": 39.10000038146973,
+            "max": 107.69999885559082
+          },
+          "probeDurationMs": {
+            "p50": 0.10000038146972656,
+            "p95": 0.5
+          },
+          "longTaskMs": {
+            "p50": 64,
+            "p95": 94,
+            "max": 105
+          },
+          "workersBeforeAnimationEnd": 30,
+          "samplesDetail": [
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1528.5,
+              "readyMs": 1172.1000000000022,
+              "interactiveMs": 1528.5,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 786.8000000000029,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1512.5,
+              "readyMs": 1160.699999999997,
+              "interactiveMs": 1512.5,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 760.6999999999971,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1502.7999999999993,
+              "readyMs": 1128.1000000000022,
+              "interactiveMs": 1502.7999999999993,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 777,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1508.7000000000007,
+              "readyMs": 1210.2999999999993,
+              "interactiveMs": 1508.7000000000007,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 796.7999999999993,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 1416.9000000000015,
+              "readyMs": 994.1000000000022,
+              "interactiveMs": 1416.9000000000015,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 675.1000000000022,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1520.2000000000007,
+              "readyMs": 1130.7000000000007,
+              "interactiveMs": 1520.2000000000007,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 785.2999999999993,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1466,
+              "readyMs": 1106.7999999999993,
+              "interactiveMs": 1466,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 777,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1429.800000000003,
+              "readyMs": 992.7000000000044,
+              "interactiveMs": 1429.800000000003,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 673.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1433.5999999999985,
+              "readyMs": 1028.199999999997,
+              "interactiveMs": 1433.5999999999985,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 705.0999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1390.2000000000044,
+              "readyMs": 1027.7000000000044,
+              "interactiveMs": 1390.2000000000044,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 663,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1530.5999999999985,
+              "readyMs": 1130.699999999997,
+              "interactiveMs": 1530.5999999999985,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 769.0999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1490.6000000000022,
+              "readyMs": 1110.300000000003,
+              "interactiveMs": 1490.6000000000022,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 739.3000000000029,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1454.5,
+              "readyMs": 1039.9000000000015,
+              "interactiveMs": 1454.5,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 728.9000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1529.5,
+              "readyMs": 1087.0999999999985,
+              "interactiveMs": 1529.5,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 769.2000000000007,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 1484.9000000000015,
+              "readyMs": 1073.4000000000015,
+              "interactiveMs": 1484.9000000000015,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 742,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1529.6000000000022,
+              "readyMs": 1139.5,
+              "interactiveMs": 1529.6000000000022,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 798.2999999999993,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1520.2000000000007,
+              "readyMs": 1139.6000000000022,
+              "interactiveMs": 1520.2000000000007,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 784.4000000000015,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1507.7999999999956,
+              "readyMs": 1078.5,
+              "interactiveMs": 1507.7999999999956,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 757.5,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1453.5,
+              "readyMs": 1082.0999999999985,
+              "interactiveMs": 1453.5,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 767.8000000000029,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1558.5999999999985,
+              "readyMs": 1133.699999999997,
+              "interactiveMs": 1558.5999999999985,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 773.1999999999971,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1423.3999999999978,
+              "readyMs": 1047.7000000000007,
+              "interactiveMs": 1423.3999999999978,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 681.2999999999993,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "explorer",
+              "idleMs": 1516.7000000000007,
+              "readyMs": 1159.9000000000015,
+              "interactiveMs": 1516.7000000000007,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 797.0999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "explorer",
+              "target": "homopolymerPrediction",
+              "idleMs": 1439.8999999999978,
+              "readyMs": 1058.2000000000007,
+              "interactiveMs": 1439.8999999999978,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 742.3999999999978,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "homopolymerPrediction",
+              "target": "conditionalGeneration",
+              "idleMs": 1436.0999999999985,
+              "readyMs": 1061,
+              "interactiveMs": 1436.0999999999985,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 734.7000000000007,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "conditionalGeneration",
+              "target": "reverseDesign",
+              "idleMs": 1503.3999999999978,
+              "readyMs": 1133.7999999999993,
+              "interactiveMs": 1503.3999999999978,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 781.5999999999985,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "reverseDesign",
+              "target": "structureWorkbench",
+              "idleMs": 1438.1000000000022,
+              "readyMs": 963.7000000000007,
+              "interactiveMs": 1438.1000000000022,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 689,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1479.4000000000015,
+              "readyMs": 1152.300000000003,
+              "interactiveMs": 1479.4000000000015,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 753.6000000000022,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1438.5999999999985,
+              "readyMs": 1104.0999999999985,
+              "interactiveMs": 1438.5999999999985,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 734.8000000000029,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "structureWorkbench",
+              "target": "databaseQuery",
+              "idleMs": 1410.199999999997,
+              "readyMs": 993.3999999999942,
+              "interactiveMs": 1410.199999999997,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 699.8999999999942,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            },
+            {
+              "from": "databaseQuery",
+              "target": "structureWorkbench",
+              "idleMs": 1460.9000000000015,
+              "readyMs": 1084.7999999999956,
+              "interactiveMs": 1460.9000000000015,
+              "afterAnimationMs": 0,
+              "firstWorkerMs": 748.2999999999956,
+              "workersCreated": 1,
+              "exportedSmiles": "CCO"
+            }
+          ]
+        },
+        "checks": {
+          "startsDuringTransition": true,
+          "loadingTailMedianZero": true,
+          "loadingTailP95": true,
+          "interactiveP50": true,
+          "interactiveP95": true,
+          "animationEndMedian": true
+        },
+        "passed": true
+      }
+    ],
+    "passed": true,
+    "gateAggregation": "Thirty measured owner switches per mode/variant, combined across the three predeclared rounds. Per-round animation deltas are also disclosed; aggregate pass is not a per-round stability guarantee.",
+    "roundAnimationDeltas": [
+      {
+        "mode": "development",
+        "round": 1,
+        "baselineMedianMs": 1621.800000000003,
+        "optimizedMedianMs": 1858.7999999999956,
+        "increaseMs": 236.99999999999272,
+        "within200ms": false
+      },
+      {
+        "mode": "development",
+        "round": 2,
+        "baselineMedianMs": 1668,
+        "optimizedMedianMs": 1801.2000000000044,
+        "increaseMs": 133.20000000000437,
+        "within200ms": true
+      },
+      {
+        "mode": "development",
+        "round": 3,
+        "baselineMedianMs": 1673.699999999997,
+        "optimizedMedianMs": 1911.800000000003,
+        "increaseMs": 238.10000000000582,
+        "within200ms": false
+      },
+      {
+        "mode": "production",
+        "round": 1,
+        "baselineMedianMs": 1433.2999999999993,
+        "optimizedMedianMs": 1466,
+        "increaseMs": 32.70000000000073,
+        "within200ms": true
+      },
+      {
+        "mode": "production",
+        "round": 2,
+        "baselineMedianMs": 1402.800000000003,
+        "optimizedMedianMs": 1507.7999999999956,
+        "increaseMs": 104.99999999999272,
+        "within200ms": true
+      },
+      {
+        "mode": "production",
+        "round": 3,
+        "baselineMedianMs": 1417.2000000000007,
+        "optimizedMedianMs": 1438.5999999999985,
+        "increaseMs": 21.399999999997817,
+        "within200ms": true
+      }
+    ]
+  },
+  "performanceGroups": [
+    {
+      "label": "development-baseline-1",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": false,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 671.9000000000015,
+          "p95": 822.2000000000007
+        },
+        "idleMs": {
+          "p50": 1621.800000000003,
+          "p95": 1696.5
+        },
+        "interactiveMs": {
+          "p50": 2297.600000000006,
+          "p95": 2460.800000000003
+        },
+        "workersStartedBeforeAnimationEnd": 0,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 4405.799999237061,
+        "firstWorkerMs": 2405.8
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 1835.800000000001,
+          "readyMs": 2670.1000000000004,
+          "interactiveMs": 2670.1000000000004,
+          "afterAnimationMs": 834.2999999999993,
+          "firstWorkerMs": 1847.5,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1651.2999999999993,
+          "readyMs": 2359.699999999999,
+          "interactiveMs": 2359.699999999999,
+          "afterAnimationMs": 708.3999999999996,
+          "firstWorkerMs": 1662.8999999999996,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1718.6000000000004,
+          "readyMs": 2499.6000000000004,
+          "interactiveMs": 2499.6000000000004,
+          "afterAnimationMs": 781,
+          "firstWorkerMs": 1729.8999999999996,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1653,
+          "readyMs": 2446.5999999999985,
+          "interactiveMs": 2446.5999999999985,
+          "afterAnimationMs": 793.5999999999985,
+          "firstWorkerMs": 1661.2999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 1756.6000000000022,
+          "readyMs": 2490.7000000000007,
+          "interactiveMs": 2490.7000000000007,
+          "afterAnimationMs": 734.0999999999985,
+          "firstWorkerMs": 1765.9000000000015,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1759.7999999999993,
+          "readyMs": 2575.899999999998,
+          "interactiveMs": 2575.899999999998,
+          "afterAnimationMs": 816.0999999999985,
+          "firstWorkerMs": 1768,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1587,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1391.2999999999956,
+          "readyMs": 662.7999999999956,
+          "interactiveMs": 1391.2999999999956,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/development-baseline-1.json",
+        "sha256": "f7399c508c926d7a2eba5499f95926aceea54bd78c969d5f975e7302517549e5"
+      }
+    },
+    {
+      "label": "development-baseline-2",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": false,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 729,
+          "p95": 883.5
+        },
+        "idleMs": {
+          "p50": 1668,
+          "p95": 1752.800000000003
+        },
+        "interactiveMs": {
+          "p50": 2428.0999999999985,
+          "p95": 2549.2000000000044
+        },
+        "workersStartedBeforeAnimationEnd": 0,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 3843.8999996185303,
+        "firstWorkerMs": 2105.9
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 1629.3999999999996,
+          "readyMs": 2454.6000000000004,
+          "interactiveMs": 2454.6000000000004,
+          "afterAnimationMs": 825.2000000000007,
+          "firstWorkerMs": 1634.5999999999995,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1651.5,
+          "readyMs": 2374.699999999999,
+          "interactiveMs": 2374.699999999999,
+          "afterAnimationMs": 723.1999999999989,
+          "firstWorkerMs": 1663.3999999999996,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1745.2000000000007,
+          "readyMs": 2542.3999999999996,
+          "interactiveMs": 2542.3999999999996,
+          "afterAnimationMs": 797.1999999999989,
+          "firstWorkerMs": 1752.2000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1636.4999999999982,
+          "readyMs": 2427.3999999999996,
+          "interactiveMs": 2427.3999999999996,
+          "afterAnimationMs": 790.9000000000015,
+          "firstWorkerMs": 1644.199999999999,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 1685.2999999999993,
+          "readyMs": 2439.7999999999993,
+          "interactiveMs": 2439.7999999999993,
+          "afterAnimationMs": 754.5,
+          "firstWorkerMs": 1693.2000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1682.6000000000022,
+          "readyMs": 2494.9000000000015,
+          "interactiveMs": 2494.9000000000015,
+          "afterAnimationMs": 812.2999999999993,
+          "firstWorkerMs": 1693.2000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1701.9000000000015,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1423,
+          "readyMs": 663.5,
+          "interactiveMs": 1423,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/development-baseline-2.json",
+        "sha256": "d2fd436e9724bec71266f4fe4886cb1a318926a3fa1af069122bc9f4f8c80b1d"
+      }
+    },
+    {
+      "label": "development-baseline-3",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": false,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 741.1999999999971,
+          "p95": 811.8000000000029
+        },
+        "idleMs": {
+          "p50": 1673.699999999997,
+          "p95": 1718.199999999997
+        },
+        "interactiveMs": {
+          "p50": 2403.9000000000015,
+          "p95": 2530
+        },
+        "workersStartedBeforeAnimationEnd": 0,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 3731.3999996185303,
+        "firstWorkerMs": 1991.5
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 1661.5,
+          "readyMs": 2469.9000000000005,
+          "interactiveMs": 2469.9000000000005,
+          "afterAnimationMs": 808.4000000000005,
+          "firstWorkerMs": 1672.9000000000005,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1652.6000000000004,
+          "readyMs": 2546.9000000000015,
+          "interactiveMs": 2546.9000000000015,
+          "afterAnimationMs": 894.3000000000011,
+          "firstWorkerMs": 1720.9000000000015,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1669.6000000000004,
+          "readyMs": 2424,
+          "interactiveMs": 2424,
+          "afterAnimationMs": 754.3999999999996,
+          "firstWorkerMs": 1672.7000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1674.7999999999993,
+          "readyMs": 2591.4000000000015,
+          "interactiveMs": 2591.4000000000015,
+          "afterAnimationMs": 916.6000000000022,
+          "firstWorkerMs": 1678.7999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 1685.6000000000022,
+          "readyMs": 2420.7999999999993,
+          "interactiveMs": 2420.7999999999993,
+          "afterAnimationMs": 735.1999999999971,
+          "firstWorkerMs": 1688.5,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1546.2999999999993,
+          "readyMs": 2201.0999999999985,
+          "interactiveMs": 2201.0999999999985,
+          "afterAnimationMs": 654.7999999999993,
+          "firstWorkerMs": 1549.7999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1685.300000000003,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1373.5,
+          "readyMs": 635,
+          "interactiveMs": 1373.5,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/development-baseline-3.json",
+        "sha256": "697e4728ffc80181bb27e68d659db57a708ff0bbfc01c593b00b9dd57932fa29"
+      }
+    },
+    {
+      "label": "development-optimized-1",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": true,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 0,
+          "p95": 0
+        },
+        "idleMs": {
+          "p50": 1858.7999999999956,
+          "p95": 2019
+        },
+        "interactiveMs": {
+          "p50": 1858.7999999999956,
+          "p95": 2019
+        },
+        "workersStartedBeforeAnimationEnd": 10,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 3882,
+        "firstWorkerMs": 2179.4
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 1869.8999999999996,
+          "readyMs": 1588.6999999999998,
+          "interactiveMs": 1869.8999999999996,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 866.8000000000002,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1892.199999999999,
+          "readyMs": 1513.2999999999993,
+          "interactiveMs": 1892.199999999999,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 870.2999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1867.699999999999,
+          "readyMs": 1494.199999999999,
+          "interactiveMs": 1867.699999999999,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 850.7999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1813.7000000000007,
+          "readyMs": 1459.300000000001,
+          "interactiveMs": 1813.7000000000007,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 893.7000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 2110.5999999999985,
+          "readyMs": 1733.4000000000015,
+          "interactiveMs": 2110.5999999999985,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 1030.5999999999985,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1924.2999999999993,
+          "readyMs": 1539.4000000000015,
+          "interactiveMs": 1924.2999999999993,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 972.5,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1669.300000000003,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1322.5999999999985,
+          "readyMs": 583.0999999999985,
+          "interactiveMs": 1322.5999999999985,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/development-optimized-1.json",
+        "sha256": "c23e2eb77bc07e5e1b19baf2ead34d8e4219b1efba4c1def9ddc5bae6ddf486e"
+      }
+    },
+    {
+      "label": "development-optimized-2",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": true,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 0,
+          "p95": 0
+        },
+        "idleMs": {
+          "p50": 1801.2000000000044,
+          "p95": 1867.4000000000015
+        },
+        "interactiveMs": {
+          "p50": 1801.2000000000044,
+          "p95": 1867.4000000000015
+        },
+        "workersStartedBeforeAnimationEnd": 10,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 3215.199998855591,
+        "firstWorkerMs": 1599.3
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 1762.2000000000007,
+          "readyMs": 1410.1000000000004,
+          "interactiveMs": 1762.2000000000007,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 763.3000000000002,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1763.4000000000005,
+          "readyMs": 1516.1999999999998,
+          "interactiveMs": 1763.4000000000005,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 815.9999999999991,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1798.5,
+          "readyMs": 1426.3999999999996,
+          "interactiveMs": 1798.5,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 830.8999999999996,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1888.0999999999985,
+          "readyMs": 1506,
+          "interactiveMs": 1888.0999999999985,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 879.1999999999989,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 1962.0000000000018,
+          "readyMs": 1685,
+          "interactiveMs": 1962.0000000000018,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 1023.8999999999996,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1746,
+          "readyMs": 1475.5999999999985,
+          "interactiveMs": 1746,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 897.0999999999985,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1597.2999999999956,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1271.800000000003,
+          "readyMs": 562.3000000000029,
+          "interactiveMs": 1271.800000000003,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/development-optimized-2.json",
+        "sha256": "069c6f299174c22f425a997c1777c735b910ad67b78fcf3bee274960da497ef0"
+      }
+    },
+    {
+      "label": "development-optimized-3",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": true,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 0,
+          "p95": 0
+        },
+        "idleMs": {
+          "p50": 1911.800000000003,
+          "p95": 1962.699999999997
+        },
+        "interactiveMs": {
+          "p50": 1911.800000000003,
+          "p95": 1962.699999999997
+        },
+        "workersStartedBeforeAnimationEnd": 10,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 4453,
+        "firstWorkerMs": 2623.5
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 2158.5999999999995,
+          "readyMs": 1753.499999999999,
+          "interactiveMs": 2158.5999999999995,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 1044.6999999999998,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1969.7000000000007,
+          "readyMs": 1708,
+          "interactiveMs": 1969.7000000000007,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 952,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1992,
+          "readyMs": 1743,
+          "interactiveMs": 1992,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 1000.5,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1888.4000000000015,
+          "readyMs": 1586.7999999999993,
+          "interactiveMs": 1888.4000000000015,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 967.6000000000004,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 2028.1000000000022,
+          "readyMs": 1637.4000000000015,
+          "interactiveMs": 2028.1000000000022,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 1034.4000000000015,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1905.9000000000015,
+          "readyMs": 1564.2999999999993,
+          "interactiveMs": 1905.9000000000015,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 981.2000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1737.7000000000044,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1320.7999999999956,
+          "readyMs": 582.1999999999971,
+          "interactiveMs": 1320.7999999999956,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/development-optimized-3.json",
+        "sha256": "8988f07b741de4dc0f10c07bd35b29435892663c2d7dd1beb4e35a6f3ad42722"
+      }
+    },
+    {
+      "label": "production-baseline-1",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": false,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 379,
+          "p95": 403.90000000000146
+        },
+        "idleMs": {
+          "p50": 1433.2999999999993,
+          "p95": 1500.800000000003
+        },
+        "interactiveMs": {
+          "p50": 1817,
+          "p95": 1886.9000000000015
+        },
+        "workersStartedBeforeAnimationEnd": 0,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 5528.5,
+        "firstWorkerMs": 4366.4
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 1532,
+          "readyMs": 1952.6000000000004,
+          "interactiveMs": 1952.6000000000004,
+          "afterAnimationMs": 420.60000000000036,
+          "firstWorkerMs": 1536.8999999999996,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1449.800000000001,
+          "readyMs": 1842.8999999999996,
+          "interactiveMs": 1842.8999999999996,
+          "afterAnimationMs": 393.09999999999854,
+          "firstWorkerMs": 1454.300000000001,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1521.699999999999,
+          "readyMs": 2005.199999999999,
+          "interactiveMs": 2005.199999999999,
+          "afterAnimationMs": 483.5,
+          "firstWorkerMs": 1527.2999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1467.2999999999993,
+          "readyMs": 1853.5999999999985,
+          "interactiveMs": 1853.5999999999985,
+          "afterAnimationMs": 386.2999999999993,
+          "firstWorkerMs": 1472,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 1516,
+          "readyMs": 1910.6000000000022,
+          "interactiveMs": 1910.6000000000022,
+          "afterAnimationMs": 394.6000000000022,
+          "firstWorkerMs": 1520.7000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1447.2000000000007,
+          "readyMs": 1850.0999999999985,
+          "interactiveMs": 1850.0999999999985,
+          "afterAnimationMs": 402.8999999999978,
+          "firstWorkerMs": 1452,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1568.800000000003,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1272.4000000000015,
+          "readyMs": 547.5999999999985,
+          "interactiveMs": 1272.4000000000015,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/production-baseline-1.json",
+        "sha256": "c0567f7b178e7356f1c69f6edc6aaea8ce98a9a907f9dfe54b7c057a7c81f1ee"
+      }
+    },
+    {
+      "label": "production-baseline-2",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": false,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 347.3000000000029,
+          "p95": 373.6999999999971
+        },
+        "idleMs": {
+          "p50": 1402.800000000003,
+          "p95": 1449.0999999999985
+        },
+        "interactiveMs": {
+          "p50": 1748.5,
+          "p95": 1803.2999999999993
+        },
+        "workersStartedBeforeAnimationEnd": 0,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 4873,
+        "firstWorkerMs": 3619.8
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 1515.1999999999998,
+          "readyMs": 1903.999999999999,
+          "interactiveMs": 1903.999999999999,
+          "afterAnimationMs": 388.7999999999993,
+          "firstWorkerMs": 1519.8000000000002,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1394.3999999999996,
+          "readyMs": 1707.300000000001,
+          "interactiveMs": 1707.300000000001,
+          "afterAnimationMs": 312.90000000000146,
+          "firstWorkerMs": 1396.2000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1409.2000000000007,
+          "readyMs": 1712.6000000000004,
+          "interactiveMs": 1712.6000000000004,
+          "afterAnimationMs": 303.39999999999964,
+          "firstWorkerMs": 1410.8999999999996,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1352.7999999999993,
+          "readyMs": 1691.3999999999996,
+          "interactiveMs": 1691.3999999999996,
+          "afterAnimationMs": 338.60000000000036,
+          "firstWorkerMs": 1355.7999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 1496.8999999999978,
+          "readyMs": 1868.0999999999985,
+          "interactiveMs": 1868.0999999999985,
+          "afterAnimationMs": 371.2000000000007,
+          "firstWorkerMs": 1502.7999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1415.7000000000007,
+          "readyMs": 1793.3999999999978,
+          "interactiveMs": 1793.3999999999978,
+          "afterAnimationMs": 377.6999999999971,
+          "firstWorkerMs": 1431.5,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1411.7000000000044,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1156.2999999999956,
+          "readyMs": 482.79999999999563,
+          "interactiveMs": 1156.2999999999956,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/production-baseline-2.json",
+        "sha256": "8f1f958b3bcae46ac626f3205ab997a1898c94078a892d7a2956bc0fb221b1d3"
+      }
+    },
+    {
+      "label": "production-baseline-3",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": false,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 368.5,
+          "p95": 414.40000000000146
+        },
+        "idleMs": {
+          "p50": 1417.2000000000007,
+          "p95": 1471.300000000003
+        },
+        "interactiveMs": {
+          "p50": 1782.0999999999985,
+          "p95": 1827.0999999999985
+        },
+        "workersStartedBeforeAnimationEnd": 0,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 5488.199998855591,
+        "firstWorkerMs": 4265.8
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 1531.3000000000002,
+          "readyMs": 1981.8000000000002,
+          "interactiveMs": 1981.8000000000002,
+          "afterAnimationMs": 450.5,
+          "firstWorkerMs": 1536.1999999999998,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1483.3999999999996,
+          "readyMs": 1894.1000000000004,
+          "interactiveMs": 1894.1000000000004,
+          "afterAnimationMs": 410.7000000000007,
+          "firstWorkerMs": 1487.8999999999996,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1467.7000000000007,
+          "readyMs": 1861.8999999999996,
+          "interactiveMs": 1861.8999999999996,
+          "afterAnimationMs": 394.1999999999989,
+          "firstWorkerMs": 1478.7999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1600.2000000000007,
+          "readyMs": 1978.9000000000015,
+          "interactiveMs": 1978.9000000000015,
+          "afterAnimationMs": 378.7000000000007,
+          "firstWorkerMs": 1609.4000000000015,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 1464.7999999999993,
+          "readyMs": 1852.5999999999985,
+          "interactiveMs": 1852.5999999999985,
+          "afterAnimationMs": 387.7999999999993,
+          "firstWorkerMs": 1470.2000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1479.699999999997,
+          "readyMs": 1853,
+          "interactiveMs": 1853,
+          "afterAnimationMs": 373.3000000000029,
+          "firstWorkerMs": 1484.5,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1536.5,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1205.0999999999985,
+          "readyMs": 515.4000000000015,
+          "interactiveMs": 1205.0999999999985,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/production-baseline-3.json",
+        "sha256": "f42c65bb22d7b3371971ae8e35b708d8792328343d55a20918b3b94e3f4a2948"
+      }
+    },
+    {
+      "label": "production-optimized-1",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": true,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 0,
+          "p95": 0
+        },
+        "idleMs": {
+          "p50": 1466,
+          "p95": 1528.5
+        },
+        "interactiveMs": {
+          "p50": 1466,
+          "p95": 1528.5
+        },
+        "workersStartedBeforeAnimationEnd": 10,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 5305.299999237061,
+        "firstWorkerMs": 4086.7
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 1582.1000000000004,
+          "readyMs": 1193.5,
+          "interactiveMs": 1582.1000000000004,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 847.7000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1568.0999999999985,
+          "readyMs": 1178.0999999999985,
+          "interactiveMs": 1568.0999999999985,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 812.8999999999996,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1562.1000000000004,
+          "readyMs": 1176.8999999999996,
+          "interactiveMs": 1562.1000000000004,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 837.2999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1550.199999999999,
+          "readyMs": 1244.3999999999996,
+          "interactiveMs": 1550.199999999999,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 821.8999999999996,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 1596.300000000001,
+          "readyMs": 1255.1000000000004,
+          "interactiveMs": 1596.300000000001,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 816.8000000000011,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1583.5,
+          "readyMs": 1158.2999999999993,
+          "interactiveMs": 1583.5,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 826.7999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1515.699999999997,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1211,
+          "readyMs": 529.5,
+          "interactiveMs": 1211,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/production-optimized-1.json",
+        "sha256": "0c3d37fc17f68a1e9e5cd09bd84595cb6bb8cbc5113438b4fe0064f88241864e"
+      }
+    },
+    {
+      "label": "production-optimized-2",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": true,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 0,
+          "p95": 0
+        },
+        "idleMs": {
+          "p50": 1507.7999999999956,
+          "p95": 1558.5999999999985
+        },
+        "interactiveMs": {
+          "p50": 1507.7999999999956,
+          "p95": 1558.5999999999985
+        },
+        "workersStartedBeforeAnimationEnd": 10,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 5311.89999961853,
+        "firstWorkerMs": 4039.9
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 1566,
+          "readyMs": 1153.3999999999996,
+          "interactiveMs": 1566,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 845.7000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1574.1000000000004,
+          "readyMs": 1177,
+          "interactiveMs": 1574.1000000000004,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 799.3000000000011,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1578.8999999999996,
+          "readyMs": 1230.1000000000004,
+          "interactiveMs": 1578.8999999999996,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 838.7000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1522.8999999999996,
+          "readyMs": 1202.3999999999996,
+          "interactiveMs": 1522.8999999999996,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 816.2999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 1561.199999999999,
+          "readyMs": 1177.4999999999982,
+          "interactiveMs": 1561.199999999999,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 819.1000000000004,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1503.5999999999985,
+          "readyMs": 1103.699999999997,
+          "interactiveMs": 1503.5999999999985,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 777.3999999999978,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1553.7000000000044,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1221.2000000000044,
+          "readyMs": 510.90000000000146,
+          "interactiveMs": 1221.2000000000044,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/production-optimized-2.json",
+        "sha256": "e3ba009ff2ee7f963a627023dadb3611282756ff05e4d261e03091ead20fe174"
+      }
+    },
+    {
+      "label": "production-optimized-3",
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": true,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 0,
+          "p95": 0
+        },
+        "idleMs": {
+          "p50": 1438.5999999999985,
+          "p95": 1516.7000000000007
+        },
+        "interactiveMs": {
+          "p50": 1438.5999999999985,
+          "p95": 1516.7000000000007
+        },
+        "workersStartedBeforeAnimationEnd": 10,
+        "singleWorkerPerMount": true
+      },
+      "passed": true,
+      "coldEmptyDocument": {
+        "readyMs": 4933.39999961853,
+        "firstWorkerMs": 3802.8
+      },
+      "warmups": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "idleMs": 1593.6999999999998,
+          "readyMs": 1225.9000000000005,
+          "interactiveMs": 1593.6999999999998,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 814.6999999999998,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "idleMs": 1501.699999999999,
+          "readyMs": 1125.199999999999,
+          "interactiveMs": 1501.699999999999,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 766.6000000000004,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "idleMs": 1493.1000000000004,
+          "readyMs": 1181.1000000000004,
+          "interactiveMs": 1493.1000000000004,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 820.9000000000015,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "idleMs": 1525.5,
+          "readyMs": 1096.6000000000004,
+          "interactiveMs": 1525.5,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 752.6000000000004,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "idleMs": 1547.6000000000004,
+          "readyMs": 1205.699999999999,
+          "interactiveMs": 1547.6000000000004,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 822.7000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "idleMs": 1523.300000000003,
+          "readyMs": 1167.4000000000015,
+          "interactiveMs": 1523.300000000003,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": 801.9000000000015,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "retention": [
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "idleMs": 1554.5999999999985,
+          "readyMs": null,
+          "interactiveMs": null,
+          "afterAnimationMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "idleMs": 1277.699999999997,
+          "readyMs": 540.0999999999985,
+          "interactiveMs": 1277.699999999997,
+          "afterAnimationMs": 0,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "pageErrors": [],
+      "artifact": {
+        "path": "/tmp/nexpoly-loading-optimization-jjdda010/performance-delivery/production-optimized-3.json",
+        "sha256": "a6675b38a0955cec4d27e64b403af3990b74a90628d483707462d322fd89a700"
+      }
+    }
+  ],
+  "diagnosticIterations": {
+    "initialFullGateFailure": {
+      "date": "2026-09-11T02:37:07.046Z",
+      "browser": "151.0.7922.34",
+      "rounds": 3,
+      "perVariantPerMode": 30,
+      "sampling": "Nearest-rank quantiles; matched mode and document; before/after order reversed in round2; real implementation, no overlap interception",
+      "comparisons": [
+        {
+          "mode": "development",
+          "checks": {
+            "startsDuringTransition": true,
+            "loadingTailMedianZero": true,
+            "loadingTailP95": true,
+            "interactiveP50": true,
+            "interactiveP95": true,
+            "animationEndMedian": false
+          },
+          "passed": false,
+          "baseline": {
+            "afterAnimationMs": {
+              "p50": 795,
+              "p95": 870.7999999999956
+            },
+            "idleMs": {
+              "p50": 1662.5999999999985,
+              "p95": 1805.5
+            },
+            "interactiveMs": {
+              "p50": 2480.300000000001,
+              "p95": 2585
+            }
+          },
+          "optimized": {
+            "afterAnimationMs": {
+              "p50": 0,
+              "p95": 0
+            },
+            "idleMs": {
+              "p50": 1992.2000000000007,
+              "p95": 2154
+            },
+            "interactiveMs": {
+              "p50": 1992.2000000000007,
+              "p95": 2154
+            }
+          }
+        },
+        {
+          "mode": "production",
+          "checks": {
+            "startsDuringTransition": true,
+            "loadingTailMedianZero": true,
+            "loadingTailP95": true,
+            "interactiveP50": true,
+            "interactiveP95": true,
+            "animationEndMedian": true
+          },
+          "passed": true,
+          "baseline": {
+            "afterAnimationMs": {
+              "p50": 381.59999999999854,
+              "p95": 430.59999999999854
+            },
+            "idleMs": {
+              "p50": 1449.9000000000015,
+              "p95": 1524.7000000000007
+            },
+            "interactiveMs": {
+              "p50": 1833.7000000000007,
+              "p95": 1965.7999999999993
+            }
+          },
+          "optimized": {
+            "afterAnimationMs": {
+              "p50": 0,
+              "p95": 0
+            },
+            "idleMs": {
+              "p50": 1508.1000000000022,
+              "p95": 1586
+            },
+            "interactiveMs": {
+              "p50": 1508.1000000000022,
+              "p95": 1586
+            }
+          }
+        }
+      ],
+      "passed": false
+    },
+    "pilots": [
+      {
+        "label": "development-boundary-geometry-pilot",
+        "settings": {
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "reducedMotion": "no-preference",
+          "acceptance": true,
+          "overlapExperiment": false,
+          "dwellMs": 150,
+          "input": "CCO",
+          "cache": "normal browser HTTP cache, no route interception",
+          "cpuNetworkThrottle": "none"
+        },
+        "summary": {
+          "afterAnimationMs": {
+            "p50": 0,
+            "p95": 0
+          },
+          "idleMs": {
+            "p50": 1880.7000000000007,
+            "p95": 2099.7000000000007
+          },
+          "interactiveMs": {
+            "p50": 1880.7000000000007,
+            "p95": 2099.7000000000007
+          },
+          "workersStartedBeforeAnimationEnd": 10,
+          "singleWorkerPerMount": true
+        },
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/pilot/development-boundary-geometry-pilot.json",
+          "sha256": "9357af909fd4a26fc3f0f638f52b565796c62f65a6511627b22934794888fb76"
+        }
+      },
+      {
+        "label": "development-containment-pilot",
+        "settings": {
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "reducedMotion": "no-preference",
+          "acceptance": true,
+          "overlapExperiment": false,
+          "dwellMs": 150,
+          "input": "CCO",
+          "cache": "normal browser HTTP cache, no route interception",
+          "cpuNetworkThrottle": "none"
+        },
+        "summary": {
+          "afterAnimationMs": {
+            "p50": 0,
+            "p95": 0
+          },
+          "idleMs": {
+            "p50": 1812,
+            "p95": 1980.4000000000005
+          },
+          "interactiveMs": {
+            "p50": 1812,
+            "p95": 1980.4000000000005
+          },
+          "workersStartedBeforeAnimationEnd": 10,
+          "singleWorkerPerMount": true
+        },
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/pilot/development-containment-pilot.json",
+          "sha256": "367c21add54711ff8992d8de71c214dcc6d2e8e2b91434237d92fbbb05b6b63f"
+        }
+      },
+      {
+        "label": "development-current-baseline-pilot",
+        "settings": {
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "reducedMotion": "no-preference",
+          "acceptance": false,
+          "overlapExperiment": false,
+          "dwellMs": 150,
+          "input": "CCO",
+          "cache": "normal browser HTTP cache, no route interception",
+          "cpuNetworkThrottle": "none"
+        },
+        "summary": {
+          "afterAnimationMs": {
+            "p50": 802.0999999999985,
+            "p95": 883.3000000000011
+          },
+          "idleMs": {
+            "p50": 1719.4000000000015,
+            "p95": 1809.7000000000007
+          },
+          "interactiveMs": {
+            "p50": 2533.300000000001,
+            "p95": 2601.300000000001
+          },
+          "workersStartedBeforeAnimationEnd": 0,
+          "singleWorkerPerMount": true
+        },
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/pilot/development-current-baseline-pilot.json",
+          "sha256": "2561a1fbb17f87dcecb6473eb7df6cc8fd17b0bd8b281acfd1a149da97c2e10d"
+        }
+      },
+      {
+        "label": "development-gap-pilot",
+        "settings": {
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "reducedMotion": "no-preference",
+          "acceptance": true,
+          "overlapExperiment": false,
+          "dwellMs": 150,
+          "input": "CCO",
+          "cache": "normal browser HTTP cache, no route interception",
+          "cpuNetworkThrottle": "none"
+        },
+        "summary": {
+          "afterAnimationMs": {
+            "p50": 0,
+            "p95": 0
+          },
+          "idleMs": {
+            "p50": 2085.7999999999993,
+            "p95": 2314.6000000000004
+          },
+          "interactiveMs": {
+            "p50": 2085.7999999999993,
+            "p95": 2314.6000000000004
+          },
+          "workersStartedBeforeAnimationEnd": 10,
+          "singleWorkerPerMount": true
+        },
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/pilot/development-gap-pilot.json",
+          "sha256": "d4c129ef7501fbf231092006f59d362cb8b97138016e2c19564df1a354f3a994"
+        }
+      },
+      {
+        "label": "development-immediate-memo-pilot",
+        "settings": {
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "reducedMotion": "no-preference",
+          "acceptance": true,
+          "overlapExperiment": false,
+          "dwellMs": 150,
+          "input": "CCO",
+          "cache": "normal browser HTTP cache, no route interception",
+          "cpuNetworkThrottle": "none"
+        },
+        "summary": {
+          "afterAnimationMs": {
+            "p50": 0,
+            "p95": 0
+          },
+          "idleMs": {
+            "p50": 1962.8999999999978,
+            "p95": 2085.8999999999996
+          },
+          "interactiveMs": {
+            "p50": 1962.8999999999978,
+            "p95": 2085.8999999999996
+          },
+          "workersStartedBeforeAnimationEnd": 10,
+          "singleWorkerPerMount": true
+        },
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/pilot/development-immediate-memo-pilot.json",
+          "sha256": "4c1b1ebb5e27811a8d2c738ee0f0169b870e2fe73bf45f5072aaf5ddeea8f7b4"
+        }
+      },
+      {
+        "label": "development-layout-pilot",
+        "settings": {
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "reducedMotion": "no-preference",
+          "acceptance": true,
+          "overlapExperiment": false,
+          "dwellMs": 150,
+          "input": "CCO",
+          "cache": "normal browser HTTP cache, no route interception",
+          "cpuNetworkThrottle": "none"
+        },
+        "summary": {
+          "afterAnimationMs": {
+            "p50": 0,
+            "p95": 0
+          },
+          "idleMs": {
+            "p50": 1913.5999999999985,
+            "p95": 2136
+          },
+          "interactiveMs": {
+            "p50": 1913.5999999999985,
+            "p95": 2136
+          },
+          "workersStartedBeforeAnimationEnd": 10,
+          "singleWorkerPerMount": true
+        },
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/pilot/development-layout-pilot.json",
+          "sha256": "8f3e5af707b26241e5646e3b90e7be0b9fda076a3b3a79db5363b038c9b5668b"
+        }
+      },
+      {
+        "label": "development-memo-pilot",
+        "settings": {
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "reducedMotion": "no-preference",
+          "acceptance": true,
+          "overlapExperiment": false,
+          "dwellMs": 150,
+          "input": "CCO",
+          "cache": "normal browser HTTP cache, no route interception",
+          "cpuNetworkThrottle": "none"
+        },
+        "summary": {
+          "afterAnimationMs": {
+            "p50": 0,
+            "p95": 0
+          },
+          "idleMs": {
+            "p50": 2028.5,
+            "p95": 2137.7
+          },
+          "interactiveMs": {
+            "p50": 2028.5,
+            "p95": 2137.7
+          },
+          "workersStartedBeforeAnimationEnd": 10,
+          "singleWorkerPerMount": true
+        },
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/pilot/development-memo-pilot.json",
+          "sha256": "5772951d73b8b3a06fa46f7e346f3fe95f1724627b2a84939d3f0db060c4467d"
+        }
+      },
+      {
+        "label": "development-size-containment-pilot",
+        "settings": {
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "reducedMotion": "no-preference",
+          "acceptance": true,
+          "overlapExperiment": false,
+          "dwellMs": 150,
+          "input": "CCO",
+          "cache": "normal browser HTTP cache, no route interception",
+          "cpuNetworkThrottle": "none"
+        },
+        "summary": {
+          "afterAnimationMs": {
+            "p50": 0,
+            "p95": 0
+          },
+          "idleMs": {
+            "p50": 1871.3999999999996,
+            "p95": 2157.499999999999
+          },
+          "interactiveMs": {
+            "p50": 1871.3999999999996,
+            "p95": 2157.499999999999
+          },
+          "workersStartedBeforeAnimationEnd": 10,
+          "singleWorkerPerMount": true
+        },
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/pilot/development-size-containment-pilot.json",
+          "sha256": "55d20a68ac101a5f7fc0b1612011385dde7e28adfbeac646668094e4d75cbcc0"
+        }
+      },
+      {
+        "label": "development-transition-pilot",
+        "settings": {
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "reducedMotion": "no-preference",
+          "acceptance": true,
+          "overlapExperiment": false,
+          "dwellMs": 150,
+          "input": "CCO",
+          "cache": "normal browser HTTP cache, no route interception",
+          "cpuNetworkThrottle": "none"
+        },
+        "summary": {
+          "afterAnimationMs": {
+            "p50": 0,
+            "p95": 0
+          },
+          "idleMs": {
+            "p50": 1905.9000000000015,
+            "p95": 2063
+          },
+          "interactiveMs": {
+            "p50": 1905.9000000000015,
+            "p95": 2063
+          },
+          "workersStartedBeforeAnimationEnd": 10,
+          "singleWorkerPerMount": true
+        },
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/pilot/development-transition-pilot.json",
+          "sha256": "d4b00f121941251725c1ae83757ccbc75208df6b3e1399163e40889c6d1f6b76"
+        }
+      },
+      {
+        "label": "development-two-frame-pilot",
+        "settings": {
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "reducedMotion": "no-preference",
+          "acceptance": true,
+          "overlapExperiment": false,
+          "dwellMs": 150,
+          "input": "CCO",
+          "cache": "normal browser HTTP cache, no route interception",
+          "cpuNetworkThrottle": "none"
+        },
+        "summary": {
+          "afterAnimationMs": {
+            "p50": 0,
+            "p95": 0
+          },
+          "idleMs": {
+            "p50": 2068,
+            "p95": 2188
+          },
+          "interactiveMs": {
+            "p50": 2068,
+            "p95": 2188
+          },
+          "workersStartedBeforeAnimationEnd": 10,
+          "singleWorkerPerMount": true
+        },
+        "artifact": {
+          "path": "/tmp/nexpoly-loading-optimization-jjdda010/pilot/development-two-frame-pilot.json",
+          "sha256": "b30694ac107b7ff64bad598695bae896735defd328a1298d72ff486f0a7268a4"
+        }
+      }
+    ],
+    "timerBlockingExample": [
+      {
+        "t": 6313.799999237061,
+        "type": "state",
+        "module": "structureWorkbench",
+        "phase": "guarding",
+        "status": "ready"
+      },
+      {
+        "t": 6802.699998855591,
+        "type": "animation-start",
+        "name": "np-module-exit"
+      },
+      {
+        "t": 6815.299999237061,
+        "type": "state",
+        "module": "structureWorkbench",
+        "phase": "exiting",
+        "status": "ready"
+      },
+      {
+        "t": 7300.799999237061,
+        "type": "animation-finish",
+        "name": "np-module-exit"
+      },
+      {
+        "t": 7304.39999961853,
+        "type": "state",
+        "module": "structureWorkbench",
+        "phase": "blank",
+        "status": "ready"
+      },
+      {
+        "t": 7470,
+        "type": "state",
+        "module": "databaseQuery",
+        "phase": "blank",
+        "status": "loading"
+      },
+      {
+        "t": 7483,
+        "type": "gap-scheduled"
+      },
+      {
+        "t": 7520.799999237061,
+        "type": "worker"
+      },
+      {
+        "t": 8042.5,
+        "type": "gap-fired"
+      },
+      {
+        "t": 8042.699998855591,
+        "type": "animation-start",
+        "name": "np-module-enter"
+      },
+      {
+        "t": 8043.5,
+        "type": "state",
+        "module": "databaseQuery",
+        "phase": "entering",
+        "status": "loading"
+      },
+      {
+        "t": 8217.60000038147,
+        "type": "state",
+        "module": "databaseQuery",
+        "phase": "entering",
+        "status": "ready"
+      },
+      {
+        "t": 8600.29999923706,
+        "type": "animation-finish",
+        "name": "np-module-enter"
+      },
+      {
+        "t": 8616.29999923706,
+        "type": "state",
+        "module": "databaseQuery",
+        "phase": "idle",
+        "status": "ready"
+      }
+    ],
+    "timerArtifact": {
+      "path": "/tmp/nexpoly-loading-optimization-jjdda010/timers.json",
+      "sha256": "5d1f28815c4a85a155bbcee057970e2c47de633d197f209e55a6814d6e350c62"
+    },
+    "note": "Exploratory delayed mounts, startTransition and CSS containment were removed. The early per-frame geometry probe was replaced with boundary checks. Final warmup is predeclared, retained in full and identical for both variants; no outlier-based filtering."
+  },
+  "scope": {
+    "deployed": false,
+    "productionChanges": false,
+    "sdkOrDependencyChanges": false,
+    "animationParameterChanges": false,
+    "documentAndNavigationChanges": false
+  },
+  "passed": true
+}

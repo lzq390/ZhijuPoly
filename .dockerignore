@@ -42,6 +42,10 @@ frontend/.vite/
 frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+frontend/vite.ketcher-compat.config.js
+frontend/vite.ketcher-compat.config.d.ts
+frontend/build/*.js
+frontend/build/*.d.ts
 
 # Large source datasets are imported before deployment.
 database/

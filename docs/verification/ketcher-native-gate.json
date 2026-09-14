@@ -1,0 +1,125 @@
+{
+  "at": "2026-09-10T09:59:10.850359+00:00",
+  "defaultEngine": "react",
+  "fallbackEngine": "iframe",
+  "sdkBranch": "codex/ketcher-react-compat",
+  "sdkCommit": "b02a86359246ab616feac375e437962b79cd25aa",
+  "patch": "nexpoly-3.8.0-r3",
+  "patchHashes": {
+    "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+    "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+    "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+    "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+  },
+  "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+  "versions": {
+    "ketcher-core": "3.8.0",
+    "ketcher-macromolecules": "3.8.0",
+    "ketcher-react": "3.8.0",
+    "ketcher-standalone": "3.8.0",
+    "process": "0.11.10",
+    "@rollup/plugin-inject": "5.0.5",
+    "patch-package": "8.0.1",
+    "react": "19.2.4",
+    "vite": "7.3.6",
+    "node": "v22.23.2",
+    "chromium": "Google Chrome for Testing 151.0.7922.34"
+  },
+  "tests": {
+    "vitestFiles": 96,
+    "vitestCases": 889,
+    "workerCases": 12,
+    "passed": true
+  },
+  "install": {
+    "command": "npm ci",
+    "passed": true,
+    "patch": "nexpoly-3.8.0-r3",
+    "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+    "at": "2026-09-10T09:28:18.657585+00:00"
+  },
+  "builds": [
+    {
+      "engine": "react",
+      "bundleBytes": 27224922,
+      "distBytes": 105694946,
+      "nativeAssets": [
+        {
+          "path": "assets/KetcherReactRuntime-D1y9KbGV.css",
+          "bytes": 252352,
+          "gzipBytes": 28353
+        },
+        {
+          "path": "assets/KetcherReactRuntime-CE_oiv9x.js",
+          "bytes": 23204014,
+          "gzipBytes": 6814110
+        },
+        {
+          "path": "assets/index.modern-DgymyiYC.js",
+          "bytes": 1238778,
+          "gzipBytes": 335783
+        },
+        {
+          "path": "assets/index.modern-c0bcdf82-axHgPF5J.js",
+          "bytes": 384294,
+          "gzipBytes": 117912
+        }
+      ]
+    },
+    {
+      "engine": "iframe",
+      "bundleBytes": 2137914,
+      "distBytes": 80605642,
+      "nativeAssets": []
+    }
+  ],
+  "docker": [
+    {
+      "engine": "react",
+      "image": "nexpoly-ketcher-native-gate:local",
+      "imageId": "sha256:a3216f47bee7d731996e72107ded4511391e6212d85a8a524b46a98671e85100",
+      "patch": "nexpoly-3.8.0-r3",
+      "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+      "httpAssets": 6,
+      "unprivilegedReadable": true,
+      "passed": true,
+      "nginxConfigValid": true
+    },
+    {
+      "engine": "iframe",
+      "image": "nexpoly-ketcher-iframe-gate:local",
+      "imageId": "sha256:6c6390ce485c4f1eae8f51100d46c2d4a4d29d3b50e0d0b51883d002e9ff453f",
+      "patch": "nexpoly-3.8.0-r3",
+      "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+      "httpAssets": 3,
+      "unprivilegedReadable": true,
+      "passed": true,
+      "nginxConfigValid": true
+    }
+  ],
+  "browserReports": [
+    "ketcher-native-development.json",
+    "ketcher-native-production.json",
+    "ketcher-workspace-development.json",
+    "ketcher-workspace-browser.json",
+    "ketcher-iframe-fallback.json",
+    "ketcher-ai-output.json"
+  ],
+  "scope": {
+    "persistence": "App memory only",
+    "undoHistory": false,
+    "productionDeployment": false,
+    "iframeRemoval": "After one normal release cycle without fallback"
+  },
+  "notes": [
+    "All business API requests in browser probes were intercepted by fixtures; no jobs were created.",
+    "Explicit awaited polling is used for asynchronous SDK assertions. Miew is accepted only after molecule loading enables Apply.",
+    "A development deep-link probe once timed out with no editor node and its diagnostic read also timed out. Nonblocking diagnostics were added; three independent deep links and the complete development suite passed after restarting the test server. No SDK exception was observed; the original failure was not assigned a speculative cause.",
+    "The legacy iframe probe waits for the public UI commit before exporting, avoiding an artificial raw export/import overlap in the unpatched 3.7 Worker.",
+    "Module-transition and page-drawer supplemental reports were collected on r2. The r3 change scopes only the macro help key; r3 SDK and full workspace gates are recorded separately.",
+    "Heap measurements are post-GC JS heap samples, not total browser or WASM memory and not a performance improvement claim. The build directory retains legacy static assets for the agreed fallback release."
+  ],
+  "passed": true,
+  "runtimeSampleReport": "ketcher-runtime-samples.json",
+  "defaultBuildBrowserSmoke": true
+}

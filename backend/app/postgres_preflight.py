@@ -56,7 +56,9 @@ MONOMER_DFT_POSTGRES_TABLES = [
 PROPERTY_FILTER_PERFORMANCE_POSTGRES_TABLES = [
     ("governance", "property_filter_options_snapshots"),
 ]
+POLYMERIZATION_BATCH_POSTGRES_TABLES = [("polymerization_batch", name) for name in ("imports", "jobs", "chunks", "worker_status")]
 POSTGRES_TABLES = [
+    *POLYMERIZATION_BATCH_POSTGRES_TABLES,
     *POSTGRES_TABLES,
     *MONOMER_DFT_POSTGRES_TABLES,
     *PROPERTY_FILTER_PERFORMANCE_POSTGRES_TABLES,
@@ -104,6 +106,7 @@ STARTUP_RUNTIME_TABLES = tuple(
     not in {
         *MONOMER_DFT_POSTGRES_TABLES,
         *PROPERTY_FILTER_PERFORMANCE_POSTGRES_TABLES,
+        *POLYMERIZATION_BATCH_POSTGRES_TABLES,
     }
 )
 SCHEMA_TARGET_STARTUP = "startup-through-0012"
@@ -125,6 +128,15 @@ def _required_runtime_tables(
     if schema_target == SCHEMA_TARGET_STARTUP:
         return STARTUP_RUNTIME_TABLES
     if schema_target == SCHEMA_TARGET_FINAL:
+        # The compatibility baseline ships this code with a manifest ending at
+        # 0015. It must pass strict readiness before the separate 0016 rollout.
+        # A release whose canonical manifest includes 0016 still requires all
+        # batch tables, even when the feature flag is disabled.
+        if "0016_monomer_polymerization_batch" not in _MIGRATION_CHECKSUMS:
+            return tuple(
+                table for table in STRICT_RUNTIME_TABLES
+                if table not in POLYMERIZATION_BATCH_POSTGRES_TABLES
+            )
         return STRICT_RUNTIME_TABLES
     raise ValueError(f"unsupported schema target: {schema_target}")
 
@@ -484,7 +496,10 @@ def run_preflight(
                         schema,
                         table,
                     )
-                    for schema, table in PROPERTY_FILTER_PERFORMANCE_POSTGRES_TABLES
+                    for schema, table in (
+                        *PROPERTY_FILTER_PERFORMANCE_POSTGRES_TABLES,
+                        *POLYMERIZATION_BATCH_POSTGRES_TABLES,
+                    )
                 }
             )
             if dft_schema.state is MonomerDftSchemaState.READY:
@@ -562,7 +577,7 @@ def main() -> None:
         default=SCHEMA_TARGET_FINAL,
         help=(
             "Validate startup compatibility through 0012 or strict readiness "
-            "through the current canonical manifest (currently 0015). The "
+            "through the current canonical manifest (currently 0016). The "
             "final-0013 choice is retained as a compatibility identifier."
         ),
     )

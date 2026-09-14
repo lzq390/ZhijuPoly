@@ -1,3 +1,4 @@
+import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -7,6 +8,8 @@ import type {
   StructureWorkspaceContext
 } from "../types";
 import { ConditionalGenerationPage } from "./ConditionalGenerationPage";
+
+vi.mock("@structure-editor-engine", () => import("../test/structureEditorEngineMock"));
 
 const mocks = vi.hoisted(() => ({
   submit: vi.fn(),
@@ -94,6 +97,10 @@ vi.mock("../hooks/useTgStructureCanvas", async () => {
       clearCanvas: mocks.clearCanvas,
       importImageFile: mocks.importImageFile,
       syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
+    syncBeforeLeave: async () => {
+      await mocks.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
+      return { status: "saved" as const };
+    },
       toggle3D: mocks.toggle3D,
       resolveSmilesForSearch: mocks.resolveSmilesForSearch,
       copySmiles: mocks.copySmiles
@@ -111,8 +118,7 @@ function makeStructure(): StructureWorkspaceContext {
   return {
     smiles: "*CC*",
     setSmiles: vi.fn(),
-    iframeRef: { current: null },
-    setIsReady: vi.fn(),
+    workspace: new StructureWorkspace("*CC*"),
     getCurrentSmiles: vi.fn().mockResolvedValue("*CC*")
   };
 }
@@ -135,7 +141,8 @@ describe("ConditionalGenerationPage Tg workbench reuse", () => {
     const title = screen.getByRole("heading", { name: "条件聚合物生成" });
 
     expect(view.container.firstElementChild?.classList.contains("np-structure-workbench")).toBe(true);
-    expect(title.parentElement?.classList.contains("np-sw-page")).toBe(true);
+    expect(title.parentElement?.classList.contains("np-module-page-header")).toBe(true);
+    expect(title.closest(".np-module-page-body")).toBeNull();
     expect(screen.getByRole("button", { name: "加载结构" }).getAttribute("data-workbench-tool")).toBe("load");
     expect(screen.getByRole("button", { name: "导入图片" }).getAttribute("data-workbench-tool")).toBe("import");
     expect(screen.getByRole("button", { name: "清空画布" }).getAttribute("data-workbench-tool")).toBe("clear");
@@ -152,8 +159,7 @@ describe("ConditionalGenerationPage Tg workbench reuse", () => {
     expect(screen.getAllByRole("spinbutton")).toHaveLength(4);
     expect(screen.getByRole("button", { name: "高级采样" }).querySelector("svg")).toBeTruthy();
 
-    fireEvent.load(screen.getByTitle("条件聚合物生成结构编辑器"));
-    expect(mocks.handleEditorLoad).toHaveBeenCalledOnce();
+    expect(document.querySelector("[data-structure-editor]")).not.toBeNull();
   });
 
   it("wires the shared Tg canvas toolbar actions to the same controls", async () => {

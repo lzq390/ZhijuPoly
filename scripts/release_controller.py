@@ -156,6 +156,7 @@ ACTIVE_JOB_CATEGORIES_V1 = (
     "inflight_api_writes",
 )
 ACTIVE_JOB_CATEGORIES_V2 = (*ACTIVE_JOB_CATEGORIES_V1, "monomer_dft")
+ACTIVE_JOB_CATEGORIES_V3 = (*ACTIVE_JOB_CATEGORIES_V2, "polymerization_batch")
 PERSISTENT_ACTIVE_JOB_CATEGORIES_V1 = (
     "monomer_md",
     "online_knowledge",
@@ -163,6 +164,10 @@ PERSISTENT_ACTIVE_JOB_CATEGORIES_V1 = (
 PERSISTENT_ACTIVE_JOB_CATEGORIES_V2 = (
     *PERSISTENT_ACTIVE_JOB_CATEGORIES_V1,
     "monomer_dft",
+)
+PERSISTENT_ACTIVE_JOB_CATEGORIES_V3 = (
+    *PERSISTENT_ACTIVE_JOB_CATEGORIES_V2,
+    "polymerization_batch",
 )
 # Compatibility for existing operational tooling and tests. New consumers
 # should select a category set through the payload schema version.
@@ -1517,6 +1522,8 @@ def validated_active_total(
             required_categories = set(ACTIVE_JOB_CATEGORIES_V1)
         elif schema_version == 2:
             required_categories = set(ACTIVE_JOB_CATEGORIES_V2)
+        elif schema_version == 3:
+            required_categories = set(ACTIVE_JOB_CATEGORIES_V3)
         else:
             raise ReleaseError("deployment status has an unsupported schema version")
     jobs = payload.get("active_jobs")
@@ -1558,7 +1565,7 @@ def validated_persistent_active_total(
     """Validate the database-only snapshot emitted by postgres-init.
 
     The bootstrap helper cannot observe in-process managers and must never
-    invent zeroes for them. Versioned V1/V2 payloads therefore use their own
+    invent zeroes for them. Versioned V1/V2/V3 payloads therefore use their own
     exact persistent category sets; unversioned payloads retain the historical
     caller-supplied shape solely for bridge compatibility.
     """
@@ -1576,6 +1583,8 @@ def validated_persistent_active_total(
         required_categories = set(PERSISTENT_ACTIVE_JOB_CATEGORIES_V1)
     elif schema_version == 2:
         required_categories = set(PERSISTENT_ACTIVE_JOB_CATEGORIES_V2)
+    elif schema_version == 3:
+        required_categories = set(PERSISTENT_ACTIVE_JOB_CATEGORIES_V3)
     else:
         raise ReleaseError("deployment status has an unsupported schema version")
     unversioned = {
@@ -4628,11 +4637,11 @@ class ReleaseController:
                 "bootstrap quiesce found active work; refusing to create a backup"
             )
         schema_version = payload.get("active_jobs_schema_version", 1)
-        categories = (
-            ACTIVE_JOB_CATEGORIES_V2
-            if schema_version == 2
-            else ACTIVE_JOB_CATEGORIES_V1
-        )
+        categories = {
+            1: ACTIVE_JOB_CATEGORIES_V1,
+            2: ACTIVE_JOB_CATEGORIES_V2,
+            3: ACTIVE_JOB_CATEGORIES_V3,
+        }[schema_version]
         return {
             "active_jobs_schema_version": schema_version,
             "ingress_isolated": True,

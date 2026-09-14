@@ -95,13 +95,24 @@ export function useModalFocus({ active, open, scopeRef, panelRef, initialFocusRe
   }, [active, visible, scopeRef, panelRef, ownerId, global]);
   useEffect(() => {
     if (!active || !visible || !open) return;
-    let frame = window.requestAnimationFrame(() => {
-      frame = window.requestAnimationFrame(() => {
-        if (panelRef.current?.contains(document.activeElement) && document.activeElement !== panelRef.current) return;
-        if (ownerId && document.querySelector(`[data-modal-owner="${ownerId}"][role="menu"]:not([aria-hidden="true"])`)) return;
-        (initialFocusRef?.current ?? (panelRef.current && focusableWithin(panelRef.current)[0]) ?? panelRef.current)?.focus({ preventScroll: true });
-      });
-    });
+    let frame = 0;
+    const focusWhenVisible = () => {
+      const panel = panelRef.current;
+      if (!panel?.isConnected || !openRef.current || panel.closest('[inert], [hidden], [aria-hidden="true"], [data-module-transitioning="true"]')) return;
+      if (panel.contains(document.activeElement) && document.activeElement !== panel) return;
+      if (ownerId && document.querySelector(`[data-modal-owner="${ownerId}"][role="menu"]:not([aria-hidden="true"])`)) return;
+      const target = initialFocusRef?.current ?? focusableWithin(panel)[0] ?? panel;
+      // The presence state may settle before inherited CSS visibility does,
+      // particularly with reduced motion. Focus on a still-hidden control is
+      // ignored, so wait until the browser can accept it.
+      const style = getComputedStyle(target);
+      if (style.visibility !== "visible" || style.display === "none") {
+        frame = window.requestAnimationFrame(focusWhenVisible);
+        return;
+      }
+      target.focus({ preventScroll: true });
+    };
+    frame = window.requestAnimationFrame(() => { frame = window.requestAnimationFrame(focusWhenVisible); });
     return () => window.cancelAnimationFrame(frame);
   }, [active, visible, open, initialFocusRef, panelRef, ownerId]);
 }

@@ -1,0 +1,24 @@
+[
+  {
+    "engine": "react",
+    "image": "nexpoly-ketcher-native-gate:local",
+    "imageId": "sha256:a3216f47bee7d731996e72107ded4511391e6212d85a8a524b46a98671e85100",
+    "patch": "nexpoly-3.8.0-r3",
+    "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+    "httpAssets": 6,
+    "unprivilegedReadable": true,
+    "passed": true,
+    "nginxConfigValid": true
+  },
+  {
+    "engine": "iframe",
+    "image": "nexpoly-ketcher-iframe-gate:local",
+    "imageId": "sha256:6c6390ce485c4f1eae8f51100d46c2d4a4d29d3b50e0d0b51883d002e9ff453f",
+    "patch": "nexpoly-3.8.0-r3",
+    "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+    "httpAssets": 3,
+    "unprivilegedReadable": true,
+    "passed": true,
+    "nginxConfigValid": true
+  }
+]

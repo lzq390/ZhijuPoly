@@ -4,8 +4,12 @@ WORKDIR /app/frontend
 
 ARG VITE_AGENT_WORKSPACE_URL=""
 ENV VITE_AGENT_WORKSPACE_URL="${VITE_AGENT_WORKSPACE_URL}"
+ARG VITE_STRUCTURE_EDITOR_ENGINE="react"
+ENV VITE_STRUCTURE_EDITOR_ENGINE="${VITE_STRUCTURE_EDITOR_ENGINE}"
 
 COPY frontend/package*.json ./
+COPY frontend/patches ./patches
+COPY frontend/scripts/verify-ketcher-patches.mjs ./scripts/verify-ketcher-patches.mjs
 RUN npm ci
 
 COPY contracts/monomer_dft_api_contract_v1.json /app/contracts/monomer_dft_api_contract_v1.json
