@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -10063,6 +10065,7 @@ def test_direct_controller_reaches_ready_without_any_host_audit(
     monkeypatch.setattr(session, "read_gpu3_guard_fingerprint", fail_audit)
     monkeypatch.setattr(session, "collect_target_snapshot", fail_audit)
     monkeypatch.setattr(controller, "_audit", fail_audit)
+    monkeypatch.setattr(controller, "_check_direct_md_health", lambda: None)
     monkeypatch.setattr(controller, "_mps_authority", fail_audit)
     monkeypatch.setattr(controller, "_prepare_descriptors", lambda: None)
     monkeypatch.setattr(controller, "_start_broker", start_broker)
@@ -10090,6 +10093,103 @@ def test_direct_controller_reaches_ready_without_any_host_audit(
     assert controller.audit_mode == "direct"
     assert controller.audit_sequence == 0
     assert controller.dft_stabilized is True
+
+
+@pytest.mark.parametrize("transient", [False, True])
+@pytest.mark.parametrize("error_message", ["MD Worker socket refused connection", ""])
+def test_direct_controller_detects_md_loss_and_recovers_only_after_repeated_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transient: bool, error_message: str,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    controller = session.SessionController(run, "a" * 40, "b" * 40, direct_start=True)
+    controller.activation_generation = controller.last_audit_activation_generation = 1
+    controller.dft_stabilized = True
+    controller.broker = SimpleNamespace(poll=lambda: None)
+    states, commands, drain = [], [], []
+    now, probes = [0.0], [0]
+
+    def probe():
+        probes[0] += 1
+        if not transient or probes[0] == 1:
+            raise ConnectionRefusedError(error_message)
+
+    def publish(value, **_kwargs):
+        states.append(value)
+        if transient and value == "ready":
+            controller.stop_requested = True
+
+    monkeypatch.setattr(controller, "_check_direct_md_health", probe)
+    monkeypatch.setattr(controller, "_state", publish)
+    monkeypatch.setattr(controller, "_recovery_command", lambda cmd: commands.append(cmd) or True)
+    monkeypatch.setattr(controller, "_cleanup", lambda _client: True)
+    monkeypatch.setattr(controller, "_remove_controller_record", lambda: None)
+    monkeypatch.setattr(session.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(session.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    broker = SimpleNamespace(
+        status=lambda: {"draining": False, "leases": []},
+        set_draining=lambda value: drain.append(value),
+    )
+    assert controller._direct_serve_loop(broker) == 0
+    assert states[0] == "worker-unavailable"
+    if transient:
+        assert probes[0] == 2 and states[-2:] == ["ready", "stopped"]
+        assert not drain and not commands
+    else:
+        assert probes[0] == 3 and "ready" not in states
+        assert states[-2:] == ["worker-failed", "recovered"]
+        assert drain == [True]
+        assert commands == ["gpu-session-stop-owned-internal", "gpu-session-restore-cpu-internal"]
+
+
+@pytest.mark.parametrize("healthy", [True, False])
+def test_direct_md_health_checks_real_socket_and_worker_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, healthy: bool,
+) -> None:
+    run = tmp_path / ("run-" + "d" * 32)
+    run.mkdir()
+    controller = session.SessionController(run, "a" * 40, "b" * 40, direct_start=True)
+    socket_path = tmp_path / "w.sock"
+    argv = [sys.executable, "-m", "uvicorn", "app.main:app", "--uds", str(socket_path)]
+    worker = dict(
+        schema_version=1, pid=os.getpid(), start_ticks=123, argv=argv,
+        python=sys.executable, socket=str(socket_path), source_sha="a" * 40,
+        source_tree="b" * 40, worker_lock_sha256="sha256:" + "c" * 64,
+        session_id="d" * 32, worker_instance_id="e" * 32,
+    )
+    manifest = {**worker, "md_process": worker}
+    session._atomic_json(run / "activation-manifest.json", manifest)
+    monkeypatch.setattr(session, "RUNTIME_ROOT", tmp_path)
+    monkeypatch.setattr(session, "process_start_ticks", lambda _pid: 123)
+    monkeypatch.setattr(session, "process_argv", lambda _pid: tuple(argv))
+    with socket.socket(socket.AF_UNIX) as listener:
+        listener.bind(str(socket_path))
+        socket_path.chmod(0o600)
+        listener.listen()
+        listener.settimeout(3)
+
+        def serve():
+            connection, _ = listener.accept()
+            with connection:
+                connection.recv(4096)
+                body = json.dumps(dict(
+                    status="ok", runtime_ready=True,
+                    worker_instance_id=("e" if healthy else "f") * 32,
+                )).encode()
+                connection.sendall(
+                    f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body
+                )
+
+        thread = threading.Thread(target=serve)
+        thread.start()
+        try:
+            if healthy:
+                controller._check_direct_md_health()
+            else:
+                with pytest.raises(session.DevGpuSessionError, match="not healthy"):
+                    controller._check_direct_md_health()
+        finally:
+            thread.join(timeout=4)
+        assert not thread.is_alive()
 
 
 def test_direct_controller_accepts_explicit_broker_drain_before_stop_signal(

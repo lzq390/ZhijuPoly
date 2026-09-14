@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 from pathlib import Path
 import re
 import signal
+import socket as unix_socket
 import stat
 import tempfile
 from typing import Any
@@ -244,6 +246,7 @@ def collect_dead_record(
     worker_lock_sha256: str,
     session_id: str,
     proc_root: Path = Path("/proc"),
+    collect_socket: bool = False,
 ) -> dict[str, Any]:
     """Remove an exact managed record only after its recorded process is gone."""
     record = load_record(path)
@@ -288,11 +291,42 @@ def collect_dead_record(
                         "managed Worker process is still running"
                     )
 
+    socket_metadata = None
+    if collect_socket:
+        try:
+            socket_metadata = socket.lstat()
+        except FileNotFoundError:
+            pass
+        if socket_metadata is not None:
+            if (
+                not stat.S_ISSOCK(socket_metadata.st_mode)
+                or socket_metadata.st_uid != os.geteuid()
+                or socket.resolve() != socket
+                or stat.S_IMODE(socket_metadata.st_mode) != 0o600
+            ):
+                raise WorkerProcessRecordError("dead Worker socket is unsafe")
+            with unix_socket.socket(unix_socket.AF_UNIX) as connection:
+                connection.settimeout(1)
+                try:
+                    connection.connect(str(socket))
+                except OSError as exc:
+                    if exc.errno not in (errno.ECONNREFUSED, errno.ENOENT):
+                        raise WorkerProcessRecordError(
+                            "dead Worker socket liveness is uncertain"
+                        ) from exc
+                else:
+                    raise WorkerProcessRecordError("dead Worker socket still has a listener")
+
     if load_record(path) != record:
         raise WorkerProcessRecordError(
             "managed Worker process record changed while collecting it"
         )
     try:
+        if socket_metadata is not None:
+            current_metadata = socket.lstat()
+            if current_metadata != socket_metadata:
+                raise WorkerProcessRecordError("dead Worker socket changed while collecting it")
+            socket.unlink()
         path.unlink()
         directory_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -335,6 +369,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pid", type=int)
     parser.add_argument("--instance-id")
     parser.add_argument("--require-instance", action="store_true")
+    parser.add_argument("--collect-socket", action="store_true")
     parser.add_argument("--expected-argv", nargs=argparse.REMAINDER)
     return parser.parse_args(argv)
 
@@ -376,7 +411,9 @@ def main(argv: list[str] | None = None) -> int:
                 **common,
             )
         elif args.command == "collect-dead":
-            result = collect_dead_record(args.record, **common)
+            result = collect_dead_record(
+                args.record, collect_socket=args.collect_socket, **common
+            )
         else:
             result = verify_record(
                 args.record,

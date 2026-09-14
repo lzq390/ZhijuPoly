@@ -8,13 +8,16 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import http.client
 import json
 import math
 import os
 from pathlib import Path
 import re
 import signal
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -42,6 +45,8 @@ GPU3_UUID = "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5"
 POLYPROP_CONTAINER = "polyprop-backend-gpu-1"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DFT_WARMUP_CHURN_TIMEOUT_SECONDS = 90.0
+MD_HEALTH_INTERVAL_SECONDS = 5.0
+MD_HEALTH_FAILURE_LIMIT = 3
 STEADY_CHURN_TIMEOUT_SECONDS = 12.0
 FULL_AUDIT_ATTEMPTS = 3
 PREACTIVATION_ROLLOUT_AUDIT_ATTEMPTS = 8
@@ -2946,6 +2951,9 @@ class SessionController:
         self.last_audit_activation_generation = 0
         self.last_audit_stabilization_generation = 0
         self.last_audit_duration = 0.0
+        self.md_health_next_probe = 0.0
+        self.md_health_failures = 0
+        self.md_health_error: str | None = None
         self.last_mps_authority: Any | None = None
         self.gpu3_guard: dict[str, Any] | None = None
 
@@ -2983,6 +2991,7 @@ class SessionController:
         if status in {
             "audit-failed",
             "broker-failed",
+            "worker-failed",
             "cleanup-blocked",
             "contaminated",
             "gpu3-drift",
@@ -5179,6 +5188,64 @@ class SessionController:
             return False
         return True
 
+    def _check_direct_md_health(self) -> None:
+        """Probe only the activated MD process and its private Unix socket."""
+        from scripts.dev_worker_process import _validate_record_shape
+
+        manifest = _load_private_json(self.run_directory / "activation-manifest.json")
+        worker = _validate_record_shape(manifest.get("md_process"))
+        for key, expected in (
+            ("session_id", self.session_id),
+            ("source_sha", self.source_sha),
+            ("source_tree", self.source_tree),
+        ):
+            if manifest.get(key) != expected or worker.get(key) != expected:
+                raise DevGpuSessionError("MD health identity differs from the activated session")
+        socket_path = Path(worker["socket"])
+        if not socket_path.is_relative_to(RUNTIME_ROOT) or socket_path.resolve() != socket_path:
+            raise DevGpuSessionError("MD health socket is outside the development runtime")
+        expected_argv = [worker["python"], "-m", "uvicorn", "app.main:app", "--uds", str(socket_path)]
+        if (
+            worker["argv"] != expected_argv
+            or process_start_ticks(worker["pid"]) != worker["start_ticks"]
+            or list(process_argv(worker["pid"])) != expected_argv
+        ):
+            raise DevGpuSessionError("activated MD Worker process is unavailable or changed")
+        metadata = socket_path.lstat()
+        if (
+            not stat.S_ISSOCK(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise DevGpuSessionError("MD health socket ownership or permissions changed")
+        connection = http.client.HTTPConnection("localhost", timeout=2)
+        try:
+            connection.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.sock.settimeout(2)
+            connection.sock.connect(str(socket_path))
+            peer_pid, peer_uid, _peer_gid = struct.unpack(
+                "3i", connection.sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+            )
+            if peer_pid != worker["pid"] or peer_uid != os.geteuid():
+                raise DevGpuSessionError("MD health listener differs from the activated Worker")
+            connection.request("GET", "/health")
+            response = connection.getresponse()
+            payload = response.read(64 * 1024 + 1)
+            if response.status != 200 or len(payload) > 64 * 1024:
+                raise DevGpuSessionError("MD health response is invalid")
+            health = json.loads(payload)
+        finally:
+            connection.close()
+        if (
+            not isinstance(health, dict)
+            or not worker["worker_instance_id"]
+            or health.get("worker_instance_id") != worker["worker_instance_id"]
+            or health.get("status") != "ok"
+            or health.get("runtime_ready") is not True
+            or process_start_ticks(worker["pid"]) != worker["start_ticks"]
+        ):
+            raise DevGpuSessionError("activated MD Worker runtime is not healthy")
+
     def _direct_serve_loop(self, client: Any) -> int:
         """Serve the trusted 9001 session without consulting host GPU inventory."""
 
@@ -5248,6 +5315,41 @@ class SessionController:
                 self.stop_requested = True
                 continue
 
+            # Broker liveness alone cannot prove that an idle MD Worker still
+            # exists. Probe after activation, outside intentional teardown, and
+            # allow short health timeouts to recover before stopping the session.
+            if (
+                self.activation_generation > 0
+                and not self.stop_requested
+                and not broker_status["draining"]
+                and time.monotonic() >= self.md_health_next_probe
+            ):
+                self.md_health_next_probe = time.monotonic() + MD_HEALTH_INTERVAL_SECONDS
+                try:
+                    self._check_direct_md_health()
+                except Exception as exc:
+                    self.md_health_failures += 1
+                    self.md_health_error = (str(exc) or type(exc).__name__)[:512]
+                else:
+                    self.md_health_failures = 0
+                    self.md_health_error = None
+                if self.stop_requested:
+                    continue
+                if self.md_health_failures >= MD_HEALTH_FAILURE_LIMIT:
+                    try:
+                        client.set_draining(True)
+                    except Exception:
+                        # Cleanup retries admission closure; never strand the
+                        # session by exiting its controller on a lost response.
+                        pass
+                    self._state(
+                        "worker-failed", contaminated=False, broker_draining=True,
+                        recovery_error=self.md_health_error,
+                    )
+                    self.automatic_recovery = True
+                    self.stop_requested = True
+                    continue
+
             previous_mask = signal.pthread_sigmask(
                 signal.SIG_BLOCK,
                 {signal.SIGUSR1, signal.SIGUSR2},
@@ -5286,9 +5388,11 @@ class SessionController:
                     else "plane-ready"
                 )
                 self._state(
-                    phase,
+                    "worker-unavailable" if self.md_health_error is not None else phase,
                     contaminated=False,
                     audit_sequence=0,
+                    md_health_error=self.md_health_error,
+                    md_health_failures=self.md_health_failures,
                 )
             finally:
                 signal.pthread_sigmask(
@@ -5876,6 +5980,7 @@ def activate_execute(session_id: str) -> dict[str, Any]:
             "plane-ready",
             "auditing",
             "ready",
+            "worker-unavailable",
         }:
             raise DevGpuSessionError(
                 f"controller activation ended as {current.get('status')}"
@@ -5918,6 +6023,7 @@ def drain_execute() -> dict[str, Any]:
             "plane-ready",
             "stabilizing",
             "ready",
+            "worker-unavailable",
         }:
             raise DevGpuSessionError(
                 f"controller drain handshake ended as {state}"

@@ -45,6 +45,8 @@ CONTROLLER_STARTING_STATES = {
 CONTROLLER_RECOVERY_STATES = {
     "audit-failed",
     "broker-failed",
+    "worker-failed",
+    "worker-unavailable",
     "cleanup-blocked",
     "contaminated",
     "gpu3-drift",
@@ -334,7 +336,8 @@ class DevGpuOperator:
             "source_sha": self.source_sha,
             "source_tree": self.source_tree,
             "updated_at": (
-                operation.get("updated_at") if operation is not None else _utc_now()
+                operation.get("updated_at") if operation_active
+                else controller.get("updated_at", _utc_now())
             ),
         }
 

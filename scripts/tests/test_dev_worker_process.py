@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket as unix_socket
 import sys
 
 import pytest
@@ -181,3 +182,49 @@ def test_collect_dead_record_accepts_pid_reuse_without_touching_the_new_process(
 
     assert not record.exists()
     assert (proc_root / str(pid) / "stat").exists()
+
+
+@pytest.mark.parametrize("listening", [False, True])
+def test_dead_worker_collection_removes_only_an_unlistened_socket(
+    tmp_path: Path, listening: bool,
+) -> None:
+    pid, python, socket, record, argv, proc_root = _fixture(tmp_path)
+    socket = tmp_path / "w.sock"
+    argv[-1] = str(socket)
+    (proc_root / str(pid) / "cmdline").write_bytes(b"\0".join(s.encode() for s in argv))
+    common = dict(
+        python=python, socket=socket, source_sha="a" * 40, source_tree="b" * 40,
+        worker_lock_sha256="sha256:" + "c" * 64, session_id="e" * 32, proc_root=proc_root,
+    )
+    process_record.create_record(record, pid=pid, expected_argv=argv, **common)
+    for child in (proc_root / str(pid)).iterdir():
+        child.unlink()
+    (proc_root / str(pid)).rmdir()
+    with unix_socket.socket(unix_socket.AF_UNIX) as listener:
+        listener.bind(str(socket))
+        socket.chmod(0o600)
+        if listening:
+            listener.listen()
+            with pytest.raises(process_record.WorkerProcessRecordError, match="listener"):
+                process_record.collect_dead_record(record, collect_socket=True, **common)
+            assert record.exists() and socket.exists()
+        else:
+            process_record.collect_dead_record(record, collect_socket=True, **common)
+            assert not record.exists() and not socket.exists()
+
+
+def test_dead_worker_collection_preserves_unexpected_socket_file(tmp_path: Path) -> None:
+    pid, python, socket, record, argv, proc_root = _fixture(tmp_path)
+    common = dict(
+        python=python, socket=socket, source_sha="a" * 40, source_tree="b" * 40,
+        worker_lock_sha256="sha256:" + "c" * 64, session_id="e" * 32, proc_root=proc_root,
+    )
+    process_record.create_record(record, pid=pid, expected_argv=argv, **common)
+    for child in (proc_root / str(pid)).iterdir():
+        child.unlink()
+    (proc_root / str(pid)).rmdir()
+    socket.parent.mkdir()
+    socket.write_text("unrelated file")
+    with pytest.raises(process_record.WorkerProcessRecordError, match="unsafe"):
+        process_record.collect_dead_record(record, collect_socket=True, **common)
+    assert record.exists() and socket.read_text() == "unrelated file"
