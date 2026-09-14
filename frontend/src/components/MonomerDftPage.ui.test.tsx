@@ -514,6 +514,74 @@ describe("MonomerDftPage workbench", () => {
     expect(alert.textContent).toContain("删除任务失败，请稍后重试。");
   });
 
+  it.each(["CCN", "CC("])("restores the shared draft %s when entering DFT", (draft) => {
+    const structure = makeStructure("CCO");
+    structure.workspace.setDraft(draft);
+    renderPage(structure);
+
+    expect(screen.getByLabelText("SMILES / PSMILES")).toHaveProperty("value", draft);
+    expect(structure.workspace.getSnapshot().smiles).toBe("CCO");
+    expect(structure.getCurrentSmiles).not.toHaveBeenCalled();
+  });
+
+  it("preserves an incomplete draft when the accepted structure changes", () => {
+    const structure = makeStructure("CCO");
+    structure.workspace.setDraft("CC(");
+    const { view } = renderPage(structure);
+
+    act(() => structure.workspace.commitSmiles("CCN"));
+    view.rerender(
+      <MonomerDftPage
+        structure={{ ...structure, smiles: structure.workspace.getSnapshot().smiles }}
+        initialJobId={null}
+        onJobIdChange={vi.fn()}
+        onEditStructure={vi.fn()}
+      />
+    );
+
+    expect(structure.workspace.getSnapshot().smiles).toBe("CCN");
+    expect(screen.getByLabelText("SMILES / PSMILES")).toHaveProperty("value", "CC(");
+  });
+
+  it("does not submit an invalid restored draft or fall back to the accepted structure", async () => {
+    const submit = vi.fn();
+    mocks.useMonomerDftJob.mockReturnValue(controller({ submit }));
+    mocks.standardizeSmiles.mockRejectedValue(new Error("Invalid SMILES"));
+    const structure = makeStructure("CCO");
+    structure.workspace.setDraft("CC(");
+    renderPage(structure);
+
+    const submitButton = screen.getByRole("button", { name: "提交计算" });
+    await waitFor(() => expect(submitButton.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("SMILES 标准化失败"));
+    expect(mocks.standardizeSmiles).toHaveBeenCalledWith({ smiles: "CC(" }, expect.any(AbortSignal));
+    expect(submit).not.toHaveBeenCalled();
+    expect(structure.getCurrentSmiles).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("SMILES / PSMILES")).toHaveProperty("value", "CC(");
+  });
+
+  it("standardizes and submits a valid restored draft without another edit", async () => {
+    const submit = vi.fn().mockResolvedValue("11111111-1111-4111-8111-111111111111");
+    mocks.useMonomerDftJob.mockReturnValue(controller({ submit }));
+    mocks.standardizeSmiles.mockResolvedValue({ standardized_smiles: "CCO" });
+    const structure = makeStructure("CC");
+    structure.workspace.setDraft("C(C)O");
+    renderPage(structure);
+
+    const submitButton = screen.getByRole("button", { name: "提交计算" });
+    await waitFor(() => expect(submitButton.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(mocks.standardizeSmiles).toHaveBeenCalledWith({ smiles: "C(C)O" }, expect.any(AbortSignal));
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      input: expect.objectContaining({ smiles: "CCO" })
+    }));
+    expect(structure.getCurrentSmiles).not.toHaveBeenCalled();
+  });
+
   it("submits the standardized visible draft and never reads the hidden Ketcher value", async () => {
     const submit = vi.fn().mockResolvedValue("11111111-1111-4111-8111-111111111111");
     mocks.useMonomerDftJob.mockReturnValue(controller({ submit }));

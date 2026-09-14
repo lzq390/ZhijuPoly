@@ -669,7 +669,7 @@ export function MonomerDftPage({
   const [activeTab, setActiveTab] = useState<PrimaryTab>(initialJobId ? "results" : "config");
   const tabContentRef = useRef<HTMLDivElement | null>(null);
   useContentMotion(tabContentRef, activeTab, "tab");
-  const [smilesDraft, setSmilesDraft] = useState(structure.smiles);
+  const [smilesDraft, setSmilesDraft] = useState(structure.workspace.getSnapshot().draft);
   const [calculationType, setCalculationType] = useState<MonomerDftCalculationType>("single_point");
   const [modelId, setModelId] = useState<MonomerDftModelName | "">("");
   const [netChargeText, setNetChargeText] = useState("");
@@ -695,7 +695,7 @@ export function MonomerDftPage({
   );
 
   useEffect(() => {
-    setSmilesDraft(structure.smiles);
+    setSmilesDraft(structure.workspace.getSnapshot().draft);
   }, [structure.smiles]);
 
   useEffect(() => {
