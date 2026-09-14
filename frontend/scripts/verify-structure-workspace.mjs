@@ -1,4 +1,5 @@
 import { pollBrowser } from "./browser-poll.mjs";
+import { verifyKetcherNativeMenu } from "./verify-ketcher-native-menu.mjs";
 // Real editor/browser verification. Business requests are fixtures; no jobs or records are submitted.
 import assert from "node:assert/strict";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
@@ -99,6 +100,7 @@ try {
   result.readyMs = Date.now() - start;
   result.engine = await page.locator('[data-structure-editor]').getAttribute('data-editor-engine');
   result.sdk = result.engine === 'react' ? '3.8.0' : '3.7.0';
+  if (result.engine === 'react') result.nativeSettingsMenu = await verifyKetcherNativeMenu(page);
   const input = () => page.getByRole("textbox", { name: "SMILES 输入，自动同步到画板" });
   await input().fill("CCO");
   // Observe the public commit state before querying the SDK. The legacy 3.7
