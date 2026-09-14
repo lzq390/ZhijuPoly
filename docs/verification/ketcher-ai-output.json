@@ -1,0 +1,300 @@
+{
+  "requests": [
+    {
+      "path": "/api/v1/assistant/tg/chat/image-stream",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "分析当前画板"
+          }
+        ],
+        "page_context": {
+          "type": "tg_reverse_design",
+          "version": 1,
+          "captured_at": "2026-09-10T09:49:24.002Z",
+          "action_context_revision": "87988951-36a5-418a-9e32-c2a61fd6a7ef",
+          "structure": {
+            "smiles": "CCO",
+            "canvas_dirty": false,
+            "editor_ready": true,
+            "view_mode": "2d",
+            "busy": false
+          },
+          "draft_parameters": {
+            "target_tg": 450,
+            "similarity_threshold": 0.7,
+            "candidate_size": 200
+          },
+          "submitted_request": null,
+          "parameters_dirty": false,
+          "validation_error": null,
+          "job": null,
+          "result_view": null,
+          "error": null
+        }
+      },
+      "pngBytes": 2409,
+      "pngSha256": "9eaf69430380c78f3fb3ebd69d0124d2aa2b894b7a1191fe50d5d70dd2a74eca",
+      "pixels": {
+        "width": 161,
+        "height": 81,
+        "ink": 355
+      }
+    },
+    {
+      "path": "/api/v1/assistant/tg/chat/image-stream",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "分析当前画板"
+          },
+          {
+            "role": "assistant",
+            "content": "fixture-1"
+          },
+          {
+            "role": "user",
+            "content": "再次读取相同画板"
+          }
+        ],
+        "page_context": {
+          "type": "tg_reverse_design",
+          "version": 1,
+          "captured_at": "2026-09-10T09:49:24.911Z",
+          "action_context_revision": "2b7f838f-5d59-477d-b4e8-af2caf34c1c4",
+          "structure": {
+            "smiles": "CCO",
+            "canvas_dirty": false,
+            "editor_ready": true,
+            "view_mode": "2d",
+            "busy": false
+          },
+          "draft_parameters": {
+            "target_tg": 450,
+            "similarity_threshold": 0.7,
+            "candidate_size": 200
+          },
+          "submitted_request": null,
+          "parameters_dirty": false,
+          "validation_error": null,
+          "job": null,
+          "result_view": null,
+          "error": null
+        }
+      },
+      "pngBytes": 2409,
+      "pngSha256": "9eaf69430380c78f3fb3ebd69d0124d2aa2b894b7a1191fe50d5d70dd2a74eca",
+      "pixels": {
+        "width": 161,
+        "height": 81,
+        "ink": 355
+      }
+    },
+    {
+      "path": "/api/v1/assistant/tg/chat/image-stream",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "分析当前画板"
+          },
+          {
+            "role": "assistant",
+            "content": "fixture-1"
+          },
+          {
+            "role": "user",
+            "content": "再次读取相同画板"
+          },
+          {
+            "role": "assistant",
+            "content": "fixture-2"
+          },
+          {
+            "role": "user",
+            "content": "读取新的布局"
+          }
+        ],
+        "page_context": {
+          "type": "tg_reverse_design",
+          "version": 1,
+          "captured_at": "2026-09-10T09:49:25.877Z",
+          "action_context_revision": "84dbe92b-3d46-42da-8a2b-3ab43a9fb9c4",
+          "structure": {
+            "smiles": "CCO",
+            "canvas_dirty": false,
+            "editor_ready": true,
+            "view_mode": "2d",
+            "busy": false
+          },
+          "draft_parameters": {
+            "target_tg": 450,
+            "similarity_threshold": 0.7,
+            "candidate_size": 200
+          },
+          "submitted_request": null,
+          "parameters_dirty": false,
+          "validation_error": null,
+          "job": null,
+          "result_view": null,
+          "error": null
+        }
+      },
+      "pngBytes": 2242,
+      "pngSha256": "dce016ea80105fbb843ee0147940a76a1e683ee859c41bb39c7c7c8376ac4a0f",
+      "pixels": {
+        "width": 168,
+        "height": 72,
+        "ink": 363
+      }
+    },
+    {
+      "path": "/api/v1/assistant/tg/chat/stream",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "分析当前画板"
+          },
+          {
+            "role": "assistant",
+            "content": "fixture-1"
+          },
+          {
+            "role": "user",
+            "content": "再次读取相同画板"
+          },
+          {
+            "role": "assistant",
+            "content": "fixture-2"
+          },
+          {
+            "role": "user",
+            "content": "读取新的布局"
+          },
+          {
+            "role": "assistant",
+            "content": "fixture-3"
+          },
+          {
+            "role": "user",
+            "content": "生成失败时保留结构上下文"
+          }
+        ],
+        "page_context": {
+          "type": "tg_reverse_design",
+          "version": 1,
+          "captured_at": "2026-09-10T09:49:26.856Z",
+          "action_context_revision": "fdb8a008-9c23-437c-8829-98f5cdf688b1",
+          "structure": {
+            "smiles": "CCO",
+            "canvas_dirty": false,
+            "editor_ready": true,
+            "view_mode": "2d",
+            "busy": false
+          },
+          "draft_parameters": {
+            "target_tg": 450,
+            "similarity_threshold": 0.7,
+            "candidate_size": 200
+          },
+          "submitted_request": null,
+          "parameters_dirty": false,
+          "validation_error": null,
+          "job": null,
+          "result_view": null,
+          "error": null
+        }
+      },
+      "pngBytes": 0,
+      "pngSha256": null
+    },
+    {
+      "path": "/api/v1/assistant/tg/chat/image-stream",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "分析当前画板"
+          },
+          {
+            "role": "assistant",
+            "content": "fixture-1"
+          },
+          {
+            "role": "user",
+            "content": "再次读取相同画板"
+          },
+          {
+            "role": "assistant",
+            "content": "fixture-2"
+          },
+          {
+            "role": "user",
+            "content": "读取新的布局"
+          },
+          {
+            "role": "assistant",
+            "content": "fixture-3"
+          },
+          {
+            "role": "user",
+            "content": "生成失败时保留结构上下文"
+          },
+          {
+            "role": "assistant",
+            "content": "fixture-4"
+          },
+          {
+            "role": "user",
+            "content": "取消尚未生成的画板截图"
+          },
+          {
+            "role": "user",
+            "content": "读取聚合物端基画板图片"
+          }
+        ],
+        "page_context": {
+          "type": "tg_reverse_design",
+          "version": 1,
+          "captured_at": "2026-09-10T09:49:30.599Z",
+          "action_context_revision": "460fa151-84c0-4daf-9fa0-e5c36c3c9748",
+          "structure": {
+            "smiles": "*CC*",
+            "canvas_dirty": false,
+            "editor_ready": true,
+            "view_mode": "2d",
+            "busy": false
+          },
+          "draft_parameters": {
+            "target_tg": 450,
+            "similarity_threshold": 0.7,
+            "candidate_size": 200
+          },
+          "submitted_request": null,
+          "parameters_dirty": false,
+          "validation_error": null,
+          "job": null,
+          "result_view": null,
+          "error": null
+        }
+      },
+      "pngBytes": 2250,
+      "pngSha256": "d4a5e195470e851332e085da57dbc307fa419812a21fb0d98313b117d59fae40",
+      "pixels": {
+        "width": 166,
+        "height": 82,
+        "ink": 314
+      }
+    }
+  ],
+  "errors": [],
+  "engine": "react",
+  "layoutCache": true,
+  "smilesFallback": true,
+  "cancelled": true,
+  "polymerPng": true,
+  "passed": true
+}

@@ -601,8 +601,13 @@ runtime and both active Worker identities are unchanged.
 After `prepare`, and before `apply`, the source-pinned
 `production_postgres_rehearsal.py --plan/--apply` command must produce a sealed
 passing report for that exact descriptor/ready pair. It performs a fresh custom
-dump, isolated PostgreSQL 16 restore, exact ordered 0014/0015 migration, and
+dump, isolated PostgreSQL 16 restore, exact reviewed migration sequence, and
 post-migration ledger/property/snapshot/index/query-plan validation. The
+accepted paths are 0013→0015, exact reviewed 0015→0015 compatibility-baseline
+installation, 0015→0016 batch upgrade, and 0016→0016 code release. The 0015/0016
+release paths pin the complete manifest and exact source ledger; same-version
+releases require all migrations to be `skipped` and retain the entire rehearsal
+and sealed-report gate. The 615,159 property-record baseline is unchanged. The
 backup-plus-restore limit is 30 minutes and the migration limit is 10 minutes.
 The migration evidence fixes `lock_timeout=30s` and
 `statement_timeout=15min`.

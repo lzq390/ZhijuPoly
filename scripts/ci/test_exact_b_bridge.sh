@@ -118,6 +118,7 @@ assert [
 ] == [
     "0014_monomer_md_task_queue_cancel",
     "0015_property_filter_performance",
+    "0016_monomer_polymerization_batch",
 ]
 manifest["migrations"] = records
 (destination / "manifest.json").write_text(
@@ -566,7 +567,7 @@ stop_backend "$b_schema_f_name"
 
 # Seed online/MD/lab business rows before F creates any DFT table. This is the
 # actual future transition: an exact B/post-0012 database is upgraded in place
-# through the B-compatible 0013 checkpoint and then the final 0014/0015 authority
+# through the B-compatible 0013 checkpoint and then the final 0014–0016 authority
 # schema. Neither the mutable rows nor their existing sequences may change
 # while the migration ledger advances.
 psql -X -v ON_ERROR_STOP=1 "$(database_dsn "$B_DATABASE")" <<'SQL' >/dev/null
@@ -650,7 +651,7 @@ assert_dft_state 18109 true
 stop_backend "$b_transition_return_name"
 [[ "$(pre_dft_mutable_digest "$B_DATABASE")" == "$b_transition_before" ]]
 
-# F now applies the remaining canonical 0014 and 0015 expansions.
+# F now applies the remaining canonical 0014, 0015 and 0016 expansions.
 # Exact B must reject that newer ledger without mutating it; returning to F
 # must still pass strict preflight and preserve every pre-0014 business field.
 run_backend_command "$F_BACKEND_IMAGE" "$B_DATABASE" \
@@ -660,10 +661,10 @@ run_backend_command "$F_BACKEND_IMAGE" "$B_DATABASE" \
 [[ "$(
   psql -X -v ON_ERROR_STOP=1 -At "$(database_dsn "$B_DATABASE")" \
     --command "SELECT version || ':' || checksum FROM governance.schema_migrations ORDER BY version DESC LIMIT 1"
-)" == "0015_property_filter_performance:e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732" ]]
+)" == "0016_monomer_polymerization_batch:c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976" ]]
 [[ "$(pre_dft_mutable_digest "$B_DATABASE")" == "$b_transition_before" ]]
 
-b_transition_final_name="${CONTAINER_PREFIX}-f-after-0015"
+b_transition_final_name="${CONTAINER_PREFIX}-f-after-0016"
 start_backend "$F_BACKEND_IMAGE" "$B_DATABASE" "$b_transition_final_name" 18108
 assert_dft_state 18108 true
 stop_backend "$b_transition_final_name"
@@ -671,7 +672,7 @@ stop_backend "$b_transition_final_name"
 
 if run_backend_command "$B_BACKEND_IMAGE" "$B_DATABASE" \
   python -m app.postgres_preflight --mode schema --strict >/dev/null 2>&1; then
-  echo "Exact B unexpectedly accepted the canonical 0015 ledger" >&2
+  echo "Exact B unexpectedly accepted the canonical 0016 ledger" >&2
   exit 1
 fi
 [[ "$(pre_dft_mutable_digest "$B_DATABASE")" == "$b_transition_before" ]]
@@ -776,11 +777,11 @@ assert_dft_state 18102 true
 stop_backend "$f_before_name"
 [[ "$(business_digest "$F_DATABASE")" == "$before_digest" ]]
 
-# Exact B must fail closed on the canonical 0015 ledger without applying,
+# Exact B must fail closed on the canonical 0016 ledger without applying,
 # rewriting, or truncating any mutable row.
 if run_backend_command "$B_BACKEND_IMAGE" "$F_DATABASE" \
   python -m app.postgres_preflight --mode schema --strict >/dev/null 2>&1; then
-  echo "Exact B unexpectedly accepted the fresh canonical 0015 ledger" >&2
+  echo "Exact B unexpectedly accepted the fresh canonical 0016 ledger" >&2
   exit 1
 fi
 [[ "$(business_digest "$F_DATABASE")" == "$before_digest" ]]

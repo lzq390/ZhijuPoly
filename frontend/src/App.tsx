@@ -20,31 +20,27 @@ import {
   type AppShellModuleItem
 } from "./components/AppShell";
 import { AgentWorkspaceHomePage, agentWorkspaceUrl } from "./components/AgentWorkspaceHomePage";
-import { ConditionalGenerationPage } from "./components/ConditionalGenerationPage";
-import { DatabaseAnalysis, type DatasetKey } from "./components/DatabaseAnalysis";
-import { DatabaseFilterPage } from "./components/DatabaseFilterPage";
-import { DatabaseQueryPage } from "./components/DatabaseQueryPage";
-import { ExperimentWorkflowDemoPage } from "./components/ExperimentWorkflowDemoPage";
-import { HighThroughputWorkflowDemoPage } from "./components/HighThroughputWorkflowDemoPage";
-import { HomopolymerPropertyPredictionPage } from "./components/HomopolymerPropertyPredictionPage";
-import { KnowledgeSearch } from "./components/KnowledgeSearch";
-import { LabDataPage, type LabDataView } from "./components/LabDataPage";
-import { MdSimulationDemoPage } from "./components/MdSimulationDemoPage";
-import { MonomerMdSimulationPage } from "./components/MonomerMdSimulationPage";
-import { MonomerDftPage } from "./components/MonomerDftPage";
-import { MonomerPolymerizationPage } from "./components/MonomerPolymerizationPage";
-import { PolytaoGenerationPage } from "./components/PolytaoGenerationPage";
-import { ReverseDesignPage } from "./components/ReverseDesignPage";
-import { PolymerSimilarityExplorerPage } from "./components/PolymerSimilarityExplorerPage";
+import type { DatasetKey } from "./components/database-analysis/types";
+import type { LabDataView } from "./components/LabDataPage";
+import type { StructureCanvasOwnerHandle } from "./components/StructureWorkbenchPage";
 import {
-  StructureWorkbenchPage,
-  type StructureCanvasOwnerHandle
-} from "./components/StructureWorkbenchPage";
-import { useKetcher } from "./hooks/useKetcher";
+  ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
+  ExperimentWorkflowDemoPage, HighThroughputWorkflowDemoPage, HomopolymerPropertyPredictionPage,
+  KnowledgeSearch, LabDataPage, MdSimulationDemoPage, MonomerMdSimulationPage, MonomerDftPage,
+  MonomerPolymerizationPage, PolytaoGenerationPage, ReverseDesignPage,
+  PolymerSimilarityExplorerPage, StructureWorkbenchPage, preloadPage
+} from "./pages";
+import {
+  canvasModules, getInitialRoute, normalizePath, routeFromPath, pathFromRoute,
+  POLYTAO_ROUTE, HOMOPOLYMER_PREDICTION_ROUTE, LEGACY_POLYTAO_ROUTE,
+  DATABASE_FILTER_ROUTE, LEGACY_DATABASE_FILTER_ROUTE, type ActiveModule, type AppRoute
+} from "./routing";
+import { useStructureWorkspace } from "./hooks/useStructureWorkspace";
+import { StructureWorkspaceNotice } from "./components/structure-workbench/StructureWorkspaceNotice";
+import { syncStructureForNavigation } from "./structure/navigation";
 import { useQuery } from "./hooks/useQuery";
 import { useTgAssistant } from "./hooks/useTgAssistant";
 import { useModuleTransition, type ModuleNavigationRequest } from "./hooks/useModuleTransition";
-import { standardizeSmiles } from "./services/api";
 import { getMonomerDftJobIdFromSearch, getMonomerDftPath } from "./lib/monomerDftRouting";
 import { getMonomerMdJobIdFromSearch, getMonomerMdPath } from "./lib/monomerMdRouting";
 import {
@@ -59,36 +55,7 @@ import {
   createOpenScienceGeneralSessionBridge,
   type OpenScienceGeneralSessionsSnapshot
 } from "./lib/openScienceGeneralSessionBridge";
-import {
-  type KnowledgeNavigationRequest,
-  type StructureWorkspaceContext
-} from "./types";
-
-type ActiveModule =
-  | "home"
-  | "structureWorkbench"
-  | "homopolymerPrediction"
-  | "explorer"
-  | "mdSimulationDemo"
-  | "monomerMdSimulation"
-  | "monomerDft"
-  | "monomerPolymerization"
-  | "reverseDesign"
-  | "conditionalGeneration"
-  | "polytaoGeneration"
-  | "databaseQuery"
-  | "databaseFilter"
-  | "database"
-  | "knowledge"
-  | "labData"
-  | "experimentWorkflowDemo"
-  | "highThroughputWorkflowDemo";
-
-type AppRoute = {
-  module: ActiveModule;
-  datasetKey: DatasetKey | null;
-  labDataView?: LabDataView;
-};
+import type { KnowledgeNavigationRequest } from "./types";
 
 type AppNavigationRequest = ModuleNavigationRequest & {
   route: AppRoute;
@@ -98,205 +65,8 @@ type AppNavigationRequest = ModuleNavigationRequest & {
   onCommit?: () => void;
 };
 
-const canvasModules = new Set<ActiveModule>([
-  "structureWorkbench", "homopolymerPrediction", "explorer", "databaseQuery", "conditionalGeneration", "reverseDesign"
-]);
-
 type KnowledgeNavigationInput = string | KnowledgeNavigationRequest;
 type AgentWorkspaceView = "general" | "projects" | "project";
-const POLYTAO_ROUTE = "/polytao-generation";
-const HOMOPOLYMER_PREDICTION_ROUTE = "/homopolymer-property-prediction";
-const LEGACY_POLYTAO_ROUTE = "/conditional-generation/polytao";
-const DATABASE_FILTER_ROUTE = "/database-filter";
-const LEGACY_DATABASE_FILTER_ROUTE = "/database/property-filter";
-const STRUCTURE_NAVIGATION_SYNC_TIMEOUT_MS = 1500;
-
-const datasetPathByKey: Record<DatasetKey, string> = {
-  process: "/database/process",
-  property: "/database/property",
-  structureEffect: "/database/structure-effect",
-  dft: "/database/dft",
-  formulation: "/database/formulation"
-};
-
-const datasetKeyByPath = Object.fromEntries(
-  Object.entries(datasetPathByKey).map(([key, path]) => [path, key as DatasetKey])
-) as Record<string, DatasetKey>;
-
-function normalizePath(pathname: string) {
-  const normalized = pathname.replace(/\/+$/, "");
-  return normalized.length > 0 ? normalized : "/";
-}
-
-function routeFromPath(pathname: string): AppRoute {
-  const path = normalizePath(pathname);
-
-  if (path === "/structure-workbench") {
-    return { module: "structureWorkbench", datasetKey: null };
-  }
-
-  if (path === HOMOPOLYMER_PREDICTION_ROUTE) {
-    return { module: "homopolymerPrediction", datasetKey: null };
-  }
-
-  if (path === "/explorer") {
-    return { module: "explorer", datasetKey: null };
-  }
-
-  if (path === "/md-simulation") {
-    return { module: "mdSimulationDemo", datasetKey: null };
-  }
-
-  if (path === "/monomer-md-simulation") {
-    return { module: "monomerMdSimulation", datasetKey: null };
-  }
-
-  if (path === "/monomer-dft") {
-    return { module: "monomerDft", datasetKey: null };
-  }
-
-  if (path === "/monomer-polymerization") {
-    return { module: "monomerPolymerization", datasetKey: null };
-  }
-
-  if (path === "/reverse-design") {
-    return { module: "reverseDesign", datasetKey: null };
-  }
-
-  if (path === "/conditional-generation") {
-    return { module: "conditionalGeneration", datasetKey: null };
-  }
-
-  if (path === POLYTAO_ROUTE || path === LEGACY_POLYTAO_ROUTE) {
-    return { module: "polytaoGeneration", datasetKey: null };
-  }
-
-  if (path === "/database-query") {
-    return { module: "databaseQuery", datasetKey: null };
-  }
-
-  if (path === DATABASE_FILTER_ROUTE || path === LEGACY_DATABASE_FILTER_ROUTE) {
-    return { module: "databaseFilter", datasetKey: null };
-  }
-
-  if (path === "/knowledge") {
-    return { module: "knowledge", datasetKey: null };
-  }
-
-  if (path === "/experiment-workflow-demo") {
-    return { module: "experimentWorkflowDemo", datasetKey: null };
-  }
-
-  if (path === "/high-throughput-workflow-demo") {
-    return { module: "highThroughputWorkflowDemo", datasetKey: null };
-  }
-
-  if (path === "/lab-data" || path === "/lab-data/collect") {
-    return { module: "labData", datasetKey: null, labDataView: "collect" };
-  }
-
-  if (path === "/lab-data/dashboard") {
-    return { module: "labData", datasetKey: null, labDataView: "dashboard" };
-  }
-
-  if (path === "/database") {
-    return { module: "database", datasetKey: null };
-  }
-
-  const datasetKey = datasetKeyByPath[path];
-  if (datasetKey) {
-    return { module: "database", datasetKey };
-  }
-
-  return { module: "home", datasetKey: null };
-}
-
-function pathFromRoute(route: AppRoute) {
-  if (route.module === "structureWorkbench") {
-    return "/structure-workbench";
-  }
-
-  if (route.module === "homopolymerPrediction") {
-    return HOMOPOLYMER_PREDICTION_ROUTE;
-  }
-
-  if (route.module === "explorer") {
-    return "/explorer";
-  }
-
-  if (route.module === "mdSimulationDemo") {
-    return "/md-simulation";
-  }
-
-  if (route.module === "monomerMdSimulation") {
-    return "/monomer-md-simulation";
-  }
-
-  if (route.module === "monomerDft") {
-    return "/monomer-dft";
-  }
-
-  if (route.module === "monomerPolymerization") {
-    return "/monomer-polymerization";
-  }
-
-  if (route.module === "reverseDesign") {
-    return "/reverse-design";
-  }
-
-  if (route.module === "conditionalGeneration") {
-    return "/conditional-generation";
-  }
-
-  if (route.module === "polytaoGeneration") {
-    return POLYTAO_ROUTE;
-  }
-
-  if (route.module === "databaseQuery") {
-    return "/database-query";
-  }
-
-  if (route.module === "databaseFilter") {
-    return DATABASE_FILTER_ROUTE;
-  }
-
-  if (route.module === "knowledge") {
-    return "/knowledge";
-  }
-
-  if (route.module === "experimentWorkflowDemo") {
-    return "/experiment-workflow-demo";
-  }
-
-  if (route.module === "highThroughputWorkflowDemo") {
-    return "/high-throughput-workflow-demo";
-  }
-
-  if (route.module === "labData") {
-    return route.labDataView === "dashboard" ? "/lab-data/dashboard" : "/lab-data/collect";
-  }
-
-  if (route.module === "database") {
-    return route.datasetKey ? datasetPathByKey[route.datasetKey] : "/database";
-  }
-
-  return "/";
-}
-
-function getInitialRoute() {
-  if (typeof window === "undefined") {
-    return { module: "home", datasetKey: null } satisfies AppRoute;
-  }
-
-  const route = routeFromPath(window.location.pathname);
-  if (normalizePath(window.location.pathname) === LEGACY_POLYTAO_ROUTE) {
-    window.history.replaceState(route, "", POLYTAO_ROUTE);
-  } else if (normalizePath(window.location.pathname) === LEGACY_DATABASE_FILTER_ROUTE) {
-    window.history.replaceState(route, "", DATABASE_FILTER_ROUTE);
-  }
-  return route;
-}
-
 function normalizeKnowledgeTerms(terms: string[] | undefined) {
   const normalized: string[] = [];
   const seen = new Set<string>();
@@ -369,10 +139,9 @@ function AppContent() {
   const activeModuleRef = useRef(activeModule);
   activeModuleRef.current = activeModule;
   const structureCanvasOwnerRef = useRef<StructureCanvasOwnerHandle | null>(null);
-  const structureNavigationSyncRef = useRef<Promise<void> | null>(null);
   const moduleContentRef = useRef<HTMLDivElement | null>(null);
   const moduleMainRef = useRef<HTMLElement | null>(null);
-  const { smiles, setSmiles, iframeRef, setIsReady } = useKetcher();
+  const structureWorkspace = useStructureWorkspace();
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const tgAssistant = useTgAssistant();
   const agentWorkspaceIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -406,78 +175,11 @@ function AppContent() {
     []
   );
 
-  async function getCurrentSmiles() {
-    const fallbackSmiles = smiles.trim();
-    let currentSmiles = fallbackSmiles;
-    const ketcher = iframeRef.current?.contentWindow?.ketcher;
-    if (ketcher && typeof ketcher.getSmiles === "function") {
-      try {
-        const editorSmiles = (await ketcher.getSmiles()).trim();
-        if (editorSmiles) {
-          if (editorSmiles !== fallbackSmiles) {
-            setSmiles(editorSmiles);
-          }
-          currentSmiles = editorSmiles;
-        } else if (fallbackSmiles) {
-          currentSmiles = fallbackSmiles;
-        } else {
-          setSmiles(editorSmiles);
-          currentSmiles = editorSmiles;
-        }
-      } catch (syncError) {
-        console.error("Failed to read SMILES from Ketcher", syncError);
-      }
-    }
-
-    if (!currentSmiles) {
-      return currentSmiles;
-    }
-
-    try {
-      const result = await standardizeSmiles({ smiles: currentSmiles });
-      if (result.standardized_smiles !== smiles.trim()) {
-        setSmiles(result.standardized_smiles);
-      }
-      return result.standardized_smiles;
-    } catch (standardizeError) {
-      console.error("Failed to standardize current SMILES", standardizeError);
-      return currentSmiles;
-    }
-  }
-
-  const structureWorkspace: StructureWorkspaceContext = {
-    smiles,
-    setSmiles,
-    iframeRef,
-    setIsReady,
-    getCurrentSmiles
-  };
-
-  const syncStructureBeforeNavigation = useCallback(() => {
-    if (structureNavigationSyncRef.current) {
-      return structureNavigationSyncRef.current;
-    }
-
-    const task = structureCanvasOwnerRef.current?.syncBeforeLeave() ?? Promise.resolve();
-    const guarded = new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timeout);
-        resolve();
-      };
-      const timeout = window.setTimeout(finish, STRUCTURE_NAVIGATION_SYNC_TIMEOUT_MS);
-      task.then(finish, finish);
-    });
-    const tracked = guarded.finally(() => {
-      if (structureNavigationSyncRef.current === tracked) {
-        structureNavigationSyncRef.current = null;
-      }
-    });
-    structureNavigationSyncRef.current = tracked;
-    return tracked;
-  }, []);
+  const syncStructureBeforeNavigation = useCallback((signal: AbortSignal) => {
+    const workspace = structureWorkspace.workspace;
+    return syncStructureForNavigation(workspace,
+      () => structureCanvasOwnerRef.current?.syncBeforeLeave(signal) ?? workspace.saveForNavigation(), signal);
+  }, [structureWorkspace.workspace]);
 
   const moduleTransition = useModuleTransition<AppNavigationRequest>({
     activeModule, contentRef: moduleContentRef, mainRef: moduleMainRef,
@@ -546,6 +248,9 @@ function AppContent() {
   }
 
   function navigate(route: AppRoute, extra: Partial<Omit<AppNavigationRequest, "route" | "target">> = {}) {
+    // Fetch the target while the existing navigation transaction saves/exits.
+    // A failed prefetch is presented by that page's own retry boundary.
+    void preloadPage(route.module).catch(() => {});
     const item = [...standaloneModules, ...moduleGroups.flatMap((group) => group.items)].find((candidate) => candidate.id === route.module);
     moduleTransition.request({
       route, href: pathFromRoute(route), history: "push", source: "navigation", kind: "module",
@@ -718,7 +423,7 @@ function AppContent() {
         openMonomerDft();
         break;
       case "monomerPolymerization":
-        openMonomerPolymerization();
+        navigate({ module: "monomerPolymerization", datasetKey: null }, { href: "/monomer-polymerization?mode=single" });
         break;
       case "reverseDesign":
         openReverseDesign();
@@ -893,7 +598,7 @@ function AppContent() {
         {
           id: "monomerPolymerization",
           label: "单体正向聚合",
-          description: "用 SMiPoly 规则对一个或两个单体生成少量聚合物候选。",
+          description: "上传单体表批量生成聚合物候选，也可逐对聚合。",
           route: "/monomer-polymerization",
           icon: <FlaskConical className="h-4 w-4" />,
           isActive: activeModule === "monomerPolymerization",
@@ -1031,6 +736,7 @@ function AppContent() {
       onDeleteGeneralSession={(sessionID) => generalSessionBridge.deleteSession(sessionID)}
       moduleTransition={moduleTransition}
     >
+      <StructureWorkspaceNotice workspace={structureWorkspace.workspace} />
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
         <AgentWorkspaceHomePage
           iframeRef={agentWorkspaceIframeRef}

@@ -30,6 +30,7 @@ FORWARD_COMPATIBLE_MIGRATIONS = (
             "e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732"
         ),
     },
+    {'version': '0016_monomer_polymerization_batch', 'checksum': 'c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976'},
 )
 
 
@@ -45,9 +46,12 @@ def compatible_forward_versions(
     }
     extra = set(applied).difference(canonical_checksums)
     ordered_versions = tuple(record["version"] for record in FORWARD_COMPATIBLE_MIGRATIONS)
+    known_registered = tuple(version for version in ordered_versions if version in canonical_checksums)
+    if known_registered != ordered_versions[:len(known_registered)]:
+        return frozenset()
+    remaining = ordered_versions[len(known_registered):]
     valid_prefixes = {
-        frozenset(ordered_versions[:index])
-        for index in range(1, len(ordered_versions) + 1)
+        frozenset(remaining[:index]) for index in range(1, len(remaining) + 1)
     }
     valid_extra = frozenset(extra) in valid_prefixes
     if (

@@ -1,0 +1,375 @@
+{
+  "date": "2026-09-14",
+  "base": "de6c52b",
+  "artifactRoot": "/tmp/nexpoly-ketcher-review-20260914-URNIPB",
+  "scope": "Native Ketcher 3.8/r3, iframe fallback, document/Worker lifecycle, route loading/preload/compression and CI. Excludes unrelated page/theme changes and /tmp performance PoCs.",
+  "checks": {
+    "fullUnit": {
+      "files": 101,
+      "tests": 944,
+      "passed": true,
+      "timing": "Before final Chromium sheet fix"
+    },
+    "finalTargetedUnit": {
+      "files": 4,
+      "tests": 31,
+      "passed": true,
+      "timing": "After final CSS fix; includes two additional regressions"
+    },
+    "worker": {
+      "tests": 12,
+      "passed": true
+    },
+    "imageAssetFixtures": {
+      "tests": 14,
+      "passed": true
+    },
+    "sdkPatch": {
+      "revision": "r3",
+      "artifacts": 11,
+      "patches": 4,
+      "passed": true
+    },
+    "builds": {
+      "react": true,
+      "iframe": true,
+      "sdkCompatibility": true,
+      "reactAfterFinalCssFix": true
+    },
+    "docker": {
+      "react": true,
+      "iframe": true,
+      "tree": "a2dcca4b35c630c80546c9ad1e097cbdfacb1086",
+      "note": "Actual candidate tree built via temporary archive harness before final CSS guard change; final CSS was separately rebuilt/tested. Harness excluded from commit."
+    },
+    "compression": {
+      "passed": true,
+      "originalBytes": 15595692,
+      "gzipBytes": 5790453,
+      "brotliBytes": 5034787,
+      "protocols": [
+        "body equality",
+        "304",
+        "Vary",
+        "HEAD",
+        "range",
+        "outdated dependency",
+        "source/HMR"
+      ]
+    }
+  },
+  "browserProbes": {
+    "engine-gate/sdk-development/ketcher-native-development.json": {
+      "passed": true,
+      "sha256": "eef0cf2f82c623c504374fb8837196b0936e425ac06c9a83b23c66426718562a",
+      "result": {
+        "engine": "react",
+        "errors": [],
+        "mode": "development"
+      }
+    },
+    "engine-gate/sdk-production/ketcher-native-production.json": {
+      "passed": true,
+      "sha256": "c15a9bbb59e490d28411dfc34fa37ffd46d047e7b593f0225f3d1e2fa0d12656",
+      "result": {
+        "engine": "react",
+        "errors": [],
+        "mode": "production"
+      }
+    },
+    "engine-gate/react-development/result.json": {
+      "passed": true,
+      "sha256": "22f185f7b8899f5be1384719893e73950752a9d0806eccce81c349d79c79afaf",
+      "result": {
+        "errors": [],
+        "engine": "react",
+        "realAtomDrag": true,
+        "layoutRoundTrip": true,
+        "annotationRoundTrip": true,
+        "explicitSync": true,
+        "external3D": true,
+        "failedImageRollback": true,
+        "invalidDraftRetained": true,
+        "emptyRoundTrip": true,
+        "polymerEndGroups": true,
+        "deepLinks": [
+          "/structure-workbench",
+          "/database-query",
+          "/explorer",
+          "/homopolymer-property-prediction",
+          "/conditional-generation",
+          "/reverse-design"
+        ]
+      }
+    },
+    "engine-gate/react-production/result.json": {
+      "passed": true,
+      "sha256": "4b1cf15555fd9b15c16c0bee36611a5c04f173ff94614014b5f04820e18967fe",
+      "result": {
+        "errors": [],
+        "engine": "react",
+        "realAtomDrag": true,
+        "layoutRoundTrip": true,
+        "annotationRoundTrip": true,
+        "explicitSync": true,
+        "external3D": true,
+        "failedImageRollback": true,
+        "invalidDraftRetained": true,
+        "emptyRoundTrip": true,
+        "polymerEndGroups": true,
+        "deepLinks": [
+          "/structure-workbench",
+          "/database-query",
+          "/explorer",
+          "/homopolymer-property-prediction",
+          "/conditional-generation",
+          "/reverse-design"
+        ]
+      }
+    },
+    "engine-gate/iframe-production/result.json": {
+      "passed": true,
+      "sha256": "cddf2738cb8311611482407d2da35c2fb70a4bf610e4a176c034ad359ef54c6b",
+      "result": {
+        "errors": [],
+        "engine": "iframe",
+        "realAtomDrag": true,
+        "layoutRoundTrip": true,
+        "annotationRoundTrip": true,
+        "explicitSync": true,
+        "external3D": true,
+        "failedImageRollback": true,
+        "invalidDraftRetained": true,
+        "emptyRoundTrip": true,
+        "polymerEndGroups": true,
+        "deepLinks": [
+          "/structure-workbench",
+          "/database-query",
+          "/explorer",
+          "/homopolymer-property-prediction",
+          "/conditional-generation",
+          "/reverse-design"
+        ]
+      }
+    },
+    "ai-final/result.json": {
+      "passed": true,
+      "sha256": "07b17cfedd3865c1421cbe5604eea2f481c07373fb4e398632b68b9bee85abe0",
+      "result": {
+        "errors": [],
+        "engine": "react",
+        "layoutCache": true,
+        "smilesFallback": true,
+        "cancelled": true,
+        "polymerPng": true
+      }
+    },
+    "refresh-dev-passed/result.json": {
+      "passed": true,
+      "sha256": "389f46311e600ce4457998dfd27fc1c98c52a5ebabbc252e3227da3d0587e401",
+      "result": {
+        "checks": [
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/"
+          },
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/knowledge"
+          },
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/database-filter"
+          },
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/monomer-dft"
+          },
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/database/property-filter"
+          },
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/conditional-generation/polytao"
+          },
+          {
+            "name": "failed-sdk-prefetch-retry",
+            "attempts": 3,
+            "workers": 1
+          },
+          {
+            "name": "real-module-fetch-retry-preserves-canvas",
+            "attempts": 2
+          },
+          {
+            "name": "history-back-forward-preserves-canvas-and-structure"
+          },
+          {
+            "name": "business-hmr-preserves-document-and-sdk",
+            "epoch": 1789358474737.6,
+            "sameSdk": true,
+            "sameCanvas": true
+          },
+          {
+            "name": "bootstrap-preload-reload-after-hmr",
+            "hints": [
+              {
+                "href": "http://127.0.0.1:5290/src/routing.ts",
+                "requests": 1
+              },
+              {
+                "href": "http://127.0.0.1:5290/src/pages.ts?t=1789358487773",
+                "requests": 1
+              },
+              {
+                "href": "http://127.0.0.1:5290/src/mountApp.tsx?t=1789358487773",
+                "requests": 1
+              }
+            ]
+          }
+        ],
+        "errors": []
+      }
+    },
+    "refresh-production-passed/result.json": {
+      "passed": true,
+      "sha256": "7d80195a989dd506f4228f673af421ae8ad117ed4e807f07f8c78de452acf161",
+      "result": {
+        "checks": [
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/"
+          },
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/knowledge"
+          },
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/database-filter"
+          },
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/monomer-dft"
+          },
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/database/property-filter"
+          },
+          {
+            "name": "ordinary-entry-no-sdk",
+            "route": "/conditional-generation/polytao"
+          },
+          {
+            "name": "failed-sdk-prefetch-retry",
+            "attempts": 3,
+            "workers": 1
+          },
+          {
+            "name": "failed-page-css-retry",
+            "attempts": 2
+          },
+          {
+            "name": "real-module-fetch-retry-preserves-canvas",
+            "attempts": 2
+          },
+          {
+            "name": "history-back-forward-preserves-canvas-and-structure"
+          }
+        ],
+        "errors": []
+      }
+    }
+  },
+  "retainedFailures": [
+    {
+      "path": "engine-gate/ai/result.json",
+      "classification": "probe",
+      "cause": "Unscoped Playwright initialization accessed localStorage in a blocked iframe error document; top-origin scope fixed, AI rerun passed.",
+      "failure": "AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ [\n+   \"Failed to read the 'localStorage' property from 'Window': Access is denied for this document.\"\n+ ]\n- []\n\n    at file:///tmp/nexpoly-ketcher-review-20260914-URNIPB/candidate/frontend/scripts/verify-structure-ai.mjs:118:10\n    at runNextTicks (node:internal/process/task_queues:64:5)\n    at process.processImmediate (node:internal/timers:452:9)\n    at process.callbackTrampoline (node:internal/async_hooks:130:17)",
+      "sha256": "16a05f90959d81922ab8ed57add44cded13a07b86a523bd520df08e98af2222c"
+    },
+    {
+      "path": "refresh-dev-final/result.json",
+      "classification": "probe",
+      "cause": "The isolated server had no business backend. Replaced API dependency with explicit CCO fixture.",
+      "failure": "page.waitForFunction: Timeout 30000ms exceeded.\n    at /tmp/nexpoly-ketcher-review-20260914-URNIPB/candidate/frontend/scripts/verify-refresh-interactions.mjs:107:14",
+      "sha256": "dcded3aabd127015899d8562edc502230bfe844cf654427e2caa0a0e2836cb98"
+    },
+    {
+      "path": "refresh-dev-fixture/result.json",
+      "classification": "probe",
+      "cause": "Initial fixture omitted /v1 in endpoint path. Corrected exact API path.",
+      "failure": "page.waitForFunction: Timeout 30000ms exceeded.\n    at /tmp/nexpoly-ketcher-review-20260914-URNIPB/candidate/frontend/scripts/verify-refresh-interactions.mjs:123:14",
+      "sha256": "22be5e29b6a2732714b2d1583a6dfa990828dc9ef839a3a4ea6273099259cfa5"
+    },
+    {
+      "path": "refresh-production-final/result.json",
+      "classification": "product",
+      "cause": "Failed stylesheet retained a truthy sheet; retry skipped original failed link. Fixed and added regressions; rebuilt production browser retest passed.",
+      "failure": "AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:\n\n  assert.ok(cssAttempts >= 2)\n\n    at file:///tmp/nexpoly-ketcher-review-20260914-URNIPB/candidate/frontend/scripts/verify-refresh-interactions.mjs:113:12",
+      "sha256": "3f1a5b38e32619eca89b6401a7ade2d27f5efe745f33579e7a1c49a402c125f5"
+    }
+  ],
+  "fullEngineGateExit": 1,
+  "fullEngineGateNote": "All SDK/shared-engine probes passed; AI probe initialization failed. Fixed affected script and reran AI alone successfully; original gate result retained.",
+  "dependencyAudit": {
+    "reportedDependencyNodes": 15,
+    "unchangedDevNodes": 9,
+    "sdkChainNodes": 6,
+    "clean": false,
+    "note": "Reachable Immutable text path requires separately scoped compatibility/hardening work. No demonstrated new harmful application exploit established; old iframe also bundles unsafe toObject."
+  },
+  "logs": {
+    "npm-ci.log": {
+      "sha256": "461f9a2a2e8d82078fb82d23efb0a450bc05039cb77c7eecfe68563aff77e3a8",
+      "bytes": 3841
+    },
+    "unit-tests.log": {
+      "sha256": "0232fa0ace210d11142490910d1de5fe282c3fafed8dc51cdf544cdc80151457",
+      "bytes": 540
+    },
+    "retry-final-unit.log": {
+      "sha256": "20694756f5a1eb2602810e24310aee97c7d5eedac3fbce6499562f0d01252288",
+      "bytes": 647
+    },
+    "worker-tests.log": {
+      "sha256": "a27bc01e69b12346e18ea9b9dfd94d629fbefd62c1d96a5f2bc17326a011ee4f",
+      "bytes": 2433
+    },
+    "compression.log": {
+      "sha256": "7e74dd8b6db3e158cfda78f202a73c978f3ecf50eaff64606c0483e8450e3190",
+      "bytes": 288
+    },
+    "engine-gate.log": {
+      "sha256": "8e0671908cdd94b97a252d3ff2eb454694bdd52540ddd8afc9406554e2241fdd",
+      "bytes": 97058
+    },
+    "build-react-final.log": {
+      "sha256": "b242a8bab5f67f1b5ff803f68a39649e47ff8a764a664c5fd3fc09980e918f0f",
+      "bytes": 16280
+    },
+    "docker-react.log": {
+      "sha256": "5d0fb725eb107452736c83c8dfb8dbce7feff95815a1f56ca12dd8dd1a3c29f1",
+      "bytes": 26561
+    },
+    "docker-iframe.log": {
+      "sha256": "3d0ebf24e5c2767700b35df96c9797b11f79472bd864b09f61c7906205866460",
+      "bytes": 24289
+    },
+    "npm-audit.json": {
+      "sha256": "284a4522e3c1ee4bcb82b5fc1a11fd4ff46cec4f6fe1422d2dc6e212cd5bef8e",
+      "bytes": 16958
+    },
+    "npm-audit-review.md": {
+      "sha256": "d5cf15d61fe925c9e81cf593a4c29de66a23ce05a93bf51520bc2360e426ba15",
+      "bytes": 5852
+    },
+    "css-review-diagnostic/result.json": {
+      "sha256": "75953e638385e15019daaf93c52b8d3d4b3f5fd9ff07bd0f177c738c7c275f1d",
+      "bytes": 156415
+    }
+  },
+  "performance": "This checkpoint review contains no new performance benchmark; historical results retain original experiment scopes."
+}

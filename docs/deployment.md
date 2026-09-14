@@ -175,6 +175,39 @@ the same reviewed plan digest:
 If NexPoly moves to HTTPS, an HTTP iframe on `9011` will be blocked as mixed
 content and OpenScience must gain an HTTPS endpoint before activation.
 
+### OpenScience Backend model adapter configuration
+
+Backend model configuration is separate from the UI image release above. The
+Luna override in [openscience-luna-responses.merge.json](../ops/config/openscience-luna-responses.merge.json)
+is a credential-free merge fragment, not a complete production configuration.
+Its only leaf assignment is:
+
+```text
+provider.lab-openai-compatible.models.gpt-5.6-luna.provider.npm = "@ai-sdk/openai"
+```
+
+Use a JSONC-aware editor to merge this leaf into the existing model object,
+preserving comments, credentials and all other settings. Do not replace the
+entire configuration or shallow-merge the top-level provider object. This
+override does not change the gateway, capability declarations, model limits,
+default Sol selection, auxiliary Luna selection, or the existing medium/low
+reasoning policy. The private runtime configuration is not tracked here.
+
+The validated configuration rollback uses the existing single-file mount:
+confirm the service is idle and the maintenance entry is active, stop Backend,
+restore the original configuration bytes in place and fsync, then start the
+original container. Preserve inode, ownership and permissions; do not replace
+session data, business files or the database. The UI image release controller
+does not perform this Backend configuration operation.
+
+The private operation record under
+`<runtime-root>/manual-operations/openscience-luna-fix-20260914t023410z/OPERATIONS.md`
+contains the operation-specific checks and recovery commands. Publicly tracked
+evidence is limited to the merge fragment and the
+[2026-09-14 acceptance record](verification/openscience-luna-acceptance-20260914.md),
+whose observations end at 15:03 Beijing time. A configuration change needs its
+own current validation; that historical record is not a live health check.
+
 ### Development tunnel proxy
 
 All OpenAI-compatible clients use the optional `AI_PROXY_URL` setting: online
@@ -1344,7 +1377,12 @@ its final A/B slot path, and builds the immutable DFT environment at
 Worker runtime.
 
 After `prepare`, rehearse the descriptor's exact PostgreSQL 16 restore and
-0013→0015 transition while production remains online. Run the target script
+reviewed migration transition while production remains online. The accepted
+paths are the historical 0013→0015 transition, the exact reviewed 0015→0015
+compatibility-baseline release, 0015→0016 batch upgrade, and 0016→0016 code
+release. The latter three paths pin the complete reviewed manifest (including
+checksums and contract metadata); other histories require a separate review.
+Run the target script
 from the same private, clean, source-pinned clone. First review the read-only
 plan, then repeat every confirmation emitted by that plan:
 
@@ -1366,14 +1404,18 @@ plan, then repeat every confirmation emitted by that plan:
 ```
 
 The rehearsal creates a fresh custom dump, performs a network-isolated
-PostgreSQL 16 restore, applies exactly 0014 followed by 0015 in the candidate
-Backend image, and verifies the ledger, 615,159 property records, snapshot,
+PostgreSQL 16 restore, runs the exact candidate Backend migration sequence,
+and verifies the ledger, 615,159 property records, snapshot,
 indexes, and query plans. Backup plus restore must finish within 30 minutes and
-the two migrations within 10 minutes; the migration session proves
+the migration sequence within 10 minutes; the migration session proves
 `lock_timeout=30s` and `statement_timeout=15min`. Its terminal sealed authority
 is bound to the prepared descriptor and ready record. Ordinary `apply` refuses
 to begin its business mutation unless it can load and validate that exact
-report.
+report. The historical path applies only 0014 then 0015; the batch upgrade
+applies only 0016. Same-version releases must report every migration as
+`skipped` and still perform the full fresh backup, isolated restore, source
+before/after comparison, and final evidence checks. All paths retain the
+615,159-record baseline and the same performance and safety limits.
 
 Enter the authorized maintenance window only after the rehearsal passes:
 

@@ -1,0 +1,114 @@
+diff --git a/node_modules/ketcher-macromolecules/dist/index.js b/node_modules/ketcher-macromolecules/dist/index.js
+--- a/node_modules/ketcher-macromolecules/dist/index.js
++++ b/node_modules/ketcher-macromolecules/dist/index.js
+@@ -166,3 +166,4 @@
+     },
+-    destroyEditor: function destroyEditor(state) {
++    destroyEditor: function destroyEditor(state, action) {
++      if (state.editor !== action.payload) return;
+       var _state$editor, _state$editor2;
+@@ -8326,4 +8327,5 @@
+ 
+-function useMacromoleculesHotkeys() {
++function useMacromoleculesHotkeys(canvasRef) {
+   React.useEffect(function () {
++    var canvas = canvasRef.current;
+     var HELP_LINK = process.env.HELP_LINK || 'master';
+@@ -8333,2 +8335,7 @@
+       var target = e.target;
++      var root = canvas?.closest('[data-structure-editor]') || canvas;
++      if (!canvas?.isConnected || !canvas.getClientRects().length || !root?.getClientRects().length ||
++          root.closest('[hidden], [inert], [aria-hidden="true"]') || !(target instanceof Element)) return;
++      var popup = target.closest('[data-ketcher-owner]');
++      if (!root.contains(target) && (!popup || popup.getAttribute('data-ketcher-owner') !== root.getAttribute('data-ketcher-session'))) return;
+       var isEditableTarget = !!(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('[contenteditable="true"]')));
+@@ -8616,2 +8623,3 @@
+   var activeOption = activeOptions[0];
++  React.useEffect(function () {
+   if (subMenuId && activeOption && activeOption !== lastActiveOption) {
+@@ -8622,2 +8630,3 @@
+   }
++  }, [dispatch, subMenuId, activeOption, lastActiveOption]);
+   var visibleItemId = activeItem !== null && activeItem !== void 0 ? activeItem : activeOption || lastActiveOption || options[0];
+@@ -13304,3 +13313,8 @@
+   });
+-  store.dispatch(initKetcherId(ketcherId));
++  var nexpolyInitialized = React.useState(null);
++  React.useLayoutEffect(function () {
++    store.dispatch(initKetcherId(ketcherId));
++    nexpolyInitialized[1](ketcherId);
++  }, [ketcherId]);
++  if (nexpolyInitialized[0] !== ketcherId) return null;
+   return jsxRuntime.jsx(reactRedux.Provider, {
+@@ -13372,4 +13386,5 @@
+     }));
++    var ownedEditor = selectEditor(store.getState());
+     return function () {
+-      dispatch(destroyEditor(null));
++      dispatch(destroyEditor(ownedEditor));
+     };
+@@ -13377,3 +13392,3 @@
+   useSetRnaPresets();
+-  useMacromoleculesHotkeys();
++  useMacromoleculesHotkeys(canvasRef);
+   React.useEffect(function () {
+@@ -13553,2 +13568 @@
+ exports["default"] = EditorContainer;
+-//# sourceMappingURL=index.js.map
+diff --git a/node_modules/ketcher-macromolecules/dist/index.modern.js b/node_modules/ketcher-macromolecules/dist/index.modern.js
+--- a/node_modules/ketcher-macromolecules/dist/index.modern.js
++++ b/node_modules/ketcher-macromolecules/dist/index.modern.js
+@@ -123,3 +123,4 @@
+     },
+-    destroyEditor: function destroyEditor(state) {
++    destroyEditor: function destroyEditor(state, action) {
++      if (state.editor !== action.payload) return;
+       var _state$editor, _state$editor2;
+@@ -8283,4 +8284,5 @@
+ 
+-function useMacromoleculesHotkeys() {
++function useMacromoleculesHotkeys(canvasRef) {
+   useEffect(function () {
++    var canvas = canvasRef.current;
+     var HELP_LINK = process.env.HELP_LINK || 'master';
+@@ -8290,2 +8292,7 @@
+       var target = e.target;
++      var root = canvas?.closest('[data-structure-editor]') || canvas;
++      if (!canvas?.isConnected || !canvas.getClientRects().length || !root?.getClientRects().length ||
++          root.closest('[hidden], [inert], [aria-hidden="true"]') || !(target instanceof Element)) return;
++      var popup = target.closest('[data-ketcher-owner]');
++      if (!root.contains(target) && (!popup || popup.getAttribute('data-ketcher-owner') !== root.getAttribute('data-ketcher-session'))) return;
+       var isEditableTarget = !!(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('[contenteditable="true"]')));
+@@ -8573,2 +8580,3 @@
+   var activeOption = activeOptions[0];
++  React.useEffect(function () {
+   if (subMenuId && activeOption && activeOption !== lastActiveOption) {
+@@ -8579,2 +8587,3 @@
+   }
++  }, [dispatch, subMenuId, activeOption, lastActiveOption]);
+   var visibleItemId = activeItem !== null && activeItem !== void 0 ? activeItem : activeOption || lastActiveOption || options[0];
+@@ -13261,3 +13270,8 @@
+   });
+-  store.dispatch(initKetcherId(ketcherId));
++  var nexpolyInitialized = React.useState(null);
++  React.useLayoutEffect(function () {
++    store.dispatch(initKetcherId(ketcherId));
++    nexpolyInitialized[1](ketcherId);
++  }, [ketcherId]);
++  if (nexpolyInitialized[0] !== ketcherId) return null;
+   return jsx(Provider, {
+@@ -13329,4 +13343,5 @@
+     }));
++    var ownedEditor = selectEditor(store.getState());
+     return function () {
+-      dispatch(destroyEditor(null));
++      dispatch(destroyEditor(ownedEditor));
+     };
+@@ -13334,3 +13349,3 @@
+   useSetRnaPresets();
+-  useMacromoleculesHotkeys();
++  useMacromoleculesHotkeys(canvasRef);
+   useEffect(function () {
+@@ -13510,2 +13525 @@
+ export { EditorContainer as default };
+-//# sourceMappingURL=index.modern.js.map

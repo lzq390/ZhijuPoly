@@ -1393,6 +1393,36 @@ def _unique_shell_section(
 
 
 def validate_exact_b_transition(text: str, failures: list[str]) -> None:
+    prefix_function = _unique_shell_section(
+        text,
+        start="prepare_f_0013_migrations() {",
+        end="wait_for_backend() {",
+        label="exact-B 0013 migration prefix",
+        failures=failures,
+    )
+    if prefix_function is not None:
+        require_ordered_markers(
+            prefix_function,
+            (
+                (
+                    "exact 0013 checkpoint",
+                    'assert records[-1]["version"] == "0013_monomer_dft_jobs"',
+                ),
+                (
+                    "complete canonical 0014/0015/0016 suffix",
+                    'assert [\n'
+                    '    record["version"] for record in manifest["migrations"][len(records):]\n'
+                    '] == [\n'
+                    '    "0014_monomer_md_task_queue_cancel",\n'
+                    '    "0015_property_filter_performance",\n'
+                    '    "0016_monomer_polymerization_batch",\n'
+                    ']',
+                ),
+                ("prefix manifest only", 'manifest["migrations"] = records'),
+            ),
+            label="exact-B 0013 migration prefix",
+            failures=failures,
+        )
     digest_function = _unique_shell_section(
         text,
         start="pre_dft_mutable_digest() {",
@@ -1443,7 +1473,7 @@ def validate_exact_b_transition(text: str, failures: list[str]) -> None:
         ),
         label=(
             "exact-B B/post-0012 through F/0013 compatibility and "
-            "F/0014/F/0015 authority transition"
+            "F/0014/F/0015/F/0016 authority transition"
         ),
         failures=failures,
     )
@@ -1501,31 +1531,31 @@ def validate_exact_b_transition(text: str, failures: list[str]) -> None:
             ("returned F reports the 0013 schema ready", "assert_dft_state 18109 true"),
             ("post-return-to-F 0013 mutable digest", mutable_unchanged),
             (
-                "F applies the remaining canonical 0014/0015 migrations",
+                "F applies the remaining canonical 0014/0015/0016 migrations",
                 'run_backend_command "$F_BACKEND_IMAGE" "$B_DATABASE" \\\n'
                 "  python -m app.postgres_migrations --mode expand",
             ),
             (
-                "exact final 0015 ledger",
-                "0015_property_filter_performance:"
-                "e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732",
+                "exact final 0016 ledger",
+                "0016_monomer_polymerization_batch:"
+                "c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976",
             ),
-            ("post-0015 mutable digest", mutable_unchanged),
+            ("post-0016 mutable digest", mutable_unchanged),
             (
-                "F starts on the final 0015 database",
+                "F starts on the final 0016 database",
                 'start_backend "$F_BACKEND_IMAGE" "$B_DATABASE" '
                 '"$b_transition_final_name" 18108',
             ),
-            ("F reports the 0015 schema ready", "assert_dft_state 18108 true"),
-            ("post-0015 F mutable digest", mutable_unchanged),
+            ("F reports the 0016 schema ready", "assert_dft_state 18108 true"),
+            ("post-0016 F mutable digest", mutable_unchanged),
             (
-                "B preflight is required to reject 0015",
+                "B preflight is required to reject 0016",
                 'if run_backend_command "$B_BACKEND_IMAGE" "$B_DATABASE" \\\n'
                 "  python -m app.postgres_preflight --mode schema --strict",
             ),
             (
                 "B rejection is explicit",
-                "Exact B unexpectedly accepted the canonical 0015 ledger",
+                "Exact B unexpectedly accepted the canonical 0016 ledger",
             ),
             ("post-rejected-B mutable digest", mutable_unchanged),
             (
@@ -1537,7 +1567,7 @@ def validate_exact_b_transition(text: str, failures: list[str]) -> None:
         ),
         label=(
             "exact-B B/post-0012 through F/0013 compatibility and "
-            "F/0014/F/0015 authority transition"
+            "F/0014/F/0015/F/0016 authority transition"
         ),
         failures=failures,
     )
@@ -1555,7 +1585,7 @@ def validate_exact_b_job(ci_text: str, failures: list[str]) -> None:
             ("private B image login", "Log in for the exact private B images"),
             (
                 "real transition step",
-                "Run real B-schema through F/0013, F/0014 and F/0015 transition smoke",
+                "Run real B-schema through F/0013 and F/0014 through F/0016 transition smoke",
             ),
             ("exact transition script", "run: scripts/ci/test_exact_b_bridge.sh"),
         ),
@@ -2730,7 +2760,7 @@ def main() -> int:
             "    name: exact-B bridge compatibility\n"
             "    needs: resolve-sha\n"
             "    runs-on: ubuntu-24.04",
-            "Run real B-schema through F/0013, F/0014 and F/0015 transition smoke",
+            "Run real B-schema through F/0013 and F/0014 through F/0016 transition smoke",
             "scripts/ci/test_exact_b_bridge.sh",
             "name: ci-gate",
             "  release:\n"

@@ -89,9 +89,9 @@ try {
     let releaseSlowRequest;
     try {
       await page.goto(`${base}/structure-workbench`);
-      await page.waitForFunction(() => Boolean(document.querySelector(".np-sw-editor iframe")?.contentWindow?.ketcher), null, { timeout: 30000 });
+      await page.waitForFunction(() => document.querySelector("[data-structure-editor]")?.dataset.editorStatus === "ready", null, { timeout: 30000 });
       assert.equal(await page.evaluate(() => window.__motion.animations.length), 0, "No first-load transition");
-      await page.evaluate(() => { window.__retainedCanvas = document.querySelector(".np-sw-editor iframe"); });
+      await page.evaluate(() => { window.__retainedCanvas = document.querySelector("[data-structure-editor]"); });
       if (viewport.width === 1440) {
         client = await context.newCDPSession(page);
         await client.send("Tracing.start", { categories: "devtools.timeline,blink.user_timing,v8.execute", transferMode: "ReturnAsStream" }); tracing = true;
@@ -106,7 +106,7 @@ try {
       }
       result.modules.push(await cycle(page, viewport.width, "knowledge"));
       result.modules.push(await cycle(page, viewport.width, "structureWorkbench"));
-      result.retainedCanvas = await page.evaluate(() => window.__retainedCanvas === document.querySelector(".np-sw-editor iframe"));
+      result.retainedCanvas = await page.evaluate(() => window.__retainedCanvas === document.querySelector("[data-structure-editor]"));
       assert.equal(result.retainedCanvas, true);
       if (client) {
         if (process.env.MOTION_CAPTURE_FRAMES === "true") await client.send("Page.stopScreencast");

@@ -1,3 +1,4 @@
+import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -6,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SmilesLookupResponse, StructureWorkspaceContext } from "../types";
 import { DatabaseQueryPage } from "./DatabaseQueryPage";
 import type { StructureCanvasOwnerHandle } from "./StructureWorkbenchPage";
+
+vi.mock("@structure-editor-engine", () => import("../test/structureEditorEngineMock"));
 
 const mocks = vi.hoisted(() => ({
   canvasState: { isFlipped: false },
@@ -51,6 +54,11 @@ vi.mock("../hooks/useTgStructureCanvas", () => ({
     clearCanvas: mocks.clearCanvas,
     importImageFile: mocks.importImageFile,
     syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
+    syncBeforeLeave: async () => {
+      await mocks.flushSmilesDraft();
+      await mocks.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
+      return { status: "saved" as const };
+    },
     resolveSmilesForSearch: mocks.resolveSmilesForSearch,
     toggle3D: mocks.toggle3D,
     copySmiles: mocks.copySmiles
@@ -91,8 +99,7 @@ function makeStructure(smiles = "*CC*"): StructureWorkspaceContext {
   return {
     smiles,
     setSmiles: vi.fn(),
-    iframeRef: { current: null },
-    setIsReady: vi.fn(),
+    workspace: new StructureWorkspace(smiles),
     getCurrentSmiles: vi.fn().mockResolvedValue(smiles)
   };
 }
@@ -123,8 +130,8 @@ describe("DatabaseQueryPage", () => {
     render(<DatabaseQueryPage structure={makeStructure()} />);
 
     const pageTitle = screen.getByRole("heading", { name: "数据库查询" });
-    expect(pageTitle.classList.contains("np-material-discovery-page-title")).toBe(true);
-    expect(pageTitle.closest(".np-material-discovery-page")).not.toBeNull();
+    expect(pageTitle.classList.contains("np-module-page-title")).toBe(true);
+    expect(pageTitle.closest(".np-module-page")).not.toBeNull();
     expect(screen.getByTitle("数据库查询结构编辑器")).toBeTruthy();
     expect(screen.getByRole("button", { name: "加载结构" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "AI 助手" })).toBeNull();
@@ -265,6 +272,6 @@ describe("DatabaseQueryPage", () => {
     await ownerRef.current?.syncBeforeLeave();
     expect(mocks.flushSmilesDraft).toHaveBeenCalledOnce();
     expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledWith({ preserveExisting: true, quiet: true });
-    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-structure-editor]')).toHaveLength(1);
   });
 });

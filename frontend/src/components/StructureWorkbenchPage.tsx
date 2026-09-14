@@ -1,3 +1,5 @@
+import type { StructureSyncResult } from "../structure/workspace";
+import { ModulePageHeader } from "./ModulePageHeader";
 import {
   forwardRef,
   useCallback,
@@ -33,7 +35,7 @@ export type { StructureWorkbenchModuleId } from "./structure-workbench/Structure
 export { CurrentStructurePanel, MissingStructurePanel, WorkbenchPanel } from "./CurrentStructurePanel";
 
 export type StructureCanvasOwnerHandle = {
-  syncBeforeLeave(): Promise<void>;
+  syncBeforeLeave(signal?: AbortSignal): Promise<StructureSyncResult>;
 };
 
 export type StructureWorkbenchHandle = StructureCanvasOwnerHandle;
@@ -118,10 +120,7 @@ export const StructureWorkbenchPage = forwardRef<
   useImperativeHandle(
     forwardedRef,
     () => ({
-      async syncBeforeLeave() {
-        if (!(await canvas.flushSmilesDraft())) return;
-        await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
-      }
+      syncBeforeLeave: canvas.syncBeforeLeave
     }),
     [canvas]
   );
@@ -315,13 +314,12 @@ export const StructureWorkbenchPage = forwardRef<
 
   return (
     <div
-      className="np-structure-workbench"
+      className="np-module-page np-structure-workbench"
       data-module="structure-workbench"
       style={workbenchStyle}
     >
-      <div className={`np-sw-page${isDrawerOpen ? " has-open-drawer" : ""}`}>
-        <h1 className="np-sw-page-title">结构工作台</h1>
-
+      <ModulePageHeader>结构工作台</ModulePageHeader>
+      <div className={`np-sw-page np-module-page-body${isDrawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${isDrawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
             <StructureCanvasSurface

@@ -1,0 +1,4615 @@
+{
+  "date": "2026-09-14",
+  "scope": "Analysis and isolated PoCs; product source and actual 9000/9001 unchanged. Warm blank-document refresh on structure-workbench. Not a release acceptance.",
+  "batches": [
+    {
+      "name": "screening-base",
+      "settings": {
+        "variants": [
+          {
+            "name": "old-production",
+            "port": 9000
+          },
+          {
+            "name": "native-development",
+            "port": 9001
+          },
+          {
+            "name": "island",
+            "port": 5942
+          },
+          {
+            "name": "startup-control",
+            "port": 5951
+          },
+          {
+            "name": "startup-preload",
+            "port": 5952
+          }
+        ],
+        "networks": [
+          "remote"
+        ],
+        "rounds": 5,
+        "route": "/structure-workbench",
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "remote": {
+          "latency": 40,
+          "downloadMbps": 50,
+          "uploadMbps": 10
+        },
+        "document": "",
+        "cache": "persistent context, prime then ordinary reload; default encoding",
+        "validation": "After measurement import CCO, drag actual oxygen, export; document restored to declared scenario",
+        "ready": "visible drawing SVG + enabled common clear + native/current shared ready; old iframe has no shared ready attribute; additionally await successful initial SMILES export for all variants",
+        "order": "alternating forward/reverse variant order each round",
+        "startedAt": "2026-09-14T02:47:10.596Z",
+        "browser": "151.0.7922.34"
+      },
+      "rawPath": "/tmp/nexpoly-refresh-beyond-9000-20260914/screening-base/results.json",
+      "rawSha256": "64951dafcb5fdebe0347356795da13b8d026075d8518205cfda748edb1765ce0",
+      "groups": [
+        {
+          "variant": "old-production",
+          "count": 5,
+          "failures": 0,
+          "metrics": {
+            "appMs": {
+              "p50": 262.800048828125,
+              "p95": 297.10009765625
+            },
+            "sdkMs": {
+              "p50": 1123.89990234375,
+              "p95": 1260.800048828125
+            },
+            "svgMs": {
+              "p50": 1123.89990234375,
+              "p95": 1260.800048828125
+            },
+            "workerMs": {
+              "p50": 644.800048828125,
+              "p95": 750.199951171875
+            },
+            "workerReplyMs": {
+              "p50": 1330,
+              "p95": 1423.699951171875
+            },
+            "uiReadyMs": {
+              "p50": 1511,
+              "p95": 1691.8999996185303
+            },
+            "readyMs": {
+              "p50": 1677.7999992370605,
+              "p95": 1904.6999988555908
+            },
+            "initialExportMs": {
+              "p50": 169.20000076293945,
+              "p95": 212.79999923706055
+            },
+            "workers": {
+              "p50": 1,
+              "p95": 1
+            },
+            "requests": {
+              "p50": 12,
+              "p95": 12
+            },
+            "wireBytes": {
+              "p50": 2062,
+              "p95": 2062
+            },
+            "sourceRequests": {
+              "p50": 0,
+              "p95": 0
+            },
+            "longtaskMaxMs": {
+              "p50": 241,
+              "p95": 326
+            },
+            "longtaskTotalMs": {
+              "p50": 673,
+              "p95": 801
+            }
+          },
+          "intervalsComputedPerSample": {
+            "appToWorker": {
+              "p50": 390.7001953125,
+              "p95": 453.099853515625
+            },
+            "workerToReply": {
+              "p50": 670.099853515625,
+              "p95": 725.099853515625
+            },
+            "workerToUi": {
+              "p50": 866.7999496459961,
+              "p95": 941.7000484466553
+            },
+            "svgToUi": {
+              "p50": 405.9000988006592,
+              "p95": 523.2000484466553
+            },
+            "replyToUi": {
+              "p50": 181,
+              "p95": 268.2000484466553
+            }
+          },
+          "editDurationIncludingAutomation": {
+            "p50": 672.5,
+            "p95": 704.7000007629395
+          }
+        },
+        {
+          "variant": "native-development",
+          "count": 5,
+          "failures": 0,
+          "metrics": {
+            "appMs": {
+              "p50": 790.10009765625,
+              "p95": 880.199951171875
+            },
+            "sdkMs": {
+              "p50": 1346.300048828125,
+              "p95": 1924.800048828125
+            },
+            "svgMs": {
+              "p50": 1346.300048828125,
+              "p95": 1924.800048828125
+            },
+            "workerMs": {
+              "p50": 1234.39990234375,
+              "p95": 1728.199951171875
+            },
+            "workerReplyMs": {
+              "p50": 2374.800048828125,
+              "p95": 3021.199951171875
+            },
+            "uiReadyMs": {
+              "p50": 2715.099998474121,
+              "p95": 3362.199998855591
+            },
+            "readyMs": {
+              "p50": 3007.699998855591,
+              "p95": 3664.5
+            },
+            "initialExportMs": {
+              "p50": 296.4000015258789,
+              "p95": 302.3000011444092
+            },
+            "workers": {
+              "p50": 1,
+              "p95": 1
+            },
+            "requests": {
+              "p50": 95,
+              "p95": 95
+            },
+            "wireBytes": {
+              "p50": 13216,
+              "p95": 13216
+            },
+            "sourceRequests": {
+              "p50": 64,
+              "p95": 64
+            },
+            "longtaskMaxMs": {
+              "p50": 713,
+              "p95": 731
+            },
+            "longtaskTotalMs": {
+              "p50": 1454,
+              "p95": 2007
+            }
+          },
+          "intervalsComputedPerSample": {
+            "appToWorker": {
+              "p50": 545.39990234375,
+              "p95": 938.099853515625
+            },
+            "workerToReply": {
+              "p50": 1157,
+              "p95": 1293.0
+            },
+            "workerToUi": {
+              "p50": 1521.5000495910645,
+              "p95": 1634.0000476837158
+            },
+            "svgToUi": {
+              "p50": 1414.599998474121,
+              "p95": 1461.1999988555908
+            },
+            "replyToUi": {
+              "p50": 361.0999984741211,
+              "p95": 392.0999011993408
+            }
+          },
+          "editDurationIncludingAutomation": {
+            "p50": 999.1999988555908,
+            "p95": 1039.3999996185303
+          }
+        },
+        {
+          "variant": "island",
+          "count": 5,
+          "failures": 0,
+          "metrics": {
+            "appMs": {
+              "p50": 744.199951171875,
+              "p95": 749.60009765625
+            },
+            "sdkMs": {
+              "p50": 1355.5,
+              "p95": 1652.699951171875
+            },
+            "svgMs": {
+              "p50": 1355.5,
+              "p95": 1652.699951171875
+            },
+            "workerMs": {
+              "p50": 1277.89990234375,
+              "p95": 1572.699951171875
+            },
+            "workerReplyMs": {
+              "p50": 2067.89990234375,
+              "p95": 2422.10009765625
+            },
+            "uiReadyMs": {
+              "p50": 2396.099998474121,
+              "p95": 2763
+            },
+            "readyMs": {
+              "p50": 2662,
+              "p95": 3077.400001525879
+            },
+            "initialExportMs": {
+              "p50": 265.9000015258789,
+              "p95": 314.4000015258789
+            },
+            "workers": {
+              "p50": 1,
+              "p95": 1
+            },
+            "requests": {
+              "p50": 84,
+              "p95": 84
+            },
+            "wireBytes": {
+              "p50": 12719,
+              "p95": 12719
+            },
+            "sourceRequests": {
+              "p50": 63,
+              "p95": 63
+            },
+            "longtaskMaxMs": {
+              "p50": 396,
+              "p95": 420
+            },
+            "longtaskTotalMs": {
+              "p50": 1072,
+              "p95": 1391
+            }
+          },
+          "intervalsComputedPerSample": {
+            "appToWorker": {
+              "p50": 528.7998046875,
+              "p95": 828.5
+            },
+            "workerToReply": {
+              "p50": 780.699951171875,
+              "p95": 849.400146484375
+            },
+            "workerToUi": {
+              "p50": 1110.2000007629395,
+              "p95": 1190.300048828125
+            },
+            "svgToUi": {
+              "p50": 1040.599998474121,
+              "p95": 1110.300048828125
+            },
+            "replyToUi": {
+              "p50": 330.199951171875,
+              "p95": 340.89990234375
+            }
+          },
+          "editDurationIncludingAutomation": {
+            "p50": 878.8000011444092,
+            "p95": 937.6999988555908
+          }
+        },
+        {
+          "variant": "startup-control",
+          "count": 5,
+          "failures": 0,
+          "metrics": {
+            "appMs": {
+              "p50": 724.699951171875,
+              "p95": 992
+            },
+            "sdkMs": {
+              "p50": 1317.89990234375,
+              "p95": 1521.699951171875
+            },
+            "svgMs": {
+              "p50": 1317.89990234375,
+              "p95": 1521.699951171875
+            },
+            "workerMs": {
+              "p50": 1205.60009765625,
+              "p95": 1399.5
+            },
+            "workerReplyMs": {
+              "p50": 2357.199951171875,
+              "p95": 2653.10009765625
+            },
+            "uiReadyMs": {
+              "p50": 2694.400001525879,
+              "p95": 2984.3999996185303
+            },
+            "readyMs": {
+              "p50": 2987.900001525879,
+              "p95": 3289
+            },
+            "initialExportMs": {
+              "p50": 294.5,
+              "p95": 313.1000003814697
+            },
+            "workers": {
+              "p50": 1,
+              "p95": 1
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 12679,
+              "p95": 12679
+            },
+            "sourceRequests": {
+              "p50": 64,
+              "p95": 64
+            },
+            "longtaskMaxMs": {
+              "p50": 705,
+              "p95": 786
+            },
+            "longtaskTotalMs": {
+              "p50": 1404,
+              "p95": 1774
+            }
+          },
+          "intervalsComputedPerSample": {
+            "appToWorker": {
+              "p50": 487.0,
+              "p95": 598.699951171875
+            },
+            "workerToReply": {
+              "p50": 1177.60009765625,
+              "p95": 1253.60009765625
+            },
+            "workerToUi": {
+              "p50": 1517.2000007629395,
+              "p95": 1584.8999996185303
+            },
+            "svgToUi": {
+              "p50": 1414.2000007629395,
+              "p95": 1462.7000484466553
+            },
+            "replyToUi": {
+              "p50": 331.9000492095947,
+              "p95": 361.59990310668945
+            }
+          },
+          "editDurationIncludingAutomation": {
+            "p50": 972.7999992370605,
+            "p95": 982.5999984741211
+          }
+        },
+        {
+          "variant": "startup-preload",
+          "count": 5,
+          "failures": 0,
+          "metrics": {
+            "appMs": {
+              "p50": 852.10009765625,
+              "p95": 949.5
+            },
+            "sdkMs": {
+              "p50": 1432.699951171875,
+              "p95": 1794.10009765625
+            },
+            "svgMs": {
+              "p50": 1432.699951171875,
+              "p95": 1794.10009765625
+            },
+            "workerMs": {
+              "p50": 1313.199951171875,
+              "p95": 1674.699951171875
+            },
+            "workerReplyMs": {
+              "p50": 2525.699951171875,
+              "p95": 2860.300048828125
+            },
+            "uiReadyMs": {
+              "p50": 2925.6000003814697,
+              "p95": 3240.5
+            },
+            "readyMs": {
+              "p50": 3226.1000003814697,
+              "p95": 3533.1000003814697
+            },
+            "initialExportMs": {
+              "p50": 297,
+              "p95": 300.5
+            },
+            "workers": {
+              "p50": 1,
+              "p95": 1
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 12679,
+              "p95": 12679
+            },
+            "sourceRequests": {
+              "p50": 64,
+              "p95": 64
+            },
+            "longtaskMaxMs": {
+              "p50": 730,
+              "p95": 819
+            },
+            "longtaskTotalMs": {
+              "p50": 1558,
+              "p95": 1908
+            }
+          },
+          "intervalsComputedPerSample": {
+            "appToWorker": {
+              "p50": 486.39990234375,
+              "p95": 725.199951171875
+            },
+            "workerToReply": {
+              "p50": 1185.60009765625,
+              "p95": 1279.199951171875
+            },
+            "workerToUi": {
+              "p50": 1599.5000495910645,
+              "p95": 1631.9000492095947
+            },
+            "svgToUi": {
+              "p50": 1492.3000984191895,
+              "p95": 1515.1000003814697
+            },
+            "replyToUi": {
+              "p50": 380.199951171875,
+              "p95": 471.9000492095947
+            }
+          },
+          "editDurationIncludingAutomation": {
+            "p50": 971.7000007629395,
+            "p95": 1003.5
+          }
+        }
+      ],
+      "warmups": [
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 0,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 1218.39990234375,
+            "sdkMs": 4775.300048828125,
+            "svgMs": 4775.300048828125,
+            "workerMs": 4051.199951171875,
+            "workerReplyMs": 4776,
+            "uiReadyMs": 5012.39999961853,
+            "readyMs": 5183.299999237061,
+            "initialExportMs": 170.89999961853027,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 7644355,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 840,
+            "longtaskTotalMs": 2280
+          },
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 0,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 1298.5,
+            "sdkMs": 3363.199951171875,
+            "svgMs": 3363.199951171875,
+            "workerMs": 3153.39990234375,
+            "workerReplyMs": 4604.699951171875,
+            "uiReadyMs": 4957.700000762939,
+            "readyMs": 5257.799999237061,
+            "initialExportMs": 300.0999984741211,
+            "workers": 1,
+            "requests": 96,
+            "wireBytes": 9554843,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 926,
+            "longtaskTotalMs": 2465
+          },
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "variant": "island",
+          "port": 5942,
+          "round": 0,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 1072.10009765625,
+            "sdkMs": 3469.699951171875,
+            "svgMs": 3469.699951171875,
+            "workerMs": 3331.800048828125,
+            "workerReplyMs": 4235,
+            "uiReadyMs": 4523.299999237061,
+            "readyMs": 4779.700000762939,
+            "initialExportMs": 256.4000015258789,
+            "workers": 1,
+            "requests": 85,
+            "wireBytes": 9221490,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 621,
+            "longtaskTotalMs": 1875
+          },
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "variant": "startup-control",
+          "port": 5951,
+          "round": 0,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 4221,
+            "sdkMs": 10296.199951171875,
+            "svgMs": 10296.199951171875,
+            "workerMs": 10083.39990234375,
+            "workerReplyMs": 10796.199951171875,
+            "uiReadyMs": 14783,
+            "readyMs": 15099.20000076294,
+            "initialExportMs": 316.20000076293945,
+            "workers": 1,
+            "requests": 94,
+            "wireBytes": 44777635,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 779,
+            "longtaskTotalMs": 2809
+          },
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "variant": "startup-preload",
+          "port": 5952,
+          "round": 0,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 5263.699951171875,
+            "sdkMs": 9390.800048828125,
+            "svgMs": 9390.800048828125,
+            "workerMs": 9206.199951171875,
+            "workerReplyMs": 9881.800048828125,
+            "uiReadyMs": 13663.30000114441,
+            "readyMs": 13896.900001525879,
+            "initialExportMs": 233.60000038146973,
+            "workers": 1,
+            "requests": 94,
+            "wireBytes": 44781838,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 728,
+            "longtaskTotalMs": 2524
+          },
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "samples": [
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 1,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 297.10009765625,
+            "sdkMs": 1168.699951171875,
+            "svgMs": 1168.699951171875,
+            "workerMs": 750.199951171875,
+            "workerReplyMs": 1423.699951171875,
+            "uiReadyMs": 1691.8999996185303,
+            "readyMs": 1904.6999988555908,
+            "initialExportMs": 212.79999923706055,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 241,
+            "longtaskTotalMs": 673
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 704.7000007629395
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 1,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 790.10009765625,
+            "sdkMs": 1924.800048828125,
+            "svgMs": 1924.800048828125,
+            "workerMs": 1728.199951171875,
+            "workerReplyMs": 3021.199951171875,
+            "uiReadyMs": 3362.199998855591,
+            "readyMs": 3664.5,
+            "initialExportMs": 302.3000011444092,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 731,
+            "longtaskTotalMs": 2007
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 987.6999988555908
+        },
+        {
+          "variant": "island",
+          "port": 5942,
+          "round": 1,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 744.199951171875,
+            "sdkMs": 1652.699951171875,
+            "svgMs": 1652.699951171875,
+            "workerMs": 1572.699951171875,
+            "workerReplyMs": 2422.10009765625,
+            "uiReadyMs": 2763,
+            "readyMs": 3077.400001525879,
+            "initialExportMs": 314.4000015258789,
+            "workers": 1,
+            "requests": 84,
+            "wireBytes": 12719,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 420,
+            "longtaskTotalMs": 1391
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 878.7000007629395
+        },
+        {
+          "variant": "startup-control",
+          "port": 5951,
+          "round": 1,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 800.800048828125,
+            "sdkMs": 1521.699951171875,
+            "svgMs": 1521.699951171875,
+            "workerMs": 1399.5,
+            "workerReplyMs": 2653.10009765625,
+            "uiReadyMs": 2984.3999996185303,
+            "readyMs": 3289,
+            "initialExportMs": 304.6000003814697,
+            "workers": 1,
+            "requests": 93,
+            "wireBytes": 12679,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 786,
+            "longtaskTotalMs": 1774
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 959.2000007629395
+        },
+        {
+          "variant": "startup-preload",
+          "port": 5952,
+          "round": 1,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 949.5,
+            "sdkMs": 1794.10009765625,
+            "svgMs": 1794.10009765625,
+            "workerMs": 1674.699951171875,
+            "workerReplyMs": 2860.300048828125,
+            "uiReadyMs": 3240.5,
+            "readyMs": 3533.1000003814697,
+            "initialExportMs": 292.6000003814697,
+            "workers": 1,
+            "requests": 93,
+            "wireBytes": 12679,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 717,
+            "longtaskTotalMs": 1908
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 1003.5
+        },
+        {
+          "variant": "startup-preload",
+          "port": 5952,
+          "round": 2,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 857,
+            "sdkMs": 1345.89990234375,
+            "svgMs": 1345.89990234375,
+            "workerMs": 1238.699951171875,
+            "workerReplyMs": 2466.800048828125,
+            "uiReadyMs": 2838.2000007629395,
+            "readyMs": 3135.2000007629395,
+            "initialExportMs": 297,
+            "workers": 1,
+            "requests": 93,
+            "wireBytes": 12679,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 773,
+            "longtaskTotalMs": 1510
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 978.6999988555908
+        },
+        {
+          "variant": "startup-control",
+          "port": 5951,
+          "round": 2,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 724.699951171875,
+            "sdkMs": 1194.60009765625,
+            "svgMs": 1194.60009765625,
+            "workerMs": 1074.5,
+            "workerReplyMs": 2252.10009765625,
+            "uiReadyMs": 2582,
+            "readyMs": 2876.5,
+            "initialExportMs": 294.5,
+            "workers": 1,
+            "requests": 93,
+            "wireBytes": 12679,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 700,
+            "longtaskTotalMs": 1203
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 955.5
+        },
+        {
+          "variant": "island",
+          "port": 5942,
+          "round": 2,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 695,
+            "sdkMs": 1392.800048828125,
+            "svgMs": 1392.800048828125,
+            "workerMs": 1323.5,
+            "workerReplyMs": 2104.199951171875,
+            "uiReadyMs": 2433.7000007629395,
+            "readyMs": 2704.8999996185303,
+            "initialExportMs": 271.1999988555908,
+            "workers": 1,
+            "requests": 84,
+            "wireBytes": 12719,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 396,
+            "longtaskTotalMs": 1086
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 870.3999996185303
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 2,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 689,
+            "sdkMs": 1346.300048828125,
+            "svgMs": 1346.300048828125,
+            "workerMs": 1234.39990234375,
+            "workerReplyMs": 2374.800048828125,
+            "uiReadyMs": 2715.099998474121,
+            "readyMs": 3007.699998855591,
+            "initialExportMs": 292.6000003814697,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 687,
+            "longtaskTotalMs": 1380
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 1018.2000007629395
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 2,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 262.800048828125,
+            "sdkMs": 1038.39990234375,
+            "svgMs": 1038.39990234375,
+            "workerMs": 644.800048828125,
+            "workerReplyMs": 1228,
+            "uiReadyMs": 1407.6000003814697,
+            "readyMs": 1573,
+            "initialExportMs": 165.39999961853027,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 180,
+            "longtaskTotalMs": 613
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 685.2000007629395
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 3,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 237,
+            "sdkMs": 1123.89990234375,
+            "svgMs": 1123.89990234375,
+            "workerMs": 627.400146484375,
+            "workerReplyMs": 1352.5,
+            "uiReadyMs": 1529.8000011444092,
+            "readyMs": 1625.900001525879,
+            "initialExportMs": 96.10000038146973,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 268,
+            "longtaskTotalMs": 703
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 561.1000003814697
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 3,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 880.199951171875,
+            "sdkMs": 1265.5,
+            "svgMs": 1265.5,
+            "workerMs": 1162,
+            "workerReplyMs": 2319,
+            "uiReadyMs": 2680.099998474121,
+            "readyMs": 2976.5,
+            "initialExportMs": 296.4000015258789,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 707,
+            "longtaskTotalMs": 1454
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 1039.3999996185303
+        },
+        {
+          "variant": "island",
+          "port": 5942,
+          "round": 3,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 749.60009765625,
+            "sdkMs": 1328.60009765625,
+            "svgMs": 1328.60009765625,
+            "workerMs": 1251.10009765625,
+            "workerReplyMs": 2019.89990234375,
+            "uiReadyMs": 2353.699998855591,
+            "readyMs": 2614.599998474121,
+            "initialExportMs": 260.8999996185303,
+            "workers": 1,
+            "requests": 84,
+            "wireBytes": 12719,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 377,
+            "longtaskTotalMs": 1072
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 935.6000003814697
+        },
+        {
+          "variant": "startup-control",
+          "port": 5951,
+          "round": 3,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 992,
+            "sdkMs": 1360.5,
+            "svgMs": 1360.5,
+            "workerMs": 1245.699951171875,
+            "workerReplyMs": 2468.699951171875,
+            "uiReadyMs": 2800.6000003814697,
+            "readyMs": 3113.7000007629395,
+            "initialExportMs": 313.1000003814697,
+            "workers": 1,
+            "requests": 93,
+            "wireBytes": 12679,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 767,
+            "longtaskTotalMs": 1460
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 982.5999984741211
+        },
+        {
+          "variant": "startup-preload",
+          "port": 5952,
+          "round": 3,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 826.800048828125,
+            "sdkMs": 1432.699951171875,
+            "svgMs": 1432.699951171875,
+            "workerMs": 1313.199951171875,
+            "workerReplyMs": 2592.39990234375,
+            "uiReadyMs": 2925.6000003814697,
+            "readyMs": 3226.1000003814697,
+            "initialExportMs": 300.5,
+            "workers": 1,
+            "requests": 93,
+            "wireBytes": 12679,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 819,
+            "longtaskTotalMs": 1558
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 961.1000003814697
+        },
+        {
+          "variant": "startup-preload",
+          "port": 5952,
+          "round": 4,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 838.300048828125,
+            "sdkMs": 1395.199951171875,
+            "svgMs": 1395.199951171875,
+            "workerMs": 1289.5,
+            "workerReplyMs": 2404,
+            "uiReadyMs": 2791.2999992370605,
+            "readyMs": 3059.1000003814697,
+            "initialExportMs": 267.8000011444092,
+            "workers": 1,
+            "requests": 93,
+            "wireBytes": 12679,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 658,
+            "longtaskTotalMs": 1507
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 971.7000007629395
+        },
+        {
+          "variant": "startup-control",
+          "port": 5951,
+          "round": 4,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 660.5,
+            "sdkMs": 1250.5,
+            "svgMs": 1250.5,
+            "workerMs": 1147.5,
+            "workerReplyMs": 2303.10009765625,
+            "uiReadyMs": 2664.7000007629395,
+            "readyMs": 2959,
+            "initialExportMs": 294.29999923706055,
+            "workers": 1,
+            "requests": 93,
+            "wireBytes": 12679,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 705,
+            "longtaskTotalMs": 1374
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 979.7999992370605
+        },
+        {
+          "variant": "island",
+          "port": 5942,
+          "round": 4,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 730.699951171875,
+            "sdkMs": 1283.699951171875,
+            "svgMs": 1283.699951171875,
+            "workerMs": 1224.800048828125,
+            "workerReplyMs": 1970.800048828125,
+            "uiReadyMs": 2301,
+            "readyMs": 2562.199998855591,
+            "initialExportMs": 261.1999988555908,
+            "workers": 1,
+            "requests": 84,
+            "wireBytes": 12719,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 375,
+            "longtaskTotalMs": 972
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 878.8000011444092
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 4,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 687.5,
+            "sdkMs": 1376.199951171875,
+            "svgMs": 1376.199951171875,
+            "workerMs": 1265.699951171875,
+            "workerReplyMs": 2411,
+            "uiReadyMs": 2787.2000007629395,
+            "readyMs": 3087.7000007629395,
+            "initialExportMs": 300.5,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 721,
+            "longtaskTotalMs": 1419
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 955.7000007629395
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 4,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 269.199951171875,
+            "sdkMs": 1055.10009765625,
+            "svgMs": 1055.10009765625,
+            "workerMs": 659.900146484375,
+            "workerReplyMs": 1330,
+            "uiReadyMs": 1511,
+            "readyMs": 1683.900001525879,
+            "initialExportMs": 172.9000015258789,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 184,
+            "longtaskTotalMs": 586
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 672.5
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 5,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 243.89990234375,
+            "sdkMs": 1260.800048828125,
+            "svgMs": 1260.800048828125,
+            "workerMs": 641.800048828125,
+            "workerReplyMs": 1261.199951171875,
+            "uiReadyMs": 1508.599998474121,
+            "readyMs": 1677.7999992370605,
+            "initialExportMs": 169.20000076293945,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 326,
+            "longtaskTotalMs": 801
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 646.5
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 5,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 844.699951171875,
+            "sdkMs": 1170.5,
+            "svgMs": 1170.5,
+            "workerMs": 1065.800048828125,
+            "workerReplyMs": 2239.60009765625,
+            "uiReadyMs": 2631.699998855591,
+            "readyMs": 2897.3999996185303,
+            "initialExportMs": 265.70000076293945,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 713,
+            "longtaskTotalMs": 1457
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 999.1999988555908
+        },
+        {
+          "variant": "island",
+          "port": 5942,
+          "round": 5,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 749.10009765625,
+            "sdkMs": 1355.5,
+            "svgMs": 1355.5,
+            "workerMs": 1277.89990234375,
+            "workerReplyMs": 2067.89990234375,
+            "uiReadyMs": 2396.099998474121,
+            "readyMs": 2662,
+            "initialExportMs": 265.9000015258789,
+            "workers": 1,
+            "requests": 84,
+            "wireBytes": 12719,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 401,
+            "longtaskTotalMs": 1060
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 937.6999988555908
+        },
+        {
+          "variant": "startup-control",
+          "port": 5951,
+          "round": 5,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 666.60009765625,
+            "sdkMs": 1317.89990234375,
+            "svgMs": 1317.89990234375,
+            "workerMs": 1205.60009765625,
+            "workerReplyMs": 2357.199951171875,
+            "uiReadyMs": 2694.400001525879,
+            "readyMs": 2987.900001525879,
+            "initialExportMs": 293.5,
+            "workers": 1,
+            "requests": 93,
+            "wireBytes": 12679,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 694,
+            "longtaskTotalMs": 1404
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 972.7999992370605
+        },
+        {
+          "variant": "startup-preload",
+          "port": 5952,
+          "round": 5,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 852.10009765625,
+            "sdkMs": 1482.5,
+            "svgMs": 1482.5,
+            "workerMs": 1365.699951171875,
+            "workerReplyMs": 2525.699951171875,
+            "uiReadyMs": 2997.6000003814697,
+            "readyMs": 3294.8999996185303,
+            "initialExportMs": 297.29999923706055,
+            "workers": 1,
+            "requests": 93,
+            "wireBytes": 12679,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 730,
+            "longtaskTotalMs": 1646
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 950.3999996185303
+        }
+      ]
+    },
+    {
+      "name": "combined-empty",
+      "settings": {
+        "variants": [
+          {
+            "name": "old-production",
+            "port": 9000
+          },
+          {
+            "name": "native-development",
+            "port": 9001
+          },
+          {
+            "name": "lazy-macro",
+            "port": 5941
+          },
+          {
+            "name": "island-lazy",
+            "port": 5943
+          }
+        ],
+        "networks": [
+          "remote"
+        ],
+        "rounds": 10,
+        "route": "/structure-workbench",
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "remote": {
+          "latency": 40,
+          "downloadMbps": 50,
+          "uploadMbps": 10
+        },
+        "document": "",
+        "cache": "persistent context, prime then ordinary reload; default encoding",
+        "validation": "After measurement import CCO, drag actual oxygen, export; document restored to declared scenario",
+        "ready": "visible drawing SVG + enabled common clear + native/current shared ready; old iframe has no shared ready attribute; additionally await successful initial SMILES export for all variants",
+        "order": "alternating forward/reverse variant order each round",
+        "startedAt": "2026-09-14T02:58:56.121Z",
+        "browser": "151.0.7922.34"
+      },
+      "rawPath": "/tmp/nexpoly-refresh-beyond-9000-20260914/combined-empty/results.json",
+      "rawSha256": "93f119a55c54d3082732574d11ad9fdfe09780dbcaca045b7bdc7ee7c6a88ecd",
+      "groups": [
+        {
+          "variant": "old-production",
+          "count": 10,
+          "failures": 0,
+          "metrics": {
+            "appMs": {
+              "p50": 249.199951171875,
+              "p95": 341
+            },
+            "sdkMs": {
+              "p50": 1111.699951171875,
+              "p95": 1285.699951171875
+            },
+            "svgMs": {
+              "p50": 1111.699951171875,
+              "p95": 1285.699951171875
+            },
+            "workerMs": {
+              "p50": 663.699951171875,
+              "p95": 874
+            },
+            "workerReplyMs": {
+              "p50": 1231.60009765625,
+              "p95": 1448.099853515625
+            },
+            "uiReadyMs": {
+              "p50": 1408.7000007629395,
+              "p95": 1617.7000007629395
+            },
+            "readyMs": {
+              "p50": 1579.400001525879,
+              "p95": 1783.3000011444092
+            },
+            "initialExportMs": {
+              "p50": 166.5,
+              "p95": 174.80000114440918
+            },
+            "workers": {
+              "p50": 1,
+              "p95": 1
+            },
+            "requests": {
+              "p50": 12,
+              "p95": 12
+            },
+            "wireBytes": {
+              "p50": 2062,
+              "p95": 2062
+            },
+            "sourceRequests": {
+              "p50": 0,
+              "p95": 0
+            },
+            "longtaskMaxMs": {
+              "p50": 194,
+              "p95": 329
+            },
+            "longtaskTotalMs": {
+              "p50": 623,
+              "p95": 811
+            }
+          },
+          "intervalsComputedPerSample": {
+            "appToWorker": {
+              "p50": 390.2998046875,
+              "p95": 533
+            },
+            "workerToReply": {
+              "p50": 574.0,
+              "p95": 685.2998046875
+            },
+            "workerToUi": {
+              "p50": 750.2999019622803,
+              "p95": 862.1998519897461
+            },
+            "svgToUi": {
+              "p50": 322.3000965118408,
+              "p95": 421.9000473022461
+            },
+            "replyToUi": {
+              "p50": 176.39995002746582,
+              "p95": 186.50004959106445
+            }
+          },
+          "editDurationIncludingAutomation": {
+            "p50": 652,
+            "p95": 694.1000003814697
+          }
+        },
+        {
+          "variant": "native-development",
+          "count": 10,
+          "failures": 0,
+          "metrics": {
+            "appMs": {
+              "p50": 685.699951171875,
+              "p95": 997.199951171875
+            },
+            "sdkMs": {
+              "p50": 1283.800048828125,
+              "p95": 1553.800048828125
+            },
+            "svgMs": {
+              "p50": 1283.800048828125,
+              "p95": 1553.800048828125
+            },
+            "workerMs": {
+              "p50": 1180.300048828125,
+              "p95": 1420.5
+            },
+            "workerReplyMs": {
+              "p50": 2368.89990234375,
+              "p95": 2694.800048828125
+            },
+            "uiReadyMs": {
+              "p50": 2704,
+              "p95": 3027.5
+            },
+            "readyMs": {
+              "p50": 3007.2000007629395,
+              "p95": 3295.199998855591
+            },
+            "initialExportMs": {
+              "p50": 294.8999996185303,
+              "p95": 303.6999988555908
+            },
+            "workers": {
+              "p50": 1,
+              "p95": 1
+            },
+            "requests": {
+              "p50": 95,
+              "p95": 95
+            },
+            "wireBytes": {
+              "p50": 13216,
+              "p95": 13216
+            },
+            "sourceRequests": {
+              "p50": 64,
+              "p95": 64
+            },
+            "longtaskMaxMs": {
+              "p50": 724,
+              "p95": 786
+            },
+            "longtaskTotalMs": {
+              "p50": 1426,
+              "p95": 1686
+            }
+          },
+          "intervalsComputedPerSample": {
+            "appToWorker": {
+              "p50": 460.699951171875,
+              "p95": 730.300048828125
+            },
+            "workerToReply": {
+              "p50": 1172.300048828125,
+              "p95": 1274.300048828125
+            },
+            "workerToUi": {
+              "p50": 1533.7000007629395,
+              "p95": 1607.0
+            },
+            "svgToUi": {
+              "p50": 1420.199951171875,
+              "p95": 1473.699951171875
+            },
+            "replyToUi": {
+              "p50": 364.2000503540039,
+              "p95": 394.9999027252197
+            }
+          },
+          "editDurationIncludingAutomation": {
+            "p50": 979.8999996185303,
+            "p95": 1033.1999988555908
+          }
+        },
+        {
+          "variant": "lazy-macro",
+          "count": 10,
+          "failures": 0,
+          "metrics": {
+            "appMs": {
+              "p50": 649.89990234375,
+              "p95": 714.39990234375
+            },
+            "sdkMs": {
+              "p50": 1287.39990234375,
+              "p95": 1539.800048828125
+            },
+            "svgMs": {
+              "p50": 1287.39990234375,
+              "p95": 1539.800048828125
+            },
+            "workerMs": {
+              "p50": 1173.300048828125,
+              "p95": 1405.89990234375
+            },
+            "workerReplyMs": {
+              "p50": 1784.39990234375,
+              "p95": 2047.5
+            },
+            "uiReadyMs": {
+              "p50": 2179.199998855591,
+              "p95": 2446.300001144409
+            },
+            "readyMs": {
+              "p50": 2198.5,
+              "p95": 2465.400001525879
+            },
+            "initialExportMs": {
+              "p50": 19,
+              "p95": 19.30000114440918
+            },
+            "workers": {
+              "p50": 1,
+              "p95": 1
+            },
+            "requests": {
+              "p50": 92,
+              "p95": 92
+            },
+            "wireBytes": {
+              "p50": 12702,
+              "p95": 12702
+            },
+            "sourceRequests": {
+              "p50": 64,
+              "p95": 64
+            },
+            "longtaskMaxMs": {
+              "p50": 241,
+              "p95": 283
+            },
+            "longtaskTotalMs": {
+              "p50": 854,
+              "p95": 1039
+            }
+          },
+          "intervalsComputedPerSample": {
+            "appToWorker": {
+              "p50": 518.699951171875,
+              "p95": 691.5
+            },
+            "workerToReply": {
+              "p50": 626.39990234375,
+              "p95": 647.89990234375
+            },
+            "workerToUi": {
+              "p50": 1023.2999019622803,
+              "p95": 1043.4999027252197
+            },
+            "svgToUi": {
+              "p50": 891.8999519348145,
+              "p95": 925.2000007629395
+            },
+            "replyToUi": {
+              "p50": 394.2999019622803,
+              "p95": 409.80009841918945
+            }
+          },
+          "editDurationIncludingAutomation": {
+            "p50": 687.5,
+            "p95": 736.8999996185303
+          }
+        },
+        {
+          "variant": "island-lazy",
+          "count": 10,
+          "failures": 0,
+          "metrics": {
+            "appMs": {
+              "p50": 723.10009765625,
+              "p95": 1336.5
+            },
+            "sdkMs": {
+              "p50": 1343,
+              "p95": 1700.5
+            },
+            "svgMs": {
+              "p50": 1343,
+              "p95": 1700.5
+            },
+            "workerMs": {
+              "p50": 1261.699951171875,
+              "p95": 1622.10009765625
+            },
+            "workerReplyMs": {
+              "p50": 1854.89990234375,
+              "p95": 2425
+            },
+            "uiReadyMs": {
+              "p50": 2132.699998855591,
+              "p95": 2723.8999996185303
+            },
+            "readyMs": {
+              "p50": 2151.8999996185303,
+              "p95": 2743.099998474121
+            },
+            "initialExportMs": {
+              "p50": 19.200000762939453,
+              "p95": 20.5
+            },
+            "workers": {
+              "p50": 1,
+              "p95": 1
+            },
+            "requests": {
+              "p50": 83,
+              "p95": 83
+            },
+            "wireBytes": {
+              "p50": 12517,
+              "p95": 12517
+            },
+            "sourceRequests": {
+              "p50": 63,
+              "p95": 63
+            },
+            "longtaskMaxMs": {
+              "p50": 304,
+              "p95": 414
+            },
+            "longtaskTotalMs": {
+              "p50": 702,
+              "p95": 1032
+            }
+          },
+          "intervalsComputedPerSample": {
+            "appToWorker": {
+              "p50": 517.199951171875,
+              "p95": 577.300048828125
+            },
+            "workerToReply": {
+              "p50": 578.5,
+              "p95": 802.89990234375
+            },
+            "workerToUi": {
+              "p50": 872.8999500274658,
+              "p95": 1101.7999019622803
+            },
+            "svgToUi": {
+              "p50": 801.9999027252197,
+              "p95": 1023.3999996185303
+            },
+            "replyToUi": {
+              "p50": 304.7999515533447,
+              "p95": 316.0
+            }
+          },
+          "editDurationIncludingAutomation": {
+            "p50": 610.5,
+            "p95": 648.2999992370605
+          }
+        }
+      ],
+      "warmups": [
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 0,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 1209.199951171875,
+            "sdkMs": 4638.89990234375,
+            "svgMs": 4638.89990234375,
+            "workerMs": 4011.10009765625,
+            "workerReplyMs": 4728.199951171875,
+            "uiReadyMs": 4916.199998855591,
+            "readyMs": 5101.099998474121,
+            "initialExportMs": 184.89999961853027,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 7644379,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 838,
+            "longtaskTotalMs": 2183
+          },
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 0,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 1098.89990234375,
+            "sdkMs": 3290.5,
+            "svgMs": 3290.60009765625,
+            "workerMs": 3061,
+            "workerReplyMs": 4419.89990234375,
+            "uiReadyMs": 4741.89999961853,
+            "readyMs": 5045.799999237061,
+            "initialExportMs": 303.8999996185303,
+            "workers": 1,
+            "requests": 96,
+            "wireBytes": 9554843,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 778,
+            "longtaskTotalMs": 2163
+          },
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "variant": "lazy-macro",
+          "port": 5941,
+          "round": 0,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 1190.60009765625,
+            "sdkMs": 6954.300048828125,
+            "svgMs": 6954.300048828125,
+            "workerMs": 6777.800048828125,
+            "workerReplyMs": 7494.5,
+            "uiReadyMs": 7906.5,
+            "readyMs": 7927.400001525879,
+            "initialExportMs": 20.900001525878906,
+            "workers": 1,
+            "requests": 93,
+            "wireBytes": 33493843,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 445,
+            "longtaskTotalMs": 1904
+          },
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "variant": "island-lazy",
+          "port": 5943,
+          "round": 0,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 1061.199951171875,
+            "sdkMs": 3419.39990234375,
+            "svgMs": 3419.39990234375,
+            "workerMs": 3285.60009765625,
+            "workerReplyMs": 3908.800048828125,
+            "uiReadyMs": 4227.299999237061,
+            "readyMs": 4248.599998474121,
+            "initialExportMs": 21.299999237060547,
+            "workers": 1,
+            "requests": 84,
+            "wireBytes": 9090659,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 665,
+            "longtaskTotalMs": 1546
+          },
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "samples": [
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 1,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 341,
+            "sdkMs": 1285.699951171875,
+            "svgMs": 1285.699951171875,
+            "workerMs": 874,
+            "workerReplyMs": 1448.099853515625,
+            "uiReadyMs": 1617.7000007629395,
+            "readyMs": 1783.3000011444092,
+            "initialExportMs": 165.60000038146973,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 329,
+            "longtaskTotalMs": 811
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 637.4000015258789
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 1,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 690.199951171875,
+            "sdkMs": 1553.800048828125,
+            "svgMs": 1553.800048828125,
+            "workerMs": 1420.5,
+            "workerReplyMs": 2694.800048828125,
+            "uiReadyMs": 3027.5,
+            "readyMs": 3295.199998855591,
+            "initialExportMs": 267.6999988555908,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 786,
+            "longtaskTotalMs": 1686
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 982.2999992370605
+        },
+        {
+          "variant": "lazy-macro",
+          "port": 5941,
+          "round": 1,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 714.39990234375,
+            "sdkMs": 1539.800048828125,
+            "svgMs": 1539.800048828125,
+            "workerMs": 1405.89990234375,
+            "workerReplyMs": 2047.5,
+            "uiReadyMs": 2446.300001144409,
+            "readyMs": 2465.400001525879,
+            "initialExportMs": 19.100000381469727,
+            "workers": 1,
+            "requests": 92,
+            "wireBytes": 12702,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 217,
+            "longtaskTotalMs": 1039
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 654.5
+        },
+        {
+          "variant": "island-lazy",
+          "port": 5943,
+          "round": 1,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 1336.5,
+            "sdkMs": 1700.5,
+            "svgMs": 1700.5,
+            "workerMs": 1622.10009765625,
+            "workerReplyMs": 2425,
+            "uiReadyMs": 2723.8999996185303,
+            "readyMs": 2743.099998474121,
+            "initialExportMs": 19.19999885559082,
+            "workers": 1,
+            "requests": 83,
+            "wireBytes": 12517,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 305,
+            "longtaskTotalMs": 1032
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 633.7999992370605
+        },
+        {
+          "variant": "island-lazy",
+          "port": 5943,
+          "round": 2,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 689.5,
+            "sdkMs": 1366,
+            "svgMs": 1366,
+            "workerMs": 1266.800048828125,
+            "workerReplyMs": 1866.800048828125,
+            "uiReadyMs": 2171.6000003814697,
+            "readyMs": 2191,
+            "initialExportMs": 19.399999618530273,
+            "workers": 1,
+            "requests": 83,
+            "wireBytes": 12517,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 256,
+            "longtaskTotalMs": 748
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 614.5999984741211
+        },
+        {
+          "variant": "lazy-macro",
+          "port": 5941,
+          "round": 2,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 649.89990234375,
+            "sdkMs": 1321,
+            "svgMs": 1321,
+            "workerMs": 1210,
+            "workerReplyMs": 1836.39990234375,
+            "uiReadyMs": 2246.2000007629395,
+            "readyMs": 2265.5,
+            "initialExportMs": 19.299999237060547,
+            "workers": 1,
+            "requests": 92,
+            "wireBytes": 12702,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 283,
+            "longtaskTotalMs": 920
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 725.1999988555908
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 2,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 748.89990234375,
+            "sdkMs": 1269.699951171875,
+            "svgMs": 1269.699951171875,
+            "workerMs": 1160.10009765625,
+            "workerReplyMs": 2275.60009765625,
+            "uiReadyMs": 2670.6000003814697,
+            "readyMs": 2965.5,
+            "initialExportMs": 294.8999996185303,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 694,
+            "longtaskTotalMs": 1426
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 1002.8999996185303
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 2,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 249.199951171875,
+            "sdkMs": 1049.800048828125,
+            "svgMs": 1049.89990234375,
+            "workerMs": 635.900146484375,
+            "workerReplyMs": 1195.800048828125,
+            "uiReadyMs": 1372.1999988555908,
+            "readyMs": 1538.6999988555908,
+            "initialExportMs": 166.5,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 194,
+            "longtaskTotalMs": 623
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 694.1000003814697
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 3,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 248.800048828125,
+            "sdkMs": 1123.10009765625,
+            "svgMs": 1123.10009765625,
+            "workerMs": 645.39990234375,
+            "workerReplyMs": 1222.199951171875,
+            "uiReadyMs": 1408.7000007629395,
+            "readyMs": 1579.400001525879,
+            "initialExportMs": 170.70000076293945,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 228,
+            "longtaskTotalMs": 687
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 674.2999992370605
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 3,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 712.10009765625,
+            "sdkMs": 1178.39990234375,
+            "svgMs": 1178.39990234375,
+            "workerMs": 1049,
+            "workerReplyMs": 2120.800048828125,
+            "uiReadyMs": 2514.8999996185303,
+            "readyMs": 2780.7999992370605,
+            "initialExportMs": 265.8999996185303,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 594,
+            "longtaskTotalMs": 1310
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 973.2999992370605
+        },
+        {
+          "variant": "lazy-macro",
+          "port": 5941,
+          "round": 3,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 667.300048828125,
+            "sdkMs": 1334,
+            "svgMs": 1334,
+            "workerMs": 1213.89990234375,
+            "workerReplyMs": 1825.10009765625,
+            "uiReadyMs": 2219.3999996185303,
+            "readyMs": 2226,
+            "initialExportMs": 6.600000381469727,
+            "workers": 1,
+            "requests": 92,
+            "wireBytes": 12702,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 277,
+            "longtaskTotalMs": 857
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 736.3999996185303
+        },
+        {
+          "variant": "island-lazy",
+          "port": 5943,
+          "round": 3,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 1134.39990234375,
+            "sdkMs": 1419.5,
+            "svgMs": 1419.5,
+            "workerMs": 1346.89990234375,
+            "workerReplyMs": 1946,
+            "uiReadyMs": 2252.300001144409,
+            "readyMs": 2267.800001144409,
+            "initialExportMs": 15.5,
+            "workers": 1,
+            "requests": 83,
+            "wireBytes": 12517,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 414,
+            "longtaskTotalMs": 724
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 603.2999992370605
+        },
+        {
+          "variant": "island-lazy",
+          "port": 5943,
+          "round": 4,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 676.89990234375,
+            "sdkMs": 1321.199951171875,
+            "svgMs": 1321.199951171875,
+            "workerMs": 1239.60009765625,
+            "workerReplyMs": 1818.10009765625,
+            "uiReadyMs": 2104.199998855591,
+            "readyMs": 2124.699998855591,
+            "initialExportMs": 20.5,
+            "workers": 1,
+            "requests": 83,
+            "wireBytes": 12517,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 260,
+            "longtaskTotalMs": 697
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 630.5
+        },
+        {
+          "variant": "lazy-macro",
+          "port": 5941,
+          "round": 4,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 635,
+            "sdkMs": 1371.10009765625,
+            "svgMs": 1371.10009765625,
+            "workerMs": 1236.39990234375,
+            "workerReplyMs": 1875,
+            "uiReadyMs": 2263.800001144409,
+            "readyMs": 2282.7000007629395,
+            "initialExportMs": 18.899999618530273,
+            "workers": 1,
+            "requests": 92,
+            "wireBytes": 12702,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 247,
+            "longtaskTotalMs": 872
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 678.2999992370605
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 4,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 997.199951171875,
+            "sdkMs": 1381.199951171875,
+            "svgMs": 1381.199951171875,
+            "workerMs": 1260.39990234375,
+            "workerReplyMs": 2459.89990234375,
+            "uiReadyMs": 2790.1000003814697,
+            "readyMs": 3091.7999992370605,
+            "initialExportMs": 301.6999988555908,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 735,
+            "longtaskTotalMs": 1447
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 991.2999992370605
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 4,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 298.199951171875,
+            "sdkMs": 1079.199951171875,
+            "svgMs": 1079.199951171875,
+            "workerMs": 690.599853515625,
+            "workerReplyMs": 1263.699951171875,
+            "uiReadyMs": 1436.6000003814697,
+            "readyMs": 1605,
+            "initialExportMs": 168.39999961853027,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 189,
+            "longtaskTotalMs": 608
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 686
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 5,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 240.60009765625,
+            "sdkMs": 1120.89990234375,
+            "svgMs": 1120.89990234375,
+            "workerMs": 634.400146484375,
+            "workerReplyMs": 1215.30029296875,
+            "uiReadyMs": 1389.599998474121,
+            "readyMs": 1561.3999996185303,
+            "initialExportMs": 171.80000114440918,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 243,
+            "longtaskTotalMs": 688
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 652
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 5,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 685.699951171875,
+            "sdkMs": 1390.300048828125,
+            "svgMs": 1390.300048828125,
+            "workerMs": 1253,
+            "workerReplyMs": 2425.300048828125,
+            "uiReadyMs": 2798.3999996185303,
+            "readyMs": 3100.6000003814697,
+            "initialExportMs": 302.20000076293945,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 721,
+            "longtaskTotalMs": 1434
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 968.2999992370605
+        },
+        {
+          "variant": "lazy-macro",
+          "port": 5941,
+          "round": 5,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 654.60009765625,
+            "sdkMs": 1287.39990234375,
+            "svgMs": 1287.39990234375,
+            "workerMs": 1173.300048828125,
+            "workerReplyMs": 1784.39990234375,
+            "uiReadyMs": 2179.199998855591,
+            "readyMs": 2198.5,
+            "initialExportMs": 19.30000114440918,
+            "workers": 1,
+            "requests": 92,
+            "wireBytes": 12702,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 272,
+            "longtaskTotalMs": 857
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 706.1000003814697
+        },
+        {
+          "variant": "island-lazy",
+          "port": 5943,
+          "round": 5,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 742.60009765625,
+            "sdkMs": 1336.39990234375,
+            "svgMs": 1336.39990234375,
+            "workerMs": 1259.800048828125,
+            "workerReplyMs": 1828.199951171875,
+            "uiReadyMs": 2132.699998855591,
+            "readyMs": 2151.8999996185303,
+            "initialExportMs": 19.200000762939453,
+            "workers": 1,
+            "requests": 83,
+            "wireBytes": 12517,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 363,
+            "longtaskTotalMs": 702
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 648.2999992370605
+        },
+        {
+          "variant": "island-lazy",
+          "port": 5943,
+          "round": 6,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 952.10009765625,
+            "sdkMs": 1343,
+            "svgMs": 1343,
+            "workerMs": 1261.699951171875,
+            "workerReplyMs": 1855.699951171875,
+            "uiReadyMs": 2109.7999992370605,
+            "readyMs": 2128.7000007629395,
+            "initialExportMs": 18.900001525878906,
+            "workers": 1,
+            "requests": 83,
+            "wireBytes": 12517,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 304,
+            "longtaskTotalMs": 682
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 374.1000003814697
+        },
+        {
+          "variant": "lazy-macro",
+          "port": 5941,
+          "round": 6,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 649.199951171875,
+            "sdkMs": 1152.300048828125,
+            "svgMs": 1152.300048828125,
+            "workerMs": 1032.39990234375,
+            "workerReplyMs": 1663.39990234375,
+            "uiReadyMs": 2059.7999992370605,
+            "readyMs": 2078.7999992370605,
+            "initialExportMs": 19,
+            "workers": 1,
+            "requests": 92,
+            "wireBytes": 12702,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 191,
+            "longtaskTotalMs": 706
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 736.8999996185303
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 6,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 653.5,
+            "sdkMs": 1237.5,
+            "svgMs": 1237.5,
+            "workerMs": 1114.199951171875,
+            "workerReplyMs": 2300.199951171875,
+            "uiReadyMs": 2664.400001525879,
+            "readyMs": 2958.7000007629395,
+            "initialExportMs": 294.29999923706055,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 704,
+            "longtaskTotalMs": 1397
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 979.8999996185303
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 6,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 280.10009765625,
+            "sdkMs": 1064.199951171875,
+            "svgMs": 1064.199951171875,
+            "workerMs": 670.39990234375,
+            "workerReplyMs": 1244.39990234375,
+            "uiReadyMs": 1428.6000003814697,
+            "readyMs": 1534,
+            "initialExportMs": 105.39999961853027,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 181,
+            "longtaskTotalMs": 597
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 684.2000007629395
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 7,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 245.39990234375,
+            "sdkMs": 1112.89990234375,
+            "svgMs": 1112.89990234375,
+            "workerMs": 663.699951171875,
+            "workerReplyMs": 1231.60009765625,
+            "uiReadyMs": 1408,
+            "readyMs": 1582.8000011444092,
+            "initialExportMs": 174.80000114440918,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 237,
+            "longtaskTotalMs": 654
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 639.0999984741211
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 7,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 659.5,
+            "sdkMs": 1318.800048828125,
+            "svgMs": 1318.800048828125,
+            "workerMs": 1211.800048828125,
+            "workerReplyMs": 2374.89990234375,
+            "uiReadyMs": 2756,
+            "readyMs": 3057.199998855591,
+            "initialExportMs": 301.1999988555908,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 733,
+            "longtaskTotalMs": 1452
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 891.3999996185303
+        },
+        {
+          "variant": "lazy-macro",
+          "port": 5941,
+          "round": 7,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 665.300048828125,
+            "sdkMs": 1215.5,
+            "svgMs": 1215.5,
+            "workerMs": 1081.60009765625,
+            "workerReplyMs": 1712.199951171875,
+            "uiReadyMs": 2104.8999996185303,
+            "readyMs": 2124.1000003814697,
+            "initialExportMs": 19.200000762939453,
+            "workers": 1,
+            "requests": 92,
+            "wireBytes": 12702,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 211,
+            "longtaskTotalMs": 738
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 628.1000003814697
+        },
+        {
+          "variant": "island-lazy",
+          "port": 5943,
+          "round": 7,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 659.300048828125,
+            "sdkMs": 1217.800048828125,
+            "svgMs": 1217.800048828125,
+            "workerMs": 1142.10009765625,
+            "workerReplyMs": 1719.5,
+            "uiReadyMs": 2035.5,
+            "readyMs": 2055.1000003814697,
+            "initialExportMs": 19.600000381469727,
+            "workers": 1,
+            "requests": 83,
+            "wireBytes": 12517,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 319,
+            "longtaskTotalMs": 623
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 639.7000007629395
+        },
+        {
+          "variant": "island-lazy",
+          "port": 5943,
+          "round": 8,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 727.89990234375,
+            "sdkMs": 1378.699951171875,
+            "svgMs": 1378.699951171875,
+            "workerMs": 1293.89990234375,
+            "workerReplyMs": 1880.199951171875,
+            "uiReadyMs": 2190.5,
+            "readyMs": 2210.1000003814697,
+            "initialExportMs": 19.600000381469727,
+            "workers": 1,
+            "requests": 83,
+            "wireBytes": 12517,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 264,
+            "longtaskTotalMs": 723
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 519.4000015258789
+        },
+        {
+          "variant": "lazy-macro",
+          "port": 5941,
+          "round": 8,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 640.699951171875,
+            "sdkMs": 1233.800048828125,
+            "svgMs": 1233.800048828125,
+            "workerMs": 1127.199951171875,
+            "workerReplyMs": 1732.5,
+            "uiReadyMs": 2125.7000007629395,
+            "readyMs": 2144.5,
+            "initialExportMs": 18.799999237060547,
+            "workers": 1,
+            "requests": 92,
+            "wireBytes": 12702,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 241,
+            "longtaskTotalMs": 748
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 527.5
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 8,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 741.800048828125,
+            "sdkMs": 1274,
+            "svgMs": 1274,
+            "workerMs": 1166,
+            "workerReplyMs": 2318.5,
+            "uiReadyMs": 2699.7000007629395,
+            "readyMs": 3003.3999996185303,
+            "initialExportMs": 303.6999988555908,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 731,
+            "longtaskTotalMs": 1381
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 1033.1999988555908
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 8,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 285.10009765625,
+            "sdkMs": 1111.699951171875,
+            "svgMs": 1111.699951171875,
+            "workerMs": 671.400146484375,
+            "workerReplyMs": 1356.699951171875,
+            "uiReadyMs": 1533.599998474121,
+            "readyMs": 1696.599998474121,
+            "initialExportMs": 163,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 194,
+            "longtaskTotalMs": 620
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 658.6000003814697
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 9,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 233.699951171875,
+            "sdkMs": 1127.699951171875,
+            "svgMs": 1127.699951171875,
+            "workerMs": 621.89990234375,
+            "workerReplyMs": 1207.300048828125,
+            "uiReadyMs": 1384.8000011444092,
+            "readyMs": 1549.8000011444092,
+            "initialExportMs": 165,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 253,
+            "longtaskTotalMs": 700
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 629.3000011444092
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 9,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 659.89990234375,
+            "sdkMs": 1283.800048828125,
+            "svgMs": 1283.800048828125,
+            "workerMs": 1180.300048828125,
+            "workerReplyMs": 2368.89990234375,
+            "uiReadyMs": 2704,
+            "readyMs": 3007.2000007629395,
+            "initialExportMs": 303.20000076293945,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 724,
+            "longtaskTotalMs": 1362
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 977.6000003814697
+        },
+        {
+          "variant": "lazy-macro",
+          "port": 5941,
+          "round": 9,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 646.60009765625,
+            "sdkMs": 1116.60009765625,
+            "svgMs": 1116.60009765625,
+            "workerMs": 992.800048828125,
+            "workerReplyMs": 1610.300048828125,
+            "uiReadyMs": 2004.3999996185303,
+            "readyMs": 2023.3999996185303,
+            "initialExportMs": 19,
+            "workers": 1,
+            "requests": 92,
+            "wireBytes": 12702,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 196,
+            "longtaskTotalMs": 727
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 704.3999996185303
+        },
+        {
+          "variant": "island-lazy",
+          "port": 5943,
+          "round": 9,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 723.10009765625,
+            "sdkMs": 1364.800048828125,
+            "svgMs": 1364.800048828125,
+            "workerMs": 1297.300048828125,
+            "workerReplyMs": 1854.89990234375,
+            "uiReadyMs": 2166.599998474121,
+            "readyMs": 2186,
+            "initialExportMs": 19.400001525878906,
+            "workers": 1,
+            "requests": 83,
+            "wireBytes": 12517,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 368,
+            "longtaskTotalMs": 707
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 606.3999996185303
+        },
+        {
+          "variant": "island-lazy",
+          "port": 5943,
+          "round": 10,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 699.300048828125,
+            "sdkMs": 1309.60009765625,
+            "svgMs": 1309.60009765625,
+            "workerMs": 1240.60009765625,
+            "workerReplyMs": 1805.699951171875,
+            "uiReadyMs": 2111.6000003814697,
+            "readyMs": 2130.6000003814697,
+            "initialExportMs": 19,
+            "workers": 1,
+            "requests": 83,
+            "wireBytes": 12517,
+            "sourceRequests": 63,
+            "longtaskMaxMs": 237,
+            "longtaskTotalMs": 604
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 610.5
+        },
+        {
+          "variant": "lazy-macro",
+          "port": 5941,
+          "round": 10,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 654.5,
+            "sdkMs": 1360.39990234375,
+            "svgMs": 1360.39990234375,
+            "workerMs": 1219.60009765625,
+            "workerReplyMs": 1867.5,
+            "uiReadyMs": 2263.1000003814697,
+            "readyMs": 2282.2000007629395,
+            "initialExportMs": 19.100000381469727,
+            "workers": 1,
+            "requests": 92,
+            "wireBytes": 12702,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 242,
+            "longtaskTotalMs": 854
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 687.5
+        },
+        {
+          "variant": "native-development",
+          "port": 9001,
+          "round": 10,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 666.10009765625,
+            "sdkMs": 1405.699951171875,
+            "svgMs": 1405.699951171875,
+            "workerMs": 1283.39990234375,
+            "workerReplyMs": 2535.60009765625,
+            "uiReadyMs": 2870.800001144409,
+            "readyMs": 3102.900001525879,
+            "initialExportMs": 232.10000038146973,
+            "workers": 1,
+            "requests": 95,
+            "wireBytes": 13216,
+            "sourceRequests": 64,
+            "longtaskMaxMs": 786,
+            "longtaskTotalMs": 1536
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 997.0999984741211
+        },
+        {
+          "variant": "old-production",
+          "port": 9000,
+          "round": 10,
+          "passed": true,
+          "errors": [],
+          "metrics": {
+            "appMs": 302.89990234375,
+            "sdkMs": 1102.300048828125,
+            "svgMs": 1102.300048828125,
+            "workerMs": 693.10009765625,
+            "workerReplyMs": 1261.5,
+            "uiReadyMs": 1443.3999996185303,
+            "readyMs": 1615.3999996185303,
+            "initialExportMs": 172,
+            "workers": 1,
+            "requests": 12,
+            "wireBytes": 2062,
+            "sourceRequests": 0,
+            "longtaskMaxMs": 191,
+            "longtaskTotalMs": 613
+          },
+          "initialSmiles": "",
+          "actualAtomDrag": true,
+          "exportedSmiles": "CCO",
+          "editDurationMs": 646.6000003814697
+        }
+      ]
+    }
+  ],
+  "invalidNonemptyReloadScenario": {
+    "status": "invalid-scenario-stopped",
+    "reason": "Probe incorrectly assumed the shared document persists across full page reload. workspace.ts intentionally scopes it to one App lifetime. All variants returned empty documents as designed; these samples do not measure nonempty restoration and are not included in formal comparison. Original records retained. Process stopped with SIGINT.",
+    "formalAttempted": 13,
+    "failedAssertions": 13,
+    "warmups": 3,
+    "recordedAt": "2026-09-14T03:05:05.373548+00:00"
+  },
+  "criticalPathPriorSamples": {
+    "source": "/tmp/nexpoly-refresh-residual-20260914/comparison/results.json",
+    "method": "Compute durations per sample before nearest-rank quantiles, do not add medians",
+    "groups": [
+      {
+        "network": "local",
+        "variant": "old-production",
+        "intervals": {
+          "appToWorker": {
+            "p50": 348.19970703125,
+            "p95": 506.699951171875,
+            "min": 306.300048828125,
+            "max": 506.699951171875,
+            "samples": [
+              506.699951171875,
+              357.900146484375,
+              330.19970703125,
+              381.60009765625,
+              306.300048828125,
+              400.199951171875,
+              344.999755859375,
+              341.5,
+              348.19970703125,
+              402.699951171875
+            ]
+          },
+          "workerToReply": {
+            "p50": 595.5,
+            "p95": 714.2001953125,
+            "min": 531.300048828125,
+            "max": 714.2001953125,
+            "samples": [
+              595.5,
+              597.39990234375,
+              714.2001953125,
+              662.300048828125,
+              594.5,
+              588.900146484375,
+              531.300048828125,
+              604.2001953125,
+              576.0,
+              599.400146484375
+            ]
+          },
+          "workerToReady": {
+            "p50": 775.4999504089355,
+            "p95": 1017.7002449035645,
+            "min": 695.1001472473145,
+            "max": 1017.7002449035645,
+            "samples": [
+              775.4999504089355,
+              778.4999027252197,
+              1017.7002449035645,
+              890.8999996185303,
+              773.4000492095947,
+              762.4999504089355,
+              695.1001472473145,
+              791.0999507904053,
+              756.7001953125,
+              783.1000480651855
+            ]
+          },
+          "svgToReady": {
+            "p50": 385.2000980377197,
+            "p95": 653.2000007629395,
+            "min": 196.09990310668945,
+            "max": 653.2000007629395,
+            "samples": [
+              301.60004806518555,
+              411.7000980377197,
+              653.2000007629395,
+              403.7000484466553,
+              385.2000980377197,
+              341.40009689331055,
+              196.09990310668945,
+              438.0000972747803,
+              362.5,
+              404.40009689331055
+            ]
+          },
+          "replyToReady": {
+            "p50": 180.7001953125,
+            "p95": 303.50004959106445,
+            "min": 163.80009841918945,
+            "max": 303.50004959106445,
+            "samples": [
+              179.99995040893555,
+              181.10000038146973,
+              303.50004959106445,
+              228.59995079040527,
+              178.90004920959473,
+              173.59980392456055,
+              163.80009841918945,
+              186.89975547790527,
+              180.7001953125,
+              183.69990158081055
+            ]
+          }
+        }
+      },
+      {
+        "network": "local",
+        "variant": "native-development",
+        "intervals": {
+          "appToWorker": {
+            "p50": 575.0,
+            "p95": 758.5,
+            "min": 465.5,
+            "max": 758.5,
+            "samples": [
+              758.5,
+              627.7998046875,
+              575.0,
+              663.699951171875,
+              603.800048828125,
+              521.5,
+              531.7001953125,
+              560.300048828125,
+              465.5,
+              610.699951171875
+            ]
+          },
+          "workerToReply": {
+            "p50": 1163.699951171875,
+            "p95": 1330.89990234375,
+            "min": 1112.300048828125,
+            "max": 1330.89990234375,
+            "samples": [
+              1330.89990234375,
+              1193.2001953125,
+              1212.60009765625,
+              1112.300048828125,
+              1201.39990234375,
+              1135.5,
+              1212.199951171875,
+              1163.699951171875,
+              1131.900146484375,
+              1137.10009765625
+            ]
+          },
+          "workerToReady": {
+            "p50": 1569.3999500274658,
+            "p95": 1687.400047302246,
+            "min": 1500.800048828125,
+            "max": 1687.400047302246,
+            "samples": [
+              1668.3999996185303,
+              1600.2000980377197,
+              1687.400047302246,
+              1510.3999519348145,
+              1586.9999027252197,
+              1500.800048828125,
+              1518.89990234375,
+              1569.3999500274658,
+              1513.0000972747803,
+              1585.2999992370605
+            ]
+          },
+          "svgToReady": {
+            "p50": 1452.7999515533447,
+            "p95": 1563.200096130371,
+            "min": 1382.0,
+            "max": 1563.200096130371,
+            "samples": [
+              1473.0000972747803,
+              1483.1000003814697,
+              1563.200096130371,
+              1399.2000007629395,
+              1452.7999515533447,
+              1382.0,
+              1417.0,
+              1452.8000965118408,
+              1394.0999507904053,
+              1472.1000480651855
+            ]
+          },
+          "replyToReady": {
+            "p50": 385.6000003814697,
+            "p95": 474.7999496459961,
+            "min": 306.699951171875,
+            "max": 474.7999496459961,
+            "samples": [
+              337.5000972747803,
+              406.9999027252197,
+              474.7999496459961,
+              398.09990310668945,
+              385.6000003814697,
+              365.300048828125,
+              306.699951171875,
+              405.6999988555908,
+              381.0999507904053,
+              448.19990158081055
+            ]
+          }
+        }
+      },
+      {
+        "network": "local",
+        "variant": "native-production",
+        "intervals": {
+          "appToWorker": {
+            "p50": 801.900146484375,
+            "p95": 969.89990234375,
+            "min": 685.7001953125,
+            "max": 969.89990234375,
+            "samples": [
+              891.5,
+              801.900146484375,
+              809.199951171875,
+              742.699951171875,
+              916.39990234375,
+              809.300048828125,
+              685.7001953125,
+              713.39990234375,
+              969.89990234375,
+              761.10009765625
+            ]
+          },
+          "workerToReply": {
+            "p50": 758.300048828125,
+            "p95": 815.5,
+            "min": 655.800048828125,
+            "max": 815.5,
+            "samples": [
+              815.5,
+              790.599853515625,
+              787.699951171875,
+              655.800048828125,
+              740.5,
+              742.10009765625,
+              780.89990234375,
+              732.900146484375,
+              758.300048828125,
+              815.0
+            ]
+          },
+          "workerToReady": {
+            "p50": 1037.1000003814697,
+            "p95": 1091.2999992370605,
+            "min": 931.7000980377197,
+            "max": 1091.2999992370605,
+            "samples": [
+              1090.9999523162842,
+              1064.9999504089355,
+              1067.8999519348145,
+              931.7000980377197,
+              986.5000495910645,
+              1017.5,
+              1061.0999031066895,
+              998.800048828125,
+              1037.1000003814697,
+              1091.2999992370605
+            ]
+          },
+          "svgToReady": {
+            "p50": 966.2000980377197,
+            "p95": 1031.1999034881592,
+            "min": 873.9999027252197,
+            "max": 1031.1999034881592,
+            "samples": [
+              1031.1999034881592,
+              987.9000968933105,
+              993.2000007629395,
+              873.9999027252197,
+              915.8000984191895,
+              945.5,
+              995.8000984191895,
+              944.39990234375,
+              966.2000980377197,
+              998.9000968933105
+            ]
+          },
+          "replyToReady": {
+            "p50": 275.4999523162842,
+            "p95": 280.20000076293945,
+            "min": 246.00004959106445,
+            "max": 280.20000076293945,
+            "samples": [
+              275.4999523162842,
+              274.40009689331055,
+              280.20000076293945,
+              275.9000492095947,
+              246.00004959106445,
+              275.39990234375,
+              280.20000076293945,
+              265.89990234375,
+              278.7999515533447,
+              276.29999923706055
+            ]
+          }
+        }
+      },
+      {
+        "network": "local",
+        "variant": "iframe-current-production",
+        "intervals": {
+          "appToWorker": {
+            "p50": 355.7001953125,
+            "p95": 492.099853515625,
+            "min": 239.0,
+            "max": 492.099853515625,
+            "samples": [
+              492.099853515625,
+              362.7001953125,
+              432.60009765625,
+              354.0,
+              279.199951171875,
+              355.7001953125,
+              421.5,
+              239.0,
+              440.800048828125,
+              300.500244140625
+            ]
+          },
+          "workerToReply": {
+            "p50": 592.300048828125,
+            "p95": 651.39990234375,
+            "min": 578.7998046875,
+            "max": 651.39990234375,
+            "samples": [
+              592.300048828125,
+              651.39990234375,
+              596.60009765625,
+              581.699951171875,
+              590.10009765625,
+              591.2998046875,
+              594.199951171875,
+              650.10009765625,
+              599.099853515625,
+              578.7998046875
+            ]
+          },
+          "workerToReady": {
+            "p50": 587.9000492095947,
+            "p95": 710.2001457214355,
+            "min": 529.7998542785645,
+            "max": 710.2001457214355,
+            "samples": [
+              587.9000492095947,
+              605.9998550415039,
+              592.2999992370605,
+              577.3999519348145,
+              710.2001457214355,
+              644.9998054504395,
+              638.0999507904053,
+              559.5000972747803,
+              574.800048828125,
+              529.7998542785645
+            ]
+          },
+          "svgToReady": {
+            "p50": 182.79990196228027,
+            "p95": 304.99995040893555,
+            "min": 167.70009803771973,
+            "max": 304.99995040893555,
+            "samples": [
+              167.70009803771973,
+              249.7999038696289,
+              178.49995040893555,
+              190.39995193481445,
+              304.99995040893555,
+              194.09990310668945,
+              182.79990196228027,
+              174.09995079040527,
+              183.300048828125,
+              175.39995193481445
+            ]
+          },
+          "replyToReady": {
+            "p50": -4.399999618530273,
+            "p95": 120.10004806518555,
+            "min": -90.60000038146973,
+            "max": 120.10004806518555,
+            "samples": [
+              -4.399999618530273,
+              -45.400047302246094,
+              -4.300098419189453,
+              -4.299999237060547,
+              120.10004806518555,
+              53.70000076293945,
+              43.89999961853027,
+              -90.60000038146973,
+              -24.2998046875,
+              -48.99995040893555
+            ]
+          }
+        }
+      },
+      {
+        "network": "remote",
+        "variant": "old-production",
+        "intervals": {
+          "appToWorker": {
+            "p50": 387.199951171875,
+            "p95": 505.900146484375,
+            "min": 345.39990234375,
+            "max": 505.900146484375,
+            "samples": [
+              505.900146484375,
+              395.0,
+              360.900146484375,
+              396.0,
+              356.19970703125,
+              387.199951171875,
+              354.5,
+              391.599853515625,
+              345.39990234375,
+              393.80029296875
+            ]
+          },
+          "workerToReply": {
+            "p50": 573.199951171875,
+            "p95": 584.39990234375,
+            "min": 568.0,
+            "max": 584.39990234375,
+            "samples": [
+              575.39990234375,
+              581.199951171875,
+              580.300048828125,
+              568.0,
+              569.699951171875,
+              572.699951171875,
+              573.199951171875,
+              581.800048828125,
+              572.400146484375,
+              584.39990234375
+            ]
+          },
+          "workerToReady": {
+            "p50": 752.8998546600342,
+            "p95": 836.9000492095947,
+            "min": 744.7999515533447,
+            "max": 836.9000492095947,
+            "samples": [
+              752.8998546600342,
+              761.7000961303711,
+              759.5999011993408,
+              744.7999515533447,
+              746.9001941680908,
+              749.8000965118408,
+              836.9000492095947,
+              759.9000492095947,
+              751.5000972747803,
+              764.5997543334961
+            ]
+          },
+          "svgToReady": {
+            "p50": 357.0999011993408,
+            "p95": 474.7000980377197,
+            "min": 287.4000473022461,
+            "max": 474.7000980377197,
+            "samples": [
+              371.1000499725342,
+              314.2999496459961,
+              295.5999011993408,
+              364.2000980377197,
+              357.0999011993408,
+              367.3000965118408,
+              474.7000980377197,
+              335.7000980377197,
+              369.5999507904053,
+              287.4000473022461
+            ]
+          },
+          "replyToReady": {
+            "p50": 178.10000038146973,
+            "p95": 263.7000980377197,
+            "min": 176.79995155334473,
+            "max": 263.7000980377197,
+            "samples": [
+              177.49995231628418,
+              180.5001449584961,
+              179.29985237121582,
+              176.79995155334473,
+              177.20024299621582,
+              177.10014533996582,
+              263.7000980377197,
+              178.10000038146973,
+              179.09995079040527,
+              180.1998519897461
+            ]
+          }
+        }
+      },
+      {
+        "network": "remote",
+        "variant": "native-development",
+        "intervals": {
+          "appToWorker": {
+            "p50": 464.5,
+            "p95": 574.300048828125,
+            "min": 359.0,
+            "max": 574.300048828125,
+            "samples": [
+              500.400146484375,
+              465.39990234375,
+              574.300048828125,
+              360.199951171875,
+              359.0,
+              458.89990234375,
+              511.199951171875,
+              464.5,
+              545.199951171875,
+              448.39990234375
+            ]
+          },
+          "workerToReply": {
+            "p50": 1218.800048828125,
+            "p95": 1259.699951171875,
+            "min": 1170.0,
+            "max": 1259.699951171875,
+            "samples": [
+              1189.699951171875,
+              1183.10009765625,
+              1218.800048828125,
+              1242.699951171875,
+              1245.599853515625,
+              1188.89990234375,
+              1219.300048828125,
+              1235.89990234375,
+              1170.0,
+              1259.699951171875
+            ]
+          },
+          "workerToReady": {
+            "p50": 1552.8999996185303,
+            "p95": 1591.3999996185303,
+            "min": 1512.4000988006592,
+            "max": 1591.3999996185303,
+            "samples": [
+              1527.4999504089355,
+              1515.0000495910645,
+              1552.8999996185303,
+              1573.7000484466553,
+              1570.9999027252197,
+              1527.6999988555908,
+              1561.199951171875,
+              1573.3999500274658,
+              1512.4000988006592,
+              1591.3999996185303
+            ]
+          },
+          "svgToReady": {
+            "p50": 1400.1000480651855,
+            "p95": 1437.2000980377197,
+            "min": 1393.5000476837158,
+            "max": 1437.2000980377197,
+            "samples": [
+              1400.1000480651855,
+              1398.7000007629395,
+              1425.8999996185303,
+              1399.3999996185303,
+              1437.2000980377197,
+              1416.0000476837158,
+              1430,
+              1393.5000476837158,
+              1404.6999034881592,
+              1397.2000484466553
+            ]
+          },
+          "replyToReady": {
+            "p50": 334.0999507904053,
+            "p95": 342.4000988006592,
+            "min": 325.4000492095947,
+            "max": 342.4000988006592,
+            "samples": [
+              337.79999923706055,
+              331.89995193481445,
+              334.0999507904053,
+              331.0000972747803,
+              325.4000492095947,
+              338.8000965118408,
+              341.89990234375,
+              337.5000476837158,
+              342.4000988006592,
+              331.7000484466553
+            ]
+          }
+        }
+      },
+      {
+        "network": "remote",
+        "variant": "native-production",
+        "intervals": {
+          "appToWorker": {
+            "p50": 777.2998046875,
+            "p95": 979.10009765625,
+            "min": 760.699951171875,
+            "max": 979.10009765625,
+            "samples": [
+              979.10009765625,
+              773.300048828125,
+              844.199951171875,
+              760.699951171875,
+              777.2998046875,
+              800.0,
+              883.599853515625,
+              772.199951171875,
+              852.699951171875,
+              768.89990234375
+            ]
+          },
+          "workerToReply": {
+            "p50": 784.699951171875,
+            "p95": 816.39990234375,
+            "min": 729.400146484375,
+            "max": 816.39990234375,
+            "samples": [
+              784.699951171875,
+              729.400146484375,
+              804.5,
+              782.900146484375,
+              785.2001953125,
+              752.5,
+              797.5,
+              816.39990234375,
+              788.199951171875,
+              762.300048828125
+            ]
+          },
+          "workerToReady": {
+            "p50": 1061.2000980377197,
+            "p95": 1091.5,
+            "min": 1018.4000473022461,
+            "max": 1091.5,
+            "samples": [
+              1061.3999519348145,
+              1018.4000473022461,
+              1078.1000480651855,
+              1066.8000965118408,
+              1061.2000980377197,
+              1028.800048828125,
+              1075.2000484466553,
+              1091.5,
+              1032.6999988555908,
+              1040.400001525879
+            ]
+          },
+          "svgToReady": {
+            "p50": 963.800048828125,
+            "p95": 1002.2999019622803,
+            "min": 948.9000968933105,
+            "max": 1002.2999019622803,
+            "samples": [
+              988.8000984191895,
+              959.4999008178711,
+              948.9000968933105,
+              990.8000965118408,
+              970.9999027252197,
+              963.800048828125,
+              1002.2999019622803,
+              956.300048828125,
+              960.3999500274658,
+              974.9000015258789
+            ]
+          },
+          "replyToReady": {
+            "p50": 276.300048828125,
+            "p95": 288.9999008178711,
+            "min": 244.50004768371582,
+            "max": 288.9999008178711,
+            "samples": [
+              276.70000076293945,
+              288.9999008178711,
+              273.60004806518555,
+              283.8999500274658,
+              275.9999027252197,
+              276.300048828125,
+              277.7000484466553,
+              275.10009765625,
+              244.50004768371582,
+              278.0999526977539
+            ]
+          }
+        }
+      },
+      {
+        "network": "remote",
+        "variant": "iframe-current-production",
+        "intervals": {
+          "appToWorker": {
+            "p50": 507.0,
+            "p95": 575.800048828125,
+            "min": 460.400146484375,
+            "max": 575.800048828125,
+            "samples": [
+              575.800048828125,
+              493.69970703125,
+              540.500244140625,
+              507.0,
+              525.5,
+              460.400146484375,
+              569.599853515625,
+              490.599853515625,
+              571.099853515625,
+              472.800048828125
+            ]
+          },
+          "workerToReply": {
+            "p50": 589.60009765625,
+            "p95": 695.800048828125,
+            "min": 571.900146484375,
+            "max": 695.800048828125,
+            "samples": [
+              643.699951171875,
+              575.5,
+              589.199951171875,
+              581.300048828125,
+              609.39990234375,
+              598.099853515625,
+              695.800048828125,
+              571.900146484375,
+              589.60009765625,
+              592.699951171875
+            ]
+          },
+          "workerToReady": {
+            "p50": 630.800048828125,
+            "p95": 755.39990234375,
+            "min": 554.6999988555908,
+            "max": 755.39990234375,
+            "samples": [
+              686.7999992370605,
+              618.7001953125,
+              644.5997562408447,
+              554.6999988555908,
+              755.39990234375,
+              572.9999504089355,
+              630.800048828125,
+              589.400146484375,
+              650.4001960754395,
+              635.5999526977539
+            ]
+          },
+          "svgToReady": {
+            "p50": 179.80009651184082,
+            "p95": 205.9000015258789,
+            "min": 173.699951171875,
+            "max": 205.9000015258789,
+            "samples": [
+              176.90009689331055,
+              200.699951171875,
+              184.60000038146973,
+              179.80009651184082,
+              173.699951171875,
+              173.99995040893555,
+              174.699951171875,
+              204.699951171875,
+              180.80009841918945,
+              205.9000015258789
+            ]
+          },
+          "replyToReady": {
+            "p50": 42.900001525878906,
+            "p95": 146,
+            "min": -65.0,
+            "max": 146,
+            "samples": [
+              43.10004806518555,
+              43.2001953125,
+              55.39980506896973,
+              -26.60004997253418,
+              146,
+              -25.099903106689453,
+              -65.0,
+              17.5,
+              60.80009841918945,
+              42.900001525878906
+            ]
+          }
+        }
+      }
+    ],
+    "target": 1438,
+    "budgetScenariosNotMeasured": [
+      {
+        "workerMs": 600,
+        "confirmationMs": 160,
+        "latestWorkerStartMs": 678
+      },
+      {
+        "workerMs": 785,
+        "confirmationMs": 160,
+        "latestWorkerStartMs": 493
+      },
+      {
+        "workerMs": 785,
+        "confirmationMs": 276,
+        "latestWorkerStartMs": 377
+      }
+    ]
+  },
+  "productSourceVerification": {
+    "checkedAt": "2026-09-14T02:58:34.604745+00:00",
+    "count": 424,
+    "changed": [],
+    "files": {
+      ".env.example": "353937a1cf5a451b04bbdf6ddef8e3e34788d7c1be0daa887a24b6222eb2ea1f",
+      "Dockerfile": "710947bc84bf90ba3b2884d015d267cd8fbe9e2179309e67b7d832c905793591",
+      "build/browser-process.mjs": "c79688d462bf24c443698dfcce9b8bdb0a0dd34658183aa23ea81c2cd08ba141",
+      "build/development-compression.ts": "7f878f26c8f9e8fac7d8aa51ea1eb7cdb4d5ec2157b45d5521e225b290983a8f",
+      "build/development-entry-preload.ts": "763d61aa86e3dca2d8775975b7026bd085a55db4c00908cb1b3a6b7e92801dcb",
+      "build/ketcher-compat.ts": "91a47810a1f2f21f54a3ae39bd1c40f05db1442616e14ba2cb35197a7c700b34",
+      "build/retryable-imports.ts": "551506214298ec514dbdd19a13e3641a38a9a562f319e567f067c4d833a804c6",
+      "build/scope-ketcher-css.mjs": "6f3bd25ac8c6a9077b7d06763c95cde4eddf3e7b8517d92870dd722b1d3af62b",
+      "build/structure-engine.ts": "08ce9c2c9dc56a19d9de1442fc3e281e5f034541eda58ed4569bea81ae46e800",
+      "index.html": "08714e1d9ed32591ea3c6b78219e0dd3ca9433609be5e68095a64a7c0e7af65e",
+      "ketcher-compat.html": "85875882ead7a8057895a9bd32148737ee8eefb2611ce34684fc78a732242758",
+      "package-lock.json": "5cd9b28b33c6ea026d1a4a7e942e59addb221bf80cc184d4494ab72438c5b819",
+      "package.json": "aece2ffb2a0c0337798852911605833c3649a96c78f36ccf45a532a233a5c851",
+      "patches/README.md": "ab42cac32be316a751bd648407fda4174f3e451cef05b3ba62988311eb680349",
+      "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+      "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+      "patches/ketcher-manifest.json": "d42e31c4dfa7ce5d97ca65a5568d84b5aa66c865045cda8eae4e75febb4a80a4",
+      "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+      "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7",
+      "postcss.config.js": "a6956afcf1045edd0be841224bb2eb4c1f011c02b05ce3350fb6423756cb5b50",
+      "public/demo-data/doe_prior_cte.csv": "223af9f0718f47ca399a7ee01c6210b2b5854350a956681479167871a8aabef5",
+      "public/demo-data/doe_prior_elongation.csv": "428dffa0af47c3234b91ba509b313d7e63dff2b2d00d5c53a6d5b23220fa8dee",
+      "public/demo-data/doe_prior_modulus.csv": "2e33cde1dc802ea7600744173ccdfafe4e516362bc413cec83b122f2a48015d5",
+      "public/demo-data/doe_prior_tg.csv": "7949d5e15edd1ced39d3e19615d9a64eb50bf1cb5eea75a260c15801d02bae93",
+      "public/images/data-knowledge-card-bg.png": "129509e5066678064e3924455b0e4b764a3ba95e41df9d9c7953b223c0cf56a6",
+      "public/images/nexpoly-black-gold-hero.png": "ae64f2b93d5d257053523fb5b14f733547803515559576edebb96178aa6556e0",
+      "public/images/pdf-similarity/similar_paper_1.png": "10eff00d94f1ba71cecc3b90df4b801a560bb2ba6e3e97e5a4659c89388ad525",
+      "public/images/pdf-similarity/similar_paper_2.png": "aef7453134fcff7fdae8687246994f4436b2fd34dc6fba1000d2f21204d8294f",
+      "public/images/pdf-similarity/similar_paper_3.png": "1dd1d5b4f53d60f82140ac211d17f865f03e383cffd0770a6aa89bfd485e6d16",
+      "public/images/pdf-similarity/similar_paper_4.png": "2aac1f7dd6e957f02569388a87f59603c0f25b66f03ac7f28c2dd3d9f1a5d3df",
+      "public/images/pdf-similarity/similar_paper_5.png": "91453b61bbb32840d70c127f8f0b696981aeff8ae26974c712da889b12133761",
+      "public/images/pdf-similarity/similar_paper_6.png": "1602f994a75b38886b145b5def6e5bb0eebd11e9debf4efcfb9b32969a1bb628",
+      "public/images/polymer-design-card-bg.png": "f2b24fc89bbbca94f11f014a3051c5736544c5572f353343bc2477756d095d9f",
+      "public/images/polymer-reverse-logo-icon.png": "b408a0996eec59b4235abe5611036547c405e8dae6350702984d98962d3fe9ca",
+      "public/images/property-exploration-card-bg.png": "d6ce00d935f2df748488ef097f3cb8a9ab0ef46f0f30ff4e1501e20ceb6fcd30",
+      "public/ketcher/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "public/ketcher/apple-touch-icon.png": "f414dcb2c13ea591559b6373070b7a5d4f59b59ef5910c5fa013a80c74a162a2",
+      "public/ketcher/asset-manifest.json": "091e0946138ac2d0ff896d4b2cd922cd3e3f0fbf116f307e213ce60288908ca0",
+      "public/ketcher/closable.html": "bbe19dc00cda153d49737610781118371a075c0f9f4376775a96d185dbd44905",
+      "public/ketcher/duo.html": "1ecdf9f34238dcbacdd6a65ef9726ed9bae9e058ff0b6c2bf81202ad49c065f1",
+      "public/ketcher/favicon-16x16.png": "b17e9b5e3467455a41e611edc0f49b05cf2f02d7569524a958cfdb5d22c989d9",
+      "public/ketcher/favicon-32x32.png": "5cc22edce0ac5dd4b4a20b9a4b828d08ae312941b03f60aa3fe467a6bf9db561",
+      "public/ketcher/favicon.ico": "87a3fe8c44e333cfeaaa3e69151bfb36d0302b5e97bb392219cf1489be274760",
+      "public/ketcher/iframe.html": "c2073d828b15d433ccfa6cfa960c3d4b1586f4423903030556af3052dda89362",
+      "public/ketcher/index.html": "969324360df7767c396a4def347d19745302600a45bcda674b5f65809e07e67b",
+      "public/ketcher/logo.svg": "0cc1fa734753e99ae6bc8edaaae519b67c8fde53142761a730b0c0a510496812",
+      "public/ketcher/manifest.json": "59292c1075edbc4bf0b8dddcaa50220bb8eae8c3f01ada8d0428f4762d30ac57",
+      "public/ketcher/polyprop-focus-guard.js": "7bd95aef1965aba5a5d940922748089cc17a8109e07cb7f34505366d55375b92",
+      "public/ketcher/popup.html": "2226fef6e348ed609465e9b45fc5f0e0dac5e41e07c3a0cc91c6af2a2c68503c",
+      "public/ketcher/robots.txt": "90d24bc3bf698ac1e173739502298ccca72adf1f564fab05f484b8c48d1cadd2",
+      "public/ketcher/serve.json": "2e92566bf89257dea9041b5fc2b7d73e467fd55dbc801a87f3ce17d54799d133",
+      "public/ketcher/static/css/622.365fdd8e.chunk.css": "12dbdda47840873a34f66277a644475f79471bf914d296e24d4c72041841c2b7",
+      "public/ketcher/static/css/duo.f33a1767.css": "5da1ebe766492f6b03ba526605e3718d09a8027ec5aa1eb805a9a459284f81ef",
+      "public/ketcher/static/css/main.748bd42d.css": "a008e6b6e1ff652d57d6852103764eee48017a74f17f80813096f42e61e21be9",
+      "public/ketcher/static/css/popup.748bd42d.css": "a008e6b6e1ff652d57d6852103764eee48017a74f17f80813096f42e61e21be9",
+      "public/ketcher/static/js/159.6bd8317f.chunk.js": "15a5c447b34302dc78ebc8aa11630c3e5e32a1ee61a2603c28ca6d3d9418e932",
+      "public/ketcher/static/js/605.fc6bd27b.chunk.js": "b00932ece014de842dc38b010050d68f6f4418581fbf84cd40ad44a7ee1a3dd1",
+      "public/ketcher/static/js/605.fc6bd27b.chunk.js.LICENSE.txt": "132a168296df8bd7919df80713563ca8e196d41253e94e835d670313ba0ba126",
+      "public/ketcher/static/js/622.a35444cf.chunk.js": "cce26f9c55e081221f6b853d8f24c397a8b109beff5d8e987faa46f010b06e24",
+      "public/ketcher/static/js/78.fab565cc.chunk.js": "8e1618bc9f09fa996e4f3d4733345c97bcc5ddc3a8dec47f3101df6ed2e4aa36",
+      "public/ketcher/static/js/duo.ce4c8f16.js": "266f6bf510c886d6f51ac30b45a80af3b41f17e9bf484bff170d1bab717dd56c",
+      "public/ketcher/static/js/duo.ce4c8f16.js.LICENSE.txt": "bbfef084324985a41705be0b4ba0527454c705431f31ae361f2837789584ef53",
+      "public/ketcher/static/js/main.8617f334.js": "eb4fa894fcb85b766fe18406c7581fe40944ed3af79e373ba35eb5d22f239f8f",
+      "public/ketcher/static/js/main.8617f334.js.LICENSE.txt": "87405e0df120cb41db9e9c2b05f3ec5a0652e26d0a72094675cfa7cfe5f95a85",
+      "public/ketcher/static/js/popup.6fb10cd1.js": "e89459919848ca8044000379eb1c880b4905969031e202eb1c145c71485d061b",
+      "public/ketcher/static/js/popup.6fb10cd1.js.LICENSE.txt": "bbfef084324985a41705be0b4ba0527454c705431f31ae361f2837789584ef53",
+      "public/samples/monomer-polymerization-batch/README.md": "69970bc10d98e8dec903f42baf2d79de39ca76b3c3d368ec53a4547823cdd67a",
+      "public/samples/monomer-polymerization-batch/selection.json": "5f204fb36370ac5002371e30122d82751b30f47dea9e1a9cf27610f3eaf2f01e",
+      "public/samples/monomer-polymerization-batch/smipoly-diamines-120.csv": "b89be013a3d8799414ec80c94aa05473097493107ec29eef954076e389280a47",
+      "public/samples/monomer-polymerization-batch/smipoly-dianhydrides-120.csv": "f9f6e83cd29d01262d82fa190d08a710529e004ffd101e9c51e06a719d8a4bb6",
+      "public/vendor/3Dmol-min.js": "1297081865a4d6c0b2ac22d3e909724da8c03ba0caf7bfc78c8a3d9d8b143f4e",
+      "public/vendor/3Dmol-min.js.LICENSE.txt": "164aedff0608f0a79b74fe9677c05638f950801ee3f711536def74762b7d1a6f",
+      "scripts/analyze-structure-module-loading.mjs": "2204c1342cba56b7b914fd5de49b2d035a09b5713720529483bcf4f79d343301",
+      "scripts/browser-poll.mjs": "8e10b7fedd0a9293914284a6d5b283a9fa6508ac89095ce53091982e53172729",
+      "scripts/drawer-motion-probe.mjs": "ba739f9260f25d35f2ba55957f7ed0d4dd756714bdd80aa3980d5c46d791688f",
+      "scripts/scope-polymer-css.cjs": "bd967a1edcac95af735959470a87fda366ca2c23eaa6e1dbb7e73f6ea7d77908",
+      "scripts/verify-development-compression.mjs": "03a487a74bcfb4b035d2f81c2ce7407df289a2e38042da1c79ce766368738f1d",
+      "scripts/verify-ketcher-compat.mjs": "a453cd7e4a363de880fe5213d8b6367ec80016976044c3e6850db12326d9f658",
+      "scripts/verify-ketcher-patches.mjs": "3bc2a8979b54c76447dbba9bd57e068fe978e73576534758cadb9972e50ae565",
+      "scripts/verify-ketcher-worker.mjs": "ceae78bd0ee34fd1e2380904c395d9e3e6af289df10a311f66ed97cab37f790a",
+      "scripts/verify-module-entrance.mjs": "63863e3f167bf6979051840251a1898f4c2481ffe285f9349cd3bca84790fdc5",
+      "scripts/verify-motion.mjs": "f2bb41a92b0b740434a4fc5e3012e5673421d21378fcbdb26d9dddad078fc357",
+      "scripts/verify-page-consistency.mjs": "c3098c0ab5fb5913ec278393ba9cdcfa3d3e8acbd5afdb570175f25fad3a4b35",
+      "scripts/verify-refresh-interactions.mjs": "b3a4ea3e9e4ccaeba12df02614c8c6e0dcef79d95f3815e7dabf50e5b2f33688",
+      "scripts/verify-structure-ai.mjs": "529c1121cadd84338d28af15727b25be1af02f59110f99b207e0c654f275d6df",
+      "scripts/verify-structure-engines.mjs": "251e09f21cd7bd07e964c838357b42d6b96839a6cacc65b7f21e523de2e0eaaf",
+      "scripts/verify-structure-entry-points.mjs": "5245ba1f81ee191d4ce4ae502d2b6a108c1580ed04e40c032e42e56003748c56",
+      "scripts/verify-structure-loading-interactions.mjs": "9e3ab50dc19c61cdbb1f189f721b7c796b63ee4cefe09437de29c8b2d02c0e0c",
+      "scripts/verify-structure-loading-performance.mjs": "3b4f62a34df9fe6364c6778f1ae3a39113cf814b962fcca974896f0d05941fdc",
+      "scripts/verify-structure-navigation.mjs": "3ed56f370e28eea70cf05ce2495043f1babb6a0b4347e1919d73fd6da573d89e",
+      "scripts/verify-structure-refresh-performance.mjs": "0aeb3148a00da272ef87a44f582cbfb23a0be77af1a8205ee737cf945c826292",
+      "scripts/verify-structure-resources.mjs": "b640c41db84d750bb0eb78d1d7941bdf30ffe705e7f25b1cd2b41f6afe1b53fc",
+      "scripts/verify-structure-workspace.mjs": "aa64cb53fd5dbaad1b26b093a2a77dafed4b739750b8eb30e5d6c8ba66cc43ec",
+      "src/App.database.test.tsx": "823ffbf1fdae94fcc3970d785e89887cd376d83f2955a3bfe1d17ef2af68908d",
+      "src/App.home.test.tsx": "117525e6cb0fa0b5f8daecf7e21c5142f52e4abc74548b644446d663cc4cd1b8",
+      "src/App.moduleTransition.test.tsx": "81cb5edf525ad23a33e84d2a246e68deed2187f05f132e3596937778e4ed6b51",
+      "src/App.monomerMd.test.tsx": "3c5767e8850e8757f3539ee76d538d3196b766169118652909177c64c4bb72c6",
+      "src/App.structureWorkbench.test.tsx": "13c0de9d5e21ae3ef1150e660a83a3ecf7d8903ef61306ee7dc08e1b8f83daa0",
+      "src/App.tsx": "0d17f291640b16a7e16f92bae250a54d111b827317c51fad0174798ed4d10f4a",
+      "src/components/AgentWorkspaceHomePage.tsx": "30401767bdb540299f53c9521e1061fce771a198e586a76a08c79dde65d45522",
+      "src/components/AppShell.test.tsx": "fdbae7adcf25f4fc9be666d50d9c4872dd0646879f8ebbc70862789de4e5beb8",
+      "src/components/AppShell.tsx": "82d1e06a95d091e1b9cc1104bc137b07b4e408621b9ee77ec372f1e3f60684a0",
+      "src/components/ConditionalGenerationPage.test.tsx": "039b9d4a9a86a8e762478d136198a06e838019d4cc9c001de949d2a94ab95302",
+      "src/components/ConditionalGenerationPage.tsx": "083ed72007fcf92a204438b18c6a7a437f591e2e0e67b42d7bf2fc91ccf6f33a",
+      "src/components/ConditionalGenerationResults.tsx": "bb9c9cbed564569dfb5e0a2e7fdf9e50c8130a467f5ae51c26590f5f9d846b33",
+      "src/components/CurrentStructurePanel.tsx": "9e912d63deafec8fc957b8817b7d864632b1d21f28a64a303981a9560b76e83a",
+      "src/components/DatabaseAnalysis.test.tsx": "acc9db8846b6161625da04fb5b99628a9ee50be0dfdec6d10922505c4d9ca509",
+      "src/components/DatabaseAnalysis.tsx": "63dbbe28cce3b174b8abb6c359316da4b03bbd57ef732613ce7bef439f4a49f4",
+      "src/components/DatabaseFilterPage.test.tsx": "16ad0433636e66a459b55dc6d4fde4f2cbb0ba30d283d005a8adeadf9a3f71d2",
+      "src/components/DatabaseFilterPage.tsx": "c0fb0d79fead59f621b28022af0175d8ec8ad4cf4ec37c6cd3f7c2e77be2c32e",
+      "src/components/DatabaseFilterResultsDrawer.tsx": "f2395a1cd98856f8243fe03d086772773a0a0aced691e4f0cff0d9ef41b16484",
+      "src/components/DatabaseQueryPage.test.tsx": "a8a50db9536649cc2e1118a13a9ea6182e61c838904d2a8c24b3f27ffb61da6f",
+      "src/components/DatabaseQueryPage.tsx": "a083f1fac23fa0968b7821ff3ca9d6df5baec551a4234c25389ac6485a1c130c",
+      "src/components/ExperimentWorkflowDemoPage.css": "cdecf662522d9cbf94f518a086cc5878cddfc13700e56418b9ba9b4e7566b7eb",
+      "src/components/ExperimentWorkflowDemoPage.tsx": "8c29f426a6a69ca1d0ef9b9ac31fb2eba1bdf7a1938baf329a43baeaee7f1e41",
+      "src/components/GpuSessionButton.test.tsx": "29b4c3bce1281d476092ce3ee8dae4a3321aa59489c7094e2bae288d97c89a71",
+      "src/components/GpuSessionButton.tsx": "590590b87c249e3cdd227ecf0c589ea60aa5b2b91781bef1498f294bed8f65c5",
+      "src/components/HighThroughputWorkflowDemoPage.css": "74e0a4fed67a2ca9caa885ff6c2a44b1512f853f2c5f649dca11cf39ce06cb3b",
+      "src/components/HighThroughputWorkflowDemoPage.test.tsx": "08855422d4621ab8227c6c2c167000d3d25f5e5314cd78240fbc6fb5c9d64d86",
+      "src/components/HighThroughputWorkflowDemoPage.tsx": "67bea4802c68da6abb4b4e15abecad1ec50d243e4f233f3b82defa939d9114d6",
+      "src/components/HomopolymerPropertyPredictionPage.test.tsx": "d71b5e6b4f503931aebe421bdce93a5c8df2448604d2e92ef3ff3f74dcbb4c3d",
+      "src/components/HomopolymerPropertyPredictionPage.tsx": "c816df76c7d2c413604ce62a6cc9919cb4a99ecf1c5d8e210dc90cc71c9db94d",
+      "src/components/KnowledgeSearch.test.tsx": "fb1e6062a593dec260c8d51c5c82eecc59f75856d1e5c3f63cab669a7623da68",
+      "src/components/KnowledgeSearch.tsx": "77fbbcd07fd987154d3344860f9662dcd330ac1e0e8bad2c48590df4e0d64b26",
+      "src/components/LabDataPage.tsx": "99d8c90785b30b61fe0c4a854f55fe8a26945011e7ba601c725b627c82077915",
+      "src/components/Layout.tsx": "87f917639d06f545439c59d9d18506d130578baeaf89f60a12eba351c4f50627",
+      "src/components/MdSimulationDemoPage.test.tsx": "3ed4df42c1d23c8909169764e42703a73fe52fe9c65aed3a7c921e05dba19bc3",
+      "src/components/MdSimulationDemoPage.tsx": "ef3ad80c09fb472ccff5ee6184cdef689b858893e4a48794923120da9713ec4f",
+      "src/components/ModulePageHeader.tsx": "a0d3ce807f6b26885b457faf379220e96e4c62b37ff708f44ba3be13f2ab5d9a",
+      "src/components/MoleculeCoordinates3D.test.ts": "9cca0ce26019e644e5ac623e0fb1bdc2f2143b416226987ab61846efaaa198c2",
+      "src/components/MoleculeCoordinates3D.test.tsx": "ea1d09e43f16cccb81b0432bf8b91fb1e6eaba67180dc9e71b4dbeaa8fb4ec12",
+      "src/components/MoleculeCoordinates3D.tsx": "fc5bc5f90bec41f76847b68ad8bba662360c2d0990bf51be1d0f7f8f681d4213",
+      "src/components/MonomerDftPage.test.ts": "716903b51c63d600f255848b4170c7709ea0bb803ca7a4641da25091f41fc9a3",
+      "src/components/MonomerDftPage.tsx": "400a7a7308b3c0ac4130f488598eb496fc6e62680f791a515de7f5f065cab39b",
+      "src/components/MonomerDftPage.ui.test.tsx": "ed77dfc6aeb91ceeeec1226ef3e5bd234459d1b58385d45e6b44795cd1d02eb1",
+      "src/components/MonomerDftResults.test.ts": "616dfb6649545d8c0ecb3392a6fd50959efb92105d59fb948631db18b2d6c656",
+      "src/components/MonomerDftResults.tsx": "b9f2189244a796ea878896dcf5c41d8392e9fec99cba285d3f6220231e7d115d",
+      "src/components/MonomerDftResults.ui.test.tsx": "e6a5f2b3c00cfcd04d6a9dcb779e0f57b82552b92140b57bbfd5bb3828aba402",
+      "src/components/MonomerMdSimulationPage.test.tsx": "e5d56e97264393df3af16542ae37d59f07b345ee0893821bb8156bbf1e65157d",
+      "src/components/MonomerMdSimulationPage.tsx": "ff9287a2d6328e3a1f58f981442d6dad2f282997f8b3c910c9c470aaea6e9b9d",
+      "src/components/MonomerPolymerizationPage.batch.test.tsx": "5875f809935d915a7c427dd3de4625e9e7398c15ecc3529c48938c0fb11b9403",
+      "src/components/MonomerPolymerizationPage.test.tsx": "c2b3f1f209287a3d311649890d8ba3394f5695f9fe1fd8a2b3f7debd79f8ec2e",
+      "src/components/MonomerPolymerizationPage.tsx": "68fbe55d81c617fbf187547e3c04ee2b67f502a41ff1c4e31a3a6803112189a8",
+      "src/components/PdfSimilarityDemoPanel.tsx": "7f6cc50a08406d98aa8292199aa9eb769057dfa08b577362da68247f01c74d49",
+      "src/components/PolymerCard.tsx": "50f43db2dc35fc1dbb04859c107fead8bc1b5960a4d6b17975b0a0cb8f758de3",
+      "src/components/PolymerSimilarityExplorerPage.test.tsx": "916f7e9f1c021dcf487fded012a293855e0bc56c8a6f94146430be43c3ed2091",
+      "src/components/PolymerSimilarityExplorerPage.tsx": "a79e1d7ff7b919b7be1dffe1ab990845166699e477309a6d234c5ce3d5302872",
+      "src/components/PolytaoGenerationPage.test.tsx": "3a59546a5f0a5557a67d3a8f778dbe077674aa9afc81ec5a60df3e44a6d44ee6",
+      "src/components/PolytaoGenerationPage.tsx": "9a8cf9ea2df0f9e95f5227e9a921515facd7932b54077a7c8387f01aeb2e5797",
+      "src/components/PropertyGroupCard.tsx": "32265e6665ed84934307d68b2416fd715e719d8b3dc0b5892a7075be3b68e6a1",
+      "src/components/PropertyItem.tsx": "ecc462edbada0b5bdf1ec261ab4b8dff5496f1288febe50f5fd58162f65e2e3d",
+      "src/components/ReverseDesignPage.test.tsx": "52ddc726813d36886c9446cfbb69b36f8f232a6f2d4d69e37e729f6efa7e21a6",
+      "src/components/ReverseDesignPage.tsx": "3f6d128d4401f39b0590ca98594c901263278f2dcb4fbfbe11bbe21368f7c3e6",
+      "src/components/ReverseDesignResults.test.tsx": "34ad45ba3a0d60530bdbb6a4e7c9def9d1cfc594580f6d88a27e9fb06cb0fa3f",
+      "src/components/ReverseDesignResults.tsx": "44ff5aee74daf79ebc4a90e3e1231e720474a91427843e0ecbfe401890a30f2f",
+      "src/components/StructurePreview3D.test.tsx": "6a9c8d88e45ea2259d87b51638a993e76718e2167c623549132ec22e26bd55f9",
+      "src/components/StructurePreview3D.tsx": "7a33b795f09312b12f2bd63bfd3a20de14494c264bd439e883b8584f03465bc1",
+      "src/components/StructureSvg.test.tsx": "8b17b3e6ee5175e675ff5aaebfb1cabdfac97f77798168ea747e03f95f26223b",
+      "src/components/StructureSvg.tsx": "c84dce610a47953697b93bd0f44f94943c942fb26766105a8249cdbd53638dde",
+      "src/components/StructureWorkbenchPage.test.tsx": "b5d8796db2af93720dbeff220db5d1f2ac91a9966281688e147d8a84210f3fa8",
+      "src/components/StructureWorkbenchPage.tsx": "0f72abb0ee7b73a75043cb4f9c965422022a6a11de7d4a9e47dd15984044f1d8",
+      "src/components/SummaryMetric.tsx": "e15df29c94c86fdb5efb79633faba32a3d652a35b34f06d1348592cc0b1b46cd",
+      "src/components/TgAssistantPanel.test.tsx": "f42e83a87669e7ba2ceb8f04aa9d6d03de3bfa7cf05ebb68cf7c5e72be3d8969",
+      "src/components/TgAssistantPanel.tsx": "7e83ab5e9acaa4b452b7ac80cd400b5399578595e3fa95736e5446d4ebc863e3",
+      "src/components/conditional-generation/ConditionalGenerationDrawer.tsx": "7c308a56877ce3617a697e19951fa6b43d0989ab02a39a53cb0a342deb471a35",
+      "src/components/conditional-generation/ConditionalGenerationUtilityPanels.tsx": "d4fe6f9ff5594fa05030c48df01bc3d6ee6a72eabbce0b4e98479bbb12a608ee",
+      "src/components/createLazyPage.test.tsx": "eaa0462085a8c13fdb4e63060eda046254a69b03b3d6ce447637d6158b9cf20b",
+      "src/components/createLazyPage.tsx": "0065848940abc9e6f3a313cf19b7b010b40bf71a7968c8b159565c90469cce8e",
+      "src/components/database-analysis/DatabaseAnalysisWorkbench.tsx": "0edbf997e7fa5e1919295f2af998b7e5164821915a77d2378d2a1cdaef82cee1",
+      "src/components/database-analysis/DatabaseRecordDrawer.tsx": "f7cd671c3e5f37c35a6fb889e3d21d579448022cadd3e501479f1c2a5dfd36c6",
+      "src/components/database-analysis/DftAnalysisView.tsx": "380074513a839f6d088aa83d343a0227fd099c7ff277dbbe49bc3ead4633694f",
+      "src/components/database-analysis/charts.tsx": "f41e7539a0d4ba1aa18082f2cca16db5beea5221eaaf3e3ffcb6dc1698498f36",
+      "src/components/database-analysis/errors.ts": "002a8fca655040c5ec17b2480502be6f9b56e61c22990d91f72fa969200ed251",
+      "src/components/database-analysis/types.ts": "0df72a8265ca432907cd8522beaf4c85e7df955464fa0301c5fba2a7bdb1dcfb",
+      "src/components/database-query/DatabaseQueryDrawer.tsx": "9799abac21c05f0318e134beb34e9fc6ef955a2da1e3f8bbdd4b5f75702911e9",
+      "src/components/database-query/DatabaseQueryParameters.tsx": "b7a3b168bc38b4b730493c6463369c0f9143da39f43787a1abaa253df405aaf8",
+      "src/components/database-query/config.ts": "f68bfff120b3aacd6070cba60aabfc12e49ed07ce2a522bc32c628557cd0a4f1",
+      "src/components/high-throughput/CandidateOutputWorkspace.test.tsx": "f6936cce173eab1bc16573a832d8fd73aa2deb87bc8ae3478936a6f2bbb64d31",
+      "src/components/high-throughput/CandidateOutputWorkspace.tsx": "41db7bed38c42cd83955b6b471cfd1d31e2ac051508c6c9180ac05ae384d932b",
+      "src/components/high-throughput/FinalFormulationWorkspace.test.tsx": "1c26524bbe98b80480b7d12eb1ab1b6901fabde1eb6077017dbd326e70c88bfd",
+      "src/components/high-throughput/FinalFormulationWorkspace.tsx": "063d2ab7b7f41df0f75c2854bf9585775262306651271f3974a9136270022a3f",
+      "src/components/high-throughput/PriorHotspotWorkspace.test.tsx": "d91eba3a2b9a9fe627181d3f10f1763915bff351d5a1de8eb965b657cf60552f",
+      "src/components/high-throughput/PriorHotspotWorkspace.tsx": "ee8580036c9e2cd9e00aebc6d82cbc7de02c1e9113db76dd9adbd325439e99a1",
+      "src/components/high-throughput/PriorImportWorkspace.tsx": "f28593fbfc832ec8caa076e9cacd0f0125d578319d9af281d8372238d36c9548",
+      "src/components/high-throughput/PriorWorkbench.tsx": "d0c033722cf60053af7b5e52765aba68b9985d902434ef471eee193490ecd160",
+      "src/components/high-throughput/RatioSearchMap.tsx": "65b91adaf74a5378245bda3b5d35c4211f8c1762bb3fa5307a121cf6b7f19985",
+      "src/components/high-throughput/RatioSearchWorkspace.test.tsx": "acf6eed35b211ad7c1114768b263acfbceb369f4447ed495b683bab5260abf9f",
+      "src/components/high-throughput/RatioSearchWorkspace.tsx": "b196e1cbcc26e77a1592273dfe04eebbe816c8f354b5e9ae6322d9bae13547c2",
+      "src/components/high-throughput/RecommendationValidation.tsx": "21fbbf63e33b57cab8f6bf75ad85548a7a63fcef88777c30e4b41abe6209890c",
+      "src/components/high-throughput/SinglePropertyIterationWorkspace.test.tsx": "b55df7ea0fd5e7520e3e003df761865438fc076f1686140ddca81764b46090cb",
+      "src/components/high-throughput/SinglePropertyIterationWorkspace.tsx": "c3404401f3caf92f11f9b89ab97c9cc6fc85581cf1db2dfaac5339a486959683",
+      "src/components/high-throughput/candidate-output-model.test.ts": "486bec310ec9c87d65ae3a9a88927b3a71ff7ab78c3c4d58b01ef2820d008d7e",
+      "src/components/high-throughput/candidate-output-model.ts": "4821e4764d66271d141f407ccb65b6d52acd487f3939d29113b2460ab4183770",
+      "src/components/high-throughput/candidate-output-workspace.css": "19d49f64a8e5f01124058bebde9745d1eabfe7307729ca6baa3e8fdd8084c561",
+      "src/components/high-throughput/final-formulation-model.test.ts": "6943106e56b605640c9d97c810d0e6620b4f47e0dd158b6e9e265279df676c3a",
+      "src/components/high-throughput/final-formulation-model.ts": "accbc43168c1e030bf7a49f90cdea20372ec1d10d9a3dda60be72ab3d78126e5",
+      "src/components/high-throughput/final-formulation-workspace.css": "79e2b2ccf98ff634b508f4c83bf0bbc34e5299982d5f6b0596ab0ee7b8b3c957",
+      "src/components/high-throughput/iteration-model.test.ts": "8572bbf5f6f5854a6f4c3dd7fcbbc5139dd60c8edd797ab2663fc09a5064ae43",
+      "src/components/high-throughput/iteration-model.ts": "6ae7c778c4afc414b3920dea9717e6c7594d4feccf61695b8e54a5d977cc959a",
+      "src/components/high-throughput/prior-hotspot-model.test.ts": "049f591eeaf47e303be5aad29016dff87f2976bf891951e67c7ee070e093bcfa",
+      "src/components/high-throughput/prior-hotspot-model.ts": "e19938434d175716a1593dad61a5dc3342bb7f1eb560942576ff240fcefec828",
+      "src/components/high-throughput/prior-hotspot-workspace.css": "5c16a3d1189c13b9740fee751d8a2933d4f1f1e40ff1c538864ec6f118ecf2db",
+      "src/components/high-throughput/prior-import-workspace.css": "1ed3574764533d1ab0ea10060a142f17ae4de728e6e460af9a67ea6bc4df2ed8",
+      "src/components/high-throughput/ratio-search-model.test.ts": "9e070acb0a8bf6a64c22fdce724be1adc1d534e4827f040aa12ccaedbd15c598",
+      "src/components/high-throughput/ratio-search-model.ts": "871259b236be1995d0a897c0ad68da2f6cf2950a24ed97c74385feddb4c31f12",
+      "src/components/high-throughput/ratio-search-workspace.css": "082daf03b40b8243e984661906ad586fedd0d0b52fc3db266f87256b48a03c09",
+      "src/components/high-throughput/recommendation-validation.css": "5e24a2a77cb629c0636c1a603d9c1252500aa71de64de18a872bf7c964cee804",
+      "src/components/high-throughput/single-property-iteration-workspace.css": "77f79e9243b6e8d23c292caa0ac1fb0894cd149005651f0815d6f836f597dd8e",
+      "src/components/high-throughput/types.ts": "3811b7f10ee52f86226244f5ac767e4201be446758baec5c07341618a9e41ff7",
+      "src/components/homopolymer-prediction/HomopolymerPredictionDrawer.tsx": "46397ad3ce1395e94ebed9ab1f4fca4b6d4503e3a0dc6e28873902aa6522693f",
+      "src/components/homopolymer-prediction/HomopolymerPredictionParameters.tsx": "5b3237a7744f394069514fd645ae6f2b55a1536cd9231cc8cb5cbaec150b0f88",
+      "src/components/knowledge-search/KnowledgeDetailDrawer.tsx": "1298cab7dca4c1797cbf169276022c191756ddf800df6b21a0dc0411e25cc303",
+      "src/components/knowledge-search/LocalKnowledgePanel.tsx": "03021e0205bb55a0f3273ca78d06a204e02d58902bd97fd2e5fda5386608c9c6",
+      "src/components/md-simulation/ForcefieldPicker.tsx": "88a1a0a1597efe3fb216b4a91bae7ee7606c92ace092d1375c7366f946c83931",
+      "src/components/md-simulation/MdSeriesChart.tsx": "9f8547bb5f338edb9a96a1f14f847151804c8550d9597e21e9a5a8dfed6518aa",
+      "src/components/md-simulation/MdSimulationParameters.tsx": "2b69ba521e216fc7f2d0bff83cc89de03164e6a547e7b709e06e12f9e5149c71",
+      "src/components/md-simulation/MdSimulationResultsPanel.tsx": "c94c26c097467e68e4bc1067aa8fdd3cf080f6b0e36c5d8f900526cd6b4631de",
+      "src/components/md-simulation/MdStructureInput.tsx": "a6e6ff642b2578ffd9421e4b9fc8361f2d12a9d973855534b351f293e395cf11",
+      "src/components/md-simulation/MdTrajectoryExplorer.test.tsx": "6fa7b699f0de34f499d2dca9ae645387b5a8168f7ff02a1ef4259da03b1657ff",
+      "src/components/md-simulation/MdTrajectoryExplorer.tsx": "8d5d9d087cebe3fd01befdadc9e93b9984295ca019b091977647bc96ce41e8f8",
+      "src/components/md-simulation/config.test.ts": "0d6cb71045f9ddecbafeba4002b5ea5aa78701318cbfef5161833741716a3a9b",
+      "src/components/md-simulation/config.ts": "023a28d611b8ef30fce590d302a724e3ce9447beacd214f90b782d4aa7b0ec28",
+      "src/components/md-simulation/session.test.ts": "12de8ae77332d6a32a6d8be087902c99a65239cf24c4f96fc17d3800494112df",
+      "src/components/md-simulation/session.ts": "2e85e8cf753a2c065f8c1288d9e2b7e11cf28f6a963c15ccbb05576fc5bc7a06",
+      "src/components/monomer-dft/MonomerDftSelect.tsx": "54a75c61925128ea1ef643f014202eeef7b2a97302a29e87a2802aa7f7ecfc53",
+      "src/components/monomer-dft/MonomerDftStructureInput.tsx": "7d78f4836e305e2a411f57155fb5508b6659bb0b8a4b8e0a13fcac3f5dd104ef",
+      "src/components/monomer-md-simulation/MonomerMdFormalConfig.test.tsx": "bff431d96401d9ba9e7a396802f01abdb96b13837f65eec52b3b504eec8a541f",
+      "src/components/monomer-md-simulation/MonomerMdFormalConfig.tsx": "c7c4de042043fe792ea6596818cdea859c3237fc807bcb0628338e4864717579",
+      "src/components/monomer-md-simulation/MonomerMdResultsPanel.test.tsx": "e2b7ef87c29680fdf86e612fcb0afe1235499787d5a20f0db19a4435e0455d51",
+      "src/components/monomer-md-simulation/MonomerMdResultsPanel.tsx": "7fd73cd2e8e9f06fe0a617cf6eb35dbdf7681a1ac939f032d829ee2a466d32b3",
+      "src/components/monomer-md-simulation/MonomerMdStructureInput.test.tsx": "711c64f962f7fd2b9e6e2c489d172552fb7aff306df0136f48a2328a4fa49034",
+      "src/components/monomer-md-simulation/MonomerMdStructureInput.tsx": "5cf5e919e81d292169de84ab0f9f3761a7fbd1ff1c0305817f75b0ce5cf2dbdf",
+      "src/components/monomer-md-simulation/MonomerMdTaskCenter.tsx": "336a95e37971ae352450845836e650200e8972ad708bae2e46bd8ec4a073d8cf",
+      "src/components/monomer-md-simulation/config.test.ts": "64301d9a284410d3d27a2e6261206796a985dcdf78f4eab694dbe1d9634761de",
+      "src/components/monomer-md-simulation/config.ts": "4ce6a141a74770b96beadbf3a8a21691331ecbb5b047fbab30abce5a9a3d7ab7",
+      "src/components/monomer-md-simulation/presentation.test.ts": "e97b2cfb3992d27e84f13faf57d9fdaa9cc0230b4de447107a45b2ebf4139d27",
+      "src/components/monomer-md-simulation/presentation.ts": "36eed50ccb09ce0f332d57fcc3a00e867d63f084012db28cd2d9fd7d5377b5ac",
+      "src/components/monomer-md-simulation/session.test.ts": "600733a950bb3a14c380616bf60246a72bc63a20e10872cadbdf1420f383aa22",
+      "src/components/monomer-md-simulation/session.ts": "34662c9c849cceab92f34c3cb37df0435b7ba691e648b7f43f34979d234cd411",
+      "src/components/monomer-md-simulation/trajectoryTimeline.test.ts": "6672795cb95c6123765b1e56039fba0e71ea218427f61ea55547b5c62d72dbff",
+      "src/components/monomer-md-simulation/trajectoryTimeline.ts": "0e8701dd3d162d1dc83b3d2b2000c76ce8554f1cea8fd50368138ddbbe1842d7",
+      "src/components/monomer-polymerization/BatchPolymerizationPanel.test.tsx": "50acf5455a9ac71d9fd0c63a38170e6fa442cfd95635a1592934c2f9b127240d",
+      "src/components/monomer-polymerization/BatchPolymerizationPanel.tsx": "317b64cab5c035f62bd0b8c322856f7c67de92d546e1903587cabe85b48bb518",
+      "src/components/monomer-polymerization/MonomerPairEditor.tsx": "49854f8ff80dfd6b5bf5e8e714bba1d02704d7a01505f5c47d8f0d40431e3476",
+      "src/components/monomer-polymerization/MonomerPolymerizationCandidateCard.tsx": "536b1b716f2a3c3b885550ed716147ddf85bece8e960390a110a4368349f70f3",
+      "src/components/monomer-polymerization/MonomerPolymerizationDrawer.tsx": "4fb80e6ed1afa71ca64f87d7a9905d04e89794dd5c4487f35dacc52621473715",
+      "src/components/monomer-polymerization/PolymerClassPicker.tsx": "de13c93136b3ee6fe5d2245d7c42a20e109141d27a4bd96bd7fdab3f4d058fa5",
+      "src/components/monomer-polymerization/config.ts": "3a781a7556fa75558d8ae5d82df2c19e2ad3565eaba4e7572ce6ed0cc771e183",
+      "src/components/monomer-polymerization/session.ts": "e8eabcd31b96eccee969d586ec52be7ae68533c2f7f48f7a90dac8b3bdc38029",
+      "src/components/online-knowledge/OnlineKnowledgeSearchPanel.tsx": "07b151a0adc799ce8251ac45aab3ba3a4a7a818acbd8e85cb887463f95efd119",
+      "src/components/polymer-similarity-explorer/SimilarityExplorerDrawer.tsx": "676947fc1d3c3ed90c2f6dc6d4ec386d93712b1a62d0b76bd4b4f66d3de5d675",
+      "src/components/polymer-similarity-explorer/SimilarityExplorerParameters.tsx": "9d130d445f8ca03708db979a2cb592fbadc5e94baa77c76ead8d26a6ec9432eb",
+      "src/components/reverse-design/ReverseDesignDrawer.tsx": "abda6d58357236b7649ec9c8661c0c0e62e81f50e951a9494105829e40a827ee",
+      "src/components/reverse-design/ReverseDesignUtilityPanels.tsx": "c0c96f8205e642805d4bc19f7ad87a89c97c2034a756a73a5b67eed9d0015242",
+      "src/components/sidebar/PlatformSidebar.tsx": "df85fd97671cb1a879c855692bdfe60969900d699e0bc221a5c9a875dab7364b",
+      "src/components/sidebar/platform-sidebar.css": "b5293bcd5c988a640a2fa33e6dc46e48246a267479a3e66026f7c5ea94b02aca",
+      "src/components/structure-workbench/IframeStructureEditor.tsx": "0dbd831c10d36d250bf903049436ccb8c75e019e1af13c4f2f9711653dbbb5ec",
+      "src/components/structure-workbench/KetcherReactRuntime.tsx": "a20b497382480a5d0d1a65ca067b705861223d5e28097909e04540ea9b5e3405",
+      "src/components/structure-workbench/ReactStructureEditor.test.tsx": "2a251053c0cd4032faf97bfe5cb9e98d5064700c94e14109023bfc4cd2851a24",
+      "src/components/structure-workbench/ReactStructureEditor.tsx": "edbeddec71e0e5882abac7b43402975435bcc825bf2bcc6e3185e83a407e70f4",
+      "src/components/structure-workbench/RetrosynthesisDrawer.tsx": "cb9b00ab17e9da59437608731fdcf4539356c449b9ea9a57ba6bd4391c4f8620",
+      "src/components/structure-workbench/StructureCanvasSurface.tsx": "9204c882e102f451bf1bb8d696d1a105dabcc3518ef22b86dfefdb54f1111b46",
+      "src/components/structure-workbench/StructureEditor.test.tsx": "681edc89c00febfc6d53c1aa0d2d9bf08687027c1a6be63d569b90c1ef93e642",
+      "src/components/structure-workbench/StructureEditor.tsx": "2e1c37302f665de8fab008420b392046ac89e5b76418721959330ba4195c8dc1",
+      "src/components/structure-workbench/StructureUtilityPanels.tsx": "82af59b530598a577fe6936c89db6be449cb2997c903b9dd3f31193f3cafc29e",
+      "src/components/structure-workbench/StructureWorkspaceNotice.tsx": "b344b55af40beae55fafd0c2344d11a72698fdea6c46500409282cef5e284344",
+      "src/components/structure-workbench/WorkbenchDrawerShell.test.tsx": "b3368359a58e5e9640ed45e65e401b059c5f44b4daa963f11af9cfa676e695c5",
+      "src/components/structure-workbench/WorkbenchDrawerShell.tsx": "d5a5a33ac3ca1a3836307d16696079333770ee17d45ad05f33a7e6e643bdef28",
+      "src/components/structure-workbench/WorkbenchSelect.tsx": "e3a836ddfecc3333760b55f09ddbf50b87ce5d6de2aa860fc04383ae41739158",
+      "src/components/structure-workbench/loadKetcherRuntime.ts": "e082767014bb37bb50643aee393cbec9956ab01bb3a6c662272d97a1c9fbad09",
+      "src/components/structure-workbench/preloadIframeStructureEditor.ts": "be544bb6fab31986173c4b87548baa2cb726473a8dc0c06eed1f8a05cbdf2cb6",
+      "src/components/structure-workbench/preloadReactStructureEditor.ts": "f595e844eabb684495df59ad60f914f02abf33cbd09f99ebe2014efca91a39fc",
+      "src/components/ui/alert.tsx": "6face8986e7c220d084182549599aef04f3ba2d0316893a35dab6cb7c131cd69",
+      "src/components/ui/badge.tsx": "bf5f0e9e448d64135ca5c8382ca428a8b7f68814b2fdea1e027807f14271fa5b",
+      "src/components/ui/button.tsx": "5db9607459151fbe8e11b98f8ec2d50b7617cf8177ad66f10837625e9ae7cd46",
+      "src/components/ui/card.tsx": "ea5fbb1e15612b3afb2ecbdf03e8d7065efd5d705f9dc433f6437dfc751c82b2",
+      "src/components/ui/input.tsx": "29503fb9de92d37ded899563df471c14898057527c53fda83ba1bd89f1ed486c",
+      "src/components/ui/select.tsx": "d8e2415bdca087f05b4cd34585ec2b03ffdf2767c49ef36394171dcca0776bb8",
+      "src/components/ui/textarea.tsx": "b62960411604603603035d8ba4929f76e38d4a39f0c991c2324d67050be53990",
+      "src/constants/highThroughputDemoScenario.ts": "c8d0c2505131f33d1d664483cbad2d43e30f9894af1bc5b9de29abacef1bd1c3",
+      "src/constants/highThroughputDoePiRows.ts": "54148e05cff8330af56ec6e01525f03570fae83d99d0b68014ce38be163db932",
+      "src/constants/onlineKnowledgeDefaults.ts": "66e576de47f431bdf5afa87453696c9c393cc53e6b3da53137f3fcd735b84aad",
+      "src/constants/predictableProperties.ts": "19cee2fdd7ce30e293ba879f61c713741fd9bbedece6e9c933683932cb510b59",
+      "src/constants/reverseDesignDefaults.ts": "57e504b53e3e663691443b92ff193169e299ded5d22f3e3c42fbc59619d04c82",
+      "src/hooks/ModuleTransitionContext.test.tsx": "ee09c237622bd9ed28da61c2be5e7b55a502973468b50cdc0900aa137e4f78bf",
+      "src/hooks/ModuleTransitionContext.ts": "1baeb4bb97d463c4c2f485a114e5ff8d9adb185d939619bae4709b9274874191",
+      "src/hooks/jobPolling.test.ts": "9c137aab8c3892bab817616001bdeb26357b5bc3e1ef0cfe80cf883e2a979dd8",
+      "src/hooks/jobPolling.ts": "ac37a48e751888f9a8e0665a1d5cf182038ffe0d1dd2ebb24ddb78c1e28cd404",
+      "src/hooks/monomerMdStatusLoader.test.ts": "164236e48f9e1b33b32c070857a121df8622193fdc5f57b823669b3263e38cc6",
+      "src/hooks/monomerMdStatusLoader.ts": "475c77a296e62fc1f84280c847f6298f43752f6e2cc2203e71c6fe249c24cbd5",
+      "src/hooks/motion.test.tsx": "b85e0b1a1294be81dd0cdb959a7a002555b39331cab85366f2d6a657b58bea2c",
+      "src/hooks/useConditionalGeneration.ts": "3dc5dd6e07ff67c49db8a1069044fd3b8383beb841c6dbaeeef7ca3faa8486a0",
+      "src/hooks/useConditionalGenerationStatus.test.tsx": "b3d157d34f2235b247a8e3212cbadf3a12fb9cfbef7501fba542b0267031e09a",
+      "src/hooks/useConditionalGenerationStatus.ts": "eeddb3e6c43dc61bb6b4c88e9cf635fc75ed57e4b36a88532a20117e17b0be76",
+      "src/hooks/useContentMotion.ts": "49eb7213765f00dedde56c49103fb29635d33d6a408c8f6192d638b91a0ada72",
+      "src/hooks/useDrawerMode.test.tsx": "e1341ff151cd0e38271e9dac413bfa13693d121ddce02a26f0cd1aac46a64334",
+      "src/hooks/useDrawerMode.ts": "5e282aa8ef857bfa211d99ca45ecbfdebadee222128a013b67bbcc98844edd42",
+      "src/hooks/useDrawerResize.ts": "4c6b1662592c70baf1a37f3416122ab0f2be733243820d05dfea7ba3d7f3ed98",
+      "src/hooks/useFlipMotion.ts": "965df089a6e6e92d558e4adf675a788876bed54f258456e307255665c55c7fe9",
+      "src/hooks/useGenerationJobExpiry.test.tsx": "930e92aef3ebc2824c62be82dd8fd123e5e5ec1d585ef1f123b807e8f62047e7",
+      "src/hooks/useGuardedNavigation.ts": "b3843de2fd1842e72749b68a573ea8e08485498fb8d940f970d6c9f38cd1fa4d",
+      "src/hooks/useJobPollingHooks.test.tsx": "59dde794824e70107efbddf8814f0fc0aba320ccb809c89ccbb99b10ccafff11",
+      "src/hooks/useKnowledgeSearch.test.tsx": "8e4f64afd74854ff506a06bb2314efde219eb56a84d7a3e43bb898c8d3b20f19",
+      "src/hooks/useKnowledgeSearch.ts": "fb5a0d57cfd13441dbc308d8d1fbb1308bf9f4ca8e8e484b17d319d5cac161c4",
+      "src/hooks/useMdSimulationDemo.test.tsx": "c872854d61d9c1e6bf876f78a66a520d15b1f6819e8c6967e03afcdc1755c071",
+      "src/hooks/useMdSimulationDemo.ts": "36b20646c93be08e437b35cc206247a19a9f78875646e779febaf3d3a9d7e1b8",
+      "src/hooks/useModalFocus.ts": "d7717a0b40eec322d7c3ab5a4be56eb6ff9714e6dcd886f5c5d3c68fccdebbe7",
+      "src/hooks/useModuleTransition.test.tsx": "85f1b7349d4114e9f84ed1567d99922bf0b173ee90b61ed26f7e689f1234d1f3",
+      "src/hooks/useModuleTransition.ts": "616bd4f84a871d1e3b82c5fb4e65c0cd718f6b0a3699b84130c4ddd6e5d1014d",
+      "src/hooks/useMonomerDftJob.integration.test.tsx": "afa02c32663e005ab239f69ada535de048d98d9a4128042dcf85e9a9369201b6",
+      "src/hooks/useMonomerDftJob.test.ts": "a800371bc7b9aae98a123c888cf464c9114b3a39630635cdb69f5713b54b045a",
+      "src/hooks/useMonomerDftJob.ts": "34cb6581467096c235b4085570ad08bb5834731141c7f6765541224ece7449ef",
+      "src/hooks/useMonomerMdSimulation.deepLink.test.tsx": "01bf9c1b63db42d3eb7a2c790b13625cff13e3b3ced2f3ebe5a05982b5ca9a03",
+      "src/hooks/useMonomerMdSimulation.integration.test.tsx": "a69b7136a5169bd467bab66e176b6d7f41d18f894cd8019e1101e720f326228d",
+      "src/hooks/useMonomerMdSimulation.test.ts": "ab85fa58550047b8db15ca8f4edbc448a0c721987f9bf094f1fcd74832ecf6b9",
+      "src/hooks/useMonomerMdSimulation.test.tsx": "9c2a2ca32f78a383d3ec6d6a228d9660f78996b4fd5f90be18ed378cd388e9bc",
+      "src/hooks/useMonomerMdSimulation.ts": "88463070f7d0a3908c6dcef83f0c3bd18d855e35b2648d1fb7ce94d12edfd266",
+      "src/hooks/useMonomerPolymerization.test.tsx": "9642ad8b39d15e37aee11ee510f5e1ab8b24d232a8534182d04e9f553cc993a9",
+      "src/hooks/useMonomerPolymerization.ts": "46a4f8743a50779a9c4170f7395b02c1998d2d48d641e054779ffaf37fa08445",
+      "src/hooks/useMotionPresence.ts": "1d31177b382c0b314acf978b42c545ca4bd6c4c36bba728c019992f2c071e4b1",
+      "src/hooks/useOnlineKnowledgeSearch.ts": "32069d77d296868832e2dec8881f65c92096c2bd3e021b413d1bc77173fbda9f",
+      "src/hooks/usePolymerizationBatchJob.test.tsx": "e982a04ce6f2cb97b722ca4e146b4f0dfe6f7dff8c191ddb5a647267fba0ce81",
+      "src/hooks/usePolymerizationBatchJob.ts": "6665b8aebba018d6a399ae9b74e204d97536d6c361376ea70ced44ed512e525d",
+      "src/hooks/usePolytaoGeneration.test.ts": "085cf99c7a01dfbf661dfc752db654da37d6902eba2d69841afca3dbb6df5647",
+      "src/hooks/usePolytaoGeneration.ts": "bb5d2e59328bb710dff8e001c127a450c1ce58ac2b52598c16d5baff76c6e7ab",
+      "src/hooks/usePredict.test.tsx": "68c65070b3f97fb7a0ecb70ebeb793b229749e05e71f4f3f28b70c0347780db0",
+      "src/hooks/usePredict.ts": "1281501ab54b30fad3964087b34edc08a08a2482beb18796c0631b40aa2fa893",
+      "src/hooks/usePropertyFilter.ts": "dfdfb0ff87bdd14e2369ceafd2b5e476c4c13cf3949e2dd71c0e18bd770afa08",
+      "src/hooks/useQuery.ts": "d6a64020f15c83a5860a126d8889cf4c804eaca34c2c8f78873e4ca6ceefc3e0",
+      "src/hooks/useReducedMotion.ts": "780af586c2f5d909aad8ad71c50650a4dd2bcd54cf089d73e6bb20ecfe924aa8",
+      "src/hooks/useReverseDesign.ts": "1e30c92efecfc7ca59bfcd07f271df0b8cff0d4e227bf5be154ae8e4397173b7",
+      "src/hooks/useStructureWorkspace.ts": "2f320c6d977dd16cd3b6143be87654c5cfb8d9fbc16764fe40b8e11d82cf90e0",
+      "src/hooks/useTgAssistant.test.tsx": "ff300ee578234d8cd78114bd7d76bca2a7497cf453364602a323b1fed5ec41a2",
+      "src/hooks/useTgAssistant.ts": "94bb5aec25c8c081b3fea8dc8e14b41c06edb945e0689bcbc2e876139049e8b6",
+      "src/hooks/useTgStructureCanvas.test.ts": "ecf1d76bb0d4da4847f0ad19775871a6c3f0fae9a01e5633cd02967ae815664d",
+      "src/hooks/useTgStructureCanvas.ts": "d20f4fa6534d41c20dbaa96c1a0f7d1bdaa3f61f3e9f1fc20f3d7455d8754a55",
+      "src/index.css": "aedf4d917155d82ac97285b5b8ddaa3e8d2e9a2e17f988762fe47649976b6f0e",
+      "src/ketcher-compat.tsx": "0519e9e6580fc2810f413788be175ae78600b1fb73a32ec2b1f08cf69bfff99a",
+      "src/lib/knowledgeSearchExpression.test.ts": "2613601153ec8b0948b4886dcdafcd0de9a0ce990706f10246f5e1f14db3f237",
+      "src/lib/knowledgeSearchExpression.ts": "14cb0f93ba0e80bed27f7be982ed0a3c79e7107903fc6b475b541bffda364dfb",
+      "src/lib/monomerDftPresentation.test.ts": "92cebe4b4dd894ac66c1082112614513074aeb5dad3878a266e026fb21c1ad6f",
+      "src/lib/monomerDftPresentation.ts": "3b985320df1ef3644d049bd034b06bae9f48bf994e8052b57862315aa0bbe122",
+      "src/lib/monomerDftRouting.test.ts": "601ac94a12e132f476a495b85802beba552e32411c82a0f8ec4062bdc2cd6e8b",
+      "src/lib/monomerDftRouting.ts": "2258bc8fe0aec36146ca29084663e691bb9d5576b3756f196fb5168eed01154d",
+      "src/lib/monomerMdRouting.test.ts": "f0d95adcacc5a232a20ed60be9052ae83ea4f8c5e32175885900dfc6605e0c3d",
+      "src/lib/monomerMdRouting.ts": "135423d18677747b8728d5c1fb44539fa034a2a15eb6ab0c88ca2190b4973bab",
+      "src/lib/motion.ts": "e033ae3aa88ae4cfe3b3b2540382568fe1b7a34748bfdebbc601f6746f46e706",
+      "src/lib/openScienceGeneralSessionBridge.test.ts": "69c90f2f121591a623b7885496d01d9c5e69ba6bd445683201a5107aef4a54d1",
+      "src/lib/openScienceGeneralSessionBridge.ts": "fdb2ce74038f49dcc3f447883eefa1d55d043bb1caf5abcf5491942e2af230f5",
+      "src/lib/openScienceProjectBridge.test.ts": "6cca1d648e49c03a415897be6724959e613c71e11231bb334301d7152f86a572",
+      "src/lib/openScienceProjectBridge.ts": "50d90f68c6c2ee88c109b71ac259529a7cba404b83c4ffb999c0edd96d50d2f1",
+      "src/lib/utils.ts": "d1f1e0d62cb8d8d1e04c26e14de842d8a151f75812d81b046c65b5d1fe8e4b27",
+      "src/main.test.ts": "9e7c1c76cac995246bbc041ce58d9377dffb8d95bfe14acdb5e53c8583eb248f",
+      "src/main.tsx": "f3e9808e59fde1546dd5fa527f66973892cde2c514838f627097017cc69fc4e1",
+      "src/mountApp.tsx": "40fbe00f69719ea3101ad4415b8fdd2f5f5161f469d0d62b1595425445318ba6",
+      "src/pages.ts": "1843f78746ac1f34d6dec78d229327b162bddec5dc5de9ddfcebd9bc4c4e5c01",
+      "src/retryModuleImport.test.ts": "2974fa0f5a2c7484f082076f89466c0d7c197524b19bb40ffe477233fda09e9f",
+      "src/retryModuleImport.ts": "f3f8999ec4310c131e1bf62a37143e20b69aa3068be40e38b7ee8398105bd02d",
+      "src/routing.ts": "b7c3932bf7cd846a357c790f3f58c67404c7806b26c957c4e01c2c1623a91478",
+      "src/services/api.test.ts": "b289fa6b282a4400051c29a0ab804da433d92ef3bcfdf497fc4a1ffb88c8e106",
+      "src/services/api.ts": "fb410667b9be983f36d4e953b852fbfcdcb59c936ac28216b3b05c77d3595933",
+      "src/services/monomerDftApi.test.ts": "a71efd6ebb5f73c02b0f76faaee8a2662aa3901e7dc67bcf08815ef2986b6741",
+      "src/services/monomerDftContract.test.ts": "f8c527c5ea3eccb52298f037b5c92cc301bf5c21cf302da0b0950f18c92d6f0f",
+      "src/services/polymerizationBatchApi.test.ts": "21cc85cccaf7545115359d0b4298b70263ebcaa8648bdbdd0df75548b4928e33",
+      "src/services/polymerizationBatchApi.ts": "d00c7e0535dcf654de360f7a3a5f8dd5a169932e646b5e6810764e178c2f59b8",
+      "src/services/propertyFilterHistogramResource.test.ts": "fb4f9f0edc8c38e13633a98ea3a8dda4f3eb33136f4339e12036840877b440e0",
+      "src/services/propertyFilterHistogramResource.ts": "77ae4d59d49582370f04ddde1d1e629babb22560e3e469c98e0b71e453fb06b7",
+      "src/services/propertyFilterOptionsResource.test.ts": "4ff4b4301304f74a20e9dd32de6d66675145b9f09aeb16b9affd50ffdcfc35d8",
+      "src/services/propertyFilterOptionsResource.ts": "fdb394e744772cfe2b0613501742490274d5b6b1e275d7fff9293ce872f7b8ba",
+      "src/services/tgAssistantImagePreviews.test.ts": "c89c36702f13fad4de1bd8fbe685f257d847735bd51a416a00987983c992e68f",
+      "src/services/tgAssistantImagePreviews.ts": "134d80e1a229149f9924f61291c7124434bdcb70c661bc20ab46bea969e56751",
+      "src/services/tgAssistantStream.test.ts": "747aaea6942663f8f58b13c83861d44167652e1912405d2dbb44c9f33eea4a2b",
+      "src/services/tgAssistantStream.ts": "6145a5f40106d49c3b441f4aeb8332f3d438080826563b970322d3f44d3a4161",
+      "src/storageMigrations.test.ts": "a7ff30898eaf4e4b334b3bf3f88f02ce720d82957508179c02944eedf90df61e",
+      "src/storageMigrations.ts": "062e3b3cacb6ca8e7e4eec4d211c63550aaf8064d40e9de8c1858f67a4bd83d0",
+      "src/structure/editor.ts": "6373becd3b67554b208f67c5418cf4d63e0d4cca78f53c15ddadf771aba8ef73",
+      "src/structure/editorLifetime.ts": "569ca58e68b4fc9cd38f0e8cfb68b68351fa23474078e0ffa528706843b24a38",
+      "src/structure/nativePopups.ts": "fe39e281d80b2fea0b7f4e9d9b5fba862b8dc90e7d4142d6077eeaa3c461b2c4",
+      "src/structure/nativeSession.test.ts": "a0a82afbdab2c193002cd862cc354cba088988c46e9da6c11a8af891c809a939",
+      "src/structure/nativeSession.ts": "90b8764a7072533a8f1672ee68891926231b32e94fbdaf950592b5caa31dc222",
+      "src/structure/navigation.test.ts": "4522a44d5b6223861085874a48957436e063cd018f1b75b8384269c6715ac6d2",
+      "src/structure/navigation.ts": "d8cfe56481b269abeaef5a2e7efbf7a9390b25e984a9d7048e00c9e4db93a985",
+      "src/structure/workspace.test.ts": "69f848c84d464d58a37452181d0da34fe92bb1bf4b35acd8c135a220f3c9cfab",
+      "src/structure/workspace.ts": "86cb96a8c705e1ac82cf90d885c2a2c3bcb4d49be4814e4fb4a9e0368e0ab5e5",
+      "src/styles/conditional-generation.css": "fa40dc2e3f7ab860e74136bf8d569a2e9b12f07c83f8ba0da151638f3102526e",
+      "src/styles/database-analysis.css": "d9007df2b1b59d2d709b8ae293dbda17ab622a1b2430b081841939f612f5a388",
+      "src/styles/database-filter.css": "20041d06290a4ff2f1571dc2f5a669f86195623e6885480d344f8b8415b99892",
+      "src/styles/database-query.css": "23b3ec67c534dd2ef2554e0b4313e20ba536dd80054514628430092549710f83",
+      "src/styles/homopolymer-property-prediction.css": "5ed7da108398eadeb448fb87b2d9571d8c7b5977b260dfc07b6821fa8d1e977a",
+      "src/styles/ketcher-native.css": "a5fdf4ebbeaf32445479350c27aa7bed3f74f4cb34d168ed160f5ae34304f7d7",
+      "src/styles/knowledge-retrieval.css": "ce68fbcaaafd0b61951054e43772df087e92c3c112a4c4a0ee308ed833f75fcd",
+      "src/styles/md-simulation.css": "7edacbb6359b8fac492d8211e33d7454fedc3d91c7323856e31ca7c04335bdce",
+      "src/styles/module-page.css": "2f0cbd3305a8376923846200a425ef0e3fd38bed733ca50666401c9c85c43230",
+      "src/styles/monomer-dft.css": "58b33d9d208d64687d3b7ef03c5778d05f8cf5fc54b65b6c7805d63c6c208feb",
+      "src/styles/monomer-md-simulation.css": "6844f2f9a50efe2dc21eac9643c502a5dc31e0c57b026ae0e9da1aae26289f66",
+      "src/styles/monomer-polymerization-batch.css": "26a946e210159864e0052cc2f6f4500e049174c507631b304bc080862b286f9b",
+      "src/styles/monomer-polymerization.css": "fcba48a8b5cd42e271293a42dab7d06edabb2b2e1dbf16c53f92c08c29ba11ca",
+      "src/styles/motion.css": "978d00be8404242ef19ef248d68603b663f4fca348d3f9e22367c1cff726bc80",
+      "src/styles/polymer-desktop.css": "5e416406f02d155e604fac7b506a161ae6d7b7963af3178edcb3cdbd539987b8",
+      "src/styles/polymer-similarity-explorer.css": "b68fe3bfb791d5683117b6987e6426c192089844f2c19f4f300f7b28043aba12",
+      "src/styles/polytao-generation.css": "f35928e886f4d5eacb57d77014b015d6c51b3021a2fcba37a7081ee207a43fad",
+      "src/styles/reverse-design.css": "5ddf9af63ccc346027e9018cf361aa6797a8d890fd130ba8804c08f2278679e1",
+      "src/styles/structure-workbench.css": "21a76ef5e6e78498960ddc50fcfe6d7b12376f8a4bcd12ffddffd48cd5136876",
+      "src/styles/tg-reverse-design-workbench.css": "d8f3cdf25735689c0bcd0006fbba03f7d8668ef26697aa5dd156fefae91f40f6",
+      "src/styles/workbench-select.css": "6aa1ccd364b2cd21b360e6124d1111dc899f6f777cb895505a801c56252fec97",
+      "src/styles/workbench-theme.css": "1e62f7301e2a4d91c17ac0544e6a23bc62cd8d612e2269396d8dc92cdcb5af29",
+      "src/test/structureEditorEngineMock.tsx": "68e95b6e7a6e5744dde486841bded87c42bda97715b28af1f60f22f8f2ea21e1",
+      "src/test/structureFixture.ts": "653cac9cbaaeb08e56b9b5b2408b5d0702b3ce6d69797662ca7a8e0c2f36eb49",
+      "src/types/index.ts": "c71ed76c6a9d38bbc874613b3db8cac5300c7d4d9d56b3620b823da5e243f358",
+      "src/types/ketcher.d.ts": "d5fed3dff058e61cc6fc2e39384a0b1b371091b2703a2d4d6e025961b7c3f3f2",
+      "src/types/pako.d.ts": "ec73ea884770d5df3888784a85541a4599802a6a47bae75174744ec95ecc398a",
+      "src/types/polymerizationBatch.ts": "4ad5f56cba7c45d4d5d78ca8b0c0b48271d3346955c951fd10e4509f410baae6",
+      "src/types/structure-editor-engine.d.ts": "a92ca8e0a7f941088e34eba31b778dff821c8dfcff4b5e127868c1cd5a1fd1f8",
+      "src/utils/monomerMdPresentation.test.ts": "4e45fdd55ea704f28042fc5d73f7b90d217e3a7cdf0ff20b9aa9b510ef89b71e",
+      "src/utils/monomerMdPresentation.ts": "e839ef8f0f871b7bf5359e61e1f0f89a01a3e6559eaf698bf7487e60a2692d89",
+      "src/vite-env.d.ts": "f77c9dfd6a690f6b7f949ce8afbb32b46c121635f92710310cef482bb9dfeeb8",
+      "tailwind.config.ts": "b16e6fd85e6837091b33c0dfa124c9d2276f3f2a94e1e535598cc527d865518c",
+      "tsconfig.json": "77e546e5a8ed6e43b2ebc716495fa8375d1d832aa4fc242de17199be99f69c1e",
+      "tsconfig.node.json": "05baa4bc966382e1137791b75fb37ee470d2dc2f47edeeb852d0197566a9d558",
+      "vite.config.d.ts": "f1a1b21a223c18a29308ebff0b002317e4bb8aa5e350164f8c8c3b8bde33a535",
+      "vite.config.js": "a760fa569bad4df5c6f15f8c43b7807607de4214987f7b57a1e248825b490b87",
+      "vite.config.ts": "4199cc72ba3ec9970dd01974ec0d656fdb398478932ea7b3ca54cbb8e73361bd",
+      "vite.ketcher-compat.config.d.ts": "4b96dd19fd2949d28ce80e913412b0026dc421e5bf6c31d87c7b5eb11b5753b4",
+      "vite.ketcher-compat.config.ts": "60903580cec3afe2aa5a883b4c55312010dc8d067aba42ea0ed35734a9fe92a6"
+    }
+  },
+  "budgetsNotMeasurements": {
+    "canvasEssentialReadyMs": 1050,
+    "workerCreatedMs": 450,
+    "workerUsableAfterCreatedMs": 600,
+    "documentConfirmationMs": 200,
+    "initialExportMs": 50,
+    "uiReadyTargetMs": 1250,
+    "exportReadyTargetMs": 1300,
+    "caution": "Simultaneous per-navigation stage budgets; not sum of independent P50 gains or a prediction. Advancing Worker alone will expose the UI path, which must also move earlier."
+  },
+  "prototypeFunctionalEvidence": {
+    "smoke-results.json": {
+      "path": "/tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/smoke-results.json",
+      "data": {
+        "url": "http://127.0.0.1:5943/structure-workbench",
+        "passed": false,
+        "checks": [
+          {
+            "name": "ready requires worker info and no Macro mount",
+            "value": {
+              "ready": 5538.900001525879,
+              "serviceReady": 5205.5,
+              "firstInfo": 5202.400001525879,
+              "workers": 1,
+              "macroRequests": 0,
+              "macroLibrary": false
+            }
+          },
+          {
+            "name": "small molecule SMILES KET Molfile PNG exports",
+            "value": {
+              "smiles": "CCO",
+              "nodes": 1,
+              "molValid": true,
+              "pngType": "image/png",
+              "pngBytes": 1188,
+              "macroRequests": 0
+            }
+          },
+          {
+            "name": "first Macro mount preserves document",
+            "value": {
+              "mode": 1,
+              "nodes": 1,
+              "macroRequests": 1
+            }
+          },
+          {
+            "name": "Macro to molecules roundtrip",
+            "value": {
+              "smiles": "CCO"
+            }
+          },
+          {
+            "name": "fresh reload did not preinitialize Macro",
+            "value": {
+              "requests": 0
+            }
+          },
+          {
+            "name": "host Macro document automatically ensures SDK",
+            "value": {
+              "macroRequests": 1,
+              "nodes": 3,
+              "macroReady": 1
+            }
+          }
+        ],
+        "failure": "Probe manually stopped after >60s awaiting ketcher.switchToMoleculesMode() following successful HELM host import. CCO UI Macro roundtrip had passed earlier. No implementation change or rerun used to conceal this timeout."
+      }
+    },
+    "smoke-lifecycle.json": {
+      "path": "/tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/smoke-lifecycle.json",
+      "data": {
+        "passed": true,
+        "checks": [
+          {
+            "name": "owner-switch",
+            "created": 2,
+            "active": 1,
+            "smiles": "CCO"
+          },
+          {
+            "name": "ordinary-page",
+            "created": 0,
+            "assets": 0
+          }
+        ],
+        "errors": []
+      }
+    },
+    "navigation-final.json": {
+      "path": "/tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/navigation-final.json",
+      "data": {
+        "startedAt": "2026-09-14T03:07:44.245Z",
+        "url": "http://127.0.0.1:5943/structure-workbench",
+        "scope": "App-lifetime CCO, 10 complete round trips (20 owner switches), no reload persistence assumption",
+        "steps": [
+          {
+            "name": "actual oxygen drag changes KET coordinates",
+            "smiles": "CCO",
+            "workers": 1,
+            "active": 1
+          },
+          {
+            "round": 1,
+            "module": "databaseQuery",
+            "switches": 1,
+            "smiles": "CCO",
+            "created": 2,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 1,
+            "module": "structureWorkbench",
+            "switches": 2,
+            "smiles": "CCO",
+            "created": 3,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 2,
+            "module": "databaseQuery",
+            "switches": 3,
+            "smiles": "CCO",
+            "created": 4,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 2,
+            "module": "structureWorkbench",
+            "switches": 4,
+            "smiles": "CCO",
+            "created": 5,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 3,
+            "module": "databaseQuery",
+            "switches": 5,
+            "smiles": "CCO",
+            "created": 6,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 3,
+            "module": "structureWorkbench",
+            "switches": 6,
+            "smiles": "CCO",
+            "created": 7,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 4,
+            "module": "databaseQuery",
+            "switches": 7,
+            "smiles": "CCO",
+            "created": 8,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 4,
+            "module": "structureWorkbench",
+            "switches": 8,
+            "smiles": "CCO",
+            "created": 9,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 5,
+            "module": "databaseQuery",
+            "switches": 9,
+            "smiles": "CCO",
+            "created": 10,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 5,
+            "module": "structureWorkbench",
+            "switches": 10,
+            "smiles": "CCO",
+            "created": 11,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 6,
+            "module": "databaseQuery",
+            "switches": 11,
+            "smiles": "CCO",
+            "created": 12,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 6,
+            "module": "structureWorkbench",
+            "switches": 12,
+            "smiles": "CCO",
+            "created": 13,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 7,
+            "module": "databaseQuery",
+            "switches": 13,
+            "smiles": "CCO",
+            "created": 14,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 7,
+            "module": "structureWorkbench",
+            "switches": 14,
+            "smiles": "CCO",
+            "created": 15,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 8,
+            "module": "databaseQuery",
+            "switches": 15,
+            "smiles": "CCO",
+            "created": 16,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 8,
+            "module": "structureWorkbench",
+            "switches": 16,
+            "smiles": "CCO",
+            "created": 17,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 9,
+            "module": "databaseQuery",
+            "switches": 17,
+            "smiles": "CCO",
+            "created": 18,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 9,
+            "module": "structureWorkbench",
+            "switches": 18,
+            "smiles": "CCO",
+            "created": 19,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 10,
+            "module": "databaseQuery",
+            "switches": 19,
+            "smiles": "CCO",
+            "created": 20,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "round": 10,
+            "module": "structureWorkbench",
+            "switches": 20,
+            "smiles": "CCO",
+            "created": 21,
+            "active": 1,
+            "maxActive": 1,
+            "oldDisposed": true,
+            "oldCanvasDetached": true,
+            "allOldDisposed": true,
+            "staleRejected": true,
+            "staleError": "AbortError"
+          },
+          {
+            "name": "ordinary page creates no SDK instance",
+            "beforeCreated": 21,
+            "created": 21,
+            "active": 1,
+            "maxActive": 1
+          }
+        ],
+        "errors": [],
+        "passed": true,
+        "finishedAt": "2026-09-14T03:08:23.195Z"
+      }
+    },
+    "navigation-final-attempt1.json": {
+      "path": "/tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/navigation-final-attempt1.json",
+      "data": {
+        "startedAt": "2026-09-14T03:06:55.533Z",
+        "url": "http://127.0.0.1:5943/structure-workbench",
+        "scope": "App-lifetime CCO, 10 complete round trips (20 owner switches), no reload persistence assumption",
+        "steps": [
+          {
+            "name": "actual oxygen drag changes KET coordinates",
+            "smiles": "CCO",
+            "workers": 1,
+            "active": 1
+          }
+        ],
+        "errors": [],
+        "passed": false,
+        "failure": "page.evaluate: TypeError: Cannot read properties of null (reading 'isConnected')\n    at eval (eval at evaluate (:311:30), <anonymous>:1:370)\n    at async <anonymous>:337:30\n    at /tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/navigation-final.mjs:24:34",
+        "failureState": {
+          "route": "/database-query",
+          "text": "智聚万物\nNEXPOLY LAB\n结构工作台\n材料发现\nDISCOVER\n知识检索\n聚合物生成\n聚合物相似性探索\n数据库查询\n数据库筛选\n数据库分析\n材料设计\nBUILD\n均聚物性质预测\n单体正向聚合\nMD 模拟\n单体 MD 模拟\n单体 DFT\n条件聚合物生成\n实验优化\nOPTIMIZE\nTg 逆向设计\n高通量优化演示\n数据管理\nDATA\n暂无模块\n项目\n对话\n数据库查询\n加载结构\n导入图片\n清空画布\n生成SMILES\n3D构象\nC\nH\n3\nO\nH\nMolecules\n100%\n▼\nH\nCNOS\nPFClBrI\nSMILES",
+          "workers": 2,
+          "active": 1,
+          "status": {
+            "structureEditor": "true",
+            "editorEngine": "react",
+            "editorStatus": "ready",
+            "ketcherSession": "structure-4"
+          }
+        },
+        "finishedAt": "2026-09-14T03:07:02.697Z"
+      }
+    }
+  },
+  "cleanup": {
+    "at": "2026-09-14T03:12:30.356276+00:00",
+    "services": [
+      {
+        "pid": 2281977,
+        "port": 5941,
+        "cwd": "/tmp/nexpoly-refresh-beyond-9000-20260914/lazy-macro/frontend",
+        "command": "node node_modules/vite/bin/vite.js --config vite.config.ts --host 127.0.0.1 --port 5941 --strictPort --force ",
+        "verifiedOwned": true,
+        "sentSignal": "SIGTERM"
+      },
+      {
+        "pid": 2252522,
+        "port": 5942,
+        "cwd": "/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend",
+        "command": "node node_modules/vite/bin/vite.js --config vite.config.ts --configLoader runner --host 127.0.0.1 --port 5942 --strictPort ",
+        "verifiedOwned": true,
+        "sentSignal": "SIGTERM"
+      },
+      {
+        "pid": 2321130,
+        "port": 5943,
+        "cwd": "/tmp/nexpoly-refresh-beyond-9000-20260914/island-lazy/frontend",
+        "command": "node node_modules/vite/bin/vite.js --config vite.config.ts --configLoader runner --host 127.0.0.1 --port 5943 --strictPort ",
+        "verifiedOwned": true,
+        "sentSignal": "SIGTERM"
+      },
+      {
+        "pid": 2244474,
+        "port": 5951,
+        "cwd": "/tmp/nexpoly-refresh-beyond-9000-20260914/startup/frontend",
+        "command": "node ./node_modules/.bin/vite --config vite.config.ts --host 127.0.0.1 --port 5951 --strictPort ",
+        "verifiedOwned": true,
+        "sentSignal": "SIGTERM"
+      },
+      {
+        "pid": 2244607,
+        "port": 5952,
+        "cwd": "/tmp/nexpoly-refresh-beyond-9000-20260914/startup/frontend",
+        "command": "node ./node_modules/.bin/vite --config vite.config.ts --host 127.0.0.1 --port 5952 --strictPort ",
+        "verifiedOwned": true,
+        "sentSignal": "SIGTERM"
+      }
+    ]
+  },
+  "final-environment": {
+    "finishedAt": "2026-09-14T03:12:56.692001+00:00",
+    "productFilesChecked": 424,
+    "changedProductFiles": [],
+    "http": {
+      "9000": 200,
+      "9001": 200
+    },
+    "containers": [
+      "/nexpoly-nginx-1 0aea339d659f7774c9ca5aebf329fa2a9a269b916faa700711e45d6b73869096 sha256:df16c98afd93edd95c69936ff8b32fa8da7d2c4e1fa147d0da6a920ed56f4b34 2026-09-10T09:55:27.66770871Z running",
+      "/nexpoly_dev-frontend-dev-1 7a9a60be382054eac50b33e91ee92597d91a3b895d5fdda71f2b0bcc997d1b64 sha256:d9f850096136edbc402debdd8729579a288aac64574ada0ff4db26b6ae58b0b2 2026-09-11T11:49:33.988441901Z running"
+    ]
+  },
+  "actualSdkPatchVerification": "Verified nexpoly-3.8.0-r3: 11 SDK artifacts and 4 versioned patches."
+}

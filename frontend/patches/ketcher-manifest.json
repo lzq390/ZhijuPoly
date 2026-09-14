@@ -1,0 +1,64 @@
+{
+  "revision": "nexpoly-3.8.0-r3",
+  "versions": {
+    "ketcher-core": "3.8.0",
+    "ketcher-macromolecules": "3.8.0",
+    "ketcher-react": "3.8.0",
+    "ketcher-standalone": "3.8.0",
+    "process": "0.11.10",
+    "@rollup/plugin-inject": "5.0.5",
+    "patch-package": "8.0.1"
+  },
+  "files": {
+    "node_modules/ketcher-core/dist/index.js": {
+      "upstream": "3c4f9c60df8775db51da67ff0ee86e3de240d918fd06a946b18f33348c2f6422",
+      "patched": "01605b21272980c4b81907b44d94d5ac46c7b06a448849b42fe4c2c8795d2e7e"
+    },
+    "node_modules/ketcher-core/dist/index.modern.js": {
+      "upstream": "f67ac80f3471e0f98bb3ac4a6d84a1133e7300a9bad6422f5d39b549791573cb",
+      "patched": "2b136993d4db4db163acd143eec6ffda42e4d495035bd60062dda9cf3c0574fc"
+    },
+    "node_modules/ketcher-macromolecules/dist/index.js": {
+      "upstream": "563fa7befe50404de74cc1567f3867a2584de288a3d2be86f0df97c9b6d836d6",
+      "patched": "b59b0bbfdff4a9850af98d984cae8b30eb619b0bfb84a69a0198477b150c2cc3"
+    },
+    "node_modules/ketcher-macromolecules/dist/index.modern.js": {
+      "upstream": "764bec437ca5cf4f29b77b63d4f8ade8db652f7763fa07202335453a99b7a322",
+      "patched": "f243ce8f1121398e95357ba510b39111832fa5052d4e5cbc0899d871377f196d"
+    },
+    "node_modules/ketcher-react/dist/cjs/index.js": {
+      "upstream": "4f98d1a1b4a512587fd06195f70d56a72ae213e8e80d4ed8afe4f3cb1639d0e1",
+      "patched": "846fb1785c6eaea270a0c792be63d8b34be92bc407063536c6706dfd85878af4"
+    },
+    "node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js": {
+      "upstream": "8d421018f398295071ed3f7073c805d5c4ee6ec699fe63c28f1579a5051caef7",
+      "patched": "0612055555a90b6b087c223ff12b9bf816ee03479732531c9c388b2cc7665146"
+    },
+    "node_modules/ketcher-react/dist/index.js": {
+      "upstream": "d7d9d79208482f5a90ceaa8ac27bb9c7c821c536c14080b00dfff69d4b712abf",
+      "patched": "0771066ae3c821725bf61be26bd0d7cd8d988d8b11389883c7006cac2b15534b"
+    },
+    "node_modules/ketcher-react/dist/index.modern-c0bcdf82.js": {
+      "upstream": "459ef3a39acb318006269f3eef46089eb1d596f641e29c524bc76220f4cdd570",
+      "patched": "444de5a5381283fe45bc8d8ffed268904ce2b8b746b4a3b66ae5cae215f7df42"
+    },
+    "node_modules/ketcher-standalone/dist/cjs/main.js": {
+      "upstream": "706163aa4c1caa4877dec8cb288a44a662cb7cb8278710320848fa2690506d57",
+      "patched": "dacdbe79d8122f5603c076982311e36d4c1590c024795f9a9c99887d8489181f"
+    },
+    "node_modules/ketcher-standalone/dist/main.js": {
+      "upstream": "5043a6554904b2ddedf02fe9f8540656a278e3dbda6695d6688040f362862e63",
+      "patched": "ef9962f014787d18cf2c6ccd8365c8ef80e0de16563d445bf282cf19bfdfdeac"
+    },
+    "node_modules/ketcher-standalone/package.json": {
+      "upstream": "30c52a37befe57b8a50f01673f94b3e8ade9a892001c4fc99e9d3f6fc9237d7f",
+      "patched": "091c0502a2f75ca03c79c01ebc3f6260f1ded76211572810a03453ed4b0fc8f9"
+    }
+  },
+  "patches": {
+    "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+    "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+    "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+    "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+  }
+}

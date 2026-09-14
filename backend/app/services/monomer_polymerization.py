@@ -130,15 +130,12 @@ def run_monomer_polymerization(
     seen: set[tuple[str, str | None, str, str, int | None]] = set()
     filtered_auxiliary_rows = 0
 
-    for _, row in generated_df.iterrows():
-        monomer_a = _clean_text(row.get("mon1"))
-        monomer_b = _clean_optional_text(row.get("mon2"))
-        polymer_smiles = _clean_text(row.get("polym"))
-        polymer_class = _clean_text(row.get("polymer_class"))
-        reaction_id = _optional_int(row.get("Ps_rxnL"))
-
-        if not monomer_a or not polymer_smiles:
-            continue
+    for item in parse_generated_rows(generated_df):
+        monomer_a = item["monomer_a_smiles"]
+        monomer_b = item["monomer_b_smiles"]
+        polymer_smiles = item["polymer_smiles"]
+        polymer_class = item["polymer_class"]
+        reaction_id = item["reaction_id"]
 
         monomer_a_key = _smiles_key(monomer_a)
         monomer_b_key = _smiles_key(monomer_b) if monomer_b else None
@@ -166,7 +163,7 @@ def run_monomer_polymerization(
                 "polymer_class": polymer_class,
                 "reaction_id": reaction_id,
                 "reaction_name": None,
-                "reactset": _reactset_to_list(row.get("reactset")),
+                "reactset": item["reactset"],
                 "structure_svg": generate_2d_svg(polymer_smiles),
             }
         )
@@ -333,3 +330,20 @@ def _reactset_to_list(value: Any) -> list[str]:
         return [str(item).strip() for item in value if str(item).strip()]
     text = str(value).strip()
     return [text] if text else []
+
+
+def parse_generated_rows(generated_df):
+    """Parse engine rows without rendering or applying an interface result cap."""
+    for _, row in generated_df.iterrows():
+        monomer_a = _clean_text(row.get("mon1"))
+        polymer = _clean_text(row.get("polym"))
+        if not monomer_a or not polymer:
+            continue
+        yield {
+            "monomer_a_smiles": monomer_a,
+            "monomer_b_smiles": _clean_optional_text(row.get("mon2")),
+            "polymer_smiles": polymer,
+            "polymer_class": _clean_text(row.get("polymer_class")),
+            "reaction_id": _optional_int(row.get("Ps_rxnL")),
+            "reactset": _reactset_to_list(row.get("reactset")),
+        }

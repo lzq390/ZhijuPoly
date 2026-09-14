@@ -1,0 +1,697 @@
+{
+  "base": "http://127.0.0.1:9001",
+  "browser": "151.0.7922.34",
+  "cases": [
+    {
+      "name": "same-target-double-click",
+      "module": "databaseQuery",
+      "phase": "idle",
+      "status": "ready",
+      "notice": "",
+      "smiles": "CCO",
+      "events": [
+        {
+          "event": "saveSnapshot:end",
+          "call": 2,
+          "time": 6087.199998855591,
+          "result": {
+            "status": "saved"
+          },
+          "status": "ready",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 3,
+          "epoch": 3,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "structureWorkbench",
+          "phase": "idle"
+        },
+        {
+          "event": "saveSnapshot",
+          "call": 3,
+          "time": 6096.799999237061,
+          "args": [],
+          "status": "ready",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 3,
+          "epoch": 3,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "structureWorkbench",
+          "phase": "guarding"
+        },
+        {
+          "event": "saveSnapshot:end",
+          "call": 3,
+          "time": 6376.39999961853,
+          "result": {
+            "status": "saved"
+          },
+          "status": "ready",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 3,
+          "epoch": 3,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "structureWorkbench",
+          "phase": "guarding"
+        },
+        {
+          "event": "mountEditor",
+          "call": 4,
+          "time": 6947.199998855591,
+          "args": [],
+          "status": "unmounted",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 4,
+          "epoch": 4,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "databaseQuery",
+          "phase": "blank"
+        },
+        {
+          "event": "mountEditor",
+          "call": 5,
+          "time": 6951.799999237061,
+          "args": [],
+          "status": "unmounted",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 6,
+          "epoch": 6,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "databaseQuery",
+          "phase": "blank"
+        },
+        {
+          "event": "saveSnapshot",
+          "call": 6,
+          "time": 7987.799999237061,
+          "args": [],
+          "status": "ready",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 7,
+          "epoch": 7,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "databaseQuery",
+          "phase": "entering"
+        },
+        {
+          "event": "saveSnapshot:end",
+          "call": 6,
+          "time": 8427.19999885559,
+          "result": {
+            "status": "saved"
+          },
+          "status": "ready",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 7,
+          "epoch": 7,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "databaseQuery",
+          "phase": "idle"
+        }
+      ]
+    },
+    {
+      "name": "two-targets-before-commit",
+      "module": "homopolymerPrediction",
+      "phase": "idle",
+      "status": "ready",
+      "notice": "",
+      "smiles": "CCO",
+      "events": [
+        {
+          "event": "saveSnapshot",
+          "call": 7,
+          "time": 9196.79999923706,
+          "args": [],
+          "status": "ready",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 7,
+          "epoch": 7,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "databaseQuery",
+          "phase": "guarding"
+        },
+        {
+          "event": "saveSnapshot:end",
+          "call": 7,
+          "time": 9448.39999961853,
+          "result": {
+            "status": "saved"
+          },
+          "status": "ready",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 7,
+          "epoch": 7,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "databaseQuery",
+          "phase": "guarding"
+        },
+        {
+          "event": "mountEditor",
+          "call": 8,
+          "time": 10035.19999885559,
+          "args": [],
+          "status": "unmounted",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 8,
+          "epoch": 8,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "homopolymerPrediction",
+          "phase": "blank"
+        },
+        {
+          "event": "mountEditor",
+          "call": 9,
+          "time": 10036.29999923706,
+          "args": [],
+          "status": "unmounted",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 10,
+          "epoch": 10,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "homopolymerPrediction",
+          "phase": "blank"
+        },
+        {
+          "event": "saveSnapshot",
+          "call": 10,
+          "time": 10959.39999961853,
+          "args": [],
+          "status": "ready",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 11,
+          "epoch": 11,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "homopolymerPrediction",
+          "phase": "idle"
+        }
+      ]
+    },
+    {
+      "name": "second-target-during-loading",
+      "module": "homopolymerPrediction",
+      "phase": "idle",
+      "status": "ready",
+      "notice": "最新修改未能同步，将使用上一次保存的画板；未完成的文本草稿已保留。关闭",
+      "smiles": "CCO",
+      "events": [
+        {
+          "event": "saveSnapshot",
+          "call": 11,
+          "time": 11780.39999961853,
+          "args": [],
+          "status": "ready",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 11,
+          "epoch": 11,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "homopolymerPrediction",
+          "phase": "guarding"
+        },
+        {
+          "event": "saveSnapshot:end",
+          "call": 11,
+          "time": 12028.19999885559,
+          "result": {
+            "status": "saved"
+          },
+          "status": "ready",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 11,
+          "epoch": 11,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "homopolymerPrediction",
+          "phase": "guarding"
+        },
+        {
+          "event": "mountEditor",
+          "call": 12,
+          "time": 12565.60000038147,
+          "args": [],
+          "status": "unmounted",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 12,
+          "epoch": 12,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "explorer",
+          "phase": "blank"
+        },
+        {
+          "event": "mountEditor",
+          "call": 13,
+          "time": 12567,
+          "args": [],
+          "status": "unmounted",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 14,
+          "epoch": 14,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "explorer",
+          "phase": "blank"
+        },
+        {
+          "event": "second-click-while-loading",
+          "time": 12605.60000038147,
+          "module": "explorer",
+          "phase": "blank",
+          "status": "loading"
+        },
+        {
+          "event": "saveSnapshot",
+          "call": 14,
+          "time": 12619.89999961853,
+          "args": [],
+          "status": "loading",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 15,
+          "epoch": 15,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "explorer",
+          "phase": "guarding"
+        },
+        {
+          "event": "saveSnapshot:end",
+          "call": 14,
+          "time": 12620.29999923706,
+          "result": {
+            "status": "failed",
+            "message": "结构编辑器尚未就绪。"
+          },
+          "status": "loading",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 15,
+          "epoch": 15,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "explorer",
+          "phase": "guarding"
+        },
+        {
+          "event": "recoverForNavigation",
+          "call": 15,
+          "time": 12620.39999961853,
+          "args": [
+            "failed"
+          ],
+          "status": "loading",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 15,
+          "epoch": 15,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "explorer",
+          "phase": "guarding"
+        },
+        {
+          "event": "recoverLastSnapshot",
+          "call": 16,
+          "time": 12620.39999961853,
+          "args": [
+            "failed"
+          ],
+          "status": "loading",
+          "dirty": false,
+          "revision": 3,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 15,
+          "epoch": 15,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "explorer",
+          "phase": "guarding"
+        },
+        {
+          "event": "mountEditor",
+          "call": 17,
+          "time": 12648,
+          "args": [],
+          "status": "loading",
+          "dirty": false,
+          "revision": 4,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 16,
+          "epoch": 16,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "explorer",
+          "phase": "guarding"
+        },
+        {
+          "event": "mountEditor",
+          "call": 18,
+          "time": 12648.5,
+          "args": [],
+          "status": "unmounted",
+          "dirty": false,
+          "revision": 4,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 18,
+          "epoch": 18,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "explorer",
+          "phase": "guarding"
+        },
+        {
+          "event": "mountEditor",
+          "call": 19,
+          "time": 12722.39999961853,
+          "args": [],
+          "status": "unmounted",
+          "dirty": false,
+          "revision": 4,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 20,
+          "epoch": 20,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "homopolymerPrediction",
+          "phase": "blank"
+        },
+        {
+          "event": "mountEditor",
+          "call": 20,
+          "time": 12724.19999885559,
+          "args": [],
+          "status": "unmounted",
+          "dirty": false,
+          "revision": 4,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 22,
+          "epoch": 22,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "homopolymerPrediction",
+          "phase": "blank"
+        },
+        {
+          "event": "saveSnapshot",
+          "call": 21,
+          "time": 13673.19999885559,
+          "args": [],
+          "status": "ready",
+          "dirty": false,
+          "revision": 4,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 23,
+          "epoch": 23,
+          "mutationDepth": 0,
+          "lastGoodRevision": 3,
+          "module": "homopolymerPrediction",
+          "phase": "idle"
+        }
+      ]
+    },
+    {
+      "name": "cancelled-navigation-delayed-export",
+      "module": "homopolymerPrediction",
+      "phase": "idle",
+      "status": "ready",
+      "notice": "最新修改未能同步，将使用上一次保存的画板；未完成的文本草稿已保留。关闭",
+      "smiles": "CCO",
+      "events": [
+        {
+          "event": "saveSnapshot",
+          "call": 22,
+          "time": 14703.89999961853,
+          "args": [],
+          "status": "ready",
+          "dirty": false,
+          "revision": 4,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 23,
+          "epoch": 23,
+          "mutationDepth": 0,
+          "lastGoodRevision": 4,
+          "module": "homopolymerPrediction",
+          "phase": "idle"
+        },
+        {
+          "event": "recoverForNavigation",
+          "call": 23,
+          "time": 16191.10000038147,
+          "args": [
+            "timeout"
+          ],
+          "status": "ready",
+          "dirty": false,
+          "revision": 4,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 23,
+          "epoch": 23,
+          "mutationDepth": 0,
+          "lastGoodRevision": 4,
+          "module": "homopolymerPrediction",
+          "phase": "idle"
+        },
+        {
+          "event": "recoverLastSnapshot",
+          "call": 24,
+          "time": 16191.19999885559,
+          "args": [
+            "timeout"
+          ],
+          "status": "ready",
+          "dirty": false,
+          "revision": 4,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 23,
+          "epoch": 23,
+          "mutationDepth": 0,
+          "lastGoodRevision": 4,
+          "module": "homopolymerPrediction",
+          "phase": "idle"
+        },
+        {
+          "event": "mountEditor",
+          "call": 25,
+          "time": 16234.89999961853,
+          "args": [],
+          "status": "loading",
+          "dirty": false,
+          "revision": 5,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 24,
+          "epoch": 24,
+          "mutationDepth": 0,
+          "lastGoodRevision": 4,
+          "module": "homopolymerPrediction",
+          "phase": "idle"
+        },
+        {
+          "event": "mountEditor",
+          "call": 26,
+          "time": 16239.60000038147,
+          "args": [],
+          "status": "unmounted",
+          "dirty": false,
+          "revision": 5,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 26,
+          "epoch": 26,
+          "mutationDepth": 0,
+          "lastGoodRevision": 4,
+          "module": "homopolymerPrediction",
+          "phase": "idle"
+        },
+        {
+          "event": "saveSnapshot:end",
+          "call": 22,
+          "time": 16272.60000038147,
+          "result": {
+            "status": "failed",
+            "message": "画板操作已失效。"
+          },
+          "status": "loading",
+          "dirty": false,
+          "revision": 5,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 27,
+          "epoch": 27,
+          "mutationDepth": 0,
+          "lastGoodRevision": 4,
+          "module": "homopolymerPrediction",
+          "phase": "idle"
+        },
+        {
+          "event": "saveSnapshot",
+          "call": 27,
+          "time": 17155.19999885559,
+          "args": [],
+          "status": "ready",
+          "dirty": false,
+          "revision": 5,
+          "draftDiffers": false,
+          "draftError": null,
+          "owner": 27,
+          "epoch": 27,
+          "mutationDepth": 0,
+          "lastGoodRevision": 4,
+          "module": "homopolymerPrediction",
+          "phase": "idle"
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "conditions": {
+    "date": "2026-09-11",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "reducedMotion": "no-preference",
+    "engine": "react",
+    "sdk": "3.8.0",
+    "document": "CCO",
+    "businessApi": "browser fixtures, no external writes",
+    "mutation": "ephemeral browser instrumentation only",
+    "sourceCodeChanged": false
+  },
+  "limitations": [
+    "用户尚未确认具体连点目标；按左侧模块导航复现。",
+    "第二次点击在 DOM 观察到新模块 loading 后触发，以稳定覆盖该时序；同一目标对照使用真实 dblclick（间隔 80ms）。",
+    "前三例没有人为延迟 SDK；第四例在浏览器中将 KET 导出结果延后 1900ms，以验证取消后的超时回调。",
+    "未对截图中的完整聚合物做耗时测量，未改动生产环境。"
+  ],
+  "sourceSha256": {
+    "frontend/src/App.tsx": "d6295cc04ba1c518b949d0f1916456322dd2b4e9aa40a87cefbac3b3fcec7fdc",
+    "frontend/src/hooks/useModuleTransition.ts": "1fb9d4c2793df3d49cf6a21a7808400f99e1ebf68808b3745d07274843dc7568",
+    "frontend/src/hooks/useGuardedNavigation.ts": "4f4ebb7f66abcb9486a2251c0093d36248dad218cf9b5adca072dec9a776e104",
+    "frontend/src/hooks/useTgStructureCanvas.ts": "9a7b3a1074614274b6df30a67eda9c5f858feb81ba0eeeae5fd81cc5eee5ef44",
+    "frontend/src/structure/workspace.ts": "c066f1951cdee05b6fe4ec46926cd14fcb3ed0bad8eef1f7bc4252333f113192",
+    "frontend/src/components/structure-workbench/ReactStructureEditor.tsx": "c02b9a0df0b71185a3ab9416cd965be8fbf3d4732314f9049ba6b72a8fc1dd88",
+    "frontend/package-lock.json": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861"
+  },
+  "summaries": [
+    {
+      "name": "same-target-double-click",
+      "notice": false,
+      "finalSmiles": "CCO",
+      "failedSaves": [],
+      "recoveryReasons": []
+    },
+    {
+      "name": "two-targets-before-commit",
+      "notice": false,
+      "finalSmiles": "CCO",
+      "failedSaves": [],
+      "recoveryReasons": []
+    },
+    {
+      "name": "second-target-during-loading",
+      "notice": true,
+      "finalSmiles": "CCO",
+      "failedSaves": [
+        {
+          "status": "failed",
+          "message": "结构编辑器尚未就绪。"
+        }
+      ],
+      "recoveryReasons": [
+        "failed"
+      ],
+      "failedSaveMs": 0.4
+    },
+    {
+      "name": "cancelled-navigation-delayed-export",
+      "notice": true,
+      "finalSmiles": "CCO",
+      "failedSaves": [
+        {
+          "status": "failed",
+          "message": "画板操作已失效。"
+        }
+      ],
+      "recoveryReasons": [
+        "timeout"
+      ],
+      "failedSaveMs": 1568.7
+    }
+  ]
+}

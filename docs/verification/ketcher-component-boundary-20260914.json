@@ -1,0 +1,1860 @@
+{
+  "date": "2026-09-14",
+  "checkpointCommit": "4793ce73f1de4a2d240c48412a95e0a98696607f",
+  "scope": "Embedding only, same non-lazy 3.8 production SDK. Excludes full App/HMR and does not compare actual 9000/9001.",
+  "method": {
+    "browser": "151.0.7922.34",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "network": "remote",
+    "latencyMs": 40,
+    "downloadMbps": 50,
+    "uploadMbps": 10,
+    "cache": "One persistent browser profile; same origin and SDK URLs; one prime per arm, ordinary reloads; no interception or cache disabling",
+    "order": "Alternating forward/reverse pairs; previous SDK disposed before next arm",
+    "endpoints": "Top navigation -> visible SDK SVG + actual workspace ready + common clear enabled; then first real empty SMILES. Also report owner-document/import/mount intervals.",
+    "functional": "CCO import, real oxygen mouse drag verified by KET coordinates, SMILES export, clear, one Worker, retirement to zero Workers",
+    "startedAt": "2026-09-14T04:17:58.582Z",
+    "finishedAt": "2026-09-14T04:19:26.610Z"
+  },
+  "complete": true,
+  "summary": [
+    {
+      "variant": "div",
+      "count": 10,
+      "passed": 10,
+      "metrics": {
+        "ownerDocumentMs": {
+          "p50": 0,
+          "p95": 0
+        },
+        "ownerProbeMs": {
+          "p50": 100.199951171875,
+          "p95": 101.5
+        },
+        "sdkImportStartMs": {
+          "p50": 196.39990234375,
+          "p95": 198.60009765625
+        },
+        "sdkImportedMs": {
+          "p50": 857.699951171875,
+          "p95": 913.199951171875
+        },
+        "mountMs": {
+          "p50": 857.89990234375,
+          "p95": 913.39990234375
+        },
+        "workerMs": {
+          "p50": 917.10009765625,
+          "p95": 971.699951171875
+        },
+        "workerReplyMs": {
+          "p50": 1646.699951171875,
+          "p95": 1715.5
+        },
+        "svgMs": {
+          "p50": 981.39990234375,
+          "p95": 1052
+        },
+        "onInitMs": {
+          "p50": 1613.699951171875,
+          "p95": 1681.300048828125
+        },
+        "restoreCompletedMs": {
+          "p50": 1873.800048828125,
+          "p95": 1947.5
+        },
+        "uiReadyMs": {
+          "p50": 1883.5,
+          "p95": 1958.89990234375
+        },
+        "readyMs": {
+          "p50": 2159.199951171875,
+          "p95": 2234.5
+        },
+        "importDurationMs": {
+          "p50": 659.099853515625,
+          "p95": 720.5
+        },
+        "mountToReadyMs": {
+          "p50": 1299.89990234375,
+          "p95": 1372.099853515625
+        },
+        "workerToReplyMs": {
+          "p50": 743.800048828125,
+          "p95": 757.400146484375
+        },
+        "restoreDurationMs": {
+          "p50": 263.2998046875,
+          "p95": 267.099853515625
+        },
+        "initialExportMs": {
+          "p50": 274,
+          "p95": 334.699951171875
+        },
+        "longtaskMaxMs": {
+          "p50": 366,
+          "p95": 382
+        },
+        "longtaskTotalMs": {
+          "p50": 807,
+          "p95": 884
+        },
+        "wireBytes": {
+          "p50": 2331,
+          "p95": 2331
+        },
+        "requestCount": {
+          "p50": 12,
+          "p95": 12
+        }
+      }
+    },
+    {
+      "variant": "iframe",
+      "count": 10,
+      "passed": 10,
+      "metrics": {
+        "ownerDocumentMs": {
+          "p50": 63.60009765625,
+          "p95": 65.699951171875
+        },
+        "ownerProbeMs": {
+          "p50": 169.89990234375,
+          "p95": 175.300048828125
+        },
+        "sdkImportStartMs": {
+          "p50": 267.400146484375,
+          "p95": 272.300048828125
+        },
+        "sdkImportedMs": {
+          "p50": 940,
+          "p95": 1004.5
+        },
+        "mountMs": {
+          "p50": 940.199951171875,
+          "p95": 1004.60009765625
+        },
+        "workerMs": {
+          "p50": 999.5,
+          "p95": 1063.89990234375
+        },
+        "workerReplyMs": {
+          "p50": 1742.10009765625,
+          "p95": 1947.300048828125
+        },
+        "svgMs": {
+          "p50": 1056,
+          "p95": 1133.199951171875
+        },
+        "onInitMs": {
+          "p50": 1707.300048828125,
+          "p95": 1892.5
+        },
+        "restoreCompletedMs": {
+          "p50": 1968.7001953125,
+          "p95": 2185.39990234375
+        },
+        "uiReadyMs": {
+          "p50": 1978.60009765625,
+          "p95": 2189
+        },
+        "readyMs": {
+          "p50": 2248.5,
+          "p95": 2461.60009765625
+        },
+        "importDurationMs": {
+          "p50": 672.599853515625,
+          "p95": 736.300048828125
+        },
+        "mountToReadyMs": {
+          "p50": 1319.199951171875,
+          "p95": 1457
+        },
+        "workerToReplyMs": {
+          "p50": 744.900146484375,
+          "p95": 883.400146484375
+        },
+        "restoreDurationMs": {
+          "p50": 266.10009765625,
+          "p95": 292.7998046875
+        },
+        "initialExportMs": {
+          "p50": 272.5,
+          "p95": 274.300048828125
+        },
+        "longtaskMaxMs": {
+          "p50": 378,
+          "p95": 499
+        },
+        "longtaskTotalMs": {
+          "p50": 799,
+          "p95": 1062
+        },
+        "wireBytes": {
+          "p50": 2611,
+          "p95": 2611
+        },
+        "requestCount": {
+          "p50": 13,
+          "p95": 13
+        }
+      }
+    }
+  ],
+  "samples": [
+    {
+      "variant": "div",
+      "round": 1,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 0,
+        "ownerProbeMs": 99.300048828125,
+        "sdkImportStartMs": 196.5,
+        "sdkImportedMs": 854.89990234375,
+        "mountMs": 855.10009765625,
+        "workerMs": 914.5,
+        "workerReplyMs": 1646,
+        "svgMs": 968.699951171875,
+        "onInitMs": 1613.699951171875,
+        "restoreCompletedMs": 1873.800048828125,
+        "uiReadyMs": 1878.89990234375,
+        "readyMs": 2152.89990234375,
+        "importDurationMs": 658.39990234375,
+        "mountToReadyMs": 1297.7998046875,
+        "workerToReplyMs": 731.5,
+        "restoreDurationMs": 260.10009765625,
+        "initialExportMs": 274,
+        "longtaskMaxMs": 366,
+        "longtaskTotalMs": 790,
+        "wireBytes": 2331,
+        "requestCount": 12
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359493027
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359493306.9001
+          },
+          {
+            "event": "disposed",
+            "at": 1789359493635.2
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "iframe",
+      "round": 1,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 65.699951171875,
+        "ownerProbeMs": 170,
+        "sdkImportStartMs": 268.099853515625,
+        "sdkImportedMs": 938.699951171875,
+        "mountMs": 938.89990234375,
+        "workerMs": 997.800048828125,
+        "workerReplyMs": 1738.699951171875,
+        "svgMs": 1069.39990234375,
+        "onInitMs": 1700.39990234375,
+        "restoreCompletedMs": 1966.5,
+        "uiReadyMs": 1968.199951171875,
+        "readyMs": 2239.099853515625,
+        "importDurationMs": 670.60009765625,
+        "mountToReadyMs": 1300.199951171875,
+        "workerToReplyMs": 740.89990234375,
+        "restoreDurationMs": 266.10009765625,
+        "initialExportMs": 270.89990234375,
+        "longtaskMaxMs": 353,
+        "longtaskTotalMs": 846,
+        "wireBytes": 2611,
+        "requestCount": 13
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359497017.7
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359497236.2
+          },
+          {
+            "event": "disposed",
+            "at": 1789359497467.6
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "iframe",
+      "round": 2,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 63.300048828125,
+        "ownerProbeMs": 170.5,
+        "sdkImportStartMs": 267.400146484375,
+        "sdkImportedMs": 940,
+        "mountMs": 940.199951171875,
+        "workerMs": 999.5,
+        "workerReplyMs": 1777.10009765625,
+        "svgMs": 1054.699951171875,
+        "onInitMs": 1741.699951171875,
+        "restoreCompletedMs": 2002.5,
+        "uiReadyMs": 2005.800048828125,
+        "readyMs": 2279.300048828125,
+        "importDurationMs": 672.599853515625,
+        "mountToReadyMs": 1339.10009765625,
+        "workerToReplyMs": 777.60009765625,
+        "restoreDurationMs": 260.699951171875,
+        "initialExportMs": 273.5,
+        "longtaskMaxMs": 413,
+        "longtaskTotalMs": 927,
+        "wireBytes": 2611,
+        "requestCount": 13
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359500833.4
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359501102.3
+          },
+          {
+            "event": "disposed",
+            "at": 1789359501464.6
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "div",
+      "round": 2,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 0,
+        "ownerProbeMs": 99.10009765625,
+        "sdkImportStartMs": 196.39990234375,
+        "sdkImportedMs": 859.39990234375,
+        "mountMs": 859.60009765625,
+        "workerMs": 919.300048828125,
+        "workerReplyMs": 1636.60009765625,
+        "svgMs": 987,
+        "onInitMs": 1602.39990234375,
+        "restoreCompletedMs": 1867.800048828125,
+        "uiReadyMs": 1878.300048828125,
+        "readyMs": 2151.10009765625,
+        "importDurationMs": 663,
+        "mountToReadyMs": 1291.5,
+        "workerToReplyMs": 717.300048828125,
+        "restoreDurationMs": 265.300048828125,
+        "initialExportMs": 272.800048828125,
+        "longtaskMaxMs": 339,
+        "longtaskTotalMs": 781,
+        "wireBytes": 2331,
+        "requestCount": 12
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359504593.0999
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359504902.5999
+          },
+          {
+            "event": "disposed",
+            "at": 1789359505151.2
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "div",
+      "round": 3,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 0,
+        "ownerProbeMs": 100.199951171875,
+        "sdkImportStartMs": 194.60009765625,
+        "sdkImportedMs": 817.10009765625,
+        "mountMs": 817.300048828125,
+        "workerMs": 876.699951171875,
+        "workerReplyMs": 1622.10009765625,
+        "svgMs": 938.10009765625,
+        "onInitMs": 1586.10009765625,
+        "restoreCompletedMs": 1853.199951171875,
+        "uiReadyMs": 1854.699951171875,
+        "readyMs": 2189.39990234375,
+        "importDurationMs": 622.5,
+        "mountToReadyMs": 1372.099853515625,
+        "workerToReplyMs": 745.400146484375,
+        "restoreDurationMs": 267.099853515625,
+        "initialExportMs": 334.699951171875,
+        "longtaskMaxMs": 373,
+        "longtaskTotalMs": 839,
+        "wireBytes": 2331,
+        "requestCount": 12
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359508209.9001
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359508521
+          },
+          {
+            "event": "disposed",
+            "at": 1789359508824.3
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "iframe",
+      "round": 3,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 63,
+        "ownerProbeMs": 165.60009765625,
+        "sdkImportStartMs": 262.5,
+        "sdkImportedMs": 971.300048828125,
+        "mountMs": 971.60009765625,
+        "workerMs": 1031.199951171875,
+        "workerReplyMs": 1739.300048828125,
+        "svgMs": 1086.60009765625,
+        "onInitMs": 1705,
+        "restoreCompletedMs": 1929.10009765625,
+        "uiReadyMs": 1942.800048828125,
+        "readyMs": 2214.5,
+        "importDurationMs": 708.800048828125,
+        "mountToReadyMs": 1242.89990234375,
+        "workerToReplyMs": 708.10009765625,
+        "restoreDurationMs": 224.10009765625,
+        "initialExportMs": 271.699951171875,
+        "longtaskMaxMs": 347,
+        "longtaskTotalMs": 860,
+        "wireBytes": 2611,
+        "requestCount": 13
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359512049.4001
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359512328.4001
+          },
+          {
+            "event": "disposed",
+            "at": 1789359512651.1
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "iframe",
+      "round": 4,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 64.5,
+        "ownerProbeMs": 170.10009765625,
+        "sdkImportStartMs": 267.10009765625,
+        "sdkImportedMs": 876.199951171875,
+        "mountMs": 876.39990234375,
+        "workerMs": 940.60009765625,
+        "workerReplyMs": 1696.39990234375,
+        "svgMs": 1002,
+        "onInitMs": 1661.800048828125,
+        "restoreCompletedMs": 1928,
+        "uiReadyMs": 1933,
+        "readyMs": 2206.10009765625,
+        "importDurationMs": 609.099853515625,
+        "mountToReadyMs": 1329.7001953125,
+        "workerToReplyMs": 755.7998046875,
+        "restoreDurationMs": 266.199951171875,
+        "initialExportMs": 273.10009765625,
+        "longtaskMaxMs": 385,
+        "longtaskTotalMs": 763,
+        "wireBytes": 2611,
+        "requestCount": 13
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359516066.7
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359516338.9
+          },
+          {
+            "event": "disposed",
+            "at": 1789359516542.9
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "div",
+      "round": 4,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 0,
+        "ownerProbeMs": 96.89990234375,
+        "sdkImportStartMs": 192.699951171875,
+        "sdkImportedMs": 913.199951171875,
+        "mountMs": 913.39990234375,
+        "workerMs": 971.699951171875,
+        "workerReplyMs": 1715.5,
+        "svgMs": 1052,
+        "onInitMs": 1681.300048828125,
+        "restoreCompletedMs": 1947.5,
+        "uiReadyMs": 1958.89990234375,
+        "readyMs": 2234.5,
+        "importDurationMs": 720.5,
+        "mountToReadyMs": 1321.10009765625,
+        "workerToReplyMs": 743.800048828125,
+        "restoreDurationMs": 266.199951171875,
+        "initialExportMs": 275.60009765625,
+        "longtaskMaxMs": 353,
+        "longtaskTotalMs": 884,
+        "wireBytes": 2331,
+        "requestCount": 12
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359519759
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359520034.7
+          },
+          {
+            "event": "disposed",
+            "at": 1789359520232
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "div",
+      "round": 5,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 0,
+        "ownerProbeMs": 101.5,
+        "sdkImportStartMs": 198.60009765625,
+        "sdkImportedMs": 859.199951171875,
+        "mountMs": 859.300048828125,
+        "workerMs": 918.300048828125,
+        "workerReplyMs": 1646.699951171875,
+        "svgMs": 981.5,
+        "onInitMs": 1612.5,
+        "restoreCompletedMs": 1875.39990234375,
+        "uiReadyMs": 1883.5,
+        "readyMs": 2159.199951171875,
+        "importDurationMs": 660.599853515625,
+        "mountToReadyMs": 1299.89990234375,
+        "workerToReplyMs": 728.39990234375,
+        "restoreDurationMs": 262.7998046875,
+        "initialExportMs": 275.699951171875,
+        "longtaskMaxMs": 355,
+        "longtaskTotalMs": 778,
+        "wireBytes": 2331,
+        "requestCount": 12
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359523358.8
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359523636.8
+          },
+          {
+            "event": "disposed",
+            "at": 1789359523958.6
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "iframe",
+      "round": 5,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 63.5,
+        "ownerProbeMs": 169.89990234375,
+        "sdkImportStartMs": 268.199951171875,
+        "sdkImportedMs": 1004.5,
+        "mountMs": 1004.60009765625,
+        "workerMs": 1063.89990234375,
+        "workerReplyMs": 1947.300048828125,
+        "svgMs": 1133.199951171875,
+        "onInitMs": 1892.5,
+        "restoreCompletedMs": 2185.39990234375,
+        "uiReadyMs": 2189,
+        "readyMs": 2461.60009765625,
+        "importDurationMs": 736.300048828125,
+        "mountToReadyMs": 1457,
+        "workerToReplyMs": 883.400146484375,
+        "restoreDurationMs": 292.7998046875,
+        "initialExportMs": 272.60009765625,
+        "longtaskMaxMs": 499,
+        "longtaskTotalMs": 1062,
+        "wireBytes": 2611,
+        "requestCount": 13
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359527614.1
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359527890.3
+          },
+          {
+            "event": "disposed",
+            "at": 1789359528095.6
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "iframe",
+      "round": 6,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 65.099853515625,
+        "ownerProbeMs": 167.89990234375,
+        "sdkImportStartMs": 268.699951171875,
+        "sdkImportedMs": 915.199951171875,
+        "mountMs": 915.39990234375,
+        "workerMs": 974.7998046875,
+        "workerReplyMs": 1705.599853515625,
+        "svgMs": 1037.499755859375,
+        "onInitMs": 1672.89990234375,
+        "restoreCompletedMs": 1940.39990234375,
+        "uiReadyMs": 1948.999755859375,
+        "readyMs": 2217.199951171875,
+        "importDurationMs": 646.5,
+        "mountToReadyMs": 1301.800048828125,
+        "workerToReplyMs": 730.800048828125,
+        "restoreDurationMs": 267.400146484375,
+        "initialExportMs": 268.2001953125,
+        "longtaskMaxMs": 359,
+        "longtaskTotalMs": 779,
+        "wireBytes": 2611,
+        "requestCount": 13
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359531381.5999
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359531661.5999
+          },
+          {
+            "event": "disposed",
+            "at": 1789359531982.9
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "div",
+      "round": 6,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 0,
+        "ownerProbeMs": 100.89990234375,
+        "sdkImportStartMs": 196.39990234375,
+        "sdkImportedMs": 864.800048828125,
+        "mountMs": 864.89990234375,
+        "workerMs": 924.39990234375,
+        "workerReplyMs": 1680.199951171875,
+        "svgMs": 991,
+        "onInitMs": 1644.60009765625,
+        "restoreCompletedMs": 1907.89990234375,
+        "uiReadyMs": 1921.60009765625,
+        "readyMs": 2194.39990234375,
+        "importDurationMs": 668.400146484375,
+        "mountToReadyMs": 1329.5,
+        "workerToReplyMs": 755.800048828125,
+        "restoreDurationMs": 263.2998046875,
+        "initialExportMs": 272.7998046875,
+        "longtaskMaxMs": 378,
+        "longtaskTotalMs": 860,
+        "wireBytes": 2331,
+        "requestCount": 12
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359535158.5
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359535440.9
+          },
+          {
+            "event": "disposed",
+            "at": 1789359535764.3
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "div",
+      "round": 7,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 0,
+        "ownerProbeMs": 101,
+        "sdkImportStartMs": 196.39990234375,
+        "sdkImportedMs": 850.300048828125,
+        "mountMs": 850.39990234375,
+        "workerMs": 909.699951171875,
+        "workerReplyMs": 1667.10009765625,
+        "svgMs": 974.5,
+        "onInitMs": 1631.800048828125,
+        "restoreCompletedMs": 1898.89990234375,
+        "uiReadyMs": 1914.699951171875,
+        "readyMs": 2192,
+        "importDurationMs": 653.900146484375,
+        "mountToReadyMs": 1341.60009765625,
+        "workerToReplyMs": 757.400146484375,
+        "restoreDurationMs": 267.099853515625,
+        "initialExportMs": 277.300048828125,
+        "longtaskMaxMs": 382,
+        "longtaskTotalMs": 805,
+        "wireBytes": 2331,
+        "requestCount": 12
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359538925.3
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359539206.9001
+          },
+          {
+            "event": "disposed",
+            "at": 1789359539528.3
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "iframe",
+      "round": 7,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 63.599853515625,
+        "ownerProbeMs": 166.39990234375,
+        "sdkImportStartMs": 262.599853515625,
+        "sdkImportedMs": 990.199951171875,
+        "mountMs": 990.39990234375,
+        "workerMs": 1049.999755859375,
+        "workerReplyMs": 1794.89990234375,
+        "svgMs": 1107.89990234375,
+        "onInitMs": 1755.89990234375,
+        "restoreCompletedMs": 2044.7998046875,
+        "uiReadyMs": 2050.2998046875,
+        "readyMs": 2324.39990234375,
+        "importDurationMs": 727.60009765625,
+        "mountToReadyMs": 1334,
+        "workerToReplyMs": 744.900146484375,
+        "restoreDurationMs": 288.89990234375,
+        "initialExportMs": 274.10009765625,
+        "longtaskMaxMs": 371,
+        "longtaskTotalMs": 823,
+        "wireBytes": 2611,
+        "requestCount": 13
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359542947.5999
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359543224.7998
+          },
+          {
+            "event": "disposed",
+            "at": 1789359543546.5
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "iframe",
+      "round": 8,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 64.60009765625,
+        "ownerProbeMs": 175.300048828125,
+        "sdkImportStartMs": 272.300048828125,
+        "sdkImportedMs": 929.10009765625,
+        "mountMs": 929.300048828125,
+        "workerMs": 989.2001953125,
+        "workerReplyMs": 1742.10009765625,
+        "svgMs": 1043.400146484375,
+        "onInitMs": 1707.300048828125,
+        "restoreCompletedMs": 1968.7001953125,
+        "uiReadyMs": 1978.60009765625,
+        "readyMs": 2248.5,
+        "importDurationMs": 656.800048828125,
+        "mountToReadyMs": 1319.199951171875,
+        "workerToReplyMs": 752.89990234375,
+        "restoreDurationMs": 261.300048828125,
+        "initialExportMs": 269.89990234375,
+        "longtaskMaxMs": 389,
+        "longtaskTotalMs": 799,
+        "wireBytes": 2611,
+        "requestCount": 13
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359546846.9001
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359547245.9001
+          },
+          {
+            "event": "disposed",
+            "at": 1789359547490
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "div",
+      "round": 8,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 0,
+        "ownerProbeMs": 100.5,
+        "sdkImportStartMs": 198.60009765625,
+        "sdkImportedMs": 857.699951171875,
+        "mountMs": 858,
+        "workerMs": 918.199951171875,
+        "workerReplyMs": 1669.300048828125,
+        "svgMs": 982.60009765625,
+        "onInitMs": 1632,
+        "restoreCompletedMs": 1872.60009765625,
+        "uiReadyMs": 1884.10009765625,
+        "readyMs": 2145.199951171875,
+        "importDurationMs": 659.099853515625,
+        "mountToReadyMs": 1287.199951171875,
+        "workerToReplyMs": 751.10009765625,
+        "restoreDurationMs": 240.60009765625,
+        "initialExportMs": 261.099853515625,
+        "longtaskMaxMs": 377,
+        "longtaskTotalMs": 807,
+        "wireBytes": 2331,
+        "requestCount": 12
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359550624.5999
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359550909
+          },
+          {
+            "event": "disposed",
+            "at": 1789359551231.5
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "div",
+      "round": 9,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 0,
+        "ownerProbeMs": 100.699951171875,
+        "sdkImportStartMs": 198.39990234375,
+        "sdkImportedMs": 857.699951171875,
+        "mountMs": 857.89990234375,
+        "workerMs": 917.10009765625,
+        "workerReplyMs": 1633.60009765625,
+        "svgMs": 981.39990234375,
+        "onInitMs": 1599.10009765625,
+        "restoreCompletedMs": 1861.800048828125,
+        "uiReadyMs": 1862.300048828125,
+        "readyMs": 2132,
+        "importDurationMs": 659.300048828125,
+        "mountToReadyMs": 1274.10009765625,
+        "workerToReplyMs": 716.5,
+        "restoreDurationMs": 262.699951171875,
+        "initialExportMs": 269.699951171875,
+        "longtaskMaxMs": 342,
+        "longtaskTotalMs": 818,
+        "wireBytes": 2331,
+        "requestCount": 12
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359554340.8
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359554619.0999
+          },
+          {
+            "event": "disposed",
+            "at": 1789359554941.7
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "iframe",
+      "round": 9,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 63.60009765625,
+        "ownerProbeMs": 171.5,
+        "sdkImportStartMs": 267.60009765625,
+        "sdkImportedMs": 942.60009765625,
+        "mountMs": 942.7001953125,
+        "workerMs": 1002.400146484375,
+        "workerReplyMs": 1743.7001953125,
+        "svgMs": 1056,
+        "onInitMs": 1708.300048828125,
+        "restoreCompletedMs": 1971.60009765625,
+        "uiReadyMs": 1987,
+        "readyMs": 2261.300048828125,
+        "importDurationMs": 675,
+        "mountToReadyMs": 1318.599853515625,
+        "workerToReplyMs": 741.300048828125,
+        "restoreDurationMs": 263.199951171875,
+        "initialExportMs": 274.300048828125,
+        "longtaskMaxMs": 378,
+        "longtaskTotalMs": 791,
+        "wireBytes": 2611,
+        "requestCount": 13
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359558229.7
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359558510.6
+          },
+          {
+            "event": "disposed",
+            "at": 1789359558831.4001
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "iframe",
+      "round": 10,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 63.699951171875,
+        "ownerProbeMs": 167.099853515625,
+        "sdkImportStartMs": 263.89990234375,
+        "sdkImportedMs": 949.5,
+        "mountMs": 949.699951171875,
+        "workerMs": 1009.599853515625,
+        "workerReplyMs": 1754.699951171875,
+        "svgMs": 1063.699951171875,
+        "onInitMs": 1721.39990234375,
+        "restoreCompletedMs": 2000.800048828125,
+        "uiReadyMs": 2005.099853515625,
+        "readyMs": 2277.599853515625,
+        "importDurationMs": 685.60009765625,
+        "mountToReadyMs": 1327.89990234375,
+        "workerToReplyMs": 745.10009765625,
+        "restoreDurationMs": 279.400146484375,
+        "initialExportMs": 272.5,
+        "longtaskMaxMs": 383,
+        "longtaskTotalMs": 796,
+        "wireBytes": 2611,
+        "requestCount": 13
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359562129.2
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359562402.2
+          },
+          {
+            "event": "disposed",
+            "at": 1789359562728.0999
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    },
+    {
+      "variant": "div",
+      "round": 10,
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 0,
+        "ownerProbeMs": 100,
+        "sdkImportStartMs": 197.89990234375,
+        "sdkImportedMs": 839.39990234375,
+        "mountMs": 839.699951171875,
+        "workerMs": 898.60009765625,
+        "workerReplyMs": 1649.39990234375,
+        "svgMs": 963,
+        "onInitMs": 1615.10009765625,
+        "restoreCompletedMs": 1879.60009765625,
+        "uiReadyMs": 1885.39990234375,
+        "readyMs": 2160.10009765625,
+        "importDurationMs": 641.5,
+        "mountToReadyMs": 1320.400146484375,
+        "workerToReplyMs": 750.7998046875,
+        "restoreDurationMs": 264.400146484375,
+        "initialExportMs": 274.7001953125,
+        "longtaskMaxMs": 376,
+        "longtaskTotalMs": 858,
+        "wireBytes": 2331,
+        "requestCount": 12
+      },
+      "actualAtomDrag": true,
+      "exportedSmiles": "CCO",
+      "final": {
+        "worker": {
+          "created": 1,
+          "active": 0,
+          "maxActive": 1
+        },
+        "errors": [],
+        "clearStatus": "complete",
+        "lifecycle": [
+          {
+            "event": "clear-operation-start",
+            "at": 1789359565873.7002
+          },
+          {
+            "event": "clear-operation-complete",
+            "at": 1789359566144.3
+          },
+          {
+            "event": "disposed",
+            "at": 1789359566421.7002
+          }
+        ]
+      },
+      "canvas": {
+        "x": 47,
+        "y": 80,
+        "width": 1346,
+        "height": 784
+      },
+      "visibilityState": "visible"
+    }
+  ],
+  "pairedSamples": [
+    {
+      "round": 1,
+      "iframeMinusDivUiMs": 89.300048828125,
+      "iframeMinusDivFunctionalMs": 86.199951171875
+    },
+    {
+      "round": 2,
+      "iframeMinusDivUiMs": 127.5,
+      "iframeMinusDivFunctionalMs": 128.199951171875
+    },
+    {
+      "round": 3,
+      "iframeMinusDivUiMs": 88.10009765625,
+      "iframeMinusDivFunctionalMs": 25.10009765625
+    },
+    {
+      "round": 4,
+      "iframeMinusDivUiMs": -25.89990234375,
+      "iframeMinusDivFunctionalMs": -28.39990234375
+    },
+    {
+      "round": 5,
+      "iframeMinusDivUiMs": 305.5,
+      "iframeMinusDivFunctionalMs": 302.400146484375
+    },
+    {
+      "round": 6,
+      "iframeMinusDivUiMs": 27.399658203125,
+      "iframeMinusDivFunctionalMs": 22.800048828125
+    },
+    {
+      "round": 7,
+      "iframeMinusDivUiMs": 135.599853515625,
+      "iframeMinusDivFunctionalMs": 132.39990234375
+    },
+    {
+      "round": 8,
+      "iframeMinusDivUiMs": 94.5,
+      "iframeMinusDivFunctionalMs": 103.300048828125
+    },
+    {
+      "round": 9,
+      "iframeMinusDivUiMs": 124.699951171875,
+      "iframeMinusDivFunctionalMs": 129.300048828125
+    },
+    {
+      "round": 10,
+      "iframeMinusDivUiMs": 119.699951171875,
+      "iframeMinusDivFunctionalMs": 117.499755859375
+    }
+  ],
+  "sdkImportedToWorkerP50Ms": {
+    "div": 59.400146484375,
+    "iframe": 59.7998046875
+  },
+  "warmups": [
+    {
+      "variant": "div",
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 0,
+        "ownerProbeMs": 117.800048828125,
+        "sdkImportStartMs": 236.199951171875,
+        "sdkImportedMs": 2489.60009765625,
+        "mountMs": 2490.10009765625,
+        "workerMs": 2575,
+        "workerReplyMs": 3557.39990234375,
+        "svgMs": 2767.5,
+        "onInitMs": 3505.199951171875,
+        "restoreCompletedMs": 3821.300048828125,
+        "uiReadyMs": 3822.199951171875,
+        "readyMs": 4103.10009765625,
+        "importDurationMs": 2253.400146484375,
+        "mountToReadyMs": 1613,
+        "workerToReplyMs": 982.39990234375,
+        "restoreDurationMs": 315.800048828125,
+        "initialExportMs": 280.900146484375,
+        "longtaskMaxMs": 584,
+        "longtaskTotalMs": 1434,
+        "wireBytes": 7250541,
+        "requestCount": 13
+      },
+      "networkProbe": {
+        "durationMs": 46.5,
+        "body": {
+          "probe": true
+        },
+        "status": 200,
+        "resource": {
+          "name": "http://127.0.0.1:5961/network-probe.json?nonce=1789359484875-0.4331353482659258",
+          "entryType": "resource",
+          "startTime": 5776.89999961853,
+          "duration": 45.30000114440918,
+          "navigationId": 4901,
+          "initiatorType": "fetch",
+          "deliveryType": "",
+          "nextHopProtocol": "http/1.1",
+          "renderBlockingStatus": "non-blocking",
+          "contentType": "application/json",
+          "contentEncoding": "gzip",
+          "workerStart": 0,
+          "workerRouterEvaluationStart": 0,
+          "workerCacheLookupStart": 0,
+          "workerMatchedSourceType": "",
+          "workerFinalSourceType": "",
+          "redirectStart": 0,
+          "redirectEnd": 0,
+          "fetchStart": 5776.89999961853,
+          "domainLookupStart": 5776.89999961853,
+          "domainLookupEnd": 5776.89999961853,
+          "connectStart": 5776.89999961853,
+          "secureConnectionStart": 0,
+          "connectEnd": 5776.89999961853,
+          "requestStart": 5778,
+          "responseStart": 5779,
+          "firstInterimResponseStart": 0,
+          "finalResponseHeadersStart": 5779,
+          "responseEnd": 5822.200000762939,
+          "transferSize": 334,
+          "encodedBodySize": 34,
+          "decodedBodySize": 14,
+          "responseStatus": 200,
+          "serverTiming": []
+        },
+        "cdpOwnerFrameId": "35F7E5B75E93B2517FE333C2FE359C5A",
+        "cdpRequests": [
+          {
+            "url": "http://127.0.0.1:5961/network-probe.json?nonce=1789359484875-0.4331353482659258",
+            "type": "Fetch",
+            "start": 8969537.526252,
+            "frameId": "35F7E5B75E93B2517FE333C2FE359C5A",
+            "initiatorType": "script",
+            "status": 200,
+            "diskCache": false,
+            "headers": {
+              "Cache-Control": "no-cache",
+              "Content-Encoding": "gzip",
+              "ETag": "\"c775500ea34eded73c2a3c3bede193f0d839e6c14b36f21b6cc31472e0720a91-gzip\"",
+              "Connection": "keep-alive",
+              "Content-Length": "34",
+              "Keep-Alive": "timeout=5",
+              "Date": "Mon, 14 Sep 2026 04:18:04 GMT",
+              "Content-Type": "application/json; charset=utf-8",
+              "Vary": "Accept-Encoding"
+            },
+            "bytes": 355,
+            "end": 8969537.571647
+          }
+        ]
+      }
+    },
+    {
+      "variant": "iframe",
+      "passed": true,
+      "metrics": {
+        "ownerDocumentMs": 60.400146484375,
+        "ownerProbeMs": 174.800048828125,
+        "sdkImportStartMs": 280.500244140625,
+        "sdkImportedMs": 1233.10009765625,
+        "mountMs": 1233.800048828125,
+        "workerMs": 1411.10009765625,
+        "workerReplyMs": 2393.500244140625,
+        "svgMs": 1594.60009765625,
+        "onInitMs": 2342.500244140625,
+        "restoreCompletedMs": 2663.800048828125,
+        "uiReadyMs": 2674.900146484375,
+        "readyMs": 2953.500244140625,
+        "importDurationMs": 952.599853515625,
+        "mountToReadyMs": 1719.7001953125,
+        "workerToReplyMs": 982.400146484375,
+        "restoreDurationMs": 320.7998046875,
+        "initialExportMs": 278.60009765625,
+        "longtaskMaxMs": 651,
+        "longtaskTotalMs": 1485,
+        "wireBytes": 3464,
+        "requestCount": 13
+      },
+      "networkProbe": {
+        "durationMs": 45.400001525878906,
+        "body": {
+          "probe": true
+        },
+        "status": 200,
+        "resource": {
+          "name": "http://127.0.0.1:5961/network-probe.json?nonce=1789359489893-0.20961595018614787",
+          "entryType": "resource",
+          "startTime": 4854.200000762939,
+          "duration": 43.79999923706055,
+          "navigationId": 7286,
+          "initiatorType": "fetch",
+          "deliveryType": "",
+          "nextHopProtocol": "http/1.1",
+          "renderBlockingStatus": "non-blocking",
+          "contentType": "application/json",
+          "contentEncoding": "gzip",
+          "workerStart": 0,
+          "workerRouterEvaluationStart": 0,
+          "workerCacheLookupStart": 0,
+          "workerMatchedSourceType": "",
+          "workerFinalSourceType": "",
+          "redirectStart": 0,
+          "redirectEnd": 0,
+          "fetchStart": 4854.200000762939,
+          "domainLookupStart": 4854.200000762939,
+          "domainLookupEnd": 4854.200000762939,
+          "connectStart": 4854.200000762939,
+          "secureConnectionStart": 0,
+          "connectEnd": 4854.200000762939,
+          "requestStart": 4855.200000762939,
+          "responseStart": 4856.900001525879,
+          "firstInterimResponseStart": 0,
+          "finalResponseHeadersStart": 4856.900001525879,
+          "responseEnd": 4898,
+          "transferSize": 334,
+          "encodedBodySize": 34,
+          "decodedBodySize": 14,
+          "responseStatus": 200,
+          "serverTiming": []
+        },
+        "cdpOwnerFrameId": "6A6CB1E3F2920A6C327881A7C5332FC4",
+        "cdpRequests": [
+          {
+            "url": "http://127.0.0.1:5961/network-probe.json?nonce=1789359489893-0.20961595018614787",
+            "type": "Fetch",
+            "start": 8969542.54422,
+            "frameId": "6A6CB1E3F2920A6C327881A7C5332FC4",
+            "initiatorType": "script",
+            "status": 200,
+            "diskCache": false,
+            "headers": {
+              "Cache-Control": "no-cache",
+              "Content-Encoding": "gzip",
+              "ETag": "\"c775500ea34eded73c2a3c3bede193f0d839e6c14b36f21b6cc31472e0720a91-gzip\"",
+              "Connection": "keep-alive",
+              "Content-Length": "34",
+              "Keep-Alive": "timeout=5",
+              "Date": "Mon, 14 Sep 2026 04:18:09 GMT",
+              "Content-Type": "application/json; charset=utf-8",
+              "Vary": "Accept-Encoding"
+            },
+            "bytes": 355,
+            "end": 8969542.588347
+          }
+        ]
+      }
+    }
+  ],
+  "provenance": {
+    "preparedAt": "2026-09-14T04:04:25.080Z",
+    "candidate": "/tmp/nexpoly-ketcher-review-20260914-URNIPB/candidate/frontend",
+    "island": "/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend",
+    "sdkRevision": "nexpoly-3.8.0-r3",
+    "reactDependency": "19.2.4",
+    "sdkSources": {
+      "node_modules/ketcher-core/dist/index.js": {
+        "candidate": "01605b21272980c4b81907b44d94d5ac46c7b06a448849b42fe4c2c8795d2e7e",
+        "island": "01605b21272980c4b81907b44d94d5ac46c7b06a448849b42fe4c2c8795d2e7e"
+      },
+      "node_modules/ketcher-core/dist/index.modern.js": {
+        "candidate": "2b136993d4db4db163acd143eec6ffda42e4d495035bd60062dda9cf3c0574fc",
+        "island": "2b136993d4db4db163acd143eec6ffda42e4d495035bd60062dda9cf3c0574fc"
+      },
+      "node_modules/ketcher-macromolecules/dist/index.js": {
+        "candidate": "b59b0bbfdff4a9850af98d984cae8b30eb619b0bfb84a69a0198477b150c2cc3",
+        "island": "b59b0bbfdff4a9850af98d984cae8b30eb619b0bfb84a69a0198477b150c2cc3"
+      },
+      "node_modules/ketcher-macromolecules/dist/index.modern.js": {
+        "candidate": "f243ce8f1121398e95357ba510b39111832fa5052d4e5cbc0899d871377f196d",
+        "island": "f243ce8f1121398e95357ba510b39111832fa5052d4e5cbc0899d871377f196d"
+      },
+      "node_modules/ketcher-react/dist/cjs/index.js": {
+        "candidate": "846fb1785c6eaea270a0c792be63d8b34be92bc407063536c6706dfd85878af4",
+        "island": "846fb1785c6eaea270a0c792be63d8b34be92bc407063536c6706dfd85878af4"
+      },
+      "node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js": {
+        "candidate": "0612055555a90b6b087c223ff12b9bf816ee03479732531c9c388b2cc7665146",
+        "island": "0612055555a90b6b087c223ff12b9bf816ee03479732531c9c388b2cc7665146"
+      },
+      "node_modules/ketcher-react/dist/index.js": {
+        "candidate": "0771066ae3c821725bf61be26bd0d7cd8d988d8b11389883c7006cac2b15534b",
+        "island": "0771066ae3c821725bf61be26bd0d7cd8d988d8b11389883c7006cac2b15534b"
+      },
+      "node_modules/ketcher-react/dist/index.modern-c0bcdf82.js": {
+        "candidate": "444de5a5381283fe45bc8d8ffed268904ce2b8b746b4a3b66ae5cae215f7df42",
+        "island": "444de5a5381283fe45bc8d8ffed268904ce2b8b746b4a3b66ae5cae215f7df42"
+      },
+      "node_modules/ketcher-standalone/dist/cjs/main.js": {
+        "candidate": "dacdbe79d8122f5603c076982311e36d4c1590c024795f9a9c99887d8489181f",
+        "island": "dacdbe79d8122f5603c076982311e36d4c1590c024795f9a9c99887d8489181f"
+      },
+      "node_modules/ketcher-standalone/dist/main.js": {
+        "candidate": "ef9962f014787d18cf2c6ccd8365c8ef80e0de16563d445bf282cf19bfdfdeac",
+        "island": "ef9962f014787d18cf2c6ccd8365c8ef80e0de16563d445bf282cf19bfdfdeac"
+      },
+      "node_modules/ketcher-standalone/package.json": {
+        "candidate": "091c0502a2f75ca03c79c01ebc3f6260f1ded76211572810a03453ed4b0fc8f9",
+        "island": "091c0502a2f75ca03c79c01ebc3f6260f1ded76211572810a03453ed4b0fc8f9"
+      }
+    },
+    "patchHashes": {
+      "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+      "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+      "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+      "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+    },
+    "sdk": {
+      "chunk-BFpHzB79.js": {
+        "bytes": 1686831,
+        "sha256": "cc611b13ee14d24ad1b33b02188d7491405ac8c0e2c230a0bda3b2b338dd50a7"
+      },
+      "chunk-BUdKgKgM.js": {
+        "bytes": 521768,
+        "sha256": "16496a52d78c74ddf65ca14d4eab0a5c9a5cf1dc5ce8b992c33404ae0a1fb4b2"
+      },
+      "chunk-BrtO_RO7.js": {
+        "bytes": 25221621,
+        "sha256": "eff5b7c1f90b0291c7113a47e33a243535a5ea3ee37c30fa75f1189c6e34662c"
+      },
+      "sdk.css": {
+        "bytes": 252340,
+        "sha256": "0d71443f1691584d3ca6cb30027bc653a975eeac069defd606296f38f9d200de"
+      },
+      "sdk.js": {
+        "bytes": 72,
+        "sha256": "d1a9ed8fcc71c5ec0deed1f4e28655bc5f366a323ca63740b63747145b16e338"
+      }
+    },
+    "staticChunks": [
+      "chunk-BrtO_RO7.js"
+    ],
+    "support": {
+      "nativeSession": {
+        "sourceSha256": "90b8764a7072533a8f1672ee68891926231b32e94fbdaf950592b5caa31dc222",
+        "outputSha256": "2c50639d8e511564f52b15e5e85bc30ece042b023392ea83e895bf6aa3c21abc"
+      },
+      "workspace": {
+        "sourceSha256": "86cb96a8c705e1ac82cf90d885c2a2c3bcb4d49be4814e4fb4a9e0368e0ab5e5",
+        "outputSha256": "ca11a8090b46d9a544172725d83b438a8facff5ad6192f600c67105aaf5ef7b2"
+      },
+      "editor": {
+        "sourceSha256": "6373becd3b67554b208f67c5418cf4d63e0d4cca78f53c15ddadf771aba8ef73",
+        "outputSha256": "3c67a1d060b74bc8620b1d9e98788d123d6c4c79584e7eb276e99dac77bd5ab2"
+      },
+      "editorLifetime": {
+        "sourceSha256": "569ca58e68b4fc9cd38f0e8cfb68b68351fa23474078e0ffa528706843b24a38",
+        "outputSha256": "dafe2dd06766f64526a20c87f05f46075b24319a3a29253f6a689154f905f4ca"
+      },
+      "nativePopups": {
+        "sourceSha256": "fe39e281d80b2fea0b7f4e9d9b5fba862b8dc90e7d4142d6077eeaa3c461b2c4",
+        "outputSha256": "00b10089bf177f6d9771c88e2b679aa36398ec24ff6e714c843e8ec6a4d22e0d"
+      }
+    },
+    "staticResources": "/tmp/nexpoly-refresh-beyond-9000-20260914/island/frontend/public/ketcher-assets/3.8.0",
+    "scope": "Same frozen non-lazy production SDK bytes, two document embeddings. No App/HMR timing claim."
+  },
+  "previousRuns": {
+    "smoke": {
+      "passed": false,
+      "cause": "Harness disposed the session before its clear+settle button operation finished. Fixed only the measurement fixture; retained the original AbortError."
+    },
+    "smoke-final": {
+      "passed": true,
+      "samples": 2
+    },
+    "formal": {
+      "passed": true,
+      "samples": 20,
+      "use": "Sensitivity group only: outer iframe diagnostic script added a blocking request. Primary formal-control removes that extra probe request."
+    }
+  },
+  "limitations": [
+    "Same production SDK in a minimal shell; not a full-App or actual9000/9001 comparison.",
+    "No independent throughput calibration: CDP configured 50Mbps; owner fetch probe validates latency and frame coverage.",
+    "10 samples per arm: nearest-rank P95 is observed maximum, not a stable tail guarantee.",
+    "Only warm empty reload performance. Real CCO operations validated after the timing endpoints.",
+    "Import interval includes loading/parse/evaluation; not all attributed to CPU.",
+    "SDK source artifacts match r3 and copied production files match each other; reused prior bundle is not claimed to be a new reproducible build.",
+    "During documentation cleanup, finalVerification.preexistingWorkingFilesUnchangedAfterCommit was changed from the unexplained numeric value 1000 to null (unknown). No source record was found to verify that historical claim; samples, statistics and evidence hashes are unchanged.",
+    "Evidence paths identify local historical artifacts and SDK installations; these files are not distributed with the repository."
+  ],
+  "evidence": {
+    "formal-control/results.json": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/formal-control/results.json",
+      "sha256": "e1ce8925478d6f5235a0dc1dc3a886b0f766907e5c832a8e5350f4507dce0d35"
+    },
+    "formal-control/summary.json": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/formal-control/summary.json",
+      "sha256": "1057698af61220213d8b21e59363ebedaadb7dc74a30f830f79cda9b68e12050"
+    },
+    "formal/results.json": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/formal/results.json",
+      "sha256": "41bdbe7a4980c0d082111f790c1a06384fbe1e140ab07df7433088dcabd1cc2b"
+    },
+    "formal/summary.json": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/formal/summary.json",
+      "sha256": "f7bb3ea672e268abc7f1b86135a3011aa1cba4f541e9e2f5ca4fa18cf468a269"
+    },
+    "smoke/results.json": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/smoke/results.json",
+      "sha256": "cef012f66c1084e13efafce52a80d87576b8804f418a1ff54920a74d6b505732"
+    },
+    "smoke-final/results.json": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/smoke-final/results.json",
+      "sha256": "cb1317ba74d8321c65426b90340dcfb789a3f88950e39723a216ef95102c91b5"
+    },
+    "server.mjs": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/server.mjs",
+      "sha256": "8db9db90f05830603d85f53ccbdde37bdf1b2c5c02b9b2be3e94d76df6d47076"
+    },
+    "server.instrumented-parent.mjs": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/server.instrumented-parent.mjs",
+      "sha256": "62ff4af38b6024ed2ef3b16cbd7949f2b14f046c7438d77d47c3a62a4d39b22c"
+    },
+    "harness.js": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/harness.js",
+      "sha256": "c613829ff0e4fd429db7a12ba595ef854f0257a911ffa97efbe8c05570707413"
+    },
+    "bench.mjs": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/bench.mjs",
+      "sha256": "112b3dff36c9a10c76382b0b530655c56e3978aeb5b689432e6ff553f405ccfb"
+    },
+    "probe.js": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/probe.js",
+      "sha256": "18f5915381df15cff1b7bfd4775be16850a57a014c190f716c3aaa490f2d4925"
+    },
+    "prepare.mjs": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/prepare.mjs",
+      "sha256": "c38fa3cb1263046a7fef98d73942e1faa723cfa9558fab4d05c341b9ee77fca9"
+    },
+    "README.md": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/README.md",
+      "sha256": "3d93323462830ce2d584339b071d9fe6ae201612ebda8368e21bd8ae84816a74"
+    },
+    "provenance.json": {
+      "path": "/tmp/nexpoly-ketcher-component-boundary-20260914/provenance.json",
+      "sha256": "1850f767efb0d89e8c7d04a6118b992dacb938cdda2abf21c5b835227c2e50d5"
+    }
+  },
+  "finalVerification": {
+    "preexistingWorkingFilesUnchangedAfterCommit": null,
+    "supportSourceHashesMatchCommit": true,
+    "sdkBytesUnchangedDuringBenchmark": true,
+    "indexClean": true,
+    "temporaryServersStopped": true
+  },
+  "statistics": {
+    "quantiles": "Nearest rank: sorted(values)[ceil(n*p)-1], including P50 and P95. For n=10 P95 is maximum.",
+    "pairedUiDifferenceNearestRankP50Ms": 94.5,
+    "pairedUiDifferenceConventionalMedianMs": 107.0999755859375
+  }
+}

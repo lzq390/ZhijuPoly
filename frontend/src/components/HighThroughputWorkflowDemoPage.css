@@ -1,19 +1,19 @@
 .high-throughput-demo {
-  --ht-bg: #eef3f5;
-  --ht-surface: #ffffff;
+  --ht-bg: var(--np-theme-bg);
+  --ht-surface: var(--np-theme-surface);
   --ht-surface-soft: #f6f8fb;
-  --ht-border: #d7e0e8;
+  --ht-border: var(--np-theme-border);
   --ht-border-strong: #aebdca;
-  --ht-text: #111827;
-  --ht-muted: #5f6b7a;
+  --ht-text: var(--np-theme-ink);
+  --ht-muted: var(--np-theme-muted);
   --ht-muted-strong: #3b4654;
-  --ht-primary: #0f766e;
-  --ht-primary-strong: #0b5f59;
+  --ht-primary: var(--np-theme-blue);
+  --ht-primary-strong: var(--np-theme-blue-strong);
   --ht-primary-soft: #e6f5f3;
-  --ht-warning: #b45309;
-  --ht-warning-soft: #fff7ed;
-  --ht-danger: #b91c1c;
-  --ht-success: #15803d;
+  --ht-warning: var(--np-theme-warning-text);
+  --ht-warning-soft: var(--np-theme-warning-soft);
+  --ht-danger: var(--np-theme-danger-text);
+  --ht-success: var(--np-theme-success-text);
   background:
     linear-gradient(180deg, rgba(230, 245, 243, 0.86), transparent 260px),
     var(--ht-bg);
@@ -46,7 +46,7 @@
 
 .high-throughput-demo button:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
 .high-throughput-demo h1,
@@ -1057,7 +1057,7 @@
 .ht-round-arrow-button:disabled {
   color: #94a3b8;
   cursor: not-allowed;
-  opacity: 0.48;
+  opacity: 0.5;
 }
 
 .ht-property-space-card > svg {
@@ -1258,13 +1258,13 @@
 }
 
 .ht-prior-upload-result.error {
-  background: #fff1f2;
-  border-color: #fecdd3;
+  background: var(--np-theme-danger-soft);
+  border-color: var(--np-theme-danger-border);
 }
 
 .ht-prior-upload-result.error strong,
 .ht-prior-upload-result.error span {
-  color: #be123c;
+  color: var(--np-theme-danger-text);
 }
 
 .ht-s2-validation-panel {
@@ -1561,9 +1561,9 @@
 }
 
 .ht-doe-csv-preview-panel.error {
-  background: #fff1f2;
-  border-color: #fecdd3;
-  border-left-color: #e11d48;
+  background: var(--np-theme-danger-soft);
+  border-color: var(--np-theme-danger-border);
+  border-left-color: var(--np-theme-danger);
 }
 
 .ht-doe-csv-preview-head {
@@ -1628,15 +1628,15 @@
 }
 
 .ht-doe-csv-status-row.error {
-  background: #fff7f7;
-  border-color: #fecdd3;
+  background: var(--np-theme-danger-soft);
+  border-color: var(--np-theme-danger-border);
   grid-template-columns: 1fr;
 }
 
 .ht-doe-csv-status-row.error span,
 .ht-doe-csv-status-row.error b,
 .ht-doe-csv-status-row.error em {
-  color: #be123c;
+  color: var(--np-theme-danger-text);
 }
 
 .ht-doe-csv-table-wrap {
@@ -2142,9 +2142,9 @@
 }
 
 .ht-agent-upload-button.error {
-  background: #fff1f2;
-  border-color: #fda4af;
-  color: #be123c;
+  background: var(--np-theme-danger-soft);
+  border-color: var(--np-theme-danger-border);
+  color: var(--np-theme-danger-text);
 }
 
 .ht-agent-upload-button.loading svg {
@@ -2750,18 +2750,18 @@
   --ht-s0-type-panel: 13px;
   --ht-s0-type-section: 16px;
   --ht-s0-control-height: 38px;
-  --ht-bg: #edf3f9;
+  --ht-bg: var(--np-theme-bg);
   --ht-surface-soft: #f5f8fc;
-  --ht-border: rgba(51, 83, 126, 0.18);
+  --ht-border: var(--np-theme-border);
   --ht-border-strong: rgba(71, 100, 143, 0.28);
-  --ht-text: #0b1f3a;
-  --ht-muted: #58708d;
+  --ht-text: var(--np-theme-ink);
+  --ht-muted: var(--np-theme-muted);
   --ht-muted-strong: #385674;
-  --ht-primary: #2563eb;
-  --ht-primary-strong: #1d4ed8;
+  --ht-primary: var(--np-theme-blue);
+  --ht-primary-strong: var(--np-theme-blue-strong);
   --ht-primary-soft: #eff6ff;
   --ht-s0-grid-line: rgba(37, 99, 235, 0.032);
-  --ht-s0-shadow: 0 12px 34px rgba(30, 64, 175, 0.075);
+  --ht-s0-shadow: var(--np-theme-surface-shadow);
   --ht-section-background: linear-gradient(150deg, rgba(248, 251, 255, 0.98), rgba(244, 248, 252, 0.8));
   --ht-section-border: rgba(51, 83, 126, 0.13);
   --ht-section-title: #102a46;
@@ -2782,20 +2782,6 @@
   line-height: 1.5;
 }
 
-.ht-workbench-page .ht-workbench-title {
-  position: absolute;
-  z-index: 2;
-  top: 22px;
-  left: 20px;
-  margin: 0;
-  color: var(--ht-text);
-  font-family: var(--font-heading);
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 30px;
-  letter-spacing: -0.02em;
-}
-
 .ht-workbench-page .ht-shell {
   padding: 2px 24px 0;
 }
@@ -2808,7 +2794,7 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  margin: 62px auto 12px;
+  margin: 0 auto 12px;
 }
 
 .ht-workbench-toolbar::before {
@@ -2882,10 +2868,10 @@
   max-width: var(--ht-s0-column);
   margin-bottom: 48px;
   overflow: hidden;
-  border: 1px solid rgba(37, 99, 235, 0.14);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: var(--ht-s0-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--np-theme-surface-border);
+  border-radius: var(--np-theme-surface-radius);
+  background: var(--np-theme-panel);
+  box-shadow: var(--np-theme-surface-shadow);
 }
 
 .ht-workbench-board > * {
@@ -2932,7 +2918,7 @@
   color: var(--ht-text);
   font-family: var(--font-heading);
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 750;
   line-height: 1.4;
   letter-spacing: -0.01em;
 }
@@ -3482,10 +3468,6 @@
 }
 
 @container ht-workbench (max-width: 700px) {
-  .ht-workbench-page .ht-workbench-title {
-    top: 14px;
-    left: 14px;
-  }
 
   .ht-workbench-page .ht-shell {
     padding: 2px 12px 0;
@@ -3493,7 +3475,7 @@
 
   .ht-workbench-toolbar {
     width: calc(100% - 24px);
-    margin-top: 54px;
+    margin-top: 0;
     margin-bottom: 10px;
   }
 
@@ -3599,13 +3581,6 @@
     background-size: 48px 48px, 48px 48px, auto, auto, auto;
   }
 
-  .ht-workbench-page .ht-workbench-title {
-    top: 30px;
-    left: 36px;
-    font-size: 28px;
-    line-height: 42px;
-  }
-
   .ht-workbench-page .ht-shell {
     padding: 2px 36px 0;
   }
@@ -3614,7 +3589,7 @@
     width: min(calc(100% - 72px), var(--ht-s0-column));
     min-height: 54px;
     gap: 12px;
-    margin-top: 84px;
+    margin-top: 0;
     margin-bottom: 18px;
   }
 
@@ -3651,9 +3626,9 @@
   }
 
   .ht-workbench-board {
-    border-radius: 20px;
+    border-radius: var(--np-theme-surface-radius);
     margin-bottom: 64px;
-    box-shadow: 0 18px 50px rgba(30, 64, 175, 0.075), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+    box-shadow: var(--np-theme-surface-shadow);
   }
 
   .ht-workbench-header {

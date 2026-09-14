@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import importlib.util
 import inspect
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -65,11 +66,20 @@ class ProductionPostgresRehearsalTests(unittest.TestCase):
             for entry in self.manifest()
         ]
 
+    def existing_count(self) -> int:
+        return 1
+
+    @staticmethod
+    def reviewed_manifest() -> list[dict[str, object]]:
+        return json.loads(
+            (ROOT.parent / "backend/migrations/postgres/manifest.json").read_text()
+        )["migrations"]
+
     def expected_migration_records(self) -> list[dict[str, str]]:
         return [
             {
                 "version": entry["version"],
-                "status": "skipped" if index == 0 else "applied",
+                "status": "skipped" if index < self.existing_count() else "applied",
                 "checksum": entry["checksum"],
             }
             for index, entry in enumerate(self.manifest())
@@ -127,7 +137,7 @@ class ProductionPostgresRehearsalTests(unittest.TestCase):
         restored: bool = False,
     ) -> dict[str, object]:
         descriptor = self.descriptor()
-        source_ledger = self.ledger()[:-2]
+        source_ledger = self.ledger()[:self.existing_count()]
         return {
             "container_id": ("b" if restored else "a") * 64,
             "image_id": (
@@ -358,7 +368,7 @@ class ProductionPostgresRehearsalTests(unittest.TestCase):
         for label, tampered, message in (
             ("extra", extra, "exact target manifest"),
             ("reordered", "\n".join(reordered_lines), "canonical target manifest"),
-            ("wrong-status", wrong_status, "apply exactly 0014 then 0015"),
+            ("wrong-status", wrong_status, "exact reviewed transition"),
         ):
             with self.subTest(label=label):
                 with self.assertRaisesRegex(REHEARSAL.RehearsalError, message):
@@ -389,6 +399,197 @@ class ProductionPostgresRehearsalTests(unittest.TestCase):
         result = self.validate(self.report())
         self.assertEqual(result["completed_at"], "2026-08-14T00:02:00Z")
 
+    def build_mocked_plan(self, source: dict[str, object]) -> dict[str, object]:
+        descriptor = self.descriptor()
+        descriptor["repository"].update(
+            previous_sha="a" * 40, previous_tree="b" * 40
+        )
+        with (
+            mock.patch.object(REHEARSAL, "_private_directory"),
+            mock.patch.object(
+                REHEARSAL,
+                "_descriptor_authority",
+                return_value=(
+                    descriptor,
+                    self.RUNTIME_ROOT / "descriptor.json",
+                    self.DESCRIPTOR_SHA256,
+                    self.READY_SHA256,
+                ),
+            ),
+            mock.patch.object(
+                REHEARSAL,
+                "_run",
+                side_effect=[mock.Mock(stdout=value) for value in ("a" * 40, "b" * 40, "")],
+            ),
+            mock.patch.object(
+                REHEARSAL,
+                "_parse_literal_env",
+                return_value={
+                    "NEXPOLY_POSTGRES_USER": "nexpoly",
+                    "NEXPOLY_POSTGRES_DB": "nexpoly",
+                    "NEXPOLY_POSTGRES_RESTORE_TMPFS_BYTES": str(8 * 1024**3),
+                },
+            ),
+            mock.patch.object(REHEARSAL, "_live_postgres_container", return_value=("a" * 64, {})),
+            mock.patch.object(REHEARSAL, "_source_database_evidence", return_value=source),
+            mock.patch.object(REHEARSAL, "_validate_local_image", side_effect=lambda image, label: image),
+        ):
+            return REHEARSAL.build_plan(
+                production_root=Path("/production-fixture"),
+                runtime_root=self.RUNTIME_ROOT,
+                operation_id=self.OPERATION_ID,
+                target_sha=self.TARGET_SHA,
+            )
+
+    def test_reviewed_profiles_accept_plan_output_and_complete_report(self) -> None:
+        manifest = self.reviewed_manifest()
+        for source_count, target_count in ((13, 15), (15, 15), (15, 16), (16, 16)):
+            with (
+                self.subTest(source=source_count, target=target_count),
+                mock.patch.object(self, "manifest", return_value=manifest[:target_count]),
+                mock.patch.object(self, "existing_count", return_value=source_count),
+            ):
+                plan = self.build_mocked_plan(self.source_evidence())
+                self.assertEqual(plan["expected_target_ledger_sha256"], REHEARSAL._digest(self.ledger()))
+                self.assertEqual(plan["expected_property_records"], 615_159)
+                self.assertEqual(plan["limits_seconds"], {"backup_restore": 1800, "migrations": 600})
+                self.assertEqual(plan["source"]["ledger"], self.ledger()[:source_count])
+                report = self.report()
+                records = report["migrations"]["records"]
+                output = "\n".join(
+                    f"{record['version']}\t{record['status']}\t{record['checksum']}"
+                    for record in records
+                )
+                self.assertEqual(
+                    REHEARSAL._parse_migration_records(output, self.manifest(), existing_count=source_count),
+                    records,
+                )
+                self.assertEqual(sum(record["status"] == "applied" for record in records), target_count - source_count)
+                self.assertEqual(self.validate(report)["completed_at"], "2026-08-14T00:02:00Z")
+
+    def test_new_profiles_reject_unreviewed_manifest_even_with_matching_evidence(self) -> None:
+        for target_count in (15, 16):
+            for mutation in ("tail-checksum", "prefix-checksum", "epoch", "contract", "unknown-tail", "missing-prefix"):
+                manifest = self.reviewed_manifest()[:target_count]
+                if mutation == "tail-checksum":
+                    manifest[-1]["checksum"] = "f" * 64
+                elif mutation == "prefix-checksum":
+                    manifest[0]["checksum"] = "f" * 64
+                elif mutation == "epoch":
+                    manifest[-1]["epoch"] = 3
+                elif mutation == "contract":
+                    manifest[-1]["requires_contracts"][0]["checksum"] = "f" * 64
+                elif mutation == "unknown-tail":
+                    manifest.append({**manifest[-1], "version": "0017_unreviewed"})
+                else:
+                    manifest.pop(0)
+                with (
+                    self.subTest(target=target_count, mutation=mutation),
+                    mock.patch.object(self, "manifest", return_value=manifest),
+                    mock.patch.object(self, "existing_count", return_value=len(manifest)),
+                ):
+                    # The descriptor and every ledger/hash/output are internally consistent.
+                    # Only the independently reviewed manifest authority rejects this change.
+                    report = self.report()
+                    output = "\n".join(
+                        f"{entry['version']}\tskipped\t{entry['checksum']}" for entry in manifest
+                    )
+                    with self.assertRaises(REHEARSAL.RehearsalError):
+                        self.build_mocked_plan(self.source_evidence())
+                    with self.assertRaises(REHEARSAL.RehearsalError):
+                        REHEARSAL._parse_migration_records(output, manifest, existing_count=len(manifest))
+                    with self.assertRaises(REHEARSAL.RehearsalError):
+                        self.validate(report)
+
+    def test_reviewed_targets_reject_unreviewed_source_transitions(self) -> None:
+        for source_count, target_count in ((12, 15), (14, 15), (13, 16), (14, 16)):
+            with (
+                self.subTest(source=source_count, target=target_count),
+                mock.patch.object(self, "manifest", return_value=self.reviewed_manifest()[:target_count]),
+                mock.patch.object(self, "existing_count", return_value=source_count),
+            ):
+                with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal predecessor"):
+                    self.build_mocked_plan(self.source_evidence())
+                with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal predecessor"):
+                    self.validate(self.report())
+                with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal predecessor"):
+                    REHEARSAL._parse_migration_records("", self.manifest(), existing_count=source_count)
+
+        for source_count in (15, 16):
+            with (
+                self.subTest(source=source_count, mutation="source-checksum"),
+                mock.patch.object(self, "manifest", return_value=self.reviewed_manifest()),
+                mock.patch.object(self, "existing_count", return_value=source_count),
+            ):
+                report = self.report()
+                for label in ("source_before", "source_after", "restored_before"):
+                    report[label]["ledger"][0]["checksum"] = "f" * 64
+                    report[label]["ledger_sha256"] = REHEARSAL._digest(report[label]["ledger"])
+                with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal predecessor"):
+                    self.build_mocked_plan(report["source_before"])
+                with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal predecessor"):
+                    self.validate(report)
+
+    def test_new_profiles_reject_migration_output_tampering(self) -> None:
+        for source_count, target_count in ((15, 15), (15, 16), (16, 16)):
+            for mutation in ("first-status", "last-status", "reordered", "missing", "extra", "checksum"):
+                with (
+                    self.subTest(source=source_count, target=target_count, mutation=mutation),
+                    mock.patch.object(self, "manifest", return_value=self.reviewed_manifest()[:target_count]),
+                    mock.patch.object(self, "existing_count", return_value=source_count),
+                ):
+                    report = self.report()
+                    records = report["migrations"]["records"]
+                    if mutation == "first-status":
+                        records[0]["status"] = "applied"
+                    elif mutation == "last-status":
+                        records[-1]["status"] = "skipped" if records[-1]["status"] == "applied" else "applied"
+                    elif mutation == "reordered":
+                        records[-2:] = reversed(records[-2:])
+                    elif mutation == "missing":
+                        records.pop()
+                    elif mutation == "extra":
+                        records.append({**records[-1], "version": "0017_unreviewed"})
+                    else:
+                        records[-1]["checksum"] = "f" * 64
+                    report["migrations"]["output_sha256"] = REHEARSAL._digest(records)
+                    output = "\n".join(
+                        f"{record['version']}\t{record['status']}\t{record['checksum']}" for record in records
+                    )
+                    with self.assertRaises(REHEARSAL.RehearsalError):
+                        REHEARSAL._parse_migration_records(output, self.manifest(), existing_count=source_count)
+                    with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed transition"):
+                        self.validate(report)
+
+    def test_new_profiles_preserve_full_rehearsal_evidence_requirements(self) -> None:
+        cases = (
+            ("source_before", "property_records", 615_158),
+            ("source_before", "ledger_sha256", "sha256:" + "f" * 64),
+            ("source_after", "runtime_sha256", "sha256:" + "f" * 64),
+            ("restored_before", "system_identifier", "7659245354718314530"),
+            ("dump", "path", "/unrelated/database.dump"),
+            ("dump", "bytes", 0),
+            ("migrations", "duration_seconds", 601),
+            ("migrations", "lock_timeout", "0"),
+            ("timings", "backup_restore_seconds", 1801),
+            ("after", "property_records", 615_158),
+            ("after", "indexes", []),
+            ("after", "statistics", []),
+            ("after", "query_plans", {}),
+            ("cleanup", "migration_absent", False),
+        )
+        for source_count, target_count in ((15, 15), (15, 16), (16, 16)):
+            with (
+                mock.patch.object(self, "manifest", return_value=self.reviewed_manifest()[:target_count]),
+                mock.patch.object(self, "existing_count", return_value=source_count),
+            ):
+                for section, field, value in cases:
+                    with self.subTest(source=source_count, target=target_count, section=section, field=field):
+                        report = self.report()
+                        report[section][field] = value
+                        with self.assertRaises(REHEARSAL.RehearsalError):
+                            self.validate(report)
+
     def test_validate_report_rejects_migration_record_tampering(self) -> None:
         for label in ("extra", "reordered", "wrong-status"):
             report = self.report()
@@ -409,7 +610,7 @@ class ProductionPostgresRehearsalTests(unittest.TestCase):
             with self.subTest(label=label):
                 with self.assertRaisesRegex(
                     REHEARSAL.RehearsalError,
-                    "exact ordered 0014/0015 migrations",
+                    "exact reviewed transition",
                 ):
                     self.validate(report)
 

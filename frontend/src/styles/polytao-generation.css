@@ -1,19 +1,19 @@
 .polytao-page {
-  --polytao-bg-app: #edf3f9;
+  --polytao-bg-app: var(--np-theme-bg);
   --polytao-bg-soft: #f8fafc;
-  --polytao-primary: #4d95ff;
-  --polytao-primary-strong: #2563eb;
-  --polytao-cyan: #0891b2;
-  --polytao-success: #10b981;
-  --polytao-success-soft: #ecfdf5;
-  --polytao-warning-soft: #fffbeb;
-  --polytao-danger: #ef4444;
-  --polytao-danger-soft: #fef2f2;
-  --polytao-ink: #0f172a;
-  --polytao-border: rgba(15, 23, 42, 0.09);
+  --polytao-primary: var(--np-theme-blue);
+  --polytao-primary-strong: var(--np-theme-blue-strong);
+  --polytao-cyan: var(--np-theme-cyan);
+  --polytao-success: var(--np-theme-success);
+  --polytao-success-soft: var(--np-theme-success-soft);
+  --polytao-warning-soft: var(--np-theme-warning-soft);
+  --polytao-danger: var(--np-theme-danger);
+  --polytao-danger-soft: var(--np-theme-danger-soft);
+  --polytao-ink: var(--np-theme-ink);
+  --polytao-border: var(--np-theme-border);
   --polytao-border-strong: rgba(100, 116, 139, 0.24);
   --polytao-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03);
-  --polytao-shadow-md: 0 9px 32px rgba(15, 23, 42, 0.055);
+  --polytao-shadow-md: var(--np-theme-surface-shadow);
   position: relative;
   width: 100%;
   height: 100%;
@@ -21,7 +21,6 @@
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 24px 24px 92px;
   color: var(--polytao-ink);
   background-color: var(--polytao-bg-app);
   background-image:
@@ -52,8 +51,8 @@
 .polytao-page button:focus-visible,
 .polytao-page input:focus-visible,
 .polytao-page [tabindex]:focus-visible {
-  outline: 2px solid rgba(77, 149, 255, 0.72);
-  outline-offset: 2px;
+  outline: var(--np-theme-focus-width) solid var(--np-theme-focus);
+  outline-offset: var(--np-theme-focus-offset);
 }
 
 .polytao-page svg {
@@ -69,36 +68,6 @@
 
 @keyframes polytao-spin {
   to { transform: rotate(360deg); }
-}
-
-.polytao-page-heading {
-  position: absolute;
-  z-index: 25;
-  top: 26px;
-  right: 24px;
-  left: 20px;
-  display: flex;
-  min-height: 44px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  transition: right 220ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.polytao-page-heading-left {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 10px;
-}
-
-.polytao-page-heading h1 {
-  margin: 0;
-  font-family: var(--font-heading);
-  font-size: 18px;
-  font-weight: 770;
-  line-height: 30px;
-  letter-spacing: -0.02em;
 }
 
 .polytao-model-label {
@@ -168,19 +137,19 @@
 }
 
 .polytao-status-chip.is-warning {
-  color: #93600b;
-  border-color: #fde68a;
-  background: #fffdf3;
+  color: var(--np-theme-warning-text);
+  border-color: var(--np-theme-warning-border);
+  background: var(--np-theme-warning-soft);
 }
 
 .polytao-status-chip.is-warning i {
-  background: #e2a31b;
+  background: var(--np-theme-warning);
   box-shadow: 0 0 0 3px rgba(226, 163, 27, 0.12);
 }
 
 .polytao-status-chip.is-error {
-  color: #b91c1c;
-  border-color: #fecaca;
+  color: var(--np-theme-danger-text);
+  border-color: var(--np-theme-danger-border);
   background: var(--polytao-danger-soft);
 }
 
@@ -237,7 +206,7 @@
 
 .polytao-page button:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.5;
   transform: none !important;
 }
 
@@ -250,10 +219,10 @@
 .polytao-generation-surface {
   position: relative;
   overflow: visible;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 18px 55px rgba(15, 35, 65, 0.08), 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+  border: 1px solid var(--np-theme-surface-border);
+  border-radius: var(--np-theme-surface-radius);
+  background: var(--np-theme-panel);
+  box-shadow: var(--np-theme-surface-shadow);
 }
 
 .polytao-generation-surface::before {
@@ -936,9 +905,9 @@
   align-items: flex-start;
   gap: 7px;
   padding: 8px 9px;
-  border: 1px solid #fecaca;
+  border: 1px solid var(--np-theme-danger-border);
   border-radius: 8px;
-  color: #b91c1c;
+  color: var(--np-theme-danger-text);
   background: var(--polytao-danger-soft);
   font-size: 11px;
   line-height: 1.5;
@@ -1136,8 +1105,8 @@
 }
 
 .polytao-number-input.is-invalid {
-  border-color: #fca5a5;
-  background: #fffafa;
+  border-color: var(--np-theme-danger-border);
+  background: var(--np-theme-danger-soft);
 }
 
 .polytao-drawer-backdrop {
@@ -1614,14 +1583,14 @@
 }
 
 .polytao-state-icon.is-danger {
-  color: #b91c1c;
-  border-color: #fecaca;
+  color: var(--np-theme-danger-text);
+  border-color: var(--np-theme-danger-border);
   background: var(--polytao-danger-soft);
 }
 
 .polytao-state-icon.is-warning {
-  color: #a16207;
-  border-color: #fde68a;
+  color: var(--np-theme-warning-text);
+  border-color: var(--np-theme-warning-border);
   background: var(--polytao-warning-soft);
 }
 
@@ -1805,7 +1774,6 @@
 
 @media (max-width: 899px) {
   .polytao-page {
-    padding: 18px 14px 88px;
   }
 
   .polytao-detail-drawer {
@@ -1846,20 +1814,6 @@
 }
 
 @media (max-width: 700px) {
-  .polytao-page-heading {
-    position: relative;
-    top: auto;
-    right: auto;
-    left: auto;
-    min-height: 38px;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 10px;
-  }
-
-  .polytao-page-heading h1 {
-    font-size: 21px;
-  }
 
   .polytao-model-label {
     max-width: 190px;
@@ -1917,8 +1871,6 @@
 
 @media (max-width: 480px) {
   .polytao-page {
-    padding-right: 10px;
-    padding-left: 10px;
   }
 
   .polytao-module-toolbar .polytao-status-chip {
@@ -1928,7 +1880,7 @@
   }
 
   .polytao-generation-surface {
-    border-radius: 12px;
+    border-radius: var(--np-theme-surface-radius);
   }
 
   .polytao-surface-header,
@@ -2044,33 +1996,32 @@
 /* Knowledge retrieval / database filtering aligned workspace ------------ */
 
 .polytao-page {
-  --polytao-bg-app: #edf3f9;
+  --polytao-bg-app: var(--np-theme-bg);
   --polytao-bg-soft: #f7faff;
-  --polytao-primary: #2563eb;
-  --polytao-primary-strong: #1d4ed8;
-  --polytao-cyan: #0891b2;
-  --polytao-success: #10b981;
-  --polytao-success-soft: #ecfdf5;
-  --polytao-warning: #d89212;
-  --polytao-warning-soft: #fffbeb;
-  --polytao-danger: #ef4444;
-  --polytao-danger-soft: #fef2f2;
-  --polytao-ink: #0b1f3a;
-  --polytao-muted: #58708d;
-  --polytao-faint: #8da1b8;
-  --polytao-border: rgba(51, 83, 126, 0.17);
+  --polytao-primary: var(--np-theme-blue);
+  --polytao-primary-strong: var(--np-theme-blue-strong);
+  --polytao-cyan: var(--np-theme-cyan);
+  --polytao-success: var(--np-theme-success);
+  --polytao-success-soft: var(--np-theme-success-soft);
+  --polytao-warning: var(--np-theme-warning);
+  --polytao-warning-soft: var(--np-theme-warning-soft);
+  --polytao-danger: var(--np-theme-danger);
+  --polytao-danger-soft: var(--np-theme-danger-soft);
+  --polytao-ink: var(--np-theme-ink);
+  --polytao-muted: var(--np-theme-muted);
+  --polytao-faint: var(--np-theme-faint);
+  --polytao-border: var(--np-theme-border);
   --polytao-border-strong: rgba(51, 83, 126, 0.25);
   --polytao-shadow-sm: 0 5px 15px rgba(30, 64, 175, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.88);
-  --polytao-shadow-md: 0 22px 58px rgba(30, 64, 175, 0.09), 0 2px 8px rgba(15, 23, 42, 0.035), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  --polytao-shadow-md: var(--np-theme-surface-shadow);
   container: polytao-page / inline-size;
-  --polytao-drawer-edge: var(--np-material-discovery-title-left, 24px);
+  --polytao-drawer-edge: var(--np-page-title-left, 24px);
   --polytao-drawer-gap: 12px;
   --polytao-workspace-max-width: 1040px;
   --polytao-pair-width: min(calc(100cqw - 2 * var(--polytao-drawer-edge)), calc(var(--polytao-workspace-max-width) + var(--polytao-drawer-width) + var(--polytao-drawer-gap)));
   /* The inner page-scroll owns scrolling. A translated/focused offscreen drawer
      must not scroll this outer frame horizontally while it enters. */
   overflow: clip;
-  padding: 0;
   color: var(--polytao-ink);
   background-color: var(--polytao-bg-app);
   background-image:
@@ -2098,7 +2049,7 @@
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 24px 24px 92px;
+  padding: 0 var(--np-page-title-left) 92px;
   scrollbar-color: #c4d1df transparent;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
@@ -2127,41 +2078,15 @@
 
 .polytao-page.is-resizing .polytao-workbench-shell { transition: none; }
 
-.polytao-page.is-drawer-open .polytao-page-heading {
-  right: auto;
-}
-
 .polytao-page button:focus-visible,
 .polytao-page input:focus-visible,
 .polytao-page [tabindex]:focus-visible {
-  outline-color: rgba(37, 99, 235, 0.72);
+  outline-color: var(--np-theme-focus);
 }
 
 .polytao-page svg {
   width: 16px;
   height: 16px;
-}
-
-.polytao-page-heading {
-  position: relative;
-  z-index: 25;
-  top: auto;
-  right: auto;
-  left: auto;
-  display: flex;
-  min-height: 30px;
-  align-items: center;
-  margin: 0 0 8px;
-}
-
-.polytao-page-heading h1 {
-  margin: 0;
-  color: #0b1f3a;
-  font-family: var(--font-heading);
-  font-size: 20px;
-  font-weight: 750;
-  line-height: 30px;
-  letter-spacing: -0.02em;
 }
 
 .polytao-workbench-shell {
@@ -2218,10 +2143,10 @@
 .polytao-generation-surface {
   container: polytao-surface / inline-size;
   overflow: visible;
-  border: 1px solid rgba(37, 99, 235, 0.14);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: var(--polytao-shadow-md);
+  border: 1px solid var(--np-theme-surface-border);
+  border-radius: var(--np-theme-surface-radius);
+  background: var(--np-theme-panel);
+  box-shadow: var(--np-theme-surface-shadow);
 }
 
 .polytao-generation-surface::before {
@@ -2267,7 +2192,7 @@
 }
 
 .polytao-surface-copy h2 {
-  color: #0b1f3a;
+  color: var(--np-theme-ink);
   font-size: 18px;
   font-weight: 750;
   line-height: 1.4;
@@ -2688,7 +2613,7 @@
 }
 
 .polytao-drawer-copy h2 {
-  color: #0b1f3a;
+  color: var(--np-theme-ink);
   font-size: 18px;
 }
 
@@ -2883,16 +2808,7 @@
 
 @media (max-width: 700px) {
   .polytao-page-scroll {
-    padding: 18px 14px 88px;
-  }
-
-  .polytao-page-heading {
-    min-height: 30px;
-    margin-bottom: 10px;
-  }
-
-  .polytao-page-heading h1 {
-    font-size: 20px;
+    padding: 0 var(--np-page-title-left) 88px;
   }
 
   .polytao-module-toolbar {
@@ -2930,8 +2846,8 @@
 
 @media (max-width: 480px) {
   .polytao-page-scroll {
-    padding-right: 10px;
-    padding-left: 10px;
+    padding-right: var(--np-page-title-left);
+    padding-left: var(--np-page-title-left);
   }
 
   .polytao-surface-header,
@@ -2959,17 +2875,7 @@
   }
 
   .polytao-page-scroll {
-    padding: 36px 36px 120px;
-  }
-
-  .polytao-page-heading {
-    min-height: 40px;
-    margin-bottom: 14px;
-  }
-
-  .polytao-page-heading h1 {
-    font-size: 28px;
-    line-height: 40px;
+    padding: 0 var(--np-page-title-left) 120px;
   }
 
   .polytao-workbench-shell {
@@ -3001,7 +2907,7 @@
   }
 
   .polytao-generation-surface {
-    border-radius: 20px;
+    border-radius: var(--np-theme-surface-radius);
   }
 
   .polytao-generation-surface::before {

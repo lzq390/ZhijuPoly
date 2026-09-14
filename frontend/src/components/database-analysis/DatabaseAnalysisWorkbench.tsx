@@ -1,3 +1,4 @@
+import { ModulePageHeader } from "../ModulePageHeader";
 import {
   AlertTriangle,
   Atom,
@@ -18,7 +19,6 @@ import { fetchDatabaseAnalytics, fetchDatabaseDatasetSummary } from "../../servi
 import type { DatasetSummaryResponse } from "../../types";
 import "../../styles/structure-workbench.css";
 import "../../styles/database-analysis.css";
-import { MaterialDiscoveryPageTitle } from "../MaterialDiscoveryPageTitle";
 import {
   averageComponentCount,
   BarList,
@@ -406,12 +406,12 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
   return (
     <div
       ref={rootRef}
-      className="np-structure-workbench np-database-analysis np-material-discovery-page"
+      className="np-module-page np-structure-workbench np-database-analysis"
       data-view-key={currentView === "structureEffect" ? "structure-effect" : currentView}
       style={rootStyle}
     >
-      <div className={`np-sw-page${drawerOpen ? " has-open-drawer" : ""}`}>
-        <MaterialDiscoveryPageTitle className="np-sw-page-title">数据库分析</MaterialDiscoveryPageTitle>
+      <ModulePageHeader>数据库分析</ModulePageHeader>
+      <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className={`np-sw-workspace${datasetPopoverOpen && datasetPopoverOverlay ? " has-dataset-modal" : ""}`}>
             <div className="dba-module-toolbar" aria-label="数据库分析工具栏">

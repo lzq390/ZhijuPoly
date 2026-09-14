@@ -1,5 +1,7 @@
 # 视觉交互优化：串行模块切换与手动验收
 
+文中标注的本地证据仅用于定位当时的检查，不随仓库交付；仓库内文件仍使用相对链接。
+
 更新日期：2026-09-09。交付入口：当前开发环境 **9001**；没有发布或重启生产环境。
 
 ## 当前效果
@@ -23,7 +25,7 @@
 
 ## 统一动效参数
 
-CSS 主来源：[motion.css](/data/lzq/gith/nexpoly-dev/frontend/src/styles/motion.css)。JS 读取必要计算样式，集中兜底见 [motion.ts](/data/lzq/gith/nexpoly-dev/frontend/src/lib/motion.ts)。没有新增运行时动画库。
+CSS 主来源：[motion.css](../frontend/src/styles/motion.css)。JS 读取必要计算样式，集中兜底见 [motion.ts](../frontend/src/lib/motion.ts)。没有新增运行时动画库。
 
 | 场景 | CSS token | 规格 |
 | --- | --- | --- |
@@ -49,11 +51,11 @@ CSS 主来源：[motion.css](/data/lzq/gith/nexpoly-dev/frontend/src/styles/moti
 
 ### 单一导航事务
 
-[App.tsx](/data/lzq/gith/nexpoly-dev/frontend/src/App.tsx) 使用 [useModuleTransition](/data/lzq/gith/nexpoly-dev/frontend/src/hooks/useModuleTransition.ts) 统一侧栏、模块内部跨模块入口、命令和浏览器前进/后退。请求携带目标 ID、名称、完整 URL、知识检索条件、任务 ID、数据集和 history 方式，在透明提交点一起生效。
+[App.tsx](../frontend/src/App.tsx) 使用 [useModuleTransition](../frontend/src/hooks/useModuleTransition.ts) 统一侧栏、模块内部跨模块入口、命令和浏览器前进/后退。请求携带目标 ID、名称、完整 URL、知识检索条件、任务 ID、数据集和 history 方式，在透明提交点一起生效。
 
 内部阶段是 `idle / guarding / exiting / blank / entering`。递增事务标识、具体 Animation 实例和清理函数共同排除过期完成事件、定时器及异步守卫结果。WAAPI 完成事件为主，时长 + 80ms 的 watchdog 兜底；启动延迟不消耗正常 400ms 动画区间。空白用明确的 `opacity: 0` 保持，不依赖结束后残留的动画填充。
 
-[AppShell](/data/lzq/gith/nexpoly-dev/frontend/src/components/AppShell.tsx) 只呈现阶段、等待提示、既有内容节点和焦点。视觉状态采用外壳订阅，阶段推进不要求 App 及全部业务页面重新渲染。没有第二份工作区、旧 children 快照缓存、路由 key 或新增滚动容器。
+[AppShell](../frontend/src/components/AppShell.tsx) 只呈现阶段、等待提示、既有内容节点和焦点。视觉状态采用外壳订阅，阶段推进不要求 App 及全部业务页面重新渲染。没有第二份工作区、旧 children 快照缓存、路由 key 或新增滚动容器。
 
 | 新操作发生时 | 处理 |
 | --- | --- |
@@ -136,16 +138,16 @@ PolyTAO 结果栏也接入上述拖宽机制，移除原有独立的逐指针提
 
 ### 本次结果侧栏联动平移
 
-提交前二次 review（2026-09-09）：在最新基线 `a956794` 加本轮动效改动的完整工作区重新验证，**85 个测试文件、779 条测试全部通过**，TypeScript/Vite 构建与差异检查通过。9001 的 1440×900、1024×768、390×844、2560×1440 均重新通过抽屉联动、反向操作、焦点、运行时减少动态效果及高通量布局检查：[提交前复测结果](/tmp/nexpoly-drawer-review-20260909/results.json)。未发现新的阻断问题；原有构建提示和下述开发环境性能限制仍保留。高通量已由独立提交交付，不包含在本次动效提交的文件范围内。
+提交前二次 review（2026-09-09）：在最新基线 `a956794` 加本轮动效改动的完整工作区重新验证，**85 个测试文件、779 条测试全部通过**，TypeScript/Vite 构建与差异检查通过。9001 的 1440×900、1024×768、390×844、2560×1440 均重新通过抽屉联动、反向操作、焦点、运行时减少动态效果及高通量布局检查：提交前复测结果（本地证据：`/tmp/nexpoly-drawer-review-20260909/results.json`）。未发现新的阻断问题；原有构建提示和下述开发环境性能限制仍保留。高通量已由独立提交交付，不包含在本次动效提交的文件范围内。
 
-Review 首先用新增的逐帧几何检查复现了旧问题：[改造前失败结果](/tmp/nexpoly-drawer-slide-before/results.json)。旧实现退出完成时主区宽度突然改变，原来只检查退出期间占位的脚本无法发现这一点。
+Review 首先用新增的逐帧几何检查复现了旧问题：改造前失败结果（本地证据：`/tmp/nexpoly-drawer-slide-before/results.json`）。旧实现退出完成时主区宽度突然改变，原来只检查退出期间占位的脚本无法发现这一点。
 
 现在 `scripts/drawer-motion-probe.mjs` 同时检查主区与侧栏位置、主区宽度、平台侧栏位置、外框 scrollLeft、真实 CSS 动画时长、两者标准化运动进度以及 iframe 节点身份。采样覆盖完成后的两帧，避免漏掉最后一帧跳变；进入中关闭、重开、拖宽中关闭及运行时减少动态效果也纳入检查。
 
 - 本次代码与上一轮局部增强一起在隔离快照 `/tmp/nexpoly-drawer-motion.XVxBdS` 验证，**83 个测试文件、767 条测试全部通过**，TypeScript/Vite 构建通过；快照基于 `85916ce` 加本轮动效文件，未混入并行的高通量开发改动。构建仍有大 chunk 和 Browserslist 数据陈旧提示。
-- 9001 的 1440×900、1024×768、390×844、2560×1440 全部通过：[最终几何、竞态与性能采样](/tmp/nexpoly-drawer-slide-final/results.json)。覆盖通用、知识、PolyTAO 三类结果侧栏；并排时两块区域进度一致、宽度不变，覆盖时主区位置不变；每个场景仅创建一次被拦截的 PolyTAO 测试请求，没有真实任务或请求重放。高通量满高与内部滚动检查仍通过。
-- 初始减少动态效果的 390×844 单独通过：[减少动态效果结果](/tmp/nexpoly-drawer-slide-reduced/results.json)。动态启用减少效果的退出检查包含在四个视口中。
-- 已录制 2560×1440 正常时间轴视频：[侧栏开关、反向操作与拖宽录像](/tmp/nexpoly-drawer-slide-video/videos/6f51a13842a562180fc0b8e4f45efaff.webm)。视频没有人为放慢，录屏本身会增加渲染开销。
+- 9001 的 1440×900、1024×768、390×844、2560×1440 全部通过：最终几何、竞态与性能采样（本地证据：`/tmp/nexpoly-drawer-slide-final/results.json`）。覆盖通用、知识、PolyTAO 三类结果侧栏；并排时两块区域进度一致、宽度不变，覆盖时主区位置不变；每个场景仅创建一次被拦截的 PolyTAO 测试请求，没有真实任务或请求重放。高通量满高与内部滚动检查仍通过。
+- 初始减少动态效果的 390×844 单独通过：减少动态效果结果（本地证据：`/tmp/nexpoly-drawer-slide-reduced/results.json`）。动态启用减少效果的退出检查包含在四个视口中。
+- 已录制 2560×1440 正常时间轴视频：侧栏开关、反向操作与拖宽录像（本地证据：`/tmp/nexpoly-drawer-slide-video/videos/6f51a13842a562180fc0b8e4f45efaff.webm`）。视频没有人为放慢，录屏本身会增加渲染开销。
 - 性能轨迹按每次侧栏开关单独标记区间。在非录屏的 2K 采样中，各区间累计 Layout 约 0–8ms，知识检索仍能观察到重复的轻量 Layout 记录；没有逐帧提交宽度/padding，但不能据此宣称零重排或恒定 60fps。轨迹也包含开发环境的 React 处理及绘制长任务，未做同条件前后性能百分比对比，真实设备的流畅度仍以手动验收为准。
 
 本次手动验收：
@@ -161,9 +163,9 @@ Review 首先用新增的逐帧几何检查复现了旧问题：[改造前失败
 
 在 `85916ce` 加本次局部动效改动的隔离快照中，**82 个测试文件、761 条测试全部通过**，TypeScript/Vite 构建与差异检查通过；未混入并行开发的高通量修改。快照目录 `/tmp/nexpoly-local-motion.lNlzws`。知识检索测试改为验证真实退场完成事件，不再写死旧的 240ms 等待。构建仍只有原有的大 chunk 和 Browserslist 数据陈旧提示。
 
-9001 的 1440×900、1024×768、390×844、2560×1440 复测全部通过。验证脚本新增逐帧透明度采样：功能参数实际进入 300ms、退出 240ms，详情标签实际淡入 300ms，四个视口都采到明显中间透明度和从 0 开始的标签内容，不只检查 CSS 参数是否存在。抽屉槽位、拖宽松手无追赶、移动焦点、画板复用及高通量满高布局仍通过。[局部增强结果](/tmp/nexpoly-local-motion-visible-all/results.json)。
+9001 的 1440×900、1024×768、390×844、2560×1440 复测全部通过。验证脚本新增逐帧透明度采样：功能参数实际进入 300ms、退出 240ms，详情标签实际淡入 300ms，四个视口都采到明显中间透明度和从 0 开始的标签内容，不只检查 CSS 参数是否存在。抽屉槽位、拖宽松手无追赶、移动焦点、画板复用及高通量满高布局仍通过。局部增强结果（本地证据：`/tmp/nexpoly-local-motion-visible-all/results.json`）。
 
-390×844 额外检查了主模块仍为 400/200/400ms，以及减少动态效果直接呈现最终状态：[模块回归](/tmp/nexpoly-local-motion-module-check/results.json)、[减少动态效果](/tmp/nexpoly-local-motion-reduced/results.json)。本次没有重录视频或提供同条件性能提升百分比；新轨迹只是开发环境下的验证采样。
+390×844 额外检查了主模块仍为 400/200/400ms，以及减少动态效果直接呈现最终状态：模块回归（本地证据：`/tmp/nexpoly-local-motion-module-check/results.json`）、减少动态效果（本地证据：`/tmp/nexpoly-local-motion-reduced/results.json`）。本次没有重录视频或提供同条件性能提升百分比；新轨迹只是开发环境下的验证采样。
 
 ### 上次串行模块提交记录（局部增强前）
 
@@ -176,9 +178,9 @@ Review 首先用新增的逐帧几何检查复现了旧问题：[改造前失败
 
 上次提交 `85916ce` 的 **400/200/400ms** 回归（局部增强前）：**82 个测试文件、760 条测试通过**，TypeScript/Vite 构建和差异检查通过。验证使用 `edda103` 已提交版本加当时 59 个动效文件的隔离快照；并行开发的高通量未提交改动曾导致工作区类型和测试错误，未混入该提交，也不据此宣称那些未完成改动已通过回归。隔离目录为 `/tmp/nexpoly-motion-review.RuUc29`，仅复用现有依赖，没有安装或修改依赖。
 
-9001 在 **1440×900、1024×768、390×844、2560×1440** 的真实浏览器模块检查全部通过。1440 下遍历全部科研模块及首页，并验证连续目标覆盖、空白期替换、淡入中再次切换、前进/后退和慢请求；其余视口检查结构与知识往返。两段 WAAPI 都为 400ms，均采到完整空白帧和从 0 开始的淡入，画板节点复用及运行中减少动态效果通过，无页面异常。[本次浏览器结果](/tmp/nexpoly-module-review-400ms/results.json)、[本次模块轨迹](/tmp/nexpoly-module-review-400ms/module-switch.trace.json)。观测空白约 208–407ms，包含初始化与调度，不是将固定 200ms 计时改长。本轮回归没有重录正常速度视频或制作同条件性能基线，下面的历史录像和性能数值仍对应旧时长。
+9001 在 **1440×900、1024×768、390×844、2560×1440** 的真实浏览器模块检查全部通过。1440 下遍历全部科研模块及首页，并验证连续目标覆盖、空白期替换、淡入中再次切换、前进/后退和慢请求；其余视口检查结构与知识往返。两段 WAAPI 都为 400ms，均采到完整空白帧和从 0 开始的淡入，画板节点复用及运行中减少动态效果通过，无页面异常。本次浏览器结果（本地证据：`/tmp/nexpoly-module-review-400ms/results.json`）、本次模块轨迹（本地证据：`/tmp/nexpoly-module-review-400ms/module-switch.trace.json`）。观测空白约 208–407ms，包含初始化与调度，不是将固定 200ms 计时改长。本轮回归没有重录正常速度视频或制作同条件性能基线，下面的历史录像和性能数值仍对应旧时长。
 
-同样四个视口的抽屉/布局复测全部通过：通用及知识抽屉完整退场、2560 下并排槽位保留与通用拖宽、桌面知识拖宽松手后无追赶、移动端退出遮罩与焦点恢复、运行时减少动态效果，以及高通量满高和内部滚动。[本次抽屉结果](/tmp/nexpoly-drawers-review-400ms/results.json)，同目录保留各视口截图和原始性能轨迹。这些本机 `/tmp` 验证产物没有加入 Git；提交包含验证脚本、规格和复测说明。
+同样四个视口的抽屉/布局复测全部通过：通用及知识抽屉完整退场、2560 下并排槽位保留与通用拖宽、桌面知识拖宽松手后无追赶、移动端退出遮罩与焦点恢复、运行时减少动态效果，以及高通量满高和内部滚动。本次抽屉结果（本地证据：`/tmp/nexpoly-drawers-review-400ms/results.json`），同目录保留各视口截图和原始性能轨迹。这些本机 `/tmp` 验证产物没有加入 Git；提交包含验证脚本、规格和复测说明。
 
 以下完整回归、四视口与录像/性能数据为 **500/200/500ms 版本的历史记录**，不冒充本次 400ms 调整后的重新采样。
 
@@ -199,9 +201,9 @@ Review 首先用新增的逐帧几何检查复现了旧问题：[改造前失败
 
 ### 录像与性能轨迹
 
-正常速度实录：[module-switch.webm](/tmp/nexpoly-module-serial-delivery/module-switch.webm)。它按照实际屏幕帧时间戳编码为 25fps，没有慢放或插入额外空白。
+正常速度实录：module-switch.webm（本地证据：`/tmp/nexpoly-module-serial-delivery/module-switch.webm`）。它按照实际屏幕帧时间戳编码为 25fps，没有慢放或插入额外空白。
 
-模块检查与录像原始帧：[结果](/tmp/nexpoly-module-serial-delivery/results.json)、[模块切换轨迹](/tmp/nexpoly-module-serial-delivery/module-switch.trace.json)。抽屉/拖宽/布局检查：[结果](/tmp/nexpoly-motion-serial-delivery/results.json)、[性能摘要](/tmp/nexpoly-motion-serial-delivery/performance-summary.json)，同目录含四种视口的截图与可导入 Chrome Performance 的 `*.trace.json`。
+模块检查与录像原始帧：结果（本地证据：`/tmp/nexpoly-module-serial-delivery/results.json`）、模块切换轨迹（本地证据：`/tmp/nexpoly-module-serial-delivery/module-switch.trace.json`）。抽屉/拖宽/布局检查：结果（本地证据：`/tmp/nexpoly-motion-serial-delivery/results.json`）、性能摘要（本地证据：`/tmp/nexpoly-motion-serial-delivery/performance-summary.json`），同目录含四种视口的截图与可导入 Chrome Performance 的 `*.trace.json`。
 
 1440 桌面的两次代表性模块切换记录了 24 次 Layout（合计约 80.8ms，单次最大 48.7ms），没有形成逐帧连续 Layout；直接归属协调器的 FunctionCall 最大约 9.3ms，没有超过 50ms 的直接回调。该区间仍记录了 4 个 54–69ms 的长任务，rAF 采样间隔 P95 约 50ms。
 

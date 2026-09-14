@@ -6912,7 +6912,8 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                     CONTROLLER._bridge_core.QUEUE_MIGRATION_RECORD,
                 ],
             ),
-            ("post-0015", F_MANIFEST_RECORDS),
+            ("post-0015", F_MANIFEST_RECORDS[:-1]),
+            ("post-0016", F_MANIFEST_RECORDS),
         ):
             history = CONTROLLER.canonical_ledger_history(
                 [
@@ -6931,7 +6932,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
                 descriptor["bridge"]["policy"],
                 code_manifest_sha256=(
                     F_MANIFEST_DIGEST
-                    if name in {"post-0013", "post-0014", "post-0015"}
+                    if name in {"post-0013", "post-0014", "post-0015", "post-0016"}
                     else B_MANIFEST_DIGEST
                 ),
                 migrations=history,
@@ -7430,7 +7431,7 @@ class SlotAndDescriptorTests(PullDeployTestCase):
         self.assertEqual(pair["transition"]["kind"], "expand-0013")
         self.assertEqual(
             pair["transition"]["dft_relations"],
-            sorted(CONTROLLER.MUTABLE_DATA_BUSINESS_TABLES[-3:]),
+            sorted(f"{schema}.{table}" for schema, table in CONTROLLER._site_helper_contracts.POST_0013_BUSINESS_MUTABLE_TABLES),
         )
 
         nonempty = json.loads(json.dumps(after))
@@ -23885,3 +23886,101 @@ class BootstrapQuiesceContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BatchDeploymentCompatibilityTests(unittest.TestCase):
+    def test_batch_schema_three_and_legacy_stats(self):
+        fixtures = StrictLifecycleEvidenceTests()
+        for version in (1, 2, 3):
+            payload = fixtures.active_payload(version=min(version, 2))
+            persistent = fixtures.persistent_payload(version=min(version, 2))
+            if version == 3:
+                for document in (payload, persistent):
+                    document['active_jobs_schema_version'] = 3
+                    document['active_jobs']['polymerization_batch'] = 0
+            CONTROLLER.validate_active_jobs_evidence(payload, require_drained=True)
+            CONTROLLER.validate_persistent_drain_evidence(persistent)
+            CONTROLLER._site_helper_contracts.validate_active_jobs({
+                'active_jobs_schema_version': version, 'ingress_isolated': True,
+                'active_jobs': payload['active_jobs'], 'active_total': 0,
+            })
+        payload['active_jobs']['polymerization_batch'] = 1
+        payload['active_total'] = 1
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            CONTROLLER.validate_active_jobs_evidence(payload, require_drained=True)
+
+    def batch_evidence(self):
+        evidence = mutable_data_evidence(ledger_length=16)
+        for schema, table in CONTROLLER._site_helper_contracts.POST_0016_BUSINESS_MUTABLE_TABLES:
+            evidence['business_tables'].append({
+                'schema': schema, 'table': table, 'state': 'present', 'row_count': 0,
+                'schema_sha256': DIGEST_A,
+                'content_sha256': CONTROLLER._site_helper_contracts.EMPTY_POSTGRES_COPY_SHA256,
+            })
+        return reseal_mutable_data_evidence(evidence)
+
+    def test_0016_creation_is_empty_and_later_data_is_preserved(self):
+        before = mutable_data_evidence(ledger_length=15)
+        after = self.batch_evidence()
+        self.assertEqual(CONTROLLER.build_mutable_data_pair(before, after)['transition']['kind'], 'expand-0016')
+        self.assertEqual(CONTROLLER.build_mutable_data_pair(after, after)['transition']['kind'], 'code-deploy')
+        tampered = json.loads(json.dumps(after))
+        tampered['business_tables'][-1]['row_count'] = 1
+        reseal_mutable_data_evidence(tampered)
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            CONTROLLER.build_mutable_data_pair(before, tampered)
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            CONTROLLER.build_mutable_data_pair(after, tampered)
+
+    def test_post_0016_evidence_cannot_omit_batch_tables(self):
+        missing = mutable_data_evidence(ledger_length=16)
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            CONTROLLER.validate_mutable_data_evidence(missing)
+
+    def test_worker_lifecycle_supports_both_current_and_pre_batch_checkouts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            controller = SimpleNamespace(production_root=root)
+            (root / 'docker-compose.yml').write_text('services:\n  backend: {}\n')
+            self.assertEqual(CONTROLLER.SystemLifecycle._batch_services(controller), ())
+            (root / 'docker-compose.yml').write_text('services:\n  backend: {}\n  polymerization-batch-worker: {}\n')
+            self.assertEqual(CONTROLLER.SystemLifecycle._batch_services(controller), ('polymerization-batch-worker',))
+
+    def test_compatibility_baseline_preregisters_0016_for_exact_rollback(self):
+        bridge = CONTROLLER._bridge_core
+        authority = {'policy_id': DIGEST_A, 'accepted_migration_ledgers': bridge.expected_migration_registry(
+            target_manifest_sha256=B_MANIFEST_SHA256, target_records=B_MANIFEST_RECORDS,
+            authority_manifest_sha256=bridge.PROPERTY_FILTER_AUTHORITY_MANIFEST_SHA256,
+            authority_records=F_MANIFEST_RECORDS[:-1])}
+        legacy = CONTROLLER.build_migration_compatibility_state(authority,
+            code_manifest_sha256=bridge.PROPERTY_FILTER_AUTHORITY_MANIFEST_SHA256, migrations=F_MANIFEST_RECORDS[:-1])
+        baseline = CONTROLLER.build_migration_compatibility_state(authority,
+            code_manifest_sha256=bridge.PROPERTY_FILTER_AUTHORITY_MANIFEST_SHA256, migrations=F_MANIFEST_RECORDS[:-1], register_batch_successor=True)
+        self.assertEqual(legacy['accepted_migration_ledgers'][-1]['name'], 'post-0015')
+        self.assertEqual(baseline['accepted_migration_ledgers'][-1]['name'], 'post-0016')
+        self.assertEqual(CONTROLLER.validate_migration_compatibility_state(legacy, migrations=F_MANIFEST_RECORDS[:-1]), legacy)
+        self.assertEqual(CONTROLLER.validate_migration_compatibility_state(baseline, migrations=F_MANIFEST_RECORDS[:-1]), baseline)
+        upgraded = CONTROLLER.build_migration_compatibility_state(baseline,
+            code_manifest_sha256=F_MANIFEST_SHA256, migrations=F_MANIFEST_RECORDS)
+        previous = {'migrations': F_MANIFEST_RECORDS[:-1], 'migration_compatibility': baseline}
+        current = {'migrations': F_MANIFEST_RECORDS, 'migration_compatibility': upgraded,
+                   'final_mutable_data_audit': {}, 'final_external_database_audit': {}, 'queue_mutable_data_audit': {}}
+        restored = CONTROLLER.PullDeployController._explicit_rollback_state(current, previous)
+        self.assertEqual(restored['migrations'], F_MANIFEST_RECORDS)
+        self.assertEqual(restored['migration_compatibility']['code_manifest_sha256'], bridge.PROPERTY_FILTER_AUTHORITY_MANIFEST_SHA256)
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            CONTROLLER.PullDeployController._explicit_rollback_state(current, {**previous, 'migration_compatibility': legacy})
+
+    def test_0015_0016_audit_chain_survives_code_releases(self):
+        at14, at15, at16 = mutable_data_evidence(ledger_length=14), mutable_data_evidence(ledger_length=15), self.batch_evidence()
+        pair15 = CONTROLLER.build_mutable_data_pair(at14, at15)
+        pair16 = CONTROLLER.build_mutable_data_pair(at15, at16)
+        baseline = {'mutable_data_audit': pair15}
+        retained = CONTROLLER.retained_post_queue_audits(baseline, CONTROLLER.build_mutable_data_pair(at15, at15))
+        retained = CONTROLLER.retained_post_queue_audits({'post_queue_mutable_data_audits': retained}, pair16)
+        self.assertEqual(len(retained), 2)
+        self.assertEqual(CONTROLLER.validate_post_queue_audits(retained, at14['migration_ledger'], at16['migration_ledger']), retained)
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            CONTROLLER.validate_post_queue_audits(retained[::-1], at14['migration_ledger'], at16['migration_ledger'])
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            CONTROLLER.validate_post_queue_audits(retained[:1], at14['migration_ledger'], at16['migration_ledger'])

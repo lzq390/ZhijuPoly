@@ -44,6 +44,9 @@ from app.routers.monomer_dft import (
 )
 from app.routers.monomer_md import router as monomer_md_router
 from app.routers.monomer_polymerization import router as monomer_polymerization_router
+from app.routers.monomer_polymerization_batch import router as polymerization_batch_router, batch_error_handler, BatchUploadLimitMiddleware
+from app.services.polymerization_batch.models import BatchError, BatchSettings
+from app.services.polymerization_batch.service import BatchService
 from app.routers.monomer_retrosynthesis import router as monomer_retrosynthesis_router
 from app.routers.online_knowledge import router as online_knowledge_router
 from app.routers.predict import router as predict_router
@@ -239,6 +242,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content={"detail": _json_safe_validation_error(exc.errors())},
         )
 
+    batch_config = BatchSettings.from_env()
+    app.state.polymerization_batch_validation_limiter = anyio.CapacityLimiter(2)
+    app.state.polymerization_batch = BatchService(app_settings.app_postgres_dsn, batch_config)
+    app.add_exception_handler(BatchError, batch_error_handler)
+    app.add_middleware(BatchUploadLimitMiddleware, max_bytes=batch_config.request_bytes)
     app.state.settings = app_settings
     app.state.browsing_recording = BrowsingRecordingStore(app_settings)
     app.state.dev_gpu_operator_client = None
@@ -414,6 +422,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(monomer_md_router)
     app.include_router(monomer_dft_router)
     app.include_router(monomer_polymerization_router)
+    app.include_router(polymerization_batch_router)
     app.include_router(monomer_retrosynthesis_router)
     app.include_router(online_knowledge_router)
     app.include_router(dft_router)

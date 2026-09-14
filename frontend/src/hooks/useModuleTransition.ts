@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { motionDuration, motionEasing } from "../lib/motion";
-import { waitForGuard, type NavigationTarget } from "./useGuardedNavigation";
+import { waitForGuard, type NavigationGuard, type NavigationTarget } from "./useGuardedNavigation";
 import { useReducedMotion } from "./useReducedMotion";
 
 export type ModulePhase = "idle" | "guarding" | "exiting" | "blank" | "entering";
@@ -34,7 +34,7 @@ export function useModuleTransition<R extends ModuleNavigationRequest>({ activeM
   activeModule: string;
   contentRef: RefObject<HTMLDivElement | null>;
   mainRef: RefObject<HTMLElement | null>;
-  guard: (request: R) => (() => Promise<void | boolean>) | undefined;
+  guard: (request: R) => NavigationGuard | undefined;
   // Returns whether this transaction owns a new (as yet unseen) history entry.
   commit: (request: R, replaceUnseen: boolean) => boolean;
 }) {

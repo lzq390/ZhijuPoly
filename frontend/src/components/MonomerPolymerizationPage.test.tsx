@@ -1,3 +1,4 @@
+import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
 import { createRef } from "react";
@@ -92,8 +93,7 @@ function makeStructure(smiles: string = SMIPOLY_POLYIMIDE_FIXTURE.monomerA): Str
   return {
     smiles,
     setSmiles: vi.fn(),
-    iframeRef: createRef<HTMLIFrameElement>(),
-    setIsReady: vi.fn(),
+    workspace: new StructureWorkspace(smiles),
     getCurrentSmiles: vi.fn().mockResolvedValue(smiles)
   };
 }

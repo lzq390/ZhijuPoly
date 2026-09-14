@@ -2,6 +2,8 @@ name: nexpoly_dev
 
 x-dev-backend-env: &dev-backend-env
   WEB_CONCURRENCY: "1"
+  MONOMER_POLYMERIZATION_BATCH_ENABLED: "${MONOMER_POLYMERIZATION_BATCH_ENABLED:-false}"
+  MONOMER_POLYMERIZATION_BATCH_STORAGE_ROOT: /app/.runtime/monomer-polymerization-batch
   MODEL_DIR: /app/model
   # RDKit/sklearn property prediction is CPU-only and must remain available
   # independently of the opportunistic GPU1 session.
@@ -93,6 +95,7 @@ services:
       com.nexpoly.dev.config-hash: "${NEXPOLY_DEV_CONFIG_HASH:-uncomputed}"
     volumes: !override
       - ./backend:/app/backend
+      - ${NEXPOLY_RUNTIME_ROOT:-./.runtime}/state/monomer-polymerization-batch:/app/.runtime/monomer-polymerization-batch:rw
       - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/backend-data:/app/backend/data:ro
       - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/database:/app/database:ro
       - ${NEXPOLY_ASSET_ROOT:?set NEXPOLY_ASSET_ROOT to an immutable asset release}/model:/app/model:ro
@@ -136,6 +139,20 @@ services:
       retries: 3
       start_period: 120s
     gpus: !reset []
+
+  polymerization-batch-worker:
+    image: nexpoly-dev-backend:latest
+    env_file: !reset []
+    environment:
+      <<: *dev-backend-env
+      GPU_PRELOAD_MODE: lazy
+      GPU_BROKER_ENABLED: "false"
+    volumes: !override
+      - ./backend:/app/backend
+      - ${NEXPOLY_RUNTIME_ROOT:-./.runtime}/state/monomer-polymerization-batch:/app/.runtime/monomer-polymerization-batch:rw
+    depends_on: !override
+      lab-postgres:
+        condition: service_healthy
 
   backend-test:
     profiles:

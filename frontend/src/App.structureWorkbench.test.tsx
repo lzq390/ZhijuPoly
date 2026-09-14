@@ -1,8 +1,16 @@
 /* @vitest-environment jsdom */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { preloadPage } from "./pages";
+
+// These cases exercise routing after transport; cold loading is covered separately.
+beforeAll(async () => {
+  await Promise.all(["structureWorkbench", "knowledge", "databaseFilter", "monomerDft", "databaseQuery", "explorer", "homopolymerPrediction", "conditionalGeneration", "reverseDesign"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
+});
+
+vi.mock("@structure-editor-engine", () => import("./test/structureEditorEngineMock"));
 
 const mocks = vi.hoisted(() => ({
   syncSmilesFromCanvas: vi.fn(),
@@ -36,6 +44,10 @@ vi.mock("./hooks/useTgStructureCanvas", () => ({
     clearCanvas: vi.fn().mockResolvedValue(true),
     importImageFile: vi.fn().mockResolvedValue(true),
     syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
+    syncBeforeLeave: async () => {
+      await mocks.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
+      return { status: "saved" as const };
+    },
     peekCanvasState: vi.fn().mockResolvedValue({
       smiles: "*CC*",
       canvasDirty: false,
@@ -64,8 +76,8 @@ vi.mock("./components/MonomerDftPage", () => ({
   MonomerDftPage: () => <div data-testid="monomer-dft">单体 DFT</div>
 }));
 
-function structureIframe(container: HTMLElement) {
-  return container.querySelector<HTMLIFrameElement>('iframe[title="结构工作台结构编辑器"]');
+function structureEditor(container: HTMLElement) {
+  return container.querySelector<HTMLElement>('[data-editor-test-double][title="结构工作台结构编辑器"]');
 }
 
 function openDiscoverGroup() {
@@ -103,49 +115,49 @@ afterEach(() => {
 });
 
 describe("App 结构工作台挂载与导航", () => {
-  it("冷启动深链可直接加载，普通模块往返保留同一 iframe", async () => {
+  it("冷启动深链可直接加载，普通模块往返保留同一编辑器实例", async () => {
     const view = render(<App />);
-    const firstIframe = structureIframe(view.container);
-    expect(firstIframe).not.toBeNull();
+    const firstEditor = structureEditor(view.container);
+    expect(firstEditor).not.toBeNull();
 
     openDiscoverGroup();
     fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
     await screen.findByTestId("database-filter");
-    expect(structureIframe(view.container)).toBe(firstIframe);
+    expect(structureEditor(view.container)).toBe(firstEditor);
 
     fireEvent.click(screen.getByRole("button", { name: "结构工作台" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "结构工作台" })).not.toBeNull());
-    expect(structureIframe(view.container)).toBe(firstIframe);
+    expect(structureEditor(view.container)).toBe(firstEditor);
   });
 
   it("进入其它 Ketcher owner 时卸载工作台，返回后只挂载一个新实例", async () => {
     const view = render(<App />);
-    const firstIframe = structureIframe(view.container);
-    expect(firstIframe).not.toBeNull();
+    const firstEditor = structureEditor(view.container);
+    expect(firstEditor).not.toBeNull();
 
     openDiscoverGroup();
     fireEvent.click(screen.getByRole("button", { name: "数据库查询" }));
     await screen.findByRole("heading", { name: "数据库查询" });
-    expect(structureIframe(view.container)).toBeNull();
+    expect(structureEditor(view.container)).toBeNull();
     expect(screen.getByTitle("数据库查询结构编辑器")).toBeTruthy();
-    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-structure-editor]')).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "结构工作台" }));
-    await waitFor(() => expect(structureIframe(view.container)).not.toBeNull());
-    expect(structureIframe(view.container)).not.toBe(firstIframe);
-    expect(view.container.querySelectorAll('iframe[title="结构工作台结构编辑器"]')).toHaveLength(1);
+    await waitFor(() => expect(structureEditor(view.container)).not.toBeNull());
+    expect(structureEditor(view.container)).not.toBe(firstEditor);
+    expect(view.container.querySelectorAll('[data-editor-test-double][title="结构工作台结构编辑器"]')).toHaveLength(1);
   });
 
-  it("进入单体 DFT 时卸载隐藏的结构工作台 iframe", async () => {
+  it("进入单体 DFT 时卸载隐藏的结构工作台编辑器", async () => {
     const view = render(<App />);
-    expect(structureIframe(view.container)).not.toBeNull();
+    expect(structureEditor(view.container)).not.toBeNull();
 
     openBuildGroup();
     fireEvent.click(screen.getByRole("button", { name: "单体 DFT" }));
 
     await screen.findByTestId("monomer-dft");
-    expect(structureIframe(view.container)).toBeNull();
-    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(0);
+    expect(structureEditor(view.container)).toBeNull();
+    expect(view.container.querySelectorAll('[data-structure-editor]')).toHaveLength(0);
     expect(window.location.pathname).toBe("/monomer-dft");
   });
 
@@ -155,8 +167,8 @@ describe("App 结构工作台挂载与导航", () => {
     fireEvent.click(screen.getByRole("button", { name: "均聚物性质预测" }));
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "均聚物性质预测" })).toBeTruthy());
-    expect(structureIframe(view.container)).toBeNull();
-    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+    expect(structureEditor(view.container)).toBeNull();
+    expect(view.container.querySelectorAll('[data-structure-editor]')).toHaveLength(1);
     expect(screen.getByTitle("均聚物性质预测结构编辑器")).toBeTruthy();
     expect(window.location.pathname).toBe("/homopolymer-property-prediction");
 
@@ -164,7 +176,7 @@ describe("App 结构工作台挂载与导航", () => {
     window.history.replaceState({}, "", "/homopolymer-property-prediction");
     const deepLink = render(<App />);
     expect(await screen.findByRole("heading", { name: "均聚物性质预测" })).toBeTruthy();
-    expect(deepLink.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+    expect(deepLink.container.querySelectorAll('[data-structure-editor]')).toHaveLength(1);
     expect(screen.getByRole("button", { name: "均聚物性质预测" }).getAttribute("aria-current")).toBe("page");
   });
 
@@ -177,7 +189,7 @@ describe("App 结构工作台挂载与导航", () => {
     const view = render(<App />);
 
     expect(await screen.findByRole("heading", { name: "聚合物相似性探索" })).toBeTruthy();
-    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-structure-editor]')).toHaveLength(1);
     expect(screen.getByTitle("聚合物相似性探索结构编辑器")).toBeTruthy();
     expect(screen.getByRole("button", { name: "聚合物相似性探索" }).getAttribute("aria-current")).toBe("page");
 
@@ -256,7 +268,7 @@ describe("App 结构工作台挂载与导航", () => {
 
     expect(await screen.findByRole("heading", { name: "数据库查询" })).toBeTruthy();
     expect(screen.getByTitle("数据库查询结构编辑器")).toBeTruthy();
-    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-structure-editor]')).toHaveLength(1);
 
     window.history.pushState({}, "", "/knowledge");
     fireEvent(window, new PopStateEvent("popstate"));
@@ -277,7 +289,7 @@ describe("App 结构工作台挂载与导航", () => {
 
     expect(await screen.findByRole("heading", { name: "条件聚合物生成" })).toBeTruthy();
     expect(screen.getByTitle("条件聚合物生成结构编辑器")).toBeTruthy();
-    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-structure-editor]')).toHaveLength(1);
 
     window.history.pushState({}, "", "/knowledge");
     fireEvent(window, new PopStateEvent("popstate"));
@@ -298,7 +310,7 @@ describe("App 结构工作台挂载与导航", () => {
 
     expect(await screen.findByRole("heading", { name: "Tg 逆向设计" })).toBeTruthy();
     expect(screen.getByTitle("Tg 逆向设计结构编辑器")).toBeTruthy();
-    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-structure-editor]')).toHaveLength(1);
 
     window.history.pushState({}, "", "/knowledge");
     fireEvent(window, new PopStateEvent("popstate"));
@@ -310,7 +322,7 @@ describe("App 结构工作台挂载与导航", () => {
     expect(screen.queryByTitle("Tg 逆向设计结构编辑器")).toBeNull();
     // A deep link has never opened StructureWorkbench: history navigation
     // must not mount a new hidden canvas or retain reverse design implicitly.
-    expect(view.container.querySelectorAll('iframe[src="/ketcher/index.html"]')).toHaveLength(0);
+    expect(view.container.querySelectorAll('[data-structure-editor]')).toHaveLength(0);
   });
 
   it("等待中的侧栏目标会被更新的 popstate 目标取消", async () => {

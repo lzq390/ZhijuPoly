@@ -2,6 +2,7 @@ name: nexpoly
 
 x-backend-environment: &backend-environment
   WEB_CONCURRENCY: "1"
+  MONOMER_POLYMERIZATION_BATCH_STORAGE_ROOT: /app/.runtime/monomer-polymerization-batch
   MODEL_DIR: /app/model
   MODEL_ENABLED: "true"
   GEN_MODEL_ENABLED: "${GEN_MODEL_ENABLED:-false}"
@@ -64,6 +65,7 @@ x-backend-asset-volumes: &backend-asset-volumes
   - ${NEXPOLY_ASSET_ROOT:-.}/model/polytao:/app/model/polytao:ro
 
 x-backend-volumes: &backend-volumes
+  - ${NEXPOLY_RUNTIME_ROOT:-./.runtime}/state/monomer-polymerization-batch:/app/.runtime/monomer-polymerization-batch:rw
   - ${NEXPOLY_ASSET_ROOT:-.}/backend-data:/app/backend/data:ro
   - ${NEXPOLY_ASSET_ROOT:-.}/database:/app/database:ro
   - ${NEXPOLY_ASSET_ROOT:-.}/model/ocsr:/app/model/ocsr:ro
@@ -133,6 +135,33 @@ services:
       timeout: 15s
       retries: 3
       start_period: 120s
+
+  polymerization-batch-worker:
+    image: nexpoly-backend:latest
+    restart: unless-stopped
+    stop_grace_period: 45s
+    cpus: 1.0
+    mem_limit: 3g
+    env_file:
+      - path: .env.ai
+        required: false
+    environment:
+      <<: *backend-environment
+      GPU_PRELOAD_MODE: lazy
+      GPU_BROKER_ENABLED: "false"
+      NVIDIA_VISIBLE_DEVICES: "none"
+    command: ["python", "-m", "app.monomer_polymerization_batch_worker"]
+    volumes:
+      - ${NEXPOLY_RUNTIME_ROOT:-./.runtime}/state/monomer-polymerization-batch:/app/.runtime/monomer-polymerization-batch:rw
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.monomer_polymerization_batch_worker", "--healthcheck"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   lab-postgres:
     image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777

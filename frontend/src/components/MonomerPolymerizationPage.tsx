@@ -1,3 +1,4 @@
+import { ModulePageHeader } from "./ModulePageHeader";
 import {
   CircleOff,
   FlaskConical,
@@ -46,6 +47,8 @@ import {
   saveMonomerPolymerizationDraft,
   type MonomerPolymerizationDraft
 } from "./monomer-polymerization/session";
+
+import { BatchPolymerizationPanel, type BatchPolymerizationSections } from "./monomer-polymerization/BatchPolymerizationPanel";
 
 export { SMIPOLY_POLYIMIDE_FIXTURE };
 
@@ -113,6 +116,26 @@ export function MonomerPolymerizationPage({
   const formRef = useRef(form);
   formRef.current = form;
   const polymerization = useMonomerPolymerization();
+  const [mode, setMode] = useState<"batch" | "single" | null>(() => {
+    const value = new URLSearchParams(window.location.search).get("mode");
+    return value === "batch" || value === "single" ? value : null;
+  });
+  // A failed status refresh must not unmount the batch form and lose selected files.
+  const lastBatchEnabled = useRef(false);
+  if (polymerization.status?.batch) lastBatchEnabled.current = polymerization.status.batch.enabled;
+  const batchEnabled = lastBatchEnabled.current;
+  const effectiveMode = mode ?? (batchEnabled ? "batch" : "single");
+  const isBatch = effectiveMode === "batch";
+  const showModeSwitcher = batchEnabled || isBatch;
+  useEffect(() => {
+    const update = () => {
+      const value = new URLSearchParams(window.location.search).get("mode");
+      setMode(value === "batch" || value === "single" ? value : null);
+    };
+    window.addEventListener("popstate", update);
+    return () => window.removeEventListener("popstate", update);
+  }, []);
+
 
   const updateForm = useCallback((update: Partial<MonomerPolymerizationDraft>) => {
     persistDraftRef.current = true;
@@ -253,6 +276,7 @@ export function MonomerPolymerizationPage({
 
   function submitPolymerization(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isBatch) return;
     setSubmitAttempted(true);
     if (!canSubmit) return;
     const request: MonomerPolymerizationRequest = {
@@ -318,17 +342,43 @@ export function MonomerPolymerizationPage({
     : { minWidth: 320, maxWidth: 560, keyboardStep: 16 };
   const workbenchStyle = { "--np-sw-drawer-width": `${drawerWidth}px` } as CSSProperties;
 
-  return (
+  function selectMode(value: "batch" | "single") {
+    setMode(value);
+    const url = new URL(window.location.href);
+    url.searchParams.set("mode", value);
+    window.history.replaceState(window.history.state, "", url);
+  }
+  const modeSwitcher = (
+    <div className="np-mp-input-tabs" role="tablist" aria-label="聚合模式"
+      onKeyDown={(event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? "batch" : event.key === "End" ? "single" : isBatch ? "single" : "batch";
+        selectMode(next);
+        event.currentTarget.querySelector<HTMLButtonElement>(`#np-mp-${next}-tab`)?.focus();
+      }}
+    >
+      {(["batch", "single"] as const).map((value) => (
+        <button key={value} id={`np-mp-${value}-tab`} type="button" role="tab"
+          aria-selected={effectiveMode === value} aria-controls={`np-mp-${value}-panel`}
+          tabIndex={effectiveMode === value ? 0 : -1} onClick={() => selectMode(value)}
+        >{value === "batch" ? "批量聚合" : "单次聚合"}</button>
+      ))}
+    </div>
+  );
+  const drawerVisible = !isBatch && drawerOpen;
+
+  const renderWorkbench = (batch?: BatchPolymerizationSections) => (
     <div
-      className="np-structure-workbench np-monomer-polymerization"
+      className="np-module-page np-structure-workbench np-monomer-polymerization"
       data-module="monomer-polymerization"
       style={workbenchStyle}
     >
-      <div className={`np-sw-page np-mp-page${drawerOpen ? " has-open-drawer" : ""}`}>
-        <h1 className="np-sw-page-title">单体正向聚合</h1>
-        <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
+      <ModulePageHeader>单体正向聚合</ModulePageHeader>
+      <div className={`np-sw-page np-module-page-body np-mp-page${drawerVisible ? " has-open-drawer" : ""}`}>
+        <div className={`np-sw-layout${drawerVisible ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
-            <div className="np-mp-scroll-region">
+            <div className="np-mp-content">
               <div className="np-mp-module-toolbar" aria-label="单体正向聚合状态">
                 <div className="np-mp-service-status">
                   <span className={`is-${serviceState}`} role="status">
@@ -360,7 +410,7 @@ export function MonomerPolymerizationPage({
                     <span className="np-mp-surface-mark"><FlaskConical aria-hidden="true" /></span>
                     <div className="np-mp-surface-copy">
                       <h2>正向聚合设置</h2>
-                      <p>选择目标类型并填写一至两个单体，生成聚合物候选。</p>
+                      <p>选择目标类型并输入单体，生成聚合物候选。</p>
                     </div>
                   </div>
                 </header>
@@ -416,23 +466,31 @@ export function MonomerPolymerizationPage({
                     <span>02</span>
                     <div>
                       <h2 id="np-mp-monomers-title">单体输入</h2>
-                      <p>分别填写单体 A 和 B，也可以导入共享结构并查看 2D 预览。</p>
+                      <p>{isBatch ? "批量需上传单体表 A 和 B，预检后计算两表的全部组合。" : "填写单体 A 和 B，可导入共享结构并查看 2D 预览。"}</p>
                     </div>
                   </header>
-                  <MonomerPairEditor
-                    key={editorRevision}
-                    monomerA={form.monomerA}
-                    monomerB={form.monomerB}
-                    monomerBRequired={targetRequirement.monomer_b_required}
-                    monomerBRequirementNote={targetRequirement.note}
-                    monomerAError={monomerAError}
-                    monomerBError={monomerBError}
-                    onMonomerAChange={(monomerA) => updateForm({ monomerA })}
-                    onMonomerBChange={(monomerB) => updateForm({ monomerB })}
-                    onTouched={touchSlot}
-                    getSharedSmiles={getSharedSmiles}
-                    onEditStructure={editSharedStructure}
-                  />
+                  {showModeSwitcher ? modeSwitcher : null}
+                  <div id="np-mp-batch-panel" role={showModeSwitcher ? "tabpanel" : undefined}
+                    aria-labelledby={showModeSwitcher ? "np-mp-batch-tab" : undefined} hidden={!isBatch}>
+                    {batch?.inputs}
+                  </div>
+                  <div id="np-mp-single-panel" role={showModeSwitcher ? "tabpanel" : undefined}
+                    aria-labelledby={showModeSwitcher ? "np-mp-single-tab" : undefined} hidden={isBatch}>
+                    <MonomerPairEditor
+                      key={editorRevision}
+                      monomerA={form.monomerA}
+                      monomerB={form.monomerB}
+                      monomerBRequired={targetRequirement.monomer_b_required}
+                      monomerBRequirementNote={targetRequirement.note}
+                      monomerAError={monomerAError}
+                      monomerBError={monomerBError}
+                      onMonomerAChange={(monomerA) => updateForm({ monomerA })}
+                      onMonomerBChange={(monomerB) => updateForm({ monomerB })}
+                      onTouched={touchSlot}
+                      getSharedSmiles={getSharedSmiles}
+                      onEditStructure={editSharedStructure}
+                    />
+                  </div>
                 </section>
 
                 <section className="np-mp-section" aria-labelledby="np-mp-settings-title">
@@ -440,55 +498,59 @@ export function MonomerPolymerizationPage({
                     <span>03</span>
                     <div>
                       <h2 id="np-mp-settings-title">运行设置</h2>
-                      <p>设置需要显示的候选数量；符合条件的结果可能更多。</p>
+                      <p>确认设置后开始聚合，查看生成的候选结果。</p>
                     </div>
                   </header>
-                  <div className="np-mp-run-grid">
-                    <label className="np-mp-field">
-                      <span>MAX RESULTS</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={maxResultsLimit}
-                        step={1}
-                        value={form.maxResults}
-                        aria-invalid={maxResultsError ? true : undefined}
-                        aria-describedby={maxResultsError ? "np-mp-max-results-error" : "np-mp-max-results-hint"}
-                        onChange={(event) => updateForm({
-                          maxResults: event.target.value === "" ? 0 : Number(event.target.value)
-                        })}
-                        onBlur={() => setTouched((current) => ({ ...current, maxResults: true }))}
-                      />
-                      <small id="np-mp-max-results-hint">最多可返回：{maxResultsLimit}</small>
-                      {maxResultsError ? (
-                        <small id="np-mp-max-results-error" className="np-mp-field-error" role="alert">
-                          {maxResultsError}
-                        </small>
-                      ) : null}
-                    </label>
-                    <div className="np-mp-run-note">
-                      <FlaskConical aria-hidden="true" />
-                      <p>生成的候选不代表一定可以合成，也不代表相关性质已经得到验证；请结合实验条件进一步评估。</p>
+                  <div hidden={!isBatch}>{batch?.settings}</div>
+                  <div hidden={isBatch}>
+                    <div className="np-mp-run-grid">
+                      <label className="np-mp-field">
+                        <span>MAX RESULTS</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={maxResultsLimit}
+                          step={1}
+                          value={form.maxResults}
+                          aria-invalid={maxResultsError ? true : undefined}
+                          aria-describedby={maxResultsError ? "np-mp-max-results-error" : "np-mp-max-results-hint"}
+                          onChange={(event) => updateForm({
+                            maxResults: event.target.value === "" ? 0 : Number(event.target.value)
+                          })}
+                          onBlur={() => setTouched((current) => ({ ...current, maxResults: true }))}
+                        />
+                        <small id="np-mp-max-results-hint">最多可返回：{maxResultsLimit}</small>
+                        {maxResultsError ? (
+                          <small id="np-mp-max-results-error" className="np-mp-field-error" role="alert">
+                            {maxResultsError}
+                          </small>
+                        ) : null}
+                      </label>
+                      <div className="np-mp-run-note">
+                        <FlaskConical aria-hidden="true" />
+                        <p>生成的候选不代表一定可以合成，也不代表相关性质已经得到验证；请结合实验条件进一步评估。</p>
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="np-mp-form-actions">
-                    <button type="submit" className="np-sw-primary-button" disabled={!canSubmit}>
-                      {polymerization.runLoading ? <LoaderCircle className="np-sw-spin" /> : <Play />}
-                      {polymerization.runLoading ? "聚合中" : "聚合"}
-                    </button>
-                    <button type="button" className="np-sw-secondary-button" onClick={resetForm}>
-                      <RotateCcw aria-hidden="true" />
-                      重置
-                    </button>
+                    <div className="np-mp-form-actions">
+                      <button type="submit" className="np-sw-primary-button" disabled={isBatch || !canSubmit}>
+                        {polymerization.runLoading ? <LoaderCircle className="np-sw-spin" /> : <Play />}
+                        {polymerization.runLoading ? "聚合中" : "聚合"}
+                      </button>
+                      <button type="button" className="np-sw-secondary-button" onClick={resetForm}>
+                        <RotateCcw aria-hidden="true" />
+                        重置
+                      </button>
+                    </div>
                   </div>
                 </section>
               </form>
+              <div hidden={!isBatch}>{batch?.taskPanel}</div>
             </div>
           </main>
 
-          <MonomerPolymerizationDrawer
-            open={drawerOpen}
+          {!isBatch ? <MonomerPolymerizationDrawer
+            open={drawerVisible}
             hasAttempt={hasAttempt}
             width={drawerWidth}
             minWidth={drawerSizing.minWidth}
@@ -503,9 +565,14 @@ export function MonomerPolymerizationPage({
             onClose={() => setDrawerOpen(false)}
             onOpen={() => setDrawerOpen(true)}
             onClear={clearResults}
-          />
+          /> : null}
         </div>
       </div>
     </div>
   );
+  return showModeSwitcher ? (
+    <BatchPolymerizationPanel status={polymerization.status} target={form.targetClass}>
+      {renderWorkbench}
+    </BatchPolymerizationPanel>
+  ) : renderWorkbench();
 }

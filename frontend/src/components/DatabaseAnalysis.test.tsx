@@ -244,8 +244,8 @@ describe("数据库分析工作台", () => {
     const view = renderAnalysis();
 
     const pageTitle = screen.getByRole("heading", { name: "数据库分析" });
-    expect(pageTitle.classList.contains("np-material-discovery-page-title")).toBe(true);
-    expect(pageTitle.closest(".np-material-discovery-page")).not.toBeNull();
+    expect(pageTitle.classList.contains("np-module-page-title")).toBe(true);
+    expect(pageTitle.closest(".np-module-page")).not.toBeNull();
     expect(await screen.findByText("数据集概览")).not.toBeNull();
     expect(screen.getByText("全库概览")).not.toBeNull();
     expect(screen.getByText("统计数据")).not.toBeNull();

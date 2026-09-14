@@ -386,9 +386,9 @@ describe("DatabaseFilterPage", () => {
 
     const root = document.querySelector<HTMLElement>(".np-database-filter");
     expect(root?.classList.contains("np-structure-workbench")).toBe(true);
-    expect(root?.classList.contains("np-material-discovery-page")).toBe(true);
+    expect(root?.classList.contains("np-module-page")).toBe(true);
     expect(
-      screen.getByRole("heading", { name: "数据库筛选" }).classList.contains("np-material-discovery-page-title")
+      screen.getByRole("heading", { name: "数据库筛选" }).classList.contains("np-module-page-title")
     ).toBe(true);
     expect(root?.querySelector(".np-sw-page > .np-sw-layout > .np-sw-workspace")).not.toBeNull();
     expect(root?.querySelectorAll(".dbf-module-toolbar button")).toHaveLength(0);

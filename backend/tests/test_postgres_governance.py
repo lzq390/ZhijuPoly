@@ -54,6 +54,7 @@ _CONTRACT_RELEASE_SHA = "a" * 40
 _DFT_MIGRATION_VERSION = "0013_monomer_dft_jobs"
 _MD_QUEUE_MIGRATION_VERSION = "0014_monomer_md_task_queue_cancel"
 _PROPERTY_FILTER_MIGRATION_VERSION = "0015_property_filter_performance"
+_BATCH_MIGRATION_VERSION = "0016_monomer_polymerization_batch"
 
 
 def _canonical_json(value: object) -> str:
@@ -62,6 +63,14 @@ def _canonical_json(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,
+    )
+
+
+def _revert_batch_migration(connection) -> None:
+    connection.execute("DROP SCHEMA IF EXISTS polymerization_batch CASCADE")
+    connection.execute(
+        "DELETE FROM governance.schema_migrations WHERE version=%s",
+        (_BATCH_MIGRATION_VERSION,),
     )
 
 
@@ -171,6 +180,7 @@ def _prepare_polytao_contract_state(
 ) -> tuple[str, str]:
     version = postgres_migrations.POLYTAO_CONTRACT_VERSION
     with postgres_connection(postgres_dsn) as connection:
+        _revert_batch_migration(connection)
         _revert_md_queue_migration(connection)
         connection.execute("DROP SCHEMA IF EXISTS monomer_dft CASCADE")
         connection.execute(
@@ -231,6 +241,7 @@ def _prepare_polytao_contract_state(
 def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
     version = postgres_migrations.POLYTAO_CONTRACT_VERSION
     with postgres_connection(postgres_dsn) as connection:
+        _revert_batch_migration(connection)
         _revert_md_queue_migration(connection)
         connection.execute(
             """
@@ -306,6 +317,7 @@ def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
                     _DFT_MIGRATION_VERSION,
                     _MD_QUEUE_MIGRATION_VERSION,
                     _PROPERTY_FILTER_MIGRATION_VERSION,
+                    _BATCH_MIGRATION_VERSION,
                 ],),
             ).fetchall()
         }
@@ -334,9 +346,12 @@ def _restore_applied_polytao_contract_state(postgres_dsn: str) -> None:
             _PROPERTY_FILTER_MIGRATION_VERSION: migration_checksum(
                 MIGRATIONS_DIR / f"{_PROPERTY_FILTER_MIGRATION_VERSION}.sql"
             ),
+            _BATCH_MIGRATION_VERSION: migration_checksum(
+                MIGRATIONS_DIR / f"{_BATCH_MIGRATION_VERSION}.sql"
+            ),
         }:
             raise AssertionError(
-                "test fixture did not restore exact 0012/0013/0014/0015 migration records"
+                "test fixture did not restore exact 0012/0013/0014/0015/0016 migration records"
             )
         if (
             schema is None
@@ -1356,6 +1371,8 @@ def test_strict_runtime_preflight_passes_after_migrations(tmp_path: Path, postgr
     assert report["postgres"]["reachable"] is True
     assert report["migrations"]["missing"] == []
     assert report["schema_target"] == postgres_preflight.SCHEMA_TARGET_FINAL
+    for table in ("imports", "jobs", "chunks", "worker_status"):
+        assert report["postgres"]["tables"][f"polymerization_batch.{table}"] == 0
     assert report["monomer_dft_schema"] == {
         "state": "ready",
         "reason": "exact_0013",
@@ -1363,6 +1380,58 @@ def test_strict_runtime_preflight_passes_after_migrations(tmp_path: Path, postgr
             "6dc2e6ca7e1bb052836afec2bbdd46c6aa0928e97efdbbc6669b9b220f9bf6f8"
         ),
     }
+
+
+def test_batch_compatibility_baseline_passes_before_and_after_0016(
+    tmp_path: Path, postgres_dsn: str, monkeypatch,
+) -> None:
+    settings = _governance_settings(tmp_path, postgres_dsn)
+    version = "0016_monomer_polymerization_batch"
+
+    with postgres_connection(postgres_dsn) as connection:
+        @contextmanager
+        def same_connection(_dsn):
+            yield connection
+
+        monkeypatch.setattr(postgres_preflight, "postgres_connection", same_connection)
+        try:
+            connection.execute("DROP SCHEMA polymerization_batch CASCADE")
+            connection.execute(
+                "DELETE FROM governance.schema_migrations WHERE version=%s", (version,)
+            )
+            current = postgres_preflight.run_preflight(
+                settings, dsn=postgres_dsn, mode="schema", strict=True,
+            )
+            assert current["strict_ok"] is False
+            assert current["migrations"]["missing"] == [version]
+            assert any("polymerization_batch.jobs" in error for error in current["strict_errors"])
+
+            # Simulate the baseline artifact's canonical manifest (through 0015)
+            # while retaining the new checksum-exact forward compatibility code.
+            monkeypatch.setattr(postgres_preflight, "_MIGRATION_CHECKSUMS", {
+                name: checksum for name, checksum in postgres_preflight._MIGRATION_CHECKSUMS.items()
+                if name != version
+            })
+            monkeypatch.setattr(postgres_preflight, "STRICT_REQUIRED_MIGRATIONS", tuple(
+                name for name in postgres_preflight.STRICT_REQUIRED_MIGRATIONS if name != version
+            ))
+            monkeypatch.setattr(postgres_preflight, "_MIGRATION_POLICY", tuple(
+                record for record in postgres_preflight._MIGRATION_POLICY if record.version != version
+            ))
+            baseline = postgres_preflight.run_preflight(
+                settings, dsn=postgres_dsn, mode="schema", strict=True,
+            )
+            assert baseline["strict_ok"] is True, baseline["strict_errors"]
+            assert baseline["postgres"]["tables"]["polymerization_batch.jobs"] is None
+        finally:
+            # Only this test transaction is changed; restore the fixture schema.
+            connection.rollback()
+
+        rollback = postgres_preflight.run_preflight(
+            settings, dsn=postgres_dsn, mode="schema", strict=True,
+        )
+        assert rollback["strict_ok"] is True, rollback["strict_errors"]
+        assert rollback["migrations"]["forward_compatible_migrations"] == [version]
 
 
 def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
@@ -1406,6 +1475,7 @@ def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
     )
 
     with postgres_connection(postgres_dsn) as connection:
+        _revert_batch_migration(connection)
         _revert_md_queue_migration(connection)
         connection.execute("DROP SCHEMA monomer_dft CASCADE")
         connection.execute(
@@ -1458,6 +1528,7 @@ def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
             _DFT_MIGRATION_VERSION,
             _MD_QUEUE_MIGRATION_VERSION,
             _PROPERTY_FILTER_MIGRATION_VERSION,
+            _BATCH_MIGRATION_VERSION,
         ]
         assert any(
             "checksum-exact 0013" in error for error in final["strict_errors"]
@@ -1615,6 +1686,7 @@ def test_historical_expand_defers_0012_but_f_startup_rejects_that_state(
     )
 
     with postgres_connection(postgres_dsn) as connection:
+        _revert_batch_migration(connection)
         _revert_md_queue_migration(connection)
         connection.execute(
             """

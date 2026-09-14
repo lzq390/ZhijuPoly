@@ -22,3 +22,7 @@ sentencepiece>=0.2,<1
 chemprop>=2.0,<3
 safetensors>=0.4,<1
 pytest==8.3.4
+
+openpyxl==3.1.5
+
+defusedxml==0.7.1

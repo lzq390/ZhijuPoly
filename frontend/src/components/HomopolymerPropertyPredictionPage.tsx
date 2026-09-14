@@ -1,3 +1,4 @@
+import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal } from "lucide-react";
 import {
   forwardRef,
@@ -102,10 +103,7 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
   useImperativeHandle(
     forwardedRef,
     () => ({
-      async syncBeforeLeave() {
-        if (!(await canvas.flushSmilesDraft())) return;
-        await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
-      }
+      syncBeforeLeave: canvas.syncBeforeLeave
     }),
     [canvas]
   );
@@ -151,12 +149,12 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
 
   return (
     <div
-      className="np-structure-workbench np-homopolymer-prediction"
+      className="np-module-page np-structure-workbench np-homopolymer-prediction"
       data-module="homopolymer-property-prediction"
       style={workbenchStyle}
     >
-      <div className={`np-sw-page${drawerOpen ? " has-open-drawer" : ""}`}>
-        <h1 className="np-sw-page-title">均聚物性质预测</h1>
+      <ModulePageHeader>均聚物性质预测</ModulePageHeader>
+      <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
             <StructureCanvasSurface

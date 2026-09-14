@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { structureFixture } from "../test/structureFixture";
+import { StructureWorkspace } from "../structure/workspace";
+import { createKetcherAdapter } from "../structure/editor";
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,9 +39,109 @@ afterEach(() => {
 
 describe("Tg structure canvas wildcard protection", () => {
   function textStructure(smiles: string) {
-    return { smiles, setSmiles: vi.fn(), iframeRef: { current: null }, setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue(smiles) } as StructureWorkspaceContext;
+    return structureFixture(smiles);
   }
+
+  it("leaves an incoming loading canvas without attempting to import its pending draft", async () => {
+    const structure = textStructure("CC");
+    const lease = structure.workspace.mountEditor();
+    structure.workspace.setDraft("CO");
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+    await act(async () => expect((await result.current.syncBeforeLeave()).status).toBe("saved"));
+    expect(apiMocks.standardizeSmiles).not.toHaveBeenCalled();
+    expect(structure.workspace.getSnapshot()).toMatchObject({ smiles: "CC", draft: "CO", status: "loading", mountKey: 0 });
+    unmount();
+    lease.dispose();
+  });
+
+  it("does not start a navigation snapshot after cancellation while its shared draft finishes normally", async () => {
+    let release!: (value: { standardized_smiles: string }) => void;
+    apiMocks.standardizeSmiles.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const structure = textStructure("CC");
+    const save = vi.spyOn(structure.workspace, "saveForNavigation");
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+    act(() => result.current.updateSmilesDraft("CO"));
+    const controller = new AbortController();
+    let navigation!: ReturnType<typeof result.current.syncBeforeLeave>;
+    await act(async () => { navigation = result.current.syncBeforeLeave(controller.signal); });
+    controller.abort();
+    await act(async () => {
+      release({ standardized_smiles: "CO" });
+      expect((await navigation).status).toBe("failed");
+    });
+    expect(save).not.toHaveBeenCalled();
+    expect(structure.workspace.getSnapshot()).toMatchObject({ smiles: "CO", draft: "CO", notice: null });
+    unmount();
+  });
+
+  it("marks an externally validated draft as synced even when its text did not change", async () => {
+    const structure = textStructure("CC");
+    structure.workspace.setDraft("CO");
+    const onStructureChanged = vi.fn();
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged }));
+    expect(result.current.smilesDraftState).toBe("pending");
+    await act(async () => { structure.workspace.setSmiles("CO"); });
+    expect(result.current.smilesDraft).toBe("CO");
+    expect(result.current.smilesDraftState).toBe("synced");
+    expect(onStructureChanged).toHaveBeenCalledOnce();
+    unmount();
+  });
+
+  it("does not apply a validation result after the accepted document has changed", async () => {
+    let complete!: (value: { input_smiles: string; standardized_smiles: string }) => void;
+    apiMocks.standardizeSmiles.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+    const structure = textStructure("CC");
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+    let pending!: ReturnType<typeof result.current.applyTextStructure>;
+    await act(async () => { pending = result.current.applyTextStructure("CO"); });
+    await act(async () => { structure.workspace.commitSmiles("CN"); });
+    await act(async () => {
+      complete({ input_smiles: "CO", standardized_smiles: "CO" });
+      expect((await pending).applied).toBe(false);
+    });
+    expect(structure.workspace.getSnapshot().smiles).toBe("CN");
+    unmount();
+  });
+
+  it("navigation waits for clear even while its rollback snapshot is still being captured", async () => {
+    let smiles = "CC";
+    const ket = () => JSON.stringify({ root: { nodes: smiles ? [{ $ref: "mol0" }] : [] }, mol0: { atoms: smiles ? [{}] : [] } });
+    const change = new Set<() => void>();
+    const ketcher = {
+      getSmiles: async () => smiles,
+      getKet: vi.fn(async () => ket()),
+      getMolfile: async () => "",
+      setMolecule: async (source: string) => { smiles = source; },
+      clear: async () => { smiles = ""; change.forEach((listener) => listener()); },
+      changeEvent: { add: (listener: () => void) => change.add(listener), remove: (listener: () => void) => change.delete(listener) }
+    };
+    const workspace = new StructureWorkspace("CC");
+    const lease = workspace.mountEditor();
+    await lease.initialize({ ...createKetcherAdapter(ketcher), settle: async () => {} });
+    await workspace.saveSnapshot();
+    const structure = { workspace, smiles: "CC", setSmiles: workspace.setSmiles, getCurrentSmiles: workspace.getCurrentSmiles };
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+    const before = ket();
+    let release!: (value: string) => void;
+    ketcher.getKet.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    let clearing!: Promise<boolean>;
+    let saved = false;
+    let leaving!: ReturnType<typeof result.current.syncBeforeLeave>;
+    await act(async () => {
+      clearing = result.current.clearCanvas();
+      leaving = result.current.syncBeforeLeave().then((value) => { saved = true; return value; });
+      await Promise.resolve();
+    });
+    expect(saved).toBe(false);
+    await act(async () => {
+      release(before);
+      expect(await clearing).toBe(true);
+      expect((await leaving).status).toBe("saved");
+    });
+    expect(workspace.getSnapshot()).toMatchObject({ smiles: "", draft: "" });
+    unmount();
+    lease.dispose();
+  });
 
   it("空结构校验失败不启动翻转锁或等待视觉定时器", async () => {
     const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure: textStructure(""), onStructureChanged: vi.fn() }));
@@ -140,13 +243,7 @@ describe("Tg structure canvas wildcard protection", () => {
       dispatchEvent: vi.fn(),
       scrollTo: vi.fn()
     };
-    const structure = {
-      smiles: "*CC*",
-      setSmiles: vi.fn(),
-      iframeRef: { current: { contentWindow: frameWindow } },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("*CC*")
-    } as unknown as StructureWorkspaceContext;
+    const structure = structureFixture("*CC*", ketcher);
     const onStructureChanged = vi.fn();
     const { result } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged }));
 
@@ -159,7 +256,7 @@ describe("Tg structure canvas wildcard protection", () => {
     expect(setMolecule).toHaveBeenCalledWith("*CO*");
     expect(setMolecule).toHaveBeenCalledWith("CO");
     expect(setMolecule).toHaveBeenLastCalledWith("old-molfile");
-    expect(structure.setSmiles).toHaveBeenCalledWith("*CC*");
+    expect(structure.workspace.commitSmiles).toHaveBeenCalledWith("*CC*");
     expect(onStructureChanged).not.toHaveBeenCalled();
   });
 
@@ -213,13 +310,7 @@ describe("Tg structure canvas wildcard protection", () => {
       dispatchEvent: vi.fn(),
       scrollTo: vi.fn()
     };
-    const structure = {
-      smiles: "CC",
-      setSmiles: vi.fn(),
-      iframeRef: { current: { contentWindow: frameWindow } },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("CC")
-    } as unknown as StructureWorkspaceContext;
+    const structure = structureFixture("CC", frameWindow.ketcher);
     const { result } = renderHook(() => useTgStructureCanvas({
       structure,
       onStructureChanged: vi.fn()
@@ -281,13 +372,7 @@ describe("Tg structure canvas wildcard protection", () => {
       dispatchEvent: vi.fn(),
       scrollTo: vi.fn()
     };
-    const structure = {
-      smiles: "CC",
-      setSmiles: vi.fn(),
-      iframeRef: { current: { contentWindow: frameWindow } },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("CC")
-    } as unknown as StructureWorkspaceContext;
+    const structure = structureFixture("CC", frameWindow.ketcher);
     const { result } = renderHook(() => useTgStructureCanvas({
       structure,
       onStructureChanged: vi.fn()
@@ -351,13 +436,7 @@ describe("Tg structure canvas wildcard protection", () => {
       dispatchEvent: vi.fn(),
       scrollTo: vi.fn()
     };
-    const structure = {
-      smiles: "CC",
-      setSmiles: vi.fn(),
-      iframeRef: { current: { contentWindow: frameWindow } },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("CC")
-    } as unknown as StructureWorkspaceContext;
+    const structure = structureFixture("CC", frameWindow.ketcher);
     const { result } = renderHook(() => useTgStructureCanvas({
       structure,
       onStructureChanged: vi.fn()
@@ -383,13 +462,7 @@ describe("Tg structure canvas wildcard protection", () => {
       generateImage
     };
     const frameWindow = { ketcher, Event, dispatchEvent: vi.fn(), scrollTo: vi.fn() };
-    const structure = {
-      smiles: "",
-      setSmiles: vi.fn(),
-      iframeRef: { current: { contentWindow: frameWindow } },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("")
-    } as unknown as StructureWorkspaceContext;
+    const structure = structureFixture("", ketcher);
     const { result } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
 
     await expect(result.current.captureCanvasImage()).resolves.toBeNull();
@@ -399,13 +472,7 @@ describe("Tg structure canvas wildcard protection", () => {
   it("canonicalizes equivalent SMILES before marking the canvas dirty", async () => {
     const ketcher = { getSmiles: vi.fn().mockResolvedValue("CCO") };
     const frameWindow = { ketcher, Event, dispatchEvent: vi.fn(), scrollTo: vi.fn() };
-    const structure = {
-      smiles: "C(C)O",
-      setSmiles: vi.fn(),
-      iframeRef: { current: { contentWindow: frameWindow } },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("CCO")
-    } as unknown as StructureWorkspaceContext;
+    const structure = structureFixture("C(C)O", ketcher);
     apiMocks.standardizeSmiles.mockResolvedValue({
       input_smiles: "CCO",
       standardized_smiles: "CCO"
@@ -419,13 +486,7 @@ describe("Tg structure canvas wildcard protection", () => {
   it("marks the canvas dirty when Ketcher state cannot be read", async () => {
     const ketcher = { getSmiles: vi.fn().mockRejectedValue(new Error("iframe unavailable")) };
     const frameWindow = { ketcher, Event, dispatchEvent: vi.fn(), scrollTo: vi.fn() };
-    const structure = {
-      smiles: "CCO",
-      setSmiles: vi.fn(),
-      iframeRef: { current: { contentWindow: frameWindow } },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("CCO")
-    } as unknown as StructureWorkspaceContext;
+    const structure = structureFixture("CCO", ketcher);
     const { result } = renderHook(() => useTgStructureCanvas({
       structure,
       onStructureChanged: vi.fn()
@@ -438,13 +499,7 @@ describe("Tg structure canvas wildcard protection", () => {
   });
 
   it("在文本模式标准化并应用结构，同时保留聚合物端基", async () => {
-    const structure = {
-      smiles: "",
-      setSmiles: vi.fn(),
-      iframeRef: { current: null },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("")
-    } as StructureWorkspaceContext;
+    const structure = structureFixture("");
     apiMocks.standardizeSmiles.mockResolvedValue({
       input_smiles: "*CC*",
       standardized_smiles: "CC"
@@ -456,7 +511,7 @@ describe("Tg structure canvas wildcard protection", () => {
       applied: true,
       smiles: "*CC*"
     });
-    expect(structure.setSmiles).toHaveBeenCalledWith("*CC*");
+    expect(structure.workspace.commitSmiles).toHaveBeenCalledWith("*CC*");
     expect(onStructureChanged).toHaveBeenCalledOnce();
   });
 
@@ -474,17 +529,7 @@ describe("Tg structure canvas wildcard protection", () => {
       getSmiles: vi.fn(async () => editorSmiles),
       getMolfile: vi.fn().mockResolvedValue("old-molfile")
     };
-    const structure = {
-      smiles: "*CC*",
-      setSmiles: vi.fn(),
-      iframeRef: {
-        current: {
-          contentWindow: { ketcher, Event, dispatchEvent: vi.fn(), scrollTo: vi.fn() }
-        }
-      },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("*CC*")
-    } as unknown as StructureWorkspaceContext;
+    const structure = structureFixture("*CC*", ketcher);
     const onStructureChanged = vi.fn();
     const { result } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged }));
 
@@ -499,20 +544,14 @@ describe("Tg structure canvas wildcard protection", () => {
     expect(apiMocks.standardizeSmiles).toHaveBeenCalledWith({ smiles: "*CO*" });
     expect(clear).toHaveBeenCalledOnce();
     expect(setMolecule).toHaveBeenCalledWith("*CO*");
-    expect(structure.setSmiles).toHaveBeenCalledWith("*CO*");
+    expect(structure.workspace.commitSmiles).toHaveBeenCalledWith("*CO*");
     expect(onStructureChanged).toHaveBeenCalledOnce();
     expect(result.current.smilesDraft).toBe("*CO*");
     expect(result.current.smilesDraftState).toBe("synced");
   });
 
   it("无效 SMILES 保留原画板并显示可恢复错误", async () => {
-    const structure = {
-      smiles: "*CC*",
-      setSmiles: vi.fn(),
-      iframeRef: { current: null },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("*CC*")
-    } as StructureWorkspaceContext;
+    const structure = structureFixture("*CC*");
     apiMocks.standardizeSmiles.mockRejectedValue(new Error("invalid smiles"));
     const { result } = renderHook(() => useTgStructureCanvas({
       structure,
@@ -526,7 +565,7 @@ describe("Tg structure canvas wildcard protection", () => {
     });
 
     expect(applied).toBe(false);
-    expect(structure.setSmiles).not.toHaveBeenCalled();
+    expect(structure.workspace.commitSmiles).not.toHaveBeenCalled();
     expect(result.current.smilesDraft).toBe("*C(");
     expect(result.current.smilesDraftState).toBe("error");
     expect(result.current.smilesDraftError).toContain("原画板未修改");
@@ -539,13 +578,7 @@ describe("Tg structure canvas wildcard protection", () => {
         resolveFirst = resolve;
       }))
       .mockResolvedValueOnce({ input_smiles: "*CN*", standardized_smiles: "*CN*" });
-    const structure = {
-      smiles: "*CC*",
-      setSmiles: vi.fn(),
-      iframeRef: { current: null },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("*CC*")
-    } as StructureWorkspaceContext;
+    const structure = structureFixture("*CC*");
     const { result } = renderHook(() => useTgStructureCanvas({
       structure,
       onStructureChanged: vi.fn()
@@ -569,49 +602,35 @@ describe("Tg structure canvas wildcard protection", () => {
       expect(await firstSync).toBe(false);
       expect(await secondSync).toBe(true);
     });
-    expect(structure.setSmiles).toHaveBeenCalledTimes(1);
-    expect(structure.setSmiles).toHaveBeenCalledWith("*CN*");
+    expect(structure.workspace.commitSmiles).toHaveBeenCalledTimes(1);
+    expect(structure.workspace.commitSmiles).toHaveBeenCalledWith("*CN*");
     expect(result.current.smilesDraft).toBe("*CN*");
   });
 
   it("文本模式清空共享结构而不要求编辑器存在", async () => {
-    const structure = {
-      smiles: "CC",
-      setSmiles: vi.fn(),
-      iframeRef: { current: null },
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("CC")
-    } as StructureWorkspaceContext;
+    const structure = structureFixture("CC");
     const { result } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
 
     await expect(result.current.clearCanvas()).resolves.toBe(true);
-    expect(structure.setSmiles).toHaveBeenCalledWith("");
+    expect(structure.workspace.commitSmiles).toHaveBeenCalledWith("");
   });
 
-  it("延迟挂载 iframe 后重新启动就绪检测并恢复共享结构", async () => {
-    const iframeRef: StructureWorkspaceContext["iframeRef"] = { current: null };
-    const structure = {
-      smiles: "CC",
-      setSmiles: vi.fn(),
-      iframeRef,
-      setIsReady: vi.fn(),
-      getCurrentSmiles: vi.fn().mockResolvedValue("CC")
-    } as StructureWorkspaceContext;
-    const setMolecule = vi.fn().mockResolvedValue(undefined);
-    const { result } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
-
-    iframeRef.current = {
-      contentWindow: {
-        ketcher: { getSmiles: vi.fn().mockResolvedValue(""), setMolecule },
-        Event,
-        dispatchEvent: vi.fn(),
-        scrollTo: vi.fn()
-      }
-    } as unknown as HTMLIFrameElement;
-    await act(async () => result.current.handleEditorLoad());
-
-    await vi.waitFor(() => expect(result.current.isEditorReady).toBe(true));
+  it("延迟注册编辑器后通过共享状态就绪并恢复结构", async () => {
+    const workspace = new StructureWorkspace("CC");
+    const structure = { smiles: "CC", workspace, setSmiles: workspace.setSmiles, getCurrentSmiles: workspace.getCurrentSmiles };
+    let value = "";
+    const setMolecule = vi.fn(async (source: string) => { value = source; });
+    const editor = createKetcherAdapter({
+      getSmiles: async () => value, setMolecule, clear: async () => { value = ""; },
+      changeEvent: { add: vi.fn(), remove: vi.fn() }
+    });
+    editor.settle = async () => {};
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+    let lease!: ReturnType<StructureWorkspace["mountEditor"]>;
+    await act(async () => { lease = workspace.mountEditor(); await lease.initialize(editor); });
+    expect(result.current.isEditorReady).toBe(true);
     expect(setMolecule).toHaveBeenCalledWith("CC");
-    expect(structure.setIsReady).toHaveBeenCalledWith(true);
+    unmount();
+    lease.dispose();
   });
 });

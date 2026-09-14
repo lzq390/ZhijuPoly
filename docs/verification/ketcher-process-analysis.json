@@ -1,0 +1,65 @@
+{
+  "date": "2026-09-10",
+  "scope": "Isolated diagnostic experiments only; no application dependency or runtime configuration changed.",
+  "environment": {
+    "node": "22.23.2",
+    "react": "19.2.4",
+    "vite": "7.3.6",
+    "ketcher": "3.8.0",
+    "compatibilityCommit": "4abb259"
+  },
+  "runtimeProbe": [
+    {
+      "shim": false,
+      "errors": [
+        "ReferenceError: process is not defined\n    at node_modules/util/util.js (http://127.0.0.1:5188/node_modules/.vite/deps/chunk-EYQO6MWT.js?v=e2d3d8b4:2204:5)\n    at __require2 (http://127.0.0.1:5188/node_modules/.vite/deps/chunk-7IJKECRO.js?v=e2d3d8b4:17:50)\n    at node_modules/assert/build/internal/assert/assertion_error.js (http://127.0.0.1:5188/node_modules/.vite/deps/chunk-EYQO6MWT.js?v=e2d3d8b4:8272:20)\n    at __require2 (http://127.0.0.1:5188/node_modules/.vite/deps/chunk-7IJKECRO.js?v=e2d3d8b4:17:50)\n    at node_modules/assert/build/assert.js (http://127.0.0.1:5188/node_modules/.vite/deps/chunk-EYQO6MWT.js?v=e2d3d8b4:9643:26)\n    at __require2 (http://127.0.0.1:5188/node_modules/.vite/deps/chunk-7IJKECRO.js?v=e2d3d8b4:17:50)\n    at http://127.0.0.1:5188/node_modules/.vite/deps/chunk-EYQO6MWT.js?v=e2d3d8b4:28046:29"
+      ],
+      "result": {
+        "ready": false,
+        "processKeys": null
+      }
+    },
+    {
+      "shim": true,
+      "errors": [],
+      "result": {
+        "ready": true,
+        "processKeys": [
+          "env"
+        ],
+        "smiles": "CCO"
+      }
+    }
+  ],
+  "viteDefineProbe": {
+    "override": {
+      "define": {
+        "process.env.NODE_DEBUG": "\"\""
+      }
+    },
+    "baseConfig": "frontend/vite.ketcher-compat.config.ts in codex/ketcher-react-compat",
+    "result": {
+      "kind": "define-NODE_DEBUG-only",
+      "errors": [],
+      "consoleWarnings": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render CalculateMacromoleculePropertiesButton2 EditorContainer EditorContainer",
+        "Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopMenuComponent SubMenu2 SubMenu2",
+        "THREE.WebGLRenderer: WebGL 1 support was deprecated in r153 and will be removed in r163.",
+        "[.WebGL-0x38b40017be00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+        "[.WebGL-0x38b40017be00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+      ],
+      "ready": true,
+      "smiles": "CCO",
+      "textTool": true,
+      "miew": true,
+      "invalidMolecule": "unexpected success"
+    }
+  },
+  "limits": [
+    "The minimal override proves the initial process.env.NODE_DEBUG failure is avoidable; it does not polyfill process.nextTick, stderr or other process APIs.",
+    "The invalid molecule probe resolved without throwing, so assertion failure paths were not validated.",
+    "React setState-in-render warnings remain. StrictMode lifecycle and leak gates have not passed.",
+    "SDK listener cleanup was not modified by either probe."
+  ]
+}

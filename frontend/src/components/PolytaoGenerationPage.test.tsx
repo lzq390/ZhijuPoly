@@ -1,3 +1,4 @@
+import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -130,8 +131,7 @@ function makeStructure(overrides: Partial<StructureWorkspaceContext> = {}): Stru
   return {
     smiles: "CCO",
     setSmiles: vi.fn(),
-    iframeRef: { current: null },
-    setIsReady: vi.fn(),
+    workspace: new StructureWorkspace("CCO"),
     getCurrentSmiles: vi.fn().mockResolvedValue("C(C)O"),
     ...overrides
   };
@@ -256,8 +256,8 @@ describe("PolytaoGenerationPage", () => {
     renderPage();
 
     const pageTitle = screen.getByRole("heading", { name: "聚合物生成" });
-    expect(pageTitle.classList.contains("np-material-discovery-page-title")).toBe(true);
-    expect(pageTitle.closest(".np-material-discovery-page")).not.toBeNull();
+    expect(pageTitle.classList.contains("np-module-page-title")).toBe(true);
+    expect(pageTitle.closest(".np-module-page")).not.toBeNull();
     const referenceToggle = within(referenceRegion()).getByRole("button", { name: /已设置 · 共享结构.*展开/ });
     expect(referenceToggle.getAttribute("aria-expanded")).toBe("false");
     expect(api.fetchStructure2D).not.toHaveBeenCalled();

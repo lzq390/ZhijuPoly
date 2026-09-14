@@ -620,8 +620,9 @@ def test_active_job_summary_covers_persistent_job_types(postgres_dsn: str) -> No
         "monomer_md": 1,
         "online_knowledge": 1,
         "monomer_dft": 4,
+        "polymerization_batch": 0,
     }
-    assert summary.active_jobs_schema_version == 2
+    assert summary.active_jobs_schema_version == 3
     assert summary.total == 6
 
 
@@ -660,6 +661,7 @@ def test_active_job_snapshot_v1_never_queries_dft_business_tables(
                     ) VALUES ('online-v1-active', 'running', 'polymer', 'synthesis', 5)
                     """
                 )
+                connection.execute("DROP SCHEMA polymerization_batch CASCADE")
                 connection.execute("DROP SCHEMA monomer_dft CASCADE")
                 connection.execute(
                     """
@@ -873,11 +875,12 @@ def test_deployment_status_remains_available_when_all_gpu_features_are_disabled(
         response = client.get("/internal/deployment/status")
 
     assert response.status_code == 200
-    assert response.json()["active_jobs_schema_version"] == 2
+    assert response.json()["active_jobs_schema_version"] == 3
     assert response.json()["active_jobs"] == {
         "monomer_md": 0,
         "online_knowledge": 0,
         "monomer_dft": 0,
+        "polymerization_batch": 0,
         "inflight_api_writes": 0,
         "conditional_generation": 0,
         "reverse_design": 0,

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useContentMotion } from "../hooks/useContentMotion";
 import "../styles/knowledge-retrieval.css";
 import { LocalKnowledgePanel } from "./knowledge-search/LocalKnowledgePanel";
-import { MaterialDiscoveryPageTitle } from "./MaterialDiscoveryPageTitle";
+import { ModulePageHeader } from "./ModulePageHeader";
 import { OnlineKnowledgeSearchPanel } from "./online-knowledge/OnlineKnowledgeSearchPanel";
 import { PdfSimilarityDemoPanel } from "./PdfSimilarityDemoPanel";
 
@@ -94,14 +94,10 @@ export function KnowledgeSearch({ initialQuery = "", initialTerms = [], onLocalM
   }
 
   return (
-    <div className="knowledge-retrieval-page np-material-discovery-page">
-      <header className="ks-page-header">
-        <div className="ks-page-title">
-          <MaterialDiscoveryPageTitle>知识检索</MaterialDiscoveryPageTitle>
-        </div>
-      </header>
+    <div className="knowledge-retrieval-page np-module-page">
+      <ModulePageHeader>知识检索</ModulePageHeader>
 
-      <div ref={stageRef} className="ks-mode-stage">
+      <div ref={stageRef} className="ks-mode-stage np-module-page-body">
         <section
           id="knowledge-panel-local"
           className={`ks-mode-panel${mode === "local" ? " is-active" : ""}`}

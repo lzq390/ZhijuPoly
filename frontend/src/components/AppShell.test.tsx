@@ -326,7 +326,8 @@ describe("AppShell 侧边栏", () => {
     });
     const timeoutSpy = vi.spyOn(window, "setTimeout").mockImplementation((handler) => {
       if (typeof handler === "function") scheduledCallbacks.push(() => handler());
-      return scheduledCallbacks.length;
+      // jsdom uses browser IDs; SDK declarations also bring Node's overload in.
+      return scheduledCallbacks.length as unknown as ReturnType<typeof window.setTimeout>;
     });
 
     try {
