@@ -1377,7 +1377,12 @@ its final A/B slot path, and builds the immutable DFT environment at
 Worker runtime.
 
 After `prepare`, rehearse the descriptor's exact PostgreSQL 16 restore and
-0013→0015 transition while production remains online. Run the target script
+reviewed migration transition while production remains online. The accepted
+paths are the historical 0013→0015 transition, the exact reviewed 0015→0015
+compatibility-baseline release, 0015→0016 batch upgrade, and 0016→0016 code
+release. The latter three paths pin the complete reviewed manifest (including
+checksums and contract metadata); other histories require a separate review.
+Run the target script
 from the same private, clean, source-pinned clone. First review the read-only
 plan, then repeat every confirmation emitted by that plan:
 
@@ -1399,14 +1404,18 @@ plan, then repeat every confirmation emitted by that plan:
 ```
 
 The rehearsal creates a fresh custom dump, performs a network-isolated
-PostgreSQL 16 restore, applies exactly 0014 followed by 0015 in the candidate
-Backend image, and verifies the ledger, 615,159 property records, snapshot,
+PostgreSQL 16 restore, runs the exact candidate Backend migration sequence,
+and verifies the ledger, 615,159 property records, snapshot,
 indexes, and query plans. Backup plus restore must finish within 30 minutes and
-the two migrations within 10 minutes; the migration session proves
+the migration sequence within 10 minutes; the migration session proves
 `lock_timeout=30s` and `statement_timeout=15min`. Its terminal sealed authority
 is bound to the prepared descriptor and ready record. Ordinary `apply` refuses
 to begin its business mutation unless it can load and validate that exact
-report.
+report. The historical path applies only 0014 then 0015; the batch upgrade
+applies only 0016. Same-version releases must report every migration as
+`skipped` and still perform the full fresh backup, isolated restore, source
+before/after comparison, and final evidence checks. All paths retain the
+615,159-record baseline and the same performance and safety limits.
 
 Enter the authorized maintenance window only after the rehearsal passes:
 
