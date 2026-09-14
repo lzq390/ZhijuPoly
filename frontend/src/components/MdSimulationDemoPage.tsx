@@ -1,3 +1,4 @@
+import { ModulePageHeader } from "./ModulePageHeader";
 import { useContentMotion } from "../hooks/useContentMotion";
 import {
   Activity,
@@ -359,11 +360,11 @@ export function MdSimulationDemoPage({
 
   return (
     <div
-      className="np-structure-workbench np-md-simulation"
+      className="np-module-page np-structure-workbench np-md-simulation"
       data-module="md-simulation"
     >
-      <div className="np-sw-page np-md-page">
-        <h1 className="np-sw-page-title">MD 模拟</h1>
+      <ModulePageHeader>MD 模拟</ModulePageHeader>
+      <div className="np-sw-page np-module-page-body np-md-page">
         <div className="np-sw-layout">
           <main className="np-sw-workspace">
             <div className="np-md-module-toolbar" aria-label="MD 模拟工具栏">

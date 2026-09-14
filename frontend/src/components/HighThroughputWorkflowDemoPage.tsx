@@ -1,3 +1,4 @@
+import { ModulePageHeader } from "./ModulePageHeader";
 import {
   BadgeInfo,
   Bot,
@@ -1083,8 +1084,8 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
   }
 
   return (
-    <div className={cn("high-throughput-demo", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page", currentStageIndex === 2 && "ht-s2-page", currentStageIndex === 3 && "ht-s3-page", currentStageIndex === 4 && "ht-s4-page", currentStageIndex === 5 && "ht-s5-page", currentStageIndex === 6 && "ht-s6-page")}>
-      {isWorkbenchStage ? <h1 className="ht-workbench-title">高通量优化演示</h1> : null}
+    <div className={cn("high-throughput-demo np-module-page", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page", currentStageIndex === 2 && "ht-s2-page", currentStageIndex === 3 && "ht-s3-page", currentStageIndex === 4 && "ht-s4-page", currentStageIndex === 5 && "ht-s5-page", currentStageIndex === 6 && "ht-s6-page")}>
+      {isWorkbenchStage ? <ModulePageHeader>高通量优化演示</ModulePageHeader> : null}
       {isWorkbenchStage ? (
         <ScenarioModuleToolbar
           canReset={!stageTransition}
@@ -1094,7 +1095,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
           resetLabel={currentStageIndex === 5 ? "重演 S5" : currentStageIndex === 0 ? "恢复默认场景参数" : currentStageIndex === 1 ? "重置 S1 上传数据" : currentStageIndex === 2 ? "重置 S2 验证值" : activeIterationRoundIndex === 2 ? "重演 S3" : "重置本批验证值"}
         />
       ) : null}
-      <main ref={scrollRegionRef} className="ht-shell ht-scroll-region">
+      <main ref={scrollRegionRef} className="ht-shell ht-scroll-region np-module-page-body">
         <section
           className={cn("ht-docx-board", isWorkbenchStage && "ht-workbench-board np-sw-accented-surface", currentStageIndex === 0 && "ht-s0-board", (currentStageIndex >= 1 && currentStageIndex <= 6) && "ht-s1-board", currentStageIndex === 2 && "ht-s2-board", currentStageIndex === 3 && "ht-s3-board", currentStageIndex === 4 && "ht-s4-board", currentStageIndex === 5 && "ht-s5-board", currentStageIndex === 6 && "ht-s6-board")}
           aria-labelledby={isWorkbenchStage ? "ht-workbench-surface-title" : undefined}

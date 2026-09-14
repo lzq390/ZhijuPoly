@@ -168,8 +168,8 @@ describe("PolymerSimilarityExplorerPage", () => {
     renderPage();
 
     const pageTitle = screen.getByRole("heading", { name: "聚合物相似性探索" });
-    expect(pageTitle.classList.contains("np-material-discovery-page-title")).toBe(true);
-    expect(pageTitle.closest(".np-material-discovery-page")).not.toBeNull();
+    expect(pageTitle.classList.contains("np-module-page-title")).toBe(true);
+    expect(pageTitle.closest(".np-module-page")).not.toBeNull();
     expect(screen.getByTitle("聚合物相似性探索结构编辑器")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "AI 助手" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "相似性探索结果" })).toBeNull();

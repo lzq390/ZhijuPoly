@@ -1,7 +1,8 @@
 @import "./workbench-theme.css";
 
 /* Only the fifteen native workbenches opt into this layout. The root owns
-   header space; each existing body keeps its own scrolling and overlays. */
+   header space; bodies keep their scrolling and overlays. The documented
+   monomer-polymerization exception overrides root overflow to scroll as a page. */
 .np-module-page {
   --np-page-title-left: 20px;
   --np-page-title-top: 22px;

@@ -192,9 +192,9 @@
 }
 
 .np-conditional-generation .np-cg-parameter-status.is-error {
-  border-color: rgba(220, 38, 38, 0.2);
-  color: #b4233a;
-  background: rgba(254, 242, 242, 0.74);
+  border-color: var(--np-theme-danger-border);
+  color: var(--np-theme-danger-text);
+  background: var(--np-theme-danger-soft);
 }
 
 .np-conditional-generation .np-cg-parameters__footer {
@@ -351,8 +351,8 @@
 
 .np-conditional-generation .np-cg-candidate-select:focus-visible {
   border-radius: 8px;
-  outline: 2px solid rgba(37, 99, 235, 0.48);
-  outline-offset: 3px;
+  outline: var(--np-theme-focus-width) solid var(--np-theme-focus);
+  outline-offset: var(--np-theme-focus-offset);
 }
 
 .np-conditional-generation .np-cg-candidate-card__header {

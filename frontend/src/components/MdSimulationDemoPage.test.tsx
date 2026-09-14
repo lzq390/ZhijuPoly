@@ -239,6 +239,9 @@ async function settleDefaultsAndPreview() {
 
 async function finishRun() {
   await waitFor(() => expect(screen.getByText("结果体系规模")).toBeTruthy());
+  // The hook publishes data before submit() receives the result snapshot that
+  // enables exploration. Wait for the user action to become available.
+  await waitFor(() => expect(screen.getByRole("tab", { name: "曲线" }).hasAttribute("disabled")).toBe(false));
 }
 
 function openParameters() {

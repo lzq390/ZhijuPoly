@@ -58,7 +58,7 @@ import {
 } from "../types";
 import { StructurePreview3D } from "./StructurePreview3D";
 import { StructureSvg } from "./StructureSvg";
-import { MaterialDiscoveryPageTitle } from "./MaterialDiscoveryPageTitle";
+import { ModulePageHeader } from "./ModulePageHeader";
 import "../styles/polytao-generation.css";
 
 type PolytaoGenerationPageProps = {
@@ -580,19 +580,16 @@ export function PolytaoGenerationPage({
   return (
     <div
       ref={pageRef}
-      className={`polytao-page np-material-discovery-page is-drawer-${drawerMode}${drawerPresence.present ? " is-drawer-open" : ""}${drawerResize.resizing && drawerOpen ? " is-resizing" : ""}`}
+      className={`polytao-page np-module-page is-drawer-${drawerMode}${drawerPresence.present ? " is-drawer-open" : ""}${drawerResize.resizing && drawerOpen ? " is-resizing" : ""}`}
       data-drawer-phase={drawerPresence.phase}
       data-drawer-active={drawerPresence.active}
       style={pageStyle}
     >
+      <ModulePageHeader>聚合物生成</ModulePageHeader>
       <div
-        className="polytao-page-scroll"
+        className="polytao-page-scroll np-module-page-body"
         inert={drawerPresence.present && drawerMode === "overlay"}
       >
-        <header className="polytao-page-heading">
-          <MaterialDiscoveryPageTitle>聚合物生成</MaterialDiscoveryPageTitle>
-        </header>
-
         <main className="polytao-workbench-shell">
           <div className="polytao-module-toolbar" aria-label="PolyTAO 模块状态">
             <span className="polytao-model-label">

@@ -141,7 +141,8 @@ describe("ConditionalGenerationPage Tg workbench reuse", () => {
     const title = screen.getByRole("heading", { name: "条件聚合物生成" });
 
     expect(view.container.firstElementChild?.classList.contains("np-structure-workbench")).toBe(true);
-    expect(title.parentElement?.classList.contains("np-sw-page")).toBe(true);
+    expect(title.parentElement?.classList.contains("np-module-page-header")).toBe(true);
+    expect(title.closest(".np-module-page-body")).toBeNull();
     expect(screen.getByRole("button", { name: "加载结构" }).getAttribute("data-workbench-tool")).toBe("load");
     expect(screen.getByRole("button", { name: "导入图片" }).getAttribute("data-workbench-tool")).toBe("import");
     expect(screen.getByRole("button", { name: "清空画布" }).getAttribute("data-workbench-tool")).toBe("clear");

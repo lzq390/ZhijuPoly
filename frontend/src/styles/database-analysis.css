@@ -6,16 +6,16 @@
   --np-sw-ambient-cyan: rgba(6, 182, 212, 0.08);
   --np-sw-shadow: 0 12px 34px rgba(30, 64, 175, 0.075), inset 0 1px 0 rgba(255, 255, 255, 0.92);
   --np-sw-drawer-effective-width: var(--np-sw-drawer-width, 380px);
-  --dba-ink: #0b1f3a;
-  --dba-muted: #58708d;
-  --dba-faint: #8da1b8;
-  --dba-blue: #2563eb;
-  --dba-blue-strong: #1d4ed8;
-  --dba-cyan: #0891b2;
-  --dba-success: #10b981;
-  --dba-warning: #f59e0b;
-  --dba-danger: #dc2626;
-  --dba-border: rgba(51, 83, 126, 0.14);
+  --dba-ink: var(--np-theme-ink);
+  --dba-muted: var(--np-theme-muted);
+  --dba-faint: var(--np-theme-faint);
+  --dba-blue: var(--np-theme-blue);
+  --dba-blue-strong: var(--np-theme-blue-strong);
+  --dba-cyan: var(--np-theme-cyan);
+  --dba-success: var(--np-theme-success);
+  --dba-warning: var(--np-theme-warning);
+  --dba-danger: var(--np-theme-danger);
+  --dba-border: var(--np-theme-border);
   --dba-border-strong: rgba(51, 83, 126, 0.23);
   --dba-accent-gradient: linear-gradient(145deg, #1d4ed8 0%, #3b82f6 58%, #06b6d4 135%);
   --dba-accent-line: linear-gradient(90deg, transparent 0%, rgba(59, 130, 246, 0.8) 34%, rgba(34, 211, 238, 0.72) 68%, transparent 100%);
@@ -54,8 +54,7 @@
   border: 0;
 }
 
-.np-database-analysis .np-sw-page { padding: 62px clamp(24px, 6cqw, 160px) 28px; }
-.np-database-analysis .np-sw-page-title { top: 22px; left: 20px; font-size: 20px; line-height: 30px; }
+.np-database-analysis .np-sw-page { padding: 0 clamp(24px, 6cqw, 160px) 28px; }
 .np-database-analysis .np-sw-workspace {
   gap: 12px;
 }
@@ -156,10 +155,10 @@
   min-height: 0;
   flex-direction: column;
   overflow: visible;
-  border: 1px solid rgba(37, 99, 235, 0.14);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: var(--np-sw-shadow);
+  border: 1px solid var(--np-theme-surface-border);
+  border-radius: var(--np-theme-surface-radius);
+  background: var(--np-theme-panel);
+  box-shadow: var(--np-theme-surface-shadow);
 }
 
 .np-database-analysis .dba-analysis-surface::before {
@@ -269,7 +268,7 @@
 .np-database-analysis .dba-tool-button:active:not(:disabled),
 .np-database-analysis .dba-icon-button:active:not(:disabled) { transform: translateY(1px); }
 .np-database-analysis .dba-tool-button:disabled,
-.np-database-analysis .dba-icon-button:disabled { opacity: 0.48; cursor: not-allowed; }
+.np-database-analysis .dba-icon-button:disabled { opacity: 0.5; cursor: not-allowed; }
 .np-database-analysis .dba-refresh-button,
 .np-database-analysis .dba-dataset-button {
   color: #36516f;
@@ -474,9 +473,9 @@
 .np-database-analysis .dba-surface-banner > span { display: flex; align-items: center; gap: 7px; font-weight: 600; }
 .np-database-analysis .dba-surface-banner svg { width: 15px; height: 15px; flex: none; }
 .np-database-analysis .dba-surface-banner.info { color: #1d4ed8; border-color: #bfdbfe; background: #eff6ff; }
-.np-database-analysis .dba-surface-banner.success { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
-.np-database-analysis .dba-surface-banner.warning { color: #92400e; border-color: #fde68a; background: #fffbeb; }
-.np-database-analysis .dba-surface-banner.error { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
+.np-database-analysis .dba-surface-banner.success { color: var(--np-theme-success-text); border-color: var(--np-theme-success-border); background: var(--np-theme-success-soft); }
+.np-database-analysis .dba-surface-banner.warning { color: var(--np-theme-warning-text); border-color: var(--np-theme-warning-border); background: var(--np-theme-warning-soft); }
+.np-database-analysis .dba-surface-banner.error { color: var(--np-theme-danger-text); border-color: var(--np-theme-danger-border); background: var(--np-theme-danger-soft); }
 .np-database-analysis .dba-surface-banner button { border: 0; color: inherit; background: transparent; font-weight: 750; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
 .np-database-analysis .dba-surface-body {
@@ -772,11 +771,11 @@
 .np-database-analysis .dba-metric-stack strong { margin-top: 5px; overflow: hidden; color: #183553; font-family: var(--font-mono); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 
 .np-database-analysis .dba-inline-error,
-.np-database-analysis .dba-inline-loading { display: flex; min-height: 150px; align-items: center; justify-content: center; gap: 8px; padding: 20px; border: 1px dashed rgba(220, 38, 38, 0.24); border-radius: 9px; color: #b91c1c; background: #fef2f2; text-align: center; font-size: 13px; }
+.np-database-analysis .dba-inline-loading { display: flex; min-height: 150px; align-items: center; justify-content: center; gap: 8px; padding: 20px; border: 1px dashed var(--np-theme-danger-border); border-radius: 9px; color: var(--np-theme-danger-text); background: var(--np-theme-danger-soft); text-align: center; font-size: 13px; }
 .np-database-analysis .dba-inline-loading { border-color: rgba(37, 99, 235, 0.2); color: var(--dba-blue-strong); background: #eff6ff; }
 .np-database-analysis .dba-inline-error svg { width: 16px; height: 16px; }
 .np-database-analysis .dba-viewer-error { position: absolute; z-index: 5; inset: 0 0 30px; flex-wrap: wrap; }
-.np-database-analysis .dba-viewer-error button { min-height: 34px; padding: 0 11px; border: 1px solid rgba(220, 38, 38, 0.24); border-radius: 7px; color: #b91c1c; background: #fff; font-weight: 650; cursor: pointer; }
+.np-database-analysis .dba-viewer-error button { min-height: 34px; padding: 0 11px; border: 1px solid var(--np-theme-danger-border); border-radius: 7px; color: var(--np-theme-danger-text); background: #fff; font-weight: 650; cursor: pointer; }
 
 .np-database-analysis .dba-timeline { display: grid; gap: 8px; }
 .np-database-analysis .dba-timeline-item { display: grid; min-height: 44px; grid-template-columns: 90px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--dba-border); border-radius: 7px; color: var(--dba-muted); background: #fff; text-align: left; cursor: pointer; }
@@ -871,9 +870,9 @@
   white-space: nowrap;
 }
 .np-database-analysis .dba-record-top em { padding: 2px 6px; border: 1px solid rgba(100, 116, 139, 0.14); border-radius: 999px; color: #64748b; background: #f1f5f9; font-size: 11px; font-style: normal; }
-.np-database-analysis .dba-record-top em.is-success { border-color: rgba(16, 185, 129, 0.14); color: #047857; background: #ecfdf5; }
-.np-database-analysis .dba-record-top em.is-warning { border-color: rgba(245, 158, 11, 0.2); color: #92400e; background: #fffbeb; }
-.np-database-analysis .dba-record-top em.is-danger { border-color: rgba(220, 38, 38, 0.16); color: #b91c1c; background: #fef2f2; }
+.np-database-analysis .dba-record-top em.is-success { border-color: var(--np-theme-success-border); color: var(--np-theme-success-text); background: var(--np-theme-success-soft); }
+.np-database-analysis .dba-record-top em.is-warning { border-color: var(--np-theme-warning-border); color: var(--np-theme-warning-text); background: var(--np-theme-warning-soft); }
+.np-database-analysis .dba-record-top em.is-danger { border-color: var(--np-theme-danger-border); color: var(--np-theme-danger-text); background: var(--np-theme-danger-soft); }
 .np-database-analysis .dba-record-card h3 {
   display: -webkit-box;
   max-width: 100%;
@@ -925,7 +924,7 @@
 .np-database-analysis .dba-drawer-foot > div { display: flex; flex: none; gap: 6px; }
 .np-database-analysis .dba-drawer-state { display: flex; min-height: 300px; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center; }
 .np-database-analysis .dba-drawer-state-icon svg { width: 18px; height: 18px; }
-.np-database-analysis .dba-drawer-state.is-error .dba-drawer-state-icon { border-color: rgba(220, 38, 38, 0.16); color: var(--dba-danger); background: #fef2f2; }
+.np-database-analysis .dba-drawer-state.is-error .dba-drawer-state-icon { border-color: var(--np-theme-danger-border); color: var(--dba-danger); background: var(--np-theme-danger-soft); }
 .np-database-analysis .dba-drawer-state.is-reserved .dba-drawer-state-icon { border-color: rgba(245, 158, 11, 0.2); color: #b45309; background: #fffbeb; }
 .np-database-analysis .dba-drawer-state h3 { margin: 12px 0 0; color: #183553; font-size: 16px; }
 .np-database-analysis .dba-drawer-state p { margin: 7px 0 0; color: var(--dba-muted); font-size: 12px; line-height: 1.6; }
@@ -943,8 +942,7 @@
 }
 
 @container np-sw-workbench (max-width: 899px) {
-  .np-database-analysis .np-sw-page { height: 100%; min-height: 0; overflow: hidden; padding: 62px 14px 18px; }
-  .np-database-analysis .np-sw-page-title { position: absolute; top: 22px; left: 14px; width: max-content; padding: 0; white-space: nowrap; }
+  .np-database-analysis .np-sw-page { height: 100%; min-height: 0; overflow: hidden; padding: 0 14px 18px; }
   .np-database-analysis .np-sw-layout { width: 100%; height: 100%; margin: 0; }
   .np-database-analysis .np-sw-workspace { height: 100%; }
 }
@@ -1015,8 +1013,7 @@
     font-size: 18px;
   }
 
-  .np-database-analysis .np-sw-page { padding: 84px 36px 36px; }
-  .np-database-analysis .np-sw-page-title { top: 30px; left: 36px; font-size: 28px; line-height: 42px; }
+  .np-database-analysis .np-sw-page { padding: 0 36px 36px; }
   .np-database-analysis .np-sw-workspace { gap: 18px; }
   .np-database-analysis .dba-module-toolbar { min-height: 54px; gap: 12px; }
   .np-database-analysis .dba-module-toolbar::before { width: min(270px, 22cqw); }
@@ -1026,7 +1023,7 @@
   .np-database-analysis .dba-toolbar-status.is-ready > i { box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.11), 0 0 15px rgba(16, 185, 129, 0.28); }
   .np-database-analysis .dba-toolbar-detail { padding-left: 12px; font-size: 15px; }
   .np-database-analysis .dba-analysis-scroll { padding-right: 3px; padding-bottom: 88px; padding-left: 3px; }
-  .np-database-analysis .dba-analysis-surface { border-radius: 20px; }
+  .np-database-analysis .dba-analysis-surface { border-radius: var(--np-theme-surface-radius); }
   .np-database-analysis .dba-surface-head { border-radius: 20px 20px 0 0; }
   .np-database-analysis .dba-surface-body { border-radius: 0 0 20px 20px; }
   .np-database-analysis .dba-analysis-surface::before { right: 27px; left: 27px; height: 3px; }

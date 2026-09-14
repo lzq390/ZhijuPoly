@@ -16,12 +16,18 @@
   --np-theme-success-text: #047857;
   --np-theme-warning-text: #92400e;
   --np-theme-danger-text: #991b1b;
+  --np-theme-info-text: var(--np-theme-blue-strong);
+  --np-theme-neutral-text: #64748b;
   --np-theme-success-soft: #ecfdf5;
   --np-theme-warning-soft: #fffbeb;
   --np-theme-danger-soft: #fef2f2;
+  --np-theme-info-soft: #eff6ff;
+  --np-theme-neutral-soft: #f1f5f9;
   --np-theme-success-border: rgba(16, 185, 129, 0.24);
   --np-theme-warning-border: rgba(245, 158, 11, 0.24);
   --np-theme-danger-border: rgba(220, 38, 38, 0.24);
+  --np-theme-info-border: rgba(37, 99, 235, 0.24);
+  --np-theme-neutral-border: rgba(100, 116, 139, 0.24);
   --np-theme-border: rgba(51, 83, 126, 0.18);
   --np-theme-surface-border: rgba(37, 99, 235, 0.14);
   --np-theme-border-soft: rgba(51, 83, 126, 0.11);

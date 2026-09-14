@@ -1,3 +1,4 @@
+import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal, Sparkles } from "lucide-react";
 import {
   forwardRef,
@@ -619,13 +620,12 @@ export const ReverseDesignPage = forwardRef<
 
   return (
     <div
-      className="np-structure-workbench np-tg-reverse-design"
+      className="np-module-page np-structure-workbench np-tg-reverse-design"
       data-module="tg-reverse-design"
       style={workbenchStyle}
     >
-      <div className={`np-sw-page${drawerOpen ? " has-open-drawer" : ""}`}>
-        <h1 className="np-sw-page-title">Tg 逆向设计</h1>
-
+      <ModulePageHeader>Tg 逆向设计</ModulePageHeader>
+      <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
             <StructureCanvasSurface

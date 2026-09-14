@@ -88,7 +88,7 @@
 .np-homopolymer-prediction .np-hp-property-group > header button:disabled,
 .np-homopolymer-prediction .np-hp-parameters__footer > div button:disabled {
   cursor: not-allowed;
-  opacity: 0.4;
+  opacity: 0.5;
 }
 
 .np-homopolymer-prediction .np-hp-property-grid {
@@ -145,8 +145,8 @@
 }
 
 .np-homopolymer-prediction .np-hp-property-option:has(input:focus-visible) {
-  outline: 2px solid rgba(37, 99, 235, 0.45);
-  outline-offset: 2px;
+  outline: var(--np-theme-focus-width) solid var(--np-theme-focus);
+  outline-offset: var(--np-theme-focus-offset);
 }
 
 .np-homopolymer-prediction .np-hp-property-option__check {

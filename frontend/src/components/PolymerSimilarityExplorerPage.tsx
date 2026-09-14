@@ -1,3 +1,4 @@
+import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal } from "lucide-react";
 import {
   forwardRef,
@@ -20,7 +21,6 @@ import type {
 } from "../types";
 import "../styles/structure-workbench.css";
 import "../styles/polymer-similarity-explorer.css";
-import { MaterialDiscoveryPageTitle } from "./MaterialDiscoveryPageTitle";
 import type { StructureCanvasOwnerHandle } from "./StructureWorkbenchPage";
 import {
   SimilarityExplorerDrawer,
@@ -193,14 +193,14 @@ export const PolymerSimilarityExplorerPage = forwardRef<
 
   return (
     <div
-      className="np-structure-workbench np-similarity-explorer np-material-discovery-page"
+      className="np-module-page np-structure-workbench np-similarity-explorer"
       data-module="polymer-similarity-explorer"
       style={workbenchStyle}
     >
-      <div className={`np-sw-page${drawerOpen ? " has-open-drawer" : ""}`}>
-        <MaterialDiscoveryPageTitle className="np-sw-page-title">
+      <ModulePageHeader>
           聚合物相似性探索
-        </MaterialDiscoveryPageTitle>
+        </ModulePageHeader>
+      <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
             <StructureCanvasSurface
