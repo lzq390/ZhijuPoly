@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { searchPropertyFilterRecords } from "../services/api";
+import { useKnowledgeRecording } from "./useKnowledgeRecording";
 import {
   isPropertyFilterOptionsCacheFresh,
   readPropertyFilterOptionsCache,
@@ -147,6 +148,10 @@ function optionsCatalogRevision(cache: { etag: string | null; cachedAt: number }
 }
 
 export function usePropertyFilter() {
+  const recording = useKnowledgeRecording();
+  const track = recording?.track;
+  const isRecording = recording?.isRecording;
+  const mounted = useRef(true);
   const initialOptionsCache = useMemo(() => readPropertyFilterOptionsCache(), []);
   const [optionsData, setOptionsData] = useState<PropertyFilterOptionsResponse | null>(
     initialOptionsCache?.data ?? null
@@ -174,6 +179,11 @@ export function usePropertyFilter() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const nextDraftId = useRef(2);
   const searchRequestId = useRef(0);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; searchRequestId.current += 1; };
+  }, []);
 
   useEffect(() => {
     let subscribed = true;
@@ -245,15 +255,17 @@ export function usePropertyFilter() {
     setSearchError(null);
     setSearchData(null);
 
-    searchPropertyFilterRecords(
+    const request = (recordingId?: string) => searchPropertyFilterRecords(
       {
+        ...(recordingId ? { recording_id: recordingId } : {}),
         filters: submitted.filters,
         q: submitted.query,
         page,
         page_size: pageSize
       },
       controller.signal
-    )
+    );
+    (track ? track(request) : request())
       .then((response) => {
         if (requestId !== searchRequestId.current) return;
         setSearchData(response);
@@ -273,10 +285,13 @@ export function usePropertyFilter() {
       });
 
     return () => {
-      window.clearTimeout(timeout);
-      controller.abort();
+      // Let the shared recorder finish a request when navigating away.
+      if (mounted.current || !isRecording?.()) {
+        window.clearTimeout(timeout);
+        controller.abort();
+      }
     };
-  }, [page, pageSize, searchRetryKey, submitted]);
+  }, [page, pageSize, searchRetryKey, submitted, track, isRecording]);
 
   const options = optionsData?.options ?? [];
   const optionsByKey = useMemo(

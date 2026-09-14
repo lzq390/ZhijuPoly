@@ -1,4 +1,5 @@
 import type {
+  PropertyFilterObservationRequest,
   ConditionalGenerationJobCreateResponse,
   ConditionalGenerationJobStatusResponse,
   ConditionalGenerationTgRequest,
@@ -15,6 +16,9 @@ import type {
   FormulationBrowseResponse,
   KnowledgeSearchRequest,
   KnowledgeSearchResponse,
+  KnowledgeObservationRequest,
+  KnowledgeRecording,
+  KnowledgeRecordingSummary,
   LabDataProjectStats,
   LabDataSampleMeasurement,
   LabDataSampleMeasurementPage,
@@ -569,6 +573,26 @@ export function searchKnowledge(
   return postJSON("/knowledge/search", payload, signal);
 }
 
+export function postKnowledgeObservation(payload: KnowledgeObservationRequest): Promise<{
+  event: "article.opened" | "article.reaction_viewed";
+  search_id: string;
+  knowledge_id: number;
+}> {
+  return postJSON("/knowledge/observations", payload);
+}
+
+export function startKnowledgeRecording(recording_id: string): Promise<{ recording_id: string; status: string }> {
+  return postJSON("/knowledge/recordings", { recording_id });
+}
+
+export function stopKnowledgeRecording(recordingId: string): Promise<KnowledgeRecording> {
+  return postJSON(`/knowledge/recordings/${encodeURIComponent(recordingId)}/stop`, {});
+}
+
+export function summarizeKnowledgeRecording(recordingId: string): Promise<KnowledgeRecordingSummary> {
+  return postJSON(`/knowledge/recordings/${encodeURIComponent(recordingId)}/summary`, {});
+}
+
 export function searchOnlineKnowledge(
   payload: OnlineKnowledgeSearchRequest
 ): Promise<OnlineKnowledgeSearchResponse> {
@@ -825,6 +849,12 @@ export function searchPropertyFilterRecords(
   signal?: AbortSignal
 ): Promise<PropertyFilterSearchResponse> {
   return postJSON("/database-browser/property-filter/search", payload, signal);
+}
+
+export function postPropertyFilterObservation(payload: PropertyFilterObservationRequest): Promise<{
+  event: string; search_id: string; result_index: number;
+}> {
+  return postJSON("/database-browser/property-filter/observations", payload);
 }
 
 function buildQueryString(params: { q?: string; mol_id?: string; page?: number; page_size?: number }): string {

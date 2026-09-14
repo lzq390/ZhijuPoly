@@ -1,5 +1,5 @@
 import { Database, FileText, Globe2 } from "lucide-react";
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useContentMotion } from "../hooks/useContentMotion";
 import "../styles/knowledge-retrieval.css";
 import { LocalKnowledgePanel } from "./knowledge-search/LocalKnowledgePanel";
@@ -11,6 +11,7 @@ type KnowledgeSearchProps = {
   onBackHome: () => void;
   initialQuery?: string;
   initialTerms?: string[];
+  onLocalModeChange?: (local: boolean) => void;
 };
 
 type KnowledgeMode = "local" | "online" | "pdf";
@@ -26,11 +27,12 @@ const MODES: Array<{
   { id: "pdf", label: "PDF 相似度", icon: FileText, demo: true }
 ];
 
-export function KnowledgeSearch({ initialQuery = "", initialTerms = [] }: KnowledgeSearchProps) {
+export function KnowledgeSearch({ initialQuery = "", initialTerms = [], onLocalModeChange }: KnowledgeSearchProps) {
   const [mode, setMode] = useState<KnowledgeMode>("local");
   const stageRef = useRef<HTMLDivElement | null>(null);
   useContentMotion(stageRef, mode, "tab", ".ks-mode-panel.is-active .ks-results-surface");
   const [visitedModes, setVisitedModes] = useState<Set<KnowledgeMode>>(() => new Set(["local"]));
+  useEffect(() => { onLocalModeChange?.(mode === "local"); }, [mode, onLocalModeChange]);
 
   function activateMode(nextMode: KnowledgeMode) {
     setMode(nextMode);

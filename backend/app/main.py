@@ -33,6 +33,8 @@ from app.routers.deployment_status import router as deployment_status_router
 from app.routers.dev_gpu_session import router as dev_gpu_session_router
 from app.routers.gpu_status import router as gpu_status_router
 from app.routers.knowledge import router as knowledge_router
+from app.routers.browsing_recording import router as browsing_recording_router
+from app.services.browsing_recording import BrowsingRecordingStore
 from app.routers.lab_data import router as lab_data_router
 from app.routers.md_demo import router as md_demo_router
 from app.routers.monomer_dft import (
@@ -246,6 +248,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(BatchError, batch_error_handler)
     app.add_middleware(BatchUploadLimitMiddleware, max_bytes=batch_config.request_bytes)
     app.state.settings = app_settings
+    app.state.browsing_recording = BrowsingRecordingStore(app_settings)
     app.state.dev_gpu_operator_client = None
     if app_settings.dev_gpu_operator_enabled:
         app.state.dev_gpu_operator_client = DevGpuOperatorClient(
@@ -413,6 +416,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(conditional_generation_router)
     app.include_router(polytao_router)
     app.include_router(knowledge_router)
+    app.include_router(browsing_recording_router)
     app.include_router(lab_data_router)
     app.include_router(md_demo_router)
     app.include_router(monomer_md_router)

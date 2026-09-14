@@ -1,0 +1,29 @@
+# Standalone development database; do not combine with platform Compose files.
+name: zhijupoly_knowledge_poc
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    environment:
+      POSTGRES_DB: knowledge_poc
+      POSTGRES_USER: knowledge_poc
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "knowledge_poc", "-d", "knowledge_poc"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+secrets:
+  postgres_password:
+    file: ./.runtime/knowledge-summary/postgres-password
+
+volumes:
+  postgres_data:

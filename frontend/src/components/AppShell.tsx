@@ -50,6 +50,7 @@ type AppShellProps = {
   beforeNavigate?: () => Promise<void | boolean>;
   moduleTransition?: ModuleTransitionView;
   children: ReactNode;
+  recordingControls?: ReactNode;
 };
 
 const SCROLLBAR_HIDE_DELAY_MS = 700;
@@ -115,6 +116,7 @@ export function AppShell({
   onRenameGeneralSession,
   onDeleteGeneralSession,
   beforeNavigate,
+  recordingControls,
   moduleTransition,
   children
 }: AppShellProps) {
@@ -415,6 +417,7 @@ export function AppShell({
           onOpen={() => setIsMobileMenuOpen(true)}
         />
 
+        {recordingControls}
         <main
           ref={mainRef}
           tabIndex={-1}

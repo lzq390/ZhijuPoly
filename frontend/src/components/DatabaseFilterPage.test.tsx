@@ -11,11 +11,15 @@ import type {
 import { resetPropertyFilterHistogramResourceForTests } from "../services/propertyFilterHistogramResource";
 import { resetPropertyFilterOptionsResourceForTests } from "../services/propertyFilterOptionsResource";
 import { DatabaseFilterPage } from "./DatabaseFilterPage";
+import { KnowledgeRecordingProvider } from "../hooks/useKnowledgeRecording";
+import { KnowledgeRecordingControls } from "./knowledge-search/KnowledgeRecordingControls";
 
 const apiMocks = vi.hoisted(() => ({
   fetchOptions: vi.fn(),
   fetchHistogram: vi.fn(),
-  search: vi.fn()
+  search: vi.fn(),
+  observe: vi.fn(),
+  start: vi.fn(), stop: vi.fn(), summary: vi.fn()
 }));
 
 function installTwoKMedia(initialMatches: boolean) {
@@ -83,7 +87,9 @@ vi.mock("../services/api", () => ({
   API_BASE_URL: "/api/v1",
   fetchPropertyFilterHistogram: apiMocks.fetchHistogram,
   fetchPropertyFilterOptions: apiMocks.fetchOptions,
-  searchPropertyFilterRecords: apiMocks.search
+  searchPropertyFilterRecords: apiMocks.search,
+  postPropertyFilterObservation: apiMocks.observe,
+  startKnowledgeRecording: apiMocks.start, stopKnowledgeRecording: apiMocks.stop, summarizeKnowledgeRecording: apiMocks.summary
 }));
 
 const optionsResponse: PropertyFilterOptionsResponse = {
@@ -278,6 +284,7 @@ beforeEach(() => {
     return Promise.resolve(histogramResponse(option));
   });
   apiMocks.search.mockReset().mockResolvedValue(successResponse);
+  apiMocks.observe.mockReset().mockResolvedValue({});
 });
 
 afterEach(() => {
@@ -292,6 +299,88 @@ async function renderLoadedPage() {
 }
 
 describe("DatabaseFilterPage", () => {
+  it("筛选与查看使用共同记录 ID，离开页面不取消已记录的筛选请求", async () => {
+    apiMocks.start.mockImplementation(async (recording_id: string) => ({ recording_id, status: "recording" }));
+    apiMocks.search.mockResolvedValue({ ...successResponse, search_id: "recorded" });
+    const view = render(<KnowledgeRecordingProvider><KnowledgeRecordingControls localMode /><DatabaseFilterPage /></KnowledgeRecordingProvider>);
+    await screen.findByRole("button", { name: /玻璃化转变温度/ });
+    fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
+    await screen.findByRole("button", { name: "正在记录 · 总结" });
+    const id = apiMocks.start.mock.lastCall![0];
+    fireEvent.change(screen.getByLabelText("属性 1 最小值"), { target: { value: "100" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
+    fireEvent.click(await screen.findByText(/记录详情 · 2 条测量/));
+    await waitFor(() => expect(apiMocks.observe).toHaveBeenCalledWith(expect.objectContaining({ recording_id: id })));
+    expect(apiMocks.search.mock.lastCall![0].recording_id).toBe(id);
+    let release!: (value: PropertyFilterSearchResponse) => void;
+    apiMocks.search.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    fireEvent.change(screen.getByLabelText("属性 1 最小值"), { target: { value: "120" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
+    const signal = apiMocks.search.mock.lastCall![1] as AbortSignal;
+    view.rerender(<KnowledgeRecordingProvider><KnowledgeRecordingControls localMode /><div>另一模块</div></KnowledgeRecordingProvider>);
+    expect(signal.aborted).toBe(false);
+    expect((screen.getByRole("button", { name: "正在记录 · 总结" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => release(successResponse));
+    await waitFor(() => expect((screen.getByRole("button", { name: "正在记录 · 总结" }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it("只在展开记录或结构时通知，关闭与重复 toggle 不通知，再次展开仍可记录", async () => {
+    apiMocks.search.mockResolvedValue({ ...successResponse, search_id: "first-search", results: [
+      { ...successResponse.results[0], smiles: "*CC*", canonical_smiles: "*CO*" }
+    ] });
+    await renderLoadedPage();
+    fireEvent.change(screen.getByLabelText("属性 1 最小值"), { target: { value: "100" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
+    const summary = await screen.findByText(/记录详情 · 2 条测量/);
+    expect(apiMocks.observe).not.toHaveBeenCalled();
+    fireEvent.click(summary);
+    await waitFor(() => expect(apiMocks.observe).toHaveBeenCalledTimes(1));
+    expect(apiMocks.observe).toHaveBeenLastCalledWith({ search_id: "first-search", result_index: 0,
+      source: "measurement_details", filter_index: 0 });
+    fireEvent(summary.closest("details")!, new Event("toggle"));
+    expect(apiMocks.observe).toHaveBeenCalledTimes(1);
+    fireEvent.click(summary);
+    await waitFor(() => expect(screen.queryByText("补充测量 1")).toBeNull());
+    expect(apiMocks.observe).toHaveBeenCalledTimes(1);
+    fireEvent.click(summary);
+    await waitFor(() => expect(apiMocks.observe).toHaveBeenCalledTimes(2));
+    for (const [label, field] of [["SMILES", "smiles"], ["canonical SMILES", "canonical_smiles"]]) {
+      fireEvent.click(screen.getByText(label, { selector: ".dbf-smiles-summary-label strong" }).closest("summary")!);
+      await waitFor(() => expect(apiMocks.observe).toHaveBeenLastCalledWith({ search_id: "first-search",
+        result_index: 0, source: "smiles", smiles_field: field }));
+    }
+    apiMocks.search.mockResolvedValue({ ...successResponse, search_id: "second-search" });
+    fireEvent.change(screen.getByLabelText("属性 1 最小值"), { target: { value: "120" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
+    const secondSummary = await screen.findByText(/记录详情 · 2 条测量/);
+    expect(apiMocks.observe).toHaveBeenCalledTimes(4);
+    fireEvent.click(secondSummary);
+    await waitFor(() => expect(apiMocks.observe).toHaveBeenLastCalledWith({ search_id: "second-search",
+      result_index: 0, source: "measurement_details", filter_index: 0 }));
+  });
+
+  it("普通后端未返回快照 ID 时照常展开且不上报", async () => {
+    await renderLoadedPage();
+    fireEvent.change(screen.getByLabelText("属性 1 最小值"), { target: { value: "100" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
+    fireEvent.click(await screen.findByText(/记录详情 · 2 条测量/));
+    expect(await screen.findAllByText("原始测量")).toHaveLength(2);
+    expect(apiMocks.observe).not.toHaveBeenCalled();
+  });
+
+  it("查看通知失败不会阻止详情展示或自动重试", async () => {
+    apiMocks.search.mockResolvedValue({ ...successResponse, search_id: "failed-notice" });
+    apiMocks.observe.mockRejectedValue(new Error("snapshot expired"));
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await renderLoadedPage();
+    fireEvent.change(screen.getByLabelText("属性 1 最小值"), { target: { value: "100" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
+    fireEvent.click(await screen.findByText(/记录详情 · 2 条测量/));
+    expect(await screen.findAllByText("原始测量")).toHaveLength(2);
+    await waitFor(() => expect(warning).toHaveBeenCalled());
+    expect(apiMocks.observe).toHaveBeenCalledTimes(1);
+  });
+
   it("使用共享工作台骨架，并将状态与 Surface 操作分层", async () => {
     await renderLoadedPage();
 

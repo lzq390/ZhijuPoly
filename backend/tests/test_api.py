@@ -25,6 +25,7 @@ from app.models import (
     SmilesQueryRequest,
     Structure3DRequest,
 )
+from app.recording_models import RecordedFilterSearchResponse
 from app.routers import database_browser
 from app.routers import query as query_routes
 from app.routers.predict import predict
@@ -445,14 +446,51 @@ def test_experimental_csv_routes_keep_response_models() -> None:
     assert routes["/api/v1/database-browser/experimental-process"].response_model is ExperimentalProcessBrowseResponse
     assert routes["/api/v1/database-browser/experimental-property"].response_model is ExperimentalPropertyBrowseResponse
     assert routes["/api/v1/database-browser/property-filter/options"].response_model is PropertyFilterOptionsResponse
-    assert routes["/api/v1/database-browser/property-filter/search"].response_model is PropertyFilterSearchResponse
+    response_model = routes["/api/v1/database-browser/property-filter/search"].response_model
+    assert response_model is RecordedFilterSearchResponse
+    original = PropertyFilterSearchResponse(
+        query="polyimide", page=1, page_size=20, query_time_ms=1,
+        total_records=0, matched_records=0, results=[],
+    )
+    recorded = response_model(**original.model_dump(), search_id="search-contract")
+    assert recorded.model_dump() == {**original.model_dump(), "search_id": "search-contract"}
 
 
-def test_experimental_csv_routes_are_sync_for_threadpool() -> None:
+def test_experimental_csv_and_filter_options_routes_are_sync_for_threadpool() -> None:
     assert not inspect.iscoroutinefunction(database_browser.browse_experimental_process_records)
     assert not inspect.iscoroutinefunction(database_browser.browse_experimental_property_records)
     assert not inspect.iscoroutinefunction(database_browser.get_property_filter_options)
-    assert not inspect.iscoroutinefunction(database_browser.search_property_filter)
+
+
+def test_property_filter_search_runs_synchronous_work_off_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Response
+    from app.recording_models import RecordedFilterSearchRequest
+    from app.services.browsing_recording import BrowsingRecordingStore
+
+    worker_threads: list[int] = []
+
+    def recording_search(body, request, response):
+        worker_threads.append(get_ident())
+        return PropertyFilterSearchResponse(
+            query=body.q, page=body.page, page_size=body.page_size,
+            query_time_ms=1, total_records=0, matched_records=0, results=[],
+        )
+
+    monkeypatch.setattr(database_browser, "_search_property_filter_sync", recording_search)
+    app = FastAPI()
+    app.state.browsing_recording = BrowsingRecordingStore(Settings())
+    body = RecordedFilterSearchRequest(
+        q="polyimide", filters=[{"filter_type": "standardized", "property_key": "tg", "min_value": 100}],
+    )
+
+    async def run_search():
+        event_loop_thread = get_ident()
+        result = await database_browser.search_property_filter(body, make_request(app), Response())
+        assert worker_threads and all(thread != event_loop_thread for thread in worker_threads)
+        assert result.query == "polyimide"
+        assert result.search_id
+
+    asyncio.run(run_search())
 
 
 def test_experimental_process_browser_endpoint_returns_typed_records(test_app: FastAPI) -> None:

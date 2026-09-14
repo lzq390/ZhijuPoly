@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { normalizeKnowledgeSearchGroups } from "../lib/knowledgeSearchExpression";
 import { searchKnowledge } from "../services/api";
+import { useKnowledgeRecording } from "./useKnowledgeRecording";
 import type { KnowledgeSearchGroup, KnowledgeSearchResponse } from "../types";
 
 type KnowledgeSearchState = {
@@ -10,6 +11,9 @@ type KnowledgeSearchState = {
 };
 
 export function useKnowledgeSearch() {
+  const recording = useKnowledgeRecording();
+  const track = recording?.track;
+  const isRecording = recording?.isRecording;
   const [state, setState] = useState<KnowledgeSearchState>({
     isLoading: false,
     error: null,
@@ -21,10 +25,10 @@ export function useKnowledgeSearch() {
   useEffect(() => {
     return () => {
       requestTokenRef.current += 1;
-      requestAbortRef.current?.abort();
+      if (!isRecording?.()) requestAbortRef.current?.abort();
       requestAbortRef.current = null;
     };
-  }, []);
+  }, [isRecording]);
 
   const submit = useCallback(async (
     query: string,
@@ -47,8 +51,9 @@ export function useKnowledgeSearch() {
 
     try {
       const cleanedGroups = normalizeKnowledgeSearchGroups(groups ?? []);
-      const data = await searchKnowledge(
+      const request = (recordingId?: string) => searchKnowledge(
         {
+          ...(recordingId ? { recording_id: recordingId } : {}),
           query,
           top_k: topK,
           page,
@@ -57,6 +62,7 @@ export function useKnowledgeSearch() {
         },
         controller.signal
       );
+      const data = await (track ? track(request) : request());
       if (requestTokenRef.current !== token || controller.signal.aborted) {
         return null;
       }
@@ -85,7 +91,7 @@ export function useKnowledgeSearch() {
         requestAbortRef.current = null;
       }
     }
-  }, []);
+  }, [track]);
 
   return {
     ...state,

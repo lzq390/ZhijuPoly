@@ -1,0 +1,14 @@
+filter_record_id,polymer_name,smiles,property_name,property_key,property_label,property_value_num,property_unit_clean,canonical_value,canonical_unit
+9000001,POC-A 演示材料,*CC*,Glass transition temperature,tg,玻璃化转变温度,180,C,180,C
+9000002,POC-A 演示材料,*CC*,Tensile strength,tensile_strength,拉伸强度,60,MPa,60,MPa
+9000003,POC-A 演示材料,*CC*,断裂伸长率,,,15,%,,
+9000004,POC-B 演示材料,*CC(C)*,Glass transition temperature,tg,玻璃化转变温度,240,C,240,C
+9000005,POC-B 演示材料,*CC(C)*,Tensile strength,tensile_strength,拉伸强度,90,MPa,90,MPa
+9000006,POC-B 演示材料,*CC(C)*,断裂伸长率,,,8,%,,
+9000007,POC-C 演示材料,*CC(c1ccccc1)*,Glass transition temperature,tg,玻璃化转变温度,300,C,300,C
+9000008,POC-C 演示材料,*CC(c1ccccc1)*,Tensile strength,tensile_strength,拉伸强度,110,MPa,110,MPa
+9000009,POC-C 演示材料,*CC(c1ccccc1)*,断裂伸长率,,,3,%,,
+9000010,POC-D 演示材料,*CO*,Glass transition temperature,tg,玻璃化转变温度,120,C,120,C
+9000011,POC-D 演示材料,*CO*,Tensile strength,tensile_strength,拉伸强度,40,MPa,40,MPa
+9000012,POC-D 演示材料,*CO*,断裂伸长率,,,25,%,,
+9000013,POC-A 演示材料,*CC*,Glass transition temperature,tg,玻璃化转变温度,190,C,190,C
