@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import type { StructureWorkspace } from "../structure/workspace";
 
 export type MatchMode = "structure" | "property";
 export type SmilesLookupTable = "polymers" | "properties" | "pi_candidates";
@@ -16,8 +16,7 @@ export type MonomerPolymerizationTargetClass =
 export type StructureWorkspaceContext = {
   smiles: string;
   setSmiles: (value: string) => void;
-  iframeRef: RefObject<HTMLIFrameElement | null>;
-  setIsReady: (ready: boolean) => void;
+  workspace: StructureWorkspace;
   getCurrentSmiles: () => Promise<string>;
 };
 

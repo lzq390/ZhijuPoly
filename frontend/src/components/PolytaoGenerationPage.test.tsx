@@ -1,3 +1,4 @@
+import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -130,8 +131,7 @@ function makeStructure(overrides: Partial<StructureWorkspaceContext> = {}): Stru
   return {
     smiles: "CCO",
     setSmiles: vi.fn(),
-    iframeRef: { current: null },
-    setIsReady: vi.fn(),
+    workspace: new StructureWorkspace("CCO"),
     getCurrentSmiles: vi.fn().mockResolvedValue("C(C)O"),
     ...overrides
   };

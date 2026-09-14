@@ -1,3 +1,4 @@
+import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -40,6 +41,8 @@ describe("Tg assistant contextual recommendations", () => {
     expect(getTgAssistantSuggestions({ ...base, ...overrides })[0]).toBe(firstSuggestion);
   });
 });
+
+vi.mock("@structure-editor-engine", () => import("../test/structureEditorEngineMock"));
 
 const mocks = vi.hoisted(() => ({
   submit: vi.fn(),
@@ -111,6 +114,10 @@ vi.mock("../hooks/useTgStructureCanvas", () => ({
     loadStructure: mocks.loadStructure,
     importImageFile: mocks.importImageFile,
     syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
+    syncBeforeLeave: async () => {
+      await mocks.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
+      return { status: "saved" as const };
+    },
     toggle3D: mocks.toggle3D,
     peekCanvasState: mocks.peekCanvasState,
     captureCanvasImage: mocks.captureCanvasImage,
@@ -130,8 +137,7 @@ function makeStructure(): StructureWorkspaceContext {
   return {
     smiles: "*CC*",
     setSmiles: vi.fn(),
-    iframeRef: { current: null },
-    setIsReady: vi.fn(),
+    workspace: new StructureWorkspace("*CC*"),
     getCurrentSmiles: vi.fn().mockResolvedValue("*CC*")
   };
 }
@@ -213,8 +219,7 @@ describe("ReverseDesignPage production workbench", () => {
     expect(screen.getByRole("button", { name: "搜索参数" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "AI 助手" })).toBeTruthy();
 
-    fireEvent.load(screen.getByTitle("Tg 逆向设计结构编辑器"));
-    expect(mocks.handleEditorLoad).toHaveBeenCalledOnce();
+    expect(document.querySelector("[data-structure-editor]")).not.toBeNull();
   });
 
   it("keeps parameters and AI mutually exclusive while allowing parameters over an open result drawer", async () => {

@@ -1,3 +1,4 @@
+import type { StructureSyncResult } from "../structure/workspace";
 import {
   forwardRef,
   useCallback,
@@ -33,7 +34,7 @@ export type { StructureWorkbenchModuleId } from "./structure-workbench/Structure
 export { CurrentStructurePanel, MissingStructurePanel, WorkbenchPanel } from "./CurrentStructurePanel";
 
 export type StructureCanvasOwnerHandle = {
-  syncBeforeLeave(): Promise<void>;
+  syncBeforeLeave(signal?: AbortSignal): Promise<StructureSyncResult>;
 };
 
 export type StructureWorkbenchHandle = StructureCanvasOwnerHandle;
@@ -118,10 +119,7 @@ export const StructureWorkbenchPage = forwardRef<
   useImperativeHandle(
     forwardedRef,
     () => ({
-      async syncBeforeLeave() {
-        if (!(await canvas.flushSmilesDraft())) return;
-        await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
-      }
+      syncBeforeLeave: canvas.syncBeforeLeave
     }),
     [canvas]
   );

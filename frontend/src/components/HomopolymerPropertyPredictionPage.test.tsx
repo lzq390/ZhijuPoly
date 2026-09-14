@@ -1,3 +1,4 @@
+import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -9,6 +10,8 @@ import {
   HomopolymerPropertyPredictionPage
 } from "./HomopolymerPropertyPredictionPage";
 import type { StructureCanvasOwnerHandle } from "./StructureWorkbenchPage";
+
+vi.mock("@structure-editor-engine", () => import("../test/structureEditorEngineMock"));
 
 const mocks = vi.hoisted(() => ({
   canvasState: { isFlipped: false },
@@ -53,6 +56,10 @@ vi.mock("../hooks/useTgStructureCanvas", () => ({
     clearCanvas: mocks.clearCanvas,
     importImageFile: mocks.importImageFile,
     syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
+    syncBeforeLeave: async () => {
+      await mocks.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
+      return { status: "saved" as const };
+    },
     resolveSmilesForSearch: mocks.resolveSmilesForSearch,
     toggle3D: mocks.toggle3D,
     copySmiles: mocks.copySmiles
@@ -73,8 +80,7 @@ function makeStructure(smiles = "*CC*"): StructureWorkspaceContext {
   return {
     smiles,
     setSmiles: vi.fn(),
-    iframeRef: { current: null },
-    setIsReady: vi.fn(),
+    workspace: new StructureWorkspace(smiles),
     getCurrentSmiles: vi.fn().mockResolvedValue(smiles)
   };
 }

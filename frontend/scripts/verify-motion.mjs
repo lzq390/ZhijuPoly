@@ -171,8 +171,8 @@ try {
     let finishTrace;
     try {
       await page.goto(`${base}/structure-workbench`);
-      await page.locator(".np-sw-editor iframe").waitFor();
-      await page.waitForFunction(() => !!document.querySelector(".np-sw-editor iframe")?.contentWindow?.ketcher, null, { timeout: 30000 });
+      await page.locator("[data-structure-editor]").waitFor();
+      await page.waitForFunction(() => document.querySelector("[data-structure-editor]")?.dataset.editorStatus === "ready", null, { timeout: 30000 });
       await page.waitForTimeout(350);
       finishTrace = await traceStart(page);
       await phase(page, "rapid-navigation");
@@ -180,12 +180,12 @@ try {
       const nav = page.locator(viewport.width < 1024 ? "#np-mobile-navigation" : ".np-sidebar-desktop");
       await nav.locator('[data-group-id="discover"] .np-sidebar-group__trigger').click();
       await nav.evaluate((root) => {
-        window.__editorBefore = document.querySelector(".np-sw-editor iframe");
+        window.__editorBefore = document.querySelector("[data-structure-editor]");
         for (const id of ["knowledge", "databaseQuery", "structureWorkbench"]) root.querySelector(`[data-module-id="${id}"]`).click();
       });
       await page.waitForTimeout(1650);
-      result.retainedIframe = await page.evaluate(() => document.querySelector(".np-sw-editor iframe") === window.__editorBefore);
-      assert.equal(result.retainedIframe, true);
+      result.retainedEditor = await page.evaluate(() => document.querySelector("[data-structure-editor]") === window.__editorBefore);
+      assert.equal(result.retainedEditor, true);
       assert.equal(await page.locator("[data-module-content]").getAttribute("data-module-content"), "structureWorkbench");
 
       await phase(page, "workbench-drawer");

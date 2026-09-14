@@ -121,10 +121,7 @@ export const PolymerSimilarityExplorerPage = forwardRef<
   useImperativeHandle(
     forwardedRef,
     () => ({
-      async syncBeforeLeave() {
-        if (!(await canvas.flushSmilesDraft())) return;
-        await canvas.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
-      }
+      syncBeforeLeave: canvas.syncBeforeLeave
     }),
     [canvas]
   );

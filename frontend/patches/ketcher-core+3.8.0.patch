@@ -1,0 +1,376 @@
+diff --git a/node_modules/ketcher-core/dist/index.js b/node_modules/ketcher-core/dist/index.js
+--- a/node_modules/ketcher-core/dist/index.js
++++ b/node_modules/ketcher-core/dist/index.js
+@@ -29363,2 +29363,3 @@
+         case 8:
++          if (structService.disposed || !editor || editor.disposed) throw new DOMException('Editor disposed', 'AbortError');
+           deserialisedKet = ketSerializer.deserializeToDrawingEntities(ketStruct);
+@@ -42120,3 +42121,5 @@
+     _defineProperty__default["default"](this, "observeCanvasResize", function () {
++      _this.unobserveCanvasResize();
+       _this.resizeObserver = new ResizeObserver(function () {
++        if (_this.disposed) return;
+         _this.sz = _this.getCanvasSizeVector();
+@@ -42128,3 +42131,4 @@
+       var _this$resizeObserver;
+-      (_this$resizeObserver = _this.resizeObserver) === null || _this$resizeObserver === void 0 || _this$resizeObserver.unobserve(_this.paper.canvas);
++      (_this$resizeObserver = _this.resizeObserver) === null || _this$resizeObserver === void 0 || _this$resizeObserver.disconnect();
++      _this.resizeObserver = null;
+     });
+@@ -42257,4 +42261,5 @@
+       if (forceUpdateWithTimeout) {
+-        setTimeout(function () {
+-          _this2.update(true);
++        clearTimeout(this.updateTimer);
++        this.updateTimer = setTimeout(function () {
++          if (!_this2.disposed) _this2.update(true);
+         }, 0);
+@@ -43781,2 +43786,15 @@
+ var editor;
++function nexpolyMacroEventHandler(owner, handler) {
++  return function (event) {
++    var canvas = owner.canvas;
++    if (owner.disposed || !canvas?.isConnected || !canvas.getClientRects().length) return;
++    var root = canvas.closest('[data-structure-editor]') || canvas.closest('.Ketcher-polymer-editor-root');
++    if (root?.closest('[hidden], [inert]')) return;
++    if (!root?.contains(event.target)) {
++      var popup = event.target?.closest?.('[data-ketcher-owner]');
++      if (!popup || popup.getAttribute('data-ketcher-owner') !== root?.getAttribute('data-ketcher-session')) return;
++    }
++    return handler(event);
++  };
++}
+ var CoreEditor = function () {
+@@ -44051,2 +44069,3 @@
+       }();
++      this.keydownEventHandler = nexpolyMacroEventHandler(this, this.keydownEventHandler);
+       document.addEventListener('keydown', this.keydownEventHandler);
+@@ -44069,3 +44088,5 @@
+       };
++      this.copyEventHandler = nexpolyMacroEventHandler(this, this.copyEventHandler);
+       document.addEventListener('copy', this.copyEventHandler);
++      this.pasteEventHandler = nexpolyMacroEventHandler(this, this.pasteEventHandler);
+       document.addEventListener('paste', this.pasteEventHandler);
+@@ -44079,2 +44100,3 @@
+       };
++      this.hotKeyEventHandler = nexpolyMacroEventHandler(this, this.hotKeyEventHandler);
+       document.addEventListener('keydown', this.hotKeyEventHandler);
+@@ -44124,2 +44146,3 @@
+       };
++      this.contextMenuEventHandler = nexpolyMacroEventHandler(this, this.contextMenuEventHandler);
+       document.addEventListener('contextmenu', this.contextMenuEventHandler);
+@@ -44961,4 +44984,6 @@
+     value: function destroy() {
++      if (this.disposed) return;
++      this.disposed = true;
+       this.unsubscribeEvents();
+-      editor = undefined;
++      if (editor === this) editor = undefined;
+     }
+@@ -58252,2 +58277,16 @@
+   _createClass__default["default"](Ketcher, [{
++    key: "retire",
++    value: function retire() {
++      if (this.disposed) return;
++      this.disposed = true;
++      this.structService.destroy?.();
++      if (this.editor) {
++        this.editor.disposed = true;
++        this.editor.render.disposed = true;
++      }
++      this.changeEvent.handlers = [];
++      this.libraryUpdateEvent.handlers = [];
++      this.eventBus.removeAllListeners();
++    }
++  }, {
+     key: "editor",
+@@ -58336,2 +58375,3 @@
+       var _getMolfile = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee(molfileFormat) {
++        var nexpolyOwner = this;
+         var _CoreEditor$provideEd;
+@@ -58339,2 +58379,3 @@
+         return _regeneratorRuntime__default["default"].wrap(function _callee$(_context) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context.prev = _context.next) {
+@@ -58375,2 +58416,3 @@
+       var _getRxn = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee2() {
++        var nexpolyOwner = this;
+         var molfileFormat,
+@@ -58380,2 +58422,3 @@
+         return _regeneratorRuntime__default["default"].wrap(function _callee2$(_context2) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context2.prev = _context2.next) {
+@@ -58428,2 +58471,3 @@
+       var _getSequence = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee3() {
++        var nexpolyOwner = this;
+         var _CoreEditor$provideEd10;
+@@ -58439,2 +58483,3 @@
+         return _regeneratorRuntime__default["default"].wrap(function _callee3$(_context3) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context3.prev = _context3.next) {
+@@ -58539,4 +58584,6 @@
+       var _getInChIKey = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee4() {
++        var nexpolyOwner = this;
+         var struct;
+         return _regeneratorRuntime__default["default"].wrap(function _callee4$(_context4) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context4.prev = _context4.next) {
+@@ -58602,2 +58649,3 @@
+       var _setMolecule = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee6(structStr, options) {
++        var nexpolyOwner = this;
+         var _this = this;
+@@ -58605,2 +58653,3 @@
+         return _regeneratorRuntime__default["default"].wrap(function _callee6$(_context6) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context6.prev = _context6.next) {
+@@ -58618,3 +58667,4 @@
+                 return _regeneratorRuntime__default["default"].wrap(function _callee5$(_context5) {
+-                  while (1) switch (_context5.prev = _context5.next) {
++                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
++          while (1) switch (_context5.prev = _context5.next) {
+                     case 0:
+@@ -58666,4 +58716,6 @@
+       var _setHelm = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee8(helmStr) {
++        var nexpolyOwner = this;
+         var _this2 = this;
+         return _regeneratorRuntime__default["default"].wrap(function _callee8$(_context8) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context8.prev = _context8.next) {
+@@ -58674,3 +58726,4 @@
+                 return _regeneratorRuntime__default["default"].wrap(function _callee7$(_context7) {
+-                  while (1) switch (_context7.prev = _context7.next) {
++                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
++          while (1) switch (_context7.prev = _context7.next) {
+                     case 0:
+@@ -58706,2 +58759,3 @@
+       var _addFragment = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee10(structStr, options) {
++        var nexpolyOwner = this;
+         var _this3 = this;
+@@ -58709,2 +58763,3 @@
+         return _regeneratorRuntime__default["default"].wrap(function _callee10$(_context10) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context10.prev = _context10.next) {
+@@ -58722,3 +58777,4 @@
+                 return _regeneratorRuntime__default["default"].wrap(function _callee9$(_context9) {
+-                  while (1) switch (_context9.prev = _context9.next) {
++                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
++          while (1) switch (_context9.prev = _context9.next) {
+                     case 0:
+@@ -58767,4 +58823,6 @@
+       var _layout = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee12() {
++        var nexpolyOwner = this;
+         var _this4 = this;
+         return _regeneratorRuntime__default["default"].wrap(function _callee12$(_context12) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context12.prev = _context12.next) {
+@@ -58781,3 +58839,4 @@
+                 return _regeneratorRuntime__default["default"].wrap(function _callee11$(_context11) {
+-                  while (1) switch (_context11.prev = _context11.next) {
++                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
++          while (1) switch (_context11.prev = _context11.next) {
+                     case 0:
+@@ -58811,3 +58870,5 @@
+       var _calculate = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee13(options) {
++        var nexpolyOwner = this;
+         return _regeneratorRuntime__default["default"].wrap(function _callee13$(_context13) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context13.prev = _context13.next) {
+@@ -58881,2 +58942,3 @@
+       var _generateImage = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee14(data) {
++        var nexpolyOwner = this;
+         var options,
+@@ -58892,2 +58954,3 @@
+         return _regeneratorRuntime__default["default"].wrap(function _callee14$(_context14) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context14.prev = _context14.next) {
+@@ -59442,2 +59505 @@
+ exports.vectorUtils = vectorUtils;
+-//# sourceMappingURL=index.js.map
+diff --git a/node_modules/ketcher-core/dist/index.modern.js b/node_modules/ketcher-core/dist/index.modern.js
+--- a/node_modules/ketcher-core/dist/index.modern.js
++++ b/node_modules/ketcher-core/dist/index.modern.js
+@@ -29335,2 +29335,3 @@
+         case 8:
++          if (structService.disposed || !editor || editor.disposed) throw new DOMException('Editor disposed', 'AbortError');
+           deserialisedKet = ketSerializer.deserializeToDrawingEntities(ketStruct);
+@@ -42092,3 +42093,5 @@
+     _defineProperty(this, "observeCanvasResize", function () {
++      _this.unobserveCanvasResize();
+       _this.resizeObserver = new ResizeObserver(function () {
++        if (_this.disposed) return;
+         _this.sz = _this.getCanvasSizeVector();
+@@ -42100,3 +42103,4 @@
+       var _this$resizeObserver;
+-      (_this$resizeObserver = _this.resizeObserver) === null || _this$resizeObserver === void 0 || _this$resizeObserver.unobserve(_this.paper.canvas);
++      (_this$resizeObserver = _this.resizeObserver) === null || _this$resizeObserver === void 0 || _this$resizeObserver.disconnect();
++      _this.resizeObserver = null;
+     });
+@@ -42229,4 +42233,5 @@
+       if (forceUpdateWithTimeout) {
+-        setTimeout(function () {
+-          _this2.update(true);
++        clearTimeout(this.updateTimer);
++        this.updateTimer = setTimeout(function () {
++          if (!_this2.disposed) _this2.update(true);
+         }, 0);
+@@ -43753,2 +43758,15 @@
+ var editor;
++function nexpolyMacroEventHandler(owner, handler) {
++  return function (event) {
++    var canvas = owner.canvas;
++    if (owner.disposed || !canvas?.isConnected || !canvas.getClientRects().length) return;
++    var root = canvas.closest('[data-structure-editor]') || canvas.closest('.Ketcher-polymer-editor-root');
++    if (root?.closest('[hidden], [inert]')) return;
++    if (!root?.contains(event.target)) {
++      var popup = event.target?.closest?.('[data-ketcher-owner]');
++      if (!popup || popup.getAttribute('data-ketcher-owner') !== root?.getAttribute('data-ketcher-session')) return;
++    }
++    return handler(event);
++  };
++}
+ var CoreEditor = function () {
+@@ -44023,2 +44041,3 @@
+       }();
++      this.keydownEventHandler = nexpolyMacroEventHandler(this, this.keydownEventHandler);
+       document.addEventListener('keydown', this.keydownEventHandler);
+@@ -44041,3 +44060,5 @@
+       };
++      this.copyEventHandler = nexpolyMacroEventHandler(this, this.copyEventHandler);
+       document.addEventListener('copy', this.copyEventHandler);
++      this.pasteEventHandler = nexpolyMacroEventHandler(this, this.pasteEventHandler);
+       document.addEventListener('paste', this.pasteEventHandler);
+@@ -44051,2 +44072,3 @@
+       };
++      this.hotKeyEventHandler = nexpolyMacroEventHandler(this, this.hotKeyEventHandler);
+       document.addEventListener('keydown', this.hotKeyEventHandler);
+@@ -44096,2 +44118,3 @@
+       };
++      this.contextMenuEventHandler = nexpolyMacroEventHandler(this, this.contextMenuEventHandler);
+       document.addEventListener('contextmenu', this.contextMenuEventHandler);
+@@ -44933,4 +44956,6 @@
+     value: function destroy() {
++      if (this.disposed) return;
++      this.disposed = true;
+       this.unsubscribeEvents();
+-      editor = undefined;
++      if (editor === this) editor = undefined;
+     }
+@@ -58224,2 +58249,16 @@
+   _createClass(Ketcher, [{
++    key: "retire",
++    value: function retire() {
++      if (this.disposed) return;
++      this.disposed = true;
++      this.structService.destroy?.();
++      if (this.editor) {
++        this.editor.disposed = true;
++        this.editor.render.disposed = true;
++      }
++      this.changeEvent.handlers = [];
++      this.libraryUpdateEvent.handlers = [];
++      this.eventBus.removeAllListeners();
++    }
++  }, {
+     key: "editor",
+@@ -58308,2 +58347,3 @@
+       var _getMolfile = _asyncToGenerator( _regeneratorRuntime.mark(function _callee(molfileFormat) {
++        var nexpolyOwner = this;
+         var _CoreEditor$provideEd;
+@@ -58311,2 +58351,3 @@
+         return _regeneratorRuntime.wrap(function _callee$(_context) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context.prev = _context.next) {
+@@ -58347,2 +58388,3 @@
+       var _getRxn = _asyncToGenerator( _regeneratorRuntime.mark(function _callee2() {
++        var nexpolyOwner = this;
+         var molfileFormat,
+@@ -58352,2 +58394,3 @@
+         return _regeneratorRuntime.wrap(function _callee2$(_context2) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context2.prev = _context2.next) {
+@@ -58400,2 +58443,3 @@
+       var _getSequence = _asyncToGenerator( _regeneratorRuntime.mark(function _callee3() {
++        var nexpolyOwner = this;
+         var _CoreEditor$provideEd10;
+@@ -58411,2 +58455,3 @@
+         return _regeneratorRuntime.wrap(function _callee3$(_context3) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context3.prev = _context3.next) {
+@@ -58511,4 +58556,6 @@
+       var _getInChIKey = _asyncToGenerator( _regeneratorRuntime.mark(function _callee4() {
++        var nexpolyOwner = this;
+         var struct;
+         return _regeneratorRuntime.wrap(function _callee4$(_context4) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context4.prev = _context4.next) {
+@@ -58574,2 +58621,3 @@
+       var _setMolecule = _asyncToGenerator( _regeneratorRuntime.mark(function _callee6(structStr, options) {
++        var nexpolyOwner = this;
+         var _this = this;
+@@ -58577,2 +58625,3 @@
+         return _regeneratorRuntime.wrap(function _callee6$(_context6) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context6.prev = _context6.next) {
+@@ -58590,3 +58639,4 @@
+                 return _regeneratorRuntime.wrap(function _callee5$(_context5) {
+-                  while (1) switch (_context5.prev = _context5.next) {
++                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
++          while (1) switch (_context5.prev = _context5.next) {
+                     case 0:
+@@ -58638,4 +58688,6 @@
+       var _setHelm = _asyncToGenerator( _regeneratorRuntime.mark(function _callee8(helmStr) {
++        var nexpolyOwner = this;
+         var _this2 = this;
+         return _regeneratorRuntime.wrap(function _callee8$(_context8) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context8.prev = _context8.next) {
+@@ -58646,3 +58698,4 @@
+                 return _regeneratorRuntime.wrap(function _callee7$(_context7) {
+-                  while (1) switch (_context7.prev = _context7.next) {
++                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
++          while (1) switch (_context7.prev = _context7.next) {
+                     case 0:
+@@ -58678,2 +58731,3 @@
+       var _addFragment = _asyncToGenerator( _regeneratorRuntime.mark(function _callee10(structStr, options) {
++        var nexpolyOwner = this;
+         var _this3 = this;
+@@ -58681,2 +58735,3 @@
+         return _regeneratorRuntime.wrap(function _callee10$(_context10) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context10.prev = _context10.next) {
+@@ -58694,3 +58749,4 @@
+                 return _regeneratorRuntime.wrap(function _callee9$(_context9) {
+-                  while (1) switch (_context9.prev = _context9.next) {
++                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
++          while (1) switch (_context9.prev = _context9.next) {
+                     case 0:
+@@ -58739,4 +58795,6 @@
+       var _layout = _asyncToGenerator( _regeneratorRuntime.mark(function _callee12() {
++        var nexpolyOwner = this;
+         var _this4 = this;
+         return _regeneratorRuntime.wrap(function _callee12$(_context12) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context12.prev = _context12.next) {
+@@ -58753,3 +58811,4 @@
+                 return _regeneratorRuntime.wrap(function _callee11$(_context11) {
+-                  while (1) switch (_context11.prev = _context11.next) {
++                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
++          while (1) switch (_context11.prev = _context11.next) {
+                     case 0:
+@@ -58783,3 +58842,5 @@
+       var _calculate = _asyncToGenerator( _regeneratorRuntime.mark(function _callee13(options) {
++        var nexpolyOwner = this;
+         return _regeneratorRuntime.wrap(function _callee13$(_context13) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context13.prev = _context13.next) {
+@@ -58853,2 +58914,3 @@
+       var _generateImage = _asyncToGenerator( _regeneratorRuntime.mark(function _callee14(data) {
++        var nexpolyOwner = this;
+         var options,
+@@ -58864,2 +58926,3 @@
+         return _regeneratorRuntime.wrap(function _callee14$(_context14) {
++          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
+           while (1) switch (_context14.prev = _context14.next) {
+@@ -58998,2 +59061 @@
+ export { ARROW_MAX_SNAPPING_ANGLE, Action, AlignDescriptors, AmbiguousMonomer, AmbiguousMonomerRenderer, Atom$1 as Atom, AtomAdd, AtomAttr, AtomDelete, AtomLabel, AtomList, AtomMove, AttachmentPointHoverOperation, AttachmentPointName, AttachmentPoints, Axis, BackBoneBondSequenceRenderer, BackBoneSequenceNode, BaseMonomer, BaseMonomerRenderer, BaseRenderer, BaseSequenceItemRenderer, BaseSequenceRenderer, BlobTypes, Bond$1 as Bond, BondAdd, BondAttr, BondDelete, BondMove, Box2Abs, CREATE_MONOMER_TOOL_NAME, CalcImplicitH, CanvasLoad, Chain, ChainsCollection, Chem, ChemRenderer, ChemSequenceItemRenderer, ChemicalMimeType, Command, CoordinateTransformation, Coordinates, CoreEditor, DEFAULT_LAYOUT_MODE, DEFAULT_VARIANT_MONOMER_LABEL, DefaultStructServiceOptions, EditorClassName, EditorHistory, EditorType, ElementColor, Elements, EmptySequenceItemRenderer, EmptySequenceNode, EnhancedFlagMove, Entities, FixedPrecisionCoordinates, FlexMode, FlipMonomerOperation, FormatterFactory, Fragment, FragmentAdd, FragmentAddStereoAtom, FragmentDelete, FragmentDeleteStereoAtom, FragmentSetProperties, FragmentStereoFlag, FunctionalGroup, FunctionalGroupsProvider, Generics, HAS_CONTENT_LAYOUT_MODE, HYDROGEN_BOND_ATTACHMENT_POINT, HalfBond, HalfMonomerSize, Highlight, HydrogenBond, IMAGE_KEY, IMAGE_SERIALIZE_KEY, Image, ImageDelete, ImageMove, ImageResize, ImageUpsert, IsChainCycled, KETCHER_MACROMOLECULES_ROOT_NODE_SELECTOR, KETCHER_SAVED_OPTIONS_KEY, KETCHER_SAVED_SETTINGS_KEY, KetAmbiguousMonomerTemplateSubType, KetConnectionType, KetMonomerClass, KetMonomerGroupTemplateClass, KetNodeType, KetSerializer, KetTemplateType, Ketcher, KetcherAsyncEvents, KetcherBuilder, KetcherLogger, LayerMap, LinkerSequenceNode, LogLevel, Loop$1 as Loop, LoopMove, MACROMOLECULES_BOND_TYPES, MONOMER_CLASS_TO_CONSTRUCTOR, MONOMER_CONST, MULTITAIL_ARROW_KEY, MULTITAIL_ARROW_SERIALIZE_KEY, MULTITAIL_ARROW_TOOL_NAME, MacromoleculesConverter, MeasurementUnits, ModeTypes, MolSerializer, MonomerAddOperation, MonomerCodeToGroup, MonomerCreationAttachmentPointClickEvent, MonomerDeleteOperation, MonomerGroupCodes, MonomerGroups, MonomerHoverOperation, MonomerItemModifyOperation, MonomerMicromolecule, MonomerMoveOperation, MonomerSequenceNode, MonomerSize, MonomerToAtomBond, MultitailArrow, MultitailArrowAddTail, MultitailArrowDelete, MultitailArrowMove, MultitailArrowMoveHeadTail, MultitailArrowRefName, MultitailArrowRemoveTail, MultitailArrowResizeTailHead, MultitailArrowUpsert, NO_NATURAL_ANALOGUE, Nucleoside, NucleosideSequenceItemRenderer, Nucleotide, NucleotideSequenceItemRenderer, OperationPriority, OperationType, Peptide, PeptideRenderer, PeptideSequenceItemRenderer, Phosphate, PhosphateRenderer, PhosphateSequenceItemRenderer, Pile, PolymerBond$1 as PolymerBond, PolymerBondSequenceRenderer, Pool, RGroup, RGroupAttachmentPoint, RGroupAttachmentPointAdd, RGroupAttachmentPointRemove, RGroupAttr, RGroupFragment, RNABase, RNABaseRenderer, RNASequenceItemRenderer, RNA_DNA_NON_MODIFIED_PART, ReAtom$1 as ReAtom, ReBond$1 as ReBond, ReEnhancedFlag$1 as ReEnhancedFlag, ReFrag$1 as ReFrag, ReImage, ReMultitailArrow, ReObject, ReRGroup$1 as ReRGroup, ReRGroupAttachmentPoint, ReRxnArrow$1 as ReRxnArrow, ReRxnPlus$1 as ReRxnPlus, ReSGroup, ReSimpleObject$1 as ReSimpleObject, ReStruct, ReText$1 as ReText, ReinitializeModeOperation, RemoteStructService, RemoteStructServiceProvider, Render, RenderStruct, RestoreDescriptorsPosition, RestoreIfThen, RestoreSequenceCaretPositionOperation, RnaDnaBaseNames, RnaDnaNaturalAnaloguesEnum, RotateMonomerOperation, RxnArrow$1 as RxnArrow, RxnArrowAdd, RxnArrowDelete, RxnArrowMode, RxnArrowMove, RxnArrowResize, RxnArrowRotate, RxnPlus$1 as RxnPlus, RxnPlusAdd, RxnPlusDelete, RxnPlusMove, SCROLL_POSITION, SGroup, SGroupAddToHierarchy, SGroupAtomAdd, SGroupAtomRemove, SGroupAttachmentPoint, SGroupAttachmentPointAdd, SGroupAttachmentPointRemove, SGroupAttr, SGroupBracketParams, SGroupCreate, SGroupDataMove, SGroupDelete, SGroupForest, SGroupRemoveFromHierarchy, STRAND_TYPE, SUPERATOM_CLASS, SaltsAndSolventsProvider, Scale, ScrollbarContainer, SdfSerializer, SequenceMode, SequenceNodeRendererFactory, SequenceRenderer, SequenceType, SetEditorLineLengthAction, SettingsManager, SgContexts, ShiftMonomerOperation, ShowHydrogenLabelNames, ShowHydrogenLabels, SimpleObject, SimpleObjectAdd, SimpleObjectDelete, SimpleObjectMode, SimpleObjectMove, SimpleObjectResize, SmiSerializer, SnakeLayoutCellWidth, SnakeMode, StandardAmbiguousRnaBase, StandardBondLength, StereLabelStyleType, StereoColoringType, StereoFlag, StereoLabel, StereoValidator, Struct, Sugar, SugarRenderer, SupportedFormat, Text, TextCommand, TextCreate, TextDelete, TextMove, TextUpdate, ToolName, UnresolvedMonomer, UnresolvedMonomerRenderer, UnresolvedMonomerSequenceItemRenderer, UnsplitNucleotide, UnsplitNucleotideRenderer, UnsplitNucleotideSequenceItemRenderer, UpdateIfThen, UsageInMacromolecule, Vec2, ZoomTool, atomForNewBond, atomGetAttr, atomGetDegree, atomGetPos, atomGetSGroups, attachmentPointNames, b64toBlob, bondChangingAction, canModifyAminoAcid, checkAtomValence, checkIsR2R1Connection, checkIsSmartPropertiesExist, checkOverlapping, defaultBondThickness, deleteAllEntitiesOnCanvas, editorEvents, expandSGroupWithMultipleAttachmentPoint, fillNaturalAnalogueForPhosphateAndSugar, findStereoAtoms, flipBonds, formatProperties, formatSelection, fromAromaticTemplateOnBond, fromArrowAddition, fromArrowDeletion, fromArrowResizing, fromAtomAddition, fromAtomMerge, fromAtomsAttrs, fromAtomsFragmentAttr, fromBondAddition, fromBondFlipping, fromBondStereoUpdate, fromBondsAttrs, fromBondsMerge, fromChain, fromDescriptorsAlign, fromFlip, fromFragmentDeletion, fromFragmentSplit, fromHighlightClear, fromHighlightCreate, fromImageCreation, fromImageDeletion, fromImageMove, fromImageResize, fromItemsFuse, fromMultipleMove, fromMultitailArrowCreation, fromMultitailArrowDeletion, fromMultitailArrowHeadTailMove, fromMultitailArrowHeadTailsResize, fromMultitailArrowMove, fromMultitailArrowTailAdd, fromMultitailArrowTailRemove, fromNewCanvas, fromOneAtomDeletion, fromOneBondDeletion, fromPaste, fromPlusAddition, fromPlusDeletion, fromRGroupAttachmentPointAddition, fromRGroupAttachmentPointDeletion, fromRGroupAttachmentPointUpdate, fromRGroupAttrs, fromRGroupFragment, fromRotate, fromSeveralSgroupAddition, fromSgroupAction, fromSgroupAddition, fromSgroupAttachmentPointAddition, fromSgroupAttachmentPointRemove, fromSgroupAttrs, fromSgroupDeletion, fromSimpleObjectAddition, fromSimpleObjectDeletion, fromSimpleObjectResizing, fromStereoAtomAttrs, fromStereoFlagUpdate, fromTemplateOnAtom, fromTemplateOnBondAction, fromTemplateOnCanvas, fromTextCreation, fromTextDeletion, fromTextUpdating, fromUpdateIfThen, generateMenuShortcuts, genericsList, getAllConnectedMonomersRecursively, getAminoAcidsToModify, getAtomCustomQuery, getAtomType, getAttachmentPointLabel, getAttachmentPointLabelWithBinaryShift, getAttachmentPointNumberFromLabel, getColorFromStereoLabel, getFormatMimeTypeByFileName, getHELMClassByKetMonomerClass, getHoverToFuse, getItemsToFuse, getKetRef, getLabelRenderModeForIndigo, getMonomerUniqueKey, getNextFreeAttachmentPoint, getNextMonomerInChain, getNodeWithInvertedYCoord, getOptionsWithConvertedUnits, getPhosphateFromSugar, getPreviousMonomerInChain, getPropertiesByFormat, getPropertiesByImgFormat, getRelSGroupsBySelection, getRnaBaseFromSugar, getSnappedArrowVector, getStructStringFromClipboardData, getStructure, getSugarFromRnaBase, getSvgFromDrawnStructures, hotkeysConfiguration, identifyStructFormat, ifDef, imageReferencePositionToCursor, initHotKeys, isAmbiguousMonomerLibraryItem, isAttachmentBond, isBaseTool, isBondBetweenSugarAndBaseOfRna, isClipboardAPIAvailable, isControlKey, isHelmCompatible, isLibraryItemRnaPreset, isMonomerBeginningOfChain, isMonomerConnectedToR2RnaBase, isNodeRestrictedForHydrogenBondCreation, isPeptideOrAmbiguousPeptide, isR2R1ConnectionFromRnaBase, isRnaBaseApplicableForAntisense, isRnaBaseOrAmbiguousRnaBase, isRnaBaseVariantMonomer, isSingleRGroupAttachmentPoint, isTwoStrandedNodeRestrictedForHydrogenBondCreation, isValidNucleoside, isValidNucleotide, ketcherProvider, keyNorm, legacyCopy, legacyPaste, libraryItemHasR1AttachmentPoint, macromoleculesFilesInputFormats, makeCircleFromEllipse, mergeFragmentsIfNeeded, mergeMapOfItemsToSet, mergeSgroups, modesMap, modifyTransformation, monomerFactory, multitailArrowReferenceLinesToCursor, multitailReferencePositionToCursor, normalizeMonomerAtomsPositions, notifyCopyCut, notifyItemsToMergeInitializationComplete, notifyRenderComplete, notifyRequestCompleted, parseAndAddMacromoleculesOnCanvas, parseStruct, peptideNaturalAnalogues, pickStandardServerOptions, populateStructWithSelection, prepareStructToRender, provideEditorSettings, radicalElectrons, removeAtomFromSgroupIfNeeded, removeAttachmentPointFromSuperatom, removeInfoLabelFromAtoms, removeSgroupIfNeeded, renderersEvents, replaceMonomer, resetEditorEvents, rnaDnaNaturalAnalogues, runAsyncAction, sGroupAttributeAction, safelyGetMimeType, selectionKeys, sequenceReplacer, setAmbiguousMonomerPrefix, setAmbiguousMonomerTemplatePrefix, setExpandMonomerSGroup, setExpandSGroup, setMonomerPrefix, setMonomerTemplatePrefix, shortcutStr, structSelection, switchIntoChemistryCoordSystem, tfx, toolsMap, unknownNaturalAnalogues, vectorUtils };
+-//# sourceMappingURL=index.modern.js.map

@@ -1,0 +1,1393 @@
+{
+  "date": "2026-09-11",
+  "status": "verified; not deployed to production",
+  "node": "22.23.2",
+  "sdk": "3.8.0",
+  "patch": "nexpoly-3.8.0-r3",
+  "passed": true,
+  "scope": "Loading/no-edit navigation, cancellation/deadline ownership, snapshot sharing and truthful draft notices. SDK, loader visibility/ready policy and motion timings unchanged.",
+  "baseline": {
+    "frontend/src/structure/workspace.ts": "c066f1951cdee05b6fe4ec46926cd14fcb3ed0bad8eef1f7bc4252333f113192",
+    "frontend/src/structure/workspace.test.ts": "401931596dc6ebbacdcb4105c8ae9685d555c77309f73fbbd07519fd6eedf5f2",
+    "frontend/src/App.tsx": "d6295cc04ba1c518b949d0f1916456322dd2b4e9aa40a87cefbac3b3fcec7fdc",
+    "frontend/src/App.moduleTransition.test.tsx": "c17af5ec9b50e7b78eed2ccc9a23f23379cb821a3a3f15a87d3bbdd192218ff5",
+    "frontend/src/hooks/useModuleTransition.ts": "1fb9d4c2793df3d49cf6a21a7808400f99e1ebf68808b3745d07274843dc7568",
+    "frontend/src/hooks/useGuardedNavigation.ts": "4f4ebb7f66abcb9486a2251c0093d36248dad218cf9b5adca072dec9a776e104",
+    "frontend/src/hooks/useTgStructureCanvas.ts": "9a7b3a1074614274b6df30a67eda9c5f858feb81ba0eeeae5fd81cc5eee5ef44",
+    "frontend/src/types/index.ts": "c71ed76c6a9d38bbc874613b3db8cac5300c7d4d9d56b3620b823da5e243f358",
+    "frontend/package-lock.json": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861"
+  },
+  "sourceSha256": {
+    "frontend/src/App.tsx": "7bc70829242ab64a76f7ee956550426a3528ee8720acbfbcdd6c572b2f45068d",
+    "frontend/src/structure/workspace.ts": "86cb96a8c705e1ac82cf90d885c2a2c3bcb4d49be4814e4fb4a9e0368e0ab5e5",
+    "frontend/src/structure/navigation.ts": "d8cfe56481b269abeaef5a2e7efbf7a9390b25e984a9d7048e00c9e4db93a985",
+    "frontend/src/hooks/useGuardedNavigation.ts": "b3843de2fd1842e72749b68a573ea8e08485498fb8d940f970d6c9f38cd1fa4d",
+    "frontend/src/hooks/useModuleTransition.ts": "616bd4f84a871d1e3b82c5fb4e65c0cd718f6b0a3699b84130c4ddd6e5d1014d",
+    "frontend/src/hooks/useTgStructureCanvas.ts": "d20f4fa6534d41c20dbaa96c1a0f7d1bdaa3f61f3e9f1fc20f3d7455d8754a55",
+    "frontend/src/components/StructureWorkbenchPage.tsx": "0f72abb0ee7b73a75043cb4f9c965422022a6a11de7d4a9e47dd15984044f1d8",
+    "frontend/scripts/verify-structure-navigation.mjs": "3ed56f370e28eea70cf05ce2495043f1babb6a0b4347e1919d73fd6da573d89e",
+    "frontend/scripts/verify-structure-workspace.mjs": "0d4dd77dc3630fc98e20c9656c89b7e4c5a71dd5e723ce09c87074a8ef61250d",
+    "frontend/scripts/verify-structure-loading-interactions.mjs": "e092f96f9d46bb0d49c4aeb7a740a5c4e76564879a60e338e4d8b8e01685a7a5",
+    "frontend/src/structure/workspace.test.ts": "69f848c84d464d58a37452181d0da34fe92bb1bf4b35acd8c135a220f3c9cfab",
+    "frontend/src/structure/navigation.test.ts": "4522a44d5b6223861085874a48957436e063cd018f1b75b8384269c6715ac6d2",
+    "frontend/src/hooks/useTgStructureCanvas.test.ts": "ecf1d76bb0d4da4847f0ad19775871a6c3f0fae9a01e5633cd02967ae815664d",
+    "frontend/src/App.moduleTransition.test.tsx": "84e76644fab2bff2707aa038b65700fe10ee0ad28b5e1729dd56f510534bc1cd",
+    "frontend/src/components/structure-workbench/ReactStructureEditor.tsx": "c02b9a0df0b71185a3ab9416cd965be8fbf3d4732314f9049ba6b72a8fc1dd88",
+    "frontend/package-lock.json": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+    "frontend/patches/ketcher-manifest.json": "d42e31c4dfa7ce5d97ca65a5568d84b5aa66c865045cda8eae4e75febb4a80a4"
+  },
+  "unitTests": {
+    "files": 98,
+    "passed": 923,
+    "added": 19,
+    "logPath": "/tmp/nexpoly-navigation-fix-walx2ghp/all-tests-final.log",
+    "logSha256": "f3c6b8b5bd52584e386bfadf9d726a909a1ff9a792df2c381ed57aa6bd087c6a"
+  },
+  "builds": {
+    "react": {
+      "typeScript": true,
+      "vite": true,
+      "patchVerification": true,
+      "logSha256": "b0529c4477706a90c93b5cd5d39aadc468a894fe27dd9d3ff59ca6d266c9ab58",
+      "resources": {
+        "engine": "react",
+        "version": "3.8.0",
+        "files": 7,
+        "nativeAssets": [
+          "assets/KetcherReactRuntime-D1y9KbGV.css",
+          "assets/KetcherReactRuntime-DutY0fpi.js",
+          "assets/index.modern-D86uGDEe.js",
+          "assets/index.modern-c0bcdf82-DLGasouj.js"
+        ],
+        "passed": true
+      }
+    },
+    "iframe": {
+      "typeScript": true,
+      "vite": true,
+      "patchVerification": true,
+      "logSha256": "50821a8f929699b3bf38c01ab1c43f0ed27c7670473c89cbc988390fd17f39a1",
+      "resources": {
+        "engine": "iframe",
+        "version": "3.7.0",
+        "files": 25,
+        "nativeAssets": [],
+        "passed": true
+      }
+    }
+  },
+  "navigationBrowser": {
+    "dev": {
+      "base": "http://127.0.0.1:9001",
+      "browser": "151.0.7922.34",
+      "motion": "normal and reduced",
+      "errors": [],
+      "checks": [
+        {
+          "name": "same-target-double-click",
+          "smiles": "CCO"
+        },
+        {
+          "name": "two-targets-before-commit",
+          "smiles": "CCO"
+        },
+        {
+          "name": "second-target-during-transition",
+          "trigger": {
+            "phase": "exiting",
+            "status": "ready",
+            "module": "homopolymerPrediction"
+          },
+          "destination": "explorer"
+        },
+        {
+          "name": "second-target-during-transition",
+          "trigger": {
+            "phase": "blank",
+            "status": "loading",
+            "module": "homopolymerPrediction"
+          },
+          "destination": "conditionalGeneration"
+        },
+        {
+          "name": "second-target-during-transition",
+          "trigger": {
+            "phase": "entering",
+            "status": "loading",
+            "module": "databaseQuery"
+          },
+          "destination": "reverseDesign"
+        },
+        {
+          "name": "polymer-layout-and-annotation",
+          "trigger": {
+            "phase": "blank",
+            "status": "loading",
+            "module": "explorer"
+          },
+          "atoms": 72,
+          "labels": 1
+        },
+        {
+          "name": "reduced-motion-layout"
+        },
+        {
+          "name": "invalid-draft-during-loading"
+        },
+        {
+          "name": "cancelled-slow-save-with-later-edit",
+          "instanceRetained": true,
+          "obsoleteResultIgnored": true
+        },
+        {
+          "name": "real-timeout-still-recovers-and-notifies",
+          "lateResultIgnored": true,
+          "singleWorker": true
+        }
+      ],
+      "passed": true
+    },
+    "prod": {
+      "base": "http://127.0.0.1:4288",
+      "browser": "151.0.7922.34",
+      "motion": "normal and reduced",
+      "errors": [],
+      "checks": [
+        {
+          "name": "same-target-double-click",
+          "smiles": "CCO"
+        },
+        {
+          "name": "two-targets-before-commit",
+          "smiles": "CCO"
+        },
+        {
+          "name": "second-target-during-transition",
+          "trigger": {
+            "phase": "exiting",
+            "status": "ready",
+            "module": "homopolymerPrediction"
+          },
+          "destination": "explorer"
+        },
+        {
+          "name": "second-target-during-transition",
+          "trigger": {
+            "phase": "blank",
+            "status": "loading",
+            "module": "homopolymerPrediction"
+          },
+          "destination": "conditionalGeneration"
+        },
+        {
+          "name": "second-target-during-transition",
+          "trigger": {
+            "phase": "entering",
+            "status": "loading",
+            "module": "databaseQuery"
+          },
+          "destination": "reverseDesign"
+        },
+        {
+          "name": "polymer-layout-and-annotation",
+          "trigger": {
+            "phase": "blank",
+            "status": "loading",
+            "module": "explorer"
+          },
+          "atoms": 72,
+          "labels": 1
+        },
+        {
+          "name": "reduced-motion-layout"
+        },
+        {
+          "name": "invalid-draft-during-loading"
+        },
+        {
+          "name": "cancelled-slow-save-with-later-edit",
+          "instanceRetained": true,
+          "obsoleteResultIgnored": true
+        },
+        {
+          "name": "real-timeout-still-recovers-and-notifies",
+          "lateResultIgnored": true,
+          "singleWorker": true
+        }
+      ],
+      "passed": true
+    }
+  },
+  "workspaceBrowser": {
+    "dev": {
+      "reducedMotion": "no-preference",
+      "patch": "nexpoly-3.8.0-r3",
+      "patchHashes": {
+        "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+        "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+        "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+        "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+      },
+      "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+      "paths": [
+        "/database-query",
+        "/explorer",
+        "/homopolymer-property-prediction",
+        "/conditional-generation",
+        "/reverse-design",
+        "/structure-workbench",
+        "/database-query",
+        "/explorer",
+        "/structure-workbench",
+        "/database-query",
+        "/database-query",
+        "/structure-workbench",
+        "/database-query",
+        "/structure-workbench",
+        "/database-query",
+        "/structure-workbench",
+        "/database-query",
+        "/structure-workbench",
+        "/database-query",
+        "/structure-workbench",
+        "/database-query",
+        "/structure-workbench"
+      ],
+      "viewports": [
+        {
+          "width": 390,
+          "height": 844,
+          "editor": {
+            "x": 15,
+            "y": 204,
+            "width": 360,
+            "height": 360
+          },
+          "atomVisible": true,
+          "atomHit": true,
+          "contextMenu": true
+        },
+        {
+          "width": 1024,
+          "height": 768,
+          "editor": {
+            "x": 267,
+            "y": 107,
+            "width": 738,
+            "height": 491.328125
+          },
+          "atomVisible": true,
+          "atomHit": true,
+          "contextMenu": true
+        },
+        {
+          "width": 2560,
+          "height": 1440,
+          "editor": {
+            "x": 684,
+            "y": 151,
+            "width": 1576,
+            "height": 1050
+          },
+          "atomVisible": true,
+          "atomHit": true,
+          "contextMenu": true
+        },
+        {
+          "width": 1440,
+          "height": 900,
+          "editor": {
+            "x": 365.796875,
+            "y": 107,
+            "width": 982,
+            "height": 644
+          },
+          "atomVisible": true,
+          "atomHit": true,
+          "contextMenu": true
+        }
+      ],
+      "errors": [],
+      "renderWarnings": [],
+      "requests3D": [
+        "CCO"
+      ],
+      "missingResources": [],
+      "readyMs": 4292,
+      "engine": "react",
+      "sdk": "3.8.0",
+      "realAtomDrag": true,
+      "layoutRoundTrip": true,
+      "annotationRoundTrip": true,
+      "explicitSync": true,
+      "external3D": true,
+      "failedImageRollback": true,
+      "invalidDraftRetained": true,
+      "navigationFallback": true,
+      "emptyRoundTrip": true,
+      "polymerEndGroups": true,
+      "png": {
+        "size": 1278,
+        "signature": [
+          137,
+          80,
+          78,
+          71,
+          13,
+          10,
+          26,
+          10
+        ]
+      },
+      "externalDftWrite": true,
+      "lifecycle": [
+        {
+          "cycle": 0,
+          "workers": 1,
+          "JSEventListeners": 1719,
+          "Nodes": 5284,
+          "JSHeapUsedSize": 112437860,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 1,
+          "workers": 1,
+          "JSEventListeners": 1734,
+          "Nodes": 5424,
+          "JSHeapUsedSize": 113120980,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 2,
+          "workers": 1,
+          "JSEventListeners": 1718,
+          "Nodes": 5284,
+          "JSHeapUsedSize": 113016592,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 3,
+          "workers": 1,
+          "JSEventListeners": 1734,
+          "Nodes": 5424,
+          "JSHeapUsedSize": 113316692,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 4,
+          "workers": 1,
+          "JSEventListeners": 1718,
+          "Nodes": 5284,
+          "JSHeapUsedSize": 113190820,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 5,
+          "workers": 1,
+          "JSEventListeners": 1734,
+          "Nodes": 5424,
+          "JSHeapUsedSize": 113783044,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 6,
+          "workers": 1,
+          "JSEventListeners": 1718,
+          "Nodes": 5284,
+          "JSHeapUsedSize": 113318320,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 7,
+          "workers": 1,
+          "JSEventListeners": 1734,
+          "Nodes": 5424,
+          "JSHeapUsedSize": 113657216,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 8,
+          "workers": 1,
+          "JSEventListeners": 1718,
+          "Nodes": 5284,
+          "JSHeapUsedSize": 113695588,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 9,
+          "workers": 1,
+          "JSEventListeners": 1734,
+          "Nodes": 5424,
+          "JSHeapUsedSize": 113982724,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 10,
+          "workers": 1,
+          "JSEventListeners": 1718,
+          "Nodes": 5284,
+          "JSHeapUsedSize": 113777784,
+          "retainedEditors": 0
+        }
+      ],
+      "clipboardShortcuts": true,
+      "deepLinks": [
+        "/structure-workbench",
+        "/database-query",
+        "/explorer",
+        "/homopolymer-property-prediction",
+        "/conditional-generation",
+        "/reverse-design"
+      ],
+      "editorResources": [
+        "http://127.0.0.1:9001/src/components/structure-workbench/loadKetcherRuntime.ts",
+        "http://127.0.0.1:9001/src/components/structure-workbench/KetcherReactRuntime.tsx?t=1789092581807",
+        "http://127.0.0.1:9001/node_modules/.vite/deps/ketcher-react.js?v=9871878f",
+        "http://127.0.0.1:9001/node_modules/.vite/deps/ketcher-standalone.js?v=a04bdc35",
+        "http://127.0.0.1:9001/node_modules/ketcher-react/dist/index.css",
+        "http://127.0.0.1:9001/src/styles/ketcher-native.css"
+      ],
+      "passed": true
+    },
+    "prod": {
+      "reducedMotion": "no-preference",
+      "patch": "nexpoly-3.8.0-r3",
+      "patchHashes": {
+        "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+        "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+        "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+        "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+      },
+      "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+      "paths": [
+        "/database-query",
+        "/explorer",
+        "/homopolymer-property-prediction",
+        "/conditional-generation",
+        "/reverse-design",
+        "/structure-workbench",
+        "/database-query",
+        "/explorer",
+        "/structure-workbench",
+        "/database-query",
+        "/database-query",
+        "/structure-workbench",
+        "/database-query",
+        "/structure-workbench",
+        "/database-query",
+        "/structure-workbench",
+        "/database-query",
+        "/structure-workbench",
+        "/database-query",
+        "/structure-workbench",
+        "/database-query",
+        "/structure-workbench"
+      ],
+      "viewports": [
+        {
+          "width": 390,
+          "height": 844,
+          "editor": {
+            "x": 15,
+            "y": 204,
+            "width": 360,
+            "height": 360
+          },
+          "atomVisible": true,
+          "atomHit": true,
+          "contextMenu": true
+        },
+        {
+          "width": 1024,
+          "height": 768,
+          "editor": {
+            "x": 267,
+            "y": 107,
+            "width": 738,
+            "height": 491.328125
+          },
+          "atomVisible": true,
+          "atomHit": true,
+          "contextMenu": true
+        },
+        {
+          "width": 2560,
+          "height": 1440,
+          "editor": {
+            "x": 684,
+            "y": 151,
+            "width": 1576,
+            "height": 1050
+          },
+          "atomVisible": true,
+          "atomHit": true,
+          "contextMenu": true
+        },
+        {
+          "width": 1440,
+          "height": 900,
+          "editor": {
+            "x": 365.796875,
+            "y": 107,
+            "width": 982,
+            "height": 644
+          },
+          "atomVisible": true,
+          "atomHit": true,
+          "contextMenu": true
+        }
+      ],
+      "errors": [],
+      "renderWarnings": [],
+      "requests3D": [
+        "CCO"
+      ],
+      "missingResources": [],
+      "readyMs": 5458,
+      "engine": "react",
+      "sdk": "3.8.0",
+      "realAtomDrag": true,
+      "layoutRoundTrip": true,
+      "annotationRoundTrip": true,
+      "explicitSync": true,
+      "external3D": true,
+      "failedImageRollback": true,
+      "invalidDraftRetained": true,
+      "navigationFallback": true,
+      "emptyRoundTrip": true,
+      "polymerEndGroups": true,
+      "png": {
+        "size": 1278,
+        "signature": [
+          137,
+          80,
+          78,
+          71,
+          13,
+          10,
+          26,
+          10
+        ]
+      },
+      "externalDftWrite": true,
+      "lifecycle": [
+        {
+          "cycle": 0,
+          "workers": 1,
+          "JSEventListeners": 1716,
+          "Nodes": 3825,
+          "JSHeapUsedSize": 89293992,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 1,
+          "workers": 1,
+          "JSEventListeners": 1732,
+          "Nodes": 3965,
+          "JSHeapUsedSize": 89383400,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 2,
+          "workers": 1,
+          "JSEventListeners": 1716,
+          "Nodes": 3825,
+          "JSHeapUsedSize": 89348032,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 3,
+          "workers": 1,
+          "JSEventListeners": 1732,
+          "Nodes": 3965,
+          "JSHeapUsedSize": 89448664,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 4,
+          "workers": 1,
+          "JSEventListeners": 1716,
+          "Nodes": 3825,
+          "JSHeapUsedSize": 89402140,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 5,
+          "workers": 1,
+          "JSEventListeners": 1732,
+          "Nodes": 3965,
+          "JSHeapUsedSize": 89496540,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 6,
+          "workers": 1,
+          "JSEventListeners": 1716,
+          "Nodes": 3825,
+          "JSHeapUsedSize": 89476152,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 7,
+          "workers": 1,
+          "JSEventListeners": 1732,
+          "Nodes": 3965,
+          "JSHeapUsedSize": 89576908,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 8,
+          "workers": 1,
+          "JSEventListeners": 1716,
+          "Nodes": 3825,
+          "JSHeapUsedSize": 89531228,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 9,
+          "workers": 1,
+          "JSEventListeners": 1732,
+          "Nodes": 3965,
+          "JSHeapUsedSize": 89661608,
+          "retainedEditors": 0
+        },
+        {
+          "cycle": 10,
+          "workers": 1,
+          "JSEventListeners": 1716,
+          "Nodes": 3825,
+          "JSHeapUsedSize": 89621660,
+          "retainedEditors": 0
+        }
+      ],
+      "clipboardShortcuts": true,
+      "deepLinks": [
+        "/structure-workbench",
+        "/database-query",
+        "/explorer",
+        "/homopolymer-property-prediction",
+        "/conditional-generation",
+        "/reverse-design"
+      ],
+      "editorResources": [
+        "http://127.0.0.1:4288/assets/KetcherReactRuntime-DutY0fpi.js",
+        "http://127.0.0.1:4288/assets/KetcherReactRuntime-D1y9KbGV.css"
+      ],
+      "passed": true
+    }
+  },
+  "interactionBrowser": {
+    "dev": {
+      "base": "http://127.0.0.1:9001",
+      "browser": "151.0.7922.34",
+      "errors": [],
+      "expectedFixtureErrors": [],
+      "checks": [
+        {
+          "name": "cold-module-start",
+          "request": {
+            "time": 2294.7000007629395,
+            "phase": "blank"
+          },
+          "worker": {
+            "event": "worker",
+            "time": 3282.5,
+            "module": "structureWorkbench",
+            "phase": "idle"
+          }
+        },
+        {
+          "name": "transition-event-isolation-and-real-hit",
+          "blocked": {
+            "before": 3,
+            "after": 3,
+            "locked": true,
+            "popup": false,
+            "selection": 0,
+            "phase": "entering"
+          }
+        },
+        {
+          "name": "latest-navigation-target",
+          "singleWorker": true
+        },
+        {
+          "name": "reduced-motion"
+        },
+        {
+          "name": "host-input-focus-and-scroll"
+        },
+        {
+          "name": "late-sdk-transport-after-navigation",
+          "singleWorker": true
+        },
+        {
+          "name": "failed-initialization-retry",
+          "singleWorker": true
+        },
+        {
+          "name": "drawer-and-editor-retention",
+          "viewport": {
+            "width": 390,
+            "height": 844
+          },
+          "close": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 362,
+            "drawerTravel": 402,
+            "workspaceFrames": 0,
+            "drawerFrames": 13,
+            "durations": [
+              320
+            ],
+            "editorRetained": true
+          },
+          "open": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 362,
+            "drawerTravel": 402,
+            "workspaceFrames": 0,
+            "drawerFrames": 15,
+            "durations": [
+              400
+            ],
+            "editorRetained": true
+          }
+        },
+        {
+          "name": "drawer-and-editor-retention",
+          "viewport": {
+            "width": 1024,
+            "height": 768
+          },
+          "close": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 740,
+            "drawerTravel": 1036,
+            "workspaceFrames": 0,
+            "drawerFrames": 12,
+            "durations": [
+              320
+            ],
+            "editorRetained": true
+          },
+          "open": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 740,
+            "drawerTravel": 1036,
+            "workspaceFrames": 0,
+            "drawerFrames": 10,
+            "durations": [
+              400
+            ],
+            "editorRetained": true
+          }
+        },
+        {
+          "name": "drawer-and-editor-retention",
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "close": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 984,
+            "drawerTravel": 412,
+            "workspaceFrames": 0,
+            "drawerFrames": 8,
+            "durations": [
+              320
+            ],
+            "editorRetained": true
+          },
+          "open": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 984,
+            "drawerTravel": 412,
+            "workspaceFrames": 0,
+            "drawerFrames": 9,
+            "durations": [
+              400
+            ],
+            "editorRetained": true
+          }
+        },
+        {
+          "name": "drawer-and-editor-retention",
+          "viewport": {
+            "width": 2560,
+            "height": 1440
+          },
+          "close": {
+            "inline": true,
+            "workspaceDelta": 263,
+            "workspaceWidth": 1578,
+            "drawerTravel": 576,
+            "workspaceFrames": 8,
+            "drawerFrames": 8,
+            "durations": [
+              320
+            ],
+            "editorRetained": true
+          },
+          "open": {
+            "inline": true,
+            "workspaceDelta": -263,
+            "workspaceWidth": 1578,
+            "drawerTravel": 576,
+            "workspaceFrames": 8,
+            "drawerFrames": 9,
+            "durations": [
+              400
+            ],
+            "editorRetained": true
+          }
+        }
+      ],
+      "passed": true
+    },
+    "prod": {
+      "base": "http://127.0.0.1:4288",
+      "browser": "151.0.7922.34",
+      "errors": [],
+      "expectedFixtureErrors": [],
+      "checks": [
+        {
+          "name": "cold-module-start",
+          "request": {
+            "time": 1630.7999992370605,
+            "phase": "blank"
+          },
+          "worker": {
+            "event": "worker",
+            "time": 4468.89999961853,
+            "module": "structureWorkbench",
+            "phase": "idle"
+          }
+        },
+        {
+          "name": "transition-event-isolation-and-real-hit",
+          "blocked": {
+            "before": 3,
+            "after": 3,
+            "locked": true,
+            "popup": false,
+            "selection": 0,
+            "phase": "entering"
+          }
+        },
+        {
+          "name": "latest-navigation-target",
+          "singleWorker": true
+        },
+        {
+          "name": "reduced-motion"
+        },
+        {
+          "name": "host-input-focus-and-scroll"
+        },
+        {
+          "name": "late-sdk-transport-after-navigation",
+          "singleWorker": true
+        },
+        {
+          "name": "failed-initialization-retry",
+          "singleWorker": true
+        },
+        {
+          "name": "drawer-and-editor-retention",
+          "viewport": {
+            "width": 390,
+            "height": 844
+          },
+          "close": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 362,
+            "drawerTravel": 402,
+            "workspaceFrames": 0,
+            "drawerFrames": 13,
+            "durations": [
+              320
+            ],
+            "editorRetained": true
+          },
+          "open": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 362,
+            "drawerTravel": 402,
+            "workspaceFrames": 0,
+            "drawerFrames": 16,
+            "durations": [
+              400
+            ],
+            "editorRetained": true
+          }
+        },
+        {
+          "name": "drawer-and-editor-retention",
+          "viewport": {
+            "width": 1024,
+            "height": 768
+          },
+          "close": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 740,
+            "drawerTravel": 1036,
+            "workspaceFrames": 0,
+            "drawerFrames": 8,
+            "durations": [
+              320
+            ],
+            "editorRetained": true
+          },
+          "open": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 740,
+            "drawerTravel": 1036,
+            "workspaceFrames": 0,
+            "drawerFrames": 10,
+            "durations": [
+              400
+            ],
+            "editorRetained": true
+          }
+        },
+        {
+          "name": "drawer-and-editor-retention",
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "close": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 984,
+            "drawerTravel": 412,
+            "workspaceFrames": 0,
+            "drawerFrames": 8,
+            "durations": [
+              320
+            ],
+            "editorRetained": true
+          },
+          "open": {
+            "inline": false,
+            "workspaceDelta": 0,
+            "workspaceWidth": 984,
+            "drawerTravel": 412,
+            "workspaceFrames": 0,
+            "drawerFrames": 14,
+            "durations": [
+              400
+            ],
+            "editorRetained": true
+          }
+        },
+        {
+          "name": "drawer-and-editor-retention",
+          "viewport": {
+            "width": 2560,
+            "height": 1440
+          },
+          "close": {
+            "inline": true,
+            "workspaceDelta": 263,
+            "workspaceWidth": 1578,
+            "drawerTravel": 576,
+            "workspaceFrames": 9,
+            "drawerFrames": 9,
+            "durations": [
+              320
+            ],
+            "editorRetained": true
+          },
+          "open": {
+            "inline": true,
+            "workspaceDelta": -263,
+            "workspaceWidth": 1578,
+            "drawerTravel": 576,
+            "workspaceFrames": 8,
+            "drawerFrames": 8,
+            "durations": [
+              400
+            ],
+            "editorRetained": true
+          }
+        }
+      ],
+      "passed": true
+    }
+  },
+  "loadingRegression": {
+    "dev": {
+      "passed": true,
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": true,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "browser": "151.0.7922.34",
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 0,
+          "p95": 0
+        },
+        "idleMs": {
+          "p50": 1623.7000000000007,
+          "p95": 1755.5
+        },
+        "interactiveMs": {
+          "p50": 1623.7000000000007,
+          "p95": 1755.5
+        },
+        "workersStartedBeforeAnimationEnd": 10,
+        "singleWorkerPerMount": true
+      },
+      "runs": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "afterAnimationMs": 0,
+          "idleMs": 1609.5999999999985,
+          "interactiveMs": 1609.5999999999985,
+          "firstWorkerMs": 659.5999999999985,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "afterAnimationMs": 0,
+          "idleMs": 1740.5999999999985,
+          "interactiveMs": 1740.5999999999985,
+          "firstWorkerMs": 664.2999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "afterAnimationMs": 0,
+          "idleMs": 1709.800000000003,
+          "interactiveMs": 1709.800000000003,
+          "firstWorkerMs": 659.2000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "afterAnimationMs": 0,
+          "idleMs": 1623.7000000000007,
+          "interactiveMs": 1623.7000000000007,
+          "firstWorkerMs": 696.0999999999985,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "afterAnimationMs": 0,
+          "idleMs": 1755.5,
+          "interactiveMs": 1755.5,
+          "firstWorkerMs": 679.7000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "afterAnimationMs": 0,
+          "idleMs": 1639.7999999999993,
+          "interactiveMs": 1639.7999999999993,
+          "firstWorkerMs": 714.8999999999978,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "afterAnimationMs": 0,
+          "idleMs": 1723.5999999999985,
+          "interactiveMs": 1723.5999999999985,
+          "firstWorkerMs": 667.7999999999956,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "structureWorkbench",
+          "afterAnimationMs": 0,
+          "idleMs": 1545.1000000000058,
+          "interactiveMs": 1545.1000000000058,
+          "firstWorkerMs": 632.3000000000029,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "afterAnimationMs": 0,
+          "idleMs": 1478.2000000000044,
+          "interactiveMs": 1478.2000000000044,
+          "firstWorkerMs": 610.9000000000015,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "structureWorkbench",
+          "afterAnimationMs": 0,
+          "idleMs": 1433.199999999997,
+          "interactiveMs": 1433.199999999997,
+          "firstWorkerMs": 592.0999999999985,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "afterAnimationMs": null,
+          "idleMs": 1436.3999999999942,
+          "interactiveMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "afterAnimationMs": 0,
+          "idleMs": 1358.5,
+          "interactiveMs": 1358.5,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "warmups": 6,
+      "rawPath": "/tmp/nexpoly-navigation-fix-walx2ghp/loading/loading-dev.json",
+      "rawSha256": "2443fb0ce4e6b1ba3d76e6f903fd3f85099ec744b7e08b4ee8103c8da884e5aa"
+    },
+    "prod": {
+      "passed": true,
+      "settings": {
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "reducedMotion": "no-preference",
+        "acceptance": true,
+        "overlapExperiment": false,
+        "warmupRounds": 1,
+        "dwellMs": 150,
+        "input": "CCO",
+        "cache": "normal browser HTTP cache, no route interception",
+        "cpuNetworkThrottle": "none"
+      },
+      "browser": "151.0.7922.34",
+      "summary": {
+        "afterAnimationMs": {
+          "p50": 0,
+          "p95": 0
+        },
+        "idleMs": {
+          "p50": 1265.5,
+          "p95": 1294.0999999999985
+        },
+        "interactiveMs": {
+          "p50": 1265.5,
+          "p95": 1294.0999999999985
+        },
+        "workersStartedBeforeAnimationEnd": 10,
+        "singleWorkerPerMount": true
+      },
+      "runs": [
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "afterAnimationMs": 0,
+          "idleMs": 1272.2999999999993,
+          "interactiveMs": 1272.2999999999993,
+          "firstWorkerMs": 558.7999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "explorer",
+          "afterAnimationMs": 0,
+          "idleMs": 1167.5,
+          "interactiveMs": 1167.5,
+          "firstWorkerMs": 518,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "explorer",
+          "target": "homopolymerPrediction",
+          "afterAnimationMs": 0,
+          "idleMs": 1271.5,
+          "interactiveMs": 1271.5,
+          "firstWorkerMs": 533.9000000000015,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "homopolymerPrediction",
+          "target": "conditionalGeneration",
+          "afterAnimationMs": 0,
+          "idleMs": 1265.5,
+          "interactiveMs": 1265.5,
+          "firstWorkerMs": 515.7999999999993,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "conditionalGeneration",
+          "target": "reverseDesign",
+          "afterAnimationMs": 0,
+          "idleMs": 1294.0999999999985,
+          "interactiveMs": 1294.0999999999985,
+          "firstWorkerMs": 520.3999999999978,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "reverseDesign",
+          "target": "structureWorkbench",
+          "afterAnimationMs": 0,
+          "idleMs": 1209.7000000000007,
+          "interactiveMs": 1209.7000000000007,
+          "firstWorkerMs": 513.3999999999978,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "afterAnimationMs": 0,
+          "idleMs": 1220.7999999999993,
+          "interactiveMs": 1220.7999999999993,
+          "firstWorkerMs": 491.7000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "structureWorkbench",
+          "afterAnimationMs": 0,
+          "idleMs": 1205.7000000000007,
+          "interactiveMs": 1205.7000000000007,
+          "firstWorkerMs": 497.7000000000007,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "structureWorkbench",
+          "target": "databaseQuery",
+          "afterAnimationMs": 0,
+          "idleMs": 1268.5999999999985,
+          "interactiveMs": 1268.5999999999985,
+          "firstWorkerMs": 526.5,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "databaseQuery",
+          "target": "structureWorkbench",
+          "afterAnimationMs": 0,
+          "idleMs": 1283.199999999997,
+          "interactiveMs": 1283.199999999997,
+          "firstWorkerMs": 560.8000000000029,
+          "workersCreated": 1,
+          "retainedRoot": false,
+          "exportedSmiles": "CCO"
+        },
+        {
+          "from": "structureWorkbench",
+          "target": "knowledge",
+          "afterAnimationMs": null,
+          "idleMs": 1170.2000000000044,
+          "interactiveMs": null,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": null
+        },
+        {
+          "from": "knowledge",
+          "target": "structureWorkbench",
+          "afterAnimationMs": 0,
+          "idleMs": 1200.800000000003,
+          "interactiveMs": 1200.800000000003,
+          "firstWorkerMs": null,
+          "workersCreated": 0,
+          "retainedRoot": true,
+          "exportedSmiles": "CCO"
+        }
+      ],
+      "warmups": 6,
+      "rawPath": "/tmp/nexpoly-navigation-fix-walx2ghp/loading/loading-prod.json",
+      "rawSha256": "13b7dff8b8c39f50094c85c6e77ff486ce220a3b774fe298afdee510050ce1c4"
+    }
+  },
+  "iframeSmoke": {
+    "engine": "iframe",
+    "errors": [],
+    "nativeRequests": [],
+    "modules": [
+      "databaseQuery",
+      "explorer",
+      "homopolymerPrediction"
+    ],
+    "passed": true
+  },
+  "limits": [
+    "Browser tests use independent local contexts; business actions are fixtures; no production deployment.",
+    "The representative polymer has 72 atoms and one annotation; it is not a reconstruction of the screenshot molecule.",
+    "Loading regression is one warmup round and ten owner switches per mode, not a new three-round matched before/after performance comparison.",
+    "Cold-load absolute timings and cross-machine performance gains are not claimed."
+  ],
+  "rawArtifacts": "/tmp/nexpoly-navigation-fix-walx2ghp"
+}

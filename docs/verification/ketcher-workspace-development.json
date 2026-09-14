@@ -1,0 +1,228 @@
+{
+  "patch": "nexpoly-3.8.0-r3",
+  "patchHashes": {
+    "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+    "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+    "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+    "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+  },
+  "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+  "paths": [
+    "/database-query",
+    "/explorer",
+    "/homopolymer-property-prediction",
+    "/conditional-generation",
+    "/reverse-design",
+    "/structure-workbench",
+    "/database-query",
+    "/explorer",
+    "/structure-workbench",
+    "/database-query",
+    "/database-query",
+    "/structure-workbench",
+    "/database-query",
+    "/structure-workbench",
+    "/database-query",
+    "/structure-workbench",
+    "/database-query",
+    "/structure-workbench",
+    "/database-query",
+    "/structure-workbench",
+    "/database-query",
+    "/structure-workbench"
+  ],
+  "viewports": [
+    {
+      "width": 390,
+      "height": 844,
+      "editor": {
+        "x": 15,
+        "y": 204,
+        "width": 360,
+        "height": 360
+      },
+      "atomVisible": true,
+      "atomHit": true,
+      "contextMenu": true
+    },
+    {
+      "width": 1024,
+      "height": 768,
+      "editor": {
+        "x": 267,
+        "y": 107,
+        "width": 738,
+        "height": 491.328125
+      },
+      "atomVisible": true,
+      "atomHit": true,
+      "contextMenu": true
+    },
+    {
+      "width": 2560,
+      "height": 1440,
+      "editor": {
+        "x": 684,
+        "y": 151,
+        "width": 1576,
+        "height": 1050
+      },
+      "atomVisible": true,
+      "atomHit": true,
+      "contextMenu": true
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "editor": {
+        "x": 365.796875,
+        "y": 107,
+        "width": 982,
+        "height": 644
+      },
+      "atomVisible": true,
+      "atomHit": true,
+      "contextMenu": true
+    }
+  ],
+  "errors": [],
+  "renderWarnings": [],
+  "requests3D": [
+    "CCO"
+  ],
+  "missingResources": [],
+  "readyMs": 4794,
+  "engine": "react",
+  "sdk": "3.8.0",
+  "realAtomDrag": true,
+  "layoutRoundTrip": true,
+  "annotationRoundTrip": true,
+  "explicitSync": true,
+  "external3D": true,
+  "failedImageRollback": true,
+  "invalidDraftRetained": true,
+  "navigationFallback": true,
+  "emptyRoundTrip": true,
+  "polymerEndGroups": true,
+  "png": {
+    "size": 1275,
+    "signature": [
+      137,
+      80,
+      78,
+      71,
+      13,
+      10,
+      26,
+      10
+    ]
+  },
+  "externalDftWrite": true,
+  "lifecycle": [
+    {
+      "cycle": 0,
+      "workers": 1,
+      "JSEventListeners": 1720,
+      "Nodes": 5272,
+      "JSHeapUsedSize": 114247640,
+      "retainedEditors": 0
+    },
+    {
+      "cycle": 1,
+      "workers": 1,
+      "JSEventListeners": 1736,
+      "Nodes": 5412,
+      "JSHeapUsedSize": 114765316,
+      "retainedEditors": 0
+    },
+    {
+      "cycle": 2,
+      "workers": 1,
+      "JSEventListeners": 1720,
+      "Nodes": 5272,
+      "JSHeapUsedSize": 114836424,
+      "retainedEditors": 0
+    },
+    {
+      "cycle": 3,
+      "workers": 1,
+      "JSEventListeners": 1736,
+      "Nodes": 5412,
+      "JSHeapUsedSize": 114772496,
+      "retainedEditors": 0
+    },
+    {
+      "cycle": 4,
+      "workers": 1,
+      "JSEventListeners": 1720,
+      "Nodes": 5272,
+      "JSHeapUsedSize": 114028684,
+      "retainedEditors": 0
+    },
+    {
+      "cycle": 5,
+      "workers": 1,
+      "JSEventListeners": 1736,
+      "Nodes": 5412,
+      "JSHeapUsedSize": 115322224,
+      "retainedEditors": 0
+    },
+    {
+      "cycle": 6,
+      "workers": 1,
+      "JSEventListeners": 1720,
+      "Nodes": 5272,
+      "JSHeapUsedSize": 115107032,
+      "retainedEditors": 0
+    },
+    {
+      "cycle": 7,
+      "workers": 1,
+      "JSEventListeners": 1736,
+      "Nodes": 5412,
+      "JSHeapUsedSize": 115379356,
+      "retainedEditors": 0
+    },
+    {
+      "cycle": 8,
+      "workers": 1,
+      "JSEventListeners": 1720,
+      "Nodes": 5272,
+      "JSHeapUsedSize": 115844384,
+      "retainedEditors": 0
+    },
+    {
+      "cycle": 9,
+      "workers": 1,
+      "JSEventListeners": 1736,
+      "Nodes": 5412,
+      "JSHeapUsedSize": 116099056,
+      "retainedEditors": 0
+    },
+    {
+      "cycle": 10,
+      "workers": 1,
+      "JSEventListeners": 1716,
+      "Nodes": 5272,
+      "JSHeapUsedSize": 113339060,
+      "retainedEditors": 0
+    }
+  ],
+  "clipboardShortcuts": true,
+  "deepLinks": [
+    "/structure-workbench",
+    "/database-query",
+    "/explorer",
+    "/homopolymer-property-prediction",
+    "/conditional-generation",
+    "/reverse-design"
+  ],
+  "editorResources": [
+    "http://127.0.0.1:5280/src/components/structure-workbench/KetcherReactRuntime.tsx",
+    "http://127.0.0.1:5280/node_modules/.vite/deps/ketcher-react.js?v=41402b08",
+    "http://127.0.0.1:5280/node_modules/.vite/deps/ketcher-standalone.js?v=ca7b6fa4",
+    "http://127.0.0.1:5280/node_modules/ketcher-react/dist/index.css",
+    "http://127.0.0.1:5280/src/styles/ketcher-native.css"
+  ],
+  "passed": true
+}

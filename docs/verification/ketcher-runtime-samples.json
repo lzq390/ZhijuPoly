@@ -1,0 +1,44 @@
+[
+  {
+    "engine": "react",
+    "sdk": "3.8.0",
+    "patch": "nexpoly-3.8.0-r3",
+    "patchHashes": {
+      "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+      "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+      "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+      "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+    },
+    "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+    "readyMs": 5579,
+    "smiles": "CCO",
+    "workers": 1,
+    "JSEventListeners": 803,
+    "Nodes": 1512,
+    "JSHeapUsedSize": 68413092,
+    "errors": [],
+    "missing": [],
+    "passed": true
+  },
+  {
+    "engine": "iframe",
+    "sdk": "3.7.0",
+    "patch": "nexpoly-3.8.0-r3",
+    "patchHashes": {
+      "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
+      "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
+      "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
+      "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+    },
+    "lockSha256": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+    "readyMs": 5618,
+    "smiles": "CCO",
+    "workers": 1,
+    "JSEventListeners": 874,
+    "Nodes": 1439,
+    "JSHeapUsedSize": 60519372,
+    "errors": [],
+    "missing": [],
+    "passed": true
+  }
+]

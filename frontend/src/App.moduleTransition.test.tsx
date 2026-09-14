@@ -1,13 +1,22 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { preloadPage } from "./pages";
+
+// These cases exercise routing after transport; cold loading is covered separately.
+beforeAll(async () => {
+  await Promise.all(["structureWorkbench", "knowledge", "databaseFilter", "monomerMdSimulation"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
+});
 
 const mocks = vi.hoisted(() => ({ guard: vi.fn(), knowledgeRender: vi.fn(), jobUpdate: null as ((id: string) => void) | null }));
 vi.mock("./components/StructureWorkbenchPage", async () => {
   const { forwardRef, useImperativeHandle } = await import("react");
   return { StructureWorkbenchPage: forwardRef(function Workbench({ onOpenModule }: { onOpenModule: (id: string) => void }, ref) {
-    useImperativeHandle(ref, () => ({ syncBeforeLeave: mocks.guard }));
+    useImperativeHandle(ref, () => ({ syncBeforeLeave: async (signal?: AbortSignal) => {
+      const result = await mocks.guard(signal);
+      return result ?? { status: "saved" };
+    } }));
     return <section><h1>结构工作台</h1><iframe title="transition retained canvas" /><button onClick={() => onOpenModule("knowledge")}>内部打开知识检索</button></section>;
   }) };
 });
@@ -26,7 +35,7 @@ let original: PropertyDescriptor | undefined;
 beforeEach(() => {
   vi.useFakeTimers(); animations = [];
   window.history.replaceState({}, "", "/structure-workbench");
-  mocks.guard.mockReset().mockResolvedValue(undefined);
+  mocks.guard.mockReset().mockResolvedValue({ status: "saved" });
   mocks.knowledgeRender.mockClear();
   mocks.jobUpdate = null;
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
@@ -54,6 +63,41 @@ const discover = () => {
 };
 
 describe("App serial module integration", () => {
+  it("cancels an old save without a delayed recovery notice and starts a fresh guard on the next navigation", async () => {
+    let release!: (result: { status: string }) => void;
+    mocks.guard.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const view = render(<App />); discover();
+    fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
+    const firstSignal = mocks.guard.mock.calls[0][0] as AbortSignal;
+    fireEvent.click(screen.getByRole("button", { name: "结构工作台" }));
+    expect(firstSignal.aborted).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1900); });
+    expect(window.location.pathname).toBe("/structure-workbench");
+    expect(view.container.querySelector(".np-structure-notice")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
+    await act(async () => {});
+    expect(mocks.guard).toHaveBeenCalledTimes(2);
+    expect(mocks.guard.mock.calls[1][0]).not.toBe(firstSignal);
+    await act(async () => release({ status: "failed" }));
+    expect(view.container.querySelector(".np-structure-notice")).toBeNull();
+    end();
+    expect(window.location.pathname).toBe("/database-filter");
+  });
+
+  it.each([false, true])("recovers at the deadline before routing even with reduced motion = %s", async reduced => {
+    vi.stubGlobal("matchMedia", () => ({ matches: reduced, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    mocks.guard.mockImplementationOnce(() => new Promise(() => {}));
+    const view = render(<App />); discover();
+    fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1499); });
+    expect(window.location.pathname).toBe("/structure-workbench");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect((mocks.guard.mock.calls[0][0] as AbortSignal).reason.name).toBe("TimeoutError");
+    expect(view.container.querySelector(".np-structure-notice")?.textContent).toContain("暂无可恢复");
+    if (!reduced) end();
+    expect(window.location.pathname).toBe("/database-filter");
+  });
+
   it("guards internal navigation once, commits URL/children only after exit and retains the canvas", async () => {
     const view = render(<App />);
     const iframe = screen.getByTitle("transition retained canvas");

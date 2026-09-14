@@ -1,0 +1,2182 @@
+{
+  "measuredAt": "2026-09-11",
+  "method": {
+    "browser": "Chrome for Testing 151.0.7922.34",
+    "viewport": [
+      1440,
+      900
+    ],
+    "transport": "server-local loopback HTTP; no CPU or network throttling",
+    "motion": "no-preference; configured exit400ms/gap200ms/entry400ms; actual phase completion observed",
+    "structure": "CCO entered via public input; proxy is SDK struct().atoms.size === 3 plus sized SVG, not pixel or atom/bond identity verification",
+    "sampling": "requestAnimationFrame; only state changes logged",
+    "ready": "native shared workspace ready plus 3 atoms and sized SVG; legacy has no equivalent host status so uses 3 atoms and sized SVG",
+    "cache": "fresh browser context per environment; initial load and CCO entry excluded; normal HTTP caching enabled; no route interception",
+    "samples": "10 canvas owner transitions across six pages, then workbench/knowledge retention roundtrip",
+    "dwellMs": 150,
+    "limitations": [
+      "Server-local controlled sample, not measurements on the user workstation or WAN.",
+      "Same browser/instrumentation but environment, SDK and source versions differ between live9000 and9001.",
+      "Runs are sequential, not randomized; ordinary machine load and browser sampling affect exact timings.",
+      "Native host-ready does not assert that every asynchronous chemistry API has already completed.",
+      "Counterfactual modifies only a disposable browser closest query; product source and deployment unchanged.",
+      "Counterfactual moves main-thread initialization into animation; actual animation time and long tasks must also be considered.",
+      "Legacy hook isEditorReady/buttons are not measured; navigationAndContentReadyMs is an observed model/status proxy, not a fully equivalent interactivity guarantee across engines."
+    ]
+  },
+  "environments": [
+    {
+      "label": "production-iframe",
+      "base": "http://127.0.0.1:9000",
+      "recordedAt": "2026-09-11T01:29:01.949Z",
+      "sdk": "3.7.0",
+      "rawArtifact": "/tmp/nexpoly-editor-loading-analysis/production-iframe.json",
+      "rawSha256": "9ce56f47c0f1757979ea352d27e533fefd0f8b204eee75d09980daa6487e410d",
+      "statistics": {
+        "mountMs": {
+          "median": 636.5,
+          "min": 604.5,
+          "max": 806
+        },
+        "animationEndMs": {
+          "median": 1420.8,
+          "min": 1339.3,
+          "max": 1676.1
+        },
+        "workerStartMs": {
+          "median": 842.4,
+          "min": 784.4,
+          "max": 1155.4
+        },
+        "sdkCanvasMs": {
+          "median": 1361.4,
+          "min": 1132.2,
+          "max": 1654.4
+        },
+        "atomsRestoredMs": {
+          "median": 1694.5,
+          "min": 1588.4,
+          "max": 1971.7
+        },
+        "workerRelativeToAnimationMs": {
+          "median": -569.5,
+          "min": -646.4,
+          "max": -509.5
+        },
+        "canvasRelativeToAnimationMs": {
+          "median": -63.8,
+          "min": -207.1,
+          "max": -21.7
+        },
+        "atomsRelativeToAnimationMs": {
+          "median": 246.4,
+          "min": 216.8,
+          "max": 357.4
+        },
+        "navigationAndContentReadyMs": {
+          "median": 1694.5,
+          "min": 1588.4,
+          "max": 1971.7
+        },
+        "guardBeforeExitMs": {
+          "median": 110.8,
+          "min": 46.7,
+          "max": 234.3
+        },
+        "longTaskTotalMs": {
+          "median": 630.0,
+          "min": 463,
+          "max": 882
+        },
+        "longTaskMaxMs": {
+          "median": 257.5,
+          "min": 184,
+          "max": 323
+        }
+      },
+      "samples": [
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 806,
+          "animationEndMs": 1676.1,
+          "workerStartMs": 1155.4,
+          "sdkCanvasMs": 1654.4,
+          "atomsRestoredMs": 1971.7,
+          "workerRelativeToAnimationMs": -520.7,
+          "canvasRelativeToAnimationMs": -21.7,
+          "atomsRelativeToAnimationMs": 295.6,
+          "navigationAndContentReadyMs": 1971.7,
+          "guardBeforeExitMs": 234.3,
+          "longTaskTotalMs": 716,
+          "longTaskMaxMs": 267,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "explorer",
+          "mountMs": 604.5,
+          "animationEndMs": 1415.7,
+          "workerStartMs": 821.7,
+          "sdkCanvasMs": 1389.9,
+          "atomsRestoredMs": 1652.2,
+          "workerRelativeToAnimationMs": -594.0,
+          "canvasRelativeToAnimationMs": -25.8,
+          "atomsRelativeToAnimationMs": 236.5,
+          "navigationAndContentReadyMs": 1652.2,
+          "guardBeforeExitMs": 111.0,
+          "longTaskTotalMs": 606,
+          "longTaskMaxMs": 256,
+          "workersCreated": 1
+        },
+        {
+          "from": "explorer",
+          "to": "homopolymerPrediction",
+          "mountMs": 657.2,
+          "animationEndMs": 1568,
+          "workerStartMs": 921.6,
+          "sdkCanvasMs": 1541.3,
+          "atomsRestoredMs": 1811.7,
+          "workerRelativeToAnimationMs": -646.4,
+          "canvasRelativeToAnimationMs": -26.7,
+          "atomsRelativeToAnimationMs": 243.7,
+          "navigationAndContentReadyMs": 1811.7,
+          "guardBeforeExitMs": 99.5,
+          "longTaskTotalMs": 882,
+          "longTaskMaxMs": 323,
+          "workersCreated": 1
+        },
+        {
+          "from": "homopolymerPrediction",
+          "to": "conditionalGeneration",
+          "mountMs": 605.5,
+          "animationEndMs": 1339.3,
+          "workerStartMs": 784.4,
+          "sdkCanvasMs": 1132.2,
+          "atomsRestoredMs": 1588.4,
+          "workerRelativeToAnimationMs": -554.9,
+          "canvasRelativeToAnimationMs": -207.1,
+          "atomsRelativeToAnimationMs": 249.1,
+          "navigationAndContentReadyMs": 1588.4,
+          "guardBeforeExitMs": 67.3,
+          "longTaskTotalMs": 463,
+          "longTaskMaxMs": 184,
+          "workersCreated": 1
+        },
+        {
+          "from": "conditionalGeneration",
+          "to": "reverseDesign",
+          "mountMs": 608.7,
+          "animationEndMs": 1425.8,
+          "workerStartMs": 815.3,
+          "sdkCanvasMs": 1358.4,
+          "atomsRestoredMs": 1642.6,
+          "workerRelativeToAnimationMs": -610.5,
+          "canvasRelativeToAnimationMs": -67.4,
+          "atomsRelativeToAnimationMs": 216.8,
+          "navigationAndContentReadyMs": 1642.6,
+          "guardBeforeExitMs": 46.7,
+          "longTaskTotalMs": 674,
+          "longTaskMaxMs": 236,
+          "workersCreated": 1
+        },
+        {
+          "from": "reverseDesign",
+          "to": "structureWorkbench",
+          "mountMs": 665.1,
+          "animationEndMs": 1491.4,
+          "workerStartMs": 908.6,
+          "sdkCanvasMs": 1431.2,
+          "atomsRestoredMs": 1719.5,
+          "workerRelativeToAnimationMs": -582.8,
+          "canvasRelativeToAnimationMs": -60.2,
+          "atomsRelativeToAnimationMs": 228.1,
+          "navigationAndContentReadyMs": 1719.5,
+          "guardBeforeExitMs": 110.6,
+          "longTaskTotalMs": 652,
+          "longTaskMaxMs": 252,
+          "workersCreated": 1
+        },
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 633.2,
+          "animationEndMs": 1387,
+          "workerStartMs": 877.5,
+          "sdkCanvasMs": 1364.4,
+          "atomsRestoredMs": 1735.2,
+          "workerRelativeToAnimationMs": -509.5,
+          "canvasRelativeToAnimationMs": -22.6,
+          "atomsRelativeToAnimationMs": 348.2,
+          "navigationAndContentReadyMs": 1735.2,
+          "guardBeforeExitMs": 110.4,
+          "longTaskTotalMs": 659,
+          "longTaskMaxMs": 264,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "structureWorkbench",
+          "mountMs": 645.3,
+          "animationEndMs": 1381,
+          "workerStartMs": 860.1,
+          "sdkCanvasMs": 1313.1,
+          "atomsRestoredMs": 1738.4,
+          "workerRelativeToAnimationMs": -520.9,
+          "canvasRelativeToAnimationMs": -67.9,
+          "atomsRelativeToAnimationMs": 357.4,
+          "navigationAndContentReadyMs": 1738.4,
+          "guardBeforeExitMs": 118.3,
+          "longTaskTotalMs": 608,
+          "longTaskMaxMs": 259,
+          "workersCreated": 1
+        },
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 639.7,
+          "animationEndMs": 1380.9,
+          "workerStartMs": 824.7,
+          "sdkCanvasMs": 1309.9,
+          "atomsRestoredMs": 1642.2,
+          "workerRelativeToAnimationMs": -556.2,
+          "canvasRelativeToAnimationMs": -71.0,
+          "atomsRelativeToAnimationMs": 261.3,
+          "navigationAndContentReadyMs": 1642.2,
+          "guardBeforeExitMs": 129.1,
+          "longTaskTotalMs": 542,
+          "longTaskMaxMs": 252,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "structureWorkbench",
+          "mountMs": 608.5,
+          "animationEndMs": 1436.5,
+          "workerStartMs": 823.3,
+          "sdkCanvasMs": 1355.9,
+          "atomsRestoredMs": 1669.6,
+          "workerRelativeToAnimationMs": -613.2,
+          "canvasRelativeToAnimationMs": -80.6,
+          "atomsRelativeToAnimationMs": 233.1,
+          "navigationAndContentReadyMs": 1669.6,
+          "guardBeforeExitMs": 125.9,
+          "longTaskTotalMs": 563,
+          "longTaskMaxMs": 262,
+          "workersCreated": 1
+        }
+      ],
+      "representativeTrace": [
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "databaseQuery",
+          "phase": "guarding",
+          "locked": null,
+          "root": 4,
+          "iframe": 5,
+          "sdk": 6,
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 37.6
+        },
+        {
+          "type": "animation_start",
+          "frame": "top",
+          "name": "np-module-exit",
+          "module": "databaseQuery",
+          "duration": 400,
+          "relativeToClickMs": 111.0
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "databaseQuery",
+          "phase": "exiting",
+          "locked": "true",
+          "root": 4,
+          "iframe": 5,
+          "sdk": 6,
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 119.1
+        },
+        {
+          "type": "animation_finish",
+          "frame": "top",
+          "name": "np-module-exit",
+          "module": "databaseQuery",
+          "relativeToClickMs": 560.9
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "blank",
+          "locked": "true",
+          "root": 7,
+          "iframe": 8,
+          "sdk": null,
+          "sized": true,
+          "atoms": null,
+          "svg": false,
+          "relativeToClickMs": 604.5
+        },
+        {
+          "type": "worker_create",
+          "frame": "/ketcher/index.html",
+          "id": 3,
+          "relativeToClickMs": 821.7
+        },
+        {
+          "type": "animation_start",
+          "frame": "top",
+          "name": "np-module-enter",
+          "module": "explorer",
+          "duration": 400,
+          "relativeToClickMs": 918.8
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "entering",
+          "locked": "true",
+          "root": 7,
+          "iframe": 8,
+          "sdk": null,
+          "sized": true,
+          "atoms": null,
+          "svg": false,
+          "relativeToClickMs": 921.3
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "entering",
+          "locked": "true",
+          "root": 7,
+          "iframe": 8,
+          "sdk": 9,
+          "sized": true,
+          "atoms": 0,
+          "svg": true,
+          "relativeToClickMs": 1389.9
+        },
+        {
+          "type": "animation_finish",
+          "frame": "top",
+          "name": "np-module-enter",
+          "module": "explorer",
+          "relativeToClickMs": 1411.6
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "idle",
+          "locked": null,
+          "root": 7,
+          "iframe": 8,
+          "sdk": 9,
+          "sized": true,
+          "atoms": 0,
+          "svg": true,
+          "relativeToClickMs": 1415.7
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "idle",
+          "locked": null,
+          "root": 7,
+          "iframe": 8,
+          "sdk": 9,
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 1652.2
+        }
+      ],
+      "sdkResourceResponsesDuringWarmTransitions": 80,
+      "errors": [],
+      "retainedRoundtrip": [
+        {
+          "from": "structureWorkbench",
+          "to": "knowledge",
+          "retainedRoot": true,
+          "workersCreated": 0,
+          "afterAnimationMs": null
+        },
+        {
+          "from": "knowledge",
+          "to": "structureWorkbench",
+          "retainedRoot": true,
+          "workersCreated": 0,
+          "afterAnimationMs": 0
+        }
+      ]
+    },
+    {
+      "label": "development-react",
+      "base": "http://127.0.0.1:9001",
+      "recordedAt": "2026-09-11T01:29:56.838Z",
+      "sdk": "3.8.0",
+      "rawArtifact": "/tmp/nexpoly-editor-loading-analysis/development-react.json",
+      "rawSha256": "bb6f8103a3400eb3adb77f2fe7d37d5bcc8b4b03e18fba30eee967edc918c329",
+      "statistics": {
+        "mountMs": {
+          "median": 1092.2,
+          "min": 1040.6,
+          "max": 1176.4
+        },
+        "animationEndMs": {
+          "median": 1829.4,
+          "min": 1770.7,
+          "max": 1904.4
+        },
+        "workerStartMs": {
+          "median": 1838.5,
+          "min": 1779,
+          "max": 1952.8
+        },
+        "sdkCanvasMs": {
+          "median": 1970.2,
+          "min": 1903.2,
+          "max": 2083.7
+        },
+        "atomsRestoredMs": {
+          "median": 2363.9,
+          "min": 2255.7,
+          "max": 2456.1
+        },
+        "hostReadyMs": {
+          "median": 2639.8,
+          "min": 2542.9,
+          "max": 2798
+        },
+        "workerRelativeToAnimationMs": {
+          "median": 8.4,
+          "min": 5.7,
+          "max": 80.8
+        },
+        "canvasRelativeToAnimationMs": {
+          "median": 139.3,
+          "min": 125.7,
+          "max": 211.7
+        },
+        "atomsRelativeToAnimationMs": {
+          "median": 517.2,
+          "min": 463.2,
+          "max": 573.0
+        },
+        "loadingAfterAnimationMs": {
+          "median": 794.7,
+          "min": 724.3,
+          "max": 914.9
+        },
+        "navigationAndContentReadyMs": {
+          "median": 2639.8,
+          "min": 2542.9,
+          "max": 2798
+        },
+        "guardBeforeExitMs": {
+          "median": 479.4,
+          "min": 411.6,
+          "max": 549.2
+        },
+        "longTaskTotalMs": {
+          "median": 997.0,
+          "min": 862,
+          "max": 1215
+        },
+        "longTaskMaxMs": {
+          "median": 354.5,
+          "min": 321,
+          "max": 443
+        }
+      },
+      "samples": [
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 1074.3,
+          "animationEndMs": 1823.3,
+          "workerStartMs": 1832.4,
+          "sdkCanvasMs": 1965.9,
+          "atomsRestoredMs": 2352.6,
+          "hostReadyMs": 2581.7,
+          "workerRelativeToAnimationMs": 9.1,
+          "canvasRelativeToAnimationMs": 142.6,
+          "atomsRelativeToAnimationMs": 529.3,
+          "loadingAfterAnimationMs": 758.4,
+          "navigationAndContentReadyMs": 2581.7,
+          "guardBeforeExitMs": 418.9,
+          "longTaskTotalMs": 983,
+          "longTaskMaxMs": 383,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "explorer",
+          "mountMs": 1099.3,
+          "animationEndMs": 1835.6,
+          "workerStartMs": 1844.6,
+          "sdkCanvasMs": 1973.2,
+          "atomsRestoredMs": 2375.2,
+          "hostReadyMs": 2667.2,
+          "workerRelativeToAnimationMs": 9.0,
+          "canvasRelativeToAnimationMs": 137.6,
+          "atomsRelativeToAnimationMs": 539.6,
+          "loadingAfterAnimationMs": 831.6,
+          "navigationAndContentReadyMs": 2667.2,
+          "guardBeforeExitMs": 479.0,
+          "longTaskTotalMs": 1069,
+          "longTaskMaxMs": 399,
+          "workersCreated": 1
+        },
+        {
+          "from": "explorer",
+          "to": "homopolymerPrediction",
+          "mountMs": 1176.4,
+          "animationEndMs": 1903.9,
+          "workerStartMs": 1912.3,
+          "sdkCanvasMs": 2034.9,
+          "atomsRestoredMs": 2384.9,
+          "hostReadyMs": 2645.7,
+          "workerRelativeToAnimationMs": 8.4,
+          "canvasRelativeToAnimationMs": 131.0,
+          "atomsRelativeToAnimationMs": 481.0,
+          "loadingAfterAnimationMs": 741.8,
+          "navigationAndContentReadyMs": 2645.7,
+          "guardBeforeExitMs": 517.9,
+          "longTaskTotalMs": 1005,
+          "longTaskMaxMs": 347,
+          "workersCreated": 1
+        },
+        {
+          "from": "homopolymerPrediction",
+          "to": "conditionalGeneration",
+          "mountMs": 1118.3,
+          "animationEndMs": 1872,
+          "workerStartMs": 1952.8,
+          "sdkCanvasMs": 2083.7,
+          "atomsRestoredMs": 2438.9,
+          "hostReadyMs": 2649.2,
+          "workerRelativeToAnimationMs": 80.8,
+          "canvasRelativeToAnimationMs": 211.7,
+          "atomsRelativeToAnimationMs": 566.9,
+          "loadingAfterAnimationMs": 777.2,
+          "navigationAndContentReadyMs": 2649.2,
+          "guardBeforeExitMs": 498.2,
+          "longTaskTotalMs": 950,
+          "longTaskMaxMs": 352,
+          "workersCreated": 1
+        },
+        {
+          "from": "conditionalGeneration",
+          "to": "reverseDesign",
+          "mountMs": 1164.3,
+          "animationEndMs": 1904.4,
+          "workerStartMs": 1914.3,
+          "sdkCanvasMs": 2045.5,
+          "atomsRestoredMs": 2400.1,
+          "hostReadyMs": 2652.7,
+          "workerRelativeToAnimationMs": 9.9,
+          "canvasRelativeToAnimationMs": 141.1,
+          "atomsRelativeToAnimationMs": 495.7,
+          "loadingAfterAnimationMs": 748.3,
+          "navigationAndContentReadyMs": 2652.7,
+          "guardBeforeExitMs": 519.3,
+          "longTaskTotalMs": 988,
+          "longTaskMaxMs": 351,
+          "workersCreated": 1
+        },
+        {
+          "from": "reverseDesign",
+          "to": "structureWorkbench",
+          "mountMs": 1048.3,
+          "animationEndMs": 1797.2,
+          "workerStartMs": 1803.7,
+          "sdkCanvasMs": 1941.9,
+          "atomsRestoredMs": 2302.3,
+          "hostReadyMs": 2634,
+          "workerRelativeToAnimationMs": 6.5,
+          "canvasRelativeToAnimationMs": 144.7,
+          "atomsRelativeToAnimationMs": 505.1,
+          "loadingAfterAnimationMs": 836.8,
+          "navigationAndContentReadyMs": 2634,
+          "guardBeforeExitMs": 467.2,
+          "longTaskTotalMs": 989,
+          "longTaskMaxMs": 357,
+          "workersCreated": 1
+        },
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 1047.9,
+          "animationEndMs": 1792.5,
+          "workerStartMs": 1798.2,
+          "sdkCanvasMs": 1918.2,
+          "atomsRestoredMs": 2255.7,
+          "hostReadyMs": 2610.8,
+          "workerRelativeToAnimationMs": 5.7,
+          "canvasRelativeToAnimationMs": 125.7,
+          "atomsRelativeToAnimationMs": 463.2,
+          "loadingAfterAnimationMs": 818.3,
+          "navigationAndContentReadyMs": 2610.8,
+          "guardBeforeExitMs": 414.9,
+          "longTaskTotalMs": 1133,
+          "longTaskMaxMs": 335,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "structureWorkbench",
+          "mountMs": 1040.6,
+          "animationEndMs": 1770.7,
+          "workerStartMs": 1779,
+          "sdkCanvasMs": 1903.2,
+          "atomsRestoredMs": 2313.9,
+          "hostReadyMs": 2582.8,
+          "workerRelativeToAnimationMs": 8.3,
+          "canvasRelativeToAnimationMs": 132.5,
+          "atomsRelativeToAnimationMs": 543.2,
+          "loadingAfterAnimationMs": 812.1,
+          "navigationAndContentReadyMs": 2582.8,
+          "guardBeforeExitMs": 411.6,
+          "longTaskTotalMs": 1024,
+          "longTaskMaxMs": 408,
+          "workersCreated": 1
+        },
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 1143.4,
+          "animationEndMs": 1883.1,
+          "workerStartMs": 1890.3,
+          "sdkCanvasMs": 2008.8,
+          "atomsRestoredMs": 2456.1,
+          "hostReadyMs": 2798,
+          "workerRelativeToAnimationMs": 7.2,
+          "canvasRelativeToAnimationMs": 125.7,
+          "atomsRelativeToAnimationMs": 573.0,
+          "loadingAfterAnimationMs": 914.9,
+          "navigationAndContentReadyMs": 2798,
+          "guardBeforeExitMs": 549.2,
+          "longTaskTotalMs": 1215,
+          "longTaskMaxMs": 443,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "structureWorkbench",
+          "mountMs": 1085.2,
+          "animationEndMs": 1818.6,
+          "workerStartMs": 1825.8,
+          "sdkCanvasMs": 1967.2,
+          "atomsRestoredMs": 2290.5,
+          "hostReadyMs": 2542.9,
+          "workerRelativeToAnimationMs": 7.2,
+          "canvasRelativeToAnimationMs": 148.6,
+          "atomsRelativeToAnimationMs": 471.9,
+          "loadingAfterAnimationMs": 724.3,
+          "navigationAndContentReadyMs": 2542.9,
+          "guardBeforeExitMs": 479.9,
+          "longTaskTotalMs": 862,
+          "longTaskMaxMs": 321,
+          "workersCreated": 1
+        }
+      ],
+      "representativeTrace": [
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "databaseQuery",
+          "phase": "guarding",
+          "locked": null,
+          "root": 3,
+          "iframe": null,
+          "sdk": 4,
+          "status": "ready",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 41.5
+        },
+        {
+          "type": "animation_start",
+          "frame": "top",
+          "name": "np-module-exit",
+          "module": "databaseQuery",
+          "duration": 400,
+          "relativeToClickMs": 479.0
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "databaseQuery",
+          "phase": "exiting",
+          "locked": "true",
+          "root": 3,
+          "iframe": null,
+          "sdk": 4,
+          "status": "ready",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 489.9
+        },
+        {
+          "type": "animation_finish",
+          "frame": "top",
+          "name": "np-module-exit",
+          "module": "databaseQuery",
+          "relativeToClickMs": 970.9
+        },
+        {
+          "type": "worker_terminate",
+          "frame": "top",
+          "id": 17,
+          "relativeToClickMs": 1051.1
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "blank",
+          "locked": "true",
+          "root": 5,
+          "iframe": null,
+          "sdk": null,
+          "status": "loading",
+          "sized": true,
+          "atoms": null,
+          "svg": false,
+          "relativeToClickMs": 1099.3
+        },
+        {
+          "type": "animation_start",
+          "frame": "top",
+          "name": "np-module-enter",
+          "module": "explorer",
+          "duration": 400,
+          "relativeToClickMs": 1303.4
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "entering",
+          "locked": "true",
+          "root": 5,
+          "iframe": null,
+          "sdk": null,
+          "status": "loading",
+          "sized": true,
+          "atoms": null,
+          "svg": false,
+          "relativeToClickMs": 1326.8
+        },
+        {
+          "type": "animation_finish",
+          "frame": "top",
+          "name": "np-module-enter",
+          "module": "explorer",
+          "relativeToClickMs": 1804.1
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "idle",
+          "locked": null,
+          "root": 5,
+          "iframe": null,
+          "sdk": null,
+          "status": "loading",
+          "sized": true,
+          "atoms": null,
+          "svg": false,
+          "relativeToClickMs": 1835.6
+        },
+        {
+          "type": "worker_create",
+          "frame": "top",
+          "id": 21,
+          "relativeToClickMs": 1844.6
+        },
+        {
+          "type": "sdk_available",
+          "frame": "top",
+          "relativeToClickMs": 1973.1
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "idle",
+          "locked": null,
+          "root": 5,
+          "iframe": null,
+          "sdk": 6,
+          "status": "loading",
+          "sized": true,
+          "atoms": 0,
+          "svg": true,
+          "relativeToClickMs": 1973.2
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "idle",
+          "locked": null,
+          "root": 5,
+          "iframe": null,
+          "sdk": 6,
+          "status": "loading",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 2375.2
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "idle",
+          "locked": null,
+          "root": 5,
+          "iframe": null,
+          "sdk": 6,
+          "status": "ready",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 2667.2
+        }
+      ],
+      "sdkResourceResponsesDuringWarmTransitions": 0,
+      "errors": [],
+      "retainedRoundtrip": [
+        {
+          "from": "structureWorkbench",
+          "to": "knowledge",
+          "retainedRoot": true,
+          "workersCreated": 0,
+          "afterAnimationMs": null
+        },
+        {
+          "from": "knowledge",
+          "to": "structureWorkbench",
+          "retainedRoot": true,
+          "workersCreated": 0,
+          "afterAnimationMs": 0
+        }
+      ]
+    },
+    {
+      "label": "production-build-react-control",
+      "base": "http://127.0.0.1:4288",
+      "recordedAt": "2026-09-11T01:34:13.920Z",
+      "sdk": "3.8.0",
+      "rawArtifact": "/tmp/nexpoly-editor-loading-analysis/production-build-react-control.json",
+      "rawSha256": "c52283439291e78d8fadacc0ccffadde55ddfb3dc98431df1f18a31ed14342d3",
+      "statistics": {
+        "mountMs": {
+          "median": 896.0,
+          "min": 835,
+          "max": 1117.5
+        },
+        "animationEndMs": {
+          "median": 1584.7,
+          "min": 1535.5,
+          "max": 1816.5
+        },
+        "workerStartMs": {
+          "median": 1592.2,
+          "min": 1540.1,
+          "max": 1821.2
+        },
+        "sdkCanvasMs": {
+          "median": 1674.0,
+          "min": 1625.7,
+          "max": 1910.2
+        },
+        "atomsRestoredMs": {
+          "median": 1762.3,
+          "min": 1716.1,
+          "max": 1993.2
+        },
+        "hostReadyMs": {
+          "median": 1960.4,
+          "min": 1891.3,
+          "max": 2189
+        },
+        "workerRelativeToAnimationMs": {
+          "median": 4.7,
+          "min": 4.1,
+          "max": 12.0
+        },
+        "canvasRelativeToAnimationMs": {
+          "median": 93.3,
+          "min": 71.6,
+          "max": 116.1
+        },
+        "atomsRelativeToAnimationMs": {
+          "median": 177.4,
+          "min": 152.7,
+          "max": 211.6
+        },
+        "loadingAfterAnimationMs": {
+          "median": 372.1,
+          "min": 348.4,
+          "max": 412.1
+        },
+        "navigationAndContentReadyMs": {
+          "median": 1960.4,
+          "min": 1891.3,
+          "max": 2189
+        },
+        "guardBeforeExitMs": {
+          "median": 370.9,
+          "min": 279.7,
+          "max": 563.0
+        },
+        "longTaskTotalMs": {
+          "median": 271.0,
+          "min": 215,
+          "max": 346
+        },
+        "longTaskMaxMs": {
+          "median": 87.0,
+          "min": 77,
+          "max": 110
+        }
+      },
+      "samples": [
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 835,
+          "animationEndMs": 1545.2,
+          "workerStartMs": 1550.2,
+          "sdkCanvasMs": 1661.3,
+          "atomsRestoredMs": 1756.8,
+          "hostReadyMs": 1957.3,
+          "workerRelativeToAnimationMs": 5.0,
+          "canvasRelativeToAnimationMs": 116.1,
+          "atomsRelativeToAnimationMs": 211.6,
+          "loadingAfterAnimationMs": 412.1,
+          "navigationAndContentReadyMs": 1957.3,
+          "guardBeforeExitMs": 279.7,
+          "longTaskTotalMs": 346,
+          "longTaskMaxMs": 110,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "explorer",
+          "mountMs": 955.7,
+          "animationEndMs": 1649.1,
+          "workerStartMs": 1653.6,
+          "sdkCanvasMs": 1742.1,
+          "atomsRestoredMs": 1819.1,
+          "hostReadyMs": 2020.7,
+          "workerRelativeToAnimationMs": 4.5,
+          "canvasRelativeToAnimationMs": 93.0,
+          "atomsRelativeToAnimationMs": 170.0,
+          "loadingAfterAnimationMs": 371.6,
+          "navigationAndContentReadyMs": 2020.7,
+          "guardBeforeExitMs": 415.5,
+          "longTaskTotalMs": 274,
+          "longTaskMaxMs": 87,
+          "workersCreated": 1
+        },
+        {
+          "from": "explorer",
+          "to": "homopolymerPrediction",
+          "mountMs": 1117.5,
+          "animationEndMs": 1816.5,
+          "workerStartMs": 1821.2,
+          "sdkCanvasMs": 1910.2,
+          "atomsRestoredMs": 1993.2,
+          "hostReadyMs": 2189,
+          "workerRelativeToAnimationMs": 4.7,
+          "canvasRelativeToAnimationMs": 93.7,
+          "atomsRelativeToAnimationMs": 176.7,
+          "loadingAfterAnimationMs": 372.5,
+          "navigationAndContentReadyMs": 2189,
+          "guardBeforeExitMs": 563.0,
+          "longTaskTotalMs": 271,
+          "longTaskMaxMs": 104,
+          "workersCreated": 1
+        },
+        {
+          "from": "homopolymerPrediction",
+          "to": "conditionalGeneration",
+          "mountMs": 982.9,
+          "animationEndMs": 1699.9,
+          "workerStartMs": 1704.7,
+          "sdkCanvasMs": 1791.4,
+          "atomsRestoredMs": 1872.6,
+          "hostReadyMs": 2068.3,
+          "workerRelativeToAnimationMs": 4.8,
+          "canvasRelativeToAnimationMs": 91.5,
+          "atomsRelativeToAnimationMs": 172.7,
+          "loadingAfterAnimationMs": 368.4,
+          "navigationAndContentReadyMs": 2068.3,
+          "guardBeforeExitMs": 448.6,
+          "longTaskTotalMs": 229,
+          "longTaskMaxMs": 85,
+          "workersCreated": 1
+        },
+        {
+          "from": "conditionalGeneration",
+          "to": "reverseDesign",
+          "mountMs": 865.8,
+          "animationEndMs": 1554.2,
+          "workerStartMs": 1565,
+          "sdkCanvasMs": 1648.9,
+          "atomsRestoredMs": 1726.6,
+          "hostReadyMs": 1925.5,
+          "workerRelativeToAnimationMs": 10.8,
+          "canvasRelativeToAnimationMs": 94.7,
+          "atomsRelativeToAnimationMs": 172.4,
+          "loadingAfterAnimationMs": 371.3,
+          "navigationAndContentReadyMs": 1925.5,
+          "guardBeforeExitMs": 316.5,
+          "longTaskTotalMs": 271,
+          "longTaskMaxMs": 83,
+          "workersCreated": 1
+        },
+        {
+          "from": "reverseDesign",
+          "to": "structureWorkbench",
+          "mountMs": 847,
+          "animationEndMs": 1547.9,
+          "workerStartMs": 1559.9,
+          "sdkCanvasMs": 1656.5,
+          "atomsRestoredMs": 1743.6,
+          "hostReadyMs": 1940.4,
+          "workerRelativeToAnimationMs": 12.0,
+          "canvasRelativeToAnimationMs": 108.6,
+          "atomsRelativeToAnimationMs": 195.7,
+          "loadingAfterAnimationMs": 392.5,
+          "navigationAndContentReadyMs": 1940.4,
+          "guardBeforeExitMs": 317.3,
+          "longTaskTotalMs": 281,
+          "longTaskMaxMs": 97,
+          "workersCreated": 1
+        },
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 842.6,
+          "animationEndMs": 1549.5,
+          "workerStartMs": 1554,
+          "sdkCanvasMs": 1643.3,
+          "atomsRestoredMs": 1749.4,
+          "hostReadyMs": 1950.8,
+          "workerRelativeToAnimationMs": 4.5,
+          "canvasRelativeToAnimationMs": 93.8,
+          "atomsRelativeToAnimationMs": 199.9,
+          "loadingAfterAnimationMs": 401.3,
+          "navigationAndContentReadyMs": 1950.8,
+          "guardBeforeExitMs": 352.3,
+          "longTaskTotalMs": 244,
+          "longTaskMaxMs": 102,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "structureWorkbench",
+          "mountMs": 836.3,
+          "animationEndMs": 1535.5,
+          "workerStartMs": 1540.1,
+          "sdkCanvasMs": 1625.7,
+          "atomsRestoredMs": 1716.1,
+          "hostReadyMs": 1891.3,
+          "workerRelativeToAnimationMs": 4.6,
+          "canvasRelativeToAnimationMs": 90.2,
+          "atomsRelativeToAnimationMs": 180.6,
+          "loadingAfterAnimationMs": 355.8,
+          "navigationAndContentReadyMs": 1891.3,
+          "guardBeforeExitMs": 313.6,
+          "longTaskTotalMs": 286,
+          "longTaskMaxMs": 87,
+          "workersCreated": 1
+        },
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 972.7,
+          "animationEndMs": 1680.7,
+          "workerStartMs": 1684.8,
+          "sdkCanvasMs": 1767.2,
+          "atomsRestoredMs": 1858.8,
+          "hostReadyMs": 2061.9,
+          "workerRelativeToAnimationMs": 4.1,
+          "canvasRelativeToAnimationMs": 86.5,
+          "atomsRelativeToAnimationMs": 178.1,
+          "loadingAfterAnimationMs": 381.2,
+          "navigationAndContentReadyMs": 2061.9,
+          "guardBeforeExitMs": 457.3,
+          "longTaskTotalMs": 229,
+          "longTaskMaxMs": 85,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "structureWorkbench",
+          "mountMs": 926.1,
+          "animationEndMs": 1615.2,
+          "workerStartMs": 1619.4,
+          "sdkCanvasMs": 1686.8,
+          "atomsRestoredMs": 1767.9,
+          "hostReadyMs": 1963.6,
+          "workerRelativeToAnimationMs": 4.2,
+          "canvasRelativeToAnimationMs": 71.6,
+          "atomsRelativeToAnimationMs": 152.7,
+          "loadingAfterAnimationMs": 348.4,
+          "navigationAndContentReadyMs": 1963.6,
+          "guardBeforeExitMs": 389.5,
+          "longTaskTotalMs": 215,
+          "longTaskMaxMs": 77,
+          "workersCreated": 1
+        }
+      ],
+      "representativeTrace": [
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "databaseQuery",
+          "phase": "guarding",
+          "locked": null,
+          "root": 3,
+          "iframe": null,
+          "sdk": 4,
+          "status": "ready",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 35.1
+        },
+        {
+          "type": "animation_start",
+          "frame": "top",
+          "name": "np-module-exit",
+          "module": "databaseQuery",
+          "duration": 400,
+          "relativeToClickMs": 415.5
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "databaseQuery",
+          "phase": "exiting",
+          "locked": "true",
+          "root": 3,
+          "iframe": null,
+          "sdk": 4,
+          "status": "ready",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 419.3
+        },
+        {
+          "type": "animation_finish",
+          "frame": "top",
+          "name": "np-module-exit",
+          "module": "databaseQuery",
+          "relativeToClickMs": 905.1
+        },
+        {
+          "type": "worker_terminate",
+          "frame": "top",
+          "id": 17,
+          "relativeToClickMs": 942.5
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "blank",
+          "locked": "true",
+          "root": 5,
+          "iframe": null,
+          "sdk": null,
+          "status": "loading",
+          "sized": true,
+          "atoms": null,
+          "svg": false,
+          "relativeToClickMs": 955.7
+        },
+        {
+          "type": "animation_start",
+          "frame": "top",
+          "name": "np-module-enter",
+          "module": "explorer",
+          "duration": 400,
+          "relativeToClickMs": 1165.4
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "entering",
+          "locked": "true",
+          "root": 5,
+          "iframe": null,
+          "sdk": null,
+          "status": "loading",
+          "sized": true,
+          "atoms": null,
+          "svg": false,
+          "relativeToClickMs": 1172.1
+        },
+        {
+          "type": "animation_finish",
+          "frame": "top",
+          "name": "np-module-enter",
+          "module": "explorer",
+          "relativeToClickMs": 1638.5
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "idle",
+          "locked": null,
+          "root": 5,
+          "iframe": null,
+          "sdk": null,
+          "status": "loading",
+          "sized": true,
+          "atoms": null,
+          "svg": false,
+          "relativeToClickMs": 1649.1
+        },
+        {
+          "type": "worker_create",
+          "frame": "top",
+          "id": 21,
+          "relativeToClickMs": 1653.6
+        },
+        {
+          "type": "sdk_available",
+          "frame": "top",
+          "relativeToClickMs": 1741.9
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "idle",
+          "locked": null,
+          "root": 5,
+          "iframe": null,
+          "sdk": 6,
+          "status": "loading",
+          "sized": true,
+          "atoms": 0,
+          "svg": true,
+          "relativeToClickMs": 1742.1
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "idle",
+          "locked": null,
+          "root": 5,
+          "iframe": null,
+          "sdk": 6,
+          "status": "loading",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 1819.1
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "idle",
+          "locked": null,
+          "root": 5,
+          "iframe": null,
+          "sdk": 6,
+          "status": "ready",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 2020.7
+        }
+      ],
+      "sdkResourceResponsesDuringWarmTransitions": 0,
+      "errors": [],
+      "retainedRoundtrip": [
+        {
+          "from": "structureWorkbench",
+          "to": "knowledge",
+          "retainedRoot": true,
+          "workersCreated": 0,
+          "afterAnimationMs": null
+        },
+        {
+          "from": "knowledge",
+          "to": "structureWorkbench",
+          "retainedRoot": true,
+          "workersCreated": 0,
+          "afterAnimationMs": 0
+        }
+      ]
+    },
+    {
+      "label": "development-react-overlap",
+      "base": "http://127.0.0.1:9001",
+      "recordedAt": "2026-09-11T01:31:05.524Z",
+      "sdk": "3.8.0",
+      "rawArtifact": "/tmp/nexpoly-editor-loading-analysis/development-react-overlap.json",
+      "rawSha256": "c6040885a8b7a87b5e99a5926fc107192741de8e53c6d5461e0d2e8fe2afc60d",
+      "statistics": {
+        "mountMs": {
+          "median": 984.3,
+          "min": 903.4,
+          "max": 1073.6
+        },
+        "animationEndMs": {
+          "median": 1954.9,
+          "min": 1872.6,
+          "max": 2104.0
+        },
+        "workerStartMs": {
+          "median": 1007.2,
+          "min": 920.6,
+          "max": 1081.4
+        },
+        "sdkCanvasMs": {
+          "median": 1099.8,
+          "min": 999.9,
+          "max": 1183.6
+        },
+        "atomsRestoredMs": {
+          "median": 1398.2,
+          "min": 1277.9,
+          "max": 1510.8
+        },
+        "hostReadyMs": {
+          "median": 1702.3,
+          "min": 1522.5,
+          "max": 1726.4
+        },
+        "workerRelativeToAnimationMs": {
+          "median": -984.2,
+          "min": -1029.8,
+          "max": -872.0
+        },
+        "canvasRelativeToAnimationMs": {
+          "median": -885.2,
+          "min": -920.4,
+          "max": -795.8
+        },
+        "atomsRelativeToAnimationMs": {
+          "median": -594.2,
+          "min": -618.8,
+          "max": -524.8
+        },
+        "loadingAfterAnimationMs": {
+          "median": 0.0,
+          "min": 0,
+          "max": 0
+        },
+        "navigationAndContentReadyMs": {
+          "median": 1954.9,
+          "min": 1872.6,
+          "max": 2104.0
+        },
+        "guardBeforeExitMs": {
+          "median": 363.4,
+          "min": 268.0,
+          "max": 452.4
+        },
+        "longTaskTotalMs": {
+          "median": 1022.5,
+          "min": 797,
+          "max": 1176
+        },
+        "longTaskMaxMs": {
+          "median": 289.5,
+          "min": 236,
+          "max": 333
+        }
+      },
+      "samples": [
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 1065.1,
+          "animationEndMs": 2104.0,
+          "workerStartMs": 1074.2,
+          "sdkCanvasMs": 1183.6,
+          "atomsRestoredMs": 1510.8,
+          "hostReadyMs": 1726.4,
+          "workerRelativeToAnimationMs": -1029.8,
+          "canvasRelativeToAnimationMs": -920.4,
+          "atomsRelativeToAnimationMs": -593.2,
+          "loadingAfterAnimationMs": 0,
+          "navigationAndContentReadyMs": 2104.0,
+          "guardBeforeExitMs": 408.6,
+          "longTaskTotalMs": 881,
+          "longTaskMaxMs": 323,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "explorer",
+          "mountMs": 947.1,
+          "animationEndMs": 1954.2,
+          "workerStartMs": 954.5,
+          "sdkCanvasMs": 1043.4,
+          "atomsRestoredMs": 1355.2,
+          "hostReadyMs": 1650.6,
+          "workerRelativeToAnimationMs": -999.7,
+          "canvasRelativeToAnimationMs": -910.8,
+          "atomsRelativeToAnimationMs": -599.0,
+          "loadingAfterAnimationMs": 0,
+          "navigationAndContentReadyMs": 1954.2,
+          "guardBeforeExitMs": 336.8,
+          "longTaskTotalMs": 1083,
+          "longTaskMaxMs": 309,
+          "workersCreated": 1
+        },
+        {
+          "from": "explorer",
+          "to": "homopolymerPrediction",
+          "mountMs": 945.1,
+          "animationEndMs": 1937.3,
+          "workerStartMs": 954.5,
+          "sdkCanvasMs": 1073.1,
+          "atomsRestoredMs": 1403.5,
+          "hostReadyMs": 1700.3,
+          "workerRelativeToAnimationMs": -982.8,
+          "canvasRelativeToAnimationMs": -864.2,
+          "atomsRelativeToAnimationMs": -533.8,
+          "loadingAfterAnimationMs": 0,
+          "navigationAndContentReadyMs": 1937.3,
+          "guardBeforeExitMs": 268.0,
+          "longTaskTotalMs": 1078,
+          "longTaskMaxMs": 326,
+          "workersCreated": 1
+        },
+        {
+          "from": "homopolymerPrediction",
+          "to": "conditionalGeneration",
+          "mountMs": 986.3,
+          "animationEndMs": 1999.5,
+          "workerStartMs": 1013.9,
+          "sdkCanvasMs": 1105.8,
+          "atomsRestoredMs": 1392.9,
+          "hostReadyMs": 1704.4,
+          "workerRelativeToAnimationMs": -985.6,
+          "canvasRelativeToAnimationMs": -893.7,
+          "atomsRelativeToAnimationMs": -606.6,
+          "loadingAfterAnimationMs": 0,
+          "navigationAndContentReadyMs": 1999.5,
+          "guardBeforeExitMs": 375.3,
+          "longTaskTotalMs": 1030,
+          "longTaskMaxMs": 283,
+          "workersCreated": 1
+        },
+        {
+          "from": "conditionalGeneration",
+          "to": "reverseDesign",
+          "mountMs": 951.7,
+          "animationEndMs": 1872.6,
+          "workerStartMs": 1000.6,
+          "sdkCanvasMs": 1076.8,
+          "atomsRestoredMs": 1326.9,
+          "hostReadyMs": 1620.0,
+          "workerRelativeToAnimationMs": -872.0,
+          "canvasRelativeToAnimationMs": -795.8,
+          "atomsRelativeToAnimationMs": -545.7,
+          "loadingAfterAnimationMs": 0,
+          "navigationAndContentReadyMs": 1872.6,
+          "guardBeforeExitMs": 325.2,
+          "longTaskTotalMs": 1015,
+          "longTaskMaxMs": 247,
+          "workersCreated": 1
+        },
+        {
+          "from": "reverseDesign",
+          "to": "structureWorkbench",
+          "mountMs": 991.3,
+          "animationEndMs": 1923.5,
+          "workerStartMs": 1037.6,
+          "sdkCanvasMs": 1110.5,
+          "atomsRestoredMs": 1349.4,
+          "hostReadyMs": 1606.4,
+          "workerRelativeToAnimationMs": -885.9,
+          "canvasRelativeToAnimationMs": -813.0,
+          "atomsRelativeToAnimationMs": -574.1,
+          "loadingAfterAnimationMs": 0,
+          "navigationAndContentReadyMs": 1923.5,
+          "guardBeforeExitMs": 351.4,
+          "longTaskTotalMs": 797,
+          "longTaskMaxMs": 236,
+          "workersCreated": 1
+        },
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 982.4,
+          "animationEndMs": 1955.6,
+          "workerStartMs": 991.6,
+          "sdkCanvasMs": 1093.9,
+          "atomsRestoredMs": 1430.8,
+          "hostReadyMs": 1723.3,
+          "workerRelativeToAnimationMs": -964.0,
+          "canvasRelativeToAnimationMs": -861.7,
+          "atomsRelativeToAnimationMs": -524.8,
+          "loadingAfterAnimationMs": 0,
+          "navigationAndContentReadyMs": 1955.6,
+          "guardBeforeExitMs": 405.0,
+          "longTaskTotalMs": 1176,
+          "longTaskMaxMs": 333,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "structureWorkbench",
+          "mountMs": 1073.6,
+          "animationEndMs": 2072.3,
+          "workerStartMs": 1081.4,
+          "sdkCanvasMs": 1167.0,
+          "atomsRestoredMs": 1453.5,
+          "hostReadyMs": 1711,
+          "workerRelativeToAnimationMs": -990.9,
+          "canvasRelativeToAnimationMs": -905.3,
+          "atomsRelativeToAnimationMs": -618.8,
+          "loadingAfterAnimationMs": 0,
+          "navigationAndContentReadyMs": 2072.3,
+          "guardBeforeExitMs": 452.4,
+          "longTaskTotalMs": 998,
+          "longTaskMaxMs": 283,
+          "workersCreated": 1
+        },
+        {
+          "from": "structureWorkbench",
+          "to": "databaseQuery",
+          "mountMs": 1026.6,
+          "animationEndMs": 2022.3,
+          "workerStartMs": 1033.2,
+          "sdkCanvasMs": 1127.7,
+          "atomsRestoredMs": 1427.2,
+          "hostReadyMs": 1713.1,
+          "workerRelativeToAnimationMs": -989.1,
+          "canvasRelativeToAnimationMs": -894.6,
+          "atomsRelativeToAnimationMs": -595.1,
+          "loadingAfterAnimationMs": 0,
+          "navigationAndContentReadyMs": 2022.3,
+          "guardBeforeExitMs": 411.6,
+          "longTaskTotalMs": 1094,
+          "longTaskMaxMs": 296,
+          "workersCreated": 1
+        },
+        {
+          "from": "databaseQuery",
+          "to": "structureWorkbench",
+          "mountMs": 903.4,
+          "animationEndMs": 1876.6,
+          "workerStartMs": 920.6,
+          "sdkCanvasMs": 999.9,
+          "atomsRestoredMs": 1277.9,
+          "hostReadyMs": 1522.5,
+          "workerRelativeToAnimationMs": -956.0,
+          "canvasRelativeToAnimationMs": -876.7,
+          "atomsRelativeToAnimationMs": -598.7,
+          "loadingAfterAnimationMs": 0,
+          "navigationAndContentReadyMs": 1876.6,
+          "guardBeforeExitMs": 288.7,
+          "longTaskTotalMs": 864,
+          "longTaskMaxMs": 274,
+          "workersCreated": 1
+        }
+      ],
+      "representativeTrace": [
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "databaseQuery",
+          "phase": "guarding",
+          "locked": null,
+          "root": 3,
+          "iframe": null,
+          "sdk": 4,
+          "status": "ready",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 50.2
+        },
+        {
+          "type": "animation_start",
+          "frame": "top",
+          "name": "np-module-exit",
+          "module": "databaseQuery",
+          "duration": 400,
+          "relativeToClickMs": 336.8
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "databaseQuery",
+          "phase": "exiting",
+          "locked": "true",
+          "root": 3,
+          "iframe": null,
+          "sdk": 4,
+          "status": "ready",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 348.3
+        },
+        {
+          "type": "animation_finish",
+          "frame": "top",
+          "name": "np-module-exit",
+          "module": "databaseQuery",
+          "relativeToClickMs": 821.7
+        },
+        {
+          "type": "worker_terminate",
+          "frame": "top",
+          "id": 17,
+          "relativeToClickMs": 901.6
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "blank",
+          "locked": "true",
+          "root": 5,
+          "iframe": null,
+          "sdk": null,
+          "status": "loading",
+          "sized": true,
+          "atoms": null,
+          "svg": false,
+          "relativeToClickMs": 947.1
+        },
+        {
+          "type": "worker_create",
+          "frame": "top",
+          "id": 23,
+          "relativeToClickMs": 954.5
+        },
+        {
+          "type": "sdk_available",
+          "frame": "top",
+          "relativeToClickMs": 1043.0
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "blank",
+          "locked": "true",
+          "root": 5,
+          "iframe": null,
+          "sdk": 6,
+          "status": "loading",
+          "sized": true,
+          "atoms": 0,
+          "svg": true,
+          "relativeToClickMs": 1043.4
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "blank",
+          "locked": "true",
+          "root": 5,
+          "iframe": null,
+          "sdk": 6,
+          "status": "loading",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 1355.2
+        },
+        {
+          "type": "animation_start",
+          "frame": "top",
+          "name": "np-module-enter",
+          "module": "explorer",
+          "duration": 400,
+          "relativeToClickMs": 1378.7
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "entering",
+          "locked": "true",
+          "root": 5,
+          "iframe": null,
+          "sdk": 6,
+          "status": "loading",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 1398.3
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "entering",
+          "locked": "true",
+          "root": 5,
+          "iframe": null,
+          "sdk": 6,
+          "status": "ready",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 1650.6
+        },
+        {
+          "type": "animation_finish",
+          "frame": "top",
+          "name": "np-module-enter",
+          "module": "explorer",
+          "relativeToClickMs": 1922.5
+        },
+        {
+          "type": "state",
+          "frame": "top",
+          "module": "explorer",
+          "phase": "idle",
+          "locked": null,
+          "root": 5,
+          "iframe": null,
+          "sdk": 6,
+          "status": "ready",
+          "sized": true,
+          "atoms": 3,
+          "svg": true,
+          "relativeToClickMs": 1954.2
+        }
+      ],
+      "sdkResourceResponsesDuringWarmTransitions": 0,
+      "errors": [],
+      "retainedRoundtrip": [
+        {
+          "from": "structureWorkbench",
+          "to": "knowledge",
+          "retainedRoot": true,
+          "workersCreated": 0,
+          "afterAnimationMs": null
+        },
+        {
+          "from": "knowledge",
+          "to": "structureWorkbench",
+          "retainedRoot": true,
+          "workersCreated": 0,
+          "afterAnimationMs": 0
+        }
+      ]
+    }
+  ],
+  "provenance": {
+    "productionRevision": "db0fd67320bc43f2ed0e8ed9c294bbab92831670",
+    "productionJs": "/assets/index-fNYpmBva.js",
+    "productionSdkJs": "/ketcher/static/js/main.8617f334.js",
+    "productionHost": "nginx1.27.5",
+    "developmentHost": "Vite7.3.6",
+    "nativePatch": "nexpoly-3.8.0-r3",
+    "buildControl": {
+      "startedAt": "2026-09-11T01:32:14.157918+00:00",
+      "cwd": "/data/lzq/gith/nexpoly-dev/frontend",
+      "engine": "react",
+      "mode": "production",
+      "outputDir": "/tmp/nexpoly-editor-loading-analysis/react-build",
+      "sourceHashesBefore": {
+        "package.json": "9ac2b3bfac0ff7f676a81ec8be10bc0c0821c16aaf3b2f4790cb98263719c23e",
+        "package-lock.json": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+        "vite.config.ts": "dff7829f93608bc3a792bae4967d2870c6179c8e19decf23db977efff50aaace",
+        "patches/ketcher-manifest.json": "d42e31c4dfa7ce5d97ca65a5568d84b5aa66c865045cda8eae4e75febb4a80a4"
+      },
+      "commands": [
+        {
+          "argv": [
+            "node",
+            "scripts/verify-ketcher-patches.mjs"
+          ],
+          "log": "/tmp/nexpoly-editor-loading-analysis/patch-verification.log",
+          "exitCode": 0
+        },
+        {
+          "argv": [
+            "node",
+            "node_modules/vite/bin/vite.js",
+            "build",
+            "--config",
+            "vite.config.ts",
+            "--outDir",
+            "/tmp/nexpoly-editor-loading-analysis/react-build",
+            "--emptyOutDir"
+          ],
+          "log": "/tmp/nexpoly-editor-loading-analysis/react-build.log",
+          "exitCode": 0
+        }
+      ],
+      "node": "v22.23.2",
+      "npm": "10.9.8",
+      "gitHead": "de6c52b51422a0173e40120836c93075db74ed0a",
+      "versions": {
+        "react": "19.2.4",
+        "react-dom": "19.2.4",
+        "vite": "7.3.6",
+        "typescript": "5.9.3",
+        "ketcher-react": "3.8.0",
+        "ketcher-core": "3.8.0",
+        "ketcher-standalone": "3.8.0",
+        "ketcher-macromolecules": "3.8.0"
+      },
+      "sourceHashesAfter": {
+        "package.json": "9ac2b3bfac0ff7f676a81ec8be10bc0c0821c16aaf3b2f4790cb98263719c23e",
+        "package-lock.json": "606163d3c7dff96603823ffcae38b413590c4be32a974e4b56fae93206b3f861",
+        "vite.config.ts": "dff7829f93608bc3a792bae4967d2870c6179c8e19decf23db977efff50aaace",
+        "patches/ketcher-manifest.json": "d42e31c4dfa7ce5d97ca65a5568d84b5aa66c865045cda8eae4e75febb4a80a4"
+      },
+      "sourceHashesUnchanged": true,
+      "outputs": [
+        {
+          "path": ".vite/manifest.json",
+          "bytes": 1556,
+          "sha256": "d5504384a32c3adb46f942e9f8d46750a00bd2e24ed4d384d68fd1f63898e1fa"
+        },
+        {
+          "path": "assets/KetcherReactRuntime-CE_oiv9x.js",
+          "bytes": 23204240,
+          "sha256": "acaaeaad157c17d29e85ef155316a25aed0e6fd165da423c402b7d3237e50307"
+        },
+        {
+          "path": "assets/KetcherReactRuntime-D1y9KbGV.css",
+          "bytes": 252340,
+          "sha256": "0d71443f1691584d3ca6cb30027bc653a975eeac069defd606296f38f9d200de"
+        },
+        {
+          "path": "assets/index-BY-e55We.js",
+          "bytes": 1226361,
+          "sha256": "79c8ab7971334b444dc756a85d55baa26ef97de56c2bbfa32e84672d8163dee3"
+        },
+        {
+          "path": "assets/index-PzoIyIyG.css",
+          "bytes": 919278,
+          "sha256": "6ca35e267357c195c5363956f7fef140e91a53db0b1e24e4f432e51250997246"
+        },
+        {
+          "path": "assets/index.modern-DgymyiYC.js",
+          "bytes": 1238778,
+          "sha256": "03dca49e5b71df3379c5f34fbd72f4584fc4c30f7c99b72c3a0c2c5902bb7e26"
+        },
+        {
+          "path": "assets/index.modern-c0bcdf82-axHgPF5J.js",
+          "bytes": 384294,
+          "sha256": "75961da535613f5c2cc7b798969653e02cf1cb92ab111647b14cc43afd0bd776"
+        },
+        {
+          "path": "demo-data/doe_prior_cte.csv",
+          "bytes": 3845,
+          "sha256": "223af9f0718f47ca399a7ee01c6210b2b5854350a956681479167871a8aabef5"
+        },
+        {
+          "path": "demo-data/doe_prior_elongation.csv",
+          "bytes": 3822,
+          "sha256": "428dffa0af47c3234b91ba509b313d7e63dff2b2d00d5c53a6d5b23220fa8dee"
+        },
+        {
+          "path": "demo-data/doe_prior_modulus.csv",
+          "bytes": 3627,
+          "sha256": "2e33cde1dc802ea7600744173ccdfafe4e516362bc413cec83b122f2a48015d5"
+        },
+        {
+          "path": "demo-data/doe_prior_tg.csv",
+          "bytes": 3752,
+          "sha256": "7949d5e15edd1ced39d3e19615d9a64eb50bf1cb5eea75a260c15801d02bae93"
+        },
+        {
+          "path": "images/data-knowledge-card-bg.png",
+          "bytes": 1777347,
+          "sha256": "129509e5066678064e3924455b0e4b764a3ba95e41df9d9c7953b223c0cf56a6"
+        },
+        {
+          "path": "images/nexpoly-black-gold-hero.png",
+          "bytes": 1585188,
+          "sha256": "ae64f2b93d5d257053523fb5b14f733547803515559576edebb96178aa6556e0"
+        },
+        {
+          "path": "images/pdf-similarity/similar_paper_1.png",
+          "bytes": 207926,
+          "sha256": "10eff00d94f1ba71cecc3b90df4b801a560bb2ba6e3e97e5a4659c89388ad525"
+        },
+        {
+          "path": "images/pdf-similarity/similar_paper_2.png",
+          "bytes": 230640,
+          "sha256": "aef7453134fcff7fdae8687246994f4436b2fd34dc6fba1000d2f21204d8294f"
+        },
+        {
+          "path": "images/pdf-similarity/similar_paper_3.png",
+          "bytes": 184390,
+          "sha256": "1dd1d5b4f53d60f82140ac211d17f865f03e383cffd0770a6aa89bfd485e6d16"
+        },
+        {
+          "path": "images/pdf-similarity/similar_paper_4.png",
+          "bytes": 124315,
+          "sha256": "2aac1f7dd6e957f02569388a87f59603c0f25b66f03ac7f28c2dd3d9f1a5d3df"
+        },
+        {
+          "path": "images/pdf-similarity/similar_paper_5.png",
+          "bytes": 232688,
+          "sha256": "91453b61bbb32840d70c127f8f0b696981aeff8ae26974c712da889b12133761"
+        },
+        {
+          "path": "images/pdf-similarity/similar_paper_6.png",
+          "bytes": 212067,
+          "sha256": "1602f994a75b38886b145b5def6e5bb0eebd11e9debf4efcfb9b32969a1bb628"
+        },
+        {
+          "path": "images/polymer-design-card-bg.png",
+          "bytes": 1239543,
+          "sha256": "f2b24fc89bbbca94f11f014a3051c5736544c5572f353343bc2477756d095d9f"
+        },
+        {
+          "path": "images/polymer-reverse-logo-icon.png",
+          "bytes": 77057,
+          "sha256": "b408a0996eec59b4235abe5611036547c405e8dae6350702984d98962d3fe9ca"
+        },
+        {
+          "path": "images/property-exploration-card-bg.png",
+          "bytes": 1062497,
+          "sha256": "d6ce00d935f2df748488ef097f3cb8a9ab0ef46f0f30ff4e1501e20ceb6fcd30"
+        },
+        {
+          "path": "index.html",
+          "bytes": 634,
+          "sha256": "7cff0d63556da9d48c714396e5d8232a6ecef176fb12ad6e13f1d81586c41891"
+        },
+        {
+          "path": "ketcher/.gitkeep",
+          "bytes": 1,
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        },
+        {
+          "path": "ketcher/apple-touch-icon.png",
+          "bytes": 11817,
+          "sha256": "f414dcb2c13ea591559b6373070b7a5d4f59b59ef5910c5fa013a80c74a162a2"
+        },
+        {
+          "path": "ketcher/asset-manifest.json",
+          "bytes": 957,
+          "sha256": "091e0946138ac2d0ff896d4b2cd922cd3e3f0fbf116f307e213ce60288908ca0"
+        },
+        {
+          "path": "ketcher/closable.html",
+          "bytes": 751,
+          "sha256": "bbe19dc00cda153d49737610781118371a075c0f9f4376775a96d185dbd44905"
+        },
+        {
+          "path": "ketcher/duo.html",
+          "bytes": 871,
+          "sha256": "1ecdf9f34238dcbacdd6a65ef9726ed9bae9e058ff0b6c2bf81202ad49c065f1"
+        },
+        {
+          "path": "ketcher/favicon-16x16.png",
+          "bytes": 600,
+          "sha256": "b17e9b5e3467455a41e611edc0f49b05cf2f02d7569524a958cfdb5d22c989d9"
+        },
+        {
+          "path": "ketcher/favicon-32x32.png",
+          "bytes": 1229,
+          "sha256": "5cc22edce0ac5dd4b4a20b9a4b828d08ae312941b03f60aa3fe467a6bf9db561"
+        },
+        {
+          "path": "ketcher/favicon.ico",
+          "bytes": 15086,
+          "sha256": "87a3fe8c44e333cfeaaa3e69151bfb36d0302b5e97bb392219cf1489be274760"
+        },
+        {
+          "path": "ketcher/iframe.html",
+          "bytes": 3491,
+          "sha256": "c2073d828b15d433ccfa6cfa960c3d4b1586f4423903030556af3052dda89362"
+        },
+        {
+          "path": "ketcher/index.html",
+          "bytes": 919,
+          "sha256": "969324360df7767c396a4def347d19745302600a45bcda674b5f65809e07e67b"
+        },
+        {
+          "path": "ketcher/logo.svg",
+          "bytes": 5219,
+          "sha256": "0cc1fa734753e99ae6bc8edaaae519b67c8fde53142761a730b0c0a510496812"
+        },
+        {
+          "path": "ketcher/manifest.json",
+          "bytes": 288,
+          "sha256": "59292c1075edbc4bf0b8dddcaa50220bb8eae8c3f01ada8d0428f4762d30ac57"
+        },
+        {
+          "path": "ketcher/polyprop-focus-guard.js",
+          "bytes": 690,
+          "sha256": "7bd95aef1965aba5a5d940922748089cc17a8109e07cb7f34505366d55375b92"
+        },
+        {
+          "path": "ketcher/popup.html",
+          "bytes": 877,
+          "sha256": "2226fef6e348ed609465e9b45fc5f0e0dac5e41e07c3a0cc91c6af2a2c68503c"
+        },
+        {
+          "path": "ketcher/robots.txt",
+          "bytes": 67,
+          "sha256": "90d24bc3bf698ac1e173739502298ccca72adf1f564fab05f484b8c48d1cadd2"
+        },
+        {
+          "path": "ketcher/serve.json",
+          "bytes": 322,
+          "sha256": "2e92566bf89257dea9041b5fc2b7d73e467fd55dbc801a87f3ce17d54799d133"
+        },
+        {
+          "path": "ketcher/static/css/622.365fdd8e.chunk.css",
+          "bytes": 5035,
+          "sha256": "12dbdda47840873a34f66277a644475f79471bf914d296e24d4c72041841c2b7"
+        },
+        {
+          "path": "ketcher/static/css/duo.f33a1767.css",
+          "bytes": 171225,
+          "sha256": "5da1ebe766492f6b03ba526605e3718d09a8027ec5aa1eb805a9a459284f81ef"
+        },
+        {
+          "path": "ketcher/static/css/main.748bd42d.css",
+          "bytes": 171225,
+          "sha256": "a008e6b6e1ff652d57d6852103764eee48017a74f17f80813096f42e61e21be9"
+        },
+        {
+          "path": "ketcher/static/css/popup.748bd42d.css",
+          "bytes": 171225,
+          "sha256": "a008e6b6e1ff652d57d6852103764eee48017a74f17f80813096f42e61e21be9"
+        },
+        {
+          "path": "ketcher/static/js/159.6bd8317f.chunk.js",
+          "bytes": 68781,
+          "sha256": "15a5c447b34302dc78ebc8aa11630c3e5e32a1ee61a2603c28ca6d3d9418e932"
+        },
+        {
+          "path": "ketcher/static/js/605.fc6bd27b.chunk.js",
+          "bytes": 1249825,
+          "sha256": "b00932ece014de842dc38b010050d68f6f4418581fbf84cd40ad44a7ee1a3dd1"
+        },
+        {
+          "path": "ketcher/static/js/605.fc6bd27b.chunk.js.LICENSE.txt",
+          "bytes": 92,
+          "sha256": "132a168296df8bd7919df80713563ca8e196d41253e94e835d670313ba0ba126"
+        },
+        {
+          "path": "ketcher/static/js/622.a35444cf.chunk.js",
+          "bytes": 264551,
+          "sha256": "cce26f9c55e081221f6b853d8f24c397a8b109beff5d8e987faa46f010b06e24"
+        },
+        {
+          "path": "ketcher/static/js/78.fab565cc.chunk.js",
+          "bytes": 21781,
+          "sha256": "8e1618bc9f09fa996e4f3d4733345c97bcc5ddc3a8dec47f3101df6ed2e4aa36"
+        },
+        {
+          "path": "ketcher/static/js/duo.ce4c8f16.js",
+          "bytes": 22919901,
+          "sha256": "266f6bf510c886d6f51ac30b45a80af3b41f17e9bf484bff170d1bab717dd56c"
+        },
+        {
+          "path": "ketcher/static/js/duo.ce4c8f16.js.LICENSE.txt",
+          "bytes": 2857,
+          "sha256": "bbfef084324985a41705be0b4ba0527454c705431f31ae361f2837789584ef53"
+        },
+        {
+          "path": "ketcher/static/js/main.8617f334.js",
+          "bytes": 22943872,
+          "sha256": "eb4fa894fcb85b766fe18406c7581fe40944ed3af79e373ba35eb5d22f239f8f"
+        },
+        {
+          "path": "ketcher/static/js/main.8617f334.js.LICENSE.txt",
+          "bytes": 3310,
+          "sha256": "87405e0df120cb41db9e9c2b05f3ec5a0652e26d0a72094675cfa7cfe5f95a85"
+        },
+        {
+          "path": "ketcher/static/js/popup.6fb10cd1.js",
+          "bytes": 22924254,
+          "sha256": "e89459919848ca8044000379eb1c880b4905969031e202eb1c145c71485d061b"
+        },
+        {
+          "path": "ketcher/static/js/popup.6fb10cd1.js.LICENSE.txt",
+          "bytes": 2857,
+          "sha256": "bbfef084324985a41705be0b4ba0527454c705431f31ae361f2837789584ef53"
+        },
+        {
+          "path": "samples/monomer-polymerization-batch/README.md",
+          "bytes": 1324,
+          "sha256": "69970bc10d98e8dec903f42baf2d79de39ca76b3c3d368ec53a4547823cdd67a"
+        },
+        {
+          "path": "samples/monomer-polymerization-batch/selection.json",
+          "bytes": 1454,
+          "sha256": "5f204fb36370ac5002371e30122d82751b30f47dea9e1a9cf27610f3eaf2f01e"
+        },
+        {
+          "path": "samples/monomer-polymerization-batch/smipoly-diamines-120.csv",
+          "bytes": 11439,
+          "sha256": "b89be013a3d8799414ec80c94aa05473097493107ec29eef954076e389280a47"
+        },
+        {
+          "path": "samples/monomer-polymerization-batch/smipoly-dianhydrides-120.csv",
+          "bytes": 12920,
+          "sha256": "f9f6e83cd29d01262d82fa190d08a710529e004ffd101e9c51e06a719d8a4bb6"
+        },
+        {
+          "path": "structure-editor.json",
+          "bytes": 1369,
+          "sha256": "ecc8e46610f2b47af9eebfd994331e978619d9f9ba49ff44dde245f536e0de27"
+        },
+        {
+          "path": "vendor/3Dmol-min.js",
+          "bytes": 526159,
+          "sha256": "1297081865a4d6c0b2ac22d3e909724da8c03ba0caf7bfc78c8a3d9d8b143f4e"
+        },
+        {
+          "path": "vendor/3Dmol-min.js.LICENSE.txt",
+          "bytes": 120,
+          "sha256": "164aedff0608f0a79b74fe9677c05638f950801ee3f711536def74762b7d1a6f"
+        }
+      ],
+      "success": true,
+      "finishedAt": "2026-09-11T01:32:44.982368+00:00"
+    },
+    "sourceHashes": {
+      "frontend/src/components/structure-workbench/ReactStructureEditor.tsx": "a8e62cd49c52d24883d7d042a0c73a3b4dd4f6d3129490c73caefad855ffc14e",
+      "frontend/src/hooks/useModuleTransition.ts": "1fb9d4c2793df3d49cf6a21a7808400f99e1ebf68808b3745d07274843dc7568",
+      "frontend/src/structure/workspace.ts": "c066f1951cdee05b6fe4ec46926cd14fcb3ed0bad8eef1f7bc4252333f113192",
+      "frontend/scripts/analyze-structure-module-loading.mjs": "8f5a21e5a9bd0c4620470352cf033dba5ac979617cd5889f476806127848378c"
+    }
+  }
+}

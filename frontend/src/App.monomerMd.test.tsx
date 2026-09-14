@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { preloadPage } from "./pages";
+
+// These cases exercise routing after transport; cold loading is covered separately.
+beforeAll(async () => {
+  await Promise.all(["monomerMdSimulation"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
+});
 
 vi.mock("./components/MonomerMdSimulationPage", () => ({
   MonomerMdSimulationPage: ({

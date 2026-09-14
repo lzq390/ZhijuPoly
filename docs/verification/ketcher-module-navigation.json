@@ -1,0 +1,239 @@
+[
+  {
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "modules": [
+      {
+        "module": "knowledge",
+        "exitMs": 400,
+        "gapObservedMs": 209,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 120
+      },
+      {
+        "module": "structureWorkbench",
+        "exitMs": 400,
+        "gapObservedMs": 216,
+        "entryMs": 400,
+        "blankFrames": 15,
+        "samples": 75
+      },
+      {
+        "module": "polytaoGeneration",
+        "exitMs": 400,
+        "gapObservedMs": 225,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 102
+      },
+      {
+        "module": "explorer",
+        "exitMs": 400,
+        "gapObservedMs": 209,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 70
+      },
+      {
+        "module": "databaseQuery",
+        "exitMs": 400,
+        "gapObservedMs": 205,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 67
+      },
+      {
+        "module": "databaseFilter",
+        "exitMs": 400,
+        "gapObservedMs": 206,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 104
+      },
+      {
+        "module": "database",
+        "exitMs": 400,
+        "gapObservedMs": 210,
+        "entryMs": 400,
+        "blankFrames": 12,
+        "samples": 70
+      },
+      {
+        "module": "homopolymerPrediction",
+        "exitMs": 400,
+        "gapObservedMs": 208,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 70
+      },
+      {
+        "module": "monomerPolymerization",
+        "exitMs": 400,
+        "gapObservedMs": 209,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 76
+      },
+      {
+        "module": "mdSimulationDemo",
+        "exitMs": 400,
+        "gapObservedMs": 234,
+        "entryMs": 400,
+        "blankFrames": 15,
+        "samples": 73
+      },
+      {
+        "module": "monomerMdSimulation",
+        "exitMs": 400,
+        "gapObservedMs": 235,
+        "entryMs": 400,
+        "blankFrames": 15,
+        "samples": 75
+      },
+      {
+        "module": "monomerDft",
+        "exitMs": 400,
+        "gapObservedMs": 231,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 75
+      },
+      {
+        "module": "conditionalGeneration",
+        "exitMs": 400,
+        "gapObservedMs": 212,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 74
+      },
+      {
+        "module": "reverseDesign",
+        "exitMs": 400,
+        "gapObservedMs": 208,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 66
+      },
+      {
+        "module": "highThroughputWorkflowDemo",
+        "exitMs": 400,
+        "gapObservedMs": 213,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 71
+      },
+      {
+        "module": "home",
+        "exitMs": 400,
+        "gapObservedMs": 211,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 79
+      },
+      {
+        "module": "monomerMdSimulation",
+        "exitMs": 400,
+        "gapObservedMs": 208,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 73
+      }
+    ],
+    "retainedCanvas": true,
+    "latestTarget": true,
+    "blankReplacement": true,
+    "latestDuringEntry": true,
+    "historyNavigation": true,
+    "slowRequestDoesNotHoldEntry": true,
+    "reducedMotion": true,
+    "pageErrors": [],
+    "passed": true
+  },
+  {
+    "viewport": {
+      "width": 1024,
+      "height": 768
+    },
+    "modules": [
+      {
+        "module": "knowledge",
+        "exitMs": 400,
+        "gapObservedMs": 210,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 130
+      },
+      {
+        "module": "structureWorkbench",
+        "exitMs": 400,
+        "gapObservedMs": 210,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 79
+      }
+    ],
+    "retainedCanvas": true,
+    "reducedMotion": true,
+    "pageErrors": [],
+    "passed": true
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "modules": [
+      {
+        "module": "knowledge",
+        "exitMs": 400,
+        "gapObservedMs": 206,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 138
+      },
+      {
+        "module": "structureWorkbench",
+        "exitMs": 400,
+        "gapObservedMs": 207,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 84
+      }
+    ],
+    "retainedCanvas": true,
+    "reducedMotion": true,
+    "pageErrors": [],
+    "passed": true
+  },
+  {
+    "viewport": {
+      "width": 2560,
+      "height": 1440
+    },
+    "modules": [
+      {
+        "module": "knowledge",
+        "exitMs": 400,
+        "gapObservedMs": 208,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 92
+      },
+      {
+        "module": "structureWorkbench",
+        "exitMs": 400,
+        "gapObservedMs": 210,
+        "entryMs": 400,
+        "blankFrames": 14,
+        "samples": 55
+      }
+    ],
+    "retainedCanvas": true,
+    "reducedMotion": true,
+    "pageErrors": [],
+    "passed": true
+  }
+]

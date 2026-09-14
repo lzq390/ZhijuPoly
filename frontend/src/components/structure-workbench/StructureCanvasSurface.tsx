@@ -12,6 +12,7 @@ import type { ReactNode, RefObject } from "react";
 import type { useTgStructureCanvas } from "../../hooks/useTgStructureCanvas";
 import type { StructureWorkspaceContext } from "../../types";
 import { StructurePreview3D } from "../StructurePreview3D";
+import { StructureEditor } from "./StructureEditor";
 
 export type StructureCanvasController = ReturnType<typeof useTgStructureCanvas>;
 export type StructureUtilityPanel = "modules" | "assistant" | null;
@@ -104,12 +105,16 @@ export function StructureCanvasSurface({
   onToggle3D,
   onSmilesDraftChange
 }: StructureCanvasSurfaceProps) {
-  async function runCanvasMutation(action: () => void | Promise<unknown>) {
-    await canvas.cancelSmilesDraftSync();
+  async function runCanvasMutation(action: () => void | Promise<unknown>, writesEditor = true) {
+    const current = structure.workspace.guard();
+    const finish = writesEditor ? structure.workspace.beginMutation() : () => {};
     try {
+      await canvas.cancelSmilesDraftSync();
+      if (!current()) return;
       await action();
     } finally {
-      canvas.adoptCanvasSmiles();
+      if (current()) canvas.adoptCanvasSmiles();
+      finish();
     }
   }
 
@@ -169,7 +174,7 @@ export function StructureCanvasSurface({
             icon={<RefreshCcw aria-hidden="true" />}
             disabled={operationBusy || !canvas.isEditorReady}
             primary
-            onClick={() => void runCanvasMutation(onSync)}
+            onClick={() => void runCanvasMutation(onSync, false)}
           />
           <ToolButton
             label={canvas.isFlipped ? "2D画布" : "3D构象"}
@@ -206,12 +211,8 @@ export function StructureCanvasSurface({
             aria-hidden={canvas.isFlipped}
             inert={canvas.isFlipped}
           >
-            <iframe
-              ref={structure.iframeRef}
-              title={editorTitle}
-              src="/ketcher/index.html"
-              onLoad={canvas.handleEditorLoad}
-            />
+            <StructureEditor workspace={structure.workspace} title={editorTitle}
+              disabled={canvas.isLoadingStructure || canvas.isClearing || canvas.isImportingImage || canvas.smilesDraftState === "syncing"} />
           </div>
           {hasActivated3D ? (
             <div
