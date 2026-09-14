@@ -33,7 +33,7 @@ it("跨知识库和筛选页面保留同一记录，切换后仍等待在途操�
   mocks.summary.mockResolvedValue({ summary: "两个模块的共同回顾", generated: true });
   mocks.operation.mockResolvedValue(undefined);
   render(<App />);
-  for (const key of "adad") fireEvent.keyDown(window, { key });
+  fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
   await screen.findByRole("button", { name: "正在记录 · 总结" });
   fireEvent.click(screen.getByText("检索测试"));
   await waitFor(() => expect(mocks.operation).toHaveBeenCalledTimes(1));

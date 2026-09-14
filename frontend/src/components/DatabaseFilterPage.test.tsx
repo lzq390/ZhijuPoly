@@ -304,7 +304,7 @@ describe("DatabaseFilterPage", () => {
     apiMocks.search.mockResolvedValue({ ...successResponse, search_id: "recorded" });
     const view = render(<KnowledgeRecordingProvider><KnowledgeRecordingControls localMode /><DatabaseFilterPage /></KnowledgeRecordingProvider>);
     await screen.findByRole("button", { name: /玻璃化转变温度/ });
-    for (const key of "adad") fireEvent.keyDown(window, { key });
+    fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
     await screen.findByRole("button", { name: "正在记录 · 总结" });
     const id = apiMocks.start.mock.lastCall![0];
     fireEvent.change(screen.getByLabelText("属性 1 最小值"), { target: { value: "100" } });

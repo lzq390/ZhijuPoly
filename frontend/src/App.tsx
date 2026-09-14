@@ -1001,7 +1001,7 @@ function AppContent() {
 
   return (
     <AppShell
-      recordingControls={<KnowledgeRecordingControls global scopeKey={activeModule}
+      recordingControls={<KnowledgeRecordingControls global
         localMode={activeModule === "databaseFilter" || (activeModule === "knowledge" && knowledgeLocalMode)} />}
       activeModule={activeModule}
       fullBleed={isFullBleedModule}

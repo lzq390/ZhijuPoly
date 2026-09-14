@@ -179,7 +179,7 @@ afterEach(() => {
 });
 
 describe("KnowledgeSearch", () => {
-  it("输入框与组合键不触发，空白区域 adad 开始且重复触发不清空记录", async () => {
+  it("输入框和空白区域输入 adad 都不启动记录，只能通过按钮开始", async () => {
     render(<KnowledgeSearch onBackHome={vi.fn()} />);
     expect((screen.getByRole("button", { name: "开始记录" }) as HTMLButtonElement).disabled).toBe(false);
     const input = screen.getByRole("searchbox", { name: "本地知识库检索词" });
@@ -193,25 +193,24 @@ describe("KnowledgeSearch", () => {
     expect(apiMocks.startKnowledgeRecording).not.toHaveBeenCalled();
     input.blur();
     for (const key of "adad") fireEvent.keyDown(window, { key });
+    expect(apiMocks.startKnowledgeRecording).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
     await screen.findByRole("button", { name: "正在记录 · 总结" });
     for (const key of "adad") fireEvent.keyDown(window, { key });
     expect(apiMocks.startKnowledgeRecording).toHaveBeenCalledTimes(1);
   });
 
-  it("仅本地模式识别 adad，切换模式和离开页面不会残留触发序列或监听", async () => {
+  it("开始按钮仅在本地模式可用，切换回来后可正常开始记录", async () => {
     const view = render(<KnowledgeSearch onBackHome={vi.fn()} />);
-    for (const key of "ad") fireEvent.keyDown(window, { key });
     fireEvent.click(screen.getByRole("tab", { name: "在线文献" }));
-    for (const key of "adad") fireEvent.keyDown(window, { key });
+    expect((screen.getByRole("button", { name: "开始记录" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
     expect(apiMocks.startKnowledgeRecording).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: "本地知识库" }));
-    for (const key of "ad") fireEvent.keyDown(window, { key });
-    expect(apiMocks.startKnowledgeRecording).not.toHaveBeenCalled();
-    fireEvent.blur(window);
-    for (const key of "adad") fireEvent.keyDown(window, { key });
+    expect((screen.getByRole("button", { name: "开始记录" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
     await screen.findByRole("button", { name: "正在记录 · 总结" });
     view.unmount();
-    for (const key of "adad") fireEvent.keyDown(window, { key });
     expect(apiMocks.startKnowledgeRecording).toHaveBeenCalledTimes(1);
   });
 
@@ -230,7 +229,7 @@ describe("KnowledgeSearch", () => {
     render(<KnowledgeSearch onBackHome={vi.fn()} initialQuery="polyimide" />);
     await screen.findByRole("dialog", { name: "知识记录详情" });
     expect(apiMocks.searchKnowledge.mock.calls[0][0].recording_id).toBeUndefined();
-    for (const key of "adad") fireEvent.keyDown(window, { key });
+    fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
     await screen.findByRole("button", { name: "正在记录 · 总结" });
     const recordingId = apiMocks.startKnowledgeRecording.mock.calls[0][0];
     fireEvent.click(screen.getByRole("button", { name: "运行检索" }));
@@ -257,7 +256,7 @@ describe("KnowledgeSearch", () => {
   it("结束失败可重试同一记录，等待重试时不混入新操作", async () => {
     apiMocks.stopKnowledgeRecording.mockRejectedValueOnce(new Error("offline"));
     render(<KnowledgeSearch onBackHome={vi.fn()} />);
-    for (const key of "adad") fireEvent.keyDown(window, { key });
+    fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
     fireEvent.click(await screen.findByRole("button", { name: "正在记录 · 总结" }));
     await screen.findByRole("button", { name: "重试结束记录" });
     const input = screen.getByRole("searchbox", { name: "本地知识库检索词" });
@@ -274,7 +273,7 @@ describe("KnowledgeSearch", () => {
     let reject!: (reason: Error) => void;
     apiMocks.summarizeKnowledgeRecording.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
     render(<KnowledgeSearch onBackHome={vi.fn()} />);
-    for (const key of "adad") fireEvent.keyDown(window, { key });
+    fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
     fireEvent.click(await screen.findByRole("button", { name: "正在记录 · 总结" }));
     const generating = await screen.findByRole("button", { name: "查看生成进度" });
     expect((generating as HTMLButtonElement).disabled).toBe(false);

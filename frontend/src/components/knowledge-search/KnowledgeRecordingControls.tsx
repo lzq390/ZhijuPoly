@@ -3,8 +3,8 @@ import { createPortal } from "react-dom";
 import { ArrowUpRight, LoaderCircle, Sparkles, X } from "lucide-react";
 import { useKnowledgeRecording } from "../../hooks/useKnowledgeRecording";
 
-export function KnowledgeRecordingControls({ localMode, global = false, scopeKey }: {
-  localMode: boolean; global?: boolean; scopeKey?: string;
+export function KnowledgeRecordingControls({ localMode, global = false }: {
+  localMode: boolean; global?: boolean;
 }) {
   const recording = useKnowledgeRecording();
   const start = recording?.start;
@@ -45,38 +45,6 @@ export function KnowledgeRecordingControls({ localMode, global = false, scopeKey
       document.removeEventListener("pointerdown", onPointerDown);
     };
   }, [open, close]);
-
-  useEffect(() => {
-    if (!localMode || !start || (phase !== "idle" && phase !== "stopped")) return;
-    // Temporary POC entry: keep normal form input and IME composition untouched.
-    let sequence = "";
-    const reset = () => { sequence = ""; };
-    const editable = (target: EventTarget | null) => target instanceof HTMLElement && (
-      target.isContentEditable || Boolean(target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='textbox']"))
-    );
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing || event.repeat || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey ||
-          editable(event.target) || editable(document.activeElement)) {
-        reset();
-        return;
-      }
-      sequence = (sequence + event.key).slice(-4);
-      if (sequence === "adad") {
-        reset();
-        void start();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("blur", reset);
-    window.addEventListener("pointerdown", reset);
-    window.addEventListener("focusin", reset);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("blur", reset);
-      window.removeEventListener("pointerdown", reset);
-      window.removeEventListener("focusin", reset);
-    };
-  }, [localMode, phase, start, scopeKey]);
 
   if (!recording) return null;
   const { pending, error, incomplete, summary, stop, retrySummary } = recording;
