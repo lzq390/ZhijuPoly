@@ -845,11 +845,31 @@ def validate_database_schema_state_contract(
         "backend/app/services/deployment_control.py",
         failures,
     )
+    # V1 covers the legacy tables, V2 adds a ready DFT schema, and V3 adds
+    # batch executions. Pin each transition as well as the reported version.
     for marker in (
         '"pending",\n    "queued",\n    "running",\n    "cancel_requested",',
         "probe_monomer_dft_schema(connection)",
-        "active_jobs_schema_version=2",
-        "active_jobs_schema_version=1",
+        '"monomer_md": _count_statuses(connection, "md", "monomer_md_jobs")',
+        '"online_knowledge": _count_statuses(connection, "online_knowledge", "jobs")',
+        "if dft_schema.state is MonomerDftSchemaState.INVALID:\n"
+        "        raise RuntimeError(",
+        "version = 1\n"
+        "    if dft_schema.state is MonomerDftSchemaState.READY:",
+        'counts["monomer_dft"] = _count_statuses(connection, "monomer_dft", '
+        '"jobs", statuses=MONOMER_DFT_ACTIVE_STATUSES)',
+        "version = 2\n"
+        '    if _table_exists(connection, "polymerization_batch", "jobs"):',
+        "if version != 2:\n"
+        '            raise RuntimeError("batch deployment schema requires monomer DFT schema")',
+        # Restartable queued/checkpointed batch jobs must not block a drain;
+        # executions retaining a token must block it, even after cancellation.
+        'counts["polymerization_batch"] = int(connection.execute(\n'
+        '            "SELECT count(*) AS count FROM polymerization_batch.jobs '
+        'WHERE execution_token IS NOT NULL"\n'
+        '        ).fetchone()["count"])',
+        "version = 3\n"
+        "    return ActiveJobSummary(counts=counts, active_jobs_schema_version=version)",
     ):
         if marker not in deployment_control:
             failures.append(

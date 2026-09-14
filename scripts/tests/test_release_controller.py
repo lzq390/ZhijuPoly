@@ -5619,6 +5619,17 @@ class ReleaseControllerTests(unittest.TestCase):
                 },
                 "active_total": 0,
             },
+            {
+                "active_jobs_schema_version": 3,
+                "drain": {"enabled": True},
+                "active_jobs": {
+                    "monomer_md": 0,
+                    "online_knowledge": 0,
+                    "monomer_dft": 0,
+                    "polymerization_batch": 0,
+                },
+                "active_total": 0,
+            },
         )
         command = None
         for payload in payloads:
@@ -6986,7 +6997,7 @@ class ReleaseControllerTests(unittest.TestCase):
             ),
             1,
         )
-        for unsupported in (None, 0, 3, True, 1.0, 2.0):
+        for unsupported in (None, 0, 4, True, 1.0, 2.0, 3.0):
             with (
                 self.subTest(active_jobs_schema_version=unsupported),
                 self.assertRaisesRegex(release_controller.ReleaseError, "unsupported"),
@@ -7058,6 +7069,69 @@ class ReleaseControllerTests(unittest.TestCase):
                 invalid_persistent_v1,
                 {"monomer_md", "online_knowledge", "monomer_dft"},
             )
+
+    def test_batch_schema_three_counts_remain_part_of_the_drain_gate(self) -> None:
+        for validator, categories in (
+            (release_controller.validated_active_total, release_controller.ACTIVE_JOB_CATEGORIES_V2),
+            (release_controller.validated_persistent_active_total, release_controller.PERSISTENT_ACTIVE_JOB_CATEGORIES_V2),
+        ):
+            jobs = {**dict.fromkeys(categories, 0), "monomer_md": 1, "polymerization_batch": 2}
+            payload = {"active_jobs_schema_version": 3, "active_jobs": jobs, "active_total": 3}
+            with self.subTest(validator=validator.__name__):
+                self.assertEqual(validator(payload, set(categories)), 3)
+                self.assertEqual(validator(payload, set(categories), ignore_monomer_md=True), 2)
+                for invalid_jobs in (
+                    {key: value for key, value in jobs.items() if key != "polymerization_batch"},
+                    {**jobs, "unknown_worker": 0},
+                    {**jobs, "polymerization_batch": True},
+                    {**jobs, "polymerization_batch": -1},
+                ):
+                    with self.assertRaises(release_controller.ReleaseError):
+                        validator({**payload, "active_jobs": invalid_jobs}, set(categories))
+                with self.assertRaisesRegex(release_controller.ReleaseError, "does not match"):
+                    validator({**payload, "active_total": 1}, set(categories))
+
+    def test_batch_work_blocks_both_bootstrap_and_running_backend_drain(self) -> None:
+        controller = release_controller.ReleaseController(self.root, self.build(), "auto", False)
+        for bootstrap, categories in (
+            (True, release_controller.PERSISTENT_ACTIVE_JOB_CATEGORIES_V2),
+            (False, release_controller.ACTIVE_JOB_CATEGORIES_V2),
+        ):
+            controller.bootstrap = bootstrap
+            for active in (0, 1):
+                payload = {
+                    "active_jobs_schema_version": 3,
+                    "active_jobs": {**dict.fromkeys(categories, 0), "polymerization_batch": active},
+                    "active_total": active,
+                }
+                with (
+                    self.subTest(bootstrap=bootstrap, active=active),
+                    mock.patch.object(release_controller.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=json.dumps(payload))),
+                    mock.patch.object(release_controller.time, "monotonic", side_effect=(0, 2)),
+                ):
+                    if active:
+                        with self.assertRaisesRegex(release_controller.DeploymentDeferred, "1 active job"):
+                            controller.wait_for_jobs({"NEXPOLY_DRAIN_TIMEOUT_SECONDS": "1"}, ignore_monomer_md=True)
+                    else:
+                        controller.wait_for_jobs({"NEXPOLY_DRAIN_TIMEOUT_SECONDS": "1"})
+
+    def test_bootstrap_quiesce_keeps_batch_schema_three_evidence(self) -> None:
+        controller = release_controller.ReleaseController(self.root, self.build(), "auto", False)
+        hook = self.make_bootstrap_hook("bootstrap-quiesce-batch")
+        environment = {"NEXPOLY_BOOTSTRAP_QUIESCE_COMMAND": str(hook)}
+        for active in (0, 1):
+            payload = {
+                "active_jobs_schema_version": 3,
+                "ingress_isolated": True,
+                "active_jobs": {**dict.fromkeys(release_controller.ACTIVE_JOB_CATEGORIES_V2, 0), "polymerization_batch": active},
+                "active_total": active,
+            }
+            with mock.patch.object(release_controller.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=json.dumps(payload))):
+                if active:
+                    with self.assertRaisesRegex(release_controller.ReleaseError, "active work"):
+                        controller.run_bootstrap_quiesce(environment)
+                else:
+                    self.assertEqual(controller.run_bootstrap_quiesce(environment), payload)
 
     def test_busy_worker_cannot_be_restarted_after_global_drain_gate(self) -> None:
         manifest = self.build()

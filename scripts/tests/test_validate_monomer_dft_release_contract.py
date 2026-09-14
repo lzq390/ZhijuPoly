@@ -181,6 +181,83 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
                             failures,
                         )
 
+    def test_snapshot_contract_rejects_version_and_drain_regressions(self) -> None:
+        relative = "backend/app/services/deployment_control.py"
+        source = (REPOSITORY_ROOT / relative).read_text(encoding="utf-8")
+        mutations = {
+            "v1-version": ("version = 1\n", "version = 2\n"),
+            "v1-category": (
+                '"online_knowledge": _count_statuses(',
+                '"knowledge": _count_statuses(',
+            ),
+            "invalid-dft-schema": (
+                "if dft_schema.state is MonomerDftSchemaState.INVALID:",
+                "if False:",
+            ),
+            "v2-readiness": (
+                "if dft_schema.state is MonomerDftSchemaState.READY:",
+                "if dft_schema.state is MonomerDftSchemaState.ABSENT:",
+            ),
+            "v2-version": ("version = 2\n", "version = 1\n"),
+            "v2-active-statuses": (
+                "statuses=MONOMER_DFT_ACTIVE_STATUSES",
+                "statuses=ACTIVE_STATUSES",
+            ),
+            "v3-schema-detection": (
+                'if _table_exists(connection, "polymerization_batch", "jobs"):',
+                "if False:",
+            ),
+            "v3-dft-dependency": ("if version != 2:", "if version == 2:"),
+            "v3-category": ('counts["polymerization_batch"]', 'counts["batch"]'),
+            "v3-token-predicate": (
+                "WHERE execution_token IS NOT NULL",
+                "WHERE execution_token IS NULL",
+            ),
+            "v3-status-only-drain": (
+                "WHERE execution_token IS NOT NULL",
+                "WHERE status = 'running'",
+            ),
+            "v3-excludes-cancelled-executions": (
+                "WHERE execution_token IS NOT NULL",
+                "WHERE execution_token IS NOT NULL AND status != 'cancelled'",
+            ),
+            "v3-version": ("version = 3\n", "version = 2\n"),
+            "reported-version": (
+                "active_jobs_schema_version=version)",
+                "active_jobs_schema_version=2)",
+            ),
+        }
+        original_read_text = VALIDATOR._read_text
+
+        for mutation_name, (old, new) in mutations.items():
+            with self.subTest(mutation=mutation_name):
+                self.assertEqual(source.count(old), 1)
+                mutated_source = source.replace(old, new, 1)
+
+                def read_text(root, path, failures):  # type: ignore[no-untyped-def]
+                    if path == relative:
+                        return mutated_source
+                    return original_read_text(root, path, failures)
+
+                failures: list[str] = []
+                with mock.patch.object(
+                    VALIDATOR,
+                    "_read_text",
+                    side_effect=read_text,
+                ):
+                    VALIDATOR.validate_database_schema_state_contract(
+                        REPOSITORY_ROOT,
+                        failures,
+                    )
+                self.assertTrue(
+                    any(
+                        "versioned deployment job snapshot contract is missing"
+                        in failure
+                        for failure in failures
+                    ),
+                    failures,
+                )
+
     def test_current_development_delivery_satisfies_isolation_contract(self) -> None:
         failures: list[str] = []
         compose = (
