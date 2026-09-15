@@ -1,12 +1,60 @@
+diff --git a/node_modules/ketcher-react/dist/Editor.d.ts b/node_modules/ketcher-react/dist/Editor.d.ts
+--- a/node_modules/ketcher-react/dist/Editor.d.ts
++++ b/node_modules/ketcher-react/dist/Editor.d.ts
+@@ -1,6 +1,8 @@
+-import { EditorProps } from './MicromoleculesEditor';
+-declare type Props = Omit<EditorProps, 'ketcherId'> & {
+-    disableMacromoleculesEditor?: boolean;
+-};
+-export declare const Editor: (props: Props) => import("react/jsx-runtime").JSX.Element;
+-export {};
++import { EditorProps } from './MicromoleculesEditor';
++declare type Props = Omit<EditorProps, 'ketcherId'> & {
++    disableMacromoleculesEditor?: boolean;
++    /** Prepare Macro only when an operation requires it. */
++    deferMacromoleculesEditor?: boolean;
++};
++export declare const Editor: (props: Props) => import("react/jsx-runtime").JSX.Element;
++export {};
+diff --git a/node_modules/ketcher-react/dist/cjs/Editor.d.ts b/node_modules/ketcher-react/dist/cjs/Editor.d.ts
+--- a/node_modules/ketcher-react/dist/cjs/Editor.d.ts
++++ b/node_modules/ketcher-react/dist/cjs/Editor.d.ts
+@@ -1,6 +1,8 @@
+-import { EditorProps } from './MicromoleculesEditor';
+-declare type Props = Omit<EditorProps, 'ketcherId'> & {
+-    disableMacromoleculesEditor?: boolean;
+-};
+-export declare const Editor: (props: Props) => import("react/jsx-runtime").JSX.Element;
+-export {};
++import { EditorProps } from './MicromoleculesEditor';
++declare type Props = Omit<EditorProps, 'ketcherId'> & {
++    disableMacromoleculesEditor?: boolean;
++    /** Prepare Macro only when an operation requires it. */
++    deferMacromoleculesEditor?: boolean;
++};
++export declare const Editor: (props: Props) => import("react/jsx-runtime").JSX.Element;
++export {};
 diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher-react/dist/cjs/index.js
 --- a/node_modules/ketcher-react/dist/cjs/index.js
 +++ b/node_modules/ketcher-react/dist/cjs/index.js
-@@ -150,2 +150,4 @@
-   var info = structService.info();
+@@ -147,7 +147,13 @@
+ function createApi(structServiceProvider, defaultOptions) {
+   var _structService$destro;
+   var structService = structServiceProvider.createStructService(defaultOptions);
+-  var info = structService.info();
++  var info = structService.info().then(function (value) { return value; });
++  Object.defineProperty(info, 'nexpolyMacroController', {
++    get: function () { return structService.nexpolyMacroController; },
++    set: function (controller) { structService.nexpolyMacroController = controller; }
++  });
 +  info.catch(function () {});
 +  Object.defineProperty(info, "disposed", { get: function () { return structService.disposed; } });
    return Object.assign(info, {
-@@ -521,2 +523,7 @@
+     addKetcherId: structService.addKetcherId.bind(structService),
+     info: structService.info.bind(structService),
+@@ -519,6 +525,11 @@
+         }()
+       };
        Object.keys(this.listeners).forEach(function (en) {
 +        var handler = _this2.listeners[en];
 +        _this2.listeners[en] = function (event) {
@@ -14,34 +62,97 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +          return handler(event);
 +        };
          _this2.target.addEventListener(en, _this2.listeners[en]);
-@@ -533,2 +540,4 @@
+       });
+     }
+@@ -531,6 +542,8 @@
+     key: "componentWillUnmount",
+     value: function componentWillUnmount() {
        var _this3 = this;
 +      this.disposed = true;
 +      this.props.dispose?.();
        Object.keys(this.listeners).forEach(function (en) {
-@@ -8774,3 +8783,3 @@
+         _this3.target.removeEventListener(en, _this3.listeners[en]);
+       });
+@@ -3289,7 +3302,10 @@
+       _options.rescale;
+       _options.fragment;
+       var formatterOptions = _objectWithoutProperties__default["default"](_options, _excluded$B);
+-    var format = ketcherCore.identifyStructFormat(struct);
++    var controller = server.nexpolyMacroController;
++    var declaredFormat = controller?.detectInputFormat(struct, options['input-format']);
++    var format = controller?.requiresMacroFormat(declaredFormat) ? 'ket' : ketcherCore.identifyStructFormat(struct);
++    if (declaredFormat) formatterOptions['input-format'] = declaredFormat;
+     if (format === ketcherCore.SupportedFormat.cdx) {
+       struct = "base64::".concat(struct.replace(/\s/g, ''));
+     }
+@@ -3321,10 +3337,26 @@
+   return selection;
+ };
+ function load(struct, options) {
++  return function (dispatch, getState) {
++    var controller = getState().server?.nexpolyMacroController;
++    if (!controller) return nexpolyLoadStructure(struct, options)(dispatch, getState);
++    return controller.enqueue(async function () {
++      var result = await nexpolyLoadStructure(struct, options)(dispatch, getState);
++      controller.check();
++      if (controller.macro && controller.macro._type !== (controller.view ? 1 : 0)) await controller.setMode(controller.view);
++      return result;
++    }).catch(function (error) {
++      if (error.name !== 'AbortError') getState().editor.errorHandler?.(String(error));
++    });
++  };
++}
++function nexpolyLoadStructure(struct, options) {
+   return function () {
+     var _ref = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee(dispatch, getState) {
++      var nexpolyController = getState().server?.nexpolyMacroController;
+       var state, editor, server, serverSettings, errorHandler, _options2, isPaste, method, otherOptions, parsedStruct, _otherOptions, fragment, hasUnsupportedGroups, hasMoleculeToMonomerConnections, oldStruct, isIndigoFunctionCalled;
+       return _regeneratorRuntime__default["default"].wrap(function _callee$(_context) {
++        nexpolyController?.check();
+         while (1) switch (_context.prev = _context.next) {
+           case 0:
+             state = getState();
+@@ -8772,11 +8804,11 @@
+   var dialogRef = React.useRef(null);
+   React.useLayoutEffect(function () {
      if (focusable) {
 -      dialogRef.current.focus();
 +      nexpolyFocus(dialogRef.current);
      }
-@@ -8778,3 +8787,3 @@
+     return function () {
        var _dialogRef$current;
 -      (_dialogRef$current = dialogRef.current) === null || _dialogRef$current === void 0 || (_dialogRef$current = _dialogRef$current.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _dialogRef$current === void 0 || _dialogRef$current.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0].focus();
 +      (_dialogRef$current = dialogRef.current) === null || _dialogRef$current === void 0 || (_dialogRef$current = _dialogRef$current.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _dialogRef$current === void 0 || _dialogRef$current.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0]?.focus({ preventScroll: true });
      };
-@@ -14879,2 +14888,3 @@
+   }, [focusable]);
+   var isButtonOk = function isButtonOk(button) {
+@@ -14877,6 +14909,7 @@
+   return function (dispatch, getState) {
+     var onResize = fp.throttle(250, function () {
        var state = getState();
 +      if (!state.editor || state.editor.disposed) return;
        state.editor.render.update();
-@@ -14886,2 +14896,3 @@
+       dispatch({
+         type: 'CLEAR_VISIBLE',
+@@ -14884,6 +14917,7 @@
+       });
+     });
      addEventListener('resize', onResize);
 +    return function () { removeEventListener('resize', onResize); onResize.cancel(); };
    };
-@@ -15031,2 +15042,3 @@
+ }
+ function toolbarReducer () {
+@@ -15029,6 +15063,7 @@
+ });
+ function getRootReducer(setEditor) {
    return function root(state, action) {
 +    if (state?.editor?.disposed) return state;
      switch (action.type) {
-@@ -15150,21 +15162,42 @@
+       case 'INIT':
+         {
+@@ -15148,25 +15183,46 @@
+ function ownKeys$18(e, r) { var t = Object.keys(e); if (Object.getOwnPropertySymbols) { var o = Object.getOwnPropertySymbols(e); r && (o = o.filter(function (r) { return Object.getOwnPropertyDescriptor(e, r).enumerable; })), t.push.apply(t, o); } return t; }
+ function _objectSpread$18(e) { for (var r = 1; r < arguments.length; r++) { var t = null != arguments[r] ? arguments[r] : {}; r % 2 ? ownKeys$18(Object(t), !0).forEach(function (r) { _defineProperty__default["default"](e, r, t[r]); }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(t)) : ownKeys$18(Object(t)).forEach(function (r) { Object.defineProperty(e, r, Object.getOwnPropertyDescriptor(t, r)); }); } return e; }
  var throttleMilliseconds = 100;
 -function useThrottleResizeObserver() {
 -  var options = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
@@ -103,7 +214,11 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +  }, [options.ref]);
 +  return { ref: ref, ...state[0] };
  }
-@@ -15252,10 +15285,6 @@
+ 
+ function useFormContext() {
+@@ -15250,14 +15306,10 @@
+   useInterval(scrollBack, isScrollDown ? 100 : null);
+   useInterval(scrollForward, isScrollUp ? 100 : null);
    React.useEffect(function () {
 -    return function () {
 -      setScrollUp(false);
@@ -116,37 +231,53 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 -    };
 +    setScrollDown(false);
    }, [endInView]);
-@@ -15357,3 +15386,3 @@
+   return jsxRuntime.jsxs("div", {
+     className: clsx__default["default"](classes$L.scroll, isLeftRight ? classes$L.leftRight : classes$L.upDown),
+@@ -15355,13 +15407,13 @@
+     ref = _useResizeObserver.ref,
+     height = _useResizeObserver.height;
    var scrollRef = React.useRef(null);
 -  var _useInView = reactIntersectionObserver.useInView({
 +  var _useInView = nexpolyUseInView({
        threshold: 1
-@@ -15363,3 +15392,3 @@
+     }),
+     _useInView2 = _slicedToArray__default["default"](_useInView, 2),
+     startRef = _useInView2[0],
      startInView = _useInView2[1];
 -  var _useInView3 = reactIntersectionObserver.useInView({
 +  var _useInView3 = nexpolyUseInView({
        threshold: 1
-@@ -15651,3 +15680,3 @@
+     }),
+     _useInView4 = _slicedToArray__default["default"](_useInView3, 2),
+@@ -15649,13 +15701,13 @@
+   var _useResizeObserver = useThrottleResizeObserver(),
+     ref = _useResizeObserver.ref,
      height = _useResizeObserver.height;
 -  var _useInView = reactIntersectionObserver.useInView({
 +  var _useInView = nexpolyUseInView({
        threshold: 1
-@@ -15657,3 +15686,3 @@
+     }),
+     _useInView2 = _slicedToArray__default["default"](_useInView, 2),
+     startRef = _useInView2[0],
      startInView = _useInView2[1];
 -  var _useInView3 = reactIntersectionObserver.useInView({
 +  var _useInView3 = nexpolyUseInView({
        threshold: 1
-@@ -20231,3 +20260,2 @@
+     }),
+     _useInView4 = _slicedToArray__default["default"](_useInView3, 2),
+@@ -20229,21 +20281,18 @@
+   return _isChangingFunctionalGroup.apply(this, arguments);
+ }
  
 -var keydownListener = null;
  function initKeydownListener(element) {
-@@ -20235,3 +20263,4 @@
+   return function (dispatch, getState) {
      var hotKeys = ketcherCore.initHotKeys(configWithNonViewOnlyActionsDisabled);
 -    keydownListener = function keydownListener(event) {
 +    var keydownListener = function keydownListener(event) {
 +      if (!nexpolyOwnsEvent(element, event)) return;
        return keyHandle(dispatch, getState, hotKeys, event);
-@@ -20239,9 +20268,6 @@
+     };
      element.addEventListener('keydown', keydownListener);
 -  };
 -}
@@ -159,18 +290,28 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +      clearTimeout(getState().editor?.abbreviationLookupTimeoutId);
 +    };
    };
-@@ -20254,3 +20280,2 @@
+ }
+ function removeNotRenderedStruct(actionTool, group, dispatch) {
+@@ -20252,7 +20301,6 @@
+     dispatch(removeStructAction());
+   }
  }
 -var abbreviationLookupTimeoutId;
  var ABBREVIATION_LOOKUP_TYPING_TIMEOUT = 1000;
-@@ -20277,4 +20302,4 @@
+ var shortcutKeys = ['1', '2', '3', '4', 't', 'h', 'n', 'o', 's', 'p', 'f', 'i', 'b', '+', '-'];
+ function keyHandle(dispatch, getState, hotKeys, event) {
+@@ -20275,16 +20323,16 @@
+     var isAbbreviationLookupShown = (!isTheSameKey || !isShortcutKey) && currentlyPressedKeys;
+     if (isAbbreviationLookupShown) {
        dispatch(showAbbreviationLookup(event.key));
 -      clearTimeout(abbreviationLookupTimeoutId);
 -      abbreviationLookupTimeoutId = undefined;
 +      clearTimeout(editor.abbreviationLookupTimeoutId);
 +      editor.abbreviationLookupTimeoutId = undefined;
        var resetAction = ketcherCore.SettingsManager.getSettings().selectionTool;
-@@ -20284,5 +20309,5 @@
+       dispatch(onAction(resetAction));
+       event.preventDefault();
+       return;
      } else {
 -      abbreviationLookupTimeoutId = window.setTimeout(function () {
 +      editor.abbreviationLookupTimeoutId = window.setTimeout(function () {
@@ -178,11 +319,19 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 -        abbreviationLookupTimeoutId = undefined;
 +        editor.abbreviationLookupTimeoutId = undefined;
        }, ABBREVIATION_LOOKUP_TYPING_TIMEOUT);
-@@ -20398,2 +20423,3 @@
+       dispatch(initAbbreviationLookup(event.key));
+     }
+@@ -20396,6 +20444,7 @@
+   });
+   return {
      formats: formats,
 +    dispose: function () { debAction.cancel(); loadStruct.cancel(); },
      focused: function focused() {
-@@ -20651,5 +20677,6 @@
+       var state = getState();
+       return !state.modal;
+@@ -20649,9 +20698,10 @@
+     staticResourcesUrl = _useSettingsContext.staticResourcesUrl;
+   React.useEffect(function () {
      if (typeof requestIdleCallback === 'function') {
 -      requestIdleCallback(function () {
 +      var idle = requestIdleCallback(function () {
@@ -190,7 +339,11 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
        });
 +      return function () { cancelIdleCallback(idle); };
      } else {
-@@ -24313,2 +24340,13 @@
+       onInitTmpls(ref.current, staticResourcesUrl);
+     }
+@@ -24311,6 +24361,17 @@
+     clientArea.addEventListener('mouseleave', this.onMouseLeave);
+   }
    _createClass__default["default"](HoverIcon, [{
 +    key: "destroy",
 +    value: function destroy() {
@@ -204,11 +357,19 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +    }
 +  }, {
      key: "fill",
-@@ -24340,2 +24378,3 @@
+     get: function get() {
+       return this._fill;
+@@ -24338,6 +24399,7 @@
+   }, {
+     key: "onMouseMove",
      value: function onMouseMove(event) {
 +      if (!this.editor || this.editor.disposed || !nexpolyOwnsEvent(this.editor.render.clientArea, event)) return;
        if (this.isShown || this.isOverLoader(event) && this.shouldBeShownWhenMouseBack) {
-@@ -25168,2 +25207,19 @@
+         this.show();
+         this.updatePosition();
+@@ -25166,6 +25228,23 @@
+     this.render.paper.canvas.setAttribute('data-testid', 'canvas');
+   }
    _createClass__default["default"](Editor, [{
 +    key: "destroy",
 +    value: function destroy() {
@@ -228,14 +389,43 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +    }
 +  }, {
      key: "isDitrty",
-@@ -26091,4 +26147,4 @@
+     value: function isDitrty() {
+       var position = this.historyPtr;
+@@ -25479,6 +25558,20 @@
+   }, {
+     key: "openMonomerCreationWizard",
+     value: function openMonomerCreationWizard() {
++      var owner = ketcherCore.ketcherProvider.getKetcher();
++      var controller = owner?.structService.nexpolyMacroController;
++      if (controller && controller.state !== 'ready') {
++        if (this.nexpolyWizardPending) return this.nexpolyWizardPending;
++        var chosen = JSON.stringify(this.selection());
++        var revision = controller.revision;
++        this.nexpolyWizardPending = controller.ensure().then(() => {
++          controller.check();
++          if (!this.disposed && controller.revision === revision && JSON.stringify(this.selection()) === chosen) return this.openMonomerCreationWizard();
++        }).catch(error => { if (error.name !== 'AbortError') this.errorHandler?.(String(error)); })
++          .finally(() => { this.nexpolyWizardPending = null; });
++        return this.nexpolyWizardPending;
++      }
++
+       var _selection$atoms2,
+         _this2 = this;
+       var currentStruct = this.render.ctab.molecule;
+@@ -26089,8 +26182,8 @@
+   }, {
+     key: "focusCliparea",
      value: function focusCliparea() {
 -      var cliparea = document.querySelector('.cliparea');
 -      cliparea === null || cliparea === void 0 || cliparea.focus();
 +      var cliparea = this.render.clientArea.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)?.querySelector('.cliparea');
 +      nexpolyFocus(cliparea);
      }
-@@ -26194,3 +26250,21 @@
+   }], [{
+     key: "isSelectionContinuous",
+@@ -26192,7 +26285,25 @@
+   }
+   return false;
  }
 +function nexpolyFocus(element) {
 +  if (!element || !element.isConnected || !element.getClientRects().length) return;
@@ -257,7 +447,11 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +  editor.domDisposers = [];
 +  var dragging = false;
    var trackedDomEvents = [{
-@@ -26234,6 +26308,13 @@
+     target: clientArea,
+     eventName: 'click',
+@@ -26232,10 +26343,17 @@
+       toolEventHandler = _ref13.toolEventHandler;
+     editor.event[eventName] = new subscription.DOMSubscription();
      var subs = editor.event[eventName];
 -    target.addEventListener(eventName, function () {
 -      if (window.isPolymerEditorTurnedOn) return;
@@ -275,22 +469,44 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +    target.addEventListener(eventName, callback);
 +    editor.domDisposers.push(function () { target.removeEventListener(eventName, callback); subs.handlers = []; });
      subs.add(function (event) {
-@@ -29553,3 +29634,3 @@
+       updateLastCursorPosition(editor, event);
+       if (['mouseup', 'mousedown', 'click', 'dbclick'].includes(event.type) && !isMouseMainButtonPressed(event)) {
+@@ -29551,7 +29669,7 @@
+     value: function componentWillUnmount() {
+       removeEditorHandlers(this.editor, this.props);
        this.editorRef.current.removeEventListener('wheel', this.handleWheel);
 -      this.editor.render.unobserveCanvasResize();
 +      this.editor.destroy();
      }
-@@ -36963,3 +37044,3 @@
+   }, {
+     key: "render",
+@@ -33420,7 +33538,8 @@
+     setTimeout(function () {
+       onOk({
+         structStr: structStr,
+-        fragment: false
++        fragment: false,
++        'input-format': fileName ? ketcherCore.getFormatMimeTypeByFileName(fileName) : undefined
+       });
+       setIsLoading(false);
+     }, 0);
+@@ -36961,7 +37080,7 @@
+     (_inputRef$current = inputRef.current) === null || _inputRef$current === void 0 || _inputRef$current.focus();
+     return function () {
        var _inputRef$current2;
 -      (_inputRef$current2 = inputRef.current) === null || _inputRef$current2 === void 0 || (_inputRef$current2 = _inputRef$current2.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _inputRef$current2 === void 0 || _inputRef$current2.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0].focus();
 +      (_inputRef$current2 = inputRef.current) === null || _inputRef$current2 === void 0 || (_inputRef$current2 = _inputRef$current2.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _inputRef$current2 === void 0 || _inputRef$current2.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0]?.focus({ preventScroll: true });
      };
-@@ -37166,4 +37247,2 @@
+   }, []);
+   var closePanel = function closePanel() {
+@@ -37164,15 +37283,15 @@
+ var handleMouseMove = function handleMouseMove(dispatch, event) {
+   dispatch(updateCursorPosition(event.clientX, event.clientY));
  };
 -var pointerMoveListener = null;
 -var mouseDownListener = null;
  function initMouseListener(element) {
-@@ -37171,6 +37250,8 @@
+   return function (dispatch, getState) {
      var throttledHandleMouseMove = _.throttle(handleMouseMove, MOUSE_MOVE_THROTTLE_TIMEOUT);
 -    pointerMoveListener = function pointerMoveListener(event) {
 +    var pointerMoveListener = function pointerMoveListener(event) {
@@ -301,7 +517,11 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +    var mouseDownListener = function mouseDownListener(event) {
 +      if (!nexpolyOwnsEvent(element, event)) return;
        var areBothLeftAndRightButtonsClicked = event.buttons === 3;
-@@ -37182,12 +37263,7 @@
+       if (areBothLeftAndRightButtonsClicked) {
+         handleRightClick(getState);
+@@ -37180,16 +37299,11 @@
+     };
+     element.addEventListener('pointermove', pointerMoveListener);
      element.addEventListener('mousedown', mouseDownListener, true);
 -  };
 -}
@@ -318,7 +538,11 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +      throttledHandleMouseMove.cancel();
 +    };
    };
-@@ -37217,5 +37293,5 @@
+ }
+ function handleRightClick(getState) {
+@@ -37215,9 +37329,9 @@
+       store.dispatch(setServer(structService));
+     };
    };
 -  store.dispatch(initKeydownListener(element));
 -  store.dispatch(initMouseListener(element));
@@ -327,7 +551,11 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +  var disposeMouse = store.dispatch(initMouseListener(element));
 +  var disposeResize = store.dispatch(initResize());
    appRoot.render(jsxRuntime.jsx(reactRedux.Provider, {
-@@ -37243,4 +37319,6 @@
+     store: store,
+     children: jsxRuntime.jsx(settingsContext.Provider, {
+@@ -37241,8 +37355,10 @@
+     })
+   }));
    return function () {
 -    store.dispatch(removeKeydownListener(element));
 -    store.dispatch(removeMouseListeners(element));
@@ -336,7 +564,11 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +    disposeResize();
 +    if (global.currentState?.editor === store.getState().editor) delete global.currentState;
    };
-@@ -37284,21 +37362,16 @@
+ }
+ 
+@@ -37282,25 +37398,20 @@
+   }, {
+     key: "reinitializeApi",
      value: function reinitializeApi(ketcherId, structServiceProvider, setStructServiceToStore) {
 -      var _this = this;
 -      var oldStructService = this.structService;
@@ -371,11 +603,24 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +      }).catch(function (error) { service.destroy?.(); if (!builder.disposed) console.error(error); });
 +      return service;
      }
-@@ -37376,2 +37449,3 @@
+   }, {
+     key: "appendServiceMode",
+@@ -37370,50 +37481,46 @@
+       var params = new URLSearchParams(document.location.search);
+       var initialMol = params.get('moll');
+       if (initialMol) {
+-        ketcher.setMolecule(initialMol);
++        if (ketcher.structService.nexpolyMacroController) ketcher.nexpolyInitialMol = initialMol;
++        else ketcher.setMolecule(initialMol);
+       }
+       IndigoProvider.setIndigo(this.structService);
        ketcherCore.ketcherProvider.addKetcherInstance(ketcher);
 +      window.ketcher = ketcher;
        return ketcher;
-@@ -37382,36 +37456,29 @@
+     }
+   }]);
+   return KetcherBuilder;
+ }();
  
 -function buildKetcherAsync(_x) {
 -  return _buildKetcherAsync.apply(this, arguments);
@@ -415,6 +660,7 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +  var builder = new KetcherBuilder();
 +  var service = builder.appendApiAsync(props.structServiceProvider);
 +  builder.appendServiceMode(props.structServiceProvider.mode);
++  if (props.createMacroController) builder.structService.nexpolyMacroController = props.createMacroController();
 +  var ketcher = builder.build();
 +  service.addKetcherId(ketcher.id);
 +  props.onBuild(ketcher, builder);
@@ -439,7 +685,11 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +    throw error;
 +  } finally { props.signal.removeEventListener('abort', abort); }
  }
-@@ -37426,74 +37493,61 @@
+ 
+ var styles = {"button-common-styles":"Editor-module_button-common-styles__h4pal","scrollbar":"Editor-module_scrollbar__yVsY8","small":"Editor-module_small__8cgEX","editor":"Editor-module_editor__o0Gjz","-hidden":"Editor-module_-hidden__aKodt","switchingLoader":"Editor-module_switchingLoader__OlmM6","blink":"Editor-module_blink__J7UCV","editorsWrapper":"Editor-module_editorsWrapper__qMSvd"};
+@@ -37424,85 +37531,71 @@
+   smallWidth: 1040,
+   smallHeight: 600
  };
 +// Serialize old root cleanup before creating another SDK root, including StrictMode.
 +var nexpolyRootCleanup = Promise.resolve();
@@ -568,7 +818,7 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +        record.root = record.cleanup = record.builder = record.ketcher = null;
 +        if (active.current === record) active.current = null;
        });
-@@ -37501,6 +37555,5 @@
+     };
    }, []);
 -  return jsxRuntime.jsx("div", {
 -    ref: rootElRef,
@@ -578,26 +828,441 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.js b/node_modules/ketcher
 +    className: clsx__default["default"](KETCHER_ROOT_NODE_CLASS_NAME, styles.editor,
 +      { [styles.small]: dimensions.height && dimensions.height <= mediaSizes.smallHeight || dimensions.width && dimensions.width <= mediaSizes.smallWidth }) });
  }
-@@ -37774,2 +37827 @@
+ 
+ var _templateObject, _templateObject2, _templateObject3, _templateObject4, _templateObject5, _templateObject6, _templateObject7, _templateObject8, _templateObject9;
+@@ -37617,125 +37710,278 @@
+ 
+ function ownKeys(e, r) { var t = Object.keys(e); if (Object.getOwnPropertySymbols) { var o = Object.getOwnPropertySymbols(e); r && (o = o.filter(function (r) { return Object.getOwnPropertyDescriptor(e, r).enumerable; })), t.push.apply(t, o); } return t; }
+ function _objectSpread(e) { for (var r = 1; r < arguments.length; r++) { var t = null != arguments[r] ? arguments[r] : {}; r % 2 ? ownKeys(Object(t), !0).forEach(function (r) { _defineProperty__default["default"](e, r, t[r]); }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(t)) : ownKeys(Object(t)).forEach(function (r) { Object.defineProperty(e, r, Object.getOwnPropertyDescriptor(t, r)); }); } return e; }
+-var MacromoleculesEditorComponent = React.lazy(function () {
+-  return Promise.resolve().then(function () { return require('./index.modern-8e10d5ac.js'); });
+-});
++const aborted = () => new DOMException('Editor initialization disposed', 'AbortError');
++const macroTypes = new Set(['monomer', 'ambiguousMonomer', 'monomerTemplate',
++  'ambiguousMonomerTemplate', 'monomerGroupTemplate']);
++const macroFormats = new Map([
++  ['helm', 'helm'], ['chemical/x-helm', 'helm'], ['fasta', 'fasta'], ['chemical/x-fasta', 'fasta'],
++  ['sequence', 'sequence'], ['chemical/x-sequence', 'sequence'],
++  ['sequence3Letter', 'sequence-3-letter'], ['sequence-3-letter', 'sequence-3-letter'],
++  ['chemical/x-peptide-sequence-3-letter', 'sequence-3-letter'],
++  ['idt', 'idt'], ['chemical/x-idt', 'idt'],
++  ['chemical/x-rna-sequence', 'sequence'], ['chemical/x-dna-sequence', 'sequence'],
++  ['chemical/x-peptide-sequence', 'sequence']
++]);
++
++function containsMacro(source) {
++  if (typeof source !== 'string' || !source.trim().startsWith('{')) return false;
++  const document = JSON.parse(source);
++  return [...Object.values(document), ...(document.root?.nodes || []), ...(document.root?.templates || [])]
++    .some(value => value && typeof value === 'object' && macroTypes.has(value.type));
++}
++
++/** One controller per SDK, registered before any initial document writes. */
++class MacroController {
++  constructor({ load, show, fail, deferred = true }) {
++    Object.assign(this, { load, show, fail, deferred });
++    this.state = 'idle';
++    this.generation = 0;
++    this.tail = Promise.resolve();
++    this.waiters = new Set();
++    this.view = false;
++  }
++  check() { if (this.state === 'disposed' || this.sdk?.disposed) throw aborted(); }
++  attach(sdk) {
++    this.check(); this.sdk = sdk;
++    this.revision = 0;
++    this.onChange = () => { ++this.revision; };
++    sdk.changeEvent?.add(this.onChange);
++  }
++  requiresMacroFormat(format) { return macroFormats.has(format); }
++  detectInputFormat(source, explicit) {
++    if (explicit) return explicit;
++    if (/^\s*(?:PEPTIDE|RNA|CHEM|BLOB)\d+\s*\{/.test(source)) return 'helm';
++    if (/^\s*>/.test(source)) return 'fasta';
++  }
++  enqueue(action) {
++    try { this.check(); } catch (error) { return Promise.reject(error); }
++    const task = this.tail.then(() => { this.check(); return action(); });
++    this.tail = task.catch(() => {});
++    return this.guard(task);
++  }
++  guard(task) {
++    this.check();
++    return new Promise((resolve, reject) => {
++      const stop = error => reject(error);
++      this.waiters.add(stop);
++      Promise.resolve(task).then(value => { this.check(); resolve(value); }, reject)
++        .catch(reject).finally(() => this.waiters.delete(stop));
++    });
++  }
++  ensure() {
++    try { this.check(); } catch (error) { return Promise.reject(error); }
++    if (this.state === 'ready') return Promise.resolve(this.macro);
++    if (this.pending) return this.pending.promise;
++    const generation = ++this.generation;
++    this.state = 'loading';
++    let resolve, reject;
++    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
++    promise.catch(() => {});
++    const timer = setTimeout(() => this.rejectAttempt(new Error('Macro initialization timed out'), generation), 15000);
++    this.pending = { promise, resolve, reject, timer, generation };
++    Promise.resolve().then(() => this.load(generation)).catch(error => this.rejectAttempt(error, generation));
++    return promise;
++  }
++  initialized(editor, generation) {
++    if (this.state === 'disposed' || generation !== this.generation || !this.pending) {
++      editor.destroy(); return;
++    }
++    this.macro = editor;
++    // A hidden virgin Macro does not own the small-molecule document.
++    editor._type = 0;
++    this.state = 'ready';
++    const pending = this.pending;
++    this.pending = null;
++    clearTimeout(pending.timer);
++    pending.resolve(editor);
++  }
++  rejectAttempt(error, generation) {
++    if (generation !== this.generation || this.state === 'disposed') return;
++    const pending = this.pending;
++    this.pending = null;
++    this.state = 'failed';
++    if (pending) { clearTimeout(pending.timer); pending.reject(error); }
++    this.fail(error, generation);
++  }
++  async setMode(value) {
++    this.check();
++    const macro = value ? await this.ensure() : this.macro;
++    this.check();
++    if (macro && !macro.disposed && macro._type !== (value ? 1 : 0)) {
++      if (value) macro.switchToMacromolecules();
++      else macro.switchToMicromolecules();
++    }
++    this.view = value;
++    window.isPolymerEditorTurnedOn = value;
++    // The host acknowledges a command id, even if the boolean did not change.
++    await this.guard(this.show(value));
++    if (!value) this.sdk?.editor?.focusCliparea();
++  }
++  requestMode(value) { return this.enqueue(() => this.setMode(value)); }
++  async normalize(source, format, options) {
++    this.check();
++    const explicit = this.detectInputFormat(source, format);
++    if (macroFormats.has(explicit) || containsMacro(source)) await this.ensure();
++    if (macroFormats.has(explicit)) {
++      const sequenceType = /^chemical\/x-(rna|dna|peptide)-sequence$/.exec(explicit)?.[1].toUpperCase();
++      const result = await this.sdk.structService.convert({ struct: source,
++        input_format: macroFormats.get(explicit), output_format: 'chemical/x-indigo-ket' },
++      { ...options, ...(sequenceType ? { 'sequence-type': sequenceType } : {}) });
++      this.check();
++      return { source: result.struct, format: 'ket' };
++    }
++    // Formats that may hide monomers are normalized only during an actual import.
++    if (['mol', 'molV3000', 'cdxml', 'smilesExt', 'chemical/x-mdl-molfile', 'chemical/x-cdxml'].includes(explicit)) {
++      const result = await this.sdk.structService.convert({ struct: source, output_format: 'chemical/x-indigo-ket' });
++      this.check();
++      if (containsMacro(result.struct)) { await this.ensure(); return { source: result.struct, format: 'ket' }; }
++    }
++    return { source, format };
++  }
++  import(source, options, original) {
++    return this.enqueue(async () => {
++      const normalized = await this.normalize(source, options?.inputFormat, options);
++      this.check();
++      const result = await original(normalized.source, options?.inputFormat || normalized.format
++        ? { ...options, inputFormat: normalized.format } : options);
++      this.check();
++      // Importers can change model ownership without changing the visible mode.
++      if (this.macro && this.macro._type !== (this.view ? 1 : 0)) await this.setMode(this.view);
++      return result;
++    });
++  }
++  dispose() {
++    if (this.state === 'disposed') return;
++    ++this.generation;
++    this.state = 'disposed';
++    this.sdk?.changeEvent?.remove(this.onChange);
++    const error = aborted();
++    if (this.pending) { clearTimeout(this.pending.timer); this.pending.reject(error); this.pending = null; }
++    for (const reject of this.waiters) reject(error);
++    this.waiters.clear();
++    // SDK caches can retain an old service wrapper. Retired capabilities must
++    // not keep its document, React callbacks or editor reachable through it.
++    this.sdk = this.macro = this.onChange = undefined;
++    this.load = this.show = this.fail = () => {};
++    this.tail = Promise.resolve();
++  }
++}
++
++function nexpolyLoadMacroModule() { return import("./index.modern-8e10d5ac.js"); }
++// Embedded in both SDK module formats by the audited r4 patch.
++class NexPolyMacroBoundary extends React.Component {
++  constructor(props) { super(props); this.state = { failed: false }; }
++  static getDerivedStateFromError() { return { failed: true }; }
++  componentDidCatch(error) { this.props.onError(error); }
++  render() { return this.state.failed ? null : this.props.children; }
++}
+ var Editor = function Editor(props) {
+-  var _useState = React.useState(false),
+-    _useState2 = _slicedToArray__default["default"](_useState, 2),
+-    showPolymerEditor = _useState2[0],
+-    setShowPolymerEditor = _useState2[1];
+-  var _useState3 = React.useState(),
+-    _useState4 = _slicedToArray__default["default"](_useState3, 2),
+-    moleculesEditor = _useState4[0],
+-    setMoleculesEditor = _useState4[1];
+-  var _useState5 = React.useState(),
+-    _useState6 = _slicedToArray__default["default"](_useState5, 2),
+-    ketcher = _useState6[0],
+-    setKetcher = _useState6[1];
+-  var _useState7 = React.useState(),
+-    _useState8 = _slicedToArray__default["default"](_useState7, 2),
+-    macromoleculesEditor = _useState8[0],
+-    setMacromoleculesEditor = _useState8[1];
+-  var _useState9 = React.useState(''),
+-    _useState10 = _slicedToArray__default["default"](_useState9, 2),
+-    ketcherId = _useState10[0],
+-    setKetcherId = _useState10[1];
+-  var togglePolymerEditor = function togglePolymerEditor(toggleValue) {
+-    setShowPolymerEditor(toggleValue);
+-    window.isPolymerEditorTurnedOn = toggleValue;
++  var latest = React.useRef(props);
++  latest.current = props;
++  var current = React.useRef(null);
++  var uiWaiters = React.useRef(new Map());
++  var command = React.useRef(0);
++  var [mode, setMode] = React.useState({ macro: false, command: 0 });
++  var [macroView, setMacroView] = React.useState(null);
++  var [macroError, setMacroError] = React.useState(null);
++  var [sdkId, setSdkId] = React.useState('');
++  React.useLayoutEffect(function () {
++    var resolve = uiWaiters.current.get(mode.command);
++    if (resolve) { uiWaiters.current.delete(mode.command); resolve(); }
++  }, [mode]);
++  var createController = React.useCallback(function () {
++    var controller = new MacroController({
++      deferred: !!latest.current.deferMacromoleculesEditor,
++      load: async function (generation) {
++        setMacroError(null);
++        var module = await nexpolyLoadMacroModule();
++        controller.check();
++        if (generation !== controller.generation) return;
++        setMacroView({ Component: module.default, generation: generation, controller: controller, id: controller.sdk.id });
++      },
++      show: function (value) {
++        return new Promise(function (resolve) {
++          var id = ++command.current;
++          uiWaiters.current.set(id, resolve);
++          setMode({ macro: value, command: id });
++        });
++      },
++      fail: function (error) {
++        if (current.current !== controller) return;
++        setMacroView(null);
++        setMacroError(error);
++      }
++    });
++    current.current = controller;
++    return controller;
++  }, []);
++  var requestMode = function (value) {
++    var controller = current.current;
++    if (!controller) return;
++    controller.requestMode(value).catch(function (error) {
++      if (error.name !== 'AbortError' && controller.state !== 'failed') setMacroError(error);
++    });
+   };
+-  var togglerComponent = !props.disableMacromoleculesEditor ? jsxRuntime.jsx(ModeControl, {
+-    toggle: togglePolymerEditor,
+-    isPolymerEditor: showPolymerEditor
++  var toggler = !props.disableMacromoleculesEditor ? React.createElement(ModeControl, {
++    toggle: requestMode, isPolymerEditor: mode.macro
+   }) : undefined;
++  var onMicro = async function (sdk) {
++    var controller = sdk.structService.nexpolyMacroController;
++    try {
++      await sdk.structService.info();
++      controller.check();
++      if (!latest.current.deferMacromoleculesEditor && !latest.current.disableMacromoleculesEditor) await controller.ensure();
++      if (sdk.nexpolyInitialMol) await sdk.setMolecule(sdk.nexpolyInitialMol);
++      controller.check();
++      if (!controller.notified) { controller.notified = true; latest.current.onInit?.(sdk); }
++    } catch (error) {
++      if (error.name !== 'AbortError') latest.current.errorHandler?.(String(error));
++    }
++  };
++  var onMacro = function (editor) {
++    var controller = macroView.controller;
++    controller.initialized(editor, macroView.generation);
++  };
+   React.useEffect(function () {
+-    var switchToMacromoleculesModeHandler = function switchToMacromoleculesModeHandler() {
+-      togglePolymerEditor(true);
++    var controller = macroView?.controller;
++    var macro = controller?.macro;
++    if (!macro || macro.disposed) return;
++    var toMacro = function () { requestMode(true); };
++    var toMicro = function () { requestMode(false); };
++    macro.events.switchToMacromoleculesMode.add(toMacro);
++    macro.events.switchToMoleculesMode.add(toMicro);
++    return function () {
++      macro.events.switchToMacromoleculesMode.remove(toMacro);
++      macro.events.switchToMoleculesMode.remove(toMicro);
+     };
+-    var switchToMoleculesModeHandler = function switchToMoleculesModeHandler() {
+-      togglePolymerEditor(false);
+-    };
+-    if (macromoleculesEditor) {
+-      macromoleculesEditor.events.switchToMacromoleculesMode.add(switchToMacromoleculesModeHandler);
+-      macromoleculesEditor.events.switchToMoleculesMode.add(switchToMoleculesModeHandler);
+-    }
+-    return function () {
+-      if (macromoleculesEditor) {
+-        macromoleculesEditor.events.switchToMacromoleculesMode.remove(switchToMacromoleculesModeHandler);
+-        macromoleculesEditor.events.switchToMoleculesMode.remove(switchToMoleculesModeHandler);
+-      }
+-    };
+-  }, [macromoleculesEditor]);
++  }, [macroView, mode]);
+   React.useEffect(function () {
+     return function () {
++      // Actual SDK retirement owns cancellation; StrictMode's discarded effect
++      // must not retire a controller subsequently created by the live SDK.
++      uiWaiters.current.clear();
+       window.isPolymerEditorTurnedOn = false;
+     };
+   }, []);
+-  React.useEffect(function () {
+-    if (moleculesEditor && macromoleculesEditor) {
+-      if (showPolymerEditor) {
+-        macromoleculesEditor === null || macromoleculesEditor === void 0 || macromoleculesEditor.switchToMacromolecules();
+-      } else {
+-        macromoleculesEditor === null || macromoleculesEditor === void 0 || macromoleculesEditor.switchToMicromolecules();
+-        moleculesEditor === null || moleculesEditor === void 0 || moleculesEditor.focusCliparea();
+-      }
+-    }
+-  }, [showPolymerEditor]);
+-  React.useEffect(function () {
+-    if (ketcher && moleculesEditor && (macromoleculesEditor || props.disableMacromoleculesEditor)) {
+-      var _props$onInit;
+-      (_props$onInit = props.onInit) === null || _props$onInit === void 0 || _props$onInit.call(props, ketcher);
+-    }
+-  }, [moleculesEditor, macromoleculesEditor]);
+-  var onInitMoleculesEditor = function onInitMoleculesEditor(ketcher) {
+-    setKetcher(ketcher);
+-    setMoleculesEditor(ketcher.editor);
+-  };
+-  var onInitMacromoleculesEditor = function onInitMacromoleculesEditor(macromoleculesEditor) {
+-    setMacromoleculesEditor(macromoleculesEditor);
+-  };
+-  return jsxRuntime.jsxs(jsxRuntime.Fragment, {
+-    children: [jsxRuntime.jsx("div", {
+-      className: styles.editorsWrapper,
+-      style: {
+-        display: showPolymerEditor ? undefined : 'none'
+-      },
+-      children: jsxRuntime.jsx(React.Suspense, {
+-        fallback: jsxRuntime.jsx("div", {
+-          className: styles.switchingLoader,
+-          children: jsxRuntime.jsx(LoadingCircles, {})
+-        }),
+-        children: ketcherId && jsxRuntime.jsx(MacromoleculesEditorComponent, {
+-          togglerComponent: togglerComponent,
+-          ketcherId: ketcherId,
+-          isMacromoleculesEditorTurnedOn: showPolymerEditor,
+-          onInit: onInitMacromoleculesEditor
+-        })
+-      })
+-    }), jsxRuntime.jsx("div", {
+-      className: styles.editorsWrapper,
+-      style: {
+-        display: showPolymerEditor ? 'none' : undefined
+-      },
+-      children: jsxRuntime.jsx(MicromoleculesEditor, _objectSpread(_objectSpread({}, props), {}, {
+-        ketcherId: ketcherId,
+-        onSetKetcherId: setKetcherId,
+-        togglerComponent: togglerComponent,
+-        onInit: onInitMoleculesEditor
+-      }))
+-    })]
+-  });
+-};
+-
+-Object.defineProperty(exports, 'EditorClassName', {
+-  enumerable: true,
+-  get: function () { return ketcherCore.EditorClassName; }
+-});
+-Object.defineProperty(exports, 'KETCHER_MACROMOLECULES_ROOT_NODE_SELECTOR', {
+-  enumerable: true,
+-  get: function () { return ketcherCore.KETCHER_MACROMOLECULES_ROOT_NODE_SELECTOR; }
+-});
++  var macro = macroView && React.createElement(NexPolyMacroBoundary, {
++    key: macroView.id + ':' + macroView.generation,
++    onError: function (error) { macroView.controller.rejectAttempt(error, macroView.generation); }
++  }, React.createElement(macroView.Component, {
++    ketcherId: macroView.id, togglerComponent: toggler,
++    isMacromoleculesEditorTurnedOn: mode.macro, onInit: onMacro
++  }));
++  return React.createElement(React.Fragment, null,
++    React.createElement('div', { className: styles.editorsWrapper, style: { display: mode.macro ? undefined : 'none' } }, macro),
++    React.createElement('div', { className: styles.editorsWrapper, style: { display: mode.macro ? 'none' : undefined } },
++      React.createElement(MicromoleculesEditor, { ...props, ketcherId: sdkId, onSetKetcherId: setSdkId,
++        createMacroController: createController, togglerComponent: toggler, onInit: onMicro })),
++    macroError && React.createElement('div', { role: 'alert', className: 'np-ketcher-macro-error' },
++      '大分子功能加载失败，当前结构已保留。', React.createElement('button', { type: 'button',
++        onClick: function () { current.current.ensure().then(() => requestMode(true)).catch(() => {}); }
++      }, '重试')));
++};
++
++
+ exports.ACS_STYLE_DEFAULT_SETTINGS = ACS_STYLE_DEFAULT_SETTINGS;
+ exports.Accordion = Accordion$1;
+ exports.AmbiguousMonomerPreview = AmbiguousMonomerPreview;
+@@ -37772,4 +38018,3 @@
+ exports.ketcherInitEventName = ketcherInitEventName;
+ exports.preview = preview;
  exports.usePortalStyle = usePortalStyle;
 -//# sourceMappingURL=index.js.map
 diff --git a/node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js b/node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js
 --- a/node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js
 +++ b/node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js
-@@ -6020,3 +6020,4 @@
+@@ -6010,15 +6010,23 @@
+     },
+     createEditor: function createEditor(state, action) {
+       var _action$payload$onIni, _action$payload;
++      var previousEditor = ketcherCore.CoreEditor.provideEditorInstance();
++      try {
+       var editor = new ketcherCore.CoreEditor({
+         theme: action.payload.theme,
+         canvas: action.payload.canvas,
+         monomersLibraryUpdate: action.payload.monomersLibraryUpdate
+       });
++      } catch (error) {
++        var partial = ketcherCore.CoreEditor.provideEditorInstance();
++        if (partial && partial !== previousEditor) partial.destroy();
++        throw error;
++      }
+       state.editor = editor;
+       (_action$payload$onIni = (_action$payload = action.payload).onInit) === null || _action$payload$onIni === void 0 || _action$payload$onIni.call(_action$payload, editor);
      },
 -    destroyEditor: function destroyEditor(state) {
 +    destroyEditor: function destroyEditor(state, action) {
 +      if (state.editor !== action.payload) return;
        var _state$editor, _state$editor2;
-@@ -14180,4 +14181,5 @@
+       state.editorLayoutMode = (_state$editor = state.editor) === null || _state$editor === void 0 ? void 0 : _state$editor.mode.modeName;
+       (_state$editor2 = state.editor) === null || _state$editor2 === void 0 || _state$editor2.destroy();
+@@ -14178,13 +14186,19 @@
+   }, [editor]);
+ }
  
 -function useMacromoleculesHotkeys() {
 +function useMacromoleculesHotkeys(canvasRef) {
    React.useEffect(function () {
 +    var canvas = canvasRef.current;
      var HELP_LINK = process.env.HELP_LINK || 'master';
-@@ -14187,2 +14189,7 @@
+     var helpUrl = "https://github.com/epam/ketcher/blob/".concat(HELP_LINK, "/documentation/help.md#ketcher-macromolecules-mode");
+     var handler = function handler(e) {
+       if (e.defaultPrevented) return;
        var target = e.target;
 +      var root = canvas?.closest('[data-structure-editor]') || canvas;
 +      if (!canvas?.isConnected || !canvas.getClientRects().length || !root?.getClientRects().length ||
@@ -605,15 +1270,26 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js b/node
 +      var popup = target.closest('[data-ketcher-owner]');
 +      if (!root.contains(target) && (!popup || popup.getAttribute('data-ketcher-owner') !== root.getAttribute('data-ketcher-session'))) return;
        var isEditableTarget = !!(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('[contenteditable="true"]')));
-@@ -14470,2 +14477,3 @@
+       if (isEditableTarget) return;
+       var isQuestionHotkey = e.key === '?' || e.key === '/' && e.shiftKey;
+@@ -14468,12 +14482,14 @@
+     return isActive(itemKey);
+   });
    var activeOption = activeOptions[0];
 +  React.useEffect(function () {
    if (subMenuId && activeOption && activeOption !== lastActiveOption) {
-@@ -14476,2 +14484,3 @@
+     dispatch(setSelectedMenuGroupItem({
+       groupName: subMenuId,
+       activeItemName: activeOption
+     }));
    }
 +  }, [dispatch, subMenuId, activeOption, lastActiveOption]);
    var visibleItemId = activeItem !== null && activeItem !== void 0 ? activeItem : activeOption || lastActiveOption || options[0];
-@@ -19158,3 +19167,8 @@
+   var visibleItem = subComponents.find(function (option) {
+     return option.props.itemId === visibleItemId;
+@@ -19156,7 +19172,12 @@
+   var mergedTheme = _.merge(muiTheme, {
+     ketcher: editorTheme
    });
 -  store.dispatch(initKetcherId(ketcherId));
 +  var nexpolyInitialized = React.useState(null);
@@ -623,30 +1299,50 @@ diff --git a/node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js b/node
 +  }, [ketcherId]);
 +  if (nexpolyInitialized[0] !== ketcherId) return null;
    return jsxRuntime.jsx(reactRedux.Provider, {
-@@ -19226,4 +19240,5 @@
+     store: store,
+     children: jsxRuntime.jsxs(react.ThemeProvider, {
+@@ -19224,12 +19245,13 @@
+       monomersLibraryUpdate: monomersLibraryUpdate,
+       onInit: onInit
      }));
 +    var ownedEditor = selectEditor(store.getState());
      return function () {
 -      dispatch(destroyEditor(null));
 +      dispatch(destroyEditor(ownedEditor));
      };
-@@ -19231,3 +19246,3 @@
+   }, [dispatch]);
    useSetRnaPresets();
 -  useMacromoleculesHotkeys();
 +  useMacromoleculesHotkeys(canvasRef);
    React.useEffect(function () {
-@@ -19407,2 +19422 @@
+     editor === null || editor === void 0 || editor.events.rightClickSequence.add(function (_ref3) {
+       var _ref4 = _slicedToArray__default["default"](_ref3, 2),
+@@ -19405,4 +19427,3 @@
+ }
+ 
  exports["default"] = EditorContainer;
 -//# sourceMappingURL=index.modern-8e10d5ac.js.map
 diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-react/dist/index.js
 --- a/node_modules/ketcher-react/dist/index.js
 +++ b/node_modules/ketcher-react/dist/index.js
-@@ -87,2 +87,4 @@
-   var info = structService.info();
+@@ -84,7 +84,13 @@
+ function createApi(structServiceProvider, defaultOptions) {
+   var _structService$destro;
+   var structService = structServiceProvider.createStructService(defaultOptions);
+-  var info = structService.info();
++  var info = structService.info().then(function (value) { return value; });
++  Object.defineProperty(info, 'nexpolyMacroController', {
++    get: function () { return structService.nexpolyMacroController; },
++    set: function (controller) { structService.nexpolyMacroController = controller; }
++  });
 +  info.catch(function () {});
 +  Object.defineProperty(info, "disposed", { get: function () { return structService.disposed; } });
    return Object.assign(info, {
-@@ -458,2 +460,7 @@
+     addKetcherId: structService.addKetcherId.bind(structService),
+     info: structService.info.bind(structService),
+@@ -456,6 +462,11 @@
+         }()
+       };
        Object.keys(this.listeners).forEach(function (en) {
 +        var handler = _this2.listeners[en];
 +        _this2.listeners[en] = function (event) {
@@ -654,34 +1350,97 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +          return handler(event);
 +        };
          _this2.target.addEventListener(en, _this2.listeners[en]);
-@@ -470,2 +477,4 @@
+       });
+     }
+@@ -468,6 +479,8 @@
+     key: "componentWillUnmount",
+     value: function componentWillUnmount() {
        var _this3 = this;
 +      this.disposed = true;
 +      this.props.dispose?.();
        Object.keys(this.listeners).forEach(function (en) {
-@@ -8711,3 +8720,3 @@
+         _this3.target.removeEventListener(en, _this3.listeners[en]);
+       });
+@@ -3226,7 +3239,10 @@
+       _options.rescale;
+       _options.fragment;
+       var formatterOptions = _objectWithoutProperties(_options, _excluded$B);
+-    var format = identifyStructFormat(struct);
++    var controller = server.nexpolyMacroController;
++    var declaredFormat = controller?.detectInputFormat(struct, options['input-format']);
++    var format = controller?.requiresMacroFormat(declaredFormat) ? 'ket' : identifyStructFormat(struct);
++    if (declaredFormat) formatterOptions['input-format'] = declaredFormat;
+     if (format === SupportedFormat.cdx) {
+       struct = "base64::".concat(struct.replace(/\s/g, ''));
+     }
+@@ -3258,10 +3274,26 @@
+   return selection;
+ };
+ function load(struct, options) {
++  return function (dispatch, getState) {
++    var controller = getState().server?.nexpolyMacroController;
++    if (!controller) return nexpolyLoadStructure(struct, options)(dispatch, getState);
++    return controller.enqueue(async function () {
++      var result = await nexpolyLoadStructure(struct, options)(dispatch, getState);
++      controller.check();
++      if (controller.macro && controller.macro._type !== (controller.view ? 1 : 0)) await controller.setMode(controller.view);
++      return result;
++    }).catch(function (error) {
++      if (error.name !== 'AbortError') getState().editor.errorHandler?.(String(error));
++    });
++  };
++}
++function nexpolyLoadStructure(struct, options) {
+   return function () {
+     var _ref = _asyncToGenerator( _regeneratorRuntime.mark(function _callee(dispatch, getState) {
++      var nexpolyController = getState().server?.nexpolyMacroController;
+       var state, editor, server, serverSettings, errorHandler, _options2, isPaste, method, otherOptions, parsedStruct, _otherOptions, fragment, hasUnsupportedGroups, hasMoleculeToMonomerConnections, oldStruct, isIndigoFunctionCalled;
+       return _regeneratorRuntime.wrap(function _callee$(_context) {
++        nexpolyController?.check();
+         while (1) switch (_context.prev = _context.next) {
+           case 0:
+             state = getState();
+@@ -8709,11 +8741,11 @@
+   var dialogRef = useRef(null);
+   useLayoutEffect(function () {
      if (focusable) {
 -      dialogRef.current.focus();
 +      nexpolyFocus(dialogRef.current);
      }
-@@ -8715,3 +8724,3 @@
+     return function () {
        var _dialogRef$current;
 -      (_dialogRef$current = dialogRef.current) === null || _dialogRef$current === void 0 || (_dialogRef$current = _dialogRef$current.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _dialogRef$current === void 0 || _dialogRef$current.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0].focus();
 +      (_dialogRef$current = dialogRef.current) === null || _dialogRef$current === void 0 || (_dialogRef$current = _dialogRef$current.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _dialogRef$current === void 0 || _dialogRef$current.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0]?.focus({ preventScroll: true });
      };
-@@ -14816,2 +14825,3 @@
+   }, [focusable]);
+   var isButtonOk = function isButtonOk(button) {
+@@ -14814,6 +14846,7 @@
+   return function (dispatch, getState) {
+     var onResize = throttle(250, function () {
        var state = getState();
 +      if (!state.editor || state.editor.disposed) return;
        state.editor.render.update();
-@@ -14823,2 +14833,3 @@
+       dispatch({
+         type: 'CLEAR_VISIBLE',
+@@ -14821,6 +14854,7 @@
+       });
+     });
      addEventListener('resize', onResize);
 +    return function () { removeEventListener('resize', onResize); onResize.cancel(); };
    };
-@@ -14968,2 +14979,3 @@
+ }
+ function toolbarReducer () {
+@@ -14966,6 +15000,7 @@
+ });
+ function getRootReducer(setEditor) {
    return function root(state, action) {
 +    if (state?.editor?.disposed) return state;
      switch (action.type) {
-@@ -15087,21 +15099,42 @@
+       case 'INIT':
+         {
+@@ -15085,25 +15120,46 @@
+ function ownKeys$18(e, r) { var t = Object.keys(e); if (Object.getOwnPropertySymbols) { var o = Object.getOwnPropertySymbols(e); r && (o = o.filter(function (r) { return Object.getOwnPropertyDescriptor(e, r).enumerable; })), t.push.apply(t, o); } return t; }
+ function _objectSpread$18(e) { for (var r = 1; r < arguments.length; r++) { var t = null != arguments[r] ? arguments[r] : {}; r % 2 ? ownKeys$18(Object(t), !0).forEach(function (r) { _defineProperty$1(e, r, t[r]); }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(t)) : ownKeys$18(Object(t)).forEach(function (r) { Object.defineProperty(e, r, Object.getOwnPropertyDescriptor(t, r)); }); } return e; }
  var throttleMilliseconds = 100;
 -function useThrottleResizeObserver() {
 -  var options = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
@@ -743,7 +1502,11 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +  }, [options.ref]);
 +  return { ref: ref, ...state[0] };
  }
-@@ -15189,10 +15222,6 @@
+ 
+ function useFormContext() {
+@@ -15187,14 +15243,10 @@
+   useInterval(scrollBack, isScrollDown ? 100 : null);
+   useInterval(scrollForward, isScrollUp ? 100 : null);
    useEffect(function () {
 -    return function () {
 -      setScrollUp(false);
@@ -756,37 +1519,53 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 -    };
 +    setScrollDown(false);
    }, [endInView]);
-@@ -15294,3 +15323,3 @@
+   return jsxs("div", {
+     className: clsx(classes$L.scroll, isLeftRight ? classes$L.leftRight : classes$L.upDown),
+@@ -15292,13 +15344,13 @@
+     ref = _useResizeObserver.ref,
+     height = _useResizeObserver.height;
    var scrollRef = useRef(null);
 -  var _useInView = useInView({
 +  var _useInView = nexpolyUseInView({
        threshold: 1
-@@ -15300,3 +15329,3 @@
+     }),
+     _useInView2 = _slicedToArray$1(_useInView, 2),
+     startRef = _useInView2[0],
      startInView = _useInView2[1];
 -  var _useInView3 = useInView({
 +  var _useInView3 = nexpolyUseInView({
        threshold: 1
-@@ -15588,3 +15617,3 @@
+     }),
+     _useInView4 = _slicedToArray$1(_useInView3, 2),
+@@ -15586,13 +15638,13 @@
+   var _useResizeObserver = useThrottleResizeObserver(),
+     ref = _useResizeObserver.ref,
      height = _useResizeObserver.height;
 -  var _useInView = useInView({
 +  var _useInView = nexpolyUseInView({
        threshold: 1
-@@ -15594,3 +15623,3 @@
+     }),
+     _useInView2 = _slicedToArray$1(_useInView, 2),
+     startRef = _useInView2[0],
      startInView = _useInView2[1];
 -  var _useInView3 = useInView({
 +  var _useInView3 = nexpolyUseInView({
        threshold: 1
-@@ -20168,3 +20197,2 @@
+     }),
+     _useInView4 = _slicedToArray$1(_useInView3, 2),
+@@ -20166,21 +20218,18 @@
+   return _isChangingFunctionalGroup.apply(this, arguments);
+ }
  
 -var keydownListener = null;
  function initKeydownListener(element) {
-@@ -20172,3 +20200,4 @@
+   return function (dispatch, getState) {
      var hotKeys = initHotKeys(configWithNonViewOnlyActionsDisabled);
 -    keydownListener = function keydownListener(event) {
 +    var keydownListener = function keydownListener(event) {
 +      if (!nexpolyOwnsEvent(element, event)) return;
        return keyHandle(dispatch, getState, hotKeys, event);
-@@ -20176,9 +20205,6 @@
+     };
      element.addEventListener('keydown', keydownListener);
 -  };
 -}
@@ -799,18 +1578,28 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +      clearTimeout(getState().editor?.abbreviationLookupTimeoutId);
 +    };
    };
-@@ -20191,3 +20217,2 @@
+ }
+ function removeNotRenderedStruct(actionTool, group, dispatch) {
+@@ -20189,7 +20238,6 @@
+     dispatch(removeStructAction());
+   }
  }
 -var abbreviationLookupTimeoutId;
  var ABBREVIATION_LOOKUP_TYPING_TIMEOUT = 1000;
-@@ -20214,4 +20239,4 @@
+ var shortcutKeys = ['1', '2', '3', '4', 't', 'h', 'n', 'o', 's', 'p', 'f', 'i', 'b', '+', '-'];
+ function keyHandle(dispatch, getState, hotKeys, event) {
+@@ -20212,16 +20260,16 @@
+     var isAbbreviationLookupShown = (!isTheSameKey || !isShortcutKey) && currentlyPressedKeys;
+     if (isAbbreviationLookupShown) {
        dispatch(showAbbreviationLookup(event.key));
 -      clearTimeout(abbreviationLookupTimeoutId);
 -      abbreviationLookupTimeoutId = undefined;
 +      clearTimeout(editor.abbreviationLookupTimeoutId);
 +      editor.abbreviationLookupTimeoutId = undefined;
        var resetAction = SettingsManager.getSettings().selectionTool;
-@@ -20221,5 +20246,5 @@
+       dispatch(onAction(resetAction));
+       event.preventDefault();
+       return;
      } else {
 -      abbreviationLookupTimeoutId = window.setTimeout(function () {
 +      editor.abbreviationLookupTimeoutId = window.setTimeout(function () {
@@ -818,11 +1607,19 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 -        abbreviationLookupTimeoutId = undefined;
 +        editor.abbreviationLookupTimeoutId = undefined;
        }, ABBREVIATION_LOOKUP_TYPING_TIMEOUT);
-@@ -20335,2 +20360,3 @@
+       dispatch(initAbbreviationLookup(event.key));
+     }
+@@ -20333,6 +20381,7 @@
+   });
+   return {
      formats: formats,
 +    dispose: function () { debAction.cancel(); loadStruct.cancel(); },
      focused: function focused() {
-@@ -20588,5 +20614,6 @@
+       var state = getState();
+       return !state.modal;
+@@ -20586,9 +20635,10 @@
+     staticResourcesUrl = _useSettingsContext.staticResourcesUrl;
+   useEffect(function () {
      if (typeof requestIdleCallback === 'function') {
 -      requestIdleCallback(function () {
 +      var idle = requestIdleCallback(function () {
@@ -830,7 +1627,11 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
        });
 +      return function () { cancelIdleCallback(idle); };
      } else {
-@@ -24250,2 +24277,13 @@
+       onInitTmpls(ref.current, staticResourcesUrl);
+     }
+@@ -24248,6 +24298,17 @@
+     clientArea.addEventListener('mouseleave', this.onMouseLeave);
+   }
    _createClass$2(HoverIcon, [{
 +    key: "destroy",
 +    value: function destroy() {
@@ -844,11 +1645,19 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +    }
 +  }, {
      key: "fill",
-@@ -24277,2 +24315,3 @@
+     get: function get() {
+       return this._fill;
+@@ -24275,6 +24336,7 @@
+   }, {
+     key: "onMouseMove",
      value: function onMouseMove(event) {
 +      if (!this.editor || this.editor.disposed || !nexpolyOwnsEvent(this.editor.render.clientArea, event)) return;
        if (this.isShown || this.isOverLoader(event) && this.shouldBeShownWhenMouseBack) {
-@@ -25105,2 +25144,19 @@
+         this.show();
+         this.updatePosition();
+@@ -25103,6 +25165,23 @@
+     this.render.paper.canvas.setAttribute('data-testid', 'canvas');
+   }
    _createClass$2(Editor, [{
 +    key: "destroy",
 +    value: function destroy() {
@@ -868,14 +1677,43 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +    }
 +  }, {
      key: "isDitrty",
-@@ -26028,4 +26084,4 @@
+     value: function isDitrty() {
+       var position = this.historyPtr;
+@@ -25416,6 +25495,20 @@
+   }, {
+     key: "openMonomerCreationWizard",
+     value: function openMonomerCreationWizard() {
++      var owner = ketcherProvider.getKetcher();
++      var controller = owner?.structService.nexpolyMacroController;
++      if (controller && controller.state !== 'ready') {
++        if (this.nexpolyWizardPending) return this.nexpolyWizardPending;
++        var chosen = JSON.stringify(this.selection());
++        var revision = controller.revision;
++        this.nexpolyWizardPending = controller.ensure().then(() => {
++          controller.check();
++          if (!this.disposed && controller.revision === revision && JSON.stringify(this.selection()) === chosen) return this.openMonomerCreationWizard();
++        }).catch(error => { if (error.name !== 'AbortError') this.errorHandler?.(String(error)); })
++          .finally(() => { this.nexpolyWizardPending = null; });
++        return this.nexpolyWizardPending;
++      }
++
+       var _selection$atoms2,
+         _this2 = this;
+       var currentStruct = this.render.ctab.molecule;
+@@ -26026,8 +26119,8 @@
+   }, {
+     key: "focusCliparea",
      value: function focusCliparea() {
 -      var cliparea = document.querySelector('.cliparea');
 -      cliparea === null || cliparea === void 0 || cliparea.focus();
 +      var cliparea = this.render.clientArea.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)?.querySelector('.cliparea');
 +      nexpolyFocus(cliparea);
      }
-@@ -26131,3 +26187,21 @@
+   }], [{
+     key: "isSelectionContinuous",
+@@ -26129,7 +26222,25 @@
+   }
+   return false;
  }
 +function nexpolyFocus(element) {
 +  if (!element || !element.isConnected || !element.getClientRects().length) return;
@@ -897,7 +1735,11 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +  editor.domDisposers = [];
 +  var dragging = false;
    var trackedDomEvents = [{
-@@ -26171,6 +26245,13 @@
+     target: clientArea,
+     eventName: 'click',
+@@ -26169,10 +26280,17 @@
+       toolEventHandler = _ref13.toolEventHandler;
+     editor.event[eventName] = new DOMSubscription();
      var subs = editor.event[eventName];
 -    target.addEventListener(eventName, function () {
 -      if (window.isPolymerEditorTurnedOn) return;
@@ -915,22 +1757,44 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +    target.addEventListener(eventName, callback);
 +    editor.domDisposers.push(function () { target.removeEventListener(eventName, callback); subs.handlers = []; });
      subs.add(function (event) {
-@@ -29490,3 +29571,3 @@
+       updateLastCursorPosition(editor, event);
+       if (['mouseup', 'mousedown', 'click', 'dbclick'].includes(event.type) && !isMouseMainButtonPressed(event)) {
+@@ -29488,7 +29606,7 @@
+     value: function componentWillUnmount() {
+       removeEditorHandlers(this.editor, this.props);
        this.editorRef.current.removeEventListener('wheel', this.handleWheel);
 -      this.editor.render.unobserveCanvasResize();
 +      this.editor.destroy();
      }
-@@ -36900,3 +36981,3 @@
+   }, {
+     key: "render",
+@@ -33357,7 +33475,8 @@
+     setTimeout(function () {
+       onOk({
+         structStr: structStr,
+-        fragment: false
++        fragment: false,
++        'input-format': fileName ? getFormatMimeTypeByFileName(fileName) : undefined
+       });
+       setIsLoading(false);
+     }, 0);
+@@ -36898,7 +37017,7 @@
+     (_inputRef$current = inputRef.current) === null || _inputRef$current === void 0 || _inputRef$current.focus();
+     return function () {
        var _inputRef$current2;
 -      (_inputRef$current2 = inputRef.current) === null || _inputRef$current2 === void 0 || (_inputRef$current2 = _inputRef$current2.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _inputRef$current2 === void 0 || _inputRef$current2.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0].focus();
 +      (_inputRef$current2 = inputRef.current) === null || _inputRef$current2 === void 0 || (_inputRef$current2 = _inputRef$current2.closest(KETCHER_ROOT_NODE_CSS_SELECTOR)) === null || _inputRef$current2 === void 0 || _inputRef$current2.getElementsByClassName(CLIP_AREA_BASE_CLASS)[0]?.focus({ preventScroll: true });
      };
-@@ -37103,4 +37184,2 @@
+   }, []);
+   var closePanel = function closePanel() {
+@@ -37101,15 +37220,15 @@
+ var handleMouseMove = function handleMouseMove(dispatch, event) {
+   dispatch(updateCursorPosition(event.clientX, event.clientY));
  };
 -var pointerMoveListener = null;
 -var mouseDownListener = null;
  function initMouseListener(element) {
-@@ -37108,6 +37187,8 @@
+   return function (dispatch, getState) {
      var throttledHandleMouseMove = throttle$1(handleMouseMove, MOUSE_MOVE_THROTTLE_TIMEOUT);
 -    pointerMoveListener = function pointerMoveListener(event) {
 +    var pointerMoveListener = function pointerMoveListener(event) {
@@ -941,7 +1805,11 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +    var mouseDownListener = function mouseDownListener(event) {
 +      if (!nexpolyOwnsEvent(element, event)) return;
        var areBothLeftAndRightButtonsClicked = event.buttons === 3;
-@@ -37119,12 +37200,7 @@
+       if (areBothLeftAndRightButtonsClicked) {
+         handleRightClick(getState);
+@@ -37117,16 +37236,11 @@
+     };
+     element.addEventListener('pointermove', pointerMoveListener);
      element.addEventListener('mousedown', mouseDownListener, true);
 -  };
 -}
@@ -958,7 +1826,11 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +      throttledHandleMouseMove.cancel();
 +    };
    };
-@@ -37154,5 +37230,5 @@
+ }
+ function handleRightClick(getState) {
+@@ -37152,9 +37266,9 @@
+       store.dispatch(setServer(structService));
+     };
    };
 -  store.dispatch(initKeydownListener(element));
 -  store.dispatch(initMouseListener(element));
@@ -967,7 +1839,11 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +  var disposeMouse = store.dispatch(initMouseListener(element));
 +  var disposeResize = store.dispatch(initResize());
    appRoot.render(jsx(Provider, {
-@@ -37180,4 +37256,6 @@
+     store: store,
+     children: jsx(settingsContext.Provider, {
+@@ -37178,8 +37292,10 @@
+     })
+   }));
    return function () {
 -    store.dispatch(removeKeydownListener(element));
 -    store.dispatch(removeMouseListeners(element));
@@ -976,7 +1852,11 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +    disposeResize();
 +    if (global.currentState?.editor === store.getState().editor) delete global.currentState;
    };
-@@ -37221,21 +37299,16 @@
+ }
+ 
+@@ -37219,25 +37335,20 @@
+   }, {
+     key: "reinitializeApi",
      value: function reinitializeApi(ketcherId, structServiceProvider, setStructServiceToStore) {
 -      var _this = this;
 -      var oldStructService = this.structService;
@@ -1011,11 +1891,24 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +      }).catch(function (error) { service.destroy?.(); if (!builder.disposed) console.error(error); });
 +      return service;
      }
-@@ -37313,2 +37386,3 @@
+   }, {
+     key: "appendServiceMode",
+@@ -37307,50 +37418,46 @@
+       var params = new URLSearchParams(document.location.search);
+       var initialMol = params.get('moll');
+       if (initialMol) {
+-        ketcher.setMolecule(initialMol);
++        if (ketcher.structService.nexpolyMacroController) ketcher.nexpolyInitialMol = initialMol;
++        else ketcher.setMolecule(initialMol);
+       }
+       IndigoProvider.setIndigo(this.structService);
        ketcherProvider.addKetcherInstance(ketcher);
 +      window.ketcher = ketcher;
        return ketcher;
-@@ -37319,36 +37393,29 @@
+     }
+   }]);
+   return KetcherBuilder;
+ }();
  
 -function buildKetcherAsync(_x) {
 -  return _buildKetcherAsync.apply(this, arguments);
@@ -1055,6 +1948,7 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +  var builder = new KetcherBuilder();
 +  var service = builder.appendApiAsync(props.structServiceProvider);
 +  builder.appendServiceMode(props.structServiceProvider.mode);
++  if (props.createMacroController) builder.structService.nexpolyMacroController = props.createMacroController();
 +  var ketcher = builder.build();
 +  service.addKetcherId(ketcher.id);
 +  props.onBuild(ketcher, builder);
@@ -1079,7 +1973,11 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +    throw error;
 +  } finally { props.signal.removeEventListener('abort', abort); }
  }
-@@ -37363,74 +37430,61 @@
+ 
+ var styles = {"button-common-styles":"Editor-module_button-common-styles__h4pal","scrollbar":"Editor-module_scrollbar__yVsY8","small":"Editor-module_small__8cgEX","editor":"Editor-module_editor__o0Gjz","-hidden":"Editor-module_-hidden__aKodt","switchingLoader":"Editor-module_switchingLoader__OlmM6","blink":"Editor-module_blink__J7UCV","editorsWrapper":"Editor-module_editorsWrapper__qMSvd"};
+@@ -37361,85 +37468,71 @@
+   smallWidth: 1040,
+   smallHeight: 600
  };
 +// Serialize old root cleanup before creating another SDK root, including StrictMode.
 +var nexpolyRootCleanup = Promise.resolve();
@@ -1208,7 +2106,7 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +        record.root = record.cleanup = record.builder = record.ketcher = null;
 +        if (active.current === record) active.current = null;
        });
-@@ -37438,6 +37492,5 @@
+     };
    }, []);
 -  return jsx("div", {
 -    ref: rootElRef,
@@ -1218,26 +2116,428 @@ diff --git a/node_modules/ketcher-react/dist/index.js b/node_modules/ketcher-rea
 +    className: clsx(KETCHER_ROOT_NODE_CLASS_NAME, styles.editor,
 +      { [styles.small]: dimensions.height && dimensions.height <= mediaSizes.smallHeight || dimensions.width && dimensions.width <= mediaSizes.smallWidth }) });
  }
-@@ -37668,2 +37721 @@
+ 
+ var _templateObject, _templateObject2, _templateObject3, _templateObject4, _templateObject5, _templateObject6, _templateObject7, _templateObject8, _templateObject9;
+@@ -37554,116 +37647,276 @@
+ 
+ function ownKeys(e, r) { var t = Object.keys(e); if (Object.getOwnPropertySymbols) { var o = Object.getOwnPropertySymbols(e); r && (o = o.filter(function (r) { return Object.getOwnPropertyDescriptor(e, r).enumerable; })), t.push.apply(t, o); } return t; }
+ function _objectSpread(e) { for (var r = 1; r < arguments.length; r++) { var t = null != arguments[r] ? arguments[r] : {}; r % 2 ? ownKeys(Object(t), !0).forEach(function (r) { _defineProperty$1(e, r, t[r]); }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(t)) : ownKeys(Object(t)).forEach(function (r) { Object.defineProperty(e, r, Object.getOwnPropertyDescriptor(t, r)); }); } return e; }
+-var MacromoleculesEditorComponent = lazy(function () {
+-  return import('./index.modern-c0bcdf82.js');
+-});
++const aborted = () => new DOMException('Editor initialization disposed', 'AbortError');
++const macroTypes = new Set(['monomer', 'ambiguousMonomer', 'monomerTemplate',
++  'ambiguousMonomerTemplate', 'monomerGroupTemplate']);
++const macroFormats = new Map([
++  ['helm', 'helm'], ['chemical/x-helm', 'helm'], ['fasta', 'fasta'], ['chemical/x-fasta', 'fasta'],
++  ['sequence', 'sequence'], ['chemical/x-sequence', 'sequence'],
++  ['sequence3Letter', 'sequence-3-letter'], ['sequence-3-letter', 'sequence-3-letter'],
++  ['chemical/x-peptide-sequence-3-letter', 'sequence-3-letter'],
++  ['idt', 'idt'], ['chemical/x-idt', 'idt'],
++  ['chemical/x-rna-sequence', 'sequence'], ['chemical/x-dna-sequence', 'sequence'],
++  ['chemical/x-peptide-sequence', 'sequence']
++]);
++
++function containsMacro(source) {
++  if (typeof source !== 'string' || !source.trim().startsWith('{')) return false;
++  const document = JSON.parse(source);
++  return [...Object.values(document), ...(document.root?.nodes || []), ...(document.root?.templates || [])]
++    .some(value => value && typeof value === 'object' && macroTypes.has(value.type));
++}
++
++/** One controller per SDK, registered before any initial document writes. */
++class MacroController {
++  constructor({ load, show, fail, deferred = true }) {
++    Object.assign(this, { load, show, fail, deferred });
++    this.state = 'idle';
++    this.generation = 0;
++    this.tail = Promise.resolve();
++    this.waiters = new Set();
++    this.view = false;
++  }
++  check() { if (this.state === 'disposed' || this.sdk?.disposed) throw aborted(); }
++  attach(sdk) {
++    this.check(); this.sdk = sdk;
++    this.revision = 0;
++    this.onChange = () => { ++this.revision; };
++    sdk.changeEvent?.add(this.onChange);
++  }
++  requiresMacroFormat(format) { return macroFormats.has(format); }
++  detectInputFormat(source, explicit) {
++    if (explicit) return explicit;
++    if (/^\s*(?:PEPTIDE|RNA|CHEM|BLOB)\d+\s*\{/.test(source)) return 'helm';
++    if (/^\s*>/.test(source)) return 'fasta';
++  }
++  enqueue(action) {
++    try { this.check(); } catch (error) { return Promise.reject(error); }
++    const task = this.tail.then(() => { this.check(); return action(); });
++    this.tail = task.catch(() => {});
++    return this.guard(task);
++  }
++  guard(task) {
++    this.check();
++    return new Promise((resolve, reject) => {
++      const stop = error => reject(error);
++      this.waiters.add(stop);
++      Promise.resolve(task).then(value => { this.check(); resolve(value); }, reject)
++        .catch(reject).finally(() => this.waiters.delete(stop));
++    });
++  }
++  ensure() {
++    try { this.check(); } catch (error) { return Promise.reject(error); }
++    if (this.state === 'ready') return Promise.resolve(this.macro);
++    if (this.pending) return this.pending.promise;
++    const generation = ++this.generation;
++    this.state = 'loading';
++    let resolve, reject;
++    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
++    promise.catch(() => {});
++    const timer = setTimeout(() => this.rejectAttempt(new Error('Macro initialization timed out'), generation), 15000);
++    this.pending = { promise, resolve, reject, timer, generation };
++    Promise.resolve().then(() => this.load(generation)).catch(error => this.rejectAttempt(error, generation));
++    return promise;
++  }
++  initialized(editor, generation) {
++    if (this.state === 'disposed' || generation !== this.generation || !this.pending) {
++      editor.destroy(); return;
++    }
++    this.macro = editor;
++    // A hidden virgin Macro does not own the small-molecule document.
++    editor._type = 0;
++    this.state = 'ready';
++    const pending = this.pending;
++    this.pending = null;
++    clearTimeout(pending.timer);
++    pending.resolve(editor);
++  }
++  rejectAttempt(error, generation) {
++    if (generation !== this.generation || this.state === 'disposed') return;
++    const pending = this.pending;
++    this.pending = null;
++    this.state = 'failed';
++    if (pending) { clearTimeout(pending.timer); pending.reject(error); }
++    this.fail(error, generation);
++  }
++  async setMode(value) {
++    this.check();
++    const macro = value ? await this.ensure() : this.macro;
++    this.check();
++    if (macro && !macro.disposed && macro._type !== (value ? 1 : 0)) {
++      if (value) macro.switchToMacromolecules();
++      else macro.switchToMicromolecules();
++    }
++    this.view = value;
++    window.isPolymerEditorTurnedOn = value;
++    // The host acknowledges a command id, even if the boolean did not change.
++    await this.guard(this.show(value));
++    if (!value) this.sdk?.editor?.focusCliparea();
++  }
++  requestMode(value) { return this.enqueue(() => this.setMode(value)); }
++  async normalize(source, format, options) {
++    this.check();
++    const explicit = this.detectInputFormat(source, format);
++    if (macroFormats.has(explicit) || containsMacro(source)) await this.ensure();
++    if (macroFormats.has(explicit)) {
++      const sequenceType = /^chemical\/x-(rna|dna|peptide)-sequence$/.exec(explicit)?.[1].toUpperCase();
++      const result = await this.sdk.structService.convert({ struct: source,
++        input_format: macroFormats.get(explicit), output_format: 'chemical/x-indigo-ket' },
++      { ...options, ...(sequenceType ? { 'sequence-type': sequenceType } : {}) });
++      this.check();
++      return { source: result.struct, format: 'ket' };
++    }
++    // Formats that may hide monomers are normalized only during an actual import.
++    if (['mol', 'molV3000', 'cdxml', 'smilesExt', 'chemical/x-mdl-molfile', 'chemical/x-cdxml'].includes(explicit)) {
++      const result = await this.sdk.structService.convert({ struct: source, output_format: 'chemical/x-indigo-ket' });
++      this.check();
++      if (containsMacro(result.struct)) { await this.ensure(); return { source: result.struct, format: 'ket' }; }
++    }
++    return { source, format };
++  }
++  import(source, options, original) {
++    return this.enqueue(async () => {
++      const normalized = await this.normalize(source, options?.inputFormat, options);
++      this.check();
++      const result = await original(normalized.source, options?.inputFormat || normalized.format
++        ? { ...options, inputFormat: normalized.format } : options);
++      this.check();
++      // Importers can change model ownership without changing the visible mode.
++      if (this.macro && this.macro._type !== (this.view ? 1 : 0)) await this.setMode(this.view);
++      return result;
++    });
++  }
++  dispose() {
++    if (this.state === 'disposed') return;
++    ++this.generation;
++    this.state = 'disposed';
++    this.sdk?.changeEvent?.remove(this.onChange);
++    const error = aborted();
++    if (this.pending) { clearTimeout(this.pending.timer); this.pending.reject(error); this.pending = null; }
++    for (const reject of this.waiters) reject(error);
++    this.waiters.clear();
++    // SDK caches can retain an old service wrapper. Retired capabilities must
++    // not keep its document, React callbacks or editor reachable through it.
++    this.sdk = this.macro = this.onChange = undefined;
++    this.load = this.show = this.fail = () => {};
++    this.tail = Promise.resolve();
++  }
++}
++
++function nexpolyLoadMacroModule() { return import("./index.modern-c0bcdf82.js"); }
++// Embedded in both SDK module formats by the audited r4 patch.
++class NexPolyMacroBoundary extends React.Component {
++  constructor(props) { super(props); this.state = { failed: false }; }
++  static getDerivedStateFromError() { return { failed: true }; }
++  componentDidCatch(error) { this.props.onError(error); }
++  render() { return this.state.failed ? null : this.props.children; }
++}
+ var Editor = function Editor(props) {
+-  var _useState = useState(false),
+-    _useState2 = _slicedToArray$1(_useState, 2),
+-    showPolymerEditor = _useState2[0],
+-    setShowPolymerEditor = _useState2[1];
+-  var _useState3 = useState(),
+-    _useState4 = _slicedToArray$1(_useState3, 2),
+-    moleculesEditor = _useState4[0],
+-    setMoleculesEditor = _useState4[1];
+-  var _useState5 = useState(),
+-    _useState6 = _slicedToArray$1(_useState5, 2),
+-    ketcher = _useState6[0],
+-    setKetcher = _useState6[1];
+-  var _useState7 = useState(),
+-    _useState8 = _slicedToArray$1(_useState7, 2),
+-    macromoleculesEditor = _useState8[0],
+-    setMacromoleculesEditor = _useState8[1];
+-  var _useState9 = useState(''),
+-    _useState10 = _slicedToArray$1(_useState9, 2),
+-    ketcherId = _useState10[0],
+-    setKetcherId = _useState10[1];
+-  var togglePolymerEditor = function togglePolymerEditor(toggleValue) {
+-    setShowPolymerEditor(toggleValue);
+-    window.isPolymerEditorTurnedOn = toggleValue;
++  var latest = React.useRef(props);
++  latest.current = props;
++  var current = React.useRef(null);
++  var uiWaiters = React.useRef(new Map());
++  var command = React.useRef(0);
++  var [mode, setMode] = React.useState({ macro: false, command: 0 });
++  var [macroView, setMacroView] = React.useState(null);
++  var [macroError, setMacroError] = React.useState(null);
++  var [sdkId, setSdkId] = React.useState('');
++  React.useLayoutEffect(function () {
++    var resolve = uiWaiters.current.get(mode.command);
++    if (resolve) { uiWaiters.current.delete(mode.command); resolve(); }
++  }, [mode]);
++  var createController = React.useCallback(function () {
++    var controller = new MacroController({
++      deferred: !!latest.current.deferMacromoleculesEditor,
++      load: async function (generation) {
++        setMacroError(null);
++        var module = await nexpolyLoadMacroModule();
++        controller.check();
++        if (generation !== controller.generation) return;
++        setMacroView({ Component: module.default, generation: generation, controller: controller, id: controller.sdk.id });
++      },
++      show: function (value) {
++        return new Promise(function (resolve) {
++          var id = ++command.current;
++          uiWaiters.current.set(id, resolve);
++          setMode({ macro: value, command: id });
++        });
++      },
++      fail: function (error) {
++        if (current.current !== controller) return;
++        setMacroView(null);
++        setMacroError(error);
++      }
++    });
++    current.current = controller;
++    return controller;
++  }, []);
++  var requestMode = function (value) {
++    var controller = current.current;
++    if (!controller) return;
++    controller.requestMode(value).catch(function (error) {
++      if (error.name !== 'AbortError' && controller.state !== 'failed') setMacroError(error);
++    });
+   };
+-  var togglerComponent = !props.disableMacromoleculesEditor ? jsx(ModeControl, {
+-    toggle: togglePolymerEditor,
+-    isPolymerEditor: showPolymerEditor
++  var toggler = !props.disableMacromoleculesEditor ? React.createElement(ModeControl, {
++    toggle: requestMode, isPolymerEditor: mode.macro
+   }) : undefined;
+-  useEffect(function () {
+-    var switchToMacromoleculesModeHandler = function switchToMacromoleculesModeHandler() {
+-      togglePolymerEditor(true);
++  var onMicro = async function (sdk) {
++    var controller = sdk.structService.nexpolyMacroController;
++    try {
++      await sdk.structService.info();
++      controller.check();
++      if (!latest.current.deferMacromoleculesEditor && !latest.current.disableMacromoleculesEditor) await controller.ensure();
++      if (sdk.nexpolyInitialMol) await sdk.setMolecule(sdk.nexpolyInitialMol);
++      controller.check();
++      if (!controller.notified) { controller.notified = true; latest.current.onInit?.(sdk); }
++    } catch (error) {
++      if (error.name !== 'AbortError') latest.current.errorHandler?.(String(error));
++    }
++  };
++  var onMacro = function (editor) {
++    var controller = macroView.controller;
++    controller.initialized(editor, macroView.generation);
++  };
++  React.useEffect(function () {
++    var controller = macroView?.controller;
++    var macro = controller?.macro;
++    if (!macro || macro.disposed) return;
++    var toMacro = function () { requestMode(true); };
++    var toMicro = function () { requestMode(false); };
++    macro.events.switchToMacromoleculesMode.add(toMacro);
++    macro.events.switchToMoleculesMode.add(toMicro);
++    return function () {
++      macro.events.switchToMacromoleculesMode.remove(toMacro);
++      macro.events.switchToMoleculesMode.remove(toMicro);
+     };
+-    var switchToMoleculesModeHandler = function switchToMoleculesModeHandler() {
+-      togglePolymerEditor(false);
+-    };
+-    if (macromoleculesEditor) {
+-      macromoleculesEditor.events.switchToMacromoleculesMode.add(switchToMacromoleculesModeHandler);
+-      macromoleculesEditor.events.switchToMoleculesMode.add(switchToMoleculesModeHandler);
+-    }
++  }, [macroView, mode]);
++  React.useEffect(function () {
+     return function () {
+-      if (macromoleculesEditor) {
+-        macromoleculesEditor.events.switchToMacromoleculesMode.remove(switchToMacromoleculesModeHandler);
+-        macromoleculesEditor.events.switchToMoleculesMode.remove(switchToMoleculesModeHandler);
+-      }
+-    };
+-  }, [macromoleculesEditor]);
+-  useEffect(function () {
+-    return function () {
++      // Actual SDK retirement owns cancellation; StrictMode's discarded effect
++      // must not retire a controller subsequently created by the live SDK.
++      uiWaiters.current.clear();
+       window.isPolymerEditorTurnedOn = false;
+     };
+   }, []);
+-  useEffect(function () {
+-    if (moleculesEditor && macromoleculesEditor) {
+-      if (showPolymerEditor) {
+-        macromoleculesEditor === null || macromoleculesEditor === void 0 || macromoleculesEditor.switchToMacromolecules();
+-      } else {
+-        macromoleculesEditor === null || macromoleculesEditor === void 0 || macromoleculesEditor.switchToMicromolecules();
+-        moleculesEditor === null || moleculesEditor === void 0 || moleculesEditor.focusCliparea();
+-      }
+-    }
+-  }, [showPolymerEditor]);
+-  useEffect(function () {
+-    if (ketcher && moleculesEditor && (macromoleculesEditor || props.disableMacromoleculesEditor)) {
+-      var _props$onInit;
+-      (_props$onInit = props.onInit) === null || _props$onInit === void 0 || _props$onInit.call(props, ketcher);
+-    }
+-  }, [moleculesEditor, macromoleculesEditor]);
+-  var onInitMoleculesEditor = function onInitMoleculesEditor(ketcher) {
+-    setKetcher(ketcher);
+-    setMoleculesEditor(ketcher.editor);
+-  };
+-  var onInitMacromoleculesEditor = function onInitMacromoleculesEditor(macromoleculesEditor) {
+-    setMacromoleculesEditor(macromoleculesEditor);
+-  };
+-  return jsxs(Fragment, {
+-    children: [jsx("div", {
+-      className: styles.editorsWrapper,
+-      style: {
+-        display: showPolymerEditor ? undefined : 'none'
+-      },
+-      children: jsx(Suspense, {
+-        fallback: jsx("div", {
+-          className: styles.switchingLoader,
+-          children: jsx(LoadingCircles, {})
+-        }),
+-        children: ketcherId && jsx(MacromoleculesEditorComponent, {
+-          togglerComponent: togglerComponent,
+-          ketcherId: ketcherId,
+-          isMacromoleculesEditorTurnedOn: showPolymerEditor,
+-          onInit: onInitMacromoleculesEditor
+-        })
+-      })
+-    }), jsx("div", {
+-      className: styles.editorsWrapper,
+-      style: {
+-        display: showPolymerEditor ? 'none' : undefined
+-      },
+-      children: jsx(MicromoleculesEditor, _objectSpread(_objectSpread({}, props), {}, {
+-        ketcherId: ketcherId,
+-        onSetKetcherId: setKetcherId,
+-        togglerComponent: togglerComponent,
+-        onInit: onInitMoleculesEditor
+-      }))
+-    })]
+-  });
+-};
++  var macro = macroView && React.createElement(NexPolyMacroBoundary, {
++    key: macroView.id + ':' + macroView.generation,
++    onError: function (error) { macroView.controller.rejectAttempt(error, macroView.generation); }
++  }, React.createElement(macroView.Component, {
++    ketcherId: macroView.id, togglerComponent: toggler,
++    isMacromoleculesEditorTurnedOn: mode.macro, onInit: onMacro
++  }));
++  return React.createElement(React.Fragment, null,
++    React.createElement('div', { className: styles.editorsWrapper, style: { display: mode.macro ? undefined : 'none' } }, macro),
++    React.createElement('div', { className: styles.editorsWrapper, style: { display: mode.macro ? 'none' : undefined } },
++      React.createElement(MicromoleculesEditor, { ...props, ketcherId: sdkId, onSetKetcherId: setSdkId,
++        createMacroController: createController, togglerComponent: toggler, onInit: onMicro })),
++    macroError && React.createElement('div', { role: 'alert', className: 'np-ketcher-macro-error' },
++      '大分子功能加载失败，当前结构已保留。', React.createElement('button', { type: 'button',
++        onClick: function () { current.current.ensure().then(() => requestMode(true)).catch(() => {}); }
++      }, '重试')));
++};
++
+ 
  export { ACS_STYLE_DEFAULT_SETTINGS, Accordion$1 as Accordion, AmbiguousMonomerPreview, appContext as AppContext, ArrowScroll, Button, Container, Content, ContentLine, Dialog, Editor, Header$1 as Header, Icon, IconButton, IconButtonCustomIcon, IndigoProvider, InfoModal$1 as InfoModal, Input$2 as Input, KETCHER_ROOT_NODE_CLASS_NAME, KETCHER_ROOT_NODE_CSS_SELECTOR, MODES, MonomerName, PresetPosition, PreviewType, RatioBar, STRUCT_SERVICE_INITIALIZED_EVENT, STRUCT_SERVICE_NO_RENDER_INITIALIZED_EVENT, STRUCT_TYPE, StructRender, calculateAmbiguousMonomerPreviewLeft, calculateAmbiguousMonomerPreviewTop, calculateBondPreviewPosition, calculateMonomerPreviewTop, calculateNucleoElementPreviewTop, getIconName, ketcherInitEventName, preview, usePortalStyle };
 -//# sourceMappingURL=index.js.map
 diff --git a/node_modules/ketcher-react/dist/index.modern-c0bcdf82.js b/node_modules/ketcher-react/dist/index.modern-c0bcdf82.js
 --- a/node_modules/ketcher-react/dist/index.modern-c0bcdf82.js
 +++ b/node_modules/ketcher-react/dist/index.modern-c0bcdf82.js
-@@ -5979,3 +5979,4 @@
+@@ -5969,15 +5969,23 @@
+     },
+     createEditor: function createEditor(state, action) {
+       var _action$payload$onIni, _action$payload;
++      var previousEditor = CoreEditor.provideEditorInstance();
++      try {
+       var editor = new CoreEditor({
+         theme: action.payload.theme,
+         canvas: action.payload.canvas,
+         monomersLibraryUpdate: action.payload.monomersLibraryUpdate
+       });
++      } catch (error) {
++        var partial = CoreEditor.provideEditorInstance();
++        if (partial && partial !== previousEditor) partial.destroy();
++        throw error;
++      }
+       state.editor = editor;
+       (_action$payload$onIni = (_action$payload = action.payload).onInit) === null || _action$payload$onIni === void 0 || _action$payload$onIni.call(_action$payload, editor);
      },
 -    destroyEditor: function destroyEditor(state) {
 +    destroyEditor: function destroyEditor(state, action) {
 +      if (state.editor !== action.payload) return;
        var _state$editor, _state$editor2;
-@@ -14139,4 +14140,5 @@
+       state.editorLayoutMode = (_state$editor = state.editor) === null || _state$editor === void 0 ? void 0 : _state$editor.mode.modeName;
+       (_state$editor2 = state.editor) === null || _state$editor2 === void 0 || _state$editor2.destroy();
+@@ -14137,13 +14145,19 @@
+   }, [editor]);
+ }
  
 -function useMacromoleculesHotkeys() {
 +function useMacromoleculesHotkeys(canvasRef) {
    useEffect(function () {
 +    var canvas = canvasRef.current;
      var HELP_LINK = process.env.HELP_LINK || 'master';
-@@ -14146,2 +14148,7 @@
+     var helpUrl = "https://github.com/epam/ketcher/blob/".concat(HELP_LINK, "/documentation/help.md#ketcher-macromolecules-mode");
+     var handler = function handler(e) {
+       if (e.defaultPrevented) return;
        var target = e.target;
 +      var root = canvas?.closest('[data-structure-editor]') || canvas;
 +      if (!canvas?.isConnected || !canvas.getClientRects().length || !root?.getClientRects().length ||
@@ -1245,15 +2545,26 @@ diff --git a/node_modules/ketcher-react/dist/index.modern-c0bcdf82.js b/node_mod
 +      var popup = target.closest('[data-ketcher-owner]');
 +      if (!root.contains(target) && (!popup || popup.getAttribute('data-ketcher-owner') !== root.getAttribute('data-ketcher-session'))) return;
        var isEditableTarget = !!(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('[contenteditable="true"]')));
-@@ -14429,2 +14436,3 @@
+       if (isEditableTarget) return;
+       var isQuestionHotkey = e.key === '?' || e.key === '/' && e.shiftKey;
+@@ -14427,12 +14441,14 @@
+     return isActive(itemKey);
+   });
    var activeOption = activeOptions[0];
 +  React.useEffect(function () {
    if (subMenuId && activeOption && activeOption !== lastActiveOption) {
-@@ -14435,2 +14443,3 @@
+     dispatch(setSelectedMenuGroupItem({
+       groupName: subMenuId,
+       activeItemName: activeOption
+     }));
    }
 +  }, [dispatch, subMenuId, activeOption, lastActiveOption]);
    var visibleItemId = activeItem !== null && activeItem !== void 0 ? activeItem : activeOption || lastActiveOption || options[0];
-@@ -19117,3 +19126,8 @@
+   var visibleItem = subComponents.find(function (option) {
+     return option.props.itemId === visibleItemId;
+@@ -19115,7 +19131,12 @@
+   var mergedTheme = merge(muiTheme, {
+     ketcher: editorTheme
    });
 -  store.dispatch(initKetcherId(ketcherId));
 +  var nexpolyInitialized = React.useState(null);
@@ -1263,18 +2574,26 @@ diff --git a/node_modules/ketcher-react/dist/index.modern-c0bcdf82.js b/node_mod
 +  }, [ketcherId]);
 +  if (nexpolyInitialized[0] !== ketcherId) return null;
    return jsx(Provider, {
-@@ -19185,4 +19199,5 @@
+     store: store,
+     children: jsxs(ThemeProvider, {
+@@ -19183,12 +19204,13 @@
+       monomersLibraryUpdate: monomersLibraryUpdate,
+       onInit: onInit
      }));
 +    var ownedEditor = selectEditor(store.getState());
      return function () {
 -      dispatch(destroyEditor(null));
 +      dispatch(destroyEditor(ownedEditor));
      };
-@@ -19190,3 +19205,3 @@
+   }, [dispatch]);
    useSetRnaPresets();
 -  useMacromoleculesHotkeys();
 +  useMacromoleculesHotkeys(canvasRef);
    useEffect(function () {
-@@ -19366,2 +19381 @@
+     editor === null || editor === void 0 || editor.events.rightClickSequence.add(function (_ref3) {
+       var _ref4 = _slicedToArray(_ref3, 2),
+@@ -19364,4 +19386,3 @@
+ }
+ 
  export { EditorContainer as default };
 -//# sourceMappingURL=index.modern-c0bcdf82.js.map

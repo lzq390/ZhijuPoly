@@ -1,5 +1,5 @@
 {
-  "revision": "nexpoly-3.8.0-r3",
+  "revision": "nexpoly-3.8.0-r4",
   "versions": {
     "ketcher-core": "3.8.0",
     "ketcher-macromolecules": "3.8.0",
@@ -12,53 +12,79 @@
   "files": {
     "node_modules/ketcher-core/dist/index.js": {
       "upstream": "3c4f9c60df8775db51da67ff0ee86e3de240d918fd06a946b18f33348c2f6422",
-      "patched": "01605b21272980c4b81907b44d94d5ac46c7b06a448849b42fe4c2c8795d2e7e"
+      "patched": "b0e2e708cc5f083f995f1b4bc6d4c4541343e3636e37e73460b969a0b6cc4132"
     },
     "node_modules/ketcher-core/dist/index.modern.js": {
       "upstream": "f67ac80f3471e0f98bb3ac4a6d84a1133e7300a9bad6422f5d39b549791573cb",
-      "patched": "2b136993d4db4db163acd143eec6ffda42e4d495035bd60062dda9cf3c0574fc"
+      "patched": "2fb6090ffd7cb2a9c6542b932105bca85e9c460b1f811dd51f08455cf40456c9"
     },
     "node_modules/ketcher-macromolecules/dist/index.js": {
       "upstream": "563fa7befe50404de74cc1567f3867a2584de288a3d2be86f0df97c9b6d836d6",
-      "patched": "b59b0bbfdff4a9850af98d984cae8b30eb619b0bfb84a69a0198477b150c2cc3"
+      "patched": "68b9ed9a67e1993f28f66ab9de60c66846d02e2fcf4ac2ea9e779919ef24f70e"
     },
     "node_modules/ketcher-macromolecules/dist/index.modern.js": {
       "upstream": "764bec437ca5cf4f29b77b63d4f8ade8db652f7763fa07202335453a99b7a322",
-      "patched": "f243ce8f1121398e95357ba510b39111832fa5052d4e5cbc0899d871377f196d"
+      "patched": "4d34833778032a13be66c4a5c79bdcb903507a21cd7ee72c61824dab3f1a2574"
     },
     "node_modules/ketcher-react/dist/cjs/index.js": {
       "upstream": "4f98d1a1b4a512587fd06195f70d56a72ae213e8e80d4ed8afe4f3cb1639d0e1",
-      "patched": "846fb1785c6eaea270a0c792be63d8b34be92bc407063536c6706dfd85878af4"
+      "patched": "3588551d185b5d93574da31d602c2699c58e044cb4f3b1a800535171cb31ea97"
     },
     "node_modules/ketcher-react/dist/cjs/index.modern-8e10d5ac.js": {
       "upstream": "8d421018f398295071ed3f7073c805d5c4ee6ec699fe63c28f1579a5051caef7",
-      "patched": "0612055555a90b6b087c223ff12b9bf816ee03479732531c9c388b2cc7665146"
+      "patched": "c3d065f677eaf331ddff74ca33553ed3ed90737afeca9d8c4f2b23b3737ac563"
     },
     "node_modules/ketcher-react/dist/index.js": {
       "upstream": "d7d9d79208482f5a90ceaa8ac27bb9c7c821c536c14080b00dfff69d4b712abf",
-      "patched": "0771066ae3c821725bf61be26bd0d7cd8d988d8b11389883c7006cac2b15534b"
+      "patched": "d49873d380f992d704cbde6234ca52f845eb6c036380c937ef5b906c8d9a13d6"
     },
     "node_modules/ketcher-react/dist/index.modern-c0bcdf82.js": {
       "upstream": "459ef3a39acb318006269f3eef46089eb1d596f641e29c524bc76220f4cdd570",
-      "patched": "444de5a5381283fe45bc8d8ffed268904ce2b8b746b4a3b66ae5cae215f7df42"
+      "patched": "030f5007f5c0de5c2a13b78aa73967eb3139385e4994da35931770905bd4e41f"
     },
     "node_modules/ketcher-standalone/dist/cjs/main.js": {
       "upstream": "706163aa4c1caa4877dec8cb288a44a662cb7cb8278710320848fa2690506d57",
-      "patched": "dacdbe79d8122f5603c076982311e36d4c1590c024795f9a9c99887d8489181f"
+      "patched": "626868f4a3991d4e2b3cae4f579d323db8b9639050b680c7c0edd4edbf1b451e"
     },
     "node_modules/ketcher-standalone/dist/main.js": {
       "upstream": "5043a6554904b2ddedf02fe9f8540656a278e3dbda6695d6688040f362862e63",
-      "patched": "ef9962f014787d18cf2c6ccd8365c8ef80e0de16563d445bf282cf19bfdfdeac"
+      "patched": "f017551366f3fcd0cc4cc2cdec9d531df362d4b6d573cf7e000e87b9dfb04ea6"
     },
     "node_modules/ketcher-standalone/package.json": {
       "upstream": "30c52a37befe57b8a50f01673f94b3e8ade9a892001c4fc99e9d3f6fc9237d7f",
       "patched": "091c0502a2f75ca03c79c01ebc3f6260f1ded76211572810a03453ed4b0fc8f9"
+    },
+    "node_modules/ketcher-core/dist/application/ketcher.d.ts": {
+      "upstream": "4d25226b8d0def4c943cd359e56a5156356288b71a115e34e43392582882cd7c",
+      "patched": "fe102d3b4767f6ac5fb0905bff3c1465a49284052030d2a69c6b8d04cbe76689"
+    },
+    "node_modules/ketcher-react/dist/Editor.d.ts": {
+      "upstream": "58bc232d569f90f670d0242638d92e4745c60a1612ee8a1118c75b7d56e98bcc",
+      "patched": "bd32592f9cd5c699d4dd1b5d1fb55e765043387b34df969321f28ed70648d877"
+    },
+    "node_modules/ketcher-react/dist/cjs/Editor.d.ts": {
+      "upstream": "58bc232d569f90f670d0242638d92e4745c60a1612ee8a1118c75b7d56e98bcc",
+      "patched": "bd32592f9cd5c699d4dd1b5d1fb55e765043387b34df969321f28ed70648d877"
+    },
+    "node_modules/ketcher-standalone/dist/cjs/infrastructure/services/struct/standaloneStructService.d.ts": {
+      "upstream": "bfa6303c5e44c68ee593c4d9084a82597bfdd1a77129da4c9e3ecf4d40d566be",
+      "patched": "3981610f7cc8fcd01ec55934d76ce90a84e7cb88017aeffa542300991efc9e14"
+    },
+    "node_modules/ketcher-standalone/dist/infrastructure/services/struct/standaloneStructService.d.ts": {
+      "upstream": "bfa6303c5e44c68ee593c4d9084a82597bfdd1a77129da4c9e3ecf4d40d566be",
+      "patched": "3981610f7cc8fcd01ec55934d76ce90a84e7cb88017aeffa542300991efc9e14"
     }
   },
   "patches": {
-    "patches/ketcher-core+3.8.0.patch": "77bde769e69c494de7c721f8c42edb956b0f68855ef3ebf7cbee2ffd207df1eb",
-    "patches/ketcher-macromolecules+3.8.0.patch": "c40fa1b765a54a8c53dc3e63788b2d4b586fd452d0bd3759f788ce5c6af8669a",
-    "patches/ketcher-react+3.8.0.patch": "23e880083dcaf2235f686e07fbbf25e3cb6c7b7b1c098a167b55222e698ba5ab",
-    "patches/ketcher-standalone+3.8.0.patch": "1c44b84c6c8abef09c998e07c1edcd99d79c3b2f799a6666958f9325ceafebb7"
+    "patches/ketcher-core+3.8.0.patch": "05a4c5ec13da19387a7af993bf052f0f9575ee05a93693883f7747153a8d9422",
+    "patches/ketcher-macromolecules+3.8.0.patch": "fcbfee92356b265141715f1b3fb8cddf0d7c71b48a5356c49511e30ab86fcc57",
+    "patches/ketcher-react+3.8.0.patch": "ff696ff6810efbcf8ea532a88012b174f58a85727df56220a6d9f431debfed01",
+    "patches/ketcher-standalone+3.8.0.patch": "47863a6bb960ae42fae8610d0660eff4ce41291f08ab4f9d161051b5adebda1d"
+  },
+  "fragments": {
+    "sdk/core-fragment.js": "aec2962144fc51f52841a4aa1ec484dbee54eb87f39c867c2792c5fb9c8f7d49",
+    "sdk/editor-fragment.js": "91516ce5a30efd570b2919e5495ef2e63b7fe43d5799ffc5699056bf3b230e77",
+    "sdk/macro-controller.mjs": "9ba30b9e06837c241f5eedafed9dcad7a232a779b9da5b5df658ed7d106998a4",
+    "sdk/indigo-transport.mjs": "ecfc58b1d063648ac2004267207de904c06405a9aaccf30063e84098ab34bc15"
   }
 }

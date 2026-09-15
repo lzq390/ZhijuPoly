@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
+import { createHash } from 'node:crypto';
 const root = resolve(process.argv[2] || "dist");
 const iframeRoot = resolve(root, "ketcher");
 const [host, engine] = await Promise.all([
@@ -30,6 +31,23 @@ if (engine.engine === "iframe") {
   assert.ok(engine.nativeAssets.some(path => /\.css$/.test(path)));
   const nativeCss = await Promise.all(engine.nativeAssets.filter(path => /\.css$/.test(path)).map(path => readFile(resolve(root, path), "utf8")));
   assert.ok(nativeCss.some(css => css.includes('data-editor-engine')));
+  const runtime = JSON.parse(await readFile(resolve(root, 'ketcher-runtime.json'), 'utf8'));
+  assert.equal(runtime.patchRevision, engine.patch);
+  assert.equal(runtime.version, engine.nativeRuntime.version);
+  for (const asset of runtime.assets) {
+    const bytes = await readFile(resolve(root, `assets/ketcher/${runtime.version}/${asset.file}`));
+    assert.equal(bytes.length, asset.bytes);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), asset.sha256);
+  }
+  const closure = (file, visited = new Set()) => {
+    if (visited.has(file)) return visited;
+    visited.add(file);
+    for (const imported of runtime.graph.find(item => item.file === file)?.imports || []) closure(imported, visited);
+    return visited;
+  };
+  assert.ok(!closure(runtime.micro).has(runtime.macro), 'Micro must not statically load Macro.');
+  assert.ok(runtime.assets.some(asset => asset.role === 'worker' && asset.sha256 === runtime.workerSha256));
+  assert.ok(runtime.assets.some(asset => asset.role === 'macro-style' && asset.file === runtime.macroStyle));
   const entry = await readFile(resolve(root, assetPaths(host).find(path => /\.js$/.test(path)).replace(/^\//, "")), "utf8");
   assert.ok(!entry.includes('ketcher/index.html'), "Native entry must not reference the legacy application.");
 }

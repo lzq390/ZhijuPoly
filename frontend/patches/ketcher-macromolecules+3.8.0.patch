@@ -1,20 +1,43 @@
 diff --git a/node_modules/ketcher-macromolecules/dist/index.js b/node_modules/ketcher-macromolecules/dist/index.js
 --- a/node_modules/ketcher-macromolecules/dist/index.js
 +++ b/node_modules/ketcher-macromolecules/dist/index.js
-@@ -166,3 +166,4 @@
+@@ -156,15 +156,23 @@
+     },
+     createEditor: function createEditor(state, action) {
+       var _action$payload$onIni, _action$payload;
++      var previousEditor = ketcherCore.CoreEditor.provideEditorInstance();
++      try {
+       var editor = new ketcherCore.CoreEditor({
+         theme: action.payload.theme,
+         canvas: action.payload.canvas,
+         monomersLibraryUpdate: action.payload.monomersLibraryUpdate
+       });
++      } catch (error) {
++        var partial = ketcherCore.CoreEditor.provideEditorInstance();
++        if (partial && partial !== previousEditor) partial.destroy();
++        throw error;
++      }
+       state.editor = editor;
+       (_action$payload$onIni = (_action$payload = action.payload).onInit) === null || _action$payload$onIni === void 0 || _action$payload$onIni.call(_action$payload, editor);
      },
 -    destroyEditor: function destroyEditor(state) {
 +    destroyEditor: function destroyEditor(state, action) {
 +      if (state.editor !== action.payload) return;
        var _state$editor, _state$editor2;
-@@ -8326,4 +8327,5 @@
+       state.editorLayoutMode = (_state$editor = state.editor) === null || _state$editor === void 0 ? void 0 : _state$editor.mode.modeName;
+       (_state$editor2 = state.editor) === null || _state$editor2 === void 0 || _state$editor2.destroy();
+@@ -8324,13 +8332,19 @@
+   }, [editor]);
+ }
  
 -function useMacromoleculesHotkeys() {
 +function useMacromoleculesHotkeys(canvasRef) {
    React.useEffect(function () {
 +    var canvas = canvasRef.current;
      var HELP_LINK = process.env.HELP_LINK || 'master';
-@@ -8333,2 +8335,7 @@
+     var helpUrl = "https://github.com/epam/ketcher/blob/".concat(HELP_LINK, "/documentation/help.md#ketcher-macromolecules-mode");
+     var handler = function handler(e) {
+       if (e.defaultPrevented) return;
        var target = e.target;
 +      var root = canvas?.closest('[data-structure-editor]') || canvas;
 +      if (!canvas?.isConnected || !canvas.getClientRects().length || !root?.getClientRects().length ||
@@ -22,15 +45,26 @@ diff --git a/node_modules/ketcher-macromolecules/dist/index.js b/node_modules/ke
 +      var popup = target.closest('[data-ketcher-owner]');
 +      if (!root.contains(target) && (!popup || popup.getAttribute('data-ketcher-owner') !== root.getAttribute('data-ketcher-session'))) return;
        var isEditableTarget = !!(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('[contenteditable="true"]')));
-@@ -8616,2 +8623,3 @@
+       if (isEditableTarget) return;
+       var isQuestionHotkey = e.key === '?' || e.key === '/' && e.shiftKey;
+@@ -8614,12 +8628,14 @@
+     return isActive(itemKey);
+   });
    var activeOption = activeOptions[0];
 +  React.useEffect(function () {
    if (subMenuId && activeOption && activeOption !== lastActiveOption) {
-@@ -8622,2 +8630,3 @@
+     dispatch(setSelectedMenuGroupItem({
+       groupName: subMenuId,
+       activeItemName: activeOption
+     }));
    }
 +  }, [dispatch, subMenuId, activeOption, lastActiveOption]);
    var visibleItemId = activeItem !== null && activeItem !== void 0 ? activeItem : activeOption || lastActiveOption || options[0];
-@@ -13304,3 +13313,8 @@
+   var visibleItem = subComponents.find(function (option) {
+     return option.props.itemId === visibleItemId;
+@@ -13302,7 +13318,12 @@
+   var mergedTheme = lodash.merge(muiTheme, {
+     ketcher: editorTheme
    });
 -  store.dispatch(initKetcherId(ketcherId));
 +  var nexpolyInitialized = React.useState(null);
@@ -40,38 +74,69 @@ diff --git a/node_modules/ketcher-macromolecules/dist/index.js b/node_modules/ke
 +  }, [ketcherId]);
 +  if (nexpolyInitialized[0] !== ketcherId) return null;
    return jsxRuntime.jsx(reactRedux.Provider, {
-@@ -13372,4 +13386,5 @@
+     store: store,
+     children: jsxRuntime.jsxs(react.ThemeProvider, {
+@@ -13370,12 +13391,13 @@
+       monomersLibraryUpdate: monomersLibraryUpdate,
+       onInit: onInit
      }));
 +    var ownedEditor = selectEditor(store.getState());
      return function () {
 -      dispatch(destroyEditor(null));
 +      dispatch(destroyEditor(ownedEditor));
      };
-@@ -13377,3 +13392,3 @@
+   }, [dispatch]);
    useSetRnaPresets();
 -  useMacromoleculesHotkeys();
 +  useMacromoleculesHotkeys(canvasRef);
    React.useEffect(function () {
-@@ -13553,2 +13568 @@
+     editor === null || editor === void 0 || editor.events.rightClickSequence.add(function (_ref3) {
+       var _ref4 = _slicedToArray__default["default"](_ref3, 2),
+@@ -13551,4 +13573,3 @@
+ }
+ 
  exports["default"] = EditorContainer;
 -//# sourceMappingURL=index.js.map
 diff --git a/node_modules/ketcher-macromolecules/dist/index.modern.js b/node_modules/ketcher-macromolecules/dist/index.modern.js
 --- a/node_modules/ketcher-macromolecules/dist/index.modern.js
 +++ b/node_modules/ketcher-macromolecules/dist/index.modern.js
-@@ -123,3 +123,4 @@
+@@ -113,15 +113,23 @@
+     },
+     createEditor: function createEditor(state, action) {
+       var _action$payload$onIni, _action$payload;
++      var previousEditor = CoreEditor.provideEditorInstance();
++      try {
+       var editor = new CoreEditor({
+         theme: action.payload.theme,
+         canvas: action.payload.canvas,
+         monomersLibraryUpdate: action.payload.monomersLibraryUpdate
+       });
++      } catch (error) {
++        var partial = CoreEditor.provideEditorInstance();
++        if (partial && partial !== previousEditor) partial.destroy();
++        throw error;
++      }
+       state.editor = editor;
+       (_action$payload$onIni = (_action$payload = action.payload).onInit) === null || _action$payload$onIni === void 0 || _action$payload$onIni.call(_action$payload, editor);
      },
 -    destroyEditor: function destroyEditor(state) {
 +    destroyEditor: function destroyEditor(state, action) {
 +      if (state.editor !== action.payload) return;
        var _state$editor, _state$editor2;
-@@ -8283,4 +8284,5 @@
+       state.editorLayoutMode = (_state$editor = state.editor) === null || _state$editor === void 0 ? void 0 : _state$editor.mode.modeName;
+       (_state$editor2 = state.editor) === null || _state$editor2 === void 0 || _state$editor2.destroy();
+@@ -8281,13 +8289,19 @@
+   }, [editor]);
+ }
  
 -function useMacromoleculesHotkeys() {
 +function useMacromoleculesHotkeys(canvasRef) {
    useEffect(function () {
 +    var canvas = canvasRef.current;
      var HELP_LINK = process.env.HELP_LINK || 'master';
-@@ -8290,2 +8292,7 @@
+     var helpUrl = "https://github.com/epam/ketcher/blob/".concat(HELP_LINK, "/documentation/help.md#ketcher-macromolecules-mode");
+     var handler = function handler(e) {
+       if (e.defaultPrevented) return;
        var target = e.target;
 +      var root = canvas?.closest('[data-structure-editor]') || canvas;
 +      if (!canvas?.isConnected || !canvas.getClientRects().length || !root?.getClientRects().length ||
@@ -79,15 +144,26 @@ diff --git a/node_modules/ketcher-macromolecules/dist/index.modern.js b/node_mod
 +      var popup = target.closest('[data-ketcher-owner]');
 +      if (!root.contains(target) && (!popup || popup.getAttribute('data-ketcher-owner') !== root.getAttribute('data-ketcher-session'))) return;
        var isEditableTarget = !!(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('[contenteditable="true"]')));
-@@ -8573,2 +8580,3 @@
+       if (isEditableTarget) return;
+       var isQuestionHotkey = e.key === '?' || e.key === '/' && e.shiftKey;
+@@ -8571,12 +8585,14 @@
+     return isActive(itemKey);
+   });
    var activeOption = activeOptions[0];
 +  React.useEffect(function () {
    if (subMenuId && activeOption && activeOption !== lastActiveOption) {
-@@ -8579,2 +8587,3 @@
+     dispatch(setSelectedMenuGroupItem({
+       groupName: subMenuId,
+       activeItemName: activeOption
+     }));
    }
 +  }, [dispatch, subMenuId, activeOption, lastActiveOption]);
    var visibleItemId = activeItem !== null && activeItem !== void 0 ? activeItem : activeOption || lastActiveOption || options[0];
-@@ -13261,3 +13270,8 @@
+   var visibleItem = subComponents.find(function (option) {
+     return option.props.itemId === visibleItemId;
+@@ -13259,7 +13275,12 @@
+   var mergedTheme = merge(muiTheme, {
+     ketcher: editorTheme
    });
 -  store.dispatch(initKetcherId(ketcherId));
 +  var nexpolyInitialized = React.useState(null);
@@ -97,18 +173,26 @@ diff --git a/node_modules/ketcher-macromolecules/dist/index.modern.js b/node_mod
 +  }, [ketcherId]);
 +  if (nexpolyInitialized[0] !== ketcherId) return null;
    return jsx(Provider, {
-@@ -13329,4 +13343,5 @@
+     store: store,
+     children: jsxs(ThemeProvider, {
+@@ -13327,12 +13348,13 @@
+       monomersLibraryUpdate: monomersLibraryUpdate,
+       onInit: onInit
      }));
 +    var ownedEditor = selectEditor(store.getState());
      return function () {
 -      dispatch(destroyEditor(null));
 +      dispatch(destroyEditor(ownedEditor));
      };
-@@ -13334,3 +13349,3 @@
+   }, [dispatch]);
    useSetRnaPresets();
 -  useMacromoleculesHotkeys();
 +  useMacromoleculesHotkeys(canvasRef);
    useEffect(function () {
-@@ -13510,2 +13525 @@
+     editor === null || editor === void 0 || editor.events.rightClickSequence.add(function (_ref3) {
+       var _ref4 = _slicedToArray(_ref3, 2),
+@@ -13508,4 +13530,3 @@
+ }
+ 
  export { EditorContainer as default };
 -//# sourceMappingURL=index.modern.js.map

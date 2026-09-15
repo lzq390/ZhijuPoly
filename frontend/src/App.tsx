@@ -248,6 +248,7 @@ function AppContent() {
   }
 
   function navigate(route: AppRoute, extra: Partial<Omit<AppNavigationRequest, "route" | "target">> = {}) {
+    window.dispatchEvent(new Event("nexpoly:structure-navigation"));
     // Fetch the target while the existing navigation transaction saves/exits.
     // A failed prefetch is presented by that page's own retry boundary.
     void preloadPage(route.module).catch(() => {});

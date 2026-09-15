@@ -23,6 +23,10 @@
     "test:ketcher-compat": "node scripts/verify-ketcher-compat.mjs",
     "prebuild:ketcher-compat": "npm run verify:ketcher-patches",
     "test:ketcher-worker": "node --test scripts/verify-ketcher-worker.mjs",
+    "test:ketcher-runtime": "node --test sdk/*.test.mjs scripts/verify-ketcher-runtime-http.mjs",
+    "test:ketcher-deferred": "node scripts/verify-ketcher-deferred.mjs",
+    "build:ketcher-runtime": "node build/ketcher-runtime.mjs",
+    "test:structure-loading": "node scripts/verify-ketcher-loading.mjs",
     "test:structure-ai": "node scripts/verify-structure-ai.mjs",
     "test:structure-engines": "node scripts/verify-structure-engines.mjs",
     "test:structure-refresh": "node scripts/verify-structure-refresh-performance.mjs"

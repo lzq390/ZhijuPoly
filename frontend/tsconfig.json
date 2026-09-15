@@ -17,6 +17,6 @@
     "jsx": "react-jsx",
     "types": ["vite/client"]
   },
-  "include": ["src"],
+  "include": ["src", "sdk/micro.tsx"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

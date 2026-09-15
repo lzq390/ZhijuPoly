@@ -1,25 +1,21 @@
-import { useMemo } from "react";
-import { Editor } from "ketcher-react";
-import { StandaloneStructServiceProvider } from "ketcher-standalone";
-import type { NativeKetcher } from "../../structure/nativeSession";
-import type { RuntimeProps } from "./ReactStructureEditor";
-import "ketcher-react/dist/index.css";
-import "../../styles/ketcher-native.css";
+import { useEffect, useRef } from 'react';
+import { preloadNativeRuntime } from './runtimeClient';
+import type { RuntimeProps } from './ReactStructureEditor';
 
-/** This module is the sole native SDK/CSS import, behind the engine alias. */
+/** DOM boundary: SDK elements and hooks belong to its production renderer. */
 export default function KetcherReactRuntime({ session, onInit }: RuntimeProps) {
-  const provider = useMemo(() => {
-    const instance = new StandaloneStructServiceProvider();
-    const create = instance.createStructService.bind(instance);
-    instance.createStructService = options => {
-      session.check();
-      return session.ownService(create(options));
-    };
-    return instance;
-  }, [session]);
-  return <Editor structServiceProvider={provider} staticResourcesUrl={`${import.meta.env.BASE_URL}ketcher-assets/3.8.0`}
-    onInit={ketcher => onInit(ketcher as unknown as NativeKetcher)}
-    errorHandler={error => {
-      if (!session.initialized) session.fail(`结构编辑器初始化失败：${String(error)}`);
-    }} />;
+  const container = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    let retired = false;
+    void preloadNativeRuntime().then(runtime => {
+      if (retired || session.signal.aborted) return;
+      dispose = runtime.mount(container.current!, { session, onInit,
+        staticResourcesUrl: `${import.meta.env.BASE_URL}ketcher-assets/3.8.0` }).dispose;
+    }).catch(error => {
+      if (!retired && !session.signal.aborted) session.fail(`结构编辑器资源加载失败：${String(error)}`);
+    });
+    return () => { retired = true; dispose?.(); };
+  }, [session, onInit]);
+  return <div ref={container} style={{ height: '100%', width: '100%' }} />;
 }

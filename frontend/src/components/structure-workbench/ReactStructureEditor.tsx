@@ -71,7 +71,7 @@ export default function ReactStructureEditor({ workspace, title }: { workspace: 
     const restore = () => {
       if (!adapter || restoring || session.signal.aborted || !canInitialize()) return;
       restoring = true;
-      void lease.initialize(adapter).then(fit);
+      void lease.initialize(adapter, { adoptInitialDocument: Boolean(sdk?.nexpolyInitialMol) }).then(fit);
     };
     const onInit = (ketcher: NativeKetcher) => {
       if (session.signal.aborted) { ketcher.retire(); return; }

@@ -151,12 +151,32 @@ export class StructureWorkspace {
         if (current()) this.retireMount = retire;
         else retire();
       },
-      initialize: async (editor: StructureEditorHandle) => {
+      initialize: async (editor: StructureEditorHandle, options: { adoptInitialDocument?: boolean } = {}) => {
         if (!current()) return;
         this.raw = editor;
         let restoring = true;
         try {
-          await bounded(this.restore(editor, () => current() && restoring), 15000, this.operations.signal);
+          const restore = async () => {
+            const initial = this.state;
+            const external = this.externalRevision;
+            let importedRevision: number | undefined;
+            if (options.adoptInitialDocument && initial.revision === 0 && !initial.smiles && !initial.ket && !initial.draft) {
+              const document = JSON.parse(await editor.getKet());
+              const smiles = (await editor.getSmiles()).trim();
+              if (!Array.isArray(document?.root?.nodes)) throw new Error("初始导入未返回有效的 KET 文档。");
+              if (current() && restoring && this.state === initial && this.externalRevision === external) {
+                this.publish({ smiles, draft: smiles, ket: JSON.stringify(cleanKet(document)), revision: initial.revision + 1 });
+                importedRevision = this.state.revision;
+              }
+            }
+            // Initial URL imports still receive the same restore/settle checks.
+            await this.restore(editor, () => current() && restoring);
+            if (current() && restoring && importedRevision !== undefined && this.state.revision === importedRevision) {
+              const { smiles, ket, revision } = this.state;
+              this.lastGood = { smiles, ket, revision };
+            }
+          };
+          await bounded(restore(), 15000, this.operations.signal);
           if (!current()) return;
           this.unsubscribeEditor = editor.subscribeChange(() => {
             if (!current()) return;

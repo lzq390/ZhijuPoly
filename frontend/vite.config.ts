@@ -5,6 +5,7 @@ import { structureEngine } from "./build/structure-engine.ts";
 import { developmentCompression } from "./build/development-compression.ts";
 import { retryableImports } from "./build/retryable-imports.ts";
 import { developmentEntryPreload } from "./build/development-entry-preload.ts";
+import { ketcherRuntimePlugin } from "./build/ketcher-runtime-plugin.ts";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "DEV_PROXY_");
@@ -26,7 +27,7 @@ export default defineConfig(({ mode }) => {
   };
 
   return mergeConfig(ketcherCompatibility(), {
-    plugins: [react(), editor.metadata, developmentCompression(), developmentEntryPreload(), retryableImports()],
+    plugins: [react(), ketcherRuntimePlugin(editor.engine), editor.metadata, developmentCompression(), developmentEntryPreload(editor.engine), retryableImports()],
     resolve: { alias: {
       "@structure-editor-engine": editor.implementation,
       "@structure-editor-preload": editor.preload

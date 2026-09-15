@@ -1,0 +1,5751 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-09-15T07:46:39.757866+00:00",
+  "baseRevision": "ca8118b23d61031a1bde85b5bbe8fd14967fe14f",
+  "sdkVersion": "9f4e0f5f5b6efd35fb6b",
+  "patchRevision": "nexpoly-3.8.0-r4",
+  "workerSha256": "410080855a8dc69cf25b6854dbd8ac1c96c4ab10c67c17affc2cde1bfc736f8e",
+  "reference9000": {
+    "id": "0aea339d659f7774c9ca5aebf329fa2a9a269b916faa700711e45d6b73869096",
+    "image": "sha256:df16c98afd93edd95c69936ff8b32fa8da7d2c4e1fa147d0da6a920ed56f4b34",
+    "startedAt": "2026-09-10T09:55:27.66770871Z",
+    "publicEnvironment": {
+      "VITE_API_BASE_URL": null,
+      "VITE_AGENT_WORKSPACE_URL": null,
+      "DEV_PROXY_TARGET": null,
+      "HOST": null
+    },
+    "limits": {
+      "Memory": 0,
+      "NanoCpus": 0,
+      "CpusetCpus": ""
+    }
+  },
+  "reference9000FullArtifactListSha256": "40a75f174adc4cd72b6f1f158ebfdc7753e41bea4a0a657525838fdf71fb446a",
+  "sourceManifestSha256": "ff9a532d4832fdedec2c85b7b5f2f4889b78c3edeb55306b8073b861f9bbfdb9",
+  "batches": {
+    "final-matrix": {
+      "sampleCount": 2160,
+      "summary": {
+        "settings": {
+          "routes": [
+            "/structure-workbench",
+            "/database-query",
+            "/explorer",
+            "/homopolymer-property-prediction",
+            "/conditional-generation",
+            "/reverse-design"
+          ],
+          "networks": [
+            "local",
+            "remote"
+          ],
+          "modes": [
+            "cold",
+            "warm",
+            "uncached"
+          ],
+          "rounds": 30,
+          "variants": [
+            {
+              "name": "iframe",
+              "base": "http://127.0.0.1:9000"
+            },
+            {
+              "name": "native",
+              "base": "http://127.0.0.1:5962"
+            }
+          ],
+          "contextMode": "persistent",
+          "device": {
+            "cpu": "INTEL(R) XEON(R) GOLD 6530",
+            "logicalCpus": 128,
+            "memoryBytes": 270029295616,
+            "kernel": "6.8.0-31-generic"
+          },
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "canvasSize": {
+            "width": 878,
+            "height": 566
+          },
+          "canvasContainerInsets": {
+            "iframe": {
+              "width": 104,
+              "height": 78
+            },
+            "native": {
+              "width": 94,
+              "height": 72
+            }
+          },
+          "reducedMotion": "no-preference",
+          "remote": {
+            "latency": 40,
+            "downloadMbps": 50,
+            "uploadMbps": 10,
+            "acceptedEncodings": [
+              "gzip",
+              "deflate"
+            ],
+            "encodingReason": "Matches Chromium requests to the actual HTTP 9001 address; loopback otherwise also advertises Brotli/Zstd."
+          },
+          "startedAt": "2026-09-15T04:43:56.910Z",
+          "quantiles": "nearest rank",
+          "order": "reverse variant order each round; cold/warm/uncached share one fresh persistent profile",
+          "cache": "fresh persistent context per variant/route/round; warm normal reload; uncached HTTP cache disabled (process/code cache retained)",
+          "transfer": "Completed HTTP resources at the readiness snapshot; same-origin and all-origin totals reported separately. Missing external Worker completion uses ResourceTiming.transferSize (browser header estimate). In-flight/background transfers are not the complete navigation total.",
+          "scriptSha256": "085d0f6b3e5b67032baf27e021841f064892884fc17a29fd6df54d79dc0cc438",
+          "browser": "153.0.8010.12"
+        },
+        "passed": true,
+        "comparisons": [
+          {
+            "network": "local",
+            "route": "/structure-workbench",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 4245.39999961853,
+                  "p95": 4639.60000038147
+                },
+                "native": {
+                  "p50": 2266.7999992370605,
+                  "p95": 2556.1000003814697
+                },
+                "pairedMedian": -2024,
+                "pairedMedian95CI": [
+                  -2156.8999996185303,
+                  -1935.6000022888184
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4418.299999237061,
+                  "p95": 4812
+                },
+                "native": {
+                  "p50": 2359.7000007629395,
+                  "p95": 2653
+                },
+                "pairedMedian": -2154.2999992370605,
+                "pairedMedian95CI": [
+                  -2231.9999980926514,
+                  -1994.1000022888184
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643482
+                },
+                "native": {
+                  "p50": 7414594,
+                  "p95": 7414594
+                },
+                "pairedMedian": -228888,
+                "pairedMedian95CI": [
+                  -228888,
+                  -228888
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11343805,
+                  "p95": 11343806
+                },
+                "native": {
+                  "p50": 9960467,
+                  "p95": 11114918
+                },
+                "pairedMedian": -1062198,
+                "pairedMedian95CI": [
+                  -1411359,
+                  -265114
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/structure-workbench",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1467.7000007629395,
+                  "p95": 1643.5
+                },
+                "native": {
+                  "p50": 1107.6999988555908,
+                  "p95": 1356.8000011444092
+                },
+                "pairedMedian": -367.70000076293945,
+                "pairedMedian95CI": [
+                  -396.50000190734863,
+                  -328.6000003814697
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 1639.8999996185303,
+                  "p95": 1812.8999996185303
+                },
+                "native": {
+                  "p50": 1136.8999996185303,
+                  "p95": 1394.400001525879
+                },
+                "pairedMedian": -512.3999977111816,
+                "pairedMedian95CI": [
+                  -541.5,
+                  -450.8999996185303
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 1857,
+                  "p95": 1857
+                },
+                "native": {
+                  "p50": 13216,
+                  "p95": 13216
+                },
+                "pairedMedian": 11359,
+                "pairedMedian95CI": [
+                  11359,
+                  11359
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 289195,
+                  "p95": 2486367
+                },
+                "native": {
+                  "p50": 300554,
+                  "p95": 3331071
+                },
+                "pairedMedian": 11359,
+                "pairedMedian95CI": [
+                  11359,
+                  11359
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/structure-workbench",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 2317.7999992370605,
+                  "p95": 2532.599998474121
+                },
+                "native": {
+                  "p50": 1158.1999988555908,
+                  "p95": 1264.599998474121
+                },
+                "pairedMedian": -1200.5,
+                "pairedMedian95CI": [
+                  -1229.2000007629395,
+                  -1158.4999980926514
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2481.7000007629395,
+                  "p95": 2700.3999996185303
+                },
+                "native": {
+                  "p50": 1196,
+                  "p95": 1369.599998474121
+                },
+                "pairedMedian": -1308.1000003814697,
+                "pairedMedian95CI": [
+                  -1346.3000011444092,
+                  -1279.7999992370605
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643482
+                },
+                "native": {
+                  "p50": 7414594,
+                  "p95": 7414594
+                },
+                "pairedMedian": -228888,
+                "pairedMedian95CI": [
+                  -228888,
+                  -228888
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11342890,
+                  "p95": 11342913
+                },
+                "native": {
+                  "p50": 11114001,
+                  "p95": 11114002
+                },
+                "pairedMedian": -228889,
+                "pairedMedian95CI": [
+                  -576069,
+                  -228888
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/database-query",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 4202,
+                  "p95": 4956.200000762939
+                },
+                "native": {
+                  "p50": 2190.5,
+                  "p95": 2391.2999992370605
+                },
+                "pairedMedian": -2041.099998474121,
+                "pairedMedian95CI": [
+                  -2118.1000003814697,
+                  -1951.0000019073486
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4375.800001144409,
+                  "p95": 5127.799999237061
+                },
+                "native": {
+                  "p50": 2265.6000003814697,
+                  "p95": 2501.1000003814697
+                },
+                "pairedMedian": -2128.9999980926514,
+                "pairedMedian95CI": [
+                  -2242.7999992370605,
+                  -2024
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643482
+                },
+                "native": {
+                  "p50": 7375686,
+                  "p95": 7375686
+                },
+                "pairedMedian": -267796,
+                "pairedMedian95CI": [
+                  -267796,
+                  -267796
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11343805,
+                  "p95": 11343806
+                },
+                "native": {
+                  "p50": 8926222,
+                  "p95": 11076009
+                },
+                "pairedMedian": -2417584,
+                "pairedMedian95CI": [
+                  -2454203,
+                  -416329
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/database-query",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1463.2000007629395,
+                  "p95": 1574.8999996185303
+                },
+                "native": {
+                  "p50": 1088,
+                  "p95": 1192.7999992370605
+                },
+                "pairedMedian": -378.70000076293945,
+                "pairedMedian95CI": [
+                  -406.3000011444092,
+                  -344.6000003814697
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 1631.8999996185303,
+                  "p95": 1757.400001525879
+                },
+                "native": {
+                  "p50": 1125.3999996185303,
+                  "p95": 1230.7000007629395
+                },
+                "pairedMedian": -498.2999973297119,
+                "pairedMedian95CI": [
+                  -515,
+                  -474.20000076293945
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 1857,
+                  "p95": 1857
+                },
+                "native": {
+                  "p50": 13037,
+                  "p95": 13037
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 289195,
+                  "p95": 2486367
+                },
+                "native": {
+                  "p50": 300375,
+                  "p95": 2393958
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/database-query",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 2360.6000003814697,
+                  "p95": 2564.2000007629395
+                },
+                "native": {
+                  "p50": 1125.7000007629395,
+                  "p95": 1306.8999996185303
+                },
+                "pairedMedian": -1250.2999992370605,
+                "pairedMedian95CI": [
+                  -1284.9999980926514,
+                  -1175.8999996185303
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2530.6000003814697,
+                  "p95": 2719.2999992370605
+                },
+                "native": {
+                  "p50": 1172.3000011444092,
+                  "p95": 1346.1999988555908
+                },
+                "pairedMedian": -1357.9999980926514,
+                "pairedMedian95CI": [
+                  -1420.4999980926514,
+                  -1281
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643482
+                },
+                "native": {
+                  "p50": 7375686,
+                  "p95": 7375686
+                },
+                "pairedMedian": -267796,
+                "pairedMedian95CI": [
+                  -267796,
+                  -267796
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11342889,
+                  "p95": 11342890
+                },
+                "native": {
+                  "p50": 11075093,
+                  "p95": 11075094
+                },
+                "pairedMedian": -267796,
+                "pairedMedian95CI": [
+                  -1406887,
+                  -267796
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/explorer",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 4155.60000038147,
+                  "p95": 4487.10000038147
+                },
+                "native": {
+                  "p50": 2222.8999996185303,
+                  "p95": 2423.099998474121
+                },
+                "pairedMedian": -1963.6000022888184,
+                "pairedMedian95CI": [
+                  -2016.7999992370605,
+                  -1871.3000011444092
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4328.700000762939,
+                  "p95": 4668.199998855591
+                },
+                "native": {
+                  "p50": 2319.099998474121,
+                  "p95": 2498.2000007629395
+                },
+                "pairedMedian": -2047.9999980926514,
+                "pairedMedian95CI": [
+                  -2129.099998474121,
+                  -1931.8999996185303
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643482
+                },
+                "native": {
+                  "p50": 7393306,
+                  "p95": 7393306
+                },
+                "pairedMedian": -250176,
+                "pairedMedian95CI": [
+                  -250176,
+                  -250176
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11343805,
+                  "p95": 11343806
+                },
+                "native": {
+                  "p50": 10700854,
+                  "p95": 11093630
+                },
+                "pairedMedian": -250177,
+                "pairedMedian95CI": [
+                  -1239465,
+                  -250176
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/explorer",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1523.7999992370605,
+                  "p95": 1697.3999996185303
+                },
+                "native": {
+                  "p50": 1095.6999988555908,
+                  "p95": 1239.2000007629395
+                },
+                "pairedMedian": -409.1000003814697,
+                "pairedMedian95CI": [
+                  -462.4000015258789,
+                  -382.5
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 1682.3999996185303,
+                  "p95": 1849.1999988555908
+                },
+                "native": {
+                  "p50": 1140,
+                  "p95": 1277
+                },
+                "pairedMedian": -554.2999992370605,
+                "pairedMedian95CI": [
+                  -577.8999996185303,
+                  -507.3999996185303
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 1857,
+                  "p95": 1857
+                },
+                "native": {
+                  "p50": 13037,
+                  "p95": 13037
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 289195,
+                  "p95": 3319712
+                },
+                "native": {
+                  "p50": 300375,
+                  "p95": 1351696
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/explorer",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 2358.8999996185303,
+                  "p95": 2565.199998855591
+                },
+                "native": {
+                  "p50": 1165,
+                  "p95": 1345.6000003814697
+                },
+                "pairedMedian": -1196,
+                "pairedMedian95CI": [
+                  -1239,
+                  -1142.2999992370605
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2533.3999996185303,
+                  "p95": 2708.199998855591
+                },
+                "native": {
+                  "p50": 1230.3999996185303,
+                  "p95": 1385.2000007629395
+                },
+                "pairedMedian": -1279.3999996185303,
+                "pairedMedian95CI": [
+                  -1386.5,
+                  -1263.799997329712
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643482
+                },
+                "native": {
+                  "p50": 7393306,
+                  "p95": 7393306
+                },
+                "pairedMedian": -250176,
+                "pairedMedian95CI": [
+                  -250176,
+                  -250176
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11342889,
+                  "p95": 11342890
+                },
+                "native": {
+                  "p50": 11092712,
+                  "p95": 11092714
+                },
+                "pairedMedian": -250177,
+                "pairedMedian95CI": [
+                  -259543,
+                  -250176
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/homopolymer-property-prediction",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 4281.60000038147,
+                  "p95": 4665.5
+                },
+                "native": {
+                  "p50": 2219.3999996185303,
+                  "p95": 2489.2000007629395
+                },
+                "pairedMedian": -2007.6000003814697,
+                "pairedMedian95CI": [
+                  -2188.8999996185303,
+                  -1930.3000011444092
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4463,
+                  "p95": 4832.10000038147
+                },
+                "native": {
+                  "p50": 2323.7000007629395,
+                  "p95": 2620.6000003814697
+                },
+                "pairedMedian": -2103.5000019073486,
+                "pairedMedian95CI": [
+                  -2249.2000007629395,
+                  -2032.8000011444092
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643482
+                },
+                "native": {
+                  "p50": 7336665,
+                  "p95": 7336665
+                },
+                "pairedMedian": -306817,
+                "pairedMedian95CI": [
+                  -306817,
+                  -306817
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11357967,
+                  "p95": 11357968
+                },
+                "native": {
+                  "p50": 11051149,
+                  "p95": 11051151
+                },
+                "pairedMedian": -306818,
+                "pairedMedian95CI": [
+                  -1482528,
+                  -306817
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/homopolymer-property-prediction",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1598.5,
+                  "p95": 1880.2999992370605
+                },
+                "native": {
+                  "p50": 1162.2000007629395,
+                  "p95": 1300.7999992370605
+                },
+                "pairedMedian": -461.0999984741211,
+                "pairedMedian95CI": [
+                  -506.3000011444092,
+                  -371.20000076293945
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 1734.6000003814697,
+                  "p95": 2054.7999992370605
+                },
+                "native": {
+                  "p50": 1199.2999992370605,
+                  "p95": 1352.6999988555908
+                },
+                "pairedMedian": -564.8000011444092,
+                "pairedMedian95CI": [
+                  -607.3999996185303,
+                  -491.1999988555908
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 1857,
+                  "p95": 1857
+                },
+                "native": {
+                  "p50": 13037,
+                  "p95": 13037
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 289195,
+                  "p95": 289195
+                },
+                "native": {
+                  "p50": 300375,
+                  "p95": 1317904
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/homopolymer-property-prediction",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 2394.6000003814697,
+                  "p95": 2692.3999996185303
+                },
+                "native": {
+                  "p50": 1188.5,
+                  "p95": 1347.1000003814697
+                },
+                "pairedMedian": -1190.9999980926514,
+                "pairedMedian95CI": [
+                  -1279.3999996185303,
+                  -1164.1000003814697
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2542.2999992370605,
+                  "p95": 2867.7999992370605
+                },
+                "native": {
+                  "p50": 1242.5,
+                  "p95": 1438.8000011444092
+                },
+                "pairedMedian": -1321.8000011444092,
+                "pairedMedian95CI": [
+                  -1366.8000011444092,
+                  -1229.3999977111816
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643482
+                },
+                "native": {
+                  "p50": 7336665,
+                  "p95": 7336665
+                },
+                "pairedMedian": -306817,
+                "pairedMedian95CI": [
+                  -306817,
+                  -306817
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11357000,
+                  "p95": 11357001
+                },
+                "native": {
+                  "p50": 10657409,
+                  "p95": 11050184
+                },
+                "pairedMedian": -699591,
+                "pairedMedian95CI": [
+                  -699592,
+                  -306818
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/conditional-generation",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 4265.89999961853,
+                  "p95": 4455.200000762939
+                },
+                "native": {
+                  "p50": 2283.8999996185303,
+                  "p95": 2510.3999996185303
+                },
+                "pairedMedian": -1986.7000007629395,
+                "pairedMedian95CI": [
+                  -2024.2999992370605,
+                  -1872.400001525879
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4405.39999961853,
+                  "p95": 4613.60000038147
+                },
+                "native": {
+                  "p50": 2396.2999992370605,
+                  "p95": 2620.599998474121
+                },
+                "pairedMedian": -2065.200002670288,
+                "pairedMedian95CI": [
+                  -2137.2000007629395,
+                  -1939.3999996185303
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643797,
+                  "p95": 7643797
+                },
+                "native": {
+                  "p50": 7446928,
+                  "p95": 7446928
+                },
+                "pairedMedian": -196869,
+                "pairedMedian95CI": [
+                  -196869,
+                  -196869
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11363747,
+                  "p95": 11363748
+                },
+                "native": {
+                  "p50": 11166877,
+                  "p95": 11166879
+                },
+                "pairedMedian": -196870,
+                "pairedMedian95CI": [
+                  -589643,
+                  -196869
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/conditional-generation",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1555.599998474121,
+                  "p95": 1732.3999996185303
+                },
+                "native": {
+                  "p50": 1231.3999996185303,
+                  "p95": 1434.6000003814697
+                },
+                "pairedMedian": -324.5999984741211,
+                "pairedMedian95CI": [
+                  -391.5999984741211,
+                  -290.6000003814697
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 1720.1999988555908,
+                  "p95": 1923.1000003814697
+                },
+                "native": {
+                  "p50": 1273,
+                  "p95": 1474.6000003814697
+                },
+                "pairedMedian": -465.0999984741211,
+                "pairedMedian95CI": [
+                  -511.1000003814697,
+                  -404.8000011444092
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 2172,
+                  "p95": 2172
+                },
+                "native": {
+                  "p50": 14353,
+                  "p95": 14353
+                },
+                "pairedMedian": 12181,
+                "pairedMedian95CI": [
+                  12181,
+                  12181
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 289510,
+                  "p95": 289510
+                },
+                "native": {
+                  "p50": 301691,
+                  "p95": 3332208
+                },
+                "pairedMedian": 12181,
+                "pairedMedian95CI": [
+                  12181,
+                  12181
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/conditional-generation",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 2443.1000003814697,
+                  "p95": 2752.7999992370605
+                },
+                "native": {
+                  "p50": 1275.3999996185303,
+                  "p95": 1448.8000011444092
+                },
+                "pairedMedian": -1188.5,
+                "pairedMedian95CI": [
+                  -1211.1999988555908,
+                  -1104.2999992370605
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2581,
+                  "p95": 2937.1000003814697
+                },
+                "native": {
+                  "p50": 1333,
+                  "p95": 1485
+                },
+                "pairedMedian": -1269.1000003814697,
+                "pairedMedian95CI": [
+                  -1339.2999992370605,
+                  -1213.2999992370605
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643797,
+                  "p95": 7643797
+                },
+                "native": {
+                  "p50": 7446928,
+                  "p95": 7446928
+                },
+                "pairedMedian": -196869,
+                "pairedMedian95CI": [
+                  -196869,
+                  -196869
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11362780,
+                  "p95": 11362781
+                },
+                "native": {
+                  "p50": 11165911,
+                  "p95": 11165912
+                },
+                "pairedMedian": -196870,
+                "pairedMedian95CI": [
+                  -309824,
+                  -196869
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/reverse-design",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 4329,
+                  "p95": 4636.10000038147
+                },
+                "native": {
+                  "p50": 2284,
+                  "p95": 2421.300001144409
+                },
+                "pairedMedian": -2013.5,
+                "pairedMedian95CI": [
+                  -2115,
+                  -1995.900001525879
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4497.199998855591,
+                  "p95": 4796
+                },
+                "native": {
+                  "p50": 2379.7000007629395,
+                  "p95": 2576.699998855591
+                },
+                "pairedMedian": -2094.3999996185303,
+                "pairedMedian95CI": [
+                  -2178.7999992370605,
+                  -2019.7999992370605
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7645057,
+                  "p95": 7645057
+                },
+                "native": {
+                  "p50": 7699447,
+                  "p95": 7699447
+                },
+                "pairedMedian": 54390,
+                "pairedMedian95CI": [
+                  54390,
+                  54390
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11345380,
+                  "p95": 11345381
+                },
+                "native": {
+                  "p50": 11399547,
+                  "p95": 11399771
+                },
+                "pairedMedian": 54390,
+                "pairedMedian95CI": [
+                  18163,
+                  54390
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/reverse-design",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1577.6000003814697,
+                  "p95": 1807.1999988555908
+                },
+                "native": {
+                  "p50": 1222,
+                  "p95": 1341.7999992370605
+                },
+                "pairedMedian": -392.8999996185303,
+                "pairedMedian95CI": [
+                  -446.3000011444092,
+                  -302.50000190734863
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 1727.6999988555908,
+                  "p95": 2010.3999996185303
+                },
+                "native": {
+                  "p50": 1264,
+                  "p95": 1358.8999996185303
+                },
+                "pairedMedian": -495.10000228881836,
+                "pairedMedian95CI": [
+                  -573.6000003814697,
+                  -429.0999984741211
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 3432,
+                  "p95": 3432
+                },
+                "native": {
+                  "p50": 16051,
+                  "p95": 16051
+                },
+                "pairedMedian": 12619,
+                "pairedMedian95CI": [
+                  12619,
+                  12619
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 290770,
+                  "p95": 2487942
+                },
+                "native": {
+                  "p50": 303389,
+                  "p95": 779957
+                },
+                "pairedMedian": 12619,
+                "pairedMedian95CI": [
+                  12619,
+                  12619
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/reverse-design",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 2434.699998855591,
+                  "p95": 2645.7000007629395
+                },
+                "native": {
+                  "p50": 1269.6000003814697,
+                  "p95": 1425.2999992370605
+                },
+                "pairedMedian": -1198.099998474121,
+                "pairedMedian95CI": [
+                  -1260.9999980926514,
+                  -1073.7000007629395
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2585.7000007629395,
+                  "p95": 2827.6000003814697
+                },
+                "native": {
+                  "p50": 1330.7000007629395,
+                  "p95": 1459.2999992370605
+                },
+                "pairedMedian": -1313.6000003814697,
+                "pairedMedian95CI": [
+                  -1385.1000003814697,
+                  -1190
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7645057,
+                  "p95": 7645057
+                },
+                "native": {
+                  "p50": 7699447,
+                  "p95": 7699447
+                },
+                "pairedMedian": 54390,
+                "pairedMedian95CI": [
+                  54390,
+                  54390
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11344465,
+                  "p95": 11344573
+                },
+                "native": {
+                  "p50": 11398854,
+                  "p95": 11398855
+                },
+                "pairedMedian": 54390,
+                "pairedMedian95CI": [
+                  54389,
+                  54390
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/structure-workbench",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 5595.39999961853,
+                  "p95": 6185.700000762939
+                },
+                "native": {
+                  "p50": 3117.7000007629395,
+                  "p95": 3307
+                },
+                "pairedMedian": -2527.7999992370605,
+                "pairedMedian95CI": [
+                  -2666.3999996185303,
+                  -2478.8999996185303
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 5777.299999237061,
+                  "p95": 6363.799999237061
+                },
+                "native": {
+                  "p50": 3155.7999992370605,
+                  "p95": 3394.1000003814697
+                },
+                "pairedMedian": -2630.199998855591,
+                "pairedMedian95CI": [
+                  -2783.9999980926514,
+                  -2573.8999996185303
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643490
+                },
+                "native": {
+                  "p50": 8186238,
+                  "p95": 8186238
+                },
+                "pairedMedian": 542756,
+                "pairedMedian95CI": [
+                  542748,
+                  542756
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11343806,
+                  "p95": 11343814
+                },
+                "native": {
+                  "p50": 11493787,
+                  "p95": 11886562
+                },
+                "pairedMedian": 149981,
+                "pairedMedian95CI": [
+                  149973,
+                  542748
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/structure-workbench",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1955.2000007629395,
+                  "p95": 2211.5
+                },
+                "native": {
+                  "p50": 1474.6999988555908,
+                  "p95": 1638
+                },
+                "pairedMedian": -546.2000007629395,
+                "pairedMedian95CI": [
+                  -576.1999988555908,
+                  -502.5
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2149.1000003814697,
+                  "p95": 2391.099998474121
+                },
+                "native": {
+                  "p50": 1521.6000003814697,
+                  "p95": 1676.2999992370605
+                },
+                "pairedMedian": -658.6000003814697,
+                "pairedMedian95CI": [
+                  -720.5000019073486,
+                  -598.1999988555908
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 1857,
+                  "p95": 1857
+                },
+                "native": {
+                  "p50": 13216,
+                  "p95": 13216
+                },
+                "pairedMedian": 11359,
+                "pairedMedian95CI": [
+                  11359,
+                  11359
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 289195,
+                  "p95": 289195
+                },
+                "native": {
+                  "p50": 300554,
+                  "p95": 1037367
+                },
+                "pairedMedian": 11359,
+                "pairedMedian95CI": [
+                  11359,
+                  11359
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/structure-workbench",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 3865.7000007629395,
+                  "p95": 4365.39999961853
+                },
+                "native": {
+                  "p50": 2763.6000003814697,
+                  "p95": 2841.7000007629395
+                },
+                "pairedMedian": -1133.6999988555908,
+                "pairedMedian95CI": [
+                  -1203.7999992370605,
+                  -1079.8000011444092
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4033.8999996185303,
+                  "p95": 4550.299999237061
+                },
+                "native": {
+                  "p50": 2801.099998474121,
+                  "p95": 2888
+                },
+                "pairedMedian": -1237.1000003814697,
+                "pairedMedian95CI": [
+                  -1316.099998474121,
+                  -1201.2000007629395
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643490
+                },
+                "native": {
+                  "p50": 8186238,
+                  "p95": 8186238
+                },
+                "pairedMedian": 542756,
+                "pairedMedian95CI": [
+                  542756,
+                  542756
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11342889,
+                  "p95": 11342898
+                },
+                "native": {
+                  "p50": 11885645,
+                  "p95": 11885646
+                },
+                "pairedMedian": 542756,
+                "pairedMedian95CI": [
+                  542755,
+                  542757
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/database-query",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 5604.599998474121,
+                  "p95": 6909.700000762939
+                },
+                "native": {
+                  "p50": 3096.599998474121,
+                  "p95": 3230.3999996185303
+                },
+                "pairedMedian": -2674.599998474121,
+                "pairedMedian95CI": [
+                  -2720.6000003814697,
+                  -2517.7000007629395
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 5782.39999961853,
+                  "p95": 7081.5
+                },
+                "native": {
+                  "p50": 3133.199998855591,
+                  "p95": 3270.6000003814697
+                },
+                "pairedMedian": -2774.2000007629395,
+                "pairedMedian95CI": [
+                  -2861.099998474121,
+                  -2636.099998474121
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643490
+                },
+                "native": {
+                  "p50": 8147330,
+                  "p95": 8147330
+                },
+                "pairedMedian": 503848,
+                "pairedMedian95CI": [
+                  503848,
+                  503848
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11343805,
+                  "p95": 11343814
+                },
+                "native": {
+                  "p50": 11454879,
+                  "p95": 11847654
+                },
+                "pairedMedian": 111075,
+                "pairedMedian95CI": [
+                  111072,
+                  503846
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/database-query",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1915.2000007629395,
+                  "p95": 2049.699998855591
+                },
+                "native": {
+                  "p50": 1406.7000007629395,
+                  "p95": 1592
+                },
+                "pairedMedian": -502.6999969482422,
+                "pairedMedian95CI": [
+                  -547.2000007629395,
+                  -470.20000076293945
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2086.3999996185303,
+                  "p95": 2212.1000003814697
+                },
+                "native": {
+                  "p50": 1454.1999988555908,
+                  "p95": 1610.6000003814697
+                },
+                "pairedMedian": -632.6000003814697,
+                "pairedMedian95CI": [
+                  -680.7000007629395,
+                  -605.7999992370605
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 1857,
+                  "p95": 1857
+                },
+                "native": {
+                  "p50": 13037,
+                  "p95": 13037
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 289195,
+                  "p95": 289195
+                },
+                "native": {
+                  "p50": 300375,
+                  "p95": 1036933
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/database-query",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 3860.8999996185303,
+                  "p95": 4173.39999961853
+                },
+                "native": {
+                  "p50": 2741,
+                  "p95": 2817.1000003814697
+                },
+                "pairedMedian": -1161.3000011444092,
+                "pairedMedian95CI": [
+                  -1226,
+                  -1105.3000011444092
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4022.8999996185303,
+                  "p95": 4340.5
+                },
+                "native": {
+                  "p50": 2776.699998855591,
+                  "p95": 2856.1000003814697
+                },
+                "pairedMedian": -1291.1000003814697,
+                "pairedMedian95CI": [
+                  -1363,
+                  -1224.900001525879
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643490
+                },
+                "native": {
+                  "p50": 8147330,
+                  "p95": 8147330
+                },
+                "pairedMedian": 503848,
+                "pairedMedian95CI": [
+                  503848,
+                  503848
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11342889,
+                  "p95": 11342897
+                },
+                "native": {
+                  "p50": 11846738,
+                  "p95": 11846738
+                },
+                "pairedMedian": 503848,
+                "pairedMedian95CI": [
+                  503848,
+                  503849
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/explorer",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 5642.200000762939,
+                  "p95": 6123.89999961853
+                },
+                "native": {
+                  "p50": 3059.1000003814697,
+                  "p95": 3294.3999996185303
+                },
+                "pairedMedian": -2586,
+                "pairedMedian95CI": [
+                  -2763.9999980926514,
+                  -2486.400001525879
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 5792.199998855591,
+                  "p95": 6301
+                },
+                "native": {
+                  "p50": 3159.400001525879,
+                  "p95": 3335.3999996185303
+                },
+                "pairedMedian": -2723.3999996185303,
+                "pairedMedian95CI": [
+                  -2819.300001144409,
+                  -2578.099998474121
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643490
+                },
+                "native": {
+                  "p50": 8164950,
+                  "p95": 8164950
+                },
+                "pairedMedian": 521468,
+                "pairedMedian95CI": [
+                  521468,
+                  521468
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11343806,
+                  "p95": 11343814
+                },
+                "native": {
+                  "p50": 11481866,
+                  "p95": 11865274
+                },
+                "pairedMedian": 138062,
+                "pairedMedian95CI": [
+                  128693,
+                  521468
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/explorer",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1927.8000011444092,
+                  "p95": 2081.6000003814697
+                },
+                "native": {
+                  "p50": 1448,
+                  "p95": 1511.8999996185303
+                },
+                "pairedMedian": -493.70000076293945,
+                "pairedMedian95CI": [
+                  -516.6999988555908,
+                  -473.5
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2102.7000007629395,
+                  "p95": 2241.8999996185303
+                },
+                "native": {
+                  "p50": 1485,
+                  "p95": 1548.1999988555908
+                },
+                "pairedMedian": -620.6000003814697,
+                "pairedMedian95CI": [
+                  -649.5,
+                  -572.1000003814697
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 1857,
+                  "p95": 1857
+                },
+                "native": {
+                  "p50": 13037,
+                  "p95": 13037
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 289195,
+                  "p95": 786204
+                },
+                "native": {
+                  "p50": 300375,
+                  "p95": 300375
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/explorer",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 3838.8999996185303,
+                  "p95": 4016.6000003814697
+                },
+                "native": {
+                  "p50": 2759.699998855591,
+                  "p95": 2857.099998474121
+                },
+                "pairedMedian": -1059.8999996185303,
+                "pairedMedian95CI": [
+                  -1091.6000003814697,
+                  -1024.1000022888184
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4004.6000003814697,
+                  "p95": 4146.89999961853
+                },
+                "native": {
+                  "p50": 2796.2999992370605,
+                  "p95": 2895
+                },
+                "pairedMedian": -1195.6000003814697,
+                "pairedMedian95CI": [
+                  -1228.6000003814697,
+                  -1154.8999996185303
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643482
+                },
+                "native": {
+                  "p50": 8164950,
+                  "p95": 8164950
+                },
+                "pairedMedian": 521468,
+                "pairedMedian95CI": [
+                  521468,
+                  521468
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11342889,
+                  "p95": 11342905
+                },
+                "native": {
+                  "p50": 11864358,
+                  "p95": 11864358
+                },
+                "pairedMedian": 521469,
+                "pairedMedian95CI": [
+                  521468,
+                  521469
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/homopolymer-property-prediction",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 5656.700000762939,
+                  "p95": 6137.700000762939
+                },
+                "native": {
+                  "p50": 3127.5,
+                  "p95": 3347.2999992370605
+                },
+                "pairedMedian": -2579.300001144409,
+                "pairedMedian95CI": [
+                  -2680.8999996185303,
+                  -2380.7000007629395
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 5829.700000762939,
+                  "p95": 6309.10000038147
+                },
+                "native": {
+                  "p50": 3227.8999996185303,
+                  "p95": 3388.3999996185303
+                },
+                "pairedMedian": -2651.6000003814697,
+                "pairedMedian95CI": [
+                  -2743.199998855591,
+                  -2478.300001144409
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643490
+                },
+                "native": {
+                  "p50": 8108309,
+                  "p95": 8108309
+                },
+                "pairedMedian": 464827,
+                "pairedMedian95CI": [
+                  464827,
+                  464827
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11360130,
+                  "p95": 11360800
+                },
+                "native": {
+                  "p50": 11432182,
+                  "p95": 11825667
+                },
+                "pairedMedian": 71722,
+                "pairedMedian95CI": [
+                  71161,
+                  72053
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/homopolymer-property-prediction",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1951.8999996185303,
+                  "p95": 2121.8999996185303
+                },
+                "native": {
+                  "p50": 1461.5,
+                  "p95": 1572.7999992370605
+                },
+                "pairedMedian": -497.6999988555908,
+                "pairedMedian95CI": [
+                  -554.0000019073486,
+                  -449.39999771118164
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2113.2000007629395,
+                  "p95": 2292.3999996185303
+                },
+                "native": {
+                  "p50": 1497.8000011444092,
+                  "p95": 1633.2999992370605
+                },
+                "pairedMedian": -639.5,
+                "pairedMedian95CI": [
+                  -686.0000019073486,
+                  -578.6000003814697
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 1857,
+                  "p95": 1857
+                },
+                "native": {
+                  "p50": 13037,
+                  "p95": 13037
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 292019,
+                  "p95": 1022622
+                },
+                "native": {
+                  "p50": 303199,
+                  "p95": 2409191
+                },
+                "pairedMedian": 11180,
+                "pairedMedian95CI": [
+                  11180,
+                  11180
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/homopolymer-property-prediction",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 3862.300001144409,
+                  "p95": 4356.299999237061
+                },
+                "native": {
+                  "p50": 2732.6000003814697,
+                  "p95": 2809.300001144409
+                },
+                "pairedMedian": -1147.7000007629395,
+                "pairedMedian95CI": [
+                  -1206,
+                  -1111.7999992370605
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4041.5,
+                  "p95": 4500.799999237061
+                },
+                "native": {
+                  "p50": 2763.1000003814697,
+                  "p95": 2848.1000003814697
+                },
+                "pairedMedian": -1292.8000011444092,
+                "pairedMedian95CI": [
+                  -1349.3000011444092,
+                  -1237.1000003814697
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643490
+                },
+                "native": {
+                  "p50": 8108309,
+                  "p95": 8108309
+                },
+                "pairedMedian": 464827,
+                "pairedMedian95CI": [
+                  464827,
+                  464827
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11359816,
+                  "p95": 11359882
+                },
+                "native": {
+                  "p50": 11823990,
+                  "p95": 11824700
+                },
+                "pairedMedian": 464827,
+                "pairedMedian95CI": [
+                  464826,
+                  464827
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/conditional-generation",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 5670.39999961853,
+                  "p95": 5987.800001144409
+                },
+                "native": {
+                  "p50": 3160.2000007629395,
+                  "p95": 3329.2999992370605
+                },
+                "pairedMedian": -2565.699998855591,
+                "pairedMedian95CI": [
+                  -2646.0000019073486,
+                  -2472.699998855591
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 5830.89999961853,
+                  "p95": 6158.800001144409
+                },
+                "native": {
+                  "p50": 3261.3999996185303,
+                  "p95": 3441.2000007629395
+                },
+                "pairedMedian": -2616.2999992370605,
+                "pairedMedian95CI": [
+                  -2752,
+                  -2513.2999992370605
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643797,
+                  "p95": 7643805
+                },
+                "native": {
+                  "p50": 8218572,
+                  "p95": 8218572
+                },
+                "pairedMedian": 574775,
+                "pairedMedian95CI": [
+                  574767,
+                  574775
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11365910,
+                  "p95": 11365918
+                },
+                "native": {
+                  "p50": 11547910,
+                  "p95": 11791502
+                },
+                "pairedMedian": 181999,
+                "pairedMedian95CI": [
+                  181992,
+                  182000
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/conditional-generation",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1950.2999992370605,
+                  "p95": 2114.6000003814697
+                },
+                "native": {
+                  "p50": 1519.5,
+                  "p95": 1664.8000011444092
+                },
+                "pairedMedian": -447.4000015258789,
+                "pairedMedian95CI": [
+                  -494.3999996185303,
+                  -419.3000030517578
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2118.1000003814697,
+                  "p95": 2282.1000003814697
+                },
+                "native": {
+                  "p50": 1557.6000003814697,
+                  "p95": 1704
+                },
+                "pairedMedian": -570.6000003814697,
+                "pairedMedian95CI": [
+                  -619,
+                  -527.7000007629395
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 2172,
+                  "p95": 2172
+                },
+                "native": {
+                  "p50": 14353,
+                  "p95": 14353
+                },
+                "pairedMedian": 12181,
+                "pairedMedian95CI": [
+                  12181,
+                  12181
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 291672,
+                  "p95": 3304669
+                },
+                "native": {
+                  "p50": 303853,
+                  "p95": 873147
+                },
+                "pairedMedian": 12181,
+                "pairedMedian95CI": [
+                  12181,
+                  12181
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/conditional-generation",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 3880.8999996185303,
+                  "p95": 4122.39999961853
+                },
+                "native": {
+                  "p50": 2765.599998474121,
+                  "p95": 2867.599998474121
+                },
+                "pairedMedian": -1096.2999992370605,
+                "pairedMedian95CI": [
+                  -1143.2999992370605,
+                  -1051.2999992370605
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4051.3999996185303,
+                  "p95": 4273
+                },
+                "native": {
+                  "p50": 2795.5,
+                  "p95": 2906.699998855591
+                },
+                "pairedMedian": -1219.8000011444092,
+                "pairedMedian95CI": [
+                  -1271.1999988555908,
+                  -1178.3999996185303
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643797,
+                  "p95": 7643805
+                },
+                "native": {
+                  "p50": 8218572,
+                  "p95": 8218572
+                },
+                "pairedMedian": 574775,
+                "pairedMedian95CI": [
+                  574775,
+                  574775
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11364943,
+                  "p95": 11364951
+                },
+                "native": {
+                  "p50": 11939718,
+                  "p95": 11939718
+                },
+                "pairedMedian": 574775,
+                "pairedMedian95CI": [
+                  574775,
+                  574775
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/reverse-design",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 5759.700000762939,
+                  "p95": 6361.60000038147
+                },
+                "native": {
+                  "p50": 3119.800001144409,
+                  "p95": 3234.300001144409
+                },
+                "pairedMedian": -2696.7000007629395,
+                "pairedMedian95CI": [
+                  -2767.199998855591,
+                  -2624.300001144409
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 5962.700000762939,
+                  "p95": 6483.89999961853
+                },
+                "native": {
+                  "p50": 3232.8999996185303,
+                  "p95": 3370.5
+                },
+                "pairedMedian": -2763.3999996185303,
+                "pairedMedian95CI": [
+                  -2851.099998474121,
+                  -2682.6000003814697
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7645057,
+                  "p95": 7645065
+                },
+                "native": {
+                  "p50": 8471091,
+                  "p95": 8471091
+                },
+                "pairedMedian": 826034,
+                "pairedMedian95CI": [
+                  826034,
+                  826034
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11347543,
+                  "p95": 11347551
+                },
+                "native": {
+                  "p50": 11780802,
+                  "p95": 11780802
+                },
+                "pairedMedian": 433259,
+                "pairedMedian95CI": [
+                  433251,
+                  433259
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/reverse-design",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1911.8999996185303,
+                  "p95": 2083.900001525879
+                },
+                "native": {
+                  "p50": 1485.3999996185303,
+                  "p95": 1595.2999992370605
+                },
+                "pairedMedian": -427.1999988555908,
+                "pairedMedian95CI": [
+                  -457.3999996185303,
+                  -390.3000011444092
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2100.199998855591,
+                  "p95": 2233.6000003814697
+                },
+                "native": {
+                  "p50": 1527.3999996185303,
+                  "p95": 1641.6999988555908
+                },
+                "pairedMedian": -558.2999992370605,
+                "pairedMedian95CI": [
+                  -595.3999996185303,
+                  -534.6000003814697
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 3432,
+                  "p95": 3432
+                },
+                "native": {
+                  "p50": 16051,
+                  "p95": 16051
+                },
+                "pairedMedian": 12619,
+                "pairedMedian95CI": [
+                  12619,
+                  12619
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 292932,
+                  "p95": 2409221
+                },
+                "native": {
+                  "p50": 305551,
+                  "p95": 314154
+                },
+                "pairedMedian": 12619,
+                "pairedMedian95CI": [
+                  12619,
+                  12619
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/reverse-design",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 3866.7000007629395,
+                  "p95": 4222.89999961853
+                },
+                "native": {
+                  "p50": 2754.2000007629395,
+                  "p95": 2876.800001144409
+                },
+                "pairedMedian": -1123.5000019073486,
+                "pairedMedian95CI": [
+                  -1187.6000003814697,
+                  -1052.6999988555908
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4043.6000003814697,
+                  "p95": 4381
+                },
+                "native": {
+                  "p50": 2792,
+                  "p95": 2916.5
+                },
+                "pairedMedian": -1270.4999980926514,
+                "pairedMedian95CI": [
+                  -1325.3999996185303,
+                  -1183.3000011444092
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7645057,
+                  "p95": 7645065
+                },
+                "native": {
+                  "p50": 8471091,
+                  "p95": 8471091
+                },
+                "pairedMedian": 826034,
+                "pairedMedian95CI": [
+                  826034,
+                  826034
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11346627,
+                  "p95": 11346635
+                },
+                "native": {
+                  "p50": 12172661,
+                  "p95": 12172661
+                },
+                "pairedMedian": 826034,
+                "pairedMedian95CI": [
+                  826034,
+                  826034
+                ]
+              }
+            },
+            "passed": true
+          }
+        ]
+      },
+      "primaryStages": [
+        {
+          "network": "local",
+          "variant": "iframe",
+          "mode": "cold",
+          "stages": {
+            "appMs": {
+              "p50": 1232.800048828125,
+              "p95": 1500.60009765625
+            },
+            "sdkRequestMs": {
+              "p50": 830.89990234375,
+              "p95": 1148.5
+            },
+            "workerMs": {
+              "p50": 3315.2998046875,
+              "p95": 3599
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 4037.2001953125,
+              "p95": 4371.89990234375
+            },
+            "svgMs": {
+              "p50": 3966.300048828125,
+              "p95": 4335
+            },
+            "visibleSvgMs": {
+              "p50": 3966.300048828125,
+              "p95": 4335
+            },
+            "uiReadyMs": {
+              "p50": 4245.39999961853,
+              "p95": 4639.60000038147
+            },
+            "readyMs": {
+              "p50": 4418.299999237061,
+              "p95": 4812
+            },
+            "firstExportMs": {
+              "p50": 172.19999885559082,
+              "p95": 192
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 7643482,
+              "p95": 7643482
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 11343805,
+              "p95": 11343806
+            },
+            "longtaskMaxMs": {
+              "p50": 795,
+              "p95": 893
+            },
+            "longtaskTotalMs": {
+              "p50": 2358,
+              "p95": 2633
+            }
+          }
+        },
+        {
+          "network": "local",
+          "variant": "iframe",
+          "mode": "warm",
+          "stages": {
+            "appMs": {
+              "p50": 218.300048828125,
+              "p95": 242
+            },
+            "sdkRequestMs": {
+              "p50": 197.699951171875,
+              "p95": 221.39990234375
+            },
+            "workerMs": {
+              "p50": 676.800048828125,
+              "p95": 731.199951171875
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 1294,
+              "p95": 1461.7998046875
+            },
+            "svgMs": {
+              "p50": 1148.699951171875,
+              "p95": 1255
+            },
+            "visibleSvgMs": {
+              "p50": 1148.800048828125,
+              "p95": 1255
+            },
+            "uiReadyMs": {
+              "p50": 1467.7000007629395,
+              "p95": 1643.5
+            },
+            "readyMs": {
+              "p50": 1639.8999996185303,
+              "p95": 1812.8999996185303
+            },
+            "firstExportMs": {
+              "p50": 169.80000114440918,
+              "p95": 180.39999961853027
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 1857,
+              "p95": 1857
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 289195,
+              "p95": 2486367
+            },
+            "longtaskMaxMs": {
+              "p50": 231,
+              "p95": 285
+            },
+            "longtaskTotalMs": {
+              "p50": 756,
+              "p95": 994
+            }
+          }
+        },
+        {
+          "network": "local",
+          "variant": "iframe",
+          "mode": "uncached",
+          "stages": {
+            "appMs": {
+              "p50": 408.699951171875,
+              "p95": 529.39990234375
+            },
+            "sdkRequestMs": {
+              "p50": 384.800048828125,
+              "p95": 508.5
+            },
+            "workerMs": {
+              "p50": 1575.199951171875,
+              "p95": 1753.900146484375
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 2137.5,
+              "p95": 2346.599853515625
+            },
+            "svgMs": {
+              "p50": 2016.800048828125,
+              "p95": 2266
+            },
+            "visibleSvgMs": {
+              "p50": 2016.89990234375,
+              "p95": 2266
+            },
+            "uiReadyMs": {
+              "p50": 2317.7999992370605,
+              "p95": 2532.599998474121
+            },
+            "readyMs": {
+              "p50": 2481.7000007629395,
+              "p95": 2700.3999996185303
+            },
+            "firstExportMs": {
+              "p50": 167.80000114440918,
+              "p95": 178.10000038146973
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 7643482,
+              "p95": 7643482
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 11342890,
+              "p95": 11342913
+            },
+            "longtaskMaxMs": {
+              "p50": 205,
+              "p95": 284
+            },
+            "longtaskTotalMs": {
+              "p50": 707,
+              "p95": 843
+            }
+          }
+        },
+        {
+          "network": "local",
+          "variant": "native",
+          "mode": "cold",
+          "stages": {
+            "appMs": {
+              "p50": 1116.199951171875,
+              "p95": 1657.10009765625
+            },
+            "sdkRequestMs": {
+              "p50": 29.5,
+              "p95": 31.300048828125
+            },
+            "workerMs": {
+              "p50": 78.39990234375,
+              "p95": 93
+            },
+            "workerClaimMs": {
+              "p50": 1693.6999988555908,
+              "p95": 1970.3000011444092
+            },
+            "workerReplyMs": {
+              "p50": 1606.199951171875,
+              "p95": 1874.800048828125
+            },
+            "svgMs": {
+              "p50": 1959,
+              "p95": 2245.60009765625
+            },
+            "visibleSvgMs": {
+              "p50": 1959.10009765625,
+              "p95": 2245.60009765625
+            },
+            "uiReadyMs": {
+              "p50": 2266.7999992370605,
+              "p95": 2556.1000003814697
+            },
+            "readyMs": {
+              "p50": 2359.7000007629395,
+              "p95": 2653
+            },
+            "firstExportMs": {
+              "p50": 48.39999961853027,
+              "p95": 179.5
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 7414594,
+              "p95": 7414594
+            },
+            "totalRequests": {
+              "p50": 131,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 9960467,
+              "p95": 11114918
+            },
+            "longtaskMaxMs": {
+              "p50": 577,
+              "p95": 657
+            },
+            "longtaskTotalMs": {
+              "p50": 1654,
+              "p95": 1874
+            }
+          }
+        },
+        {
+          "network": "local",
+          "variant": "native",
+          "mode": "warm",
+          "stages": {
+            "appMs": {
+              "p50": 273.199951171875,
+              "p95": 307.10009765625
+            },
+            "sdkRequestMs": {
+              "p50": 40.10009765625,
+              "p95": 64.5
+            },
+            "workerMs": {
+              "p50": 46.60009765625,
+              "p95": 71.699951171875
+            },
+            "workerClaimMs": {
+              "p50": 746.5,
+              "p95": 880.1000003814697
+            },
+            "workerReplyMs": {
+              "p50": 784,
+              "p95": 879.89990234375
+            },
+            "svgMs": {
+              "p50": 833.199951171875,
+              "p95": 1003.5
+            },
+            "visibleSvgMs": {
+              "p50": 833.199951171875,
+              "p95": 1003.60009765625
+            },
+            "uiReadyMs": {
+              "p50": 1107.6999988555908,
+              "p95": 1356.8000011444092
+            },
+            "readyMs": {
+              "p50": 1136.8999996185303,
+              "p95": 1394.400001525879
+            },
+            "firstExportMs": {
+              "p50": 37,
+              "p95": 45.900001525878906
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 13216,
+              "p95": 13216
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 300554,
+              "p95": 3331071
+            },
+            "longtaskMaxMs": {
+              "p50": 216,
+              "p95": 321
+            },
+            "longtaskTotalMs": {
+              "p50": 619,
+              "p95": 881
+            }
+          }
+        },
+        {
+          "network": "local",
+          "variant": "native",
+          "mode": "uncached",
+          "stages": {
+            "appMs": {
+              "p50": 451.10009765625,
+              "p95": 554
+            },
+            "sdkRequestMs": {
+              "p50": 34.300048828125,
+              "p95": 44.10009765625
+            },
+            "workerMs": {
+              "p50": 74.10009765625,
+              "p95": 86.89990234375
+            },
+            "workerClaimMs": {
+              "p50": 746,
+              "p95": 876.7999992370605
+            },
+            "workerReplyMs": {
+              "p50": 822.199951171875,
+              "p95": 964.300048828125
+            },
+            "svgMs": {
+              "p50": 820.89990234375,
+              "p95": 995.199951171875
+            },
+            "visibleSvgMs": {
+              "p50": 821,
+              "p95": 995.300048828125
+            },
+            "uiReadyMs": {
+              "p50": 1158.1999988555908,
+              "p95": 1264.599998474121
+            },
+            "readyMs": {
+              "p50": 1196,
+              "p95": 1369.599998474121
+            },
+            "firstExportMs": {
+              "p50": 38,
+              "p95": 105
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 7414594,
+              "p95": 7414594
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 11114001,
+              "p95": 11114002
+            },
+            "longtaskMaxMs": {
+              "p50": 214,
+              "p95": 308
+            },
+            "longtaskTotalMs": {
+              "p50": 608,
+              "p95": 754
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "iframe",
+          "mode": "cold",
+          "stages": {
+            "appMs": {
+              "p50": 1265.39990234375,
+              "p95": 1649.300048828125
+            },
+            "sdkRequestMs": {
+              "p50": 904.60009765625,
+              "p95": 1266.89990234375
+            },
+            "workerMs": {
+              "p50": 4636.800048828125,
+              "p95": 5040.60009765625
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 5388.10009765625,
+              "p95": 5782.10009765625
+            },
+            "svgMs": {
+              "p50": 5302.89990234375,
+              "p95": 5704.60009765625
+            },
+            "visibleSvgMs": {
+              "p50": 5302.89990234375,
+              "p95": 5704.60009765625
+            },
+            "uiReadyMs": {
+              "p50": 5595.39999961853,
+              "p95": 6185.700000762939
+            },
+            "readyMs": {
+              "p50": 5777.299999237061,
+              "p95": 6363.799999237061
+            },
+            "firstExportMs": {
+              "p50": 169.20000076293945,
+              "p95": 187.60000038146973
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 7643482,
+              "p95": 7643490
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 11343806,
+              "p95": 11343814
+            },
+            "longtaskMaxMs": {
+              "p50": 824,
+              "p95": 916
+            },
+            "longtaskTotalMs": {
+              "p50": 2399,
+              "p95": 2574
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "iframe",
+          "mode": "warm",
+          "stages": {
+            "appMs": {
+              "p50": 295.300048828125,
+              "p95": 322.699951171875
+            },
+            "sdkRequestMs": {
+              "p50": 274.199951171875,
+              "p95": 301.300048828125
+            },
+            "workerMs": {
+              "p50": 1153.800048828125,
+              "p95": 1227.5
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 1766.599853515625,
+              "p95": 1938.800048828125
+            },
+            "svgMs": {
+              "p50": 1663.699951171875,
+              "p95": 1831.60009765625
+            },
+            "visibleSvgMs": {
+              "p50": 1663.699951171875,
+              "p95": 1831.60009765625
+            },
+            "uiReadyMs": {
+              "p50": 1955.2000007629395,
+              "p95": 2211.5
+            },
+            "readyMs": {
+              "p50": 2149.1000003814697,
+              "p95": 2391.099998474121
+            },
+            "firstExportMs": {
+              "p50": 171.9000015258789,
+              "p95": 201.29999923706055
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 1857,
+              "p95": 1857
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 289195,
+              "p95": 289195
+            },
+            "longtaskMaxMs": {
+              "p50": 267,
+              "p95": 317
+            },
+            "longtaskTotalMs": {
+              "p50": 807,
+              "p95": 961
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "iframe",
+          "mode": "uncached",
+          "stages": {
+            "appMs": {
+              "p50": 503.699951171875,
+              "p95": 995.60009765625
+            },
+            "sdkRequestMs": {
+              "p50": 480.89990234375,
+              "p95": 970
+            },
+            "workerMs": {
+              "p50": 3045,
+              "p95": 3571.39990234375
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 3678.199951171875,
+              "p95": 4192.60009765625
+            },
+            "svgMs": {
+              "p50": 3595.5,
+              "p95": 4120.300048828125
+            },
+            "visibleSvgMs": {
+              "p50": 3595.60009765625,
+              "p95": 4120.300048828125
+            },
+            "uiReadyMs": {
+              "p50": 3865.7000007629395,
+              "p95": 4365.39999961853
+            },
+            "readyMs": {
+              "p50": 4033.8999996185303,
+              "p95": 4550.299999237061
+            },
+            "firstExportMs": {
+              "p50": 172.10000038146973,
+              "p95": 189.10000038146973
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 7643482,
+              "p95": 7643490
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 11342889,
+              "p95": 11342898
+            },
+            "longtaskMaxMs": {
+              "p50": 230,
+              "p95": 328
+            },
+            "longtaskTotalMs": {
+              "p50": 823,
+              "p95": 957
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "native",
+          "mode": "cold",
+          "stages": {
+            "appMs": {
+              "p50": 1787.5,
+              "p95": 1924.699951171875
+            },
+            "sdkRequestMs": {
+              "p50": 67.300048828125,
+              "p95": 71.800048828125
+            },
+            "workerMs": {
+              "p50": 238.39990234375,
+              "p95": 247.800048828125
+            },
+            "workerClaimMs": {
+              "p50": 2540.3999996185303,
+              "p95": 2695.1000003814697
+            },
+            "workerReplyMs": {
+              "p50": 2427.89990234375,
+              "p95": 2571.39990234375
+            },
+            "svgMs": {
+              "p50": 2752.60009765625,
+              "p95": 2903.10009765625
+            },
+            "visibleSvgMs": {
+              "p50": 2752.60009765625,
+              "p95": 2903.10009765625
+            },
+            "uiReadyMs": {
+              "p50": 3117.7000007629395,
+              "p95": 3307
+            },
+            "readyMs": {
+              "p50": 3155.7999992370605,
+              "p95": 3394.1000003814697
+            },
+            "firstExportMs": {
+              "p50": 39.60000038146973,
+              "p95": 161.39999961853027
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 8186238,
+              "p95": 8186238
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 11493787,
+              "p95": 11886562
+            },
+            "longtaskMaxMs": {
+              "p50": 575,
+              "p95": 664
+            },
+            "longtaskTotalMs": {
+              "p50": 1503,
+              "p95": 1767
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "native",
+          "mode": "warm",
+          "stages": {
+            "appMs": {
+              "p50": 969.300048828125,
+              "p95": 1088.699951171875
+            },
+            "sdkRequestMs": {
+              "p50": 77.800048828125,
+              "p95": 119.199951171875
+            },
+            "workerMs": {
+              "p50": 85.60009765625,
+              "p95": 126.800048828125
+            },
+            "workerClaimMs": {
+              "p50": 1119.1999988555908,
+              "p95": 1245.3999996185303
+            },
+            "workerReplyMs": {
+              "p50": 777.199951171875,
+              "p95": 896.699951171875
+            },
+            "svgMs": {
+              "p50": 1251.699951171875,
+              "p95": 1383.199951171875
+            },
+            "visibleSvgMs": {
+              "p50": 1251.699951171875,
+              "p95": 1383.300048828125
+            },
+            "uiReadyMs": {
+              "p50": 1474.6999988555908,
+              "p95": 1638
+            },
+            "readyMs": {
+              "p50": 1521.6000003814697,
+              "p95": 1676.2999992370605
+            },
+            "firstExportMs": {
+              "p50": 40.19999885559082,
+              "p95": 105.4000015258789
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 13216,
+              "p95": 13216
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 300554,
+              "p95": 1037367
+            },
+            "longtaskMaxMs": {
+              "p50": 283,
+              "p95": 373
+            },
+            "longtaskTotalMs": {
+              "p50": 688,
+              "p95": 845
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "native",
+          "mode": "uncached",
+          "stages": {
+            "appMs": {
+              "p50": 1380.39990234375,
+              "p95": 1436
+            },
+            "sdkRequestMs": {
+              "p50": 75,
+              "p95": 109.60009765625
+            },
+            "workerMs": {
+              "p50": 223.89990234375,
+              "p95": 266
+            },
+            "workerClaimMs": {
+              "p50": 1644.1000003814697,
+              "p95": 1755.3999996185303
+            },
+            "workerReplyMs": {
+              "p50": 2461.5,
+              "p95": 2569.699951171875
+            },
+            "svgMs": {
+              "p50": 1717.199951171875,
+              "p95": 1880.10009765625
+            },
+            "visibleSvgMs": {
+              "p50": 1719.300048828125,
+              "p95": 1880.10009765625
+            },
+            "uiReadyMs": {
+              "p50": 2763.6000003814697,
+              "p95": 2841.7000007629395
+            },
+            "readyMs": {
+              "p50": 2801.099998474121,
+              "p95": 2888
+            },
+            "firstExportMs": {
+              "p50": 37.20000076293945,
+              "p95": 46.29999923706055
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 8186238,
+              "p95": 8186238
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 11885645,
+              "p95": 11885646
+            },
+            "longtaskMaxMs": {
+              "p50": 272,
+              "p95": 337
+            },
+            "longtaskTotalMs": {
+              "p50": 740,
+              "p95": 831
+            }
+          }
+        }
+      ],
+      "rawEvidence": {
+        "harness.mjs": {
+          "path": "/tmp/nexpoly-component-20260915/final-matrix/harness.mjs",
+          "archiveEntry": "final-matrix/harness.mjs",
+          "sha256": "085d0f6b3e5b67032baf27e021841f064892884fc17a29fd6df54d79dc0cc438"
+        },
+        "samples.jsonl": {
+          "path": "/tmp/nexpoly-component-20260915/final-matrix/samples.jsonl",
+          "archiveEntry": "final-matrix/samples.jsonl",
+          "sha256": "d7592c81920e94b434f7e933f3fff6eac98044ff573d36cace4ad93a5e1709b1"
+        },
+        "results.json": {
+          "path": "/tmp/nexpoly-component-20260915/final-matrix/results.json",
+          "archiveEntry": "final-matrix/results.json",
+          "sha256": "157f9093ed4f6b47cc029fe046545b0d884a4c1f7df61307a69bf66e7ec01e33"
+        },
+        "summary.json": {
+          "path": "/tmp/nexpoly-component-20260915/final-matrix/summary.json",
+          "archiveEntry": "final-matrix/summary.json",
+          "sha256": "19cd28a16beaa91c35146c44875f40beed39870b06b34ce83471c4893645691a"
+        }
+      }
+    },
+    "primary-confirmation": {
+      "sampleCount": 360,
+      "summary": {
+        "settings": {
+          "routes": [
+            "/structure-workbench"
+          ],
+          "networks": [
+            "local",
+            "remote"
+          ],
+          "modes": [
+            "cold",
+            "warm",
+            "uncached"
+          ],
+          "rounds": 30,
+          "variants": [
+            {
+              "name": "iframe",
+              "base": "http://127.0.0.1:9000"
+            },
+            {
+              "name": "native",
+              "base": "http://127.0.0.1:5962"
+            }
+          ],
+          "contextMode": "persistent",
+          "device": {
+            "cpu": "INTEL(R) XEON(R) GOLD 6530",
+            "logicalCpus": 128,
+            "memoryBytes": 270029295616,
+            "kernel": "6.8.0-31-generic"
+          },
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "canvasSize": {
+            "width": 878,
+            "height": 566
+          },
+          "canvasContainerInsets": {
+            "iframe": {
+              "width": 104,
+              "height": 78
+            },
+            "native": {
+              "width": 94,
+              "height": 72
+            }
+          },
+          "reducedMotion": "no-preference",
+          "remote": {
+            "latency": 40,
+            "downloadMbps": 50,
+            "uploadMbps": 10,
+            "acceptedEncodings": [
+              "gzip",
+              "deflate"
+            ],
+            "encodingReason": "Matches Chromium requests to the actual HTTP 9001 address; loopback otherwise also advertises Brotli/Zstd."
+          },
+          "startedAt": "2026-09-15T07:16:03.380Z",
+          "quantiles": "nearest rank",
+          "order": "reverse variant order each round; cold/warm/uncached share one fresh persistent profile",
+          "cache": "fresh persistent context per variant/route/round; warm normal reload; uncached HTTP cache disabled (process/code cache retained)",
+          "transfer": "Completed HTTP resources at the readiness snapshot; same-origin and all-origin totals reported separately. Missing external Worker completion uses ResourceTiming.transferSize (browser header estimate). In-flight/background transfers are not the complete navigation total.",
+          "scriptSha256": "085d0f6b3e5b67032baf27e021841f064892884fc17a29fd6df54d79dc0cc438",
+          "browser": "153.0.8010.12"
+        },
+        "passed": true,
+        "comparisons": [
+          {
+            "network": "local",
+            "route": "/structure-workbench",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 4328.89999961853,
+                  "p95": 5183.60000038147
+                },
+                "native": {
+                  "p50": 2255.300001144409,
+                  "p95": 2465.400001525879
+                },
+                "pairedMedian": -2071.5,
+                "pairedMedian95CI": [
+                  -2254.7000007629395,
+                  -1966.900001525879
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4502.5,
+                  "p95": 5357.89999961853
+                },
+                "native": {
+                  "p50": 2338.6000003814697,
+                  "p95": 2637.5
+                },
+                "pairedMedian": -2161.5,
+                "pairedMedian95CI": [
+                  -2351.2000007629395,
+                  -2078.300001144409
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643482
+                },
+                "native": {
+                  "p50": 7414594,
+                  "p95": 7414594
+                },
+                "pairedMedian": -228888,
+                "pairedMedian95CI": [
+                  -228888,
+                  -228888
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11345968,
+                  "p95": 11345968
+                },
+                "native": {
+                  "p50": 9969067,
+                  "p95": 11117080
+                },
+                "pairedMedian": -1062199,
+                "pairedMedian95CI": [
+                  -1471292,
+                  -274913
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/structure-workbench",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1494.2999992370605,
+                  "p95": 1633.8999996185303
+                },
+                "native": {
+                  "p50": 1080,
+                  "p95": 1261.7999992370605
+                },
+                "pairedMedian": -388.79999923706055,
+                "pairedMedian95CI": [
+                  -422.3000011444092,
+                  -339.3000011444092
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 1666.2000007629395,
+                  "p95": 1824.2000007629395
+                },
+                "native": {
+                  "p50": 1116.900001525879,
+                  "p95": 1299.3999996185303
+                },
+                "pairedMedian": -523.1000003814697,
+                "pairedMedian95CI": [
+                  -556.7999992370605,
+                  -474.8999996185303
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 1857,
+                  "p95": 1857
+                },
+                "native": {
+                  "p50": 13216,
+                  "p95": 13216
+                },
+                "pairedMedian": 11359,
+                "pairedMedian95CI": [
+                  11359,
+                  11359
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 291357,
+                  "p95": 2488529
+                },
+                "native": {
+                  "p50": 302716,
+                  "p95": 3333233
+                },
+                "pairedMedian": 11359,
+                "pairedMedian95CI": [
+                  11359,
+                  11359
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "local",
+            "route": "/structure-workbench",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 2409.199998855591,
+                  "p95": 2714.7000007629395
+                },
+                "native": {
+                  "p50": 1207.3999996185303,
+                  "p95": 1346
+                },
+                "pairedMedian": -1240.8000011444092,
+                "pairedMedian95CI": [
+                  -1286.1999988555908,
+                  -1208.5
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2578.599998474121,
+                  "p95": 2902.2000007629395
+                },
+                "native": {
+                  "p50": 1277.599998474121,
+                  "p95": 1418.2000007629395
+                },
+                "pairedMedian": -1357.0000019073486,
+                "pairedMedian95CI": [
+                  -1414,
+                  -1251.9999980926514
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643482
+                },
+                "native": {
+                  "p50": 7414594,
+                  "p95": 7414594
+                },
+                "pairedMedian": -228888,
+                "pairedMedian95CI": [
+                  -228888,
+                  -228888
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11345052,
+                  "p95": 11345052
+                },
+                "native": {
+                  "p50": 11116164,
+                  "p95": 11116164
+                },
+                "pairedMedian": -228888,
+                "pairedMedian95CI": [
+                  -228888,
+                  -228888
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/structure-workbench",
+            "mode": "cold",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 5763,
+                  "p95": 6220.200000762939
+                },
+                "native": {
+                  "p50": 3113.2000007629395,
+                  "p95": 3258.7000007629395
+                },
+                "pairedMedian": -2652.7999992370605,
+                "pairedMedian95CI": [
+                  -2803.7999992370605,
+                  -2510
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 5939,
+                  "p95": 6357.799999237061
+                },
+                "native": {
+                  "p50": 3206,
+                  "p95": 3350.5
+                },
+                "pairedMedian": -2784.099998474121,
+                "pairedMedian95CI": [
+                  -2819.599998474121,
+                  -2622
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643490
+                },
+                "native": {
+                  "p50": 8186238,
+                  "p95": 8186238
+                },
+                "pairedMedian": 542756,
+                "pairedMedian95CI": [
+                  542756,
+                  542756
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11345968,
+                  "p95": 11345976
+                },
+                "native": {
+                  "p50": 11495949,
+                  "p95": 11888724
+                },
+                "pairedMedian": 149981,
+                "pairedMedian95CI": [
+                  149981,
+                  542748
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/structure-workbench",
+            "mode": "warm",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 1936,
+                  "p95": 2056.199998855591
+                },
+                "native": {
+                  "p50": 1422.5,
+                  "p95": 1517.2000007629395
+                },
+                "pairedMedian": -540.1000003814697,
+                "pairedMedian95CI": [
+                  -572.7999992370605,
+                  -477.6999988555908
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 2103.300001144409,
+                  "p95": 2232.8999996185303
+                },
+                "native": {
+                  "p50": 1464.5,
+                  "p95": 1570.3000011444092
+                },
+                "pairedMedian": -645.2000007629395,
+                "pairedMedian95CI": [
+                  -684.7000007629395,
+                  -611.3999996185303
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 1857,
+                  "p95": 1857
+                },
+                "native": {
+                  "p50": 13216,
+                  "p95": 13216
+                },
+                "pairedMedian": 11359,
+                "pairedMedian95CI": [
+                  11359,
+                  11359
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 291357,
+                  "p95": 2488529
+                },
+                "native": {
+                  "p50": 302716,
+                  "p95": 1037367
+                },
+                "pairedMedian": 11359,
+                "pairedMedian95CI": [
+                  11359,
+                  11359
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/structure-workbench",
+            "mode": "uncached",
+            "count": 30,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 3884.2999992370605,
+                  "p95": 4277.700000762939
+                },
+                "native": {
+                  "p50": 2782.099998474121,
+                  "p95": 2835.3999996185303
+                },
+                "pairedMedian": -1078.6999988555908,
+                "pairedMedian95CI": [
+                  -1213.599998474121,
+                  -1032.3999996185303
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4060.099998474121,
+                  "p95": 4438.5
+                },
+                "native": {
+                  "p50": 2819.8999996185303,
+                  "p95": 2891.7000007629395
+                },
+                "pairedMedian": -1212,
+                "pairedMedian95CI": [
+                  -1332.1000003814697,
+                  -1163.6000003814697
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643490
+                },
+                "native": {
+                  "p50": 8186238,
+                  "p95": 8186238
+                },
+                "pairedMedian": 542756,
+                "pairedMedian95CI": [
+                  542756,
+                  542756
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11345052,
+                  "p95": 11345069
+                },
+                "native": {
+                  "p50": 11887808,
+                  "p95": 11887808
+                },
+                "pairedMedian": 542756,
+                "pairedMedian95CI": [
+                  542756,
+                  542756
+                ]
+              }
+            },
+            "passed": true
+          }
+        ]
+      },
+      "primaryStages": [
+        {
+          "network": "local",
+          "variant": "iframe",
+          "mode": "cold",
+          "stages": {
+            "appMs": {
+              "p50": 1341.300048828125,
+              "p95": 2176
+            },
+            "sdkRequestMs": {
+              "p50": 932.60009765625,
+              "p95": 1842.300048828125
+            },
+            "workerMs": {
+              "p50": 3417.60009765625,
+              "p95": 4269.900146484375
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 4140.5,
+              "p95": 4993.5
+            },
+            "svgMs": {
+              "p50": 4076.60009765625,
+              "p95": 4868.89990234375
+            },
+            "visibleSvgMs": {
+              "p50": 4076.699951171875,
+              "p95": 4868.89990234375
+            },
+            "uiReadyMs": {
+              "p50": 4328.89999961853,
+              "p95": 5183.60000038147
+            },
+            "readyMs": {
+              "p50": 4502.5,
+              "p95": 5357.89999961853
+            },
+            "firstExportMs": {
+              "p50": 172.79999923706055,
+              "p95": 186.79999923706055
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 7643482,
+              "p95": 7643482
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 11345968,
+              "p95": 11345968
+            },
+            "longtaskMaxMs": {
+              "p50": 788,
+              "p95": 852
+            },
+            "longtaskTotalMs": {
+              "p50": 2346,
+              "p95": 2453
+            }
+          }
+        },
+        {
+          "network": "local",
+          "variant": "iframe",
+          "mode": "warm",
+          "stages": {
+            "appMs": {
+              "p50": 212.39990234375,
+              "p95": 234
+            },
+            "sdkRequestMs": {
+              "p50": 193.10009765625,
+              "p95": 214.699951171875
+            },
+            "workerMs": {
+              "p50": 677.199951171875,
+              "p95": 795.800048828125
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 1307.7998046875,
+              "p95": 1446.400146484375
+            },
+            "svgMs": {
+              "p50": 1156.60009765625,
+              "p95": 1305.800048828125
+            },
+            "visibleSvgMs": {
+              "p50": 1156.60009765625,
+              "p95": 1305.800048828125
+            },
+            "uiReadyMs": {
+              "p50": 1494.2999992370605,
+              "p95": 1633.8999996185303
+            },
+            "readyMs": {
+              "p50": 1666.2000007629395,
+              "p95": 1824.2000007629395
+            },
+            "firstExportMs": {
+              "p50": 170.79999923706055,
+              "p95": 187.20000076293945
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 1857,
+              "p95": 1857
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 291357,
+              "p95": 2488529
+            },
+            "longtaskMaxMs": {
+              "p50": 241,
+              "p95": 292
+            },
+            "longtaskTotalMs": {
+              "p50": 774,
+              "p95": 994
+            }
+          }
+        },
+        {
+          "network": "local",
+          "variant": "iframe",
+          "mode": "uncached",
+          "stages": {
+            "appMs": {
+              "p50": 452.5,
+              "p95": 799.60009765625
+            },
+            "sdkRequestMs": {
+              "p50": 427.699951171875,
+              "p95": 779.60009765625
+            },
+            "workerMs": {
+              "p50": 1617.499755859375,
+              "p95": 1927.60009765625
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 2230.10009765625,
+              "p95": 2499.400146484375
+            },
+            "svgMs": {
+              "p50": 2085.10009765625,
+              "p95": 2475.199951171875
+            },
+            "visibleSvgMs": {
+              "p50": 2085.10009765625,
+              "p95": 2475.199951171875
+            },
+            "uiReadyMs": {
+              "p50": 2409.199998855591,
+              "p95": 2714.7000007629395
+            },
+            "readyMs": {
+              "p50": 2578.599998474121,
+              "p95": 2902.2000007629395
+            },
+            "firstExportMs": {
+              "p50": 166.79999923706055,
+              "p95": 187.5
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 7643482,
+              "p95": 7643482
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 11345052,
+              "p95": 11345052
+            },
+            "longtaskMaxMs": {
+              "p50": 220,
+              "p95": 292
+            },
+            "longtaskTotalMs": {
+              "p50": 731,
+              "p95": 903
+            }
+          }
+        },
+        {
+          "network": "local",
+          "variant": "native",
+          "mode": "cold",
+          "stages": {
+            "appMs": {
+              "p50": 1175.800048828125,
+              "p95": 1650.699951171875
+            },
+            "sdkRequestMs": {
+              "p50": 29.300048828125,
+              "p95": 31.60009765625
+            },
+            "workerMs": {
+              "p50": 75.10009765625,
+              "p95": 92.89990234375
+            },
+            "workerClaimMs": {
+              "p50": 1686.1000003814697,
+              "p95": 1828.6999988555908
+            },
+            "workerReplyMs": {
+              "p50": 1599,
+              "p95": 1755.800048828125
+            },
+            "svgMs": {
+              "p50": 1953.699951171875,
+              "p95": 2107.39990234375
+            },
+            "visibleSvgMs": {
+              "p50": 1953.699951171875,
+              "p95": 2107.39990234375
+            },
+            "uiReadyMs": {
+              "p50": 2255.300001144409,
+              "p95": 2465.400001525879
+            },
+            "readyMs": {
+              "p50": 2338.6000003814697,
+              "p95": 2637.5
+            },
+            "firstExportMs": {
+              "p50": 53.70000076293945,
+              "p95": 187.30000114440918
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 7414594,
+              "p95": 7414594
+            },
+            "totalRequests": {
+              "p50": 131,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 9969067,
+              "p95": 11117080
+            },
+            "longtaskMaxMs": {
+              "p50": 578,
+              "p95": 624
+            },
+            "longtaskTotalMs": {
+              "p50": 1644,
+              "p95": 1899
+            }
+          }
+        },
+        {
+          "network": "local",
+          "variant": "native",
+          "mode": "warm",
+          "stages": {
+            "appMs": {
+              "p50": 263.5,
+              "p95": 289.699951171875
+            },
+            "sdkRequestMs": {
+              "p50": 39.39990234375,
+              "p95": 78.60009765625
+            },
+            "workerMs": {
+              "p50": 46.199951171875,
+              "p95": 84.699951171875
+            },
+            "workerClaimMs": {
+              "p50": 716.1000003814697,
+              "p95": 813.8000011444092
+            },
+            "workerReplyMs": {
+              "p50": 759.800048828125,
+              "p95": 857.199951171875
+            },
+            "svgMs": {
+              "p50": 801.89990234375,
+              "p95": 903.300048828125
+            },
+            "visibleSvgMs": {
+              "p50": 802,
+              "p95": 903.39990234375
+            },
+            "uiReadyMs": {
+              "p50": 1080,
+              "p95": 1261.7999992370605
+            },
+            "readyMs": {
+              "p50": 1116.900001525879,
+              "p95": 1299.3999996185303
+            },
+            "firstExportMs": {
+              "p50": 36.80000114440918,
+              "p95": 41.79999923706055
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 13216,
+              "p95": 13216
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 302716,
+              "p95": 3333233
+            },
+            "longtaskMaxMs": {
+              "p50": 206,
+              "p95": 253
+            },
+            "longtaskTotalMs": {
+              "p50": 566,
+              "p95": 784
+            }
+          }
+        },
+        {
+          "network": "local",
+          "variant": "native",
+          "mode": "uncached",
+          "stages": {
+            "appMs": {
+              "p50": 457.699951171875,
+              "p95": 589.699951171875
+            },
+            "sdkRequestMs": {
+              "p50": 34.60009765625,
+              "p95": 51.60009765625
+            },
+            "workerMs": {
+              "p50": 72.800048828125,
+              "p95": 96.199951171875
+            },
+            "workerClaimMs": {
+              "p50": 762.5,
+              "p95": 938
+            },
+            "workerReplyMs": {
+              "p50": 837.89990234375,
+              "p95": 937.699951171875
+            },
+            "svgMs": {
+              "p50": 840.89990234375,
+              "p95": 1030.5
+            },
+            "visibleSvgMs": {
+              "p50": 841,
+              "p95": 1030.60009765625
+            },
+            "uiReadyMs": {
+              "p50": 1207.3999996185303,
+              "p95": 1346
+            },
+            "readyMs": {
+              "p50": 1277.599998474121,
+              "p95": 1418.2000007629395
+            },
+            "firstExportMs": {
+              "p50": 47.60000038146973,
+              "p95": 129.39999961853027
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 7414594,
+              "p95": 7414594
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 11116164,
+              "p95": 11116164
+            },
+            "longtaskMaxMs": {
+              "p50": 241,
+              "p95": 303
+            },
+            "longtaskTotalMs": {
+              "p50": 628,
+              "p95": 876
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "iframe",
+          "mode": "cold",
+          "stages": {
+            "appMs": {
+              "p50": 1438.300048828125,
+              "p95": 1927
+            },
+            "sdkRequestMs": {
+              "p50": 1062.39990234375,
+              "p95": 1522.60009765625
+            },
+            "workerMs": {
+              "p50": 4810.5,
+              "p95": 5264.300048828125
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 5567.300048828125,
+              "p95": 6033.39990234375
+            },
+            "svgMs": {
+              "p50": 5488.5,
+              "p95": 5920.300048828125
+            },
+            "visibleSvgMs": {
+              "p50": 5488.5,
+              "p95": 5920.300048828125
+            },
+            "uiReadyMs": {
+              "p50": 5763,
+              "p95": 6220.200000762939
+            },
+            "readyMs": {
+              "p50": 5939,
+              "p95": 6357.799999237061
+            },
+            "firstExportMs": {
+              "p50": 171.70000076293945,
+              "p95": 179.89999961853027
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 7643482,
+              "p95": 7643490
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 11345968,
+              "p95": 11345976
+            },
+            "longtaskMaxMs": {
+              "p50": 803,
+              "p95": 900
+            },
+            "longtaskTotalMs": {
+              "p50": 2508,
+              "p95": 2668
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "iframe",
+          "mode": "warm",
+          "stages": {
+            "appMs": {
+              "p50": 302.699951171875,
+              "p95": 330.5
+            },
+            "sdkRequestMs": {
+              "p50": 281,
+              "p95": 309.199951171875
+            },
+            "workerMs": {
+              "p50": 1157.60009765625,
+              "p95": 1198.099853515625
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 1756.39990234375,
+              "p95": 1871.39990234375
+            },
+            "svgMs": {
+              "p50": 1620,
+              "p95": 1817.300048828125
+            },
+            "visibleSvgMs": {
+              "p50": 1620,
+              "p95": 1817.300048828125
+            },
+            "uiReadyMs": {
+              "p50": 1936,
+              "p95": 2056.199998855591
+            },
+            "readyMs": {
+              "p50": 2103.300001144409,
+              "p95": 2232.8999996185303
+            },
+            "firstExportMs": {
+              "p50": 171.30000114440918,
+              "p95": 189.39999961853027
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 1857,
+              "p95": 1857
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 291357,
+              "p95": 2488529
+            },
+            "longtaskMaxMs": {
+              "p50": 259,
+              "p95": 314
+            },
+            "longtaskTotalMs": {
+              "p50": 793,
+              "p95": 1001
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "iframe",
+          "mode": "uncached",
+          "stages": {
+            "appMs": {
+              "p50": 555.89990234375,
+              "p95": 929.5
+            },
+            "sdkRequestMs": {
+              "p50": 534,
+              "p95": 909.199951171875
+            },
+            "workerMs": {
+              "p50": 3110.7998046875,
+              "p95": 3480.5
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 3709.5,
+              "p95": 4099.300048828125
+            },
+            "svgMs": {
+              "p50": 3599.10009765625,
+              "p95": 3945.699951171875
+            },
+            "visibleSvgMs": {
+              "p50": 3599.10009765625,
+              "p95": 3945.699951171875
+            },
+            "uiReadyMs": {
+              "p50": 3884.2999992370605,
+              "p95": 4277.700000762939
+            },
+            "readyMs": {
+              "p50": 4060.099998474121,
+              "p95": 4438.5
+            },
+            "firstExportMs": {
+              "p50": 172.39999961853027,
+              "p95": 201.80000114440918
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 7643482,
+              "p95": 7643490
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 11345052,
+              "p95": 11345069
+            },
+            "longtaskMaxMs": {
+              "p50": 206,
+              "p95": 277
+            },
+            "longtaskTotalMs": {
+              "p50": 753,
+              "p95": 902
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "native",
+          "mode": "cold",
+          "stages": {
+            "appMs": {
+              "p50": 1735.199951171875,
+              "p95": 1929.39990234375
+            },
+            "sdkRequestMs": {
+              "p50": 67.800048828125,
+              "p95": 72.39990234375
+            },
+            "workerMs": {
+              "p50": 241.199951171875,
+              "p95": 252.199951171875
+            },
+            "workerClaimMs": {
+              "p50": 2554,
+              "p95": 2703.3999996185303
+            },
+            "workerReplyMs": {
+              "p50": 2435.199951171875,
+              "p95": 2505.60009765625
+            },
+            "svgMs": {
+              "p50": 2745.39990234375,
+              "p95": 2953.5
+            },
+            "visibleSvgMs": {
+              "p50": 2745.5,
+              "p95": 2953.5
+            },
+            "uiReadyMs": {
+              "p50": 3113.2000007629395,
+              "p95": 3258.7000007629395
+            },
+            "readyMs": {
+              "p50": 3206,
+              "p95": 3350.5
+            },
+            "firstExportMs": {
+              "p50": 42.29999923706055,
+              "p95": 177.5
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 8186238,
+              "p95": 8186238
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 11495949,
+              "p95": 11888724
+            },
+            "longtaskMaxMs": {
+              "p50": 512,
+              "p95": 628
+            },
+            "longtaskTotalMs": {
+              "p50": 1611,
+              "p95": 1747
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "native",
+          "mode": "warm",
+          "stages": {
+            "appMs": {
+              "p50": 943.60009765625,
+              "p95": 1034
+            },
+            "sdkRequestMs": {
+              "p50": 78,
+              "p95": 117.800048828125
+            },
+            "workerMs": {
+              "p50": 86.60009765625,
+              "p95": 124.800048828125
+            },
+            "workerClaimMs": {
+              "p50": 1092.8999996185303,
+              "p95": 1213.6000003814697
+            },
+            "workerReplyMs": {
+              "p50": 741.199951171875,
+              "p95": 825.300048828125
+            },
+            "svgMs": {
+              "p50": 1191.39990234375,
+              "p95": 1307.699951171875
+            },
+            "visibleSvgMs": {
+              "p50": 1191.39990234375,
+              "p95": 1307.699951171875
+            },
+            "uiReadyMs": {
+              "p50": 1422.5,
+              "p95": 1517.2000007629395
+            },
+            "readyMs": {
+              "p50": 1464.5,
+              "p95": 1570.3000011444092
+            },
+            "firstExportMs": {
+              "p50": 38.599998474121094,
+              "p95": 99.79999923706055
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 13216,
+              "p95": 13216
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 302716,
+              "p95": 1037367
+            },
+            "longtaskMaxMs": {
+              "p50": 281,
+              "p95": 315
+            },
+            "longtaskTotalMs": {
+              "p50": 598,
+              "p95": 741
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "native",
+          "mode": "uncached",
+          "stages": {
+            "appMs": {
+              "p50": 1354.39990234375,
+              "p95": 1428.800048828125
+            },
+            "sdkRequestMs": {
+              "p50": 73.39990234375,
+              "p95": 107.199951171875
+            },
+            "workerMs": {
+              "p50": 222.10009765625,
+              "p95": 256.699951171875
+            },
+            "workerClaimMs": {
+              "p50": 1628.7999992370605,
+              "p95": 1693.6000003814697
+            },
+            "workerReplyMs": {
+              "p50": 2508.199951171875,
+              "p95": 2555.89990234375
+            },
+            "svgMs": {
+              "p50": 1710,
+              "p95": 1819.39990234375
+            },
+            "visibleSvgMs": {
+              "p50": 1710,
+              "p95": 1819.5
+            },
+            "uiReadyMs": {
+              "p50": 2782.099998474121,
+              "p95": 2835.3999996185303
+            },
+            "readyMs": {
+              "p50": 2819.8999996185303,
+              "p95": 2891.7000007629395
+            },
+            "firstExportMs": {
+              "p50": 37.20000076293945,
+              "p95": 48.60000038146973
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 8186238,
+              "p95": 8186238
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 11887808,
+              "p95": 11887808
+            },
+            "longtaskMaxMs": {
+              "p50": 256,
+              "p95": 293
+            },
+            "longtaskTotalMs": {
+              "p50": 697,
+              "p95": 840
+            }
+          }
+        }
+      ],
+      "rawEvidence": {
+        "harness.mjs": {
+          "path": "/tmp/nexpoly-component-20260915/primary-confirmation/harness.mjs",
+          "archiveEntry": "primary-confirmation/harness.mjs",
+          "sha256": "085d0f6b3e5b67032baf27e021841f064892884fc17a29fd6df54d79dc0cc438"
+        },
+        "samples.jsonl": {
+          "path": "/tmp/nexpoly-component-20260915/primary-confirmation/samples.jsonl",
+          "archiveEntry": "primary-confirmation/samples.jsonl",
+          "sha256": "95f400b1d6f232dfb42fefe3ed488ac18573bac2f284f252c5c2b660b3b19a0a"
+        },
+        "results.json": {
+          "path": "/tmp/nexpoly-component-20260915/primary-confirmation/results.json",
+          "archiveEntry": "primary-confirmation/results.json",
+          "sha256": "9050bd9e61b2d9e638b338bd90b584a5d42e702b5315223fd90fbabb8a823d7e"
+        },
+        "summary.json": {
+          "path": "/tmp/nexpoly-component-20260915/primary-confirmation/summary.json",
+          "archiveEntry": "primary-confirmation/summary.json",
+          "sha256": "df274c54c3264b3dd5c7aca9a9cff362e89c3ca39379f59abe22bd97a79834a6"
+        }
+      }
+    },
+    "isolated-confirmation": {
+      "sampleCount": 60,
+      "summary": {
+        "settings": {
+          "routes": [
+            "/structure-workbench"
+          ],
+          "networks": [
+            "remote"
+          ],
+          "modes": [
+            "cold",
+            "warm",
+            "uncached"
+          ],
+          "rounds": 10,
+          "variants": [
+            {
+              "name": "iframe",
+              "base": "http://127.0.0.1:9000"
+            },
+            {
+              "name": "native",
+              "base": "http://127.0.0.1:5962"
+            }
+          ],
+          "contextMode": "isolated",
+          "device": {
+            "cpu": "INTEL(R) XEON(R) GOLD 6530",
+            "logicalCpus": 128,
+            "memoryBytes": 270029295616,
+            "kernel": "6.8.0-31-generic"
+          },
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "canvasSize": {
+            "width": 878,
+            "height": 566
+          },
+          "canvasContainerInsets": {
+            "iframe": {
+              "width": 104,
+              "height": 78
+            },
+            "native": {
+              "width": 94,
+              "height": 72
+            }
+          },
+          "reducedMotion": "no-preference",
+          "remote": {
+            "latency": 40,
+            "downloadMbps": 50,
+            "uploadMbps": 10,
+            "acceptedEncodings": [
+              "gzip",
+              "deflate"
+            ],
+            "encodingReason": "Matches Chromium requests to the actual HTTP 9001 address; loopback otherwise also advertises Brotli/Zstd."
+          },
+          "startedAt": "2026-09-15T07:41:36.819Z",
+          "quantiles": "nearest rank",
+          "order": "reverse variant order each round; cold/warm/uncached share one fresh persistent profile",
+          "cache": "fresh isolated context per variant/route/round; warm normal reload; uncached HTTP cache disabled (process/code cache retained)",
+          "transfer": "Completed HTTP resources at the readiness snapshot; same-origin and all-origin totals reported separately. Missing external Worker completion uses ResourceTiming.transferSize (browser header estimate). In-flight/background transfers are not the complete navigation total.",
+          "scriptSha256": "085d0f6b3e5b67032baf27e021841f064892884fc17a29fd6df54d79dc0cc438",
+          "browser": "153.0.8010.12"
+        },
+        "passed": true,
+        "comparisons": [
+          {
+            "network": "remote",
+            "route": "/structure-workbench",
+            "mode": "cold",
+            "count": 10,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 5798.89999961853,
+                  "p95": 6809.599998474121
+                },
+                "native": {
+                  "p50": 3076.3999996185303,
+                  "p95": 3270.2999992370605
+                },
+                "pairedMedian": -2930.2999992370605,
+                "pairedMedian95CI": [
+                  -3666.5,
+                  -2572.2000007629395
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 5971.200000762939,
+                  "p95": 6978.799999237061
+                },
+                "native": {
+                  "p50": 3129.199998855591,
+                  "p95": 3324
+                },
+                "pairedMedian": -2997.7000007629395,
+                "pairedMedian95CI": [
+                  -3749.699998855591,
+                  -2703
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643490
+                },
+                "native": {
+                  "p50": 8186238,
+                  "p95": 8186238
+                },
+                "pairedMedian": 542756,
+                "pairedMedian95CI": [
+                  542748,
+                  542756
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11345968,
+                  "p95": 11345976
+                },
+                "native": {
+                  "p50": 11495949,
+                  "p95": 11888724
+                },
+                "pairedMedian": 393565,
+                "pairedMedian95CI": [
+                  149981,
+                  542756
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/structure-workbench",
+            "mode": "warm",
+            "count": 10,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 3112.900001525879,
+                  "p95": 3629
+                },
+                "native": {
+                  "p50": 1297.1000003814697,
+                  "p95": 1423.3999996185303
+                },
+                "pairedMedian": -1853.3000011444092,
+                "pairedMedian95CI": [
+                  -2132.300001144409,
+                  -1723.8999996185303
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 3282.099998474121,
+                  "p95": 3768.5
+                },
+                "native": {
+                  "p50": 1335.2000007629395,
+                  "p95": 1472.3999996185303
+                },
+                "pairedMedian": -1990.7999992370605,
+                "pairedMedian95CI": [
+                  -2238.599998474121,
+                  -1877.400001525879
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7014722,
+                  "p95": 7014722
+                },
+                "native": {
+                  "p50": 13216,
+                  "p95": 13216
+                },
+                "pairedMedian": -7001506,
+                "pairedMedian95CI": [
+                  -7001506,
+                  -7001506
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 7304222,
+                  "p95": 10331819
+                },
+                "native": {
+                  "p50": 302716,
+                  "p95": 302716
+                },
+                "pairedMedian": -7001506,
+                "pairedMedian95CI": [
+                  -7001506,
+                  -7001506
+                ]
+              }
+            },
+            "passed": true
+          },
+          {
+            "network": "remote",
+            "route": "/structure-workbench",
+            "mode": "uncached",
+            "count": 10,
+            "failures": {
+              "iframe": 0,
+              "native": 0
+            },
+            "metrics": {
+              "uiReadyMs": {
+                "iframe": {
+                  "p50": 3991.2000007629395,
+                  "p95": 4514
+                },
+                "native": {
+                  "p50": 2736.800001144409,
+                  "p95": 2806.5
+                },
+                "pairedMedian": -1347.099998474121,
+                "pairedMedian95CI": [
+                  -1588.900001525879,
+                  -1180.2999992370605
+                ]
+              },
+              "readyMs": {
+                "iframe": {
+                  "p50": 4162.39999961853,
+                  "p95": 4716.800001144409
+                },
+                "native": {
+                  "p50": 2777,
+                  "p95": 2844.699998855591
+                },
+                "pairedMedian": -1492.2999992370605,
+                "pairedMedian95CI": [
+                  -1723.0000019073486,
+                  -1316.400001525879
+                ]
+              },
+              "wireBytes": {
+                "iframe": {
+                  "p50": 7643482,
+                  "p95": 7643490
+                },
+                "native": {
+                  "p50": 8186238,
+                  "p95": 8186238
+                },
+                "pairedMedian": 542756,
+                "pairedMedian95CI": [
+                  542748,
+                  542756
+                ]
+              },
+              "totalWireBytes": {
+                "iframe": {
+                  "p50": 11345052,
+                  "p95": 11345060
+                },
+                "native": {
+                  "p50": 11887808,
+                  "p95": 11887808
+                },
+                "pairedMedian": 542755,
+                "pairedMedian95CI": [
+                  542747,
+                  542756
+                ]
+              }
+            },
+            "passed": true
+          }
+        ]
+      },
+      "primaryStages": [
+        {
+          "network": "remote",
+          "variant": "iframe",
+          "mode": "cold",
+          "stages": {
+            "appMs": {
+              "p50": 1602.800048828125,
+              "p95": 2406.699951171875
+            },
+            "sdkRequestMs": {
+              "p50": 1222.699951171875,
+              "p95": 2006.300048828125
+            },
+            "workerMs": {
+              "p50": 4925.800048828125,
+              "p95": 5812.39990234375
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 5610.5,
+              "p95": 6607.89990234375
+            },
+            "svgMs": {
+              "p50": 5533.699951171875,
+              "p95": 6437.39990234375
+            },
+            "visibleSvgMs": {
+              "p50": 5533.699951171875,
+              "p95": 6437.39990234375
+            },
+            "uiReadyMs": {
+              "p50": 5798.89999961853,
+              "p95": 6809.599998474121
+            },
+            "readyMs": {
+              "p50": 5971.200000762939,
+              "p95": 6978.799999237061
+            },
+            "firstExportMs": {
+              "p50": 170.60000038146973,
+              "p95": 182.39999961853027
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 7643482,
+              "p95": 7643490
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 11345968,
+              "p95": 11345976
+            },
+            "longtaskMaxMs": {
+              "p50": 823,
+              "p95": 1000
+            },
+            "longtaskTotalMs": {
+              "p50": 2368,
+              "p95": 2594
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "iframe",
+          "mode": "warm",
+          "stages": {
+            "appMs": {
+              "p50": 297.10009765625,
+              "p95": 325.800048828125
+            },
+            "sdkRequestMs": {
+              "p50": 272.89990234375,
+              "p95": 300
+            },
+            "workerMs": {
+              "p50": 2369.2998046875,
+              "p95": 2867.39990234375
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 2927.5,
+              "p95": 3449.89990234375
+            },
+            "svgMs": {
+              "p50": 2822.10009765625,
+              "p95": 3318.800048828125
+            },
+            "visibleSvgMs": {
+              "p50": 2822.10009765625,
+              "p95": 3318.800048828125
+            },
+            "uiReadyMs": {
+              "p50": 3112.900001525879,
+              "p95": 3629
+            },
+            "readyMs": {
+              "p50": 3282.099998474121,
+              "p95": 3768.5
+            },
+            "firstExportMs": {
+              "p50": 165,
+              "p95": 178.5
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 7014722,
+              "p95": 7014722
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 7304222,
+              "p95": 10331819
+            },
+            "longtaskMaxMs": {
+              "p50": 197,
+              "p95": 235
+            },
+            "longtaskTotalMs": {
+              "p50": 660,
+              "p95": 1018
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "iframe",
+          "mode": "uncached",
+          "stages": {
+            "appMs": {
+              "p50": 617.199951171875,
+              "p95": 1272.5
+            },
+            "sdkRequestMs": {
+              "p50": 596.699951171875,
+              "p95": 1249.10009765625
+            },
+            "workerMs": {
+              "p50": 3197.2001953125,
+              "p95": 3745.10009765625
+            },
+            "workerClaimMs": {
+              "p50": null,
+              "p95": null
+            },
+            "workerReplyMs": {
+              "p50": 3797.7001953125,
+              "p95": 4328.199951171875
+            },
+            "svgMs": {
+              "p50": 3649.60009765625,
+              "p95": 4164.300048828125
+            },
+            "visibleSvgMs": {
+              "p50": 3649.60009765625,
+              "p95": 4164.300048828125
+            },
+            "uiReadyMs": {
+              "p50": 3991.2000007629395,
+              "p95": 4514
+            },
+            "readyMs": {
+              "p50": 4162.39999961853,
+              "p95": 4716.800001144409
+            },
+            "firstExportMs": {
+              "p50": 171.19999885559082,
+              "p95": 208.80000114440918
+            },
+            "requests": {
+              "p50": 11,
+              "p95": 11
+            },
+            "wireBytes": {
+              "p50": 7643482,
+              "p95": 7643490
+            },
+            "totalRequests": {
+              "p50": 54,
+              "p95": 54
+            },
+            "totalWireBytes": {
+              "p50": 11345052,
+              "p95": 11345060
+            },
+            "longtaskMaxMs": {
+              "p50": 208,
+              "p95": 246
+            },
+            "longtaskTotalMs": {
+              "p50": 776,
+              "p95": 888
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "native",
+          "mode": "cold",
+          "stages": {
+            "appMs": {
+              "p50": 1735.699951171875,
+              "p95": 1819.10009765625
+            },
+            "sdkRequestMs": {
+              "p50": 64.89990234375,
+              "p95": 69.89990234375
+            },
+            "workerMs": {
+              "p50": 235.800048828125,
+              "p95": 240.39990234375
+            },
+            "workerClaimMs": {
+              "p50": 2497.599998474121,
+              "p95": 2659.5
+            },
+            "workerReplyMs": {
+              "p50": 2401,
+              "p95": 2527.89990234375
+            },
+            "svgMs": {
+              "p50": 2692.5,
+              "p95": 2845.10009765625
+            },
+            "visibleSvgMs": {
+              "p50": 2692.5,
+              "p95": 2845.199951171875
+            },
+            "uiReadyMs": {
+              "p50": 3076.3999996185303,
+              "p95": 3270.2999992370605
+            },
+            "readyMs": {
+              "p50": 3129.199998855591,
+              "p95": 3324
+            },
+            "firstExportMs": {
+              "p50": 42.900001525878906,
+              "p95": 132.70000076293945
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 8186238,
+              "p95": 8186238
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 11495949,
+              "p95": 11888724
+            },
+            "longtaskMaxMs": {
+              "p50": 526,
+              "p95": 614
+            },
+            "longtaskTotalMs": {
+              "p50": 1578,
+              "p95": 1703
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "native",
+          "mode": "warm",
+          "stages": {
+            "appMs": {
+              "p50": 819.10009765625,
+              "p95": 920.199951171875
+            },
+            "sdkRequestMs": {
+              "p50": 78.300048828125,
+              "p95": 113.800048828125
+            },
+            "workerMs": {
+              "p50": 87.10009765625,
+              "p95": 123
+            },
+            "workerClaimMs": {
+              "p50": 966.8999996185303,
+              "p95": 1079
+            },
+            "workerReplyMs": {
+              "p50": 710.60009765625,
+              "p95": 851.39990234375
+            },
+            "svgMs": {
+              "p50": 1087.10009765625,
+              "p95": 1189.300048828125
+            },
+            "visibleSvgMs": {
+              "p50": 1087.10009765625,
+              "p95": 1189.39990234375
+            },
+            "uiReadyMs": {
+              "p50": 1297.1000003814697,
+              "p95": 1423.3999996185303
+            },
+            "readyMs": {
+              "p50": 1335.2000007629395,
+              "p95": 1472.3999996185303
+            },
+            "firstExportMs": {
+              "p50": 39.60000038146973,
+              "p95": 59.400001525878906
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 13216,
+              "p95": 13216
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 302716,
+              "p95": 302716
+            },
+            "longtaskMaxMs": {
+              "p50": 276,
+              "p95": 344
+            },
+            "longtaskTotalMs": {
+              "p50": 475,
+              "p95": 539
+            }
+          }
+        },
+        {
+          "network": "remote",
+          "variant": "native",
+          "mode": "uncached",
+          "stages": {
+            "appMs": {
+              "p50": 1316.10009765625,
+              "p95": 1420.699951171875
+            },
+            "sdkRequestMs": {
+              "p50": 72.199951171875,
+              "p95": 126.89990234375
+            },
+            "workerMs": {
+              "p50": 232.60009765625,
+              "p95": 282.699951171875
+            },
+            "workerClaimMs": {
+              "p50": 1583.8999996185303,
+              "p95": 1677.7999992370605
+            },
+            "workerReplyMs": {
+              "p50": 2427.39990234375,
+              "p95": 2552.800048828125
+            },
+            "svgMs": {
+              "p50": 1672.300048828125,
+              "p95": 1758
+            },
+            "visibleSvgMs": {
+              "p50": 1672.300048828125,
+              "p95": 1758
+            },
+            "uiReadyMs": {
+              "p50": 2736.800001144409,
+              "p95": 2806.5
+            },
+            "readyMs": {
+              "p50": 2777,
+              "p95": 2844.699998855591
+            },
+            "firstExportMs": {
+              "p50": 38.19999885559082,
+              "p95": 40.79999923706055
+            },
+            "requests": {
+              "p50": 93,
+              "p95": 93
+            },
+            "wireBytes": {
+              "p50": 8186238,
+              "p95": 8186238
+            },
+            "totalRequests": {
+              "p50": 136,
+              "p95": 136
+            },
+            "totalWireBytes": {
+              "p50": 11887808,
+              "p95": 11887808
+            },
+            "longtaskMaxMs": {
+              "p50": 249,
+              "p95": 328
+            },
+            "longtaskTotalMs": {
+              "p50": 670,
+              "p95": 893
+            }
+          }
+        }
+      ],
+      "rawEvidence": {
+        "harness.mjs": {
+          "path": "/tmp/nexpoly-component-20260915/isolated-confirmation/harness.mjs",
+          "archiveEntry": "isolated-confirmation/harness.mjs",
+          "sha256": "085d0f6b3e5b67032baf27e021841f064892884fc17a29fd6df54d79dc0cc438"
+        },
+        "samples.jsonl": {
+          "path": "/tmp/nexpoly-component-20260915/isolated-confirmation/samples.jsonl",
+          "archiveEntry": "isolated-confirmation/samples.jsonl",
+          "sha256": "d3633baa20dbecc792138e0f977178e77743cf4ffa5fb9b4661bbaf43a1c1697"
+        },
+        "results.json": {
+          "path": "/tmp/nexpoly-component-20260915/isolated-confirmation/results.json",
+          "archiveEntry": "isolated-confirmation/results.json",
+          "sha256": "99f17f3050842e1b90e4f79b7419614a7ac66af45037be697509a854728caedb"
+        },
+        "summary.json": {
+          "path": "/tmp/nexpoly-component-20260915/isolated-confirmation/summary.json",
+          "archiveEntry": "isolated-confirmation/summary.json",
+          "sha256": "a77d0eddc206ef80fc75fbbc2c1e745dfb89f3e7a7525f8d38ddcbc22591b0e2"
+        }
+      }
+    }
+  },
+  "requiredPerformanceGatesPassed": true,
+  "wasmSplitTriggered": false,
+  "durableEvidenceArchive": "release/ketcher-component-r4-20260915/evidence.tar.gz",
+  "deploymentReceipt": "release/ketcher-component-r4-20260915/deployment-receipt.json"
+}

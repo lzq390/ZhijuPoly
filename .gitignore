@@ -35,6 +35,7 @@ backend/.env
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/.ketcher-runtime/
 frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
@@ -42,6 +43,8 @@ frontend/vite.ketcher-compat.config.js
 frontend/vite.ketcher-compat.config.d.ts
 frontend/build/*.js
 frontend/build/*.d.ts
+frontend/shared/*.js
+frontend/shared/*.d.ts
 
 # Local deployment bundles
 release/
