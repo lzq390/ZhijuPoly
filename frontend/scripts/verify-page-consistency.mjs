@@ -20,7 +20,7 @@ const modules = [
   ["/conditional-generation", "条件聚合物生成"], ["/reverse-design", "Tg 逆向设计"],
   ["/high-throughput-workflow-demo", "高通量优化演示"],
 ].filter(([path]) => !process.env.PAGE_PATH || process.env.PAGE_PATH.split(",").includes(path));
-const viewports = [[1920,1080], [2560,1440], [1440,900], [1024,768], [390,844],
+const viewports = [[1920,1080], [2560,1440], [1440,900], [1024,768], [1023,768], [390,844],
   [899,900], [900,900], [901,900], [1999,1120], [2000,1119], [2000,1120], [2560,1119]]
   .filter(([width]) => !process.env.PAGE_VIEWPORT || process.env.PAGE_VIEWPORT.split(",").map(Number).includes(width));
 assert.ok(modules.length && viewports.length, "PAGE_PATH/PAGE_VIEWPORT must select at least one module and viewport");
@@ -41,7 +41,14 @@ async function geometry(page, title, viewport, state) {
     const rootStyle = getComputedStyle(root);
     const surfaces = [...root.querySelectorAll('.np-sw-canvas-stage, .np-md-workbench-surface, .np-mp-surface, .np-batch-surface, .np-mmd-workbench-surface, .np-dft-workbench-surface, .dbf-filter-surface, .dba-analysis-surface, .ks-search-surface, .polytao-generation-surface, .ht-workbench-board')]
       .filter(visible).map(e => ({ radius: parseFloat(getComputedStyle(e).borderTopLeftRadius), shadow: getComputedStyle(e).boxShadow, background: getComputedStyle(e).backgroundColor }));
+    const entries = [...document.querySelectorAll('[data-recording-entry]')].filter(visible);
+    const entry = entries[0];
+    const button = entry?.querySelector('button')?.getBoundingClientRect();
     return { title: h1.textContent, x: rect.x - origin.x, y: rect.y - origin.y,
+      mainTop: origin.top, recordingEntries: entries.length, recordingHost: entry?.dataset.recordingEntry,
+      recordingInHeader: entry ? h1.parentElement.contains(entry) : false,
+      recordingInToolbar: Boolean(entry?.closest(".ks-module-toolbar, .dbf-module-toolbar")),
+      recordingButtonHeight: button?.height,
       size: parseFloat(style.fontSize), line: parseFloat(style.lineHeight), weight: style.fontWeight,
       font: style.fontFamily, colour: style.color, headerHeight: header.height,
       bodyTop: body.top - origin.top, rootHeight: root.getBoundingClientRect().height, mainHeight: origin.height,
@@ -53,6 +60,14 @@ async function geometry(page, title, viewport, state) {
   const [width, height] = viewport;
   const expected = width >= 2000 && height >= 1120 ? [36,30,28,42,84] : width <= 899 ? [16,20,20,30,60] : [20,22,20,30,62];
   assert.equal(data.title, title);
+  near(data.mainTop, width >= 1024 ? 0 : 56, `${title}: no extra global recording row`);
+  assert.equal(data.recordingEntries, 1, `${title}: one recording entry`);
+  const toolbarEntry = ["知识检索", "数据库筛选"].includes(title);
+  assert.equal(data.recordingHost, width >= 1024 ? toolbarEntry ? "toolbar" : "page" : "mobile");
+  assert.equal(data.recordingInHeader, width >= 1024 && !toolbarEntry);
+  assert.equal(data.recordingInToolbar, width >= 1024 && toolbarEntry);
+  const desktopButtonHeight = width >= 2000 && height >= 1120 ? toolbarEntry ? 54 : 42 : toolbarEntry ? 36 : 30;
+  near(data.recordingButtonHeight, width < 1024 ? 40 : desktopButtonHeight, `${title}: recording button height`);
   ["x", "y", "size", "line", "headerHeight"].forEach((key, i) => near(data[key], expected[i], `${title} ${state} ${key}`));
   assert.equal(data.weight, "750");
   assert.equal(data.colour, "rgb(11, 31, 58)");

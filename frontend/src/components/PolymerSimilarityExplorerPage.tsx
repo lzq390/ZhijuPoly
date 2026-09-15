@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal } from "lucide-react";
 import {
@@ -197,7 +198,7 @@ export const PolymerSimilarityExplorerPage = forwardRef<
       data-module="polymer-similarity-explorer"
       style={workbenchStyle}
     >
-      <ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="explorer" />}>
           聚合物相似性探索
         </ModulePageHeader>
       <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>

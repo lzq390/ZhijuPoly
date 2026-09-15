@@ -12,7 +12,7 @@ import { resetPropertyFilterHistogramResourceForTests } from "../services/proper
 import { resetPropertyFilterOptionsResourceForTests } from "../services/propertyFilterOptionsResource";
 import { DatabaseFilterPage } from "./DatabaseFilterPage";
 import { KnowledgeRecordingProvider } from "../hooks/useKnowledgeRecording";
-import { KnowledgeRecordingControls } from "./knowledge-search/KnowledgeRecordingControls";
+import { BrowsingRecordingControls, BrowsingRecordingUIProvider } from "./browsing-recording/BrowsingRecording";
 
 const apiMocks = vi.hoisted(() => ({
   fetchOptions: vi.fn(),
@@ -83,7 +83,8 @@ function installWorkbenchContainerWidth(initialWidth: number) {
   };
 }
 
-vi.mock("../services/api", () => ({
+vi.mock("../services/api", async (original) => ({
+  ...await original<typeof import("../services/api")>(),
   API_BASE_URL: "/api/v1",
   fetchPropertyFilterHistogram: apiMocks.fetchHistogram,
   fetchPropertyFilterOptions: apiMocks.fetchOptions,
@@ -302,10 +303,13 @@ describe("DatabaseFilterPage", () => {
   it("筛选与查看使用共同记录 ID，离开页面不取消已记录的筛选请求", async () => {
     apiMocks.start.mockImplementation(async (recording_id: string) => ({ recording_id, status: "recording" }));
     apiMocks.search.mockResolvedValue({ ...successResponse, search_id: "recorded" });
-    const view = render(<KnowledgeRecordingProvider><KnowledgeRecordingControls localMode /><DatabaseFilterPage /></KnowledgeRecordingProvider>);
+    const view = render(<KnowledgeRecordingProvider><BrowsingRecordingUIProvider activeModule="databaseFilter" canStart><DatabaseFilterPage /></BrowsingRecordingUIProvider></KnowledgeRecordingProvider>);
     await screen.findByRole("button", { name: /玻璃化转变温度/ });
-    fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
-    await screen.findByRole("button", { name: "正在记录 · 总结" });
+    const start = screen.getByRole("button", { name: "开始记录" });
+    expect(start.closest(".dbf-module-toolbar")?.textContent).toContain("数据已就绪");
+    expect(view.container.querySelector(".np-module-page-header [data-recording-entry]")).toBeNull();
+    fireEvent.click(start);
+    await screen.findByRole("button", { name: "结束并总结" });
     const id = apiMocks.start.mock.lastCall![0];
     fireEvent.change(screen.getByLabelText("属性 1 最小值"), { target: { value: "100" } });
     fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
@@ -317,11 +321,11 @@ describe("DatabaseFilterPage", () => {
     fireEvent.change(screen.getByLabelText("属性 1 最小值"), { target: { value: "120" } });
     fireEvent.click(screen.getByRole("button", { name: "运行筛选" }));
     const signal = apiMocks.search.mock.lastCall![1] as AbortSignal;
-    view.rerender(<KnowledgeRecordingProvider><KnowledgeRecordingControls localMode /><div>另一模块</div></KnowledgeRecordingProvider>);
+    view.rerender(<KnowledgeRecordingProvider><BrowsingRecordingUIProvider activeModule="databaseQuery" canStart={false}><BrowsingRecordingControls module="databaseQuery" /><div>另一模块</div></BrowsingRecordingUIProvider></KnowledgeRecordingProvider>);
     expect(signal.aborted).toBe(false);
-    expect((screen.getByRole("button", { name: "正在记录 · 总结" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "结束并总结" }) as HTMLButtonElement).disabled).toBe(true);
     await act(async () => release(successResponse));
-    await waitFor(() => expect((screen.getByRole("button", { name: "正在记录 · 总结" }) as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect((screen.getByRole("button", { name: "结束并总结" }) as HTMLButtonElement).disabled).toBe(false));
   });
 
   it("只在展开记录或结构时通知，关闭与重复 toggle 不通知，再次展开仍可记录", async () => {

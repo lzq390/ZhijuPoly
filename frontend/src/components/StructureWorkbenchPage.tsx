@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import type { StructureSyncResult } from "../structure/workspace";
 import { ModulePageHeader } from "./ModulePageHeader";
 import {
@@ -318,7 +319,7 @@ export const StructureWorkbenchPage = forwardRef<
       data-module="structure-workbench"
       style={workbenchStyle}
     >
-      <ModulePageHeader>结构工作台</ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="structureWorkbench" />}>结构工作台</ModulePageHeader>
       <div className={`np-sw-page np-module-page-body${isDrawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${isDrawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">

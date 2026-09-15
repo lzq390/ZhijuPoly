@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal, Sparkles } from "lucide-react";
 import {
@@ -624,7 +625,7 @@ export const ReverseDesignPage = forwardRef<
       data-module="tg-reverse-design"
       style={workbenchStyle}
     >
-      <ModulePageHeader>Tg 逆向设计</ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="reverseDesign" />}>Tg 逆向设计</ModulePageHeader>
       <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">

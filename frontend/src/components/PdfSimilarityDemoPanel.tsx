@@ -55,6 +55,7 @@ type DrawerView = "detail" | "history";
 
 type PdfSimilarityDemoPanelProps = {
   modeNavigation: ReactNode;
+  toolbarActions?: ReactNode;
 };
 
 const curatedPaperCards: SimilarPaperCard[] = [
@@ -166,7 +167,7 @@ function buildPaperTabs(paper: SimilarPaperCard): KnowledgeDrawerTab[] {
   ];
 }
 
-export function PdfSimilarityDemoPanel({ modeNavigation }: PdfSimilarityDemoPanelProps) {
+export function PdfSimilarityDemoPanel({ modeNavigation, toolbarActions }: PdfSimilarityDemoPanelProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const revealTimerRef = useRef<number | null>(null);
   const [historyItems, setHistoryItems] = useState<UploadHistoryRecord[]>([]);
@@ -312,8 +313,9 @@ export function PdfSimilarityDemoPanel({ modeNavigation }: PdfSimilarityDemoPane
     <div className={`ks-panel-layout${drawerOpen ? " is-drawer-open" : ""}`} style={{ "--ks-drawer-width": `${drawerWidth}px` } as CSSProperties}>
       <div className="ks-panel-scroll">
         <div className="ks-workbench-column">
-          <div className="ks-module-toolbar">
+          <div className="ks-module-toolbar" data-recording-header>
             <span className="ks-toolbar-status"><i />准备就绪</span>
+            {toolbarActions}
           </div>
 
           <section className="ks-surface ks-search-surface">

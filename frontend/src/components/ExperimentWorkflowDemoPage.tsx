@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import {
   ArrowLeft,
   BadgeCheck,
@@ -451,7 +452,7 @@ export function ExperimentWorkflowDemoPage({ onBackHome }: { onBackHome: () => v
 
   return (
     <div className="experiment-workflow-demo">
-      <header className="lab-topbar">
+      <header className="lab-topbar" data-recording-header>
         <div className="lab-brand">
           <ClipboardList aria-hidden="true" size={22} />
           <span>Experiment Workflow Demo</span>
@@ -476,6 +477,7 @@ export function ExperimentWorkflowDemoPage({ onBackHome }: { onBackHome: () => v
             <ArrowLeft aria-hidden="true" size={16} />
             Home
           </button>
+          <BrowsingRecordingControls module="experimentWorkflowDemo" />
         </div>
       </header>
 

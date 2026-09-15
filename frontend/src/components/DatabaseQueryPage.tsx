@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal } from "lucide-react";
 import {
@@ -207,7 +208,7 @@ export const DatabaseQueryPage = forwardRef<
       data-module="database-query"
       style={workbenchStyle}
     >
-      <ModulePageHeader>数据库查询</ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="databaseQuery" />}>数据库查询</ModulePageHeader>
       <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">

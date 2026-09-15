@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KnowledgeRecordingProvider } from "./hooks/useKnowledgeRecording";
-import { KnowledgeRecordingControls } from "./components/knowledge-search/KnowledgeRecordingControls";
+import { BrowsingRecordingUIProvider } from "./components/browsing-recording/BrowsingRecording";
 import {
   Activity,
   Atom,
@@ -704,10 +704,9 @@ function AppContent() {
     activeModule !== "monomerDft" &&
     !isTgKetcherOwner;
 
-  return (
+  return <BrowsingRecordingUIProvider activeModule={activeModule}
+    canStart={activeModule === "databaseFilter" || (activeModule === "knowledge" && knowledgeLocalMode)}>
     <AppShell
-      recordingControls={<KnowledgeRecordingControls global
-        localMode={activeModule === "databaseFilter" || (activeModule === "knowledge" && knowledgeLocalMode)} />}
       activeModule={activeModule}
       fullBleed={isFullBleedModule}
       standaloneModules={standaloneModules}
@@ -890,5 +889,5 @@ function AppContent() {
         />
       ) : null}
     </AppShell>
-  );
+  </BrowsingRecordingUIProvider>;
 }

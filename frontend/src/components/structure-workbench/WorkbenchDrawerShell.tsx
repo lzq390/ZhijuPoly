@@ -81,7 +81,7 @@ export function WorkbenchDrawerShell({
   const mode = useDrawerMode(layerRef, { closest: ".np-structure-workbench", inlineMinWidth: overlayContainerWidth });
   const isOverlay = mode === "overlay";
   const resize = useDrawerResize({ width, minWidth, maxWidth, onWidthChange, enabled: open && !isOverlay });
-  useModalFocus({ active: presence.present && isOverlay, open, scopeRef: layerRef, panelRef: drawerRef, onClose, global: false });
+  const modalFocusActive = useModalFocus({ active: presence.present && isOverlay, open, scopeRef: layerRef, panelRef: drawerRef, onClose, global: false });
 
   // A drag or responsive mode change is an immediate layout operation, never a
   // second position transition trailing behind the pointer/new viewport.
@@ -162,7 +162,7 @@ export function WorkbenchDrawerShell({
           {...presence.motionProps}
           className={`np-sw-drawer${drawerClassName ? ` ${drawerClassName}` : ""}`}
           role="dialog"
-          aria-modal={isOverlay ? "true" : "false"}
+          aria-modal={modalFocusActive ? "true" : "false"}
           aria-labelledby={titleId}
           aria-hidden={!open}
           tabIndex={-1}

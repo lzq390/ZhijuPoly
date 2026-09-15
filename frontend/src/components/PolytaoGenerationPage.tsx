@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { useFlipMotion } from "../hooks/useFlipMotion";
 import { useMotionPresence } from "../hooks/useMotionPresence";
 import { useDrawerMode } from "../hooks/useDrawerMode";
@@ -456,7 +457,7 @@ export function PolytaoGenerationPage({
     return () => window.cancelAnimationFrame(frame);
   }, [drawerPresence.present]);
 
-  useModalFocus({ active: drawerPresence.present && drawerMode === "overlay", open: drawerOpen,
+  const modalFocusActive = useModalFocus({ active: drawerPresence.present && drawerMode === "overlay", open: drawerOpen,
     scopeRef: drawerRef, panelRef: drawerRef, initialFocusRef: drawerCloseRef, onClose: closeDrawer, global: false });
 
   const openDrawer = useCallback(() => {
@@ -585,7 +586,7 @@ export function PolytaoGenerationPage({
       data-drawer-active={drawerPresence.active}
       style={pageStyle}
     >
-      <ModulePageHeader>聚合物生成</ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="polytaoGeneration" />}>聚合物生成</ModulePageHeader>
       <div
         className="polytao-page-scroll np-module-page-body"
         inert={drawerPresence.present && drawerMode === "overlay"}
@@ -843,6 +844,7 @@ export function PolytaoGenerationPage({
           open={drawerOpen}
           presence={drawerPresence}
           mode={drawerMode}
+          modalFocusActive={modalFocusActive}
           width={drawerWidth}
           profile={drawerProfile}
           isResizing={drawerResize.resizing}
@@ -1131,6 +1133,7 @@ type ResultsDrawerProps = {
   open: boolean;
   presence: ReturnType<typeof useMotionPresence<HTMLElement>>;
   mode: DrawerMode;
+  modalFocusActive: boolean;
   width: number;
   profile: DrawerProfile;
   isResizing: boolean;
@@ -1157,6 +1160,7 @@ function ResultsDrawer({
   open,
   presence,
   mode,
+  modalFocusActive,
   width,
   profile,
   isResizing,
@@ -1234,7 +1238,7 @@ function ResultsDrawer({
         data-drawer-mode={mode}
         className={`polytao-detail-drawer is-${mode}${presence.present ? " is-open" : ""}`}
         role="dialog"
-        aria-modal={mode === "overlay"}
+        aria-modal={modalFocusActive}
         aria-labelledby="polytao-drawer-title"
         aria-hidden={!open}
         inert={!open}

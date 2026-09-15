@@ -73,6 +73,7 @@ type PlatformSidebarProps = {
   onGeneralSessionQueryChange: (query: string) => void;
   gpuSessionControl: DevGpuSessionControl | null;
   gpuStatusId: string;
+  brandActions?: ReactNode;
   closeButtonRef?: RefObject<HTMLButtonElement | null>;
   onClose?: () => void;
 };
@@ -109,6 +110,7 @@ export function PlatformSidebar({
   onGeneralSessionQueryChange,
   gpuSessionControl,
   gpuStatusId,
+  brandActions,
   closeButtonRef,
   onClose
 }: PlatformSidebarProps) {
@@ -125,6 +127,7 @@ export function PlatformSidebar({
   return (
     <div className="np-sidebar">
       <SidebarBrand
+        actions={brandActions}
         onOpenHome={onOpenHome}
         gpuSessionControl={gpuSessionControl}
         gpuStatusId={gpuStatusId}
@@ -181,12 +184,14 @@ export function PlatformSidebar({
 }
 
 function SidebarBrand({
+  actions,
   onOpenHome,
   gpuSessionControl,
   gpuStatusId,
   closeButtonRef,
   onClose
 }: {
+  actions?: ReactNode;
   onOpenHome: () => void;
   gpuSessionControl: DevGpuSessionControl | null;
   gpuStatusId: string;
@@ -204,8 +209,9 @@ function SidebarBrand({
           <span className="np-sidebar__brand-subtitle" aria-hidden="true">NexPoly Lab</span>
         </span>
       </button>
-      {gpuSessionControl || onClose ? (
+      {gpuSessionControl || onClose || actions ? (
         <div className="np-sidebar__brand-actions">
+          {actions}
           {gpuSessionControl ? (
             <GpuSessionButton control={gpuSessionControl} statusId={gpuStatusId} />
           ) : null}

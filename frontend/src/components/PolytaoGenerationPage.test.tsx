@@ -4,6 +4,7 @@ import { StructureWorkspace } from "../structure/workspace";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_POLYTAO_DESCRIPTORS } from "../hooks/usePolytaoGeneration";
+import { ModalFocusSuspendedContext } from "../hooks/useModalFocus";
 import {
   POLYTAO_DESCRIPTOR_NAMES,
   type PolytaoDescriptorMap,
@@ -547,6 +548,22 @@ describe("PolytaoGenerationPage", () => {
     expect(document.body.style.userSelect).toBe("");
     view.unmount();
     expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("releases the result drawer modal semantics while a summary is in front, then restores them", async () => {
+    const page = <PolytaoGenerationPage structure={makeStructure()} onEditStructure={vi.fn()} onBackHome={vi.fn()} />;
+    const tree = (suspended: boolean) => <ModalFocusSuspendedContext.Provider value={suspended}>{page}</ModalFocusSuspendedContext.Provider>;
+    const view = render(tree(false));
+    resizePolytaoContainer(1024);
+    const { submit } = await loadSampleAndOpenParameters();
+    fireEvent.click(submit);
+    const dialog = await screen.findByRole("dialog", { name: "聚合物生成结果" });
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    view.rerender(tree(true));
+    expect(dialog.getAttribute("aria-modal")).toBe("false");
+    expect(dialog.getAttribute("aria-hidden")).toBe("false");
+    view.rerender(tree(false));
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
   });
 
   it("uses a modal overlay with focus containment below the inline container threshold", async () => {

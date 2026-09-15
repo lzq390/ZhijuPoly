@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { Database, FileText, Globe2 } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useContentMotion } from "../hooks/useContentMotion";
@@ -111,6 +112,7 @@ export function KnowledgeSearch({ initialQuery = "", initialTerms = [], onLocalM
             initialQuery={initialQuery}
             initialTerms={initialTerms}
             modeNavigation={modeNavigation("local")}
+            toolbarActions={mode === "local" ? <BrowsingRecordingControls module="knowledge" placement="toolbar" /> : undefined}
           />
         </section>
 
@@ -124,7 +126,8 @@ export function KnowledgeSearch({ initialQuery = "", initialTerms = [], onLocalM
             inert={mode !== "online"}
             hidden={mode !== "online"}
           >
-            <OnlineKnowledgeSearchPanel initialMaterial={initialQuery} modeNavigation={modeNavigation("online")} />
+            <OnlineKnowledgeSearchPanel initialMaterial={initialQuery} modeNavigation={modeNavigation("online")}
+              toolbarActions={mode === "online" ? <BrowsingRecordingControls module="knowledge" placement="toolbar" /> : undefined} />
           </section>
         ) : null}
 
@@ -138,7 +141,8 @@ export function KnowledgeSearch({ initialQuery = "", initialTerms = [], onLocalM
             inert={mode !== "pdf"}
             hidden={mode !== "pdf"}
           >
-            <PdfSimilarityDemoPanel modeNavigation={modeNavigation("pdf")} />
+            <PdfSimilarityDemoPanel modeNavigation={modeNavigation("pdf")}
+              toolbarActions={mode === "pdf" ? <BrowsingRecordingControls module="knowledge" placement="toolbar" /> : undefined} />
           </section>
         ) : null}
       </div>

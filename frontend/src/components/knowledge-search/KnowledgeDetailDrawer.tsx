@@ -167,7 +167,7 @@ export function KnowledgeDetailDrawer({
   useLayoutEffect(() => { if (resize.resizing) presence.finish(); }, [resize.resizing, presence.finish]);
   useLayoutEffect(() => { presence.finish(); }, [mode, presence.finish]);
   useContentMotion(bodyRef, activeTab, "tab");
-  useModalFocus({ active: mobile && presence.present, open, scopeRef: drawerRef, panelRef: drawerRef,
+  const modalFocusActive = useModalFocus({ active: mobile && presence.present, open, scopeRef: drawerRef, panelRef: drawerRef,
     initialFocusRef: closeButtonRef, onClose, ownerId: id });
 
   useEffect(() => {
@@ -280,7 +280,7 @@ export function KnowledgeDetailDrawer({
         className={`ks-detail-drawer${presence.present ? " is-open" : ""}${resize.resizing && open ? " is-resizing" : ""}`}
         style={{ "--ks-drawer-width": `${width}px` } as CSSProperties}
         role="dialog"
-        aria-modal={mobile ? "true" : undefined}
+        aria-modal={modalFocusActive ? "true" : undefined}
         aria-labelledby={titleId}
         aria-hidden={!open}
         inert={!open}

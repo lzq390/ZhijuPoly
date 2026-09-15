@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import {
   BadgeInfo,
@@ -1085,7 +1086,7 @@ export function HighThroughputWorkflowDemoPage(_props: HighThroughputWorkflowDem
 
   return (
     <div className={cn("high-throughput-demo np-module-page", isWorkbenchStage && "ht-workbench-page", currentStageIndex === 0 && "ht-s0-page", currentStageIndex === 1 && "ht-s1-page", currentStageIndex === 2 && "ht-s2-page", currentStageIndex === 3 && "ht-s3-page", currentStageIndex === 4 && "ht-s4-page", currentStageIndex === 5 && "ht-s5-page", currentStageIndex === 6 && "ht-s6-page")}>
-      {isWorkbenchStage ? <ModulePageHeader>高通量优化演示</ModulePageHeader> : null}
+      {isWorkbenchStage ? <ModulePageHeader actions={<BrowsingRecordingControls module="highThroughputWorkflowDemo" />}>高通量优化演示</ModulePageHeader> : null}
       {isWorkbenchStage ? (
         <ScenarioModuleToolbar
           canReset={!stageTransition}

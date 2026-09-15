@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
-import { startKnowledgeRecording, stopKnowledgeRecording, summarizeKnowledgeRecording } from "../services/api";
+import { isApiRequestError, startKnowledgeRecording, stopKnowledgeRecording, summarizeKnowledgeRecording } from "../services/api";
 import type { KnowledgeRecording, KnowledgeRecordingSummary } from "../types";
 
 type Phase = "idle" | "starting" | "recording" | "stopping" | "stop_failed" | "summarizing" | "summary_failed" | "stopped";
@@ -10,6 +10,7 @@ type RecordingContextValue = {
   incomplete: boolean;
   result: KnowledgeRecording | null;
   summary: KnowledgeRecordingSummary | null;
+  partialSummary: string;
   start: () => Promise<void>;
   stop: () => Promise<void>;
   retrySummary: () => Promise<void>;
@@ -40,6 +41,7 @@ export function KnowledgeRecordingProvider({ children }: { children: ReactNode }
   const [incomplete, setIncomplete] = useState(false);
   const [result, setResult] = useState<KnowledgeRecording | null>(null);
   const [summary, setSummary] = useState<KnowledgeRecordingSummary | null>(null);
+  const [partialSummary, setPartialSummary] = useState("");
 
   const changePhase = useCallback((next: Phase) => {
     phaseRef.current = next;
@@ -57,10 +59,13 @@ export function KnowledgeRecordingProvider({ children }: { children: ReactNode }
       if (response.status === "stopped") throw new Error("该记录已结束，请刷新后重新开始");
       setResult(null);
       setSummary(null);
+      setPartialSummary("");
       setIncomplete(false);
       changePhase("recording");
     } catch (cause) {
-      setError(`开始记录失败：${cause instanceof Error ? cause.message : "请求失败"}。请点击开始记录重试。`);
+      setError(isApiRequestError(cause, 404)
+        ? "开始记录失败：当前服务尚未启用浏览记录功能，请更新服务后重试。"
+        : `开始记录失败：${cause instanceof Error ? cause.message : "请求失败"}。请点击开始记录重试。`);
       changePhase("idle");
     }
   }, [changePhase]);
@@ -85,8 +90,9 @@ export function KnowledgeRecordingProvider({ children }: { children: ReactNode }
   const generateSummary = useCallback(async (recordingId: string) => {
     changePhase("summarizing");
     setError(null);
+    setPartialSummary("");
     try {
-      setSummary(await summarizeKnowledgeRecording(recordingId));
+      setSummary(await summarizeKnowledgeRecording(recordingId, setPartialSummary));
       changePhase("stopped");
     } catch (cause) {
       setError(`总结失败：${cause instanceof Error ? cause.message : "请求失败"}。本次记录已保留，可重试总结。`);
@@ -112,7 +118,7 @@ export function KnowledgeRecordingProvider({ children }: { children: ReactNode }
     }
   }, [changePhase, generateSummary]);
 
-  return <RecordingContext.Provider value={{ phase, pending, error, incomplete, result, summary, start, stop, retrySummary, track, isRecording }}>
+  return <RecordingContext.Provider value={{ phase, pending, error, incomplete, result, summary, partialSummary, start, stop, retrySummary, track, isRecording }}>
     {children}
   </RecordingContext.Provider>;
 }
