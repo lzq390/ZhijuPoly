@@ -1,4 +1,5 @@
-import { defineConfig, loadEnv, mergeConfig } from "vite";
+import { loadEnv, mergeConfig } from "vite";
+import { configDefaults, defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { ketcherCompatibility } from "./build/ketcher-compat.ts";
 import { structureEngine } from "./build/structure-engine.ts";
@@ -33,6 +34,7 @@ export default defineConfig(({ mode }) => {
       "@structure-editor-preload": editor.preload
     } },
     build: { manifest: true },
+    test: { exclude: [...configDefaults.exclude, "sdk/*.test.mjs"] },
     server: {
       port: 5173,
       proxy

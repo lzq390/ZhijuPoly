@@ -838,6 +838,9 @@ def test_calculation_timeout_starts_only_after_gpu_admission(
     async def scenario() -> None:
         runtime = TerminatingRuntime()
         engine = AdmissionGateEngine()
+        # Keep calculation blocked so this checks the deadline boundary without
+        # requiring artifact and journal fsyncs to complete within 30 ms.
+        engine.release.clear()
         manager = _manager(
             tmp_path,
             engine,
@@ -845,20 +848,26 @@ def test_calculation_timeout_starts_only_after_gpu_admission(
             single_point_timeout_seconds=0.03,
         )
         await manager.start()
-        manager.submit(_request(0))
-        await _wait_until(engine.admission_attempted.is_set)
+        try:
+            manager.submit(_request(0))
+            await _wait_until(engine.admission_attempted.is_set)
 
-        await asyncio.sleep(0.08)
-        queued = manager.get("job-0")
-        assert queued.status == "queued"
-        assert queued.queue_position == 1
-        assert manager.health_state()["fatal"] is False
-        assert runtime.termination_reasons == []
+            await asyncio.sleep(0.08)
+            queued = manager.get("job-0")
+            assert queued.status == "queued"
+            assert queued.queue_position == 1
+            assert manager.health_state()["fatal"] is False
+            assert runtime.termination_reasons == []
 
-        engine.admission_gate.set()
-        await _wait_until(lambda: manager.get("job-0").status == "completed")
-        assert runtime.termination_reasons == []
-        await manager.stop()
+            engine.admission_gate.set()
+            await _wait_until(lambda: manager.get("job-0").status == "failed")
+            failed = manager.get("job-0")
+            assert failed.error is not None
+            assert failed.error.code == "calculation_timeout"
+            assert runtime.termination_reasons == ["timeout"]
+            assert manager.health_state()["fatal"] is False
+        finally:
+            await manager.stop()
 
     asyncio.run(scenario())
 

@@ -359,6 +359,9 @@ jobs:
       - name: Verify standalone Worker isolation
         working-directory: frontend
         run: npm run test:ketcher-worker
+      - name: Verify Ketcher SDK runtime
+        working-directory: frontend
+        run: npm run test:ketcher-runtime
       - name: Build frontend
         working-directory: frontend
         run: npm run build
