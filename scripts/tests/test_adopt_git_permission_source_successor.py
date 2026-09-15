@@ -24,7 +24,15 @@ SPEC.loader.exec_module(SUCCESSOR)
 
 def _git(root: Path, *arguments: str) -> str:
     result = subprocess.run(
-        ["/usr/bin/git", *arguments],
+        # Fixture commits must finish all writes before trust checks and cleanup.
+        [
+            "/usr/bin/git",
+            "-c",
+            "maintenance.auto=false",
+            "-c",
+            "gc.auto=0",
+            *arguments,
+        ],
         cwd=root,
         env={
             "HOME": "/nonexistent",
@@ -678,6 +686,55 @@ class Fixture:
         )
 
 
+class FixtureGitTests(unittest.TestCase):
+    def test_fixture_commits_do_not_start_background_maintenance(self) -> None:
+        run = subprocess.run
+        with tempfile.TemporaryDirectory() as trace_directory:
+            # Keep tracing outside the repository and its zero-write snapshots.
+            trace_path = Path(trace_directory) / "git-trace.jsonl"
+
+            def trace_git(command, **kwargs):  # type: ignore[no-untyped-def]
+                if command[0] == "/usr/bin/git":
+                    kwargs["env"] = {
+                        **kwargs.get("env", os.environ),
+                        "GIT_TRACE2_EVENT": str(trace_path),
+                    }
+                return run(command, **kwargs)
+
+            with mock.patch.object(subprocess, "run", side_effect=trace_git):
+                fixture = Fixture()
+                try:
+                    events = [
+                        json.loads(line)
+                        for line in trace_path.read_text().splitlines()
+                    ]
+                    commits = [
+                        event
+                        for event in events
+                        if event.get("event") == "cmd_name"
+                        and event.get("name") == "commit"
+                    ]
+                    self.assertEqual(len(commits), 2)
+                    maintenance = [
+                        event
+                        for event in events
+                        if event.get("event") == "child_start"
+                        and any(
+                            argument in {"maintenance", "gc"}
+                            for argument in event.get("argv", [])
+                        )
+                    ]
+                    self.assertEqual(
+                        maintenance,
+                        [],
+                        "fixture commits started automatic Git maintenance",
+                    )
+                    fixture.plan()
+                finally:
+                    fixture.close()
+                self.assertFalse(fixture.root.exists())
+
+
 class SourceSuccessorPublisherTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = Fixture()
@@ -718,6 +775,34 @@ class SourceSuccessorPublisherTests(unittest.TestCase):
         self.assertEqual(len(plan["files"]), 13)
         self.assertFalse(self.fixture.publisher().authority_path.exists())
         self.assertFalse(self.fixture.publisher().transaction_root.exists())
+
+    def test_plan_rejects_git_locks_without_mutation(self) -> None:
+        for relative, is_directory in (
+            ("index.lock", False),
+            ("objects/maintenance.lock", False),
+            ("objects/pack/nested.lock", False),
+            ("objects/blocked.lock", True),
+        ):
+            with self.subTest(lock=relative):
+                lock = self.fixture.source / ".git" / relative
+                if is_directory:
+                    lock.mkdir(mode=0o700)
+                else:
+                    _write_private(lock, b"existing Git lock\n")
+                try:
+                    before = self.snapshot(self.fixture.root)
+                    with self.assertRaisesRegex(
+                        SUCCESSOR.SuccessorError,
+                        "Git lock file exists",
+                    ):
+                        self.fixture.plan()
+                    self.assertEqual(before, self.snapshot(self.fixture.root))
+                finally:
+                    if is_directory:
+                        lock.rmdir()
+                    else:
+                        lock.unlink()
+        self.fixture.plan()
 
     def test_auxiliary_inventory_rejects_reflog_directory_symlink(self) -> None:
         external = self.fixture.root / "external-reflog"
