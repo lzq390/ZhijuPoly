@@ -304,6 +304,9 @@ try {
       await page.evaluate(() => navigator.clipboard.writeText(''));
       await page.keyboard.press('Control+a');
       await page.waitForFunction(() => window.__probeEditor().editor.selection()?.atoms?.length === 3);
+      // Selection changes before the SDK's debounced command state. A copy
+      // shortcut sent while its action is disabled is prevented by the SDK.
+      await ui.locator('[data-testid="copy-button"]:enabled').waitFor({ state: 'visible' });
       // Observe SDK completion before querying the OS clipboard. Reading it
       // while the SDK is still exporting creates a second asynchronous client.
       await page.evaluate(() => {
