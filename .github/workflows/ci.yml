@@ -762,6 +762,10 @@ jobs:
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
       - name: Validate reviewed image publication policy
         run: python3 scripts/ci/validate_workflows.py
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Log in to private GHCR
@@ -881,12 +885,12 @@ jobs:
           postgres="${network}-postgres"
           backend="${network}-backend"
           web="${network}-web"
-          web_html="/tmp/${network}.html"
-          web_asset="/tmp/${network}.js"
+          web_dist="$(mktemp -d)"
+          web_html="${web_dist}/index.html"
           cleanup() {
             docker rm -f "$web" "$backend" "$postgres" >/dev/null 2>&1 || true
             docker network rm "$network" >/dev/null 2>&1 || true
-            rm -f "$web_html" "$web_asset"
+            rm -rf -- "$web_dist"
           }
           trap cleanup EXIT
           docker network create "$network"
@@ -922,10 +926,22 @@ jobs:
             sleep 2
           done
           curl --fail --silent --show-error http://127.0.0.1:18080/ -o "$web_html"
-          asset_path="$(grep -Eo '(src|href)="/assets/[^"?]+' "$web_html" | head -n1 | cut -d'"' -f2)"
-          [[ "$asset_path" == /assets/* ]]
-          curl --fail --silent --show-error "http://127.0.0.1:18080${asset_path}" -o "$web_asset"
-          grep -aFq "http://114.214.255.154:9011/" "$web_asset"
+          # The workspace URL lives in the lazy App graph, not the HTML entry.
+          docker cp "$web:/usr/share/nginx/html/.vite" "$web_dist/.vite"
+          docker cp "$web:/usr/share/nginx/html/assets" "$web_dist/assets"
+          node scripts/ci/verify_frontend_image_assets.mjs \
+            "$web_dist" "http://114.214.255.154:9011/" >"$web_dist/verified-assets.json"
+          mapfile -t web_assets < <(
+            node -e 'for (const file of require(process.argv[1]).checkedAssets) console.log(file)' \
+              "$web_dist/verified-assets.json"
+          )
+          (( ${#web_assets[@]} > 0 ))
+          for asset_path in "${web_assets[@]}"; do
+            echo "Verify published frontend asset: $asset_path"
+            curl --fail --silent --show-error "http://127.0.0.1:18080/${asset_path}" \
+              -o "$web_dist/http-asset"
+            cmp -- "$web_dist/$asset_path" "$web_dist/http-asset"
+          done
       - name: Seal published SHA tags to reviewed digests
         env:
           RELEASE_COMMIT: ${{ needs.resolve-sha.outputs.candidate_sha }}
