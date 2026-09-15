@@ -69,7 +69,12 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
         )
         production_url = "VITE_AGENT_WORKSPACE_URL=http://114.214.255.154:9011/"
         self.assertEqual(workflow.count(production_url), 1)
-        self.assertIn('grep -aFq "http://114.214.255.154:9011/" "$web_asset"', workflow)
+        self.assertRegex(
+            workflow,
+            r"node scripts/ci/verify_frontend_image_assets\.mjs \\\s+"
+            r'"\$web_dist" "http://114\.214\.255\.154:9011/"',
+        )
+        self.assertIn('cmp -- "$web_dist/$asset_path" "$web_dist/http-asset"', workflow)
         self.assertIn(
             "FRONTEND_EXPECTED_WORKSPACE_URL: http://114.214.255.154:9011/",
             workflow,
