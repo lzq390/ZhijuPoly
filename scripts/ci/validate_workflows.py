@@ -598,6 +598,7 @@ RELEASE_STEP_HEADERS = (
     "      - name: Check out release SHA",
     "      - name: Assert immutable checkout",
     "      - name: Validate reviewed image publication policy",
+    "      - name: Set up Node.js",
     "      - name: Set up Buildx",
     "      - name: Log in to private GHCR",
     "      - id: backend-identity",
@@ -2839,7 +2840,8 @@ def main() -> int:
             "WEB_IMAGE=ghcr.io/lzq390/nexpoly-web@${WEB_DIGEST}",
             "python -m app.postgres_migrations --mode bootstrap",
             "python -m app.postgres_preflight --mode schema --strict",
-            "asset_path=\"$(grep -Eo",
+            "node scripts/ci/verify_frontend_image_assets.mjs",
+            'cmp -- "$web_dist/$asset_path" "$web_dist/http-asset"',
         ),
         failures,
     )
