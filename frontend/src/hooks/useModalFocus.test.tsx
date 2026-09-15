@@ -3,17 +3,17 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { useRef } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { useModalFocus } from "./useModalFocus";
+import { ModalFocusSuspendedContext, useModalFocus } from "./useModalFocus";
 
-function Harness({ open = true }: { open?: boolean }) {
+function Harness({ open = true, global = false }: { open?: boolean; global?: boolean }) {
   const scopeRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  useModalFocus({ active: open, open, scopeRef, panelRef, onClose: () => {}, global: false });
+  const modalFocusActive = useModalFocus({ active: open, open, scopeRef, panelRef, onClose: () => {}, global });
   return <>
     <button>平台导航</button>
     <div data-testid="module">
       <div ref={scopeRef}>
-        <div ref={panelRef} role="dialog" tabIndex={-1}>
+        <div ref={panelRef} role="dialog" aria-modal={modalFocusActive} tabIndex={-1}>
           <button style={{ visibility: "hidden" }}>关闭结果</button>
         </div>
       </div>
@@ -32,6 +32,24 @@ async function paintedFrames(count = 5) {
 afterEach(cleanup);
 
 describe("useModalFocus initial visibility", () => {
+  it("suspends inert and focus trapping beneath a foreground panel, then restores the drawer", async () => {
+    const tree = (suspended: boolean) => <ModalFocusSuspendedContext.Provider value={suspended}><Harness global /></ModalFocusSuspendedContext.Provider>;
+    const view = render(tree(false));
+    const navigation = screen.getByText("平台导航");
+    const close = screen.getByText("关闭结果");
+    close.style.visibility = "visible";
+    await waitFor(() => expect(document.activeElement).toBe(close));
+    expect(navigation.hasAttribute("inert")).toBe(true);
+    view.rerender(tree(true));
+    expect(navigation.hasAttribute("inert")).toBe(false);
+    expect(screen.getByRole("dialog").getAttribute("aria-modal")).toBe("false");
+    navigation.focus();
+    await paintedFrames();
+    expect(document.activeElement).toBe(navigation);
+    view.rerender(tree(false));
+    await waitFor(() => expect(document.activeElement).toBe(close));
+    expect(navigation.hasAttribute("inert")).toBe(true);
+  });
   it("waits for the opening control to become visible instead of dropping its initial focus", async () => {
     render(<Harness />);
     const navigation = screen.getByText("平台导航");

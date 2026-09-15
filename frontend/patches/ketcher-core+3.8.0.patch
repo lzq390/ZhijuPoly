@@ -1,23 +1,447 @@
+diff --git a/node_modules/ketcher-core/dist/application/ketcher.d.ts b/node_modules/ketcher-core/dist/application/ketcher.d.ts
+--- a/node_modules/ketcher-core/dist/application/ketcher.d.ts
++++ b/node_modules/ketcher-core/dist/application/ketcher.d.ts
+@@ -1,72 +1,75 @@
+-/// <reference types="node" />
+-import { Subscription } from 'subscription';
+-import { FormatterFactory } from './formatters';
+-import { GenerateImageOptions, StructService, CalculateData, type CalculateResult } from "../domain/services";
+-import { Editor } from './editor';
+-import { Indigo } from "./indigo";
+-import { MolfileFormat } from "../domain/serializers";
+-import { Struct } from "../domain/entities";
+-import { EventEmitter } from 'events';
+-import { LogSettings } from "../utilities";
+-import { ExportImageParams, SupportedImageFormats, SupportedModes } from "./ketcher.types";
+-declare type SetMoleculeOptions = {
+-    position?: {
+-        x: number;
+-        y: number;
+-    };
+-};
+-export declare class Ketcher {
+-    #private;
+-    _id: string;
+-    logging: LogSettings;
+-    structService: StructService;
+-    _indigo: Indigo;
+-    changeEvent: Subscription;
+-    libraryUpdateEvent: Subscription;
+-    get editor(): Editor;
+-    get eventBus(): EventEmitter;
+-    constructor(structService: StructService, formatterFactory: FormatterFactory);
+-    get id(): string;
+-    get formatterFactory(): FormatterFactory;
+-    get indigo(): Indigo;
+-    get settings(): {};
+-    addEditor(editor: Editor): void;
+-    setSettings(settings: Record<string, string>): any;
+-    getSmiles(isExtended?: boolean): Promise<string>;
+-    getExtendedSmiles(): Promise<string>;
+-    getMolfile(molfileFormat?: MolfileFormat): Promise<string>;
+-    getIdt(): Promise<string>;
+-    getRxn(molfileFormat?: MolfileFormat): Promise<string>;
+-    getKet(): Promise<string>;
+-    getFasta(): Promise<string>;
+-    getSequence(format?: '1-letter' | '3-letter'): Promise<string>;
+-    getSmarts(): Promise<string>;
+-    getCml(): Promise<string>;
+-    getSdf(molfileFormat?: MolfileFormat): Promise<string>;
+-    getRdf(molfileFormat?: MolfileFormat): Promise<string>;
+-    getCDXml(): Promise<string>;
+-    getCDX(): Promise<string>;
+-    getInchi(withAuxInfo?: boolean): Promise<string>;
+-    getInChIKey(): Promise<string>;
+-    containsReaction(): boolean;
+-    isQueryStructureSelected(): boolean;
+-    setMolecule(structStr: string, options?: SetMoleculeOptions): Promise<void | undefined>;
+-    setHelm(helmStr: string): Promise<void | undefined>;
+-    addFragment(structStr: string, options?: SetMoleculeOptions): Promise<void | undefined>;
+-    layout(): Promise<void>;
+-    calculate(options?: CalculateData): Promise<CalculateResult>;
+-    /**
+-     * @param {number} value - in a range [ZoomTool.instance.MINZOOMSCALE, ZoomTool.instance.MAXZOOMSCALE]
+-     */
+-    setZoom(value: number): void;
+-    setMode(mode: SupportedModes): void;
+-    exportImage(format: SupportedImageFormats, params?: ExportImageParams): void;
+-    recognize(image: Blob, version?: string): Promise<Struct>;
+-    generateImage(data: string, options?: GenerateImageOptions): Promise<Blob>;
+-    reinitializeIndigo(structService: StructService): void;
+-    sendCustomAction(name: string): void;
+-    updateMonomersLibrary(rawMonomersData: string | JSON): void;
+-    switchToMacromoleculesMode(): void;
+-    switchToMoleculesMode(): void;
+-}
+-export {};
++/// <reference types="node" />
++import { Subscription } from 'subscription';
++import { FormatterFactory } from './formatters';
++import { GenerateImageOptions, StructService, CalculateData, type CalculateResult } from "../domain/services";
++import { Editor } from './editor';
++import { Indigo } from "./indigo";
++import { MolfileFormat } from "../domain/serializers";
++import { Struct } from "../domain/entities";
++import { EventEmitter } from 'events';
++import { LogSettings } from "../utilities";
++import { ExportImageParams, SupportedImageFormats, SupportedModes } from "./ketcher.types";
++declare type SetMoleculeOptions = {
++    inputFormat?: string;
++    position?: {
++        x: number;
++        y: number;
++    };
++};
++export declare class Ketcher {
++    #private;
++    _id: string;
++    logging: LogSettings;
++    structService: StructService;
++    _indigo: Indigo;
++    changeEvent: Subscription;
++    libraryUpdateEvent: Subscription;
++    get editor(): Editor;
++    get eventBus(): EventEmitter;
++    constructor(structService: StructService, formatterFactory: FormatterFactory);
++    get id(): string;
++    get formatterFactory(): FormatterFactory;
++    get indigo(): Indigo;
++    get settings(): {};
++    addEditor(editor: Editor): void;
++    setSettings(settings: Record<string, string>): any;
++    getSmiles(isExtended?: boolean): Promise<string>;
++    getExtendedSmiles(): Promise<string>;
++    getMolfile(molfileFormat?: MolfileFormat): Promise<string>;
++    getIdt(): Promise<string>;
++    getRxn(molfileFormat?: MolfileFormat): Promise<string>;
++    getKet(): Promise<string>;
++    getFasta(): Promise<string>;
++    getSequence(format?: '1-letter' | '3-letter'): Promise<string>;
++    getSmarts(): Promise<string>;
++    getCml(): Promise<string>;
++    getSdf(molfileFormat?: MolfileFormat): Promise<string>;
++    getRdf(molfileFormat?: MolfileFormat): Promise<string>;
++    getCDXml(): Promise<string>;
++    getCDX(): Promise<string>;
++    getInchi(withAuxInfo?: boolean): Promise<string>;
++    getInChIKey(): Promise<string>;
++    containsReaction(): boolean;
++    isQueryStructureSelected(): boolean;
++    clear(): Promise<void | undefined>;
++    setMolecule(structStr: string, options?: SetMoleculeOptions): Promise<void | undefined>;
++    setHelm(helmStr: string): Promise<void | undefined>;
++    addFragment(structStr: string, options?: SetMoleculeOptions): Promise<void | undefined>;
++    layout(): Promise<void>;
++    calculate(options?: CalculateData): Promise<CalculateResult>;
++    /**
++     * @param {number} value - in a range [ZoomTool.instance.MINZOOMSCALE, ZoomTool.instance.MAXZOOMSCALE]
++     */
++    setZoom(value: number): void;
++    setMode(mode: SupportedModes): void;
++    exportImage(format: SupportedImageFormats, params?: ExportImageParams): void;
++    recognize(image: Blob, version?: string): Promise<Struct>;
++    generateImage(data: string, options?: GenerateImageOptions): Promise<Blob>;
++    reinitializeIndigo(structService: StructService): void;
++    sendCustomAction(name: string): void;
++    updateMonomersLibrary(rawMonomersData: string | JSON): void;
++    ensureMacroReady(): Promise<void>;
++    switchToMacromoleculesMode(): Promise<void>;
++    switchToMoleculesMode(): Promise<void>;
++}
++export {};
 diff --git a/node_modules/ketcher-core/dist/index.js b/node_modules/ketcher-core/dist/index.js
 --- a/node_modules/ketcher-core/dist/index.js
 +++ b/node_modules/ketcher-core/dist/index.js
-@@ -29363,2 +29363,3 @@
+@@ -1374,6 +1374,91 @@
+   }
+ };
+ 
++// SDK-level gates: active before onInit and shared by every formatter factory.
++var nexpolyCreateFormatter = FormatterFactory.prototype.create;
++FormatterFactory.prototype.create = function (format, options, queryPropertiesAreUsed) {
++  var factory = this;
++  var service = factory.nexpolyStructService;
++  var formatter = nexpolyCreateFormatter.call(factory, format, options, queryPropertiesAreUsed);
++  var parse = formatter.getStructureFromStringAsync;
++  if (parse) formatter.getStructureFromStringAsync = async function (source) {
++    var controller = service?.nexpolyMacroController;
++    if (!controller) return parse.apply(this, arguments);
++    var normalized = await controller.normalize(source, options?.['input-format'] || format, options);
++    controller.check();
++    if (normalized.format !== format && normalized.format === 'ket') {
++      return nexpolyCreateFormatter.call(factory, SupportedFormat.ket, options, queryPropertiesAreUsed)
++        .getStructureFromStringAsync(normalized.source);
++    }
++    return parse.call(this, normalized.source);
++  };
++  var serialize = formatter.getStructureFromStructAsync;
++  if (serialize) formatter.getStructureFromStructAsync = async function () {
++    var controller = service?.nexpolyMacroController;
++    if (controller?.requiresMacroFormat(format)) await controller.ensure();
++    controller?.check();
++    // Preserve the caller's struct, drawing manager and selection, including
++    // internal save dialogs which deliberately export only selected entities.
++    return serialize.apply(this, arguments);
++  };
++  return formatter;
++};
++var nexpolySetMolecule = Ketcher.prototype.setMolecule;
++// Use the normal local KET commit; host validation and settle remain intact.
++Ketcher.prototype.clear = function () { return this.setMolecule('{"root":{"nodes":[]}}'); };
++['setMolecule', 'addFragment'].forEach(function (name) {
++  var original = Ketcher.prototype[name];
++  Ketcher.prototype[name] = function (source, options) {
++    var controller = this.structService.nexpolyMacroController;
++    if (!controller) return original.apply(this, arguments);
++    return controller.import(source, options, (value, opts) => original.call(this, value, opts));
++  };
++});
++var nexpolySetHelm = Ketcher.prototype.setHelm;
++Ketcher.prototype.setHelm = function (source) {
++  var controller = this.structService.nexpolyMacroController;
++  if (!controller) return nexpolySetHelm.apply(this, arguments);
++  return controller.import(source, { inputFormat: 'helm' }, value => nexpolySetMolecule.call(this, value));
++};
++Ketcher.prototype.ensureMacroReady = function () {
++  var controller = this.structService.nexpolyMacroController;
++  return controller ? controller.ensure().then(() => {}) : Promise.resolve();
++};
++['switchToMacromoleculesMode', 'switchToMoleculesMode'].forEach(function (name, index) {
++  var original = Ketcher.prototype[name];
++  Ketcher.prototype[name] = function () {
++    var controller = this.structService.nexpolyMacroController;
++    return controller ? controller.requestMode(index === 0) : Promise.resolve(original.apply(this, arguments));
++  };
++});
++['getFasta', 'getSequence', 'getIdt'].forEach(function (name) {
++  var original = Ketcher.prototype[name];
++  Ketcher.prototype[name] = function (format) {
++    var controller = this.structService.nexpolyMacroController;
++    if (!controller) return original.apply(this, arguments);
++    return controller.enqueue(async () => {
++      await controller.ensure();
++      controller.check();
++      // getKet chooses the actual owning model, including micro-mode monomers.
++      var ket = await this.getKet();
++      var output = name === 'getFasta' ? ChemicalMimeType.FASTA : name === 'getIdt' ? ChemicalMimeType.IDT :
++        format === '3-letter' ? ChemicalMimeType.PeptideSequenceThreeLetter : ChemicalMimeType.SEQUENCE;
++      var result = await this.structService.convert({ struct: ket, output_format: output });
++      controller.check();
++      return result.struct;
++    });
++  };
++});
++['updateMonomersLibrary', 'setMode', 'setZoom', 'exportImage'].forEach(function (name) {
++  var original = Ketcher.prototype[name];
++  if (!original) return;
++  Ketcher.prototype[name] = function () {
++    var controller = this.structService.nexpolyMacroController;
++    if (controller && controller.state !== 'ready') throw new Error('Macro is not ready; await ensureMacroReady() first');
++    return original.apply(this, arguments);
++  };
++});
++
+ exports.AtomLabel = void 0;
+ (function (AtomLabel) {
+   AtomLabel["Ac"] = "Ac";
+@@ -2576,66 +2661,66 @@
+   return _safelyGetMimeType.apply(this, arguments);
+ }
+ 
+-const SVG_NAMESPACE_URI = 'http://www.w3.org/2000/svg';
+-const ADDITIONAL_TOP_MARGIN = 54;
+-const ADDITIONAL_LEFT_MARGIN = 50;
+-const DEFAULT_MARGIN = 10;
+-const getSvgFromDrawnStructures = (canvas, type, margins = {
+-    horizontal: DEFAULT_MARGIN,
+-    vertical: DEFAULT_MARGIN,
+-}) => {
+-    // Convert number to Margins object to support backward compatibility
+-    const marginValues = typeof margins === 'number'
+-        ? { horizontal: margins, vertical: margins }
+-        : {
+-            horizontal: DEFAULT_MARGIN + margins.horizontal,
+-            vertical: DEFAULT_MARGIN + margins.vertical,
+-        };
+-    // Copy and clean up svg structures before previewing or saving
+-    let svgInnerHTML = canvas?.innerHTML || '';
+-    const wrapper = document.createElementNS(SVG_NAMESPACE_URI, 'svg');
+-    wrapper.innerHTML = svgInnerHTML;
+-    // remove #rectangle-selection-area
+-    wrapper.querySelector('#rectangle-selection-area')?.remove();
+-    // remove dynamic elements (scrolls, highlighters, attachment points...)
+-    wrapper.querySelectorAll('.dynamic-element')?.forEach((el) => el.remove());
+-    // set default cursor, mostly for sequence mode
+-    wrapper
+-        .querySelectorAll('text')
+-        ?.forEach((el) => el.setAttribute('cursor', 'default'));
+-    wrapper.querySelectorAll('rect')?.forEach((el) => {
+-        if (el.getAttribute('cursor') === 'text')
+-            el.removeAttribute('cursor');
+-    });
+-    // remove opacity of structures, mostly for sequence "edit in RNA builder" mode
+-    wrapper.querySelectorAll('g')?.forEach((el) => {
+-        if (el.hasAttribute('opacity'))
+-            el.removeAttribute('opacity');
+-    });
+-    svgInnerHTML = wrapper.innerHTML;
+-    // remove "cursor: pointer" style
+-    svgInnerHTML = svgInnerHTML?.replaceAll('cursor: pointer;', '');
+-    const drawStructureClientRect = canvas
+-        ?.getElementsByClassName('drawn-structures')[0]
+-        .getBoundingClientRect();
+-    if (!drawStructureClientRect || !svgInnerHTML) {
+-        const errorMessage = 'Cannot get drawn structures!';
+-        KetcherLogger.error(errorMessage);
+-        return;
+-    }
+-    const viewBoxX = drawStructureClientRect.x -
+-        ADDITIONAL_LEFT_MARGIN -
+-        marginValues.horizontal;
+-    const viewBoxY = drawStructureClientRect.y - ADDITIONAL_TOP_MARGIN - marginValues.vertical;
+-    const viewBoxWidth = drawStructureClientRect.width + marginValues.horizontal * 2;
+-    const viewBoxHeight = drawStructureClientRect.height + marginValues.vertical * 2;
+-    const viewBox = `${viewBoxX} ${viewBoxY} ${viewBoxWidth} ${viewBoxHeight}`;
+-    if (type === 'preview')
+-        return `<svg width='100%' height='100%' style='position: absolute' viewBox='${viewBox}'>${svgInnerHTML}</svg>`;
+-    else if (type === 'file')
+-        return `<svg width='${viewBoxWidth}' height='${viewBoxHeight}' viewBox='${viewBox}' xmlns='${SVG_NAMESPACE_URI}'>${svgInnerHTML}</svg>`;
+-    else
+-        return `<svg xmlns='${SVG_NAMESPACE_URI}' />`;
++const SVG_NAMESPACE_URI = 'http://www.w3.org/2000/svg';
++const ADDITIONAL_TOP_MARGIN = 54;
++const ADDITIONAL_LEFT_MARGIN = 50;
++const DEFAULT_MARGIN = 10;
++const getSvgFromDrawnStructures = (canvas, type, margins = {
++    horizontal: DEFAULT_MARGIN,
++    vertical: DEFAULT_MARGIN,
++}) => {
++    // Convert number to Margins object to support backward compatibility
++    const marginValues = typeof margins === 'number'
++        ? { horizontal: margins, vertical: margins }
++        : {
++            horizontal: DEFAULT_MARGIN + margins.horizontal,
++            vertical: DEFAULT_MARGIN + margins.vertical,
++        };
++    // Copy and clean up svg structures before previewing or saving
++    let svgInnerHTML = canvas?.innerHTML || '';
++    const wrapper = document.createElementNS(SVG_NAMESPACE_URI, 'svg');
++    wrapper.innerHTML = svgInnerHTML;
++    // remove #rectangle-selection-area
++    wrapper.querySelector('#rectangle-selection-area')?.remove();
++    // remove dynamic elements (scrolls, highlighters, attachment points...)
++    wrapper.querySelectorAll('.dynamic-element')?.forEach((el) => el.remove());
++    // set default cursor, mostly for sequence mode
++    wrapper
++        .querySelectorAll('text')
++        ?.forEach((el) => el.setAttribute('cursor', 'default'));
++    wrapper.querySelectorAll('rect')?.forEach((el) => {
++        if (el.getAttribute('cursor') === 'text')
++            el.removeAttribute('cursor');
++    });
++    // remove opacity of structures, mostly for sequence "edit in RNA builder" mode
++    wrapper.querySelectorAll('g')?.forEach((el) => {
++        if (el.hasAttribute('opacity'))
++            el.removeAttribute('opacity');
++    });
++    svgInnerHTML = wrapper.innerHTML;
++    // remove "cursor: pointer" style
++    svgInnerHTML = svgInnerHTML?.replaceAll('cursor: pointer;', '');
++    const drawStructureClientRect = canvas
++        ?.getElementsByClassName('drawn-structures')[0]
++        .getBoundingClientRect();
++    if (!drawStructureClientRect || !svgInnerHTML) {
++        const errorMessage = 'Cannot get drawn structures!';
++        KetcherLogger.error(errorMessage);
++        return;
++    }
++    const viewBoxX = drawStructureClientRect.x -
++        ADDITIONAL_LEFT_MARGIN -
++        marginValues.horizontal;
++    const viewBoxY = drawStructureClientRect.y - ADDITIONAL_TOP_MARGIN - marginValues.vertical;
++    const viewBoxWidth = drawStructureClientRect.width + marginValues.horizontal * 2;
++    const viewBoxHeight = drawStructureClientRect.height + marginValues.vertical * 2;
++    const viewBox = `${viewBoxX} ${viewBoxY} ${viewBoxWidth} ${viewBoxHeight}`;
++    if (type === 'preview')
++        return `<svg width='100%' height='100%' style='position: absolute' viewBox='${viewBox}'>${svgInnerHTML}</svg>`;
++    else if (type === 'file')
++        return `<svg width='${viewBoxWidth}' height='${viewBoxHeight}' viewBox='${viewBox}' xmlns='${SVG_NAMESPACE_URI}'>${svgInnerHTML}</svg>`;
++    else
++        return `<svg xmlns='${SVG_NAMESPACE_URI}' />`;
+ };
+ 
+ var _Vec;
+@@ -8387,6 +8472,7 @@
+ var _structService$1 = new WeakMap();
+ var FormatterFactory = function () {
+   function FormatterFactory(structService) {
++    this.nexpolyStructService = structService;
+     _classCallCheck__default["default"](this, FormatterFactory);
+     _classPrivateFieldInitSpec$9(this, _structService$1, {
+       writable: true,
+@@ -29298,13 +29384,13 @@
+   return _prepareStructToRender.apply(this, arguments);
+ }
+ function _prepareStructToRender() {
+-  _prepareStructToRender = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee(structStr, structService, ketcherInstance) {
++  _prepareStructToRender = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee(structStr, structService, ketcherInstance, inputFormat) {
+     var struct;
+     return _regeneratorRuntime__default["default"].wrap(function _callee$(_context) {
+       while (1) switch (_context.prev = _context.next) {
+         case 0:
+           _context.next = 2;
+-          return parseStruct(structStr, structService, ketcherInstance);
++          return parseStruct(structStr, structService, ketcherInstance, inputFormat);
+         case 2:
+           struct = _context.sent;
+           struct.initHalfBonds();
+@@ -29321,11 +29407,13 @@
+   }));
+   return _prepareStructToRender.apply(this, arguments);
+ }
+-function parseStruct(structStr, structService, ketcherInstance) {
+-  var format = identifyStructFormat(structStr);
++function parseStruct(structStr, structService, ketcherInstance, inputFormat) {
++  var declaredFormat = structService.nexpolyMacroController?.detectInputFormat(structStr, inputFormat);
++  var format = Object.values(SupportedFormat).includes(declaredFormat) ? declaredFormat : identifyStructFormat(structStr);
+   var factory = new FormatterFactory(structService);
+   var options = ketcherInstance.editor.options();
+   var service = factory.create(format, {
++    'input-format': declaredFormat,
+     'dearomatize-on-load': options['dearomatize-on-load'],
+     ignoreChiralFlag: options.ignoreChiralFlag
+   });
+@@ -29361,6 +29449,7 @@
+         case 7:
+           ketStruct = _context2.sent.struct;
          case 8:
 +          if (structService.disposed || !editor || editor.disposed) throw new DOMException('Editor disposed', 'AbortError');
            deserialisedKet = ketSerializer.deserializeToDrawingEntities(ketStruct);
-@@ -42120,3 +42121,5 @@
+           assert__default["default"](deserialisedKet);
+           _deserialisedKet$draw = deserialisedKet.drawingEntitiesManager.mergeInto(editor.drawingEntitiesManager), modelChanges = _deserialisedKet$draw.command;
+@@ -42118,7 +42207,9 @@
+     _defineProperty__default["default"](this, "resizeObserver", null);
+     _defineProperty__default["default"](this, "_monomerCreationState", null);
      _defineProperty__default["default"](this, "observeCanvasResize", function () {
 +      _this.unobserveCanvasResize();
        _this.resizeObserver = new ResizeObserver(function () {
 +        if (_this.disposed) return;
          _this.sz = _this.getCanvasSizeVector();
-@@ -42128,3 +42131,4 @@
+         _this.resizeViewBox();
+       });
+@@ -42126,7 +42217,8 @@
+     });
+     _defineProperty__default["default"](this, "unobserveCanvasResize", function () {
        var _this$resizeObserver;
 -      (_this$resizeObserver = _this.resizeObserver) === null || _this$resizeObserver === void 0 || _this$resizeObserver.unobserve(_this.paper.canvas);
 +      (_this$resizeObserver = _this.resizeObserver) === null || _this$resizeObserver === void 0 || _this$resizeObserver.disconnect();
 +      _this.resizeObserver = null;
      });
-@@ -42257,4 +42261,5 @@
+     this.userOpts = options;
+     this.clientArea = clientArea;
+@@ -42255,8 +42347,9 @@
+       this.scrollbar.destroy();
+       this.scrollbar = new ScrollbarContainer(this);
        if (forceUpdateWithTimeout) {
 -        setTimeout(function () {
 -          _this2.update(true);
@@ -25,7 +449,11 @@ diff --git a/node_modules/ketcher-core/dist/index.js b/node_modules/ketcher-core
 +        this.updateTimer = setTimeout(function () {
 +          if (!_this2.disposed) _this2.update(true);
          }, 0);
-@@ -43781,2 +43786,15 @@
+       } else {
+         this.update(false);
+@@ -43779,6 +43872,19 @@
+ var persistentMonomersLibrary = [];
+ var persistentMonomersLibraryParsedJson = null;
  var editor;
 +function nexpolyMacroEventHandler(owner, handler) {
 +  return function (event) {
@@ -41,25 +469,45 @@ diff --git a/node_modules/ketcher-core/dist/index.js b/node_modules/ketcher-core
 +  };
 +}
  var CoreEditor = function () {
-@@ -44051,2 +44069,3 @@
+   function CoreEditor(_ref) {
+     var _this = this,
+@@ -44049,6 +44155,7 @@
+           return _ref2.apply(this, arguments);
+         };
        }();
 +      this.keydownEventHandler = nexpolyMacroEventHandler(this, this.keydownEventHandler);
        document.addEventListener('keydown', this.keydownEventHandler);
-@@ -44069,3 +44088,5 @@
+     }
+   }, {
+@@ -44067,7 +44174,9 @@
+         }
+         _this5.mode.onPaste(event);
        };
 +      this.copyEventHandler = nexpolyMacroEventHandler(this, this.copyEventHandler);
        document.addEventListener('copy', this.copyEventHandler);
 +      this.pasteEventHandler = nexpolyMacroEventHandler(this, this.pasteEventHandler);
        document.addEventListener('paste', this.pasteEventHandler);
-@@ -44079,2 +44100,3 @@
+     }
+   }, {
+@@ -44077,6 +44186,7 @@
+       this.hotKeyEventHandler = function (event) {
+         return _this6.handleHotKeyEvents(event);
        };
 +      this.hotKeyEventHandler = nexpolyMacroEventHandler(this, this.hotKeyEventHandler);
        document.addEventListener('keydown', this.hotKeyEventHandler);
-@@ -44124,2 +44146,3 @@
+     }
+   }, {
+@@ -44122,6 +44232,7 @@
+         }
+         return false;
        };
 +      this.contextMenuEventHandler = nexpolyMacroEventHandler(this, this.contextMenuEventHandler);
        document.addEventListener('contextmenu', this.contextMenuEventHandler);
-@@ -44961,4 +44984,6 @@
+     }
+   }, {
+@@ -44959,8 +45070,10 @@
+   }, {
+     key: "destroy",
      value: function destroy() {
 +      if (this.disposed) return;
 +      this.disposed = true;
@@ -67,12 +515,20 @@ diff --git a/node_modules/ketcher-core/dist/index.js b/node_modules/ketcher-core
 -      editor = undefined;
 +      if (editor === this) editor = undefined;
      }
-@@ -58252,2 +58277,16 @@
+   }], [{
+     key: "provideEditorInstance",
+@@ -58248,8 +58361,24 @@
+       level: exports.LogLevel.ERROR,
+       showTrace: false
+     };
++    structService.nexpolyMacroController?.attach(this);
+   }
    _createClass__default["default"](Ketcher, [{
 +    key: "retire",
 +    value: function retire() {
 +      if (this.disposed) return;
 +      this.disposed = true;
++      this.structService.nexpolyMacroController?.dispose();
 +      this.structService.destroy?.();
 +      if (this.editor) {
 +        this.editor.disposed = true;
@@ -84,128 +540,396 @@ diff --git a/node_modules/ketcher-core/dist/index.js b/node_modules/ketcher-core
 +    }
 +  }, {
      key: "editor",
-@@ -58336,2 +58375,3 @@
+     get: function get() {
+       return _classPrivateFieldGet__default["default"](this, _editor);
+@@ -58334,9 +58463,11 @@
+     key: "getMolfile",
+     value: function () {
        var _getMolfile = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee(molfileFormat) {
 +        var nexpolyOwner = this;
          var _CoreEditor$provideEd;
-@@ -58339,2 +58379,3 @@
+         var formatPassed, format, molfile;
          return _regeneratorRuntime__default["default"].wrap(function _callee$(_context) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context.prev = _context.next) {
-@@ -58375,2 +58416,3 @@
+             case 0:
+               if (!this.containsReaction()) {
+@@ -58373,11 +58504,13 @@
+     key: "getRxn",
+     value: function () {
        var _getRxn = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee2() {
 +        var nexpolyOwner = this;
          var molfileFormat,
-@@ -58380,2 +58422,3 @@
+           format,
+           rxnfile,
+           _args2 = arguments;
          return _regeneratorRuntime__default["default"].wrap(function _callee2$(_context2) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context2.prev = _context2.next) {
-@@ -58428,2 +58471,3 @@
+             case 0:
+               molfileFormat = _args2.length > 0 && _args2[0] !== undefined ? _args2[0] : 'v2000';
+@@ -58426,6 +58559,7 @@
+     key: "getSequence",
+     value: function () {
        var _getSequence = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee3() {
 +        var nexpolyOwner = this;
          var _CoreEditor$provideEd10;
-@@ -58439,2 +58483,3 @@
+         var format,
+           editor,
+@@ -58437,6 +58571,7 @@
+           errorMessage,
+           _args3 = arguments;
          return _regeneratorRuntime__default["default"].wrap(function _callee3$(_context3) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context3.prev = _context3.next) {
-@@ -58539,4 +58584,6 @@
+             case 0:
+               format = _args3.length > 0 && _args3[0] !== undefined ? _args3[0] : '1-letter';
+@@ -58537,8 +58672,10 @@
+     key: "getInChIKey",
+     value: function () {
        var _getInChIKey = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee4() {
 +        var nexpolyOwner = this;
          var struct;
          return _regeneratorRuntime__default["default"].wrap(function _callee4$(_context4) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context4.prev = _context4.next) {
-@@ -58602,2 +58649,3 @@
+             case 0:
+               _context4.next = 2;
+@@ -58600,9 +58737,11 @@
+     key: "setMolecule",
+     value: function () {
        var _setMolecule = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee6(structStr, options) {
 +        var nexpolyOwner = this;
          var _this = this;
-@@ -58605,2 +58653,3 @@
+         var macromoleculesEditor;
          return _regeneratorRuntime__default["default"].wrap(function _callee6$(_context6) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context6.prev = _context6.next) {
-@@ -58618,3 +58667,4 @@
+             case 0:
+               macromoleculesEditor = CoreEditor.provideEditorInstance();
+@@ -58616,7 +58755,8 @@
+               return runAsyncAction( _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee5() {
+                 var _options$position, struct, _ref4, x, y;
                  return _regeneratorRuntime__default["default"].wrap(function _callee5$(_context5) {
 -                  while (1) switch (_context5.prev = _context5.next) {
 +                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
 +          while (1) switch (_context5.prev = _context5.next) {
                      case 0:
-@@ -58666,4 +58716,6 @@
+                       assert__default["default"](typeof structStr === 'string');
+                       if (!window.isPolymerEditorTurnedOn) {
+@@ -58633,7 +58773,7 @@
+                       break;
+                     case 9:
+                       _context5.next = 11;
+-                      return prepareStructToRender(structStr, _this.structService, _this);
++                      return prepareStructToRender(structStr, _this.structService, _this, options?.inputFormat);
+                     case 11:
+                       struct = _context5.sent;
+                       struct.rescale();
+@@ -58664,15 +58804,18 @@
+     key: "setHelm",
+     value: function () {
        var _setHelm = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee8(helmStr) {
 +        var nexpolyOwner = this;
          var _this2 = this;
          return _regeneratorRuntime__default["default"].wrap(function _callee8$(_context8) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context8.prev = _context8.next) {
-@@ -58674,3 +58726,4 @@
+             case 0:
+               _context8.next = 2;
+               return runAsyncAction( _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee7() {
+                 var struct;
                  return _regeneratorRuntime__default["default"].wrap(function _callee7$(_context7) {
 -                  while (1) switch (_context7.prev = _context7.next) {
 +                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
 +          while (1) switch (_context7.prev = _context7.next) {
                      case 0:
-@@ -58706,2 +58759,3 @@
+                       assert__default["default"](typeof helmStr === 'string');
+                       _context7.next = 3;
+@@ -58704,9 +58847,11 @@
+     key: "addFragment",
+     value: function () {
        var _addFragment = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee10(structStr, options) {
 +        var nexpolyOwner = this;
          var _this3 = this;
-@@ -58709,2 +58763,3 @@
+         var macromoleculesEditor;
          return _regeneratorRuntime__default["default"].wrap(function _callee10$(_context10) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context10.prev = _context10.next) {
-@@ -58722,3 +58777,4 @@
+             case 0:
+               macromoleculesEditor = CoreEditor.provideEditorInstance();
+@@ -58720,7 +58865,8 @@
+               return runAsyncAction( _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee9() {
+                 var isCanvasEmptyBeforeOpenStructure, _options$position2, struct, _ref7, x, y;
                  return _regeneratorRuntime__default["default"].wrap(function _callee9$(_context9) {
 -                  while (1) switch (_context9.prev = _context9.next) {
 +                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
 +          while (1) switch (_context9.prev = _context9.next) {
                      case 0:
-@@ -58767,4 +58823,6 @@
+                       assert__default["default"](typeof structStr === 'string');
+                       if (!window.isPolymerEditorTurnedOn) {
+@@ -58738,7 +58884,7 @@
+                       break;
+                     case 8:
+                       _context9.next = 10;
+-                      return prepareStructToRender(structStr, _this3.structService, _this3);
++                      return prepareStructToRender(structStr, _this3.structService, _this3, options?.inputFormat);
+                     case 10:
+                       struct = _context9.sent;
+                       struct.rescale();
+@@ -58765,8 +58911,10 @@
+     key: "layout",
+     value: function () {
        var _layout = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee12() {
 +        var nexpolyOwner = this;
          var _this4 = this;
          return _regeneratorRuntime__default["default"].wrap(function _callee12$(_context12) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context12.prev = _context12.next) {
-@@ -58781,3 +58839,4 @@
+             case 0:
+               if (!window.isPolymerEditorTurnedOn) {
+@@ -58779,7 +58927,8 @@
+               return runAsyncAction( _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee11() {
+                 var struct, ketSerializer;
                  return _regeneratorRuntime__default["default"].wrap(function _callee11$(_context11) {
 -                  while (1) switch (_context11.prev = _context11.next) {
 +                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
 +          while (1) switch (_context11.prev = _context11.next) {
                      case 0:
-@@ -58811,3 +58870,5 @@
+                       _context11.next = 2;
+                       return _this4._indigo.layout(_this4.editor.struct(), _this4.editor.serverSettings);
+@@ -58809,7 +58958,9 @@
+     key: "calculate",
+     value: function () {
        var _calculate = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee13(options) {
 +        var nexpolyOwner = this;
          return _regeneratorRuntime__default["default"].wrap(function _callee13$(_context13) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context13.prev = _context13.next) {
-@@ -58881,2 +58942,3 @@
+             case 0:
+               if (!window.isPolymerEditorTurnedOn) {
+@@ -58879,6 +59030,7 @@
+     key: "generateImage",
+     value: function () {
        var _generateImage = _asyncToGenerator__default["default"]( _regeneratorRuntime__default["default"].mark(function _callee14(data) {
 +        var nexpolyOwner = this;
          var options,
-@@ -58892,2 +58954,3 @@
+           meta,
+           serverSettings,
+@@ -58890,6 +59042,7 @@
+           blob,
+           _args14 = arguments;
          return _regeneratorRuntime__default["default"].wrap(function _callee14$(_context14) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context14.prev = _context14.next) {
-@@ -59442,2 +59505 @@
+             case 0:
+               options = _args14.length > 1 && _args14[1] !== undefined ? _args14[1] : {
+@@ -59440,4 +59593,3 @@
+ exports.toolsMap = toolsMap;
+ exports.unknownNaturalAnalogues = unknownNaturalAnalogues;
  exports.vectorUtils = vectorUtils;
 -//# sourceMappingURL=index.js.map
 diff --git a/node_modules/ketcher-core/dist/index.modern.js b/node_modules/ketcher-core/dist/index.modern.js
 --- a/node_modules/ketcher-core/dist/index.modern.js
 +++ b/node_modules/ketcher-core/dist/index.modern.js
-@@ -29335,2 +29335,3 @@
+@@ -2548,66 +2548,66 @@
+   return _safelyGetMimeType.apply(this, arguments);
+ }
+ 
+-const SVG_NAMESPACE_URI = 'http://www.w3.org/2000/svg';
+-const ADDITIONAL_TOP_MARGIN = 54;
+-const ADDITIONAL_LEFT_MARGIN = 50;
+-const DEFAULT_MARGIN = 10;
+-const getSvgFromDrawnStructures = (canvas, type, margins = {
+-    horizontal: DEFAULT_MARGIN,
+-    vertical: DEFAULT_MARGIN,
+-}) => {
+-    // Convert number to Margins object to support backward compatibility
+-    const marginValues = typeof margins === 'number'
+-        ? { horizontal: margins, vertical: margins }
+-        : {
+-            horizontal: DEFAULT_MARGIN + margins.horizontal,
+-            vertical: DEFAULT_MARGIN + margins.vertical,
+-        };
+-    // Copy and clean up svg structures before previewing or saving
+-    let svgInnerHTML = canvas?.innerHTML || '';
+-    const wrapper = document.createElementNS(SVG_NAMESPACE_URI, 'svg');
+-    wrapper.innerHTML = svgInnerHTML;
+-    // remove #rectangle-selection-area
+-    wrapper.querySelector('#rectangle-selection-area')?.remove();
+-    // remove dynamic elements (scrolls, highlighters, attachment points...)
+-    wrapper.querySelectorAll('.dynamic-element')?.forEach((el) => el.remove());
+-    // set default cursor, mostly for sequence mode
+-    wrapper
+-        .querySelectorAll('text')
+-        ?.forEach((el) => el.setAttribute('cursor', 'default'));
+-    wrapper.querySelectorAll('rect')?.forEach((el) => {
+-        if (el.getAttribute('cursor') === 'text')
+-            el.removeAttribute('cursor');
+-    });
+-    // remove opacity of structures, mostly for sequence "edit in RNA builder" mode
+-    wrapper.querySelectorAll('g')?.forEach((el) => {
+-        if (el.hasAttribute('opacity'))
+-            el.removeAttribute('opacity');
+-    });
+-    svgInnerHTML = wrapper.innerHTML;
+-    // remove "cursor: pointer" style
+-    svgInnerHTML = svgInnerHTML?.replaceAll('cursor: pointer;', '');
+-    const drawStructureClientRect = canvas
+-        ?.getElementsByClassName('drawn-structures')[0]
+-        .getBoundingClientRect();
+-    if (!drawStructureClientRect || !svgInnerHTML) {
+-        const errorMessage = 'Cannot get drawn structures!';
+-        KetcherLogger.error(errorMessage);
+-        return;
+-    }
+-    const viewBoxX = drawStructureClientRect.x -
+-        ADDITIONAL_LEFT_MARGIN -
+-        marginValues.horizontal;
+-    const viewBoxY = drawStructureClientRect.y - ADDITIONAL_TOP_MARGIN - marginValues.vertical;
+-    const viewBoxWidth = drawStructureClientRect.width + marginValues.horizontal * 2;
+-    const viewBoxHeight = drawStructureClientRect.height + marginValues.vertical * 2;
+-    const viewBox = `${viewBoxX} ${viewBoxY} ${viewBoxWidth} ${viewBoxHeight}`;
+-    if (type === 'preview')
+-        return `<svg width='100%' height='100%' style='position: absolute' viewBox='${viewBox}'>${svgInnerHTML}</svg>`;
+-    else if (type === 'file')
+-        return `<svg width='${viewBoxWidth}' height='${viewBoxHeight}' viewBox='${viewBox}' xmlns='${SVG_NAMESPACE_URI}'>${svgInnerHTML}</svg>`;
+-    else
+-        return `<svg xmlns='${SVG_NAMESPACE_URI}' />`;
++const SVG_NAMESPACE_URI = 'http://www.w3.org/2000/svg';
++const ADDITIONAL_TOP_MARGIN = 54;
++const ADDITIONAL_LEFT_MARGIN = 50;
++const DEFAULT_MARGIN = 10;
++const getSvgFromDrawnStructures = (canvas, type, margins = {
++    horizontal: DEFAULT_MARGIN,
++    vertical: DEFAULT_MARGIN,
++}) => {
++    // Convert number to Margins object to support backward compatibility
++    const marginValues = typeof margins === 'number'
++        ? { horizontal: margins, vertical: margins }
++        : {
++            horizontal: DEFAULT_MARGIN + margins.horizontal,
++            vertical: DEFAULT_MARGIN + margins.vertical,
++        };
++    // Copy and clean up svg structures before previewing or saving
++    let svgInnerHTML = canvas?.innerHTML || '';
++    const wrapper = document.createElementNS(SVG_NAMESPACE_URI, 'svg');
++    wrapper.innerHTML = svgInnerHTML;
++    // remove #rectangle-selection-area
++    wrapper.querySelector('#rectangle-selection-area')?.remove();
++    // remove dynamic elements (scrolls, highlighters, attachment points...)
++    wrapper.querySelectorAll('.dynamic-element')?.forEach((el) => el.remove());
++    // set default cursor, mostly for sequence mode
++    wrapper
++        .querySelectorAll('text')
++        ?.forEach((el) => el.setAttribute('cursor', 'default'));
++    wrapper.querySelectorAll('rect')?.forEach((el) => {
++        if (el.getAttribute('cursor') === 'text')
++            el.removeAttribute('cursor');
++    });
++    // remove opacity of structures, mostly for sequence "edit in RNA builder" mode
++    wrapper.querySelectorAll('g')?.forEach((el) => {
++        if (el.hasAttribute('opacity'))
++            el.removeAttribute('opacity');
++    });
++    svgInnerHTML = wrapper.innerHTML;
++    // remove "cursor: pointer" style
++    svgInnerHTML = svgInnerHTML?.replaceAll('cursor: pointer;', '');
++    const drawStructureClientRect = canvas
++        ?.getElementsByClassName('drawn-structures')[0]
++        .getBoundingClientRect();
++    if (!drawStructureClientRect || !svgInnerHTML) {
++        const errorMessage = 'Cannot get drawn structures!';
++        KetcherLogger.error(errorMessage);
++        return;
++    }
++    const viewBoxX = drawStructureClientRect.x -
++        ADDITIONAL_LEFT_MARGIN -
++        marginValues.horizontal;
++    const viewBoxY = drawStructureClientRect.y - ADDITIONAL_TOP_MARGIN - marginValues.vertical;
++    const viewBoxWidth = drawStructureClientRect.width + marginValues.horizontal * 2;
++    const viewBoxHeight = drawStructureClientRect.height + marginValues.vertical * 2;
++    const viewBox = `${viewBoxX} ${viewBoxY} ${viewBoxWidth} ${viewBoxHeight}`;
++    if (type === 'preview')
++        return `<svg width='100%' height='100%' style='position: absolute' viewBox='${viewBox}'>${svgInnerHTML}</svg>`;
++    else if (type === 'file')
++        return `<svg width='${viewBoxWidth}' height='${viewBoxHeight}' viewBox='${viewBox}' xmlns='${SVG_NAMESPACE_URI}'>${svgInnerHTML}</svg>`;
++    else
++        return `<svg xmlns='${SVG_NAMESPACE_URI}' />`;
+ };
+ 
+ var _Vec;
+@@ -8359,6 +8359,7 @@
+ var _structService$1 = new WeakMap();
+ var FormatterFactory = function () {
+   function FormatterFactory(structService) {
++    this.nexpolyStructService = structService;
+     _classCallCheck(this, FormatterFactory);
+     _classPrivateFieldInitSpec$9(this, _structService$1, {
+       writable: true,
+@@ -29270,13 +29271,13 @@
+   return _prepareStructToRender.apply(this, arguments);
+ }
+ function _prepareStructToRender() {
+-  _prepareStructToRender = _asyncToGenerator( _regeneratorRuntime.mark(function _callee(structStr, structService, ketcherInstance) {
++  _prepareStructToRender = _asyncToGenerator( _regeneratorRuntime.mark(function _callee(structStr, structService, ketcherInstance, inputFormat) {
+     var struct;
+     return _regeneratorRuntime.wrap(function _callee$(_context) {
+       while (1) switch (_context.prev = _context.next) {
+         case 0:
+           _context.next = 2;
+-          return parseStruct(structStr, structService, ketcherInstance);
++          return parseStruct(structStr, structService, ketcherInstance, inputFormat);
+         case 2:
+           struct = _context.sent;
+           struct.initHalfBonds();
+@@ -29293,11 +29294,13 @@
+   }));
+   return _prepareStructToRender.apply(this, arguments);
+ }
+-function parseStruct(structStr, structService, ketcherInstance) {
+-  var format = identifyStructFormat(structStr);
++function parseStruct(structStr, structService, ketcherInstance, inputFormat) {
++  var declaredFormat = structService.nexpolyMacroController?.detectInputFormat(structStr, inputFormat);
++  var format = Object.values(SupportedFormat).includes(declaredFormat) ? declaredFormat : identifyStructFormat(structStr);
+   var factory = new FormatterFactory(structService);
+   var options = ketcherInstance.editor.options();
+   var service = factory.create(format, {
++    'input-format': declaredFormat,
+     'dearomatize-on-load': options['dearomatize-on-load'],
+     ignoreChiralFlag: options.ignoreChiralFlag
+   });
+@@ -29333,6 +29336,7 @@
+         case 7:
+           ketStruct = _context2.sent.struct;
          case 8:
 +          if (structService.disposed || !editor || editor.disposed) throw new DOMException('Editor disposed', 'AbortError');
            deserialisedKet = ketSerializer.deserializeToDrawingEntities(ketStruct);
-@@ -42092,3 +42093,5 @@
+           assert(deserialisedKet);
+           _deserialisedKet$draw = deserialisedKet.drawingEntitiesManager.mergeInto(editor.drawingEntitiesManager), modelChanges = _deserialisedKet$draw.command;
+@@ -42090,7 +42094,9 @@
+     _defineProperty(this, "resizeObserver", null);
+     _defineProperty(this, "_monomerCreationState", null);
      _defineProperty(this, "observeCanvasResize", function () {
 +      _this.unobserveCanvasResize();
        _this.resizeObserver = new ResizeObserver(function () {
 +        if (_this.disposed) return;
          _this.sz = _this.getCanvasSizeVector();
-@@ -42100,3 +42103,4 @@
+         _this.resizeViewBox();
+       });
+@@ -42098,7 +42104,8 @@
+     });
+     _defineProperty(this, "unobserveCanvasResize", function () {
        var _this$resizeObserver;
 -      (_this$resizeObserver = _this.resizeObserver) === null || _this$resizeObserver === void 0 || _this$resizeObserver.unobserve(_this.paper.canvas);
 +      (_this$resizeObserver = _this.resizeObserver) === null || _this$resizeObserver === void 0 || _this$resizeObserver.disconnect();
 +      _this.resizeObserver = null;
      });
-@@ -42229,4 +42233,5 @@
+     this.userOpts = options;
+     this.clientArea = clientArea;
+@@ -42227,8 +42234,9 @@
+       this.scrollbar.destroy();
+       this.scrollbar = new ScrollbarContainer(this);
        if (forceUpdateWithTimeout) {
 -        setTimeout(function () {
 -          _this2.update(true);
@@ -213,7 +937,11 @@ diff --git a/node_modules/ketcher-core/dist/index.modern.js b/node_modules/ketch
 +        this.updateTimer = setTimeout(function () {
 +          if (!_this2.disposed) _this2.update(true);
          }, 0);
-@@ -43753,2 +43758,15 @@
+       } else {
+         this.update(false);
+@@ -43751,6 +43759,19 @@
+ var persistentMonomersLibrary = [];
+ var persistentMonomersLibraryParsedJson = null;
  var editor;
 +function nexpolyMacroEventHandler(owner, handler) {
 +  return function (event) {
@@ -229,25 +957,45 @@ diff --git a/node_modules/ketcher-core/dist/index.modern.js b/node_modules/ketch
 +  };
 +}
  var CoreEditor = function () {
-@@ -44023,2 +44041,3 @@
+   function CoreEditor(_ref) {
+     var _this = this,
+@@ -44021,6 +44042,7 @@
+           return _ref2.apply(this, arguments);
+         };
        }();
 +      this.keydownEventHandler = nexpolyMacroEventHandler(this, this.keydownEventHandler);
        document.addEventListener('keydown', this.keydownEventHandler);
-@@ -44041,3 +44060,5 @@
+     }
+   }, {
+@@ -44039,7 +44061,9 @@
+         }
+         _this5.mode.onPaste(event);
        };
 +      this.copyEventHandler = nexpolyMacroEventHandler(this, this.copyEventHandler);
        document.addEventListener('copy', this.copyEventHandler);
 +      this.pasteEventHandler = nexpolyMacroEventHandler(this, this.pasteEventHandler);
        document.addEventListener('paste', this.pasteEventHandler);
-@@ -44051,2 +44072,3 @@
+     }
+   }, {
+@@ -44049,6 +44073,7 @@
+       this.hotKeyEventHandler = function (event) {
+         return _this6.handleHotKeyEvents(event);
        };
 +      this.hotKeyEventHandler = nexpolyMacroEventHandler(this, this.hotKeyEventHandler);
        document.addEventListener('keydown', this.hotKeyEventHandler);
-@@ -44096,2 +44118,3 @@
+     }
+   }, {
+@@ -44094,6 +44119,7 @@
+         }
+         return false;
        };
 +      this.contextMenuEventHandler = nexpolyMacroEventHandler(this, this.contextMenuEventHandler);
        document.addEventListener('contextmenu', this.contextMenuEventHandler);
-@@ -44933,4 +44956,6 @@
+     }
+   }, {
+@@ -44931,8 +44957,10 @@
+   }, {
+     key: "destroy",
      value: function destroy() {
 +      if (this.disposed) return;
 +      this.disposed = true;
@@ -255,12 +1003,20 @@ diff --git a/node_modules/ketcher-core/dist/index.modern.js b/node_modules/ketch
 -      editor = undefined;
 +      if (editor === this) editor = undefined;
      }
-@@ -58224,2 +58249,16 @@
+   }], [{
+     key: "provideEditorInstance",
+@@ -58220,8 +58248,24 @@
+       level: LogLevel.ERROR,
+       showTrace: false
+     };
++    structService.nexpolyMacroController?.attach(this);
+   }
    _createClass(Ketcher, [{
 +    key: "retire",
 +    value: function retire() {
 +      if (this.disposed) return;
 +      this.disposed = true;
++      this.structService.nexpolyMacroController?.dispose();
 +      this.structService.destroy?.();
 +      if (this.editor) {
 +        this.editor.disposed = true;
@@ -272,105 +1028,278 @@ diff --git a/node_modules/ketcher-core/dist/index.modern.js b/node_modules/ketch
 +    }
 +  }, {
      key: "editor",
-@@ -58308,2 +58347,3 @@
+     get: function get() {
+       return _classPrivateFieldGet(this, _editor);
+@@ -58306,9 +58350,11 @@
+     key: "getMolfile",
+     value: function () {
        var _getMolfile = _asyncToGenerator( _regeneratorRuntime.mark(function _callee(molfileFormat) {
 +        var nexpolyOwner = this;
          var _CoreEditor$provideEd;
-@@ -58311,2 +58351,3 @@
+         var formatPassed, format, molfile;
          return _regeneratorRuntime.wrap(function _callee$(_context) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context.prev = _context.next) {
-@@ -58347,2 +58388,3 @@
+             case 0:
+               if (!this.containsReaction()) {
+@@ -58345,11 +58391,13 @@
+     key: "getRxn",
+     value: function () {
        var _getRxn = _asyncToGenerator( _regeneratorRuntime.mark(function _callee2() {
 +        var nexpolyOwner = this;
          var molfileFormat,
-@@ -58352,2 +58394,3 @@
+           format,
+           rxnfile,
+           _args2 = arguments;
          return _regeneratorRuntime.wrap(function _callee2$(_context2) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context2.prev = _context2.next) {
-@@ -58400,2 +58443,3 @@
+             case 0:
+               molfileFormat = _args2.length > 0 && _args2[0] !== undefined ? _args2[0] : 'v2000';
+@@ -58398,6 +58446,7 @@
+     key: "getSequence",
+     value: function () {
        var _getSequence = _asyncToGenerator( _regeneratorRuntime.mark(function _callee3() {
 +        var nexpolyOwner = this;
          var _CoreEditor$provideEd10;
-@@ -58411,2 +58455,3 @@
+         var format,
+           editor,
+@@ -58409,6 +58458,7 @@
+           errorMessage,
+           _args3 = arguments;
          return _regeneratorRuntime.wrap(function _callee3$(_context3) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context3.prev = _context3.next) {
-@@ -58511,4 +58556,6 @@
+             case 0:
+               format = _args3.length > 0 && _args3[0] !== undefined ? _args3[0] : '1-letter';
+@@ -58509,8 +58559,10 @@
+     key: "getInChIKey",
+     value: function () {
        var _getInChIKey = _asyncToGenerator( _regeneratorRuntime.mark(function _callee4() {
 +        var nexpolyOwner = this;
          var struct;
          return _regeneratorRuntime.wrap(function _callee4$(_context4) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context4.prev = _context4.next) {
-@@ -58574,2 +58621,3 @@
+             case 0:
+               _context4.next = 2;
+@@ -58572,9 +58624,11 @@
+     key: "setMolecule",
+     value: function () {
        var _setMolecule = _asyncToGenerator( _regeneratorRuntime.mark(function _callee6(structStr, options) {
 +        var nexpolyOwner = this;
          var _this = this;
-@@ -58577,2 +58625,3 @@
+         var macromoleculesEditor;
          return _regeneratorRuntime.wrap(function _callee6$(_context6) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context6.prev = _context6.next) {
-@@ -58590,3 +58639,4 @@
+             case 0:
+               macromoleculesEditor = CoreEditor.provideEditorInstance();
+@@ -58588,7 +58642,8 @@
+               return runAsyncAction( _asyncToGenerator( _regeneratorRuntime.mark(function _callee5() {
+                 var _options$position, struct, _ref4, x, y;
                  return _regeneratorRuntime.wrap(function _callee5$(_context5) {
 -                  while (1) switch (_context5.prev = _context5.next) {
 +                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
 +          while (1) switch (_context5.prev = _context5.next) {
                      case 0:
-@@ -58638,4 +58688,6 @@
+                       assert(typeof structStr === 'string');
+                       if (!window.isPolymerEditorTurnedOn) {
+@@ -58605,7 +58660,7 @@
+                       break;
+                     case 9:
+                       _context5.next = 11;
+-                      return prepareStructToRender(structStr, _this.structService, _this);
++                      return prepareStructToRender(structStr, _this.structService, _this, options?.inputFormat);
+                     case 11:
+                       struct = _context5.sent;
+                       struct.rescale();
+@@ -58636,15 +58691,18 @@
+     key: "setHelm",
+     value: function () {
        var _setHelm = _asyncToGenerator( _regeneratorRuntime.mark(function _callee8(helmStr) {
 +        var nexpolyOwner = this;
          var _this2 = this;
          return _regeneratorRuntime.wrap(function _callee8$(_context8) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context8.prev = _context8.next) {
-@@ -58646,3 +58698,4 @@
+             case 0:
+               _context8.next = 2;
+               return runAsyncAction( _asyncToGenerator( _regeneratorRuntime.mark(function _callee7() {
+                 var struct;
                  return _regeneratorRuntime.wrap(function _callee7$(_context7) {
 -                  while (1) switch (_context7.prev = _context7.next) {
 +                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
 +          while (1) switch (_context7.prev = _context7.next) {
                      case 0:
-@@ -58678,2 +58731,3 @@
+                       assert(typeof helmStr === 'string');
+                       _context7.next = 3;
+@@ -58676,9 +58734,11 @@
+     key: "addFragment",
+     value: function () {
        var _addFragment = _asyncToGenerator( _regeneratorRuntime.mark(function _callee10(structStr, options) {
 +        var nexpolyOwner = this;
          var _this3 = this;
-@@ -58681,2 +58735,3 @@
+         var macromoleculesEditor;
          return _regeneratorRuntime.wrap(function _callee10$(_context10) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context10.prev = _context10.next) {
-@@ -58694,3 +58749,4 @@
+             case 0:
+               macromoleculesEditor = CoreEditor.provideEditorInstance();
+@@ -58692,7 +58752,8 @@
+               return runAsyncAction( _asyncToGenerator( _regeneratorRuntime.mark(function _callee9() {
+                 var isCanvasEmptyBeforeOpenStructure, _options$position2, struct, _ref7, x, y;
                  return _regeneratorRuntime.wrap(function _callee9$(_context9) {
 -                  while (1) switch (_context9.prev = _context9.next) {
 +                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
 +          while (1) switch (_context9.prev = _context9.next) {
                      case 0:
-@@ -58739,4 +58795,6 @@
+                       assert(typeof structStr === 'string');
+                       if (!window.isPolymerEditorTurnedOn) {
+@@ -58710,7 +58771,7 @@
+                       break;
+                     case 8:
+                       _context9.next = 10;
+-                      return prepareStructToRender(structStr, _this3.structService, _this3);
++                      return prepareStructToRender(structStr, _this3.structService, _this3, options?.inputFormat);
+                     case 10:
+                       struct = _context9.sent;
+                       struct.rescale();
+@@ -58737,8 +58798,10 @@
+     key: "layout",
+     value: function () {
        var _layout = _asyncToGenerator( _regeneratorRuntime.mark(function _callee12() {
 +        var nexpolyOwner = this;
          var _this4 = this;
          return _regeneratorRuntime.wrap(function _callee12$(_context12) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context12.prev = _context12.next) {
-@@ -58753,3 +58811,4 @@
+             case 0:
+               if (!window.isPolymerEditorTurnedOn) {
+@@ -58751,7 +58814,8 @@
+               return runAsyncAction( _asyncToGenerator( _regeneratorRuntime.mark(function _callee11() {
+                 var struct, ketSerializer;
                  return _regeneratorRuntime.wrap(function _callee11$(_context11) {
 -                  while (1) switch (_context11.prev = _context11.next) {
 +                  if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
 +          while (1) switch (_context11.prev = _context11.next) {
                      case 0:
-@@ -58783,3 +58842,5 @@
+                       _context11.next = 2;
+                       return _this4._indigo.layout(_this4.editor.struct(), _this4.editor.serverSettings);
+@@ -58781,7 +58845,9 @@
+     key: "calculate",
+     value: function () {
        var _calculate = _asyncToGenerator( _regeneratorRuntime.mark(function _callee13(options) {
 +        var nexpolyOwner = this;
          return _regeneratorRuntime.wrap(function _callee13$(_context13) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context13.prev = _context13.next) {
-@@ -58853,2 +58914,3 @@
+             case 0:
+               if (!window.isPolymerEditorTurnedOn) {
+@@ -58851,6 +58917,7 @@
+     key: "generateImage",
+     value: function () {
        var _generateImage = _asyncToGenerator( _regeneratorRuntime.mark(function _callee14(data) {
 +        var nexpolyOwner = this;
          var options,
-@@ -58864,2 +58926,3 @@
+           meta,
+           serverSettings,
+@@ -58862,6 +58929,7 @@
+           blob,
+           _args14 = arguments;
          return _regeneratorRuntime.wrap(function _callee14$(_context14) {
 +          if (nexpolyOwner.disposed) throw new DOMException("Editor disposed", "AbortError");
            while (1) switch (_context14.prev = _context14.next) {
-@@ -58998,2 +59061 @@
+             case 0:
+               options = _args14.length > 1 && _args14[1] !== undefined ? _args14[1] : {
+@@ -58995,5 +59063,89 @@
+   return KetcherBuilder;
+ }();
+ 
++// SDK-level gates: active before onInit and shared by every formatter factory.
++var nexpolyCreateFormatter = FormatterFactory.prototype.create;
++FormatterFactory.prototype.create = function (format, options, queryPropertiesAreUsed) {
++  var factory = this;
++  var service = factory.nexpolyStructService;
++  var formatter = nexpolyCreateFormatter.call(factory, format, options, queryPropertiesAreUsed);
++  var parse = formatter.getStructureFromStringAsync;
++  if (parse) formatter.getStructureFromStringAsync = async function (source) {
++    var controller = service?.nexpolyMacroController;
++    if (!controller) return parse.apply(this, arguments);
++    var normalized = await controller.normalize(source, options?.['input-format'] || format, options);
++    controller.check();
++    if (normalized.format !== format && normalized.format === 'ket') {
++      return nexpolyCreateFormatter.call(factory, SupportedFormat.ket, options, queryPropertiesAreUsed)
++        .getStructureFromStringAsync(normalized.source);
++    }
++    return parse.call(this, normalized.source);
++  };
++  var serialize = formatter.getStructureFromStructAsync;
++  if (serialize) formatter.getStructureFromStructAsync = async function () {
++    var controller = service?.nexpolyMacroController;
++    if (controller?.requiresMacroFormat(format)) await controller.ensure();
++    controller?.check();
++    // Preserve the caller's struct, drawing manager and selection, including
++    // internal save dialogs which deliberately export only selected entities.
++    return serialize.apply(this, arguments);
++  };
++  return formatter;
++};
++var nexpolySetMolecule = Ketcher.prototype.setMolecule;
++// Use the normal local KET commit; host validation and settle remain intact.
++Ketcher.prototype.clear = function () { return this.setMolecule('{"root":{"nodes":[]}}'); };
++['setMolecule', 'addFragment'].forEach(function (name) {
++  var original = Ketcher.prototype[name];
++  Ketcher.prototype[name] = function (source, options) {
++    var controller = this.structService.nexpolyMacroController;
++    if (!controller) return original.apply(this, arguments);
++    return controller.import(source, options, (value, opts) => original.call(this, value, opts));
++  };
++});
++var nexpolySetHelm = Ketcher.prototype.setHelm;
++Ketcher.prototype.setHelm = function (source) {
++  var controller = this.structService.nexpolyMacroController;
++  if (!controller) return nexpolySetHelm.apply(this, arguments);
++  return controller.import(source, { inputFormat: 'helm' }, value => nexpolySetMolecule.call(this, value));
++};
++Ketcher.prototype.ensureMacroReady = function () {
++  var controller = this.structService.nexpolyMacroController;
++  return controller ? controller.ensure().then(() => {}) : Promise.resolve();
++};
++['switchToMacromoleculesMode', 'switchToMoleculesMode'].forEach(function (name, index) {
++  var original = Ketcher.prototype[name];
++  Ketcher.prototype[name] = function () {
++    var controller = this.structService.nexpolyMacroController;
++    return controller ? controller.requestMode(index === 0) : Promise.resolve(original.apply(this, arguments));
++  };
++});
++['getFasta', 'getSequence', 'getIdt'].forEach(function (name) {
++  var original = Ketcher.prototype[name];
++  Ketcher.prototype[name] = function (format) {
++    var controller = this.structService.nexpolyMacroController;
++    if (!controller) return original.apply(this, arguments);
++    return controller.enqueue(async () => {
++      await controller.ensure();
++      controller.check();
++      // getKet chooses the actual owning model, including micro-mode monomers.
++      var ket = await this.getKet();
++      var output = name === 'getFasta' ? ChemicalMimeType.FASTA : name === 'getIdt' ? ChemicalMimeType.IDT :
++        format === '3-letter' ? ChemicalMimeType.PeptideSequenceThreeLetter : ChemicalMimeType.SEQUENCE;
++      var result = await this.structService.convert({ struct: ket, output_format: output });
++      controller.check();
++      return result.struct;
++    });
++  };
++});
++['updateMonomersLibrary', 'setMode', 'setZoom', 'exportImage'].forEach(function (name) {
++  var original = Ketcher.prototype[name];
++  if (!original) return;
++  Ketcher.prototype[name] = function () {
++    var controller = this.structService.nexpolyMacroController;
++    if (controller && controller.state !== 'ready') throw new Error('Macro is not ready; await ensureMacroReady() first');
++    return original.apply(this, arguments);
++  };
++});
++
  export { ARROW_MAX_SNAPPING_ANGLE, Action, AlignDescriptors, AmbiguousMonomer, AmbiguousMonomerRenderer, Atom$1 as Atom, AtomAdd, AtomAttr, AtomDelete, AtomLabel, AtomList, AtomMove, AttachmentPointHoverOperation, AttachmentPointName, AttachmentPoints, Axis, BackBoneBondSequenceRenderer, BackBoneSequenceNode, BaseMonomer, BaseMonomerRenderer, BaseRenderer, BaseSequenceItemRenderer, BaseSequenceRenderer, BlobTypes, Bond$1 as Bond, BondAdd, BondAttr, BondDelete, BondMove, Box2Abs, CREATE_MONOMER_TOOL_NAME, CalcImplicitH, CanvasLoad, Chain, ChainsCollection, Chem, ChemRenderer, ChemSequenceItemRenderer, ChemicalMimeType, Command, CoordinateTransformation, Coordinates, CoreEditor, DEFAULT_LAYOUT_MODE, DEFAULT_VARIANT_MONOMER_LABEL, DefaultStructServiceOptions, EditorClassName, EditorHistory, EditorType, ElementColor, Elements, EmptySequenceItemRenderer, EmptySequenceNode, EnhancedFlagMove, Entities, FixedPrecisionCoordinates, FlexMode, FlipMonomerOperation, FormatterFactory, Fragment, FragmentAdd, FragmentAddStereoAtom, FragmentDelete, FragmentDeleteStereoAtom, FragmentSetProperties, FragmentStereoFlag, FunctionalGroup, FunctionalGroupsProvider, Generics, HAS_CONTENT_LAYOUT_MODE, HYDROGEN_BOND_ATTACHMENT_POINT, HalfBond, HalfMonomerSize, Highlight, HydrogenBond, IMAGE_KEY, IMAGE_SERIALIZE_KEY, Image, ImageDelete, ImageMove, ImageResize, ImageUpsert, IsChainCycled, KETCHER_MACROMOLECULES_ROOT_NODE_SELECTOR, KETCHER_SAVED_OPTIONS_KEY, KETCHER_SAVED_SETTINGS_KEY, KetAmbiguousMonomerTemplateSubType, KetConnectionType, KetMonomerClass, KetMonomerGroupTemplateClass, KetNodeType, KetSerializer, KetTemplateType, Ketcher, KetcherAsyncEvents, KetcherBuilder, KetcherLogger, LayerMap, LinkerSequenceNode, LogLevel, Loop$1 as Loop, LoopMove, MACROMOLECULES_BOND_TYPES, MONOMER_CLASS_TO_CONSTRUCTOR, MONOMER_CONST, MULTITAIL_ARROW_KEY, MULTITAIL_ARROW_SERIALIZE_KEY, MULTITAIL_ARROW_TOOL_NAME, MacromoleculesConverter, MeasurementUnits, ModeTypes, MolSerializer, MonomerAddOperation, MonomerCodeToGroup, MonomerCreationAttachmentPointClickEvent, MonomerDeleteOperation, MonomerGroupCodes, MonomerGroups, MonomerHoverOperation, MonomerItemModifyOperation, MonomerMicromolecule, MonomerMoveOperation, MonomerSequenceNode, MonomerSize, MonomerToAtomBond, MultitailArrow, MultitailArrowAddTail, MultitailArrowDelete, MultitailArrowMove, MultitailArrowMoveHeadTail, MultitailArrowRefName, MultitailArrowRemoveTail, MultitailArrowResizeTailHead, MultitailArrowUpsert, NO_NATURAL_ANALOGUE, Nucleoside, NucleosideSequenceItemRenderer, Nucleotide, NucleotideSequenceItemRenderer, OperationPriority, OperationType, Peptide, PeptideRenderer, PeptideSequenceItemRenderer, Phosphate, PhosphateRenderer, PhosphateSequenceItemRenderer, Pile, PolymerBond$1 as PolymerBond, PolymerBondSequenceRenderer, Pool, RGroup, RGroupAttachmentPoint, RGroupAttachmentPointAdd, RGroupAttachmentPointRemove, RGroupAttr, RGroupFragment, RNABase, RNABaseRenderer, RNASequenceItemRenderer, RNA_DNA_NON_MODIFIED_PART, ReAtom$1 as ReAtom, ReBond$1 as ReBond, ReEnhancedFlag$1 as ReEnhancedFlag, ReFrag$1 as ReFrag, ReImage, ReMultitailArrow, ReObject, ReRGroup$1 as ReRGroup, ReRGroupAttachmentPoint, ReRxnArrow$1 as ReRxnArrow, ReRxnPlus$1 as ReRxnPlus, ReSGroup, ReSimpleObject$1 as ReSimpleObject, ReStruct, ReText$1 as ReText, ReinitializeModeOperation, RemoteStructService, RemoteStructServiceProvider, Render, RenderStruct, RestoreDescriptorsPosition, RestoreIfThen, RestoreSequenceCaretPositionOperation, RnaDnaBaseNames, RnaDnaNaturalAnaloguesEnum, RotateMonomerOperation, RxnArrow$1 as RxnArrow, RxnArrowAdd, RxnArrowDelete, RxnArrowMode, RxnArrowMove, RxnArrowResize, RxnArrowRotate, RxnPlus$1 as RxnPlus, RxnPlusAdd, RxnPlusDelete, RxnPlusMove, SCROLL_POSITION, SGroup, SGroupAddToHierarchy, SGroupAtomAdd, SGroupAtomRemove, SGroupAttachmentPoint, SGroupAttachmentPointAdd, SGroupAttachmentPointRemove, SGroupAttr, SGroupBracketParams, SGroupCreate, SGroupDataMove, SGroupDelete, SGroupForest, SGroupRemoveFromHierarchy, STRAND_TYPE, SUPERATOM_CLASS, SaltsAndSolventsProvider, Scale, ScrollbarContainer, SdfSerializer, SequenceMode, SequenceNodeRendererFactory, SequenceRenderer, SequenceType, SetEditorLineLengthAction, SettingsManager, SgContexts, ShiftMonomerOperation, ShowHydrogenLabelNames, ShowHydrogenLabels, SimpleObject, SimpleObjectAdd, SimpleObjectDelete, SimpleObjectMode, SimpleObjectMove, SimpleObjectResize, SmiSerializer, SnakeLayoutCellWidth, SnakeMode, StandardAmbiguousRnaBase, StandardBondLength, StereLabelStyleType, StereoColoringType, StereoFlag, StereoLabel, StereoValidator, Struct, Sugar, SugarRenderer, SupportedFormat, Text, TextCommand, TextCreate, TextDelete, TextMove, TextUpdate, ToolName, UnresolvedMonomer, UnresolvedMonomerRenderer, UnresolvedMonomerSequenceItemRenderer, UnsplitNucleotide, UnsplitNucleotideRenderer, UnsplitNucleotideSequenceItemRenderer, UpdateIfThen, UsageInMacromolecule, Vec2, ZoomTool, atomForNewBond, atomGetAttr, atomGetDegree, atomGetPos, atomGetSGroups, attachmentPointNames, b64toBlob, bondChangingAction, canModifyAminoAcid, checkAtomValence, checkIsR2R1Connection, checkIsSmartPropertiesExist, checkOverlapping, defaultBondThickness, deleteAllEntitiesOnCanvas, editorEvents, expandSGroupWithMultipleAttachmentPoint, fillNaturalAnalogueForPhosphateAndSugar, findStereoAtoms, flipBonds, formatProperties, formatSelection, fromAromaticTemplateOnBond, fromArrowAddition, fromArrowDeletion, fromArrowResizing, fromAtomAddition, fromAtomMerge, fromAtomsAttrs, fromAtomsFragmentAttr, fromBondAddition, fromBondFlipping, fromBondStereoUpdate, fromBondsAttrs, fromBondsMerge, fromChain, fromDescriptorsAlign, fromFlip, fromFragmentDeletion, fromFragmentSplit, fromHighlightClear, fromHighlightCreate, fromImageCreation, fromImageDeletion, fromImageMove, fromImageResize, fromItemsFuse, fromMultipleMove, fromMultitailArrowCreation, fromMultitailArrowDeletion, fromMultitailArrowHeadTailMove, fromMultitailArrowHeadTailsResize, fromMultitailArrowMove, fromMultitailArrowTailAdd, fromMultitailArrowTailRemove, fromNewCanvas, fromOneAtomDeletion, fromOneBondDeletion, fromPaste, fromPlusAddition, fromPlusDeletion, fromRGroupAttachmentPointAddition, fromRGroupAttachmentPointDeletion, fromRGroupAttachmentPointUpdate, fromRGroupAttrs, fromRGroupFragment, fromRotate, fromSeveralSgroupAddition, fromSgroupAction, fromSgroupAddition, fromSgroupAttachmentPointAddition, fromSgroupAttachmentPointRemove, fromSgroupAttrs, fromSgroupDeletion, fromSimpleObjectAddition, fromSimpleObjectDeletion, fromSimpleObjectResizing, fromStereoAtomAttrs, fromStereoFlagUpdate, fromTemplateOnAtom, fromTemplateOnBondAction, fromTemplateOnCanvas, fromTextCreation, fromTextDeletion, fromTextUpdating, fromUpdateIfThen, generateMenuShortcuts, genericsList, getAllConnectedMonomersRecursively, getAminoAcidsToModify, getAtomCustomQuery, getAtomType, getAttachmentPointLabel, getAttachmentPointLabelWithBinaryShift, getAttachmentPointNumberFromLabel, getColorFromStereoLabel, getFormatMimeTypeByFileName, getHELMClassByKetMonomerClass, getHoverToFuse, getItemsToFuse, getKetRef, getLabelRenderModeForIndigo, getMonomerUniqueKey, getNextFreeAttachmentPoint, getNextMonomerInChain, getNodeWithInvertedYCoord, getOptionsWithConvertedUnits, getPhosphateFromSugar, getPreviousMonomerInChain, getPropertiesByFormat, getPropertiesByImgFormat, getRelSGroupsBySelection, getRnaBaseFromSugar, getSnappedArrowVector, getStructStringFromClipboardData, getStructure, getSugarFromRnaBase, getSvgFromDrawnStructures, hotkeysConfiguration, identifyStructFormat, ifDef, imageReferencePositionToCursor, initHotKeys, isAmbiguousMonomerLibraryItem, isAttachmentBond, isBaseTool, isBondBetweenSugarAndBaseOfRna, isClipboardAPIAvailable, isControlKey, isHelmCompatible, isLibraryItemRnaPreset, isMonomerBeginningOfChain, isMonomerConnectedToR2RnaBase, isNodeRestrictedForHydrogenBondCreation, isPeptideOrAmbiguousPeptide, isR2R1ConnectionFromRnaBase, isRnaBaseApplicableForAntisense, isRnaBaseOrAmbiguousRnaBase, isRnaBaseVariantMonomer, isSingleRGroupAttachmentPoint, isTwoStrandedNodeRestrictedForHydrogenBondCreation, isValidNucleoside, isValidNucleotide, ketcherProvider, keyNorm, legacyCopy, legacyPaste, libraryItemHasR1AttachmentPoint, macromoleculesFilesInputFormats, makeCircleFromEllipse, mergeFragmentsIfNeeded, mergeMapOfItemsToSet, mergeSgroups, modesMap, modifyTransformation, monomerFactory, multitailArrowReferenceLinesToCursor, multitailReferencePositionToCursor, normalizeMonomerAtomsPositions, notifyCopyCut, notifyItemsToMergeInitializationComplete, notifyRenderComplete, notifyRequestCompleted, parseAndAddMacromoleculesOnCanvas, parseStruct, peptideNaturalAnalogues, pickStandardServerOptions, populateStructWithSelection, prepareStructToRender, provideEditorSettings, radicalElectrons, removeAtomFromSgroupIfNeeded, removeAttachmentPointFromSuperatom, removeInfoLabelFromAtoms, removeSgroupIfNeeded, renderersEvents, replaceMonomer, resetEditorEvents, rnaDnaNaturalAnalogues, runAsyncAction, sGroupAttributeAction, safelyGetMimeType, selectionKeys, sequenceReplacer, setAmbiguousMonomerPrefix, setAmbiguousMonomerTemplatePrefix, setExpandMonomerSGroup, setExpandSGroup, setMonomerPrefix, setMonomerTemplatePrefix, shortcutStr, structSelection, switchIntoChemistryCoordSystem, tfx, toolsMap, unknownNaturalAnalogues, vectorUtils };
 -//# sourceMappingURL=index.modern.js.map

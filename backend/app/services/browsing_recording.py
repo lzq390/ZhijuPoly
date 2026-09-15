@@ -3,8 +3,10 @@
 from asyncio import Lock
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import logging
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -15,7 +17,9 @@ from app.recording_models import (
     RecordedKnowledgeSearchRequest, RecordedKnowledgeSearchResponse,
     RecordedFilterSearchRequest, RecordedFilterSearchResponse,
 )
-from app.services.knowledge_poc_summary import generate_knowledge_summary
+from app.services.knowledge_poc_summary import generate_knowledge_summary, stream_knowledge_summary
+
+logger = logging.getLogger(__name__)
 
 
 # In-memory snapshots; process restart or eviction requires a new record/search.
@@ -89,6 +93,32 @@ class BrowsingRecordingStore:
             if record.summary is None:
                 record.summary = await generate_knowledge_summary(record.events, self.settings)
             return {"recording_id": recording_id, **record.summary}
+
+    def stream_summary(self, recording_id: str):
+        # Validate before sending HTTP 200 / SSE headers.
+        record = self.get_recording(recording_id, active=False)
+        if record.ended_at is None:
+            raise HTTPException(409, "请先结束记录再生成总结")
+
+        async def events():
+            yield "status", {"phase": "summarizing"}
+            # JSON and SSE callers share the same lock and completed result.
+            async with record.summary_lock:
+                try:
+                    if record.summary is None:
+                        parts = []
+                        async with aclosing(stream_knowledge_summary(record.events, self.settings)) as stream:
+                            async for delta in stream:
+                                parts.append(delta)
+                                yield "delta", {"text": delta}
+                        record.summary = {"summary": "".join(parts).strip(), "generated": bool(record.events)}
+                    yield "done", {"recording_id": recording_id, **record.summary}
+                except HTTPException as exc:
+                    yield "error", {"detail": exc.detail}
+                except Exception:
+                    logger.exception("Browsing summary stream failed")
+                    yield "error", {"detail": "总结生成失败，记录已保留，可重试总结"}
+        return events()
 
     async def filter_search(self, body: RecordedFilterSearchRequest, execute: Callable[[], Awaitable[PropertyFilterSearchResponse]]):
         record = self.get_recording(body.recording_id) if body.recording_id else None

@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import App from "./App";
+import { BrowsingRecordingControls } from "./components/browsing-recording/BrowsingRecording";
 
 const mocks = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn(), summary: vi.fn(), operation: vi.fn() }));
 vi.mock("./services/api", async (original) => ({
@@ -12,14 +13,14 @@ vi.mock("./components/KnowledgeSearch", async () => {
   const { useKnowledgeRecording } = await import("./hooks/useKnowledgeRecording");
   return { KnowledgeSearch: () => {
     const recording = useKnowledgeRecording();
-    return <button onClick={() => void recording?.track(mocks.operation)}>检索测试</button>;
+    return <><BrowsingRecordingControls module="knowledge" /><button onClick={() => void recording?.track(mocks.operation)}>检索测试</button></>;
   } };
 });
 vi.mock("./components/DatabaseFilterPage", async () => {
   const { useKnowledgeRecording } = await import("./hooks/useKnowledgeRecording");
   return { DatabaseFilterPage: () => {
     const recording = useKnowledgeRecording();
-    return <button onClick={() => void recording?.track(mocks.operation)}>筛选测试</button>;
+    return <><BrowsingRecordingControls module="databaseFilter" /><button onClick={() => void recording?.track(mocks.operation)}>筛选测试</button></>;
   } };
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -33,8 +34,8 @@ it("跨知识库和筛选页面保留同一记录，切换后仍等待在途操�
   mocks.summary.mockResolvedValue({ summary: "两个模块的共同回顾", generated: true });
   mocks.operation.mockResolvedValue(undefined);
   render(<App />);
-  fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
-  await screen.findByRole("button", { name: "正在记录 · 总结" });
+  fireEvent.click(await screen.findByRole("button", { name: "开始记录" }));
+  await screen.findByRole("button", { name: "结束并总结" });
   fireEvent.click(screen.getByText("检索测试"));
   await waitFor(() => expect(mocks.operation).toHaveBeenCalledTimes(1));
   const id = mocks.start.mock.calls[0][0];
@@ -46,12 +47,12 @@ it("跨知识库和筛选页面保留同一记录，切换后仍等待在途操�
   expect(mocks.operation).toHaveBeenLastCalledWith(id);
   window.history.pushState({}, "", "/knowledge");
   fireEvent.popState(window);
-  expect((screen.getByRole("button", { name: "正在记录 · 总结" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((await screen.findByRole("button", { name: "结束并总结" }) as HTMLButtonElement).disabled).toBe(true);
   release();
-  await waitFor(() => expect((screen.getByRole("button", { name: "正在记录 · 总结" }) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.click(screen.getByRole("button", { name: "正在记录 · 总结" }));
+  await waitFor(() => expect((screen.getByRole("button", { name: "结束并总结" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "结束并总结" }));
   expect(await screen.findByText("两个模块的共同回顾")).not.toBeNull();
   expect(mocks.start).toHaveBeenCalledTimes(1);
   expect(mocks.stop).toHaveBeenCalledWith(id);
-  expect(mocks.summary).toHaveBeenCalledWith(id);
+  expect(mocks.summary).toHaveBeenCalledWith(id, expect.any(Function));
 });

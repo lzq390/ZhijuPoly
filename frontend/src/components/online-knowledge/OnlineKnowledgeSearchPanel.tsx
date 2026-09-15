@@ -42,6 +42,7 @@ import {
 type OnlineKnowledgeSearchPanelProps = {
   initialMaterial?: string;
   modeNavigation: ReactNode;
+  toolbarActions?: ReactNode;
 };
 
 type DrawerView = "detail" | "history";
@@ -250,7 +251,7 @@ function OnlineProgress({ state }: { state: ReturnType<typeof useOnlineKnowledge
   );
 }
 
-export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigation }: OnlineKnowledgeSearchPanelProps) {
+export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigation, toolbarActions }: OnlineKnowledgeSearchPanelProps) {
   const searchState = useOnlineKnowledgeSearch();
   const [material, setMaterial] = useState(initialMaterial.trim());
   const [mode, setMode] = useState<OnlineKnowledgeMode>("property");
@@ -423,8 +424,9 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
     <div className={`ks-panel-layout${drawerOpen ? " is-drawer-open" : ""}`} style={{ "--ks-drawer-width": `${drawerWidth}px` } as CSSProperties}>
       <div className="ks-panel-scroll">
         <div className="ks-workbench-column">
-          <div className="ks-module-toolbar">
+          <div className="ks-module-toolbar" data-recording-header>
             <span className="ks-toolbar-status"><i />准备就绪</span>
+            {toolbarActions}
           </div>
 
           <section className="ks-surface ks-search-surface">

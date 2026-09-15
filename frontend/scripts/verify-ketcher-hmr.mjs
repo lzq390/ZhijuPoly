@@ -1,0 +1,64 @@
+import assert from 'node:assert/strict';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { chromium } from 'playwright';
+
+const base = process.env.KETCHER_HMR_URL || 'http://127.0.0.1:5962';
+const output = resolve(process.env.KETCHER_HMR_OUTPUT || '/tmp/nexpoly-ketcher-hmr');
+assert.equal(new URL(base).hostname, '127.0.0.1');
+await mkdir(output, { recursive: true });
+const header = new URL('../src/components/ModulePageHeader.tsx', import.meta.url);
+const bootstrap = new URL('../sdk/bootstrap.mjs', import.meta.url);
+const originalHeader = await readFile(header, 'utf8'), originalBootstrap = await readFile(bootstrap, 'utf8');
+const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const errors = [], requests = [];
+page.on('pageerror', error => errors.push(String(error)));
+page.on('request', request => requests.push(request.url()));
+const report = { base, errors, passed: false };
+let headerChanged = false, sdkChanged = false;
+const ready = () => page.waitForFunction(() => document.querySelector('[data-editor-status="ready"]'), null, { timeout: 60000 });
+try {
+  await page.goto(base + '/structure-workbench', { waitUntil: 'domcontentloaded' }); await ready();
+  await page.evaluate(async () => { await ketcher.setMolecule('CCO'); window.__hmrSdk = ketcher; });
+  const epoch = await page.evaluate(() => performance.timeOrigin);
+  assert.ok(originalHeader.includes('<header className='));
+  headerChanged = true;
+  await writeFile(header, originalHeader.replace('<header className=', '<header data-ketcher-hmr-probe="true" className='));
+  await page.waitForSelector('[data-ketcher-hmr-probe="true"]');
+  assert.equal(await page.evaluate(() => performance.timeOrigin), epoch);
+  assert.equal(await page.evaluate(() => ketcher === window.__hmrSdk), true);
+  assert.equal(await page.evaluate(() => ketcher.getSmiles()), 'CCO');
+  assert.equal(page.workers().length, 1);
+  await writeFile(header, originalHeader); headerChanged = false;
+  await page.waitForSelector('[data-ketcher-hmr-probe]', { state: 'detached' });
+  report.businessHmrPreservesDocumentAndInstance = true;
+  const previous = requests.find(url => /\/assets\/ketcher\/[^/]+\/bootstrap-/.test(url));
+  await page.evaluate(() => { delete window.__hmrSdk; });
+  sdkChanged = true;
+  await writeFile(bootstrap, originalBootstrap + '\n// SDK HMR verification: rebuild the immutable delivery.\n');
+  await page.waitForFunction(value => performance.timeOrigin !== value, epoch, { timeout: 60000 });
+  await ready();
+  assert.equal(await page.evaluate(() => ketcher.getSmiles()), '');
+  assert.equal(page.workers().length, 1);
+  assert.equal((await fetch(previous)).status, 200);
+  report.sdkRebuildReloadsDocument = true;
+  report.previousAssetsRemainAvailable = true;
+  const nextEpoch = await page.evaluate(() => performance.timeOrigin);
+  await writeFile(bootstrap, originalBootstrap); sdkChanged = false;
+  await page.waitForFunction(value => performance.timeOrigin !== value, nextEpoch, { timeout: 60000 });
+  await ready();
+  assert.equal(page.workers().length, 1);
+  assert.deepEqual(errors, []);
+  report.passed = true;
+} catch (error) {
+  report.error = String(error.stack);
+  await page.screenshot({ path: resolve(output, 'failure.png') }).catch(() => {});
+} finally {
+  if (headerChanged) await writeFile(header, originalHeader);
+  if (sdkChanged) await writeFile(bootstrap, originalBootstrap);
+  await writeFile(resolve(output, 'results.json'), JSON.stringify({ ...report, requests }, null, 2));
+  console.log(JSON.stringify(report, null, 2));
+  await browser.close();
+}
+if (!report.passed) process.exitCode = 1;

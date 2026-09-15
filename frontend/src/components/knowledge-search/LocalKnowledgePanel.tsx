@@ -36,6 +36,7 @@ type LocalKnowledgePanelProps = {
   initialQuery?: string;
   initialTerms?: string[];
   modeNavigation: ReactNode;
+  toolbarActions?: ReactNode;
 };
 
 const PAGE_SIZES = [20, 50, 100] as const;
@@ -209,7 +210,7 @@ function ResultSkeletons() {
   );
 }
 
-export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], modeNavigation }: LocalKnowledgePanelProps) {
+export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], modeNavigation, toolbarActions }: LocalKnowledgePanelProps) {
   const searchState = useKnowledgeSearch();
   const observeKnowledge = useKnowledgeObservation(searchState.data?.search_id);
   const [query, setQuery] = useState(() => {
@@ -301,8 +302,9 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
     >
       <div className="ks-panel-scroll">
         <div className="ks-workbench-column">
-          <div className="ks-module-toolbar">
+          <div className="ks-module-toolbar" data-recording-header>
             <span className="ks-toolbar-status"><i />准备就绪</span>
+            {toolbarActions}
           </div>
 
           <section className="ks-surface ks-search-surface">

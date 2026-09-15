@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "../browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "../ModulePageHeader";
 import {
   AlertTriangle,
@@ -410,7 +411,7 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
       data-view-key={currentView === "structureEffect" ? "structure-effect" : currentView}
       style={rootStyle}
     >
-      <ModulePageHeader>数据库分析</ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="database" />}>数据库分析</ModulePageHeader>
       <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className={`np-sw-workspace${datasetPopoverOpen && datasetPopoverOverlay ? " has-dataset-modal" : ""}`}>

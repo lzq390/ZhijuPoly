@@ -17,6 +17,7 @@ import {
   type AppShellModuleItem
 } from "./sidebar/PlatformSidebar";
 import "./sidebar/platform-sidebar.css";
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 
 export type { AppShellModuleGroup, AppShellModuleItem } from "./sidebar/PlatformSidebar";
 
@@ -50,7 +51,6 @@ type AppShellProps = {
   beforeNavigate?: () => Promise<void | boolean>;
   moduleTransition?: ModuleTransitionView;
   children: ReactNode;
-  recordingControls?: ReactNode;
 };
 
 const SCROLLBAR_HIDE_DELAY_MS = 700;
@@ -87,7 +87,7 @@ function MobileSidebarHeader({
         </span>
         <span>智聚万物</span>
       </div>
-      <span className="np-sidebar-mobile-header__spacer" aria-hidden="true" />
+      <span className="np-sidebar-mobile-header__spacer"><BrowsingRecordingControls placement="mobile" /></span>
     </header>
   );
 }
@@ -116,7 +116,6 @@ export function AppShell({
   onRenameGeneralSession,
   onDeleteGeneralSession,
   beforeNavigate,
-  recordingControls,
   moduleTransition,
   children
 }: AppShellProps) {
@@ -203,7 +202,7 @@ export function AppShell({
     setIsMobileMenuOpen(false);
   }, [navigation.cancel, Boolean(moduleTransition)]);
 
-  useModalFocus({
+  const mobileModalFocusActive = useModalFocus({
     active: mobilePresence.present, open: isMobileMenuOpen,
     scopeRef: mobileLayerRef, panelRef: mobilePresence.ref,
     initialFocusRef: mobileCloseButtonRef, ownerId: "np-mobile-navigation",
@@ -394,7 +393,8 @@ export function AppShell({
   return (
     <div ref={appShellRef} className="np-app-shell">
       <aside className="np-sidebar-desktop" aria-label="平台侧边栏">
-        <PlatformSidebar {...sharedSidebarProps} gpuStatusId="gpu-session-status-desktop" />
+        <PlatformSidebar {...sharedSidebarProps} gpuStatusId="gpu-session-status-desktop"
+          brandActions={isHome ? <BrowsingRecordingControls module="home" placement="sidebar" /> : undefined} />
       </aside>
 
       {mobilePresence.present ? (
@@ -402,7 +402,7 @@ export function AppShell({
           <button type="button" aria-label="关闭导航背景" tabIndex={-1}
             className="np-sidebar-mobile-backdrop" onClick={() => closeMobileMenu(true)} />
           <aside ref={mobilePresence.ref} {...mobilePresence.motionProps}
-            id="np-mobile-navigation" role="dialog" aria-modal="true" aria-label="平台导航"
+            id="np-mobile-navigation" role="dialog" aria-modal={mobileModalFocusActive} aria-label="平台导航"
             tabIndex={-1} className="np-sidebar-mobile-panel">
             <PlatformSidebar {...sharedSidebarProps} gpuStatusId="gpu-session-status-mobile"
               closeButtonRef={mobileCloseButtonRef} onClose={() => closeMobileMenu(true)} />
@@ -417,7 +417,6 @@ export function AppShell({
           onOpen={() => setIsMobileMenuOpen(true)}
         />
 
-        {recordingControls}
         <main
           ref={mainRef}
           tabIndex={-1}

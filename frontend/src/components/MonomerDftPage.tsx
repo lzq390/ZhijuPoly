@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { useContentMotion } from "../hooks/useContentMotion";
 import {
@@ -1030,7 +1031,7 @@ export function MonomerDftPage({
 
   return (
     <div className="np-module-page np-structure-workbench np-monomer-dft" data-module="monomer-dft">
-      <ModulePageHeader>单体 DFT</ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="monomerDft" />}>单体 DFT</ModulePageHeader>
       <div className="np-dft-page np-module-page-body">
         <div className="np-dft-module-toolbar" aria-label="单体 DFT 服务状态">
           <div className="np-dft-service-status">

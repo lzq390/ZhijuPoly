@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import {
   CircleOff,
@@ -374,7 +375,7 @@ export function MonomerPolymerizationPage({
       data-module="monomer-polymerization"
       style={workbenchStyle}
     >
-      <ModulePageHeader>单体正向聚合</ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="monomerPolymerization" />}>单体正向聚合</ModulePageHeader>
       <div className={`np-sw-page np-module-page-body np-mp-page${drawerVisible ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${drawerVisible ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">

@@ -10,13 +10,14 @@ import type {
 import { KnowledgeSearch as KnowledgeSearchPage } from "./KnowledgeSearch";
 import { useState, type ComponentProps } from "react";
 import { KnowledgeRecordingProvider } from "../hooks/useKnowledgeRecording";
-import { KnowledgeRecordingControls } from "./knowledge-search/KnowledgeRecordingControls";
+import { BrowsingRecordingUIProvider } from "./browsing-recording/BrowsingRecording";
 
 function KnowledgeSearch(props: ComponentProps<typeof KnowledgeSearchPage>) {
   const [local, setLocal] = useState(true);
   return <KnowledgeRecordingProvider>
-    <KnowledgeRecordingControls localMode={local} />
-    <KnowledgeSearchPage {...props} onLocalModeChange={setLocal} />
+    <BrowsingRecordingUIProvider activeModule="knowledge" canStart={local}>
+      <KnowledgeSearchPage {...props} onLocalModeChange={setLocal} />
+    </BrowsingRecordingUIProvider>
   </KnowledgeRecordingProvider>;
 }
 
@@ -159,7 +160,7 @@ beforeEach(() => {
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     value: vi.fn().mockImplementation((query: string) => ({
-      matches: false,
+      matches: query === "(min-width: 1024px)",
       media: query,
       onchange: null,
       addEventListener: vi.fn(),
@@ -195,13 +196,19 @@ describe("KnowledgeSearch", () => {
     for (const key of "adad") fireEvent.keyDown(window, { key });
     expect(apiMocks.startKnowledgeRecording).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
-    await screen.findByRole("button", { name: "正在记录 · 总结" });
+    await screen.findByRole("button", { name: "结束并总结" });
     for (const key of "adad") fireEvent.keyDown(window, { key });
     expect(apiMocks.startKnowledgeRecording).toHaveBeenCalledTimes(1);
   });
 
   it("开始按钮仅在本地模式可用，切换回来后可正常开始记录", async () => {
     const view = render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    for (const mode of ["在线文献", "PDF 相似度", "本地知识库"]) {
+      fireEvent.click(screen.getByRole("tab", { name: new RegExp(mode) }));
+      expect(view.container.querySelectorAll("[data-recording-entry]")).toHaveLength(1);
+      expect(screen.getByRole("button", { name: "开始记录" }).closest(".ks-module-toolbar")?.textContent).toContain("准备就绪");
+      expect(view.container.querySelector(".np-module-page-header [data-recording-entry]")).toBeNull();
+    }
     fireEvent.click(screen.getByRole("tab", { name: "在线文献" }));
     expect((screen.getByRole("button", { name: "开始记录" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
@@ -209,7 +216,7 @@ describe("KnowledgeSearch", () => {
     fireEvent.click(screen.getByRole("tab", { name: "本地知识库" }));
     expect((screen.getByRole("button", { name: "开始记录" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
-    await screen.findByRole("button", { name: "正在记录 · 总结" });
+    await screen.findByRole("button", { name: "结束并总结" });
     view.unmount();
     expect(apiMocks.startKnowledgeRecording).toHaveBeenCalledTimes(1);
   });
@@ -230,7 +237,7 @@ describe("KnowledgeSearch", () => {
     await screen.findByRole("dialog", { name: "知识记录详情" });
     expect(apiMocks.searchKnowledge.mock.calls[0][0].recording_id).toBeUndefined();
     fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
-    await screen.findByRole("button", { name: "正在记录 · 总结" });
+    await screen.findByRole("button", { name: "结束并总结" });
     const recordingId = apiMocks.startKnowledgeRecording.mock.calls[0][0];
     fireEvent.click(screen.getByRole("button", { name: "运行检索" }));
     await waitFor(() => expect(apiMocks.searchKnowledge).toHaveBeenLastCalledWith(
@@ -242,9 +249,9 @@ describe("KnowledgeSearch", () => {
     expect(apiMocks.postKnowledgeObservation).toHaveBeenLastCalledWith({
       search_id: "search-recorded", knowledge_id: 17525, source: "reaction_tab", recording_id: recordingId
     });
-    expect((screen.getByRole("button", { name: "正在记录 · 总结" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "结束并总结" }) as HTMLButtonElement).disabled).toBe(true);
     await act(async () => resolve({ event: "article.reaction_viewed" }));
-    fireEvent.click(screen.getByRole("button", { name: "正在记录 · 总结" }));
+    fireEvent.click(screen.getByRole("button", { name: "结束并总结" }));
     const summary = within(await screen.findByRole("dialog", { name: "本次浏览总结" }));
     expect(await summary.findByText("本次查看了文献 #1。")).not.toBeNull();
     expect(summary.queryByText(/查看对应内容|个操作|关联检索/)).toBeNull();
@@ -257,14 +264,14 @@ describe("KnowledgeSearch", () => {
     apiMocks.stopKnowledgeRecording.mockRejectedValueOnce(new Error("offline"));
     render(<KnowledgeSearch onBackHome={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
-    fireEvent.click(await screen.findByRole("button", { name: "正在记录 · 总结" }));
-    await screen.findByRole("button", { name: "重试结束记录" });
+    fireEvent.click(await screen.findByRole("button", { name: "结束并总结" }));
+    await within(screen.getByRole("dialog", { name: "本次浏览总结" })).findByRole("button", { name: "重试结束记录" });
     const input = screen.getByRole("searchbox", { name: "本地知识库检索词" });
     fireEvent.change(input, { target: { value: "polyimide" } });
     fireEvent.click(screen.getByRole("button", { name: "运行检索" }));
     await waitFor(() => expect(apiMocks.searchKnowledge).toHaveBeenCalled());
     expect(apiMocks.searchKnowledge.mock.lastCall?.[0].recording_id).toBeUndefined();
-    fireEvent.click(screen.getByRole("button", { name: "重试结束记录" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "本次浏览总结" })).getByRole("button", { name: "重试结束记录" }));
     await screen.findByText("本次查看了文献 #1。");
     expect(apiMocks.stopKnowledgeRecording.mock.calls[0]).toEqual(apiMocks.stopKnowledgeRecording.mock.calls[1]);
   });
@@ -274,7 +281,7 @@ describe("KnowledgeSearch", () => {
     apiMocks.summarizeKnowledgeRecording.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
     render(<KnowledgeSearch onBackHome={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "开始记录" }));
-    fireEvent.click(await screen.findByRole("button", { name: "正在记录 · 总结" }));
+    fireEvent.click(await screen.findByRole("button", { name: "结束并总结" }));
     const generating = await screen.findByRole("button", { name: "查看生成进度" });
     expect((generating as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getByRole("dialog", { name: "本次浏览总结" })).not.toBeNull();

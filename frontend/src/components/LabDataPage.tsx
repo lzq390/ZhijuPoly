@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, BarChart3, ClipboardList, Copy, Database, RefreshCw, Save } from "lucide-react";
 import {
@@ -123,7 +124,7 @@ async function copyText(text: string) {
 
 function LabDataNav({ view, onBackHome, onChangeView }: LabDataPageProps) {
   return (
-    <nav className="flex flex-col gap-3 rounded-[26px] border border-white/70 bg-white/80 px-4 py-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between md:px-5">
+    <nav data-recording-header className="flex flex-col gap-3 rounded-[26px] border border-white/70 bg-white/80 px-4 py-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between md:px-5">
       <div className="flex items-center gap-3">
         <Button type="button" variant="outline" onClick={onBackHome}>
           <ArrowLeft className="mr-2 h-4 w-4" />
@@ -134,29 +135,32 @@ function LabDataNav({ view, onBackHome, onChangeView }: LabDataPageProps) {
           <div className="font-heading text-lg font-semibold tracking-tight text-slate-950">Lab Data Collection</div>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/70 bg-white/75 p-1">
-        <button
-          type="button"
-          onClick={() => onChangeView("collect")}
-          className={[
-            "inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-sm font-semibold transition",
-            view === "collect" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-white"
-          ].join(" ")}
-        >
-          <ClipboardList className="mr-2 h-4 w-4" />
-          Collect
-        </button>
-        <button
-          type="button"
-          onClick={() => onChangeView("dashboard")}
-          className={[
-            "inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-sm font-semibold transition",
-            view === "dashboard" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-white"
-          ].join(" ")}
-        >
-          <BarChart3 className="mr-2 h-4 w-4" />
-          Dashboard
-        </button>
+      <div className="flex items-center gap-3">
+        <div className="grid flex-1 grid-cols-2 gap-2 rounded-2xl border border-white/70 bg-white/75 p-1">
+          <button
+            type="button"
+            onClick={() => onChangeView("collect")}
+            className={[
+              "inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-sm font-semibold transition",
+              view === "collect" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-white"
+            ].join(" ")}
+          >
+            <ClipboardList className="mr-2 h-4 w-4" />
+            Collect
+          </button>
+          <button
+            type="button"
+            onClick={() => onChangeView("dashboard")}
+            className={[
+              "inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-sm font-semibold transition",
+              view === "dashboard" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-white"
+            ].join(" ")}
+          >
+            <BarChart3 className="mr-2 h-4 w-4" />
+            Dashboard
+          </button>
+        </div>
+        <BrowsingRecordingControls module="labData" />
       </div>
     </nav>
   );
@@ -465,7 +469,7 @@ function DashboardView() {
   }
 
   return (
-    <section className="grid gap-5">
+    <section className="grid min-w-0 grid-cols-1 gap-5">
       <div className="rounded-[32px] border border-white/75 bg-white/85 p-5 shadow-sm backdrop-blur md:p-7">
         <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
@@ -636,7 +640,7 @@ export function LabDataPage({ view, onBackHome, onChangeView }: LabDataPageProps
   }, []);
 
   return (
-    <div className="grid gap-5">
+    <div className="grid min-w-0 grid-cols-1 gap-5">
       <LabDataNav view={view} onBackHome={onBackHome} onChangeView={onChangeView} />
       {projectError ? (
         <div className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">{projectError}</div>

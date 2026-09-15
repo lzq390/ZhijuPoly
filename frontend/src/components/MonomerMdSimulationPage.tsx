@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import {
   Activity,
@@ -269,7 +270,7 @@ export function MonomerMdSimulationPage({
 
   return (
     <div className="np-module-page np-structure-workbench np-monomer-md-simulation">
-      <ModulePageHeader>单体 MD 模拟</ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="monomerMdSimulation" />}>单体 MD 模拟</ModulePageHeader>
       <div className="np-mmd-page np-module-page-body">
         <div className="np-mmd-module-toolbar" aria-label="单体 MD 模拟工具栏">
           <div className="np-mmd-toolbar-actions">

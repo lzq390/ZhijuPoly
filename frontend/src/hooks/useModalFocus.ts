@@ -1,4 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+
+/** A foreground panel can release underlying modal focus without closing its drawers. */
+export const ModalFocusSuspendedContext = createContext(false);
 
 export function focusableWithin(container: HTMLElement) {
   return Array.from(container.querySelectorAll<HTMLElement>(
@@ -16,6 +19,8 @@ export function useModalFocus({ active, open, scopeRef, panelRef, initialFocusRe
   // platform sidebar remains available for guarded module navigation.
   global?: boolean;
 }) {
+  const suspended = useContext(ModalFocusSuspendedContext);
+  active = active && !suspended;
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const openRef = useRef(open);
@@ -115,4 +120,5 @@ export function useModalFocus({ active, open, scopeRef, panelRef, initialFocusRe
     frame = window.requestAnimationFrame(() => { frame = window.requestAnimationFrame(focusWhenVisible); });
     return () => window.cancelAnimationFrame(frame);
   }, [active, visible, open, initialFocusRef, panelRef, ownerId]);
+  return active && visible;
 }

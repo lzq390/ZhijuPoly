@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import {
   AlertTriangle,
@@ -600,7 +601,7 @@ export function DatabaseFilterPage() {
       <div className={`np-sw-page np-module-page-body${filter.drawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${filter.drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">
-            <div className="dbf-module-toolbar" aria-label="数据库筛选状态">
+            <div className="dbf-module-toolbar" aria-label="数据库筛选状态" data-recording-header>
               <span className={`dbf-tool-status${sourceError ? " is-error" : sourceReady ? " is-ready" : ""}`}>
                 <i aria-hidden="true" />
                 {filter.optionsPending
@@ -611,6 +612,7 @@ export function DatabaseFilterPage() {
                       ? "筛选属性更新失败"
                       : "数据已就绪"}
               </span>
+              <BrowsingRecordingControls module="databaseFilter" placement="toolbar" />
             </div>
 
             <div className="dbf-filter-scroll">

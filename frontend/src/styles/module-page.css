@@ -26,6 +26,16 @@
   box-sizing: border-box;
   height: var(--np-page-header-height);
   padding: var(--np-page-title-top) var(--np-page-title-left) var(--np-page-title-gap);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.np-module-page-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
 }
 
 .np-module-page .np-module-page-header .np-module-page-title {

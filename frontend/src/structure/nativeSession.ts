@@ -3,6 +3,7 @@ import { registerEditorRetirement } from "./editorLifetime";
 
 type OwnedService = { disposed?: boolean; destroy(reason?: Error): void };
 export type NativeKetcher = KetcherInstance & {
+  nexpolyInitialMol?: string;
   disposed?: boolean;
   retire(): void;
   structService?: { convert(data: { struct: string; output_format: string }): Promise<{ struct: string }> };

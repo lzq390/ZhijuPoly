@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal } from "lucide-react";
 import {
@@ -153,7 +154,7 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
       data-module="homopolymer-property-prediction"
       style={workbenchStyle}
     >
-      <ModulePageHeader>均聚物性质预测</ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="homopolymerPrediction" />}>均聚物性质预测</ModulePageHeader>
       <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">

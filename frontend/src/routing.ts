@@ -1,5 +1,6 @@
 import type { DatasetKey } from "./components/database-analysis/types";
 import type { LabDataView } from "./components/LabDataPage";
+import { canvasRoutePaths } from "../shared/canvas-routes";
 
 export type ActiveModule =
   | "home"
@@ -27,12 +28,10 @@ export type AppRoute = {
   labDataView?: LabDataView;
 };
 
-export const canvasModules = new Set<ActiveModule>([
-  "structureWorkbench", "homopolymerPrediction", "explorer", "databaseQuery", "conditionalGeneration", "reverseDesign"
-]);
+export const canvasModules = new Set<ActiveModule>(Object.keys(canvasRoutePaths) as (keyof typeof canvasRoutePaths)[]);
 
 export const POLYTAO_ROUTE = "/polytao-generation";
-export const HOMOPOLYMER_PREDICTION_ROUTE = "/homopolymer-property-prediction";
+export const HOMOPOLYMER_PREDICTION_ROUTE = canvasRoutePaths.homopolymerPrediction;
 export const LEGACY_POLYTAO_ROUTE = "/conditional-generation/polytao";
 export const DATABASE_FILTER_ROUTE = "/database-filter";
 export const LEGACY_DATABASE_FILTER_ROUTE = "/database/property-filter";
@@ -57,7 +56,7 @@ export function normalizePath(pathname: string) {
 export function routeFromPath(pathname: string): AppRoute {
   const path = normalizePath(pathname);
 
-  if (path === "/structure-workbench") {
+  if (path === canvasRoutePaths.structureWorkbench) {
     return { module: "structureWorkbench", datasetKey: null };
   }
 
@@ -65,7 +64,7 @@ export function routeFromPath(pathname: string): AppRoute {
     return { module: "homopolymerPrediction", datasetKey: null };
   }
 
-  if (path === "/explorer") {
+  if (path === canvasRoutePaths.explorer) {
     return { module: "explorer", datasetKey: null };
   }
 
@@ -85,11 +84,11 @@ export function routeFromPath(pathname: string): AppRoute {
     return { module: "monomerPolymerization", datasetKey: null };
   }
 
-  if (path === "/reverse-design") {
+  if (path === canvasRoutePaths.reverseDesign) {
     return { module: "reverseDesign", datasetKey: null };
   }
 
-  if (path === "/conditional-generation") {
+  if (path === canvasRoutePaths.conditionalGeneration) {
     return { module: "conditionalGeneration", datasetKey: null };
   }
 
@@ -97,7 +96,7 @@ export function routeFromPath(pathname: string): AppRoute {
     return { module: "polytaoGeneration", datasetKey: null };
   }
 
-  if (path === "/database-query") {
+  if (path === canvasRoutePaths.databaseQuery) {
     return { module: "databaseQuery", datasetKey: null };
   }
 
@@ -139,7 +138,7 @@ export function routeFromPath(pathname: string): AppRoute {
 
 export function pathFromRoute(route: AppRoute) {
   if (route.module === "structureWorkbench") {
-    return "/structure-workbench";
+    return canvasRoutePaths.structureWorkbench;
   }
 
   if (route.module === "homopolymerPrediction") {
@@ -147,7 +146,7 @@ export function pathFromRoute(route: AppRoute) {
   }
 
   if (route.module === "explorer") {
-    return "/explorer";
+    return canvasRoutePaths.explorer;
   }
 
   if (route.module === "mdSimulationDemo") {
@@ -167,11 +166,11 @@ export function pathFromRoute(route: AppRoute) {
   }
 
   if (route.module === "reverseDesign") {
-    return "/reverse-design";
+    return canvasRoutePaths.reverseDesign;
   }
 
   if (route.module === "conditionalGeneration") {
-    return "/conditional-generation";
+    return canvasRoutePaths.conditionalGeneration;
   }
 
   if (route.module === "polytaoGeneration") {
@@ -179,7 +178,7 @@ export function pathFromRoute(route: AppRoute) {
   }
 
   if (route.module === "databaseQuery") {
-    return "/database-query";
+    return canvasRoutePaths.databaseQuery;
   }
 
   if (route.module === "databaseFilter") {

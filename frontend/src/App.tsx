@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KnowledgeRecordingProvider } from "./hooks/useKnowledgeRecording";
-import { KnowledgeRecordingControls } from "./components/knowledge-search/KnowledgeRecordingControls";
+import { BrowsingRecordingUIProvider } from "./components/browsing-recording/BrowsingRecording";
 import {
   Activity,
   Atom,
@@ -248,6 +248,7 @@ function AppContent() {
   }
 
   function navigate(route: AppRoute, extra: Partial<Omit<AppNavigationRequest, "route" | "target">> = {}) {
+    window.dispatchEvent(new Event("nexpoly:structure-navigation"));
     // Fetch the target while the existing navigation transaction saves/exits.
     // A failed prefetch is presented by that page's own retry boundary.
     void preloadPage(route.module).catch(() => {});
@@ -704,10 +705,9 @@ function AppContent() {
     activeModule !== "monomerDft" &&
     !isTgKetcherOwner;
 
-  return (
+  return <BrowsingRecordingUIProvider activeModule={activeModule}
+    canStart={activeModule === "databaseFilter" || (activeModule === "knowledge" && knowledgeLocalMode)}>
     <AppShell
-      recordingControls={<KnowledgeRecordingControls global
-        localMode={activeModule === "databaseFilter" || (activeModule === "knowledge" && knowledgeLocalMode)} />}
       activeModule={activeModule}
       fullBleed={isFullBleedModule}
       standaloneModules={standaloneModules}
@@ -890,5 +890,5 @@ function AppContent() {
         />
       ) : null}
     </AppShell>
-  );
+  </BrowsingRecordingUIProvider>;
 }

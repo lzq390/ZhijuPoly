@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal, Sparkles } from "lucide-react";
 import {
@@ -259,7 +260,7 @@ export const ConditionalGenerationPage = forwardRef<
       data-module="conditional-generation"
       style={workbenchStyle}
     >
-      <ModulePageHeader>条件聚合物生成</ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="conditionalGeneration" />}>条件聚合物生成</ModulePageHeader>
       <div className={`np-sw-page np-module-page-body${drawerOpen ? " has-open-drawer" : ""}`}>
         <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
           <main className="np-sw-workspace">

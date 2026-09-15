@@ -2,9 +2,11 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { KnowledgeRecordingProvider, useKnowledgeRecording } from "./useKnowledgeRecording";
+import { ApiRequestError } from "../services/api";
 
 const api = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn(), summarize: vi.fn() }));
-vi.mock("../services/api", () => ({ startKnowledgeRecording: api.start, stopKnowledgeRecording: api.stop, summarizeKnowledgeRecording: api.summarize }));
+vi.mock("../services/api", async (original) => ({ ...await original<typeof import("../services/api")>(),
+  startKnowledgeRecording: api.start, stopKnowledgeRecording: api.stop, summarizeKnowledgeRecording: api.summarize }));
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -12,6 +14,18 @@ beforeEach(() => {
   api.start.mockReset().mockImplementation((recording_id: string) => Promise.resolve({ recording_id, status: "recording" }));
   api.stop.mockReset().mockResolvedValue({ status: "stopped", events: [] });
   api.summarize.mockReset().mockResolvedValue({ summary: "本次记录总结", generated: true });
+});
+
+it("开始接口未部署时说明服务不可用，恢复后重试沿用原 ID", async () => {
+  api.start.mockRejectedValueOnce(new ApiRequestError(404, "Not Found"));
+  const { result } = renderHook(() => useKnowledgeRecording()!, { wrapper: KnowledgeRecordingProvider });
+  await act(() => result.current.start());
+  expect(result.current.phase).toBe("idle");
+  expect(result.current.error).toBe("开始记录失败：当前服务尚未启用浏览记录功能，请更新服务后重试。");
+  await act(() => result.current.start());
+  expect(result.current.phase).toBe("recording");
+  expect(result.current.error).toBeNull();
+  expect(api.start.mock.calls[0]).toEqual(api.start.mock.calls[1]);
 });
 
 it("HTTP 页面没有 randomUUID 时仍能开始记录，失败重试沿用 ID，新记录使用新 ID", async () => {

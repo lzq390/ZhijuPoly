@@ -1,3 +1,4 @@
+import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { useContentMotion } from "../hooks/useContentMotion";
 import {
@@ -363,7 +364,7 @@ export function MdSimulationDemoPage({
       className="np-module-page np-structure-workbench np-md-simulation"
       data-module="md-simulation"
     >
-      <ModulePageHeader>MD 模拟</ModulePageHeader>
+      <ModulePageHeader actions={<BrowsingRecordingControls module="mdSimulationDemo" />}>MD 模拟</ModulePageHeader>
       <div className="np-sw-page np-module-page-body np-md-page">
         <div className="np-sw-layout">
           <main className="np-sw-workspace">

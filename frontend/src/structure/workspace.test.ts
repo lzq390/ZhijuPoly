@@ -47,6 +47,34 @@ async function mounted(smiles = "CC", standardize?: (smiles: string) => Promise<
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("shared structure documents", () => {
+  it("adopts a declared startup document once and retains its layout through restore checks", async () => {
+    const workspace = new StructureWorkspace();
+    const fixture = editorFixture();
+    fixture.edit("CCO", 19, "URL label");
+    const lease = workspace.mountEditor();
+    await lease.initialize(fixture.editor, { adoptInitialDocument: true });
+    expect(workspace.getSnapshot()).toMatchObject({ status: "ready", smiles: "CCO", draft: "CCO", revision: 1 });
+    expect(workspace.getSnapshot().ket).toContain("URL label");
+    expect(fixture.editor.clear).not.toHaveBeenCalled();
+    lease.dispose();
+  });
+
+  it("a late startup import cannot replace a newer accepted document", async () => {
+    const workspace = new StructureWorkspace();
+    const fixture = editorFixture();
+    fixture.edit("CCO");
+    let release!: (value: string) => void;
+    vi.mocked(fixture.editor.getKet).mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const lease = workspace.mountEditor();
+    const pending = lease.initialize(fixture.editor, { adoptInitialDocument: true });
+    workspace.commitSmiles("CCN");
+    release(ket("CCO"));
+    await pending;
+    expect(workspace.getSnapshot()).toMatchObject({ status: "ready", smiles: "CCN", draft: "CCN" });
+    expect(await fixture.editor.getSmiles()).toBe("CCN");
+    lease.dispose();
+  });
+
   it("leaves a restoring owner with the saved layout and invalid draft without exporting or remounting", async () => {
     const { workspace, lease, editor, edit } = await mounted();
     edit("CC", 19, "saved annotation");

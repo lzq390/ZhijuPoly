@@ -589,7 +589,11 @@ export function stopKnowledgeRecording(recordingId: string): Promise<KnowledgeRe
   return postJSON(`/knowledge/recordings/${encodeURIComponent(recordingId)}/stop`, {});
 }
 
-export function summarizeKnowledgeRecording(recordingId: string): Promise<KnowledgeRecordingSummary> {
+export async function summarizeKnowledgeRecording(recordingId: string, onPartial?: (text: string) => void): Promise<KnowledgeRecordingSummary> {
+  if (onPartial) {
+    const { streamRecordingSummary } = await import("./recordingSummaryStream");
+    return streamRecordingSummary(recordingId, onPartial);
+  }
   return postJSON(`/knowledge/recordings/${encodeURIComponent(recordingId)}/summary`, {});
 }
 
