@@ -4,7 +4,8 @@ import json
 import httpx
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
+
+from test_knowledge_poc_app import TEST_IDENTITY, acting_as_test_user, authenticated_client
 
 from app.config import Settings
 from app.knowledge_poc import create_app
@@ -83,15 +84,15 @@ def test_sse_route_errors_retries_and_json_share_only_completed_cache(monkeypatc
     calls = mock_provider(monkeypatch, [provider_stream(done=False), provider_stream()])
     app = create_app(Settings(**SETTINGS))
     store = app.state.browsing_recording
-    store.recordings["one"] = Recording(ended_at="stopped", events=EVENTS)
+    store.recordings[(TEST_IDENTITY.user_id, "one")] = Recording(owner_user_id=TEST_IDENTITY.user_id, ended_at="stopped", events=EVENTS)
     headers = {"Accept": "text/event-stream"}
-    with TestClient(app) as client:
-        assert client.post("/api/v1/knowledge/recordings/missing/summary", headers=headers).status_code == 410
+    with authenticated_client(app) as client:
+        assert client.post("/api/v1/knowledge/recordings/missing/summary", headers=headers).status_code == 404
         first = client.post("/api/v1/knowledge/recordings/one/summary", headers=headers)
         assert first.headers["content-type"].startswith("text/event-stream")
         assert first.headers["x-accel-buffering"] == "no"
         assert "event: delta" in first.text and "event: error" in first.text and "event: done" not in first.text
-        assert store.recordings["one"].summary is None
+        assert store.recordings[(TEST_IDENTITY.user_id, "one")].summary is None
         retried = client.post("/api/v1/knowledge/recordings/one/summary", headers=headers)
         assert "event: done" in retried.text
         saved = client.post("/api/v1/knowledge/recordings/one/summary").json()
@@ -119,8 +120,8 @@ def test_disconnect_releases_lock_without_caching_partial_and_json_waits_for_str
 
         monkeypatch.setattr(browsing_recording, "stream_knowledge_summary", stream)
         store = BrowsingRecordingStore(Settings(**SETTINGS))
-        record = Recording(ended_at="stopped", events=EVENTS)
-        store.recordings["one"] = record
+        record = Recording(owner_user_id=TEST_IDENTITY.user_id, ended_at="stopped", events=EVENTS)
+        store.recordings[(TEST_IDENTITY.user_id, "one")] = record
         disconnected = store.stream_summary("one")
         assert (await anext(disconnected))[0] == "status"
         assert (await anext(disconnected))[0] == "delta"
@@ -138,4 +139,5 @@ def test_disconnect_releases_lock_without_caching_partial_and_json_waits_for_str
         assert (await waiting)["summary"] == "第一段。第二段。"
         assert len(calls) == 2
 
-    asyncio.run(exercise())
+    with acting_as_test_user():
+        asyncio.run(exercise())

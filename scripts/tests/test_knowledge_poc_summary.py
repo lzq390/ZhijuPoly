@@ -2,7 +2,7 @@ import json
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from test_knowledge_poc_app import authenticated_client
 
 from app.config import Settings
 from app.knowledge_poc import create_app
@@ -28,7 +28,7 @@ def setup(monkeypatch):
     settings = Settings(app_postgres_dsn="postgresql://unused:unused@127.0.0.1:1/unused",
                         assistant_api_key="test-secret", assistant_base_url="https://model.example/v1",
                         assistant_model="test-model", ai_proxy_url="", online_knowledge_proxy_url="")
-    with TestClient(create_app(settings)) as client:
+    with authenticated_client(create_app(settings)) as client:
         yield client, calls, responses
 
 
@@ -43,7 +43,7 @@ def summarize(client, name="one"):
 
 def test_summary_requires_frozen_record_and_empty_record_does_not_call_model(setup):
     client, calls, _ = setup
-    assert summarize(client, "missing").status_code == 410
+    assert summarize(client, "missing").status_code == 404
     start(client, "one")
     assert summarize(client).status_code == 409
     stop(client, "one")

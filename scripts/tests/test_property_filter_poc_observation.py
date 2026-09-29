@@ -64,7 +64,7 @@ def test_smiles_open_returns_only_the_requested_structure(client, field):
 
 def test_unknown_results_and_fabricated_observation_fields_are_rejected(client):
     payload = {"search_id": search(client), "result_index": 0, "source": "measurement_details", "filter_index": 0}
-    for changes, status in [({"search_id": "missing"}, 410), ({"result_index": 1}, 404),
+    for changes, status in [({"search_id": "missing"}, 404), ({"result_index": 1}, 404),
                             ({"filter_index": 1}, 404), ({"filter_index": None}, 422),
                             ({"source": "automatic"}, 422), ({"records": []}, 422),
                             ({"smiles_field": "smiles"}, 422)]:
@@ -77,7 +77,7 @@ def test_evicted_filter_search_requires_a_new_search(client):
     for _ in range(MAX_RECENT_SEARCHES):
         latest = search(client)
     payload = {"search_id": first, "result_index": 0, "source": "smiles", "smiles_field": "smiles"}
-    assert client.post(PATH + "/observations", json=payload).status_code == 410
+    assert client.post(PATH + "/observations", json=payload).status_code == 404
     assert client.post(PATH + "/observations", json={**payload, "search_id": latest}).status_code == 200
 
 

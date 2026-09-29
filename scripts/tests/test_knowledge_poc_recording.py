@@ -70,8 +70,8 @@ def test_recordings_do_not_mix_and_empty_recording_is_valid(monkeypatch):
         assert client.post("/api/v1/knowledge/observations", json=payload).status_code == 409
         assert stop(client, "two").json()["events"] == []
         assert len(stop(client, "one").json()["events"]) == 1
-        assert search(client, "missing", "unknown").status_code == 410
-        assert stop(client, "unknown").status_code == 410
+        assert search(client, "missing", "unknown").status_code == 404
+        assert stop(client, "unknown").status_code == 404
 
 
 def test_recorded_article_survives_unrecorded_search_cache_eviction(monkeypatch):

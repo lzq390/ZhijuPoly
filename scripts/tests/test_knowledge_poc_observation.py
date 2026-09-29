@@ -42,7 +42,7 @@ def test_opening_an_earlier_result_keeps_its_original_search_and_content(client,
 
 def test_unknown_search_and_articles_outside_its_results_are_rejected(client):
     payload = {"search_id": "missing", "knowledge_id": 1, "source": "result_card"}
-    assert client.post("/api/v1/knowledge/observations", json=payload).status_code == 410
+    assert client.post("/api/v1/knowledge/observations", json=payload).status_code == 404
     result = client.post("/api/v1/knowledge/search", json={"query": "polyimide"}).json()
     payload.update(search_id=result["search_id"], knowledge_id=2)
     assert client.post("/api/v1/knowledge/observations", json=payload).status_code == 404
@@ -56,7 +56,7 @@ def test_old_searches_expire_when_the_poc_snapshot_limit_is_reached(client):
     for _ in range(MAX_RECENT_SEARCHES):
         latest = client.post("/api/v1/knowledge/search", json={"query": "polyimide"}).json()
     payload = {"search_id": first["search_id"], "knowledge_id": 1, "source": "drawer_reopen"}
-    assert client.post("/api/v1/knowledge/observations", json=payload).status_code == 410
+    assert client.post("/api/v1/knowledge/observations", json=payload).status_code == 404
     payload["search_id"] = latest["search_id"]
     assert client.post("/api/v1/knowledge/observations", json=payload).status_code == 200
 
@@ -94,5 +94,5 @@ def test_reaction_view_records_original_server_fields_including_missing_values(m
         assert traces[-1]["response"]["reaction_info"] == fields
         assert traces[-1]["response"]["event"] == "article.reaction_viewed"
         assert client.post("/api/v1/knowledge/observations", json={**payload, "knowledge_id": 2}).status_code == 404
-        assert client.post("/api/v1/knowledge/observations", json={**payload, "search_id": "missing"}).status_code == 410
+        assert client.post("/api/v1/knowledge/observations", json={**payload, "search_id": "missing"}).status_code == 404
         assert client.post("/api/v1/knowledge/observations", json={**payload, "reaction_info": fields}).status_code == 422

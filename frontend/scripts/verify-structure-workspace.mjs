@@ -40,6 +40,10 @@ await context.route("**/*", (route) => {
   const request = route.request();
   const url = new URL(request.url());
   if (url.origin !== new URL(base).origin && !["blob:", "data:"].includes(url.protocol)) return route.abort();
+  if (url.pathname === "/api/v1/auth/session") return route.fulfill({ json: {
+    authenticated: true, user: { id: "structure-ci-user", username: "structure-ci", must_change_password: false },
+    session_id: "structure-ci-session", csrf_token: "structure-ci-csrf", capabilities: {}
+  } });
   if (url.pathname.endsWith("/structure/standardize-smiles")) {
     const { smiles } = request.postDataJSON();
     return smiles.includes("(")
@@ -206,7 +210,9 @@ try {
   await input().fill("*CC*");
   await page.waitForFunction(() => !document.querySelector('[data-workbench-tool="3d"]').disabled);
   await navigate("/database-query");
-  assert.equal(await input().inputValue(), "*CC*");
+  // Indigo may annotate wildcard labels in CXSMILES; both exports must retain
+  // the exact two-carbon graph and both polymer end groups.
+  assert.match(await input().inputValue(), /^\*CC\*(?: \|\$star_e;;;star_e\$\|)?$/);
   result.polymerEndGroups = true;
   const png = await page.evaluate(async () => {
     const editor = window.__probeEditor();

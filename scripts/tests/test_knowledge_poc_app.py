@@ -1,17 +1,52 @@
 """POC entrypoint checks; run with PYTHONPATH=backend in the lightweight venv."""
 
+from contextlib import contextmanager
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 
+from app.auth.context import Identity, user_context
 from app.config import Settings
 from app.knowledge_poc import create_app
+
+TEST_IDENTITY = Identity("00000000-0000-0000-0000-000000000123")
+
+
+@contextmanager
+def acting_as_test_user(identity=TEST_IDENTITY):
+    # Business-router tests use an explicit actor and deterministic account
+    # admission. Authentication/session behavior has its own PostgreSQL suite.
+    with user_context(identity), patch(
+        "app.task_control._start_checker", lambda owner: owner == identity.user_id
+    ):
+        yield
+
+
+@contextmanager
+def authenticated_client(app):
+    # Install identity inside each request so executor-thread tests also keep
+    # the actor; ContextVars in the caller do not cross ThreadPoolExecutor.
+    @app.middleware("http")
+    async def test_identity(request, call_next):
+        with user_context(TEST_IDENTITY):
+            return await call_next(request)
+    with acting_as_test_user(), TestClient(app) as client:
+        yield client
 
 
 def make_client():
     # These checks never connect to a database.
-    return TestClient(create_app(Settings(
+    return authenticated_client(create_app(Settings(
         app_postgres_dsn="postgresql://unused:unused@127.0.0.1:1/unused",
         allowed_origins="http://127.0.0.1:5173",
     )))
+
+
+def test_poc_private_recordings_reject_anonymous_requests():
+    app = create_app(Settings())
+    with TestClient(app) as client:
+        response = client.post("/api/v1/knowledge/recordings", json={"recording_id": "guest"})
+        assert response.status_code == 401
+        assert not app.state.browsing_recording.recordings
 
 
 def test_poc_serves_health_and_knowledge_validation_without_scientific_routes():

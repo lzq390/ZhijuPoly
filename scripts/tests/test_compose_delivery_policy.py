@@ -124,11 +124,18 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("python -m app.postgres_migrations --mode bootstrap", workflow)
+        smoke = (REPOSITORY_ROOT / "scripts/ci/test_isolated_backend_image.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('scripts/ci/test_isolated_backend_image.sh "$BACKEND_IMAGE"', workflow)
+        self.assertIn("allow_contract_on_fresh_database=True", smoke)
+        self.assertIn("apply_identity_cutover(dsn, str(owner['user_id']))", smoke)
+        self.assertIn("--schema-target user-isolation-0018 --service-context", smoke)
         self.assertNotIn(
             "python -m app.postgres_migrations --mode bootstrap-expand",
             workflow,
         )
+        self.assertNotIn("bootstrap-expand", smoke)
         self.assertIn('"bootstrap-expand"', controller)
         self.assertIn('descriptor["previous_deployment"] is None', controller)
         self.assertIn('else "expand"', controller)
