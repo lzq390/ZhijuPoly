@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import re
 import unittest
@@ -29,6 +30,73 @@ PREFLIGHT_SPEC.loader.exec_module(PREFLIGHT)
 class MonomerDftReleaseContractTests(unittest.TestCase):
     def test_current_tree_satisfies_release_contract(self) -> None:
         self.assertEqual(VALIDATOR.validate(REPOSITORY_ROOT), [])
+
+    def _schema_failures_with_sources(self, replacements):
+        original_read_text = VALIDATOR._read_text
+
+        def read_text(root, relative, failures):
+            if relative in replacements:
+                return replacements[relative]
+            return original_read_text(root, relative, failures)
+
+        failures: list[str] = []
+        with mock.patch.object(VALIDATOR, "_read_text", side_effect=read_text):
+            VALIDATOR.validate_database_schema_state_contract(REPOSITORY_ROOT, failures)
+        return failures
+
+    def test_legacy_startup_keeps_through_0012_compatibility(self) -> None:
+        manifest_path = "backend/migrations/postgres/manifest.json"
+        manifest = json.loads((REPOSITORY_ROOT / manifest_path).read_text())
+        manifest["migrations"] = [entry for entry in manifest["migrations"]
+                                  if entry["version"] not in {
+                                      "0017_user_isolation_prepare", "0018_user_isolation_cutover"}]
+        main_path = "backend/app/main.py"
+        main = (REPOSITORY_ROOT / main_path).read_text().replace(
+            "schema_target=SCHEMA_TARGET_ISOLATION", "schema_target=SCHEMA_TARGET_STARTUP"
+        ).replace("        api_app.state.auth.assert_application_ready()\n", "")
+        replacements = {manifest_path: json.dumps(manifest), main_path: main}
+        self.assertEqual(self._schema_failures_with_sources(replacements), [])
+        replacements[main_path] = main.replace(
+            "schema_target=SCHEMA_TARGET_STARTUP", "schema_target=SCHEMA_TARGET_FINAL"
+        )
+        self.assertIn("backend startup must use SCHEMA_TARGET_STARTUP",
+                      self._schema_failures_with_sources(replacements))
+
+    def test_isolated_startup_rejects_legacy_target_and_missing_auth_check(self) -> None:
+        main_path = "backend/app/main.py"
+        main = (REPOSITORY_ROOT / main_path).read_text()
+        mutations = {
+            "legacy-target": (main.replace("schema_target=SCHEMA_TARGET_ISOLATION",
+                                            "schema_target=SCHEMA_TARGET_STARTUP"),
+                              "backend startup must use SCHEMA_TARGET_ISOLATION"),
+            "comment-only-auth": (main.replace("        api_app.state.auth.assert_application_ready()",
+                                                "        # api_app.state.auth.assert_application_ready()"),
+                                  "user isolation startup must assert application authentication readiness"),
+        }
+        for name, (source, expected) in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(source, main)
+                self.assertIn(expected, self._schema_failures_with_sources({main_path: source}))
+
+    def test_isolated_startup_requires_complete_migration_pair(self) -> None:
+        relative = "backend/migrations/postgres/manifest.json"
+        manifest = json.loads((REPOSITORY_ROOT / relative).read_text())
+        for missing in ("0017_user_isolation_prepare", "0018_user_isolation_cutover"):
+            with self.subTest(missing=missing):
+                incomplete = dict(manifest, migrations=[entry for entry in manifest["migrations"]
+                                                       if entry["version"] != missing])
+                self.assertIn("user isolation startup requires both 0017 and 0018 exactly once",
+                              self._schema_failures_with_sources({relative: json.dumps(incomplete)}))
+
+    def test_isolated_startup_preserves_both_schema_profiles(self) -> None:
+        relative = "backend/app/postgres_preflight.py"
+        source = (REPOSITORY_ROOT / relative).read_text()
+        for marker in ('SCHEMA_TARGET_STARTUP = "startup-through-0012"',
+                       'SCHEMA_TARGET_ISOLATION = "user-isolation-0018"'):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+                failures = self._schema_failures_with_sources({relative: source.replace(marker, "")})
+                self.assertTrue(any("schema profile is missing" in failure for failure in failures), failures)
 
     def test_schema_contract_pins_both_exact_acl_fingerprints(self) -> None:
         self.assertEqual(

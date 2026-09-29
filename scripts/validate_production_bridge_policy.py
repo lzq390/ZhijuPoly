@@ -6,6 +6,10 @@ repository-specific validator binds that policy to one exact B commit/tree,
 the immutable B images, schema-v2 assets, migration ledgers, and the tracked
 external-database authority inputs.  F's own SHA/tree are deliberately not
 embedded in the policy, so a squash merge cannot invalidate it.
+
+After the user-isolation cutover, CI exercises this historical protocol against
+the last reviewed pre-isolation F. This is not deployment readiness for HEAD:
+ordinary readiness still rejects a manifest beyond the legacy 0016 boundary.
 """
 
 from __future__ import annotations
@@ -56,6 +60,8 @@ TARGET_SHA = "82a69ddb42bcd5c4666b5bf038d02414bccc6dde"
 TARGET_TREE = "44e4b4c398b7b84abdeb40bc02b885569aba4d8b"
 TARGET_REF = f"refs/nexpoly/bridge-target/{TARGET_SHA}"
 TARGET_CORE_BLOB = "15b8a1378d4100a5c74666344107bf00661fe34f"
+LEGACY_AUTHORITY_SHA = "d9e9d2246aa2ab29c74d4b99f06f7e6afa1afa58"
+LEGACY_AUTHORITY_TREE = "739b1c549048d33f8978a3116a73ee9cd21e3911"
 TARGET_BACKEND_IMAGE = (
     "ghcr.io/lzq390/nexpoly-backend@"
     "sha256:ecd522706ce34b6aa444b30f1dee49e34e9c5ab1e4bca78b6037848facacd8c7"
@@ -339,8 +345,9 @@ def validate_policy_payload(
     policy_payload: bytes,
     *,
     repository_root: Path = REPOSITORY_ROOT,
+    historical: bool = False,
 ) -> dict[str, Any]:
-    """Validate one policy payload against exact B and current dynamic F."""
+    """Validate exact B with current F, or the fixed historical F for CI only."""
 
     repository_root = repository_root.resolve()
     try:
@@ -367,13 +374,18 @@ def validate_policy_payload(
     if observed_target_tree != TARGET_TREE:
         raise ProductionBridgePolicyError("frozen B tree differs")
 
-    authority_sha = _head_commit(repository_root)
+    candidate_sha = _head_commit(repository_root)
+    authority_sha = LEGACY_AUTHORITY_SHA if historical else candidate_sha
     authority_tree = _git(
         repository_root,
         "rev-parse",
         "--verify",
-        "HEAD^{tree}",
+        f"{authority_sha}^{{tree}}",
     ).decode("ascii").strip()
+    if historical:
+        if authority_tree != LEGACY_AUTHORITY_TREE:
+            raise ProductionBridgePolicyError("frozen F tree differs")
+        _git(repository_root, "merge-base", "--is-ancestor", authority_sha, candidate_sha)
     if authority_sha == TARGET_SHA:
         raise ProductionBridgePolicyError("F authority collapsed to B target")
     _git(
@@ -454,6 +466,13 @@ def validate_policy_payload(
         authority_manifest_payload,
         label="current F migration manifest",
     )
+    if historical:
+        candidate_records = _manifest_records(
+            _git(repository_root, "show", f"{candidate_sha}:backend/migrations/postgres/manifest.json"),
+            label="candidate migration manifest",
+        )
+        if candidate_records[:len(authority_records)] != authority_records:
+            raise ProductionBridgePolicyError("candidate changed the historical migration prefix")
     try:
         accepted_ledgers = bridge_core.validate_migration_registry(
             policy,
@@ -543,7 +562,10 @@ def validate_policy_payload(
             "ref": bridge_core.AUTHORITY_REF,
             "sha": authority_sha,
             "tree": authority_tree,
-            "identity_source": "current-HEAD-not-policy-self-reference",
+            "identity_source": (
+                "frozen-pre-isolation-F" if historical
+                else "current-HEAD-not-policy-self-reference"
+            ),
             "bridge_core_blob": authority_core_blob,
             "required_ci_jobs": list(REQUIRED_CI_JOBS),
         },
@@ -576,7 +598,7 @@ def validate_policy_payload(
     }
 
 
-def validate_tracked_policy() -> dict[str, Any]:
+def validate_tracked_policy(*, historical: bool = False) -> dict[str, Any]:
     repository_root = REPOSITORY_ROOT.resolve()
     authority_sha = _head_commit(repository_root)
     before_bindings, before_payloads = _snapshot_head_bound_inputs(
@@ -586,8 +608,10 @@ def validate_tracked_policy() -> dict[str, Any]:
     evidence = validate_policy_payload(
         before_payloads["policy"],
         repository_root=repository_root,
+        historical=historical,
     )
-    if evidence["authority"]["sha"] != authority_sha:
+    expected_authority = LEGACY_AUTHORITY_SHA if historical else authority_sha
+    if evidence["authority"]["sha"] != expected_authority:
         raise ProductionBridgePolicyError(
             "authority HEAD changed during policy validation"
         )
@@ -604,7 +628,10 @@ def validate_tracked_policy() -> dict[str, Any]:
         raise ProductionBridgePolicyError(
             "authority inputs changed during policy validation"
         )
-    evidence["authority"]["head_bound_inputs"] = before_bindings
+    if historical:
+        evidence["candidate"] = {"sha": authority_sha, "head_bound_inputs": before_bindings}
+    else:
+        evidence["authority"]["head_bound_inputs"] = before_bindings
     return evidence
 
 
@@ -635,6 +662,21 @@ def readiness_status() -> dict[str, Any]:
 
 
 def main() -> int:
+    if sys.argv[1:] == ["--historical"]:
+        try:
+            evidence = validate_tracked_policy(historical=True)
+        except ProductionBridgePolicyError as exc:
+            print(json.dumps({"status": "historical_policy_invalid", "detail": str(exc)}))
+            return 2
+        print(json.dumps({
+            "status": "historical_policy_valid",
+            "deployment_ready": False,
+            "evidence": evidence,
+        }, sort_keys=True))
+        return 0
+    if sys.argv[1:]:
+        print("usage: validate_production_bridge_policy.py [--historical]", file=sys.stderr)
+        return 2
     status = readiness_status()
     print(json.dumps(status, sort_keys=True, separators=(",", ":")))
     return 0 if status["ready"] is True else 2

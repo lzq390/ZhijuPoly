@@ -43,6 +43,20 @@ PULL_DEPLOY_CONTROLLER_TEXT = (
 
 
 class StructuredWorkflowPolicyTests(unittest.TestCase):
+    def test_candidate_and_published_images_require_isolation_smoke(self) -> None:
+        failures: list[str] = []
+        policy.validate_isolation_image_smoke(CI_TEXT, failures)
+        self.assertEqual(failures, [])
+        for job in ("image-build", "release"):
+            with self.subTest(job=job):
+                body = policy.workflow_job_body(CI_TEXT, job, [])
+                changed = CI_TEXT.replace(body, body.replace(
+                    "scripts/ci/test_isolated_backend_image.sh", "# omitted isolation smoke"
+                ))
+                failures = []
+                policy.validate_isolation_image_smoke(changed, failures)
+                self.assertTrue(any(job in failure for failure in failures), failures)
+
     def test_lightweight_backend_tests_have_a_locked_pytest_job_and_gate(self) -> None:
         failures: list[str] = []
         policy.validate_lightweight_backend_tests(CI_TEXT, failures)
@@ -1556,7 +1570,7 @@ class ExactBTransitionPolicyTests(unittest.TestCase):
 
         def committed(name: str) -> bytes:
             return subprocess.check_output(
-                ["git", "show", f"HEAD:{migration_path}/{name}"], cwd=ROOT
+                ["git", "show", f"d9e9d2246aa2ab29c74d4b99f06f7e6afa1afa58:{migration_path}/{name}"], cwd=ROOT
             )
 
         original = json.loads(committed("manifest.json"))

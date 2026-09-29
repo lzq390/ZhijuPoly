@@ -155,3 +155,5 @@ python scripts/user_isolation_audit.py capture --output <new-audit.json>
 ```
 
 切换失败保持私人入口关闭。切换后禁止回滚到无鉴权版本；使用经验证的恢复流程或向前修复。遗留内存任务和旧浏览器数据不通过数据库迁移认领。
+
+CI 的旧 B/F 桥接检查固定使用最后一个 0016 版本（`d9e9d2246aa2ab29c74d4b99f06f7e6afa1afa58`）。`python3 scripts/validate_production_bridge_policy.py --historical` 仅验证历史协议，成功不表示当前版本可按旧发布协议部署；不带参数的发布就绪检查仍拒绝 0017/0018。当前候选和实际发布镜像另行在全新临时 PostgreSQL 16 中验证显式 0018 切换、独立 API/认证/服务角色、启动和匿名请求拦截。真实环境仍必须执行上面的备份恢复及停写切换流程。

@@ -362,6 +362,7 @@ IMAGE_BUILD_STEP_HEADERS = (
     "      - id: backend-identity",
     "      - name: Build image",
     "      - name: Verify Backend image identity",
+    "      - name: Smoke Backend isolation and startup",
 )
 IMAGE_BUILD_STEP_LINES = (
     "      - name: Build image",
@@ -2643,6 +2644,16 @@ def validate_exact_b_bridge(failures: list[str]) -> None:
         failures.append(f"exact-B bridge validation is unavailable: {exc}")
         return
     for marker in (
+        'readonly F_SHA="d9e9d2246aa2ab29c74d4b99f06f7e6afa1afa58"',
+        'readonly F_TREE="739b1c549048d33f8978a3116a73ee9cd21e3911"',
+        '[[ "$(git rev-parse --verify "${F_SHA}^{tree}")" == "$F_TREE" ]]',
+        'git merge-base --is-ancestor "$F_SHA" "$candidate_sha"',
+        'git archive "$F_SHA" | tar -x -C "$F_SOURCE_ROOT"',
+        '--build-arg "SOURCE_REVISION=$F_SHA"',
+        '--file "$F_SOURCE_ROOT/Dockerfile"',
+        '"$F_SOURCE_ROOT/backend/migrations/postgres"',
+        '"$F_SOURCE_ROOT/backend/migrations/postgres/manifest.json"',
+        'python3 scripts/validate_production_bridge_policy.py --historical',
         f'readonly B_SHA="{EXPECTED_B_SHA}"',
         f'readonly B_TREE="{EXPECTED_B_TREE}"',
         f'readonly B_BRIDGE_CORE_BLOB="{EXPECTED_B_BRIDGE_CORE_BLOB}"',
@@ -2676,6 +2687,20 @@ def validate_exact_b_bridge(failures: list[str]) -> None:
             "exact-B bridge validation must use schema-bound authority digests"
         )
     validate_exact_b_transition(text, failures)
+
+
+def validate_isolation_image_smoke(ci_text: str, failures: list[str]) -> None:
+    # The legacy bridge smoke cannot establish readiness for today's 0018
+    # backend. Both a PR candidate and the exact published digest must start
+    # with separate application/auth/service roles on a fresh test database.
+    for job, command in (
+        ("image-build", "run: scripts/ci/test_isolated_backend_image.sh nexpoly-ci-backend:sha-${{ needs.resolve-sha.outputs.candidate_sha }}"),
+        ("release", 'scripts/ci/test_isolated_backend_image.sh "$BACKEND_IMAGE"'),
+    ):
+        body = workflow_job_body(ci_text, job, failures)
+        active_lines = [line.strip() for line in body.splitlines()] if body else []
+        if body is not None and command not in active_lines:
+            failures.append(f"{job} must run the isolated backend image smoke")
 
 
 def main() -> int:
@@ -2838,8 +2863,7 @@ def main() -> int:
             "ghcr.io/lzq390/nexpoly-web:sha-",
             "BACKEND_IMAGE=ghcr.io/lzq390/nexpoly-backend@${BACKEND_DIGEST}",
             "WEB_IMAGE=ghcr.io/lzq390/nexpoly-web@${WEB_DIGEST}",
-            "python -m app.postgres_migrations --mode bootstrap",
-            "python -m app.postgres_preflight --mode schema --strict",
+            "python3 scripts/validate_production_bridge_policy.py --historical",
             "node scripts/ci/verify_frontend_image_assets.mjs",
             'cmp -- "$web_dist/$asset_path" "$web_dist/http-asset"',
         ),
@@ -2850,6 +2874,7 @@ def main() -> int:
     validate_lightweight_backend_tests(ci_text, failures)
     validate_gpu_session_compose_policy(ci_text, failures)
     validate_exact_b_job(ci_text, failures)
+    validate_isolation_image_smoke(ci_text, failures)
     validate_postgres_client_bootstrap(
         ci_text,
         postgres_client_bootstrap,

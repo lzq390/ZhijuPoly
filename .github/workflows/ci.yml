@@ -588,6 +588,10 @@ jobs:
             "$EXPECTED_DEPENDENCY_LOCK" \
             "$EXPECTED_BUILD_CONFIG"
 
+      - name: Smoke Backend isolation and startup
+        if: matrix.name == 'backend'
+        run: scripts/ci/test_isolated_backend_image.sh nexpoly-ci-backend:sha-${{ needs.resolve-sha.outputs.candidate_sha }}
+
   bridge-validation:
     name: bridge-validation
     needs: resolve-sha
@@ -604,7 +608,7 @@ jobs:
         run: scripts/ci/assert_candidate_sha.sh "${{ needs.resolve-sha.outputs.candidate_sha }}"
       - name: Validate exact bridge policy and schema compatibility states
         run: |
-          python3 scripts/validate_production_bridge_policy.py
+          python3 scripts/validate_production_bridge_policy.py --historical
           python3 -m unittest -v \
             scripts/tests/test_bridge_deploy_core.py \
             scripts/tests/test_production_bridge_policy.py \
@@ -893,45 +897,18 @@ jobs:
         run: |
           set -euo pipefail
           network="nexpoly-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          postgres="${network}-postgres"
-          backend="${network}-backend"
           web="${network}-web"
           web_dist="$(mktemp -d)"
           web_html="${web_dist}/index.html"
           cleanup() {
-            docker rm -f "$web" "$backend" "$postgres" >/dev/null 2>&1 || true
+            docker rm -f "$web" >/dev/null 2>&1 || true
             docker network rm "$network" >/dev/null 2>&1 || true
             rm -rf -- "$web_dist"
           }
           trap cleanup EXIT
           docker network create "$network"
-          docker run -d --name "$postgres" --network "$network" --network-alias postgres \
-            -e POSTGRES_USER=nexpoly -e POSTGRES_PASSWORD=nexpoly -e POSTGRES_DB=nexpoly \
-            "$POSTGRES_IMAGE"
-          for _ in {1..30}; do
-            docker exec "$postgres" pg_isready -U nexpoly -d nexpoly && break
-            sleep 2
-          done
-          docker exec "$postgres" pg_isready -U nexpoly -d nexpoly
-          common_env=(
-            -e APP_POSTGRES_DSN=postgresql://nexpoly:nexpoly@postgres:5432/nexpoly
-            -e PI_POSTGRES_DSN=postgresql://nexpoly:nexpoly@postgres:5432/nexpoly
-            -e LAB_DATA_POSTGRES_DSN=postgresql://nexpoly:nexpoly@postgres:5432/nexpoly
-            -e MODEL_ENABLED=false -e OCSR_ENABLED=false -e GEN_MODEL_ENABLED=false
-            -e POLYTAO_ENABLED=false -e RETRO_MODEL_ENABLED=false -e MONOMER_MD_SUBMIT_ENABLED=false
-          )
-          docker run --rm --network "$network" "${common_env[@]}" "$BACKEND_IMAGE" \
-            python -m app.postgres_migrations --mode bootstrap
-          docker run --rm --network "$network" "${common_env[@]}" "$BACKEND_IMAGE" \
-            python -m app.postgres_preflight --mode schema --strict
-          docker run -d --name "$backend" --network "$network" --network-alias backend \
-            -p 127.0.0.1:18000:8000 "${common_env[@]}" "$BACKEND_IMAGE"
-          for _ in {1..60}; do
-            curl --fail --silent --show-error http://127.0.0.1:18000/health >/dev/null && break
-            sleep 2
-          done
-          curl --fail --silent --show-error http://127.0.0.1:18000/health >/dev/null
-          docker run -d --name "$web" --network "$network" -p 127.0.0.1:18080:80 "$WEB_IMAGE"
+          scripts/ci/test_isolated_backend_image.sh "$BACKEND_IMAGE"
+          docker run -d --name "$web" --network "$network" --add-host backend:127.0.0.1 -p 127.0.0.1:18080:80 "$WEB_IMAGE"
           for _ in {1..30}; do
             curl --fail --silent --show-error http://127.0.0.1:18080/ >/dev/null && break
             sleep 2

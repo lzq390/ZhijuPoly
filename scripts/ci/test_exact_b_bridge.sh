@@ -3,6 +3,8 @@ set -euo pipefail
 
 readonly B_SHA="82a69ddb42bcd5c4666b5bf038d02414bccc6dde"
 readonly B_TREE="44e4b4c398b7b84abdeb40bc02b885569aba4d8b"
+readonly F_SHA="d9e9d2246aa2ab29c74d4b99f06f7e6afa1afa58"
+readonly F_TREE="739b1c549048d33f8978a3116a73ee9cd21e3911"
 readonly B_BRIDGE_CORE_BLOB="15b8a1378d4100a5c74666344107bf00661fe34f"
 readonly B_BACKEND_IMAGE="ghcr.io/lzq390/nexpoly-backend@sha256:ecd522706ce34b6aa444b30f1dee49e34e9c5ab1e4bca78b6037848facacd8c7"
 readonly B_WEB_IMAGE="ghcr.io/lzq390/nexpoly-web@sha256:bc4a472c7eab5fc4b2f1e278567d9fc2551ac70e720ff06053c297c6829c18e0"
@@ -21,8 +23,10 @@ readonly candidate_sha candidate_tree
 [[ "$(git rev-parse --verify "${B_SHA}^{tree}")" == "$B_TREE" ]]
 [[ "$(git rev-parse --verify "${B_SHA}:scripts/bridge_deploy_core.py")" == "$B_BRIDGE_CORE_BLOB" ]]
 git merge-base --is-ancestor "$B_SHA" "$candidate_sha"
+[[ "$(git rev-parse --verify "${F_SHA}^{tree}")" == "$F_TREE" ]]
+git merge-base --is-ancestor "$F_SHA" "$candidate_sha"
 
-readonly F_BACKEND_IMAGE="nexpoly-f-bridge-ci:${candidate_sha}"
+readonly F_BACKEND_IMAGE="nexpoly-f-bridge-ci:${F_SHA}"
 readonly CONTAINER_PREFIX="nexpoly-bridge-ci-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 managed_containers=()
 managed_temp_directories=()
@@ -37,6 +41,16 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+# This protocol ended at 0016. The candidate is tested separately with its
+# mandatory 0018 cutover and distinct runtime identities. Never run today's
+# authenticated backend as the historical unauthenticated F.
+F_SOURCE_ROOT="$(mktemp -d)"
+managed_temp_directories+=("$F_SOURCE_ROOT")
+readonly F_SOURCE_ROOT
+git archive "$F_SHA" | tar -x -C "$F_SOURCE_ROOT"
+python3 scripts/validate_production_bridge_policy.py --historical
+
 
 database_dsn() {
   local database="$1"
@@ -93,7 +107,7 @@ prepare_f_0013_migrations() {
   F_0013_MIGRATIONS_DIR="$(mktemp -d)"
   managed_temp_directories+=("$F_0013_MIGRATIONS_DIR")
   python3 - \
-    "$REPOSITORY_ROOT/backend/migrations/postgres" \
+    "$F_SOURCE_ROOT/backend/migrations/postgres" \
     "$F_0013_MIGRATIONS_DIR" <<'PY'
 import json
 import pathlib
@@ -426,7 +440,7 @@ assert_frozen_b_parser_accepts_policy() {
     "$temporary/manifest-b.json" \
     "$temporary/release-input-b.json" \
     "$REPOSITORY_ROOT/scripts/bridge_deploy_core.py" \
-    "$REPOSITORY_ROOT/backend/migrations/postgres/manifest.json" \
+    "$F_SOURCE_ROOT/backend/migrations/postgres/manifest.json" \
     "$REPOSITORY_ROOT/release-input.json" \
     "$REPOSITORY_ROOT/ops/config/production-bridge-policy.json" \
     "$REPOSITORY_ROOT/ops/config/postgres-media-authority-rules.json" \
@@ -532,17 +546,17 @@ docker pull "$B_WEB_IMAGE" >/dev/null
 )" == "$B_SHA" ]]
 
 docker build \
-  --build-arg "SOURCE_REVISION=$candidate_sha" \
+  --build-arg "SOURCE_REVISION=$F_SHA" \
   --build-arg "SOURCE_URL=https://github.com/lzq390/ZhijuPoly" \
-  --build-arg "VERSION=sha-$candidate_sha" \
+  --build-arg "VERSION=sha-$F_SHA" \
   --tag "$F_BACKEND_IMAGE" \
-  --file Dockerfile \
-  . >/dev/null
+  --file "$F_SOURCE_ROOT/Dockerfile" \
+  "$F_SOURCE_ROOT" >/dev/null
 
 [[ "$(
   docker image inspect "$F_BACKEND_IMAGE" \
     --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
-)" == "$candidate_sha" ]]
+)" == "$F_SHA" ]]
 
 prepare_f_0013_migrations
 readonly F_0013_MIGRATIONS_DIR
@@ -815,5 +829,5 @@ done
 curl --fail --silent --show-error http://127.0.0.1:18105/ >/dev/null
 stop_backend "$web_name"
 
-printf 'exact B/F bridge smoke passed: B=%s B-tree=%s F=%s F-tree=%s data=%s\n' \
-  "$B_SHA" "$B_TREE" "$candidate_sha" "$candidate_tree" "$before_digest"
+printf 'historical B/F bridge smoke passed: B=%s B-tree=%s F=%s F-tree=%s data=%s candidate=%s\n' \
+  "$B_SHA" "$B_TREE" "$F_SHA" "$F_TREE" "$before_digest" "$candidate_sha"

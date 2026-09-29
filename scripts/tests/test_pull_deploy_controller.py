@@ -18007,12 +18007,16 @@ class DftBuildCrashAndAbortTests(PullDeployTestCase):
             "source_tree": TARGET_TREE,
         }
         dft_root = controller.venv_root / "dft"
+        # mkdir(parents=True) applies mode only to the leaf. Each owned
+        # ancestor must be private independently of the runner's umask.
+        dft_root.mkdir(mode=0o700)
         staging = dft_root / f".{TARGET_SHA}.preparing-{OPERATION_ID}"
-        staging.mkdir(parents=True, mode=0o700)
+        staging.mkdir(mode=0o700)
         CONTROLLER.atomic_json(staging / ".preparing.json", owner)
         write_private(staging / "partial-runtime", "partial\n")
         cache = dft_root / ".build-cache" / TARGET_SHA / OPERATION_ID
-        cache.mkdir(parents=True, mode=0o700)
+        for directory in (cache.parent.parent, cache.parent, cache):
+            directory.mkdir(mode=0o700)
         CONTROLLER.atomic_json(
             cache / "owner.json",
             {
