@@ -9,8 +9,8 @@ import httpx
 from fastapi import HTTPException
 
 from app.config import Settings
+from app.services.private_quotas import PrivateQuotaSettings
 
-MAX_EVIDENCE_CHARACTERS = 80_000
 EMPTY_SUMMARY = "本次没有记录到操作，暂无可总结的内容。"
 SUMMARY_PROMPT = """你为用户回顾刚刚浏览的内容。请用自然、简洁的中文写三个段落，让用户记住阅读的主题和收获。正文约250—350字，不加标题或列表。
 
@@ -81,9 +81,10 @@ def _summary_payload(events: list[dict], settings: Settings, *, stream: bool) ->
     if not settings.assistant_api_key or not settings.assistant_model or url.scheme not in ("http", "https") or not url.hostname:
         raise HTTPException(503, "总结模型配置不完整，请检查后端配置")
     evidence = json.dumps(build_summary_evidence(events), ensure_ascii=False)
-    if len(evidence) > MAX_EVIDENCE_CHARACTERS:
+    quotas = PrivateQuotaSettings.from_environment()
+    if len(evidence) > quotas.summary_evidence_characters:
         raise HTTPException(413, "本次记录内容超出 POC 总结容量，请缩小下一次记录的范围")
-    payload = {"model": settings.assistant_model, "stream": stream, "messages": [
+    payload = {"model": settings.assistant_model, "stream": stream, "max_tokens": quotas.summary_max_tokens, "messages": [
         {"role": "system", "content": SUMMARY_PROMPT}, {"role": "user", "content": evidence},
     ]}
     if stream:
@@ -109,23 +110,30 @@ async def generate_knowledge_summary(events: list[dict], settings: Settings, *, 
     try:
         async with httpx.AsyncClient(trust_env=False, proxy=settings.ai_proxy_url or None, timeout=timeout_seconds,
                                     follow_redirects=False) as client:
-            response = await client.post(settings.assistant_base_url.rstrip("/") + "/chat/completions",
-                                         headers={"Authorization": "Bearer " + settings.assistant_api_key},
-                                         json=payload)
+            async with client.stream("POST", settings.assistant_base_url.rstrip("/") + "/chat/completions",
+                                     headers={"Authorization": "Bearer " + settings.assistant_api_key},
+                                     json=payload) as response:
+                if not response.is_success:
+                    raise _model_http_error(response.status_code)
+                content = bytearray()
+                async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                    content.extend(chunk)
+                    if len(content) > 2 * PrivateQuotaSettings.from_environment().summary_output_bytes:
+                        raise HTTPException(413, "总结超过大小限制")
     except httpx.TimeoutException:
         raise HTTPException(504, "模型响应超时，记录已保留，可重试总结") from None
     except httpx.HTTPError:
         raise HTTPException(502, "无法连接模型服务，记录已保留，可重试总结") from None
-    if not response.is_success:
-        raise _model_http_error(response.status_code)
     try:
-        data = response.json()
+        data = json.loads(content)
         choice = data["choices"][0]
         content = choice["message"]["content"]
         if choice.get("finish_reason") not in (None, "stop") or not isinstance(content, str) or not content.strip():
             raise ValueError("empty or incomplete output")
     except (ValueError, KeyError, IndexError, TypeError, AttributeError):
         raise HTTPException(502, "模型未返回完整的总结文本，记录已保留，可重试") from None
+    if len(content.encode("utf-8")) > PrivateQuotaSettings.from_environment().summary_output_bytes:
+        raise HTTPException(413, "总结超过大小限制")
     return {"summary": content.strip().replace(settings.assistant_api_key, "[已隐藏]"), "generated": True}
 
 
@@ -171,7 +179,11 @@ async def stream_knowledge_summary(
                 if not response.is_success:
                     raise _model_http_error(response.status_code)
                 data_lines: list[str] = []
+                received_bytes = 0
                 async for line in response.aiter_lines():
+                    received_bytes += len(line.encode("utf-8"))
+                    if received_bytes > 2 * PrivateQuotaSettings.from_environment().summary_output_bytes:
+                        raise HTTPException(413, "总结超过大小限制")
                     if line.startswith("data:"):
                         data_lines.append(line[5:].lstrip())
                         continue

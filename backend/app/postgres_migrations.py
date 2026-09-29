@@ -1014,7 +1014,9 @@ def apply_postgres_migrations(
                 )
 
         effective_allowed_kinds: set[MigrationKind] | None = None
-        deferred_versions: set[str] = set()
+        # Identity cutover always needs its dedicated maintenance command and
+        # explicit legacy owner, even on an otherwise empty bootstrap database.
+        deferred_versions: set[str] = {"0018_user_isolation_cutover"}
         if allowed_kinds is not None:
             effective_allowed_kinds = set(allowed_kinds)
             if fresh_bootstrap:
@@ -1023,6 +1025,7 @@ def apply_postgres_migrations(
                 entry.version
                 for entry in entries
                 if entry.version not in applied
+                and entry.version not in deferred_versions
                 and (restricted_version is None or entry.version == restricted_version)
             ]
             if defer_trailing_contracts:

@@ -232,7 +232,7 @@ it("开始失败提示可点击外部、Escape 或失焦收起，再次失败仍
   const button = screen.getByRole("button", { name: "开始记录" });
   fireEvent.click(button);
   const hint = await screen.findByRole("alert");
-  expect(hint.classList.contains("is-visible")).toBe(true);
+  await waitFor(() => expect(hint.classList.contains("is-visible")).toBe(true));
   fireEvent.pointerDown(document.body);
   expect(hint.classList.contains("is-visible")).toBe(false);
   expect(button.querySelector(".np-recording-warning")).not.toBeNull();

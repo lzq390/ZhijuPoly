@@ -1,0 +1,1602 @@
+{
+  "schema_version": 1,
+  "note": "Reviewed inventory, not evidence that every mapped scenario passed. templates permit only fixed a/b CSV/XLSX GET or HEAD.",
+  "routes": [
+    {
+      "method": "DELETE",
+      "path": "/api/v1/monomer-dft/jobs/{job_id}",
+      "feature": "F11",
+      "resource": "dft",
+      "permission": "member",
+      "frontend": "/monomer-dft",
+      "cases": [
+        "F11",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/monomer-dft/jobs/{job_id}/artifacts",
+      "feature": "F11",
+      "resource": "dft",
+      "permission": "member",
+      "frontend": "/monomer-dft",
+      "cases": [
+        "F11",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/monomer-md/jobs/{job_id}",
+      "feature": "F10",
+      "resource": "md",
+      "permission": "member",
+      "frontend": "/monomer-md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/monomer-md/jobs/{job_id}/artifacts",
+      "feature": "F10",
+      "resource": "md",
+      "permission": "member",
+      "frontend": "/monomer-md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/online-knowledge/history/{history_id}",
+      "feature": "F05",
+      "resource": "online-knowledge",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F05",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/assistant/tg/guide",
+      "feature": "F07",
+      "resource": "assistant-stream",
+      "permission": "member",
+      "frontend": "embedded-assistant",
+      "cases": [
+        "F07",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/assistant/tg/status",
+      "feature": "F07",
+      "resource": "assistant-stream",
+      "permission": "member",
+      "frontend": "embedded-assistant",
+      "cases": [
+        "F07",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/session",
+      "feature": "I02",
+      "resource": "session",
+      "permission": "public",
+      "frontend": "account-menu",
+      "cases": [
+        "I02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/conditional-generation/polytao/jobs/{job_id}",
+      "feature": "F08",
+      "resource": "memory-job",
+      "permission": "member",
+      "frontend": "/conditional-generation",
+      "cases": [
+        "F08",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/conditional-generation/polytao/status",
+      "feature": "F08",
+      "resource": "memory-job",
+      "permission": "member",
+      "frontend": "/conditional-generation",
+      "cases": [
+        "F08",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/conditional-generation/tg/jobs/{job_id}",
+      "feature": "F08",
+      "resource": "memory-job",
+      "permission": "member",
+      "frontend": "/conditional-generation",
+      "cases": [
+        "F08",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/conditional-generation/tg/status",
+      "feature": "F08",
+      "resource": "memory-job",
+      "permission": "member",
+      "frontend": "/conditional-generation",
+      "cases": [
+        "F08",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/database-browser/datasets/analytics",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/database-browser/datasets/summary",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/database-browser/dft/molecules",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/database-browser/dft/steps",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/database-browser/experimental-process",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/database-browser/experimental-property",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/database-browser/formulation",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/database-browser/property-filter/histogram",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/database-browser/property-filter/options",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/database-browser/structure-property",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dev-gpu-session/status",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dft/molecule/{mol_id}",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database/dft",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dft/pca-sample",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database/dft",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/lab-data/sample-measurements",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/lab-data/sample-measurements/count",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/lab-data/sample-measurements/stats/by-project",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/lab-data/sample-measurements/stats/summary",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/lab-data/test-projects",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/md-demo/defaults",
+      "feature": "F10",
+      "resource": "md-demo",
+      "permission": "member",
+      "frontend": "/md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-dft/capabilities",
+      "feature": "F11",
+      "resource": "dft",
+      "permission": "member",
+      "frontend": "/monomer-dft",
+      "cases": [
+        "F11",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-dft/jobs",
+      "feature": "F11",
+      "resource": "dft",
+      "permission": "member",
+      "frontend": "/monomer-dft",
+      "cases": [
+        "F11",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-dft/jobs/{job_id}",
+      "feature": "F11",
+      "resource": "dft",
+      "permission": "member",
+      "frontend": "/monomer-dft",
+      "cases": [
+        "F11",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-dft/jobs/{job_id}/artifacts/{artifact_id}",
+      "feature": "F11",
+      "resource": "dft",
+      "permission": "member",
+      "frontend": "/monomer-dft",
+      "cases": [
+        "F11",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-dft/jobs/{job_id}/bundle",
+      "feature": "F11",
+      "resource": "dft",
+      "permission": "member",
+      "frontend": "/monomer-dft",
+      "cases": [
+        "F11",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-dft/status",
+      "feature": "F11",
+      "resource": "dft",
+      "permission": "member",
+      "frontend": "/monomer-dft",
+      "cases": [
+        "F11",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-md/jobs",
+      "feature": "F10",
+      "resource": "md",
+      "permission": "member",
+      "frontend": "/monomer-md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-md/jobs/{job_id}",
+      "feature": "F10",
+      "resource": "md",
+      "permission": "member",
+      "frontend": "/monomer-md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-md/jobs/{job_id}/visualization/stages/{stage_id}/trajectory",
+      "feature": "F10",
+      "resource": "md",
+      "permission": "member",
+      "frontend": "/monomer-md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-md/protocols",
+      "feature": "F10",
+      "resource": "md",
+      "permission": "member",
+      "frontend": "/monomer-md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-md/status",
+      "feature": "F10",
+      "resource": "md",
+      "permission": "member",
+      "frontend": "/monomer-md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-polymerization/batch/jobs",
+      "feature": "F09",
+      "resource": "batch",
+      "permission": "member",
+      "frontend": "/monomer-polymerization",
+      "cases": [
+        "F09",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-polymerization/batch/jobs/{job_id}",
+      "feature": "F09",
+      "resource": "batch",
+      "permission": "member",
+      "frontend": "/monomer-polymerization",
+      "cases": [
+        "F09",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-polymerization/batch/jobs/{job_id}/artifacts/{name}",
+      "feature": "F09",
+      "resource": "batch",
+      "permission": "member",
+      "frontend": "/monomer-polymerization",
+      "cases": [
+        "F09",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-polymerization/batch/jobs/{job_id}/results",
+      "feature": "F09",
+      "resource": "batch",
+      "permission": "member",
+      "frontend": "/monomer-polymerization",
+      "cases": [
+        "F09",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-polymerization/batch/templates/{role}.{format}",
+      "feature": "F09",
+      "resource": "batch",
+      "permission": "mixed-template",
+      "frontend": "/monomer-polymerization",
+      "cases": [
+        "F09",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/monomer-polymerization/status",
+      "feature": "F09",
+      "resource": "request-result",
+      "permission": "member",
+      "frontend": "/monomer-polymerization",
+      "cases": [
+        "F09",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/online-knowledge/default-config",
+      "feature": "F05",
+      "resource": "online-knowledge",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F05",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/online-knowledge/history",
+      "feature": "F05",
+      "resource": "online-knowledge",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F05",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/online-knowledge/jobs/{job_id}",
+      "feature": "F05",
+      "resource": "online-knowledge",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F05",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/polymer/{polymer_id}",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database-query",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/reverse-design/tg/jobs/{job_id}",
+      "feature": "F08",
+      "resource": "memory-job",
+      "permission": "member",
+      "frontend": "/reverse-design",
+      "cases": [
+        "F08",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/docs",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/docs/oauth2-redirect",
+      "feature": "F13",
+      "resource": "documentation",
+      "permission": "member",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "feature": "I01",
+      "resource": "health",
+      "permission": "public",
+      "frontend": "system-health",
+      "cases": [
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/internal/deployment/status",
+      "feature": "F13",
+      "resource": "internal-service",
+      "permission": "internal",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/internal/gpu/status",
+      "feature": "F13",
+      "resource": "internal-service",
+      "permission": "internal",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/openapi.json",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/redoc",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/docs",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/docs/oauth2-redirect",
+      "feature": "F13",
+      "resource": "documentation",
+      "permission": "member",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/openapi.json",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "HEAD",
+      "path": "/redoc",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/assistant/chat/image-stream",
+      "feature": "F07",
+      "resource": "assistant-stream",
+      "permission": "member",
+      "frontend": "not-connected; structure-workbench assistant is placeholder only",
+      "cases": [
+        "F07",
+        "I01",
+        "I03"
+      ],
+      "scope_note": "2026-09-20 user-confirmed: model business acceptance N/A; mounted API authentication and isolation contracts remain required"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/assistant/chat/stream",
+      "feature": "F07",
+      "resource": "assistant-stream",
+      "permission": "member",
+      "frontend": "not-connected; structure-workbench assistant is placeholder only",
+      "cases": [
+        "F07",
+        "I01",
+        "I03"
+      ],
+      "scope_note": "2026-09-20 user-confirmed: model business acceptance N/A; mounted API authentication and isolation contracts remain required"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/assistant/tg/chat/image-stream",
+      "feature": "F07",
+      "resource": "assistant-stream",
+      "permission": "member",
+      "frontend": "embedded-assistant",
+      "cases": [
+        "F07",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/assistant/tg/chat/stream",
+      "feature": "F07",
+      "resource": "assistant-stream",
+      "permission": "member",
+      "frontend": "embedded-assistant",
+      "cases": [
+        "F07",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "feature": "I02",
+      "resource": "session",
+      "permission": "public",
+      "frontend": "account-menu",
+      "cases": [
+        "I02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/logout",
+      "feature": "I02",
+      "resource": "session",
+      "permission": "member",
+      "frontend": "account-menu",
+      "cases": [
+        "I02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/password",
+      "feature": "I02",
+      "resource": "session",
+      "permission": "member",
+      "frontend": "account-menu",
+      "cases": [
+        "I02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/conditional-generation/polytao/descriptors",
+      "feature": "F08",
+      "resource": "memory-job",
+      "permission": "member",
+      "frontend": "/conditional-generation",
+      "cases": [
+        "F08",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/conditional-generation/polytao/jobs",
+      "feature": "F08",
+      "resource": "memory-job",
+      "permission": "member",
+      "frontend": "/conditional-generation",
+      "cases": [
+        "F08",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/conditional-generation/tg/jobs",
+      "feature": "F08",
+      "resource": "memory-job",
+      "permission": "member",
+      "frontend": "/conditional-generation",
+      "cases": [
+        "F08",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/database-browser/property-filter/observations",
+      "feature": "F06",
+      "resource": "snapshot",
+      "permission": "member",
+      "frontend": "/database-filter",
+      "cases": [
+        "F06",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/database-browser/property-filter/search",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/database-browser/smiles-lookup",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database",
+      "cases": [
+        "F02",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/dev-gpu-session/recover",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/knowledge/observations",
+      "feature": "F06",
+      "resource": "snapshot",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F06",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/knowledge/recordings",
+      "feature": "F06",
+      "resource": "recording",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F06",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/knowledge/recordings/{recording_id}/stop",
+      "feature": "F06",
+      "resource": "recording",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F06",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/knowledge/recordings/{recording_id}/summary",
+      "feature": "F06",
+      "resource": "recording",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F06",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/knowledge/search",
+      "feature": "F05",
+      "resource": "shared-knowledge",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F05",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/lab-data/sample-measurements",
+      "feature": "F13",
+      "resource": "operations",
+      "permission": "operations",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/md-demo/atom-distance",
+      "feature": "F10",
+      "resource": "md-demo",
+      "permission": "member",
+      "frontend": "/md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/md-demo/run",
+      "feature": "F10",
+      "resource": "md-demo",
+      "permission": "member",
+      "frontend": "/md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/monomer-dft/jobs",
+      "feature": "F11",
+      "resource": "dft",
+      "permission": "member",
+      "frontend": "/monomer-dft",
+      "cases": [
+        "F11",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/monomer-dft/jobs/{job_id}/cancel",
+      "feature": "F11",
+      "resource": "dft",
+      "permission": "member",
+      "frontend": "/monomer-dft",
+      "cases": [
+        "F11",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/monomer-md/jobs",
+      "feature": "F10",
+      "resource": "md",
+      "permission": "member",
+      "frontend": "/monomer-md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/monomer-md/jobs/{job_id}/cancel",
+      "feature": "F10",
+      "resource": "md",
+      "permission": "member",
+      "frontend": "/monomer-md-simulation",
+      "cases": [
+        "F10",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/monomer-polymerization",
+      "feature": "F09",
+      "resource": "request-result",
+      "permission": "member",
+      "frontend": "/monomer-polymerization",
+      "cases": [
+        "F09",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/monomer-polymerization/batch/imports",
+      "feature": "F09",
+      "resource": "batch",
+      "permission": "member",
+      "frontend": "/monomer-polymerization",
+      "cases": [
+        "F09",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/monomer-polymerization/batch/imports/{import_id}/preview",
+      "feature": "F09",
+      "resource": "batch",
+      "permission": "member",
+      "frontend": "/monomer-polymerization",
+      "cases": [
+        "F09",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/monomer-polymerization/batch/jobs",
+      "feature": "F09",
+      "resource": "batch",
+      "permission": "member",
+      "frontend": "/monomer-polymerization",
+      "cases": [
+        "F09",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/monomer-polymerization/batch/jobs/{job_id}/cancel",
+      "feature": "F09",
+      "resource": "batch",
+      "permission": "member",
+      "frontend": "/monomer-polymerization",
+      "cases": [
+        "F09",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/monomer-retrosynthesis",
+      "feature": "F01",
+      "resource": "request-result",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "F01",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/online-knowledge/export-csv",
+      "feature": "F05",
+      "resource": "online-knowledge",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F05",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/online-knowledge/history/clear",
+      "feature": "F05",
+      "resource": "online-knowledge",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F05",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/online-knowledge/jobs",
+      "feature": "F05",
+      "resource": "online-knowledge",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F05",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/online-knowledge/search",
+      "feature": "F05",
+      "resource": "online-knowledge",
+      "permission": "member",
+      "frontend": "/knowledge",
+      "cases": [
+        "F05",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/predict",
+      "feature": "F04",
+      "resource": "request-result",
+      "permission": "member",
+      "frontend": "/homopolymer-property-prediction",
+      "cases": [
+        "F04",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/query/smiles",
+      "feature": "F02",
+      "resource": "shared-database",
+      "permission": "member",
+      "frontend": "/database-query; /explorer",
+      "cases": [
+        "F02",
+        "I01",
+        "I03",
+        "F03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/reverse-design/tg",
+      "feature": "F08",
+      "resource": "memory-job",
+      "permission": "member",
+      "frontend": "/reverse-design",
+      "cases": [
+        "F08",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/reverse-design/tg/jobs",
+      "feature": "F08",
+      "resource": "memory-job",
+      "permission": "member",
+      "frontend": "/reverse-design",
+      "cases": [
+        "F08",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/structure/2d",
+      "feature": "F01",
+      "resource": "request-result",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "F01",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/structure/3d",
+      "feature": "F01",
+      "resource": "request-result",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "F01",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/structure/recognize-image",
+      "feature": "F01",
+      "resource": "request-result",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "F01",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/structure/standardize-smiles",
+      "feature": "F01",
+      "resource": "request-result",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "F01",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/internal/deployment/monomer-md-canary/cleanup",
+      "feature": "F13",
+      "resource": "internal-service",
+      "permission": "internal",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/internal/deployment/monomer-md-canary/submit",
+      "feature": "F13",
+      "resource": "internal-service",
+      "permission": "internal",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/internal/deployment/monomer-md-canary/validated",
+      "feature": "F13",
+      "resource": "internal-service",
+      "permission": "internal",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/internal/monomer-dft/jobs/{job_id}/authorize-start",
+      "feature": "F13",
+      "resource": "internal-service",
+      "permission": "internal",
+      "frontend": "not-exposed",
+      "cases": [
+        "F13",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/task-events",
+      "feature": "I08",
+      "resource": "owner-scoped MD/DFT status event stream",
+      "permission": "member",
+      "frontend": [
+        "MD task center",
+        "DFT task center"
+      ],
+      "cases": [
+        "F10",
+        "F11",
+        "I01",
+        "I04",
+        "I08"
+      ]
+    }
+  ]
+}

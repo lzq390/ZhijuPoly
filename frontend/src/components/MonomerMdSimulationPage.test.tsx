@@ -3,11 +3,14 @@ import { StructureWorkspace } from "../structure/workspace";
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GUEST_SESSION, installSession, retireSession } from "../auth/session";
 import type { MonomerMdJobResponse, StructureWorkspaceContext } from "../types";
 
 const hook = vi.hoisted(() => ({
-  useMonomerMdSimulation: vi.fn()
+  useMonomerMdSimulation: vi.fn(),
+  useAuth: vi.fn()
 }));
+vi.mock("../auth/AuthProvider", () => ({ useAuth: hook.useAuth }));
 
 vi.mock("../hooks/useMonomerMdSimulation", async () => {
   const actual = await vi.importActual<
@@ -93,6 +96,8 @@ function simulationState(overrides: Partial<Simulation> = {}): Simulation {
     deletingJobIds: [],
     deleteJobErrors: {},
     submit: vi.fn().mockResolvedValue(null),
+    eventConnectionState: "live",
+    refreshAll: vi.fn().mockResolvedValue(undefined),
     refreshStatus: vi.fn(),
     refreshActiveJobs: vi.fn(),
     refreshHistory: vi.fn(),
@@ -128,13 +133,34 @@ function renderPage() {
 describe("MonomerMdSimulationPage formal queue", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hook.useAuth.mockReturnValue(null);
     window.sessionStorage.clear();
     hook.useMonomerMdSimulation.mockReturnValue(simulationState());
   });
 
   afterEach(() => {
     cleanup();
+    retireSession();
     vi.restoreAllMocks();
+  });
+
+  it("keeps guest simulation actions available without status and requests login before computation", () => {
+    hook.useAuth.mockReturnValue({ status: "guest" });
+    installSession(GUEST_SESSION);
+    const simulation = simulationState({ serviceStatus: null, protocolCatalog: null });
+    hook.useMonomerMdSimulation.mockReturnValue(simulation);
+    const login = vi.fn();
+    window.addEventListener("nexpoly:login-required", login);
+    try {
+      renderPage();
+      expect(hook.useMonomerMdSimulation).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+      expect(login).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "开始快速模拟" }));
+      fireEvent.click(screen.getByRole("button", { name: /完整MD模拟/ }));
+      fireEvent.click(screen.getByRole("button", { name: "提交完整 MD 模拟任务" }));
+      expect(login).toHaveBeenCalledTimes(2);
+      expect(simulation.submit).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("nexpoly:login-required", login); }
   });
 
   it("uses the shared work-surface title hierarchy and describes the real demo without repeating its step count", () => {
@@ -163,7 +189,7 @@ describe("MonomerMdSimulationPage formal queue", () => {
     expect(screen.getByRole("heading", { name: "选择完整 MD 模拟类型" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: /任务中心/ }));
-    expect(screen.getByRole("heading", { name: "全局 MD 任务中心" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "MD 任务中心" })).toBeTruthy();
     expect(view.container.querySelector(".np-mmd-view-badge")).toBeTruthy();
   });
 
@@ -176,6 +202,10 @@ describe("MonomerMdSimulationPage formal queue", () => {
 
     expect(screen.getAllByText(/队列第 2 位/).length).toBeGreaterThan(0);
     expect(screen.getByText("第 1 / 3 页 · 共 21 项 · 每页 10 条")).toBeTruthy();
+    expect(screen.queryByText("我的正式任务")).toBeNull();
+    expect(screen.queryByText(/每\s*5\s*秒刷新/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    expect(simulation.refreshAll).toHaveBeenCalledOnce();
 
     const filters = screen.getAllByRole("combobox");
     fireEvent.click(filters[0]);

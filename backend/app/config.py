@@ -128,6 +128,7 @@ class Settings:
         monomer_dft_worker_base_url: str | None = None,
         monomer_dft_worker_uds: str | None = None,
         monomer_dft_worker_timeout_seconds: float | None = None,
+        monomer_dft_start_authorization_token: str | None = None,
         monomer_dft_submit_enabled: bool | None = None,
         monomer_dft_max_active_jobs: int | None = None,
         monomer_dft_reconcile_interval_seconds: float | None = None,
@@ -1025,6 +1026,7 @@ class Settings:
                 "MONOMER_DFT_SUBMIT_ENABLED is true"
             )
         self.allowed_origins = raw_allowed_origins
+        self.monomer_dft_start_authorization_token = monomer_dft_start_authorization_token or os.getenv("MONOMER_DFT_START_AUTHORIZATION_TOKEN", "")
         self.dev_gpu_operator_enabled = bool(raw_dev_gpu_operator_enabled)
         self.dev_gpu_operator_frontend_port = int(
             raw_dev_gpu_operator_frontend_port

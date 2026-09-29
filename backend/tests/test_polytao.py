@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.auth.context import Identity, user_context, service_context
+TEST_OWNER = Identity("11111111-1111-1111-1111-111111111111")
+SECOND_OWNER = Identity("22222222-2222-2222-2222-222222222222")
+
+
 from contextlib import contextmanager
 from threading import Event
 from time import monotonic, sleep
@@ -8,6 +13,13 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+@pytest.fixture(autouse=True)
+def private_test_identity(monkeypatch):
+    monkeypatch.setattr("app.task_control._start_checker", lambda _: True)
+    with user_context(TEST_OWNER):
+        yield
+
 
 from app.config import Settings
 from app.routers import polytao as polytao_router_module
@@ -293,8 +305,8 @@ def test_gpu_queue_full_is_an_accepted_job_with_failed_terminal_state(
     monkeypatch.setattr(polytao_router_module, "generate_2d_svg", lambda smiles: "<svg />")
     app = _create_app(max_waiting_inferences=0)
     registry = app.state.gpu_runtime_registry
-    with registry.inference_session("polytao", timeout_seconds=1):
-        with _client_for(app) as client:
+    with service_context(), registry.inference_session("polytao", timeout_seconds=1):
+        with user_context(TEST_OWNER), _client_for(app) as client:
             submitted = client.post(
                 "/api/v1/conditional-generation/polytao/jobs",
                 json=_request_payload(),
@@ -383,7 +395,7 @@ def test_lane_capacity_is_atomic_and_returns_429(monkeypatch: pytest.MonkeyPatch
     assert app.state.polytao_job_manager.retained_jobs == 1
 
 
-def test_job_lookup_uses_404_for_wrong_namespace_and_410_for_old_instance() -> None:
+def test_job_lookup_hides_unknown_and_old_ownerless_ids() -> None:
     app = _create_app()
     current_token = "0" * 32
     with _client_for(app) as client:
@@ -407,9 +419,9 @@ def test_job_lookup_uses_404_for_wrong_namespace_and_410_for_old_instance() -> N
 
     assert malformed.status_code == 404
     assert wrong_namespace.status_code == 404
-    assert old_instance.status_code == 410
-    assert legacy_uuid.status_code == 410
-    assert legacy_uuid_hex.status_code == 410
+    assert old_instance.status_code == 404
+    assert legacy_uuid.status_code == 404
+    assert legacy_uuid_hex.status_code == 404
 
 
 def test_status_becomes_unavailable_after_job_admission_stops() -> None:

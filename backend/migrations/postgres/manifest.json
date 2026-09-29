@@ -132,6 +132,30 @@
           "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
         }
       ]
+    },
+    {
+      "version": "0017_user_isolation_prepare",
+      "kind": "expand",
+      "epoch": 2,
+      "checksum": "0eeef0058fbda71770627005fe617f5a56261cf25e236c4a159d0b059db76adb",
+      "requires_contracts": [
+        {
+          "version": "0012_drop_polytao_jobs",
+          "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+        }
+      ]
+    },
+    {
+      "version": "0018_user_isolation_cutover",
+      "kind": "contract",
+      "epoch": 3,
+      "checksum": "0755d9d802eba5fd69225a34f61bc01828b32a63f815802d2905636809c573f2",
+      "requires_contracts": [
+        {
+          "version": "0012_drop_polytao_jobs",
+          "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+        }
+      ]
     }
   ]
 }

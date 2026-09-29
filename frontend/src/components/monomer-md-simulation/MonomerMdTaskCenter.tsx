@@ -4,10 +4,8 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Clock3,
   Filter,
   LoaderCircle,
-  RefreshCw,
   Search,
   Trash2
 } from "lucide-react";
@@ -67,7 +65,6 @@ type MonomerMdTaskCenterProps = {
   cancellingJobIds: string[];
   deletingJobIds: string[];
   deleteJobErrors: Record<string, string>;
-  onRefresh: () => void;
   onSelect: (job: MonomerMdJobResponse) => void;
   onCancel: (job: MonomerMdJobResponse) => void;
   onDelete: (job: MonomerMdJobResponse) => void;
@@ -86,7 +83,6 @@ export function MonomerMdTaskCenter({
   cancellingJobIds,
   deletingJobIds,
   deleteJobErrors,
-  onRefresh,
   onSelect,
   onCancel,
   onDelete,
@@ -99,16 +95,6 @@ export function MonomerMdTaskCenter({
 
   return (
     <div className="np-mmd-task-center">
-      <div className="np-mmd-task-center__notice">
-        <Clock3 />
-        <div>
-          <strong>全局正式任务</strong>
-          <span>此处只列正式协议历史；快速演示同样由 Worker 真实执行，但不进入历史列表，可通过当前结果或任务深链恢复。</span>
-        </div>
-        <button type="button" onClick={onRefresh} disabled={isActiveJobsLoading || isHistoryLoading}>
-          <RefreshCw className={isActiveJobsLoading || isHistoryLoading ? "np-mmd-spin" : ""} />刷新
-        </button>
-      </div>
 
       {selectedJob ? (
         <section className="np-mmd-selected-task" aria-labelledby="monomer-md-selected-task-title">
@@ -123,7 +109,6 @@ export function MonomerMdTaskCenter({
       <section className="np-mmd-active-tasks" aria-labelledby="monomer-md-active-tasks-title">
         <div className="np-mmd-section-heading">
           <div><span className="np-mmd-eyebrow">ACTIVE QUEUE</span><h3 id="monomer-md-active-tasks-title">活跃任务与排队</h3></div>
-          <span className="np-mmd-section-note">每 5 秒刷新状态与排队位置</span>
         </div>
         {activeJobsError ? <div className="np-mmd-inline-error" role="alert">{translateMonomerMdMessage(activeJobsError)}</div> : null}
         {isActiveJobsLoading && activeJobs.length === 0 ? (

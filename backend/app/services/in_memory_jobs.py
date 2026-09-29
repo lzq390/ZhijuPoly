@@ -11,6 +11,9 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from app.auth.context import current_owner_id, is_service_context
+from app.services.private_quotas import PrivateQuotaSettings
+
 
 DEFAULT_JOB_RETENTION_SECONDS = 24 * 60 * 60
 DEFAULT_MAX_RETAINED_JOBS = 1000
@@ -61,6 +64,7 @@ class JobStoreStats:
 @dataclass(slots=True)
 class _StoredJob(Generic[T]):
     namespace: str
+    owner_user_id: str
     value: T
     sequence: int
     size_bytes: int
@@ -81,14 +85,19 @@ class BoundedInMemoryJobStore:
     def __init__(
         self,
         *,
-        retention_seconds: float = DEFAULT_JOB_RETENTION_SECONDS,
+        retention_seconds: float | None = None,
         max_jobs: int = DEFAULT_MAX_RETAINED_JOBS,
         max_bytes: int = DEFAULT_MAX_RETAINED_BYTES,
         instance_id: str | None = None,
         monotonic_fn: Callable[[], float] = monotonic,
         record_reserve_bytes: int = DEFAULT_RECORD_RESERVE_BYTES,
+        max_user_jobs: int | None = None,
+        max_user_bytes: int | None = None,
     ) -> None:
-        self.retention_seconds = max(0.0, float(retention_seconds))
+        quotas = PrivateQuotaSettings.from_environment()
+        self.max_user_jobs = max(1, max_user_jobs if max_user_jobs is not None else quotas.memory_jobs_per_user)
+        self.max_user_bytes = max(1, max_user_bytes if max_user_bytes is not None else quotas.memory_bytes_per_user)
+        self.retention_seconds = max(0.0, float(retention_seconds if retention_seconds is not None else quotas.memory_retention_seconds))
         self.max_jobs = max(1, int(max_jobs))
         self.max_bytes = max(1, int(max_bytes))
         self.instance_id = instance_id or uuid4().hex[:16]
@@ -102,12 +111,14 @@ class BoundedInMemoryJobStore:
         self._lock = Lock()
 
     def create(self, namespace: str, factory: Callable[[str], T]) -> T:
+        owner = current_owner_id()
         self._validate_namespace(namespace)
         job_id = f"{namespace}.{self.instance_id}.{uuid4().hex}"
         value = factory(job_id)
         size_bytes = _deep_sizeof(value) + self.record_reserve_bytes
         with self._lock:
             self._prune_expired_locked()
+            self._check_user_capacity_locked(owner, additional_jobs=1, additional_bytes=size_bytes)
             if not self._can_fit_after_reaping_locked(
                 additional_jobs=1,
                 additional_bytes=size_bytes,
@@ -123,6 +134,7 @@ class BoundedInMemoryJobStore:
             self._next_sequence += 1
             self._records[job_id] = _StoredJob(
                 namespace=namespace,
+                owner_user_id=owner,
                 value=value,
                 sequence=self._next_sequence,
                 size_bytes=size_bytes,
@@ -132,9 +144,15 @@ class BoundedInMemoryJobStore:
         return value
 
     def read(self, namespace: str, job_id: str, reader: Callable[[T], R]) -> R:
+        owner = current_owner_id()
         with self._lock:
             self._prune_expired_locked()
-            record = self._lookup_locked(namespace, job_id)
+            try:
+                record = self._authorized_lookup_locked(namespace, job_id)
+            except JobGoneError as exc:
+                raise JobNotFoundError(job_id) from exc
+            if record.owner_user_id != owner:
+                raise JobNotFoundError(job_id)
             return reader(record.value)
 
     def mutate(
@@ -147,7 +165,7 @@ class BoundedInMemoryJobStore:
     ) -> R:
         with self._lock:
             self._prune_expired_locked()
-            record = self._lookup_locked(namespace, job_id)
+            record = self._authorized_lookup_locked(namespace, job_id)
             old_value = copy.deepcopy(record.value)
             old_size = record.size_bytes
             old_terminal = record.terminal
@@ -163,6 +181,7 @@ class BoundedInMemoryJobStore:
                     record.terminal = terminal
                 record.size_bytes = new_size
                 self._total_bytes += new_size - old_size
+                self._check_user_capacity_locked(record.owner_user_id)
                 if not self._can_fit_after_reaping_locked(protected_job_id=job_id):
                     raise JobStoreCapacityError(
                         "In-memory job result exceeds the shared retention capacity"
@@ -184,7 +203,7 @@ class BoundedInMemoryJobStore:
     def mark_reapable(self, namespace: str, job_id: str) -> None:
         with self._lock:
             try:
-                record = self._lookup_locked(namespace, job_id)
+                record = self._authorized_lookup_locked(namespace, job_id)
             except JobLookupError:
                 return
             record.reapable = True
@@ -193,7 +212,7 @@ class BoundedInMemoryJobStore:
 
     def delete(self, namespace: str, job_id: str) -> None:
         with self._lock:
-            record = self._lookup_locked(namespace, job_id)
+            record = self._authorized_lookup_locked(namespace, job_id)
             self._remove_locked(job_id, record)
 
     def stats(self, namespace: str | None = None) -> JobStoreStats:
@@ -210,6 +229,17 @@ class BoundedInMemoryJobStore:
                 jobs=len(selected),
                 bytes=sum(record.size_bytes for record in selected),
             )
+
+    def _check_user_capacity_locked(self, owner: str, *, additional_jobs: int = 0, additional_bytes: int = 0) -> None:
+        records = [record for record in self._records.values() if record.owner_user_id == owner]
+        if len(records) + additional_jobs > self.max_user_jobs or sum(record.size_bytes for record in records) + additional_bytes > self.max_user_bytes:
+            raise JobStoreCapacityError("User in-memory job retention capacity is full")
+
+    def _authorized_lookup_locked(self, namespace: str, job_id: str) -> _StoredJob[Any]:
+        record = self._lookup_locked(namespace, job_id)
+        if not is_service_context() and record.owner_user_id != current_owner_id():
+            raise JobNotFoundError(job_id)
+        return record
 
     def _lookup_locked(self, namespace: str, job_id: str) -> _StoredJob[Any]:
         self._validate_namespace(namespace)

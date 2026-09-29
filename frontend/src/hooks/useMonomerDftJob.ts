@@ -1,3 +1,4 @@
+import { useTaskEvents } from "./useTaskEvents";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { userFacingMonomerDftMessage } from "../lib/monomerDftPresentation";
 import {
@@ -24,12 +25,10 @@ import type {
   MonomerDftServiceStatusResponse
 } from "../types";
 
-export const MONOMER_DFT_JOB_POLL_MS = 1_500;
-export const MONOMER_DFT_STATUS_POLL_MS = 10_000;
 export const MONOMER_DFT_HISTORY_PAGE_SIZE = 10;
 export const MONOMER_DFT_JOB_BACKOFF_MS = [1_500, 3_000, 6_000, 10_000] as const;
 
-export type MonomerDftPollState = "idle" | "polling" | "degraded" | "terminal" | "stopped";
+export type MonomerDftPollState = "idle" | "polling" | "watching" | "degraded" | "terminal" | "stopped";
 
 const TERMINAL_STATUSES = new Set<MonomerDftJobStatus>(["completed", "failed", "cancelled"]);
 
@@ -261,18 +260,18 @@ function pollingIsComplete(job: MonomerDftJobResponse): boolean {
 }
 
 type UseMonomerDftJobOptions = {
+  enabled?: boolean;
   initialJobId?: string | null;
   onJobIdChange?: (jobId: string | null) => void;
 };
 
-type JobPollSession = {
+type JobReadSession = {
   jobId: string;
   selectionEpoch: number;
   controller: AbortController;
-  timer: ReturnType<typeof globalThis.setTimeout> | null;
 };
 
-export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMonomerDftJobOptions = {}) {
+export function useMonomerDftJob({ initialJobId = null, onJobIdChange, enabled = true }: UseMonomerDftJobOptions = {}) {
   const [serviceStatus, setServiceStatus] = useState<MonomerDftServiceStatusResponse | null>(null);
   const [capabilities, setCapabilities] = useState<MonomerDftCapabilitiesResponse | null>(null);
   const [job, setJob] = useState<MonomerDftJobResponse | null>(null);
@@ -283,8 +282,8 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     status: "",
     calculation_type: ""
   });
-  const [isServiceLoading, setIsServiceLoading] = useState(true);
-  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
+  const [isServiceLoading, setIsServiceLoading] = useState(enabled);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(enabled);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pollState, setPollState] = useState<MonomerDftPollState>("idle");
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
@@ -303,7 +302,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
   const statusTokenRef = useRef(0);
   const statusAbortRef = useRef<AbortController | null>(null);
   const historyAbortRef = useRef<AbortController | null>(null);
-  const jobPollSessionRef = useRef<JobPollSession | null>(null);
+  const jobReadSessionRef = useRef<JobReadSession | null>(null);
   const cancelAbortRef = useRef<AbortController | null>(null);
   const deleteAbortRef = useRef<AbortController | null>(null);
   const submitAbortRef = useRef<AbortController | null>(null);
@@ -311,6 +310,11 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
   const deletingArtifactsJobIdRef = useRef<string | null>(null);
   const pendingSubmissionRef = useRef<{ payload: string; idempotencyKey: string } | null>(null);
   const schemaReadyRef = useRef(false);
+  const deferredEventRefresh = useRef(false);
+  const eventHandler = useRef<(change: { ids: string[]; resync: boolean }) => Promise<unknown>>(async () => {});
+  const { connectionState: eventConnectionState, reconnect } =
+    useTaskEvents("dft", enabled, change => eventHandler.current(change));
+
   const purgeControllersRef = useRef(new Map<string, AbortController>());
   const purgeRevisionsRef = useRef(new Map<string, number>());
 
@@ -327,9 +331,8 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     historyTokenRef.current += 1;
     historyAbortRef.current?.abort();
     historyAbortRef.current = null;
-    const pollSession = jobPollSessionRef.current;
-    jobPollSessionRef.current = null;
-    if (pollSession?.timer != null) globalThis.clearTimeout(pollSession.timer);
+    const pollSession = jobReadSessionRef.current;
+    jobReadSessionRef.current = null;
     pollSession?.controller.abort();
     selectionEpochRef.current += 1;
     activeJobIdRef.current = null;
@@ -453,10 +456,9 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     }
   }, []);
 
-  const stopJobPoll = useCallback((nextState?: MonomerDftPollState): void => {
-    const session = jobPollSessionRef.current;
-    jobPollSessionRef.current = null;
-    if (session?.timer != null) globalThis.clearTimeout(session.timer);
+  const stopJobRead = useCallback((nextState?: MonomerDftPollState): void => {
+    const session = jobReadSessionRef.current;
+    jobReadSessionRef.current = null;
     session?.controller.abort();
     if (nextState) setPollState(nextState);
   }, []);
@@ -465,89 +467,42 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     activeJobIdRef.current === jobId && selectionEpochRef.current === epoch
   ), []);
 
-  const startJobPoll = useCallback((jobId: string, selectionEpoch: number): void => {
-    stopJobPoll();
-    const session: JobPollSession = {
-      jobId,
-      selectionEpoch,
-      controller: new AbortController(),
-      timer: null
-    };
-    jobPollSessionRef.current = session;
-    let transientFailures = 0;
-
-    const isCurrent = () => (
-      jobPollSessionRef.current === session &&
-      !session.controller.signal.aborted &&
-      selectionMatches(jobId, selectionEpoch)
-    );
-    const schedule = (delayMs: number) => {
-      if (!isCurrent()) return;
-      session.timer = globalThis.setTimeout(() => {
-        session.timer = null;
-        void pollOnce();
-      }, delayMs);
-    };
-    const pollOnce = async (): Promise<void> => {
-      if (!isCurrent()) return;
-      const requestOperationRevision = operationRevisionRef.current;
-      try {
-        const nextJob = await fetchMonomerDftJob(jobId, session.controller.signal);
-        if (!isCurrent()) return;
-        if (
-          requestOperationRevision !== operationRevisionRef.current ||
-          cancellingJobIdRef.current === jobId ||
-          deletingArtifactsJobIdRef.current === jobId
-        ) {
-          schedule(MONOMER_DFT_JOB_POLL_MS);
-          return;
-        }
-        transientFailures = 0;
-        setJob(nextJob);
-        setJobError(nextJob.error
-          ? userFacingMonomerDftMessage(nextJob.error.message, {
-            code: nextJob.error.code,
-            fallback: "计算任务未能完成，请检查输入后重试。"
-          })
-          : null);
-        if (pollingIsComplete(nextJob)) {
-          jobPollSessionRef.current = null;
-          setPollState("terminal");
-          void refreshHistory();
-          void refreshStatus();
-          return;
-        }
-        setPollState("polling");
-        schedule(MONOMER_DFT_JOB_POLL_MS);
-      } catch (error) {
-        if (!isCurrent() || isAbortError(error)) return;
-        if (error instanceof MonomerDftApiError && error.status === 404) {
-          jobPollSessionRef.current = null;
-          activeJobIdRef.current = null;
-          selectionEpochRef.current += 1;
-          setJob(null);
-          setPollState("stopped");
-          setJobError("该任务已被删除或已按保留策略到期清理。");
-          onJobIdChangeRef.current?.(null);
-          void refreshHistory();
-          return;
-        }
-        if (!isRetryableMonomerDftPollError(error)) {
-          jobPollSessionRef.current = null;
-          setPollState("stopped");
-          setJobError(errorMessage(error, "读取单体 DFT 任务失败。"));
-          return;
-        }
-        transientFailures += 1;
-        setPollState("degraded");
-        setJobError(errorMessage(error, "读取单体 DFT 任务失败。"));
-        schedule(monomerDftPollRetryDelayMs(error, transientFailures));
-      }
-    };
-
+  const refreshSelectedJob = useCallback(async (jobId: string, selectionEpoch: number): Promise<void> => {
+    stopJobRead();
+    const session = { jobId, selectionEpoch, controller: new AbortController() };
+    jobReadSessionRef.current = session;
+    const isCurrent = () => jobReadSessionRef.current === session && !session.controller.signal.aborted && selectionMatches(jobId, selectionEpoch);
+    const requestOperationRevision = operationRevisionRef.current;
     setPollState("polling");
-    void pollOnce();
-  }, [refreshHistory, refreshStatus, selectionMatches, stopJobPoll]);
+    try {
+      const nextJob = await fetchMonomerDftJob(jobId, session.controller.signal);
+      if (!isCurrent()) return;
+      if (requestOperationRevision !== operationRevisionRef.current || cancellingJobIdRef.current === jobId || deletingArtifactsJobIdRef.current === jobId) {
+        deferredEventRefresh.current = true;
+        setPollState("watching");
+        return;
+      }
+      setJob(nextJob);
+      setJobError(nextJob.error ? userFacingMonomerDftMessage(nextJob.error.message, {
+        code: nextJob.error.code, fallback: "计算任务未能完成，请检查输入后重试。"
+      }) : null);
+      setPollState(pollingIsComplete(nextJob) ? "terminal" : "watching");
+    } catch (error) {
+      if (!isCurrent() || isAbortError(error)) return;
+      if (error instanceof MonomerDftApiError && error.status === 404) {
+        activeJobIdRef.current = null;
+        selectionEpochRef.current += 1;
+        setJob(null);
+        onJobIdChangeRef.current?.(null);
+        setJobError("该任务已被删除或已按保留策略到期清理。");
+      } else {
+        setJobError(errorMessage(error, "读取单体 DFT 任务失败，请手动刷新。"));
+      }
+      setPollState("stopped");
+    } finally {
+      if (jobReadSessionRef.current === session) jobReadSessionRef.current = null;
+    }
+  }, [selectionMatches, stopJobRead]);
 
   const invalidateOperations = useCallback((): void => {
     operationRevisionRef.current += 1;
@@ -565,12 +520,12 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
   }, []);
 
   const beginSelection = useCallback((jobId: string | null): number => {
-    stopJobPoll();
+    stopJobRead();
     invalidateOperations();
     selectionEpochRef.current += 1;
     activeJobIdRef.current = jobId;
     return selectionEpochRef.current;
-  }, [invalidateOperations, stopJobPoll]);
+  }, [invalidateOperations, stopJobRead]);
 
   const loadJob = useCallback((jobId: string, updateLocation = true) => {
     if (!schemaReadyRef.current) return;
@@ -584,38 +539,27 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     if (updateLocation) {
       onJobIdChangeRef.current?.(normalizedJobId);
     }
-    startJobPoll(normalizedJobId, selectionEpoch);
-  }, [beginSelection, startJobPoll]);
+    refreshSelectedJob(normalizedJobId, selectionEpoch);
+  }, [beginSelection, refreshSelectedJob]);
 
   useEffect(() => {
+    if (!enabled) return;
     let stopped = false;
-    let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
-    const refresh = async () => {
-      await refreshStatus(true);
-      if (schemaReadyRef.current) {
-        await refreshHistory(historyQueryRef.current);
-      } else if (!stopped) {
-        setIsHistoryLoading(false);
-      }
-      if (!stopped) {
-        timer = globalThis.setTimeout(() => void refresh(), MONOMER_DFT_STATUS_POLL_MS);
-      }
-    };
-    void refresh();
+    void refreshStatus(true).then(() => {
+      if (!stopped && schemaReadyRef.current) void refreshHistory(historyQueryRef.current);
+      else if (!stopped) setIsHistoryLoading(false);
+    });
     return () => {
       stopped = true;
-      if (timer != null) globalThis.clearTimeout(timer);
       statusTokenRef.current += 1;
       historyTokenRef.current += 1;
       statusAbortRef.current?.abort();
       historyAbortRef.current?.abort();
-      statusAbortRef.current = null;
-      historyAbortRef.current = null;
     };
-  }, [refreshHistory, refreshStatus]);
+  }, [enabled, refreshHistory, refreshStatus]);
 
   useEffect(() => {
-    if (serviceStatus?.schema_ready !== true || capabilities?.schema_ready !== true) {
+    if (!enabled || serviceStatus?.schema_ready !== true || capabilities?.schema_ready !== true) {
       return;
     }
     if (!initialJobId) {
@@ -630,18 +574,18 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     if (initialJobId !== activeJobIdRef.current) {
       loadJob(initialJobId, false);
     }
-  }, [beginSelection, capabilities?.schema_ready, initialJobId, loadJob, serviceStatus?.schema_ready]);
+  }, [beginSelection, capabilities?.schema_ready, enabled, initialJobId, loadJob, serviceStatus?.schema_ready]);
 
   useEffect(() => () => {
     selectionEpochRef.current += 1;
     activeJobIdRef.current = null;
     operationRevisionRef.current += 1;
-    stopJobPoll();
+    stopJobRead();
     cancelAbortRef.current?.abort();
     deleteAbortRef.current?.abort();
     submitAbortRef.current?.abort();
     for (const controller of purgeControllersRef.current.values()) controller.abort();
-  }, [stopJobPoll]);
+  }, [stopJobRead]);
 
   async function submit(request: MonomerDftJobCreateRequest): Promise<string | null> {
     if (!schemaReadyRef.current) return null;
@@ -651,7 +595,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
       ? pendingSubmission.idempotencyKey
       : makeRequestId();
     pendingSubmissionRef.current = { payload: serializedRequest, idempotencyKey };
-    stopJobPoll();
+    stopJobRead();
     const operationRevision = operationRevisionRef.current + 1;
     operationRevisionRef.current = operationRevision;
     submitAbortRef.current?.abort();
@@ -666,7 +610,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
       const selectionEpoch = beginSelection(created.job_id);
       setJob(created);
       onJobIdChangeRef.current?.(created.job_id);
-      startJobPoll(created.job_id, selectionEpoch);
+      refreshSelectedJob(created.job_id, selectionEpoch);
       void refreshHistory();
       void refreshStatus();
       return created.job_id;
@@ -678,6 +622,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
       if (operationRevisionRef.current === operationRevision) {
         submitAbortRef.current = null;
         setIsSubmitting(false);
+        flushDeferredEvent();
       }
     }
   }
@@ -705,9 +650,9 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
       ) return;
       setJob(nextJob);
       if (pollingIsComplete(nextJob)) {
-        stopJobPoll("terminal");
-      } else if (jobPollSessionRef.current == null) {
-        startJobPoll(targetJobId, selectionEpoch);
+        stopJobRead("terminal");
+      } else {
+        stopJobRead("watching");
       }
       void refreshHistory();
     } catch (error) {
@@ -719,6 +664,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
         cancelAbortRef.current = null;
         cancellingJobIdRef.current = null;
         setCancellingJobId(null);
+        flushDeferredEvent();
       }
     }
   }
@@ -753,9 +699,9 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
       ) return;
       setJob(nextJob);
       if (artifactDeletionIsPending(nextJob)) {
-        if (jobPollSessionRef.current == null) startJobPoll(targetJobId, selectionEpoch);
+        stopJobRead("watching");
       } else {
-        stopJobPoll("terminal");
+        stopJobRead("terminal");
       }
       void refreshHistory();
     } catch (error) {
@@ -767,6 +713,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
         deleteAbortRef.current = null;
         deletingArtifactsJobIdRef.current = null;
         setDeletingArtifactsJobId(null);
+        flushDeferredEvent();
       }
     }
   }
@@ -798,7 +745,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
         items: current.items.filter((item) => item.job_id !== targetJobId)
       } : current);
       if (activeJobIdRef.current === targetJobId) {
-        stopJobPoll("idle");
+        stopJobRead("idle");
         selectionEpochRef.current += 1;
         activeJobIdRef.current = null;
         setJob(null);
@@ -819,6 +766,7 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
       if (purgeRevisionsRef.current.get(targetJobId) === revision) {
         purgeControllersRef.current.delete(targetJobId);
         setDeletingJobIds((current) => current.filter((id) => id !== targetJobId));
+        flushDeferredEvent();
       }
     }
   }
@@ -841,7 +789,32 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
   const selectedModel: MonomerDftModelCapability | null =
     capabilities?.models.find((item) => item.id === job?.request.model) ?? null;
 
-  const isJobLoading = pollState === "polling" || pollState === "degraded";
+  const isJobLoading = pollState === "polling";
+  const refreshAll = async () => {
+    await refreshStatus(true);
+    if (!schemaReadyRef.current) return;
+    const selected = activeJobIdRef.current;
+    await Promise.allSettled([refreshHistory(), ...(selected ? [refreshSelectedJob(selected, selectionEpochRef.current)] : [])]);
+  };
+  function flushDeferredEvent() {
+    if (deferredEventRefresh.current && !cancelAbortRef.current && !deleteAbortRef.current && !submitAbortRef.current && purgeControllersRef.current.size === 0) {
+      deferredEventRefresh.current = false;
+      void eventHandler.current({ ids: [], resync: true });
+    }
+  }
+  eventHandler.current = async ({ ids, resync }) => {
+    if (cancelAbortRef.current || deleteAbortRef.current || submitAbortRef.current || purgeControllersRef.current.size > 0) {
+      deferredEventRefresh.current = true;
+      return;
+    }
+    // A notification can precede the initial capabilities response. Preserve
+    // that schema/capability check when replacing an in-flight status read.
+    await refreshStatus(true);
+    if (!schemaReadyRef.current) return;
+    const selected = activeJobIdRef.current;
+    await Promise.allSettled([refreshHistory(), ...(selected && (resync || ids.includes(selected))
+      ? [refreshSelectedJob(selected, selectionEpochRef.current)] : [])]);
+  };
   const isCancelling = cancellingJobId != null && cancellingJobId === job?.job_id;
   const isDeletingArtifacts = deletingArtifactsJobId != null && deletingArtifactsJobId === job?.job_id;
 
@@ -865,6 +838,8 @@ export function useMonomerDftJob({ initialJobId = null, onJobIdChange }: UseMono
     serviceError,
     historyError,
     jobError,
+    eventConnectionState,
+    refreshAll: async () => { if (eventConnectionState === "unavailable") reconnect(); await refreshAll(); },
     refreshStatus: () => refreshStatus(true),
     refreshHistory,
     changeHistoryQuery,

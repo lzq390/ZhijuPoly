@@ -4,12 +4,17 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Event, Lock
 
-from fastapi.testclient import TestClient
+import pytest
+
+from test_api import api_database, auth_database, test_app
 
 from app.postgres_database import postgres_connection
 from app.services import property_filter_catalog as property_filter_catalog_service
-from app.services.analytics_snapshot_store import save_analytics_snapshot
-from app.services.postgres_database_browser import get_database_analytics_postgres, get_property_filter_options_postgres
+from app.services.analytics_snapshot_store import load_analytics_snapshot, save_analytics_snapshot
+from app.services.postgres_database_browser import (
+    database_analytics_sources_changed_postgres,
+    get_database_analytics_postgres, get_property_filter_options_postgres,
+)
 from app.services.property_filter_catalog import (
     PropertyFilterCatalog,
     load_property_filter_catalog,
@@ -20,7 +25,7 @@ from app.services.property_filter_catalog import (
 
 
 def test_experimental_process_browser_returns_empty_when_postgres_table_empty(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get("/api/v1/database-browser/experimental-process?page=1&page_size=2")
 
@@ -35,7 +40,7 @@ def test_experimental_process_browser_returns_empty_when_postgres_table_empty(te
 
 
 def test_experimental_property_browser_returns_empty_when_postgres_table_empty(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get("/api/v1/database-browser/experimental-property?q=Tg&page=1&page_size=2")
 
@@ -50,7 +55,7 @@ def test_experimental_property_browser_returns_empty_when_postgres_table_empty(t
 
 
 def test_database_browser_dataset_summary_reports_all_dataset_keys(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get("/api/v1/database-browser/datasets/summary")
 
@@ -70,14 +75,15 @@ def test_database_browser_dataset_summary_reports_all_dataset_keys(test_app) -> 
 
 
 def test_database_browser_live_analytics_includes_property_filter_counts(test_app) -> None:
-    client = TestClient(test_app)
-
-    response = client.get("/api/v1/database-browser/datasets/analytics?refresh=true")
-
+    # Refresh is now a maintenance operation. Verify aggregation using explicit
+    # maintenance credentials, then the published snapshot via the API role.
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
+        datasets = get_database_analytics_postgres(connection)
+        save_analytics_snapshot(connection, datasets)
+    response = test_app.state.test_client.get("/api/v1/database-browser/datasets/analytics")
     assert response.status_code == 200
-    payload = response.json()
-    property_filter = payload["datasets"]["propertyFilter"]
-    assert payload["source"] == "live"
+    property_filter = response.json()["datasets"]["propertyFilter"]
+    assert response.json()["source"] == "snapshot"
     assert property_filter["rows"] == 6
     assert property_filter["mappedRows"] == 4
     assert property_filter["rawRows"] == 2
@@ -86,122 +92,86 @@ def test_database_browser_live_analytics_includes_property_filter_counts(test_ap
     assert property_filter["uniqueSmiles"] == 2
 
 
-def test_database_browser_refresh_reuses_unchanged_snapshot(test_app, monkeypatch) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+def test_database_browser_refresh_is_denied_without_recomputing_or_writing(test_app, monkeypatch) -> None:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         datasets = get_database_analytics_postgres(connection)
         stored = save_analytics_snapshot(connection, datasets)
+        assert not database_analytics_sources_changed_postgres(
+            connection, generated_at=stored.generated_at, datasets=stored.datasets,
+        )
 
     def fail_if_recomputed(_connection):
-        raise AssertionError("unchanged analytics snapshot must not be recomputed")
+        raise AssertionError("a member must not refresh the shared analytics snapshot")
 
-    monkeypatch.setattr(
-        "app.routers.database_browser.get_database_analytics_postgres",
-        fail_if_recomputed,
-    )
-    response = TestClient(test_app).get("/api/v1/database-browser/datasets/analytics?refresh=true")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["source"] == "snapshot"
-    assert payload["refresh_status"] == "unchanged"
+    monkeypatch.setattr("app.routers.database_browser.get_database_analytics_postgres", fail_if_recomputed)
+    client = test_app.state.test_client
+    response = client.get("/api/v1/database-browser/datasets/analytics?refresh=true")
+    assert response.status_code == 403
+    payload = client.get("/api/v1/database-browser/datasets/analytics").json()
     assert payload["generated_at"] == stored.generated_at.isoformat()
     assert payload["datasets"] == datasets
 
 
-def test_database_browser_refresh_recomputes_new_import_once(test_app, monkeypatch) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+def test_database_analytics_detects_new_import_then_accepts_maintenance_snapshot(test_app) -> None:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         datasets = get_database_analytics_postgres(connection)
-        save_analytics_snapshot(
-            connection,
-            datasets,
-            generated_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        stored = save_analytics_snapshot(
+            connection, datasets, generated_at=datetime.now(timezone.utc) - timedelta(hours=1),
         )
         connection.execute(
-            """
-            INSERT INTO governance.import_batches (
-              dataset_key, finished_at, status, row_count
-            ) VALUES ('core', now(), 'completed', 6)
-            """
+            "INSERT INTO governance.import_batches (dataset_key, finished_at, status, row_count) "
+            "VALUES ('core', now(), 'completed', 6)"
         )
-
-    original = get_database_analytics_postgres
-    recompute_calls = 0
-
-    def count_recompute(connection):
-        nonlocal recompute_calls
-        recompute_calls += 1
-        return original(connection)
-
-    monkeypatch.setattr(
-        "app.routers.database_browser.get_database_analytics_postgres",
-        count_recompute,
-    )
-    client = TestClient(test_app)
-    refreshed = client.get("/api/v1/database-browser/datasets/analytics?refresh=true")
-    unchanged = client.get("/api/v1/database-browser/datasets/analytics?refresh=true")
-
-    assert refreshed.status_code == 200
-    assert refreshed.json()["source"] == "live"
-    assert refreshed.json()["refresh_status"] == "recomputed"
-    assert unchanged.status_code == 200
-    assert unchanged.json()["source"] == "snapshot"
-    assert unchanged.json()["refresh_status"] == "unchanged"
-    assert recompute_calls == 1
-
-
-def test_database_browser_refresh_detects_direct_row_count_change(test_app) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
-        datasets = get_database_analytics_postgres(connection)
-        save_analytics_snapshot(connection, datasets)
-        connection.execute(
-            """
-            INSERT INTO experimental.process_records (
-              source_file, source_row_number, polymer_name,
-              process_flow_original_text, material_original_text
-            ) VALUES ('manual-change.csv', 1, 'Poly A', 'heated and stirred', 'ODA')
-            """
+        assert database_analytics_sources_changed_postgres(
+            connection, generated_at=stored.generated_at, datasets=stored.datasets,
         )
-
-    response = TestClient(test_app).get("/api/v1/database-browser/datasets/analytics?refresh=true")
-
+        refreshed = save_analytics_snapshot(connection, get_database_analytics_postgres(connection))
+        assert not database_analytics_sources_changed_postgres(
+            connection, generated_at=refreshed.generated_at, datasets=refreshed.datasets,
+        )
+    response = test_app.state.test_client.get("/api/v1/database-browser/datasets/analytics")
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["source"] == "live"
-    assert payload["refresh_status"] == "recomputed"
-    assert payload["datasets"]["process"]["rows"] == datasets["process"]["rows"] + 1
+    assert response.json()["datasets"] == refreshed.datasets
 
 
-def test_database_browser_refresh_replaces_invalid_snapshot(test_app) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+def test_database_analytics_detects_direct_row_count_change(test_app) -> None:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
+        datasets = get_database_analytics_postgres(connection)
+        stored = save_analytics_snapshot(connection, datasets)
         connection.execute(
-            """
-            INSERT INTO governance.database_analytics_snapshots (
-              snapshot_key, generated_at, datasets
-            ) VALUES ('database-browser', now(), '{"process": {"rows": 0}}'::jsonb)
-            """
+            "INSERT INTO experimental.process_records (source_file, source_row_number, polymer_name, "
+            "process_flow_original_text, material_original_text) "
+            "VALUES ('manual-change.csv', 1, 'Poly A', 'heated and stirred', 'ODA')"
         )
+        assert database_analytics_sources_changed_postgres(
+            connection, generated_at=stored.generated_at, datasets=stored.datasets,
+        )
+        refreshed = get_database_analytics_postgres(connection)
+        assert refreshed["process"]["rows"] == datasets["process"]["rows"] + 1
 
-    client = TestClient(test_app)
-    refreshed = client.get("/api/v1/database-browser/datasets/analytics?refresh=true")
-    stored = client.get("/api/v1/database-browser/datasets/analytics")
 
-    assert refreshed.status_code == 200
-    assert refreshed.json()["source"] == "live"
-    assert refreshed.json()["refresh_status"] == "recomputed"
-    assert stored.status_code == 200
-    assert stored.json()["source"] == "snapshot"
-    assert set(stored.json()["datasets"]) == {
-        "process",
-        "property",
-        "structureEffect",
-        "propertyFilter",
-        "dft",
-        "formulation",
+def test_database_browser_rejects_invalid_snapshot_until_maintenance_replaces_it(test_app) -> None:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
+        connection.execute(
+            "INSERT INTO governance.database_analytics_snapshots (snapshot_key, generated_at, datasets) "
+            "VALUES ('database-browser', now(), '{\"process\": {\"rows\": 0}}'::jsonb)"
+        )
+        with pytest.raises(RuntimeError, match="missing datasets"):
+            load_analytics_snapshot(connection)
+    client = test_app.state.test_client
+    assert client.get("/api/v1/database-browser/datasets/analytics").status_code == 503
+    assert client.get("/api/v1/database-browser/datasets/analytics?refresh=true").status_code == 403
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
+        save_analytics_snapshot(connection, get_database_analytics_postgres(connection))
+    response = client.get("/api/v1/database-browser/datasets/analytics")
+    assert response.status_code == 200
+    assert set(response.json()["datasets"]) == {
+        "process", "property", "structureEffect", "propertyFilter", "dft", "formulation",
     }
 
 
 def test_database_browser_snapshot_never_falls_back_to_checked_in_python(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     missing = client.get("/api/v1/database-browser/datasets/analytics")
 
@@ -215,7 +185,7 @@ def test_database_browser_snapshot_never_falls_back_to_checked_in_python(test_ap
         )
     }
     generated_at = datetime(2026, 7, 14, tzinfo=timezone.utc)
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         save_analytics_snapshot(connection, datasets, generated_at=generated_at, source_sha="a" * 40)
 
     stored = client.get("/api/v1/database-browser/datasets/analytics")
@@ -228,7 +198,7 @@ def test_database_browser_snapshot_never_falls_back_to_checked_in_python(test_ap
 
 
 def test_property_filter_options_include_standardized_and_raw_properties(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get("/api/v1/database-browser/property-filter/options")
 
@@ -253,7 +223,7 @@ def test_property_filter_options_include_standardized_and_raw_properties(test_ap
     assert tg_histogram["total_count"] == 2
     assert raw_option["property_unit_clean"] == "cal/(g*C)"
     assert raw_option["rows"] == 2
-    assert response.headers["cache-control"] == "private, max-age=0, must-revalidate"
+    assert response.headers["cache-control"] == "private, no-store"
     assert response.headers["etag"].startswith('W/"pf-options-v1-')
     assert "catalog;dur=" in response.headers["server-timing"]
 
@@ -266,7 +236,7 @@ def test_property_filter_options_include_standardized_and_raw_properties(test_ap
 
 
 def test_property_filter_histogram_reads_real_bins_and_supports_etag(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
     options_response = client.get("/api/v1/database-browser/property-filter/options")
     tg_option = next(
         item
@@ -283,7 +253,7 @@ def test_property_filter_histogram_reads_real_bins_and_supports_etag(test_app) -
     payload = response.json()
     assert payload["option_key"] == tg_option["option_key"]
     assert payload["histogram"] == tg_option["histogram"]
-    assert response.headers["cache-control"] == "private, max-age=0, must-revalidate"
+    assert response.headers["cache-control"] == "private, no-store"
     assert response.headers["etag"].startswith('W/"pf-histogram-v1-')
     assert "histogram;dur=" in response.headers["server-timing"]
 
@@ -300,7 +270,7 @@ def test_property_filter_histogram_computes_bins_for_legacy_snapshot_once(
     test_app,
     monkeypatch,
 ) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         connection.execute(
             """
             UPDATE governance.property_filter_options_snapshots
@@ -331,7 +301,7 @@ def test_property_filter_histogram_computes_bins_for_legacy_snapshot_once(
         counted_aggregate,
     )
 
-    client = TestClient(test_app)
+    client = test_app.state.test_client
     response = client.get(
         "/api/v1/database-browser/property-filter/histogram",
         params={"option_key": tg_option["option_key"]},
@@ -422,7 +392,7 @@ def test_property_filter_histogram_coalesces_concurrent_legacy_requests(
 
 
 def test_property_filter_histogram_rejects_unknown_option(test_app) -> None:
-    response = TestClient(test_app).get(
+    response = test_app.state.test_client.get(
         "/api/v1/database-browser/property-filter/histogram",
         params={"option_key": "missing:property"},
     )
@@ -431,7 +401,7 @@ def test_property_filter_histogram_rejects_unknown_option(test_app) -> None:
 
 
 def test_property_filter_histogram_uses_robust_domain_for_large_groups(test_app) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         connection.execute(
             """
             INSERT INTO core.polymer_property_filter_records (
@@ -458,7 +428,7 @@ def test_property_filter_histogram_uses_robust_domain_for_large_groups(test_app)
         )
         rebuild_property_filter_catalog(connection)
 
-    response = TestClient(test_app).get("/api/v1/database-browser/property-filter/options")
+    response = test_app.state.test_client.get("/api/v1/database-browser/property-filter/options")
     tg_option = next(
         item
         for item in response.json()["options"]
@@ -474,21 +444,21 @@ def test_property_filter_histogram_uses_robust_domain_for_large_groups(test_app)
 
 
 def test_property_filter_options_fall_back_when_snapshot_is_missing(test_app) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         connection.execute(
             "DELETE FROM governance.property_filter_options_snapshots WHERE snapshot_key = 'current'"
         )
 
-    response = TestClient(test_app).get("/api/v1/database-browser/property-filter/options")
+    response = test_app.state.test_client.get("/api/v1/database-browser/property-filter/options")
 
     assert response.status_code == 200
     assert response.json()["total_records"] == 6
-    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["cache-control"] == "private, no-store"
     assert "etag" not in response.headers
 
 
 def test_property_filter_options_fall_back_when_snapshot_payload_is_invalid(test_app) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         connection.execute(
             """
             UPDATE governance.property_filter_options_snapshots
@@ -497,17 +467,17 @@ def test_property_filter_options_fall_back_when_snapshot_payload_is_invalid(test
             """
         )
 
-    response = TestClient(test_app).get("/api/v1/database-browser/property-filter/options")
+    response = test_app.state.test_client.get("/api/v1/database-browser/property-filter/options")
 
     assert response.status_code == 200
     assert response.json()["total_records"] == 6
     assert len(response.json()["options"]) == 3
-    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["cache-control"] == "private, no-store"
     assert "etag" not in response.headers
 
 
 def test_property_filter_options_fall_back_when_newer_import_has_no_snapshot(test_app) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         connection.execute(
             """
             INSERT INTO governance.import_batches (
@@ -519,18 +489,18 @@ def test_property_filter_options_fall_back_when_newer_import_has_no_snapshot(tes
             """
         )
 
-    response = TestClient(test_app).get(
+    response = test_app.state.test_client.get(
         "/api/v1/database-browser/property-filter/options"
     )
 
     assert response.status_code == 200
     assert response.json()["total_records"] == 6
-    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["cache-control"] == "private, no-store"
     assert "etag" not in response.headers
 
 
 def test_property_filter_snapshot_matches_live_aggregation_field_for_field(test_app) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         catalog = load_property_filter_catalog(connection)
         live_total, live_mapped, live_raw, live_options = (
             get_property_filter_options_postgres(connection)
@@ -546,7 +516,7 @@ def test_property_filter_snapshot_matches_live_aggregation_field_for_field(test_
 
 
 def test_property_filter_statistics_group_by_canonical_smiles_first(test_app) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         connection.execute(
             """
             INSERT INTO core.polymer_property_filter_records (
@@ -571,9 +541,11 @@ def test_property_filter_statistics_group_by_canonical_smiles_first(test_app) ->
         )
         rebuild_property_filter_catalog(connection)
 
-    client = TestClient(test_app)
+    client = test_app.state.test_client
     options_response = client.get("/api/v1/database-browser/property-filter/options")
-    analytics_response = client.get("/api/v1/database-browser/datasets/analytics?refresh=true")
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
+        save_analytics_snapshot(connection, get_database_analytics_postgres(connection))
+    analytics_response = client.get("/api/v1/database-browser/datasets/analytics")
 
     assert options_response.status_code == 200
     tg_option = next(
@@ -587,10 +559,10 @@ def test_property_filter_statistics_group_by_canonical_smiles_first(test_app) ->
 
 
 def test_property_filter_options_report_empty_table_as_not_ready(test_app) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         connection.execute("TRUNCATE core.polymer_property_filter_records")
         rebuild_property_filter_catalog(connection)
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get("/api/v1/database-browser/property-filter/options")
 
@@ -603,7 +575,7 @@ def test_property_filter_options_report_empty_table_as_not_ready(test_app) -> No
 
 
 def test_property_filter_search_filters_standardized_property_range(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post(
         "/api/v1/database-browser/property-filter/search",
@@ -629,12 +601,12 @@ def test_property_filter_search_filters_standardized_property_range(test_app) ->
     assert payload["results"][0]["smiles"] == "CCO"
     assert payload["results"][0]["records"][0]["property_key"] == "tg"
     assert payload["results"][0]["records"][0]["canonical_value"] == 123.4
-    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["cache-control"] == "private, no-store"
     assert "search;dur=" in response.headers["server-timing"]
 
 
 def test_property_filter_search_ands_multiple_conditions_by_smiles(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post(
         "/api/v1/database-browser/property-filter/search",
@@ -668,7 +640,7 @@ def test_property_filter_search_ands_multiple_conditions_by_smiles(test_app) -> 
 
 
 def test_property_filter_search_preserves_counts_on_out_of_range_page(test_app) -> None:
-    response = TestClient(test_app).post(
+    response = test_app.state.test_client.post(
         "/api/v1/database-browser/property-filter/search",
         json={
             "filters": [
@@ -693,7 +665,7 @@ def test_property_filter_search_preserves_counts_on_out_of_range_page(test_app) 
 
 
 def test_property_filter_keyword_remains_scoped_to_each_and_branch(test_app) -> None:
-    response = TestClient(test_app).post(
+    response = test_app.state.test_client.post(
         "/api/v1/database-browser/property-filter/search",
         json={
             "filters": [
@@ -724,7 +696,7 @@ def test_property_filter_keyword_remains_scoped_to_each_and_branch(test_app) -> 
 
 
 def test_property_filter_search_groups_by_canonical_smiles_before_raw_smiles(test_app) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         connection.execute(
             """
             INSERT INTO core.polymer_property_filter_records (
@@ -748,7 +720,7 @@ def test_property_filter_search_groups_by_canonical_smiles_before_raw_smiles(tes
             """
         )
 
-    client = TestClient(test_app)
+    client = test_app.state.test_client
     response = client.post(
         "/api/v1/database-browser/property-filter/search",
         json={
@@ -785,7 +757,7 @@ def test_property_filter_search_groups_by_canonical_smiles_before_raw_smiles(tes
 
 
 def test_property_filter_search_supports_raw_property_range(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post(
         "/api/v1/database-browser/property-filter/search",
@@ -827,7 +799,7 @@ def test_smiles_lookup_properties_returns_all_matching_rows(test_app) -> None:
         )
         for index in range(60)
     ]
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         with connection.cursor() as cursor:
             cursor.executemany(
                 """
@@ -840,7 +812,7 @@ def test_smiles_lookup_properties_returns_all_matching_rows(test_app) -> None:
                 extra_rows,
             )
 
-    client = TestClient(test_app)
+    client = test_app.state.test_client
     response = client.post("/api/v1/database-browser/smiles-lookup", json={"smiles": "CCO", "table": "properties"})
 
     assert response.status_code == 200
@@ -852,7 +824,7 @@ def test_smiles_lookup_properties_returns_all_matching_rows(test_app) -> None:
 
 
 def test_formulation_browser_reads_postgres_formulation_records(test_app) -> None:
-    with postgres_connection(test_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         connection.execute(
             """
             INSERT INTO knowledge.documents (
@@ -910,7 +882,7 @@ def test_formulation_browser_reads_postgres_formulation_records(test_app) -> Non
             ),
         )
 
-    client = TestClient(test_app)
+    client = test_app.state.test_client
     response = client.get("/api/v1/database-browser/formulation", params={"q": "DMF", "page": 1, "page_size": 10})
 
     assert response.status_code == 200

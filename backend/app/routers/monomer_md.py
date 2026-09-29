@@ -22,11 +22,14 @@ from app.models import (
     MonomerMdStatusResponse,
 )
 from app.postgres_database import postgres_connection
+from app.auth.context import current_owner_id, service_context
 from app.services.monomer_md_repository import (
     create_monomer_md_job_postgres,
+    count_user_active_monomer_md_jobs_postgres,
     get_monomer_md_job_postgres,
     get_monomer_md_trajectory_timeline_postgres,
     get_monomer_md_mode_capacity_postgres,
+    get_user_monomer_md_capacity_postgres,
     list_monomer_md_jobs_postgres,
     mark_monomer_md_artifacts_deleted_postgres,
     mark_monomer_md_job_failed_postgres,
@@ -123,11 +126,17 @@ def _create_pending_job_with_capacity_guard(
     config_json: dict[str, Any] | None = None,
     components: dict[str, Any] | None = None,
 ) -> None:
-    with postgres_connection(settings.app_postgres_dsn) as connection:
+    owner_user_id = current_owner_id()
+    with service_context(), postgres_connection(settings.app_postgres_dsn) as connection:
+        account = connection.execute("SELECT status FROM auth.users WHERE user_id = %s::uuid FOR UPDATE", (owner_user_id,)).fetchone()
+        if account is None or account["status"] != "active":
+            raise HTTPException(status_code=403, detail="account disabled")
         active_jobs, _ = reconcile_and_get_active_monomer_md_capacity_postgres(
             connection,
             advisory_lock_id=_ACTIVE_CAPACITY_ADVISORY_LOCK_ID,
         )
+        if count_user_active_monomer_md_jobs_postgres(connection, owner_user_id=owner_user_id):
+            raise HTTPException(status_code=429, detail="user MD task capacity is full")
         if active_jobs >= settings.monomer_md_max_active_jobs:
             _raise_active_job_capacity_error()
         mode_capacity = get_monomer_md_mode_capacity_postgres(connection)
@@ -140,6 +149,7 @@ def _create_pending_job_with_capacity_guard(
         create_monomer_md_job_postgres(
             connection,
             job_id=job_id,
+            owner_user_id=owner_user_id,
             input_smiles=input_smiles,
             canonical_smiles=canonical_smiles,
             requested_steps=requested_steps,
@@ -196,6 +206,8 @@ def _worker_client_for_app(app) -> MonomerMdWorkerClient:
 
 
 def _worker_unavailable_message(health: dict[str, Any]) -> str | None:
+    if health.get("start_authorization_version") != 1:
+        return "monomer MD worker start authorization protocol is unavailable"
     worker_status = str(health.get("status") or "unknown")
     worker_mode = str(health.get("mode") or "unknown")
     db_configured = _optional_bool(health.get("db_configured"))
@@ -279,7 +291,7 @@ def _status_response_from_health(
     draining = _optional_bool(health.get("draining")) is True
     database_busy = (
         database_active_jobs is not None
-        and database_active_jobs >= settings.monomer_md_max_active_jobs
+        and database_active_jobs >= 1
     )
     worker_max_active_jobs = _optional_int(health.get("max_active_jobs"))
     worker_busy = (
@@ -329,7 +341,7 @@ def _status_response_from_health(
         byteff2_root_exists=_optional_bool(health.get("byteff2_root_exists")),
         runtime_ready=_optional_bool(health.get("runtime_ready")),
         runtime_error=_optional_str(health.get("runtime_error")),
-        active_jobs=worker_active_jobs,
+        active_jobs=database_active_jobs,
         database_active_jobs=database_active_jobs,
         oldest_active_heartbeat_age_seconds=oldest_active_heartbeat_age_seconds,
         max_active_jobs=settings.monomer_md_max_active_jobs,
@@ -367,19 +379,22 @@ def _database_active_job_count(
     settings,
 ) -> tuple[int | None, int | None, dict[str, int] | None, str | None]:
     try:
+        # Retain global stale-lease reconciliation under the execution role,
+        # then return only this user's capacity projection.
+        with service_context(), postgres_connection(settings.app_postgres_dsn) as connection:
+            reconcile_and_get_active_monomer_md_capacity_postgres(connection, advisory_lock_id=_ACTIVE_CAPACITY_ADVISORY_LOCK_ID)
         with postgres_connection(settings.app_postgres_dsn) as connection:
-            count, oldest_age = reconcile_and_get_active_monomer_md_capacity_postgres(
-                connection,
-                advisory_lock_id=_ACTIVE_CAPACITY_ADVISORY_LOCK_ID,
+            count, oldest_age, modes = get_user_monomer_md_capacity_postgres(
+                connection, owner_user_id=current_owner_id(),
             )
-            return count, oldest_age, get_monomer_md_mode_capacity_postgres(connection), None
+            return count, oldest_age, modes, None
     except Exception as exc:
         return None, None, None, str(exc)
 
 
 def _get_job(dsn: str, job_id: str) -> dict[str, Any] | None:
     with postgres_connection(dsn) as connection:
-        return get_monomer_md_job_postgres(connection, job_id)
+        return get_monomer_md_job_postgres(connection, job_id, owner_user_id=current_owner_id())
 
 
 def _get_trajectory_timeline(
@@ -392,6 +407,7 @@ def _get_trajectory_timeline(
             connection,
             job_id=job_id,
             stage_id=stage_id,
+            owner_user_id=current_owner_id(),
         )
 
 
@@ -467,6 +483,7 @@ def _list_jobs(
     with postgres_connection(dsn) as connection:
         return list_monomer_md_jobs_postgres(
             connection,
+            owner_user_id=current_owner_id(),
             run_mode=run_mode,
             active_only=active_only,
             include_result=include_result,
@@ -482,7 +499,7 @@ def _request_job_cancel(
     job_id: str,
 ) -> tuple[dict[str, Any] | None, bool]:
     with postgres_connection(dsn) as connection:
-        return request_monomer_md_job_cancel_postgres(connection, job_id=job_id)
+        return request_monomer_md_job_cancel_postgres(connection, job_id=job_id, owner_user_id=current_owner_id())
 
 
 def _mark_job_failed_after_submit_error(
@@ -514,7 +531,7 @@ def _mark_job_submitted_and_get(
             worker_job_id=worker_job_id,
             worker_version=worker_version,
         )
-        return get_monomer_md_job_postgres(connection, job_id)
+        return get_monomer_md_job_postgres(connection, job_id, owner_user_id=current_owner_id())
 
 
 def _mark_artifacts_deleted_and_get(
@@ -528,7 +545,7 @@ def _mark_artifacts_deleted_and_get(
             job_id=job_id,
             message=message,
         )
-        return get_monomer_md_job_postgres(connection, job_id)
+        return get_monomer_md_job_postgres(connection, job_id, owner_user_id=current_owner_id())
 
 
 def _formal_protocol_unavailable_message(health: dict[str, Any], protocol: str) -> str | None:
@@ -916,13 +933,15 @@ async def delete_monomer_md_job_artifacts(job_id: str, request: Request) -> Mono
 
 @router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_monomer_md_job(job_id: str, request: Request) -> Response:
-    # Public IDs are generated by the Backend.  An invalid ID therefore
-    # denotes an already-absent record and must never be forwarded to storage.
+    # Invalid, absent and foreign IDs share the same public authorization result.
     if _JOB_ID_RE.fullmatch(job_id) is None:
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = await run_in_threadpool(_get_job, request.app.state.settings.app_postgres_dsn, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
     service = request.app.state.monomer_md_job_deletion_service
     try:
-        await service.delete(job_id)
+        await service.delete(job_id, expected=job)
     except MonomerJobDeletionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)

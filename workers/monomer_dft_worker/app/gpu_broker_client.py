@@ -130,6 +130,8 @@ class GpuBrokerClient(Protocol):
 
     def abandon(self, lease: GpuLease) -> None: ...
 
+    def confirm_attempt_released(self, request_ids: tuple[str, ...]) -> bool: ...
+
 
 class DisabledBrokerClient:
     """Process-local leases for an explicitly Broker-disabled direct mode.
@@ -223,6 +225,10 @@ class DisabledBrokerClient:
 
     def abandon(self, lease: GpuLease) -> None:
         self.quarantine(lease, reason="gpu_runtime_corruption")
+
+    def confirm_attempt_released(self, request_ids: tuple[str, ...]) -> bool:
+        # Process-local leases cannot prove that an old executor disappeared.
+        return False
 
     def _require(self, lease: GpuLease) -> None:
         with self._lock:
@@ -878,6 +884,35 @@ class SharedGpuBrokerAdapter:
         with contextlib.suppress(Exception):
             managed.quarantine(reason="gpu_runtime_corruption")
         managed.fail_closed()
+
+    def confirm_attempt_released(self, request_ids: tuple[str, ...]) -> bool:
+        """Read the durable Broker authority after acquiring the journal lock.
+
+        Broker reconciliation retains leases whose owner or orphan workload is
+        alive. Pending waiters have no public identity list, so any waiter is
+        conservatively unresolved. Never adopt or release another PID's lease.
+        """
+        try:
+            status = self._client.status()
+        except Exception:
+            return False
+        if (not isinstance(status, dict) or status.get("schema_version") != 1
+                or not isinstance(status.get("broker_instance_id"), str)
+                or not status["broker_instance_id"]
+                or type(status.get("waiters")) is not int or status["waiters"] != 0
+                or status.get("quarantined_gpus") != {}
+                or not isinstance(status.get("leases"), list)):
+            return False
+        expected = set(request_ids)
+        if not expected or any(not isinstance(value, str) or not value for value in expected):
+            return False
+        for lease in status["leases"]:
+            if (not isinstance(lease, dict) or not isinstance(lease.get("request_id"), str)
+                    or not lease["request_id"]):
+                return False
+            if lease["request_id"] in expected:
+                return False
+        return True
 
     def _managed_lease(self, lease: GpuLease) -> Any:
         with self._managed_lock:

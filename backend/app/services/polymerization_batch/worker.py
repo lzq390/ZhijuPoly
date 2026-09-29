@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import fcntl
+from contextlib import contextmanager
+from threading import RLock
 import logging
 import os
 import shutil
@@ -11,17 +14,37 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from functools import wraps
+from app.auth.context import service_context
+from app.task_observability import TaskExecutionContext, log_task_event
+
 import psycopg
 from psycopg.rows import dict_row
 
 from .chemistry import engine_fingerprint
-from .execution import ExecutionStopped, classify_isolated, generate_isolated, run_isolated
+from .execution import CleanupPendingError, ExecutionStopped, classify_isolated, generate_isolated, run_isolated
 from .models import BatchError, BatchSettings
 from .repository import BatchRepository, WORKER_LOCK
 from .storage import digest, file_manifest, read_json, resolve_file, write_json
 
 
 logger = logging.getLogger(__name__)
+
+
+def _service_operation(function):
+    @wraps(function)
+    def run(*args, **kwargs):
+        with service_context():
+            return function(*args, **kwargs)
+    return run
+
+
+def _resource_operation(function):
+    @wraps(function)
+    def run(self, *args, **kwargs):
+        with self._resource_lease():
+            return function(self, *args, **kwargs)
+    return run
 
 
 class BatchWorker:
@@ -33,7 +56,67 @@ class BatchWorker:
         self.engine = {}
         self.lock_connection = None
         self.last_heartbeat = 0.0
+        self._resource_file = None
+        self._resource_mutex = RLock()
 
+    @contextmanager
+    def _resource_lease(self):
+        # This deployment has one local storage_root shared by its batch workers.
+        # The child inherits this open-file-description: losing the DB session
+        # or the parent process cannot release physical capacity before it exits.
+        with self._resource_mutex:
+            if self._resource_file is not None:
+                yield self._resource_file.fileno()
+                return
+            self.root.mkdir(parents=True, exist_ok=True)
+            with (self.root / ".worker-execution.lock").open("a+b") as handle:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._resource_file = handle
+                try:
+                    yield handle.fileno()
+                finally:
+                    self._resource_file = None
+                    # Only close our descriptor. LOCK_UN would also unlock the
+                    # descriptor inherited by a still-running child.
+
+    @staticmethod
+    def _execution_context(job: dict, chunk: dict | None = None):
+        return TaskExecutionContext(owner_user_id=str(job["owner_user_id"]), request_id=None,
+                                    task_type="polymerization_batch", channel="batch", task_id=job["id"],
+                                    attempt_id=chunk["chunk_id"] if chunk else None)
+
+    @staticmethod
+    def _clean_scratch(path: Path, context=None):
+        try:
+            try:
+                shutil.rmtree(path)
+            except FileNotFoundError:
+                pass
+            # A disappearing descendant is not proof the scratch root is gone.
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                return
+            raise OSError("Batch scratch directory remains after cleanup")
+        except OSError as exc:
+            if context is not None:
+                log_task_event(context, "cleanup_pending", reason="scratch_cleanup_failed")
+            raise CleanupPendingError("Batch scratch cleanup is still pending") from exc
+
+    @_service_operation
+    @_resource_operation
+    def recover(self):
+        # Holding the inherited OS lock proves every previous child has exited.
+        # Files must also be gone before dropping any execution fencing token.
+        with self.repository.connection() as conn:
+            active = conn.execute("SELECT id,owner_user_id,execution_token FROM polymerization_batch.jobs WHERE execution_token IS NOT NULL").fetchall()
+        for job in active:
+            self._clean_scratch(self.root / "jobs" / job["id"] / "attempts" / job["execution_token"] / "scratch", self._execution_context(job))
+        self.repository.recover(cleanup_confirmed=True)
+        for job in active:
+            log_task_event(self._execution_context(job), "resources_released", reason="worker_recovered")
+
+    @_service_operation
     def heartbeat(self, *, force=False):
         if self.lock_connection is not None:
             self.lock_connection.execute("SELECT 1")
@@ -41,7 +124,11 @@ class BatchWorker:
             self.repository.heartbeat_worker(self.worker_id, self.engine, self.config.enabled, "批量计算 worker 已就绪。" if self.config.enabled else "批量聚合当前未启用。")
             self.last_heartbeat = time.monotonic()
 
+    @_service_operation
+    @_resource_operation
     def execute(self, job: dict, chunk: dict) -> None:
+        context = self._execution_context(job, chunk)
+        log_task_event(context, "execution_started")
         started = time.monotonic()
         directory = self.root / "jobs" / job["id"] / "attempts" / job["execution_token"]
         scratch = directory / "scratch"
@@ -67,12 +154,12 @@ class BatchWorker:
             if digest(snapshot_path) != job["options"]["snapshot_sha256"]:
                 raise BatchError("输入快照校验失败。", "artifact_corrupt", 503)
             snapshot = read_json(snapshot_path)
-            completed = self.repository.chunks(job["id"], completed_only=True)
+            completed = self.repository.chunks_for_service(job["id"], completed_only=True)
             classification = [item["artifact"] for item in completed if item["kind"] == "classify"]
             def call(payload):
                 guard()
                 return run_isolated({**payload, "engine": job["engine"], "classification": classification,
-                                     "target": job["options"]["target_class"]}, self.config, scratch, guard=guard)
+                                     "target": job["options"]["target_class"]}, self.config, scratch, guard=guard, resource_lock_fd=self._resource_file.fileno())
             counts, exported = {}, None
             if chunk["kind"] == "classify":
                 data = classify_isolated(chunk["payload"]["smiles"], call)
@@ -106,30 +193,42 @@ class BatchWorker:
                                          "snapshot": job["options"]["snapshot_path"],
                                          "chunks": [{"kind": item["kind"], "artifact": item["artifact"]} for item in completed],
                                          "directory": str((directory / "output").relative_to(self.root))},
-                                        self.config, scratch, guard=guard, timeout=max(600, self.config.subprocess_seconds))
+                                        self.config, scratch, guard=guard, timeout=max(600, self.config.subprocess_seconds), resource_lock_fd=self._resource_file.fileno())
                 path = directory / "manifest.json"
                 write_json(path, exported)
             guard()
             artifact = file_manifest(self.root, path, "application/json")
+            self._clean_scratch(scratch, context)
             publication_uncertain = True
             published = self.repository.finish_unit(job, chunk, artifact, time.monotonic() - started, counts, exported)
             publication_uncertain = False
+            log_task_event(context, "resources_released", reason="completed" if published else "publication_fenced")
+        except CleanupPendingError:
+            # Leave the existing state and token occupied. A later recovery may
+            # clear them only after obtaining the OS lock and removing scratch.
+            publication_uncertain = True
+            log_task_event(context, "cleanup_pending", reason="cleanup_unconfirmed")
+            raise
         except ExecutionStopped:
             # Shutdown checkpoints by releasing this uncommitted attempt. A
             # cancellation already stored in jobs is finalized on the next claim.
+            self._clean_scratch(scratch, context)
             self.repository.release_execution(job, time.monotonic() - started)
+            log_task_event(context, "resources_released", reason="worker_stopped" if self.stopping else "cancelled")
         except Exception as exc:
-            logger.exception("batch execution failed: job=%s chunk=%s", job["id"], chunk["chunk_id"])
+            self._clean_scratch(scratch, context)
+            logger.warning("batch execution failed: job=%s chunk=%s error_type=%s", job["id"], chunk["chunk_id"], type(exc).__name__)
             self.repository.stop_execution(job, elapsed=time.monotonic() - started,
                                            code=getattr(exc, "code", "execution_error"), message=str(exc),
                                            finalize=chunk["kind"] != "export")
+            log_task_event(context, "resources_released", reason="execution_error")
         finally:
-            shutil.rmtree(scratch, ignore_errors=True)
             # A lost commit acknowledgement must never delete a committed
             # shard. Recovery reads its DB reference; cleanup reaps true orphans.
             if not published and not publication_uncertain:
                 shutil.rmtree(directory, ignore_errors=True)
 
+    @_service_operation
     def cleanup(self):
         with self.repository.connection() as conn:
             from app.services.deployment_control import get_drain_state
@@ -171,11 +270,12 @@ class BatchWorker:
             if not parent.exists():
                 continue
             references = {resolve_file(self.root, item["artifact"]["path"]).parent
-                          for item in self.repository.chunks(job["id"], completed_only=True)}
+                          for item in self.repository.chunks_for_service(job["id"], completed_only=True)}
             for attempt in parent.iterdir():
                 if attempt.is_dir() and attempt not in references and attempt.stat().st_mtime < cutoff:
                     shutil.rmtree(attempt)
 
+    @_service_operation
     def run(self):
         # A compatibility baseline runs with the feature disabled before 0016.
         # It must not load chemistry, require the new schema, or mutate audit data.
@@ -186,15 +286,12 @@ class BatchWorker:
         self.root.mkdir(parents=True, exist_ok=True)
         while not self.stopping:
             try:
-                with psycopg.connect(self.repository.dsn, autocommit=True, row_factory=dict_row, connect_timeout=3) as lock:
+                with self._resource_lease(), psycopg.connect(self.repository.dsn, autocommit=True, row_factory=dict_row, connect_timeout=3) as lock:
                     if not lock.execute("SELECT pg_try_advisory_lock(%s) AS acquired", (WORKER_LOCK,)).fetchone()["acquired"]:
                         time.sleep(2)
                         continue
                     self.lock_connection = lock
-                    # A previous disconnected owner checks its session every 0.8s
-                    # and kills its child before publishing. Fence all old tokens.
-                    self.repository.recover()
-                    time.sleep(2)
+                    self.recover()
                     self.engine = engine_fingerprint()
                     self.heartbeat(force=True)
                     last_cleanup = 0.0
@@ -203,16 +300,18 @@ class BatchWorker:
                         if time.monotonic() - last_cleanup > 60:
                             try:
                                 self.cleanup()
-                            except OSError:
-                                logger.exception("batch retention cleanup will retry")
+                            except OSError as exc:
+                                logger.warning("batch retention cleanup will retry: error_type=%s", type(exc).__name__)
                             last_cleanup = time.monotonic()
                         claimed = self.repository.claim(self.worker_id, self.engine["fingerprint"]) if self.config.enabled else None
                         if claimed:
                             self.execute(*claimed)
                         else:
                             time.sleep(1)
-            except Exception:
-                logger.exception("batch worker unavailable; retrying")
+            except Exception as exc:
+                # Chained filesystem errors can contain the private attempt
+                # directory/token. Operational logs only need a safe type.
+                logger.warning("batch worker unavailable; retrying: error_type=%s", type(exc).__name__)
                 try:
                     self.repository.heartbeat_worker(self.worker_id, {}, False, "批量计算 worker 暂不可用。")
                 except Exception:

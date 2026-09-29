@@ -353,6 +353,8 @@ def get_dataset_summaries(request: Request) -> DatasetSummaryResponse:
 
 @router.get("/datasets/analytics", response_model=DatabaseAnalyticsResponse)
 def get_dataset_analytics(request: Request, refresh: bool = Query(default=False)) -> DatabaseAnalyticsResponse:
+    if refresh:
+        raise HTTPException(status_code=403, detail="Analytics refresh is a maintenance operation")
     started_at = perf_counter()
     _require_postgres_browser(request)
 

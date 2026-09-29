@@ -3,15 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import secrets
 from typing import Annotated, Any
 
 import anyio
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.routing import APIRoute
 
 from app.postgres_database import PostgresUnavailableError
+from app.auth.context import current_owner_id
 
 from app.services.monomer_dft_models import (
     MonomerDftArtifactDeleteResponse,
@@ -265,6 +268,7 @@ async def _worker_health(request: Request) -> tuple[dict[str, Any], bool]:
         and health.get("runtime_ready") is True
         and health.get("draining") is not True
         and health.get("accepting_jobs") is True
+        and health.get("start_authorization_version") == 1
     )
     return health, available
 
@@ -319,6 +323,7 @@ async def _find_idempotent_job(
     try:
         return await asyncio.to_thread(
             repository.find_idempotent_job,
+            owner_user_id=current_owner_id(),
             idempotency_key=idempotency_key,
             request_sha256=request_sha256,
         )
@@ -337,7 +342,7 @@ async def get_status(request: Request) -> MonomerDftStatusResponse:
     if schema_ready:
         health, worker_available = await _worker_health(request)
         try:
-            active_jobs = await asyncio.to_thread(_repository(request).count_active_jobs)
+            active_jobs = await asyncio.to_thread(_repository(request).count_active_jobs, owner_user_id=current_owner_id())
         except Exception:
             active_jobs = 0
             worker_available = False
@@ -549,6 +554,7 @@ async def list_jobs(
     repository = _repository(request)
     result = await asyncio.to_thread(
         repository.list_jobs,
+        owner_user_id=current_owner_id(),
         page=page,
         page_size=page_size,
         status=status_filter,
@@ -685,6 +691,7 @@ async def create_job(
         created = await asyncio.to_thread(
             repository.create_job,
             prepared,
+            owner_user_id=current_owner_id(),
             idempotency_key=idempotency_key,
             max_active_jobs=settings.monomer_dft_max_active_jobs,
         )
@@ -710,7 +717,7 @@ async def get_job(request: Request, job_id: str) -> MonomerDftJobResponse:
     job_id = _validate_job_id(job_id)
     await _require_schema_ready(request)
     repository = _repository(request)
-    job = await asyncio.to_thread(repository.get_job, job_id)
+    job = await asyncio.to_thread(repository.get_job, job_id, owner_user_id=current_owner_id())
     if job is None:
         raise _public_error(404, code="job_not_found", message="DFT job not found")
     if job["status"] not in TERMINAL_STATUSES:
@@ -724,7 +731,7 @@ async def cancel_job(request: Request, job_id: str) -> MonomerDftJobResponse:
     await _require_schema_ready(request)
     repository = _repository(request)
     try:
-        job = await asyncio.to_thread(repository.request_cancel, job_id)
+        job = await asyncio.to_thread(repository.request_cancel, job_id, owner_user_id=current_owner_id())
     except MonomerDftJobNotFound as exc:
         raise _public_error(404, code="job_not_found", message="DFT job not found") from exc
     if job["status"] not in TERMINAL_STATUSES:
@@ -740,6 +747,7 @@ async def get_artifact(request: Request, job_id: str, artifact_id: str) -> FileR
     try:
         artifact = await asyncio.to_thread(
             repository.get_artifact,
+            owner_user_id=current_owner_id(),
             job_id=job_id,
             artifact_id=artifact_id,
         )
@@ -775,6 +783,7 @@ async def get_artifact(request: Request, job_id: str, artifact_id: str) -> FileR
             headers={
                 "Content-Length": str(verified.size_bytes),
                 "ETag": f'"{verified.sha256}"',
+                "Cache-Control": "private, no-store",
                 "X-Content-Type-Options": "nosniff",
                 "X-Accel-Buffering": "no",
             },
@@ -789,7 +798,7 @@ async def get_bundle(request: Request, job_id: str) -> FileResponse:
     job_id = _validate_job_id(job_id)
     await _require_schema_ready(request)
     repository = _repository(request)
-    job = await asyncio.to_thread(repository.get_job, job_id)
+    job = await asyncio.to_thread(repository.get_job, job_id, owner_user_id=current_owner_id())
     if job is None:
         raise _public_error(404, code="job_not_found", message="DFT job not found")
     if job["status"] not in TERMINAL_STATUSES:
@@ -835,6 +844,7 @@ async def get_bundle(request: Request, job_id: str) -> FileResponse:
             headers={
                 "Content-Length": str(verified.size_bytes),
                 "ETag": f'"{verified.sha256}"',
+                "Cache-Control": "private, no-store",
                 "X-Content-Type-Options": "nosniff",
                 "X-Accel-Buffering": "no",
             },
@@ -853,7 +863,7 @@ async def delete_artifacts(
     job_id = _validate_job_id(job_id)
     await _require_schema_ready(request)
     repository = _repository(request)
-    job = await asyncio.to_thread(repository.get_job, job_id)
+    job = await asyncio.to_thread(repository.get_job, job_id, owner_user_id=current_owner_id())
     if job is None:
         raise _public_error(404, code="job_not_found", message="DFT job not found")
     if job["status"] not in TERMINAL_STATUSES:
@@ -872,7 +882,7 @@ async def delete_artifacts(
             message="DFT artifacts were already deleted",
         )
     try:
-        requested = await asyncio.to_thread(repository.request_artifact_deletion, job_id)
+        requested = await asyncio.to_thread(repository.request_artifact_deletion, job_id, owner_user_id=current_owner_id())
     except MonomerDftJobStateConflict as exc:
         raise _public_error(409, code="job_not_terminal", message=str(exc)) from exc
     artifacts_state = requested["artifacts_state"]
@@ -910,9 +920,12 @@ async def delete_artifacts(
 async def delete_job(request: Request, job_id: str) -> Response:
     job_id = _validate_job_id(job_id)
     await _require_schema_ready(request)
+    job = await asyncio.to_thread(_repository(request).get_job, job_id, owner_user_id=current_owner_id())
+    if job is None:
+        raise _public_error(404, code="job_not_found", message="DFT job not found")
     service = request.app.state.monomer_dft_job_deletion_service
     try:
-        await service.delete(job_id)
+        await service.delete(job_id, expected=job)
     except MonomerJobDeletionError as exc:
         if exc.status_code == 409:
             raise _public_error(
@@ -927,3 +940,30 @@ async def delete_job(request: Request, job_id: str) -> Response:
             retryable=True,
         ) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+internal_router = APIRouter(prefix="/internal/monomer-dft", tags=["internal-monomer-dft"])
+
+
+class DftStartAuthorizationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attempt_token: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    enqueue_sequence: int = Field(ge=1)
+
+
+@internal_router.post("/jobs/{job_id}/authorize-start")
+async def authorize_start(request: Request, job_id: str) -> dict[str, Any]:
+    expected = request.app.state.settings.monomer_dft_start_authorization_token
+    provided = request.headers.get("authorization", "")
+    if not expected or not secrets.compare_digest(provided.encode("utf-8"), ("Bearer " + expected).encode("utf-8")):
+        raise HTTPException(status_code=403, detail="service authentication required")
+    job_id = _validate_job_id(job_id)
+    if int(request.headers.get("content-length", "0")) > 2048:
+        raise HTTPException(status_code=413, detail="authorization request too large")
+    try:
+        body = DftStartAuthorizationRequest.model_validate_json(await request.body())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="invalid execution identity") from exc
+    allowed = await asyncio.to_thread(_repository(request).authorize_start, job_id=job_id, **body.model_dump())
+    return {"authorized": allowed, "start_authorization_version": 1}

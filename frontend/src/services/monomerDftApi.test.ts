@@ -30,12 +30,12 @@ describe("monomer DFT API client", () => {
     await createMonomerDftJob(request, "5bcf0cb8-b593-4cb9-9e7f-f2bd7327ece7");
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe("5bcf0cb8-b593-4cb9-9e7f-f2bd7327ece7");
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe("5bcf0cb8-b593-4cb9-9e7f-f2bd7327ece7");
     expect(JSON.parse(String(init.body))).toEqual(request);
     expect(String(init.body)).not.toContain("request_id");
   });
 
-  it("uses the approved paged global-history query", async () => {
+  it("uses the approved paged personal-history query", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [], page: 2, page_size: 20, total: 0 }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
     await fetchMonomerDftJobs({ page: 2, page_size: 20, status: "completed", calculation_type: "single_point" });

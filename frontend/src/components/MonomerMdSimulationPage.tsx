@@ -1,3 +1,6 @@
+import { getSessionEpoch } from "../auth/session";
+import { useAuth } from "../auth/AuthProvider";
+import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import {
@@ -34,7 +37,7 @@ import {
 } from "./monomer-md-simulation/config";
 import {
   loadMonomerMdSession,
-  saveMonomerMdSession
+  saveMonomerMdSession as persistPrivateDraft
 } from "./monomer-md-simulation/session";
 import {
   formatNumber,
@@ -73,10 +76,10 @@ const MAIN_TABS: Array<{
   {
     id: "tasks",
     label: "任务中心",
-    description: "全局正式队列与历史",
-    surfaceTitle: "全局 MD 任务中心",
-    surfaceDescription: "查看正式活跃队列、排队位置与全局正式任务历史。",
-    badge: "全局任务",
+    description: "我的正式队列与历史",
+    surfaceTitle: "MD 任务中心",
+    surfaceDescription: "查看本人的正式活跃任务、排队位置与历史。",
+    badge: "我的任务",
     icon: ClipboardList
   },
   {
@@ -96,6 +99,12 @@ export function MonomerMdSimulationPage({
   onJobIdChange,
   onEditStructure
 }: MonomerMdSimulationPageProps) {
+  const guest = useAuth()?.status === "guest";
+  const identityEpoch = useRef(getSessionEpoch());
+  const saveMonomerMdSession = (...args: Parameters<typeof persistPrivateDraft>) => {
+    if (identityEpoch.current === getSessionEpoch()) persistPrivateDraft(...args);
+  };
+
   const restoredSession = useRef(loadMonomerMdSession()).current;
   const [activeTab, setActiveTab] = useState<MainTab>(initialJobId ? "results" : "config");
   const [runMode, setRunMode] = useState<MonomerMdRunMode>(restoredSession.runMode);
@@ -107,6 +116,7 @@ export function MonomerMdSimulationPage({
   const [templateChanges, setTemplateChanges] = useState<Set<MonomerMdFormalProtocol>>(new Set());
 
   const simulation = useMonomerMdSimulation({
+    enabled: !guest,
     initialJobId,
     onJobIdChange,
     taskCenterActive: activeTab === "tasks"
@@ -179,6 +189,7 @@ export function MonomerMdSimulationPage({
     simulation.serviceStatus?.formal_can_submit === true;
 
   const servicePresentation = useMemo(() => {
+    if (guest) return { tone: "warning", icon: null, title: "请登录账号。", detail: "登录后可查看服务状态并提交模拟任务" };
     if (simulation.isStatusLoading && !simulation.serviceStatus) {
       return { tone: "loading", icon: LoaderCircle, title: "服务检查中", detail: "正在读取快速演示与完整 MD 任务容量" };
     }
@@ -192,7 +203,7 @@ export function MonomerMdSimulationPage({
       return { tone: "warning", icon: TriangleAlert, title: "容量已满", detail: "快速演示与完整 MD 提交当前均已关闭" };
     }
     return { tone: "ready", icon: null, title: "准备就绪", detail: null };
-  }, [demoCanSubmit, formalCanSubmit, simulation.isStatusLoading, simulation.serviceStatus, simulation.statusError]);
+  }, [guest, demoCanSubmit, formalCanSubmit, simulation.isStatusLoading, simulation.serviceStatus, simulation.statusError]);
 
   function changeMainTab(next: MainTab) {
     setActiveTab(next);
@@ -213,6 +224,7 @@ export function MonomerMdSimulationPage({
   }
 
   async function submitDemo() {
+    if (!requestServiceAccess()) return;
     setDemoTouched(true);
     const error = getMonomerMdSmilesValidationError(demoSmiles);
     if (error || !demoCanSubmit) return;
@@ -225,6 +237,7 @@ export function MonomerMdSimulationPage({
   }
 
   async function submitFormal() {
+    if (!requestServiceAccess()) return;
     if (!currentConfig || !formalCanSubmit) return;
     const validation = validateFormalConfig(currentConfig, selectedProtocol);
     if (!validation.valid) return;
@@ -283,12 +296,15 @@ export function MonomerMdSimulationPage({
                   {servicePresentation.detail ? <small>{servicePresentation.detail}</small> : null}
                 </span>
               </span>
-              <button type="button" onClick={() => void simulation.refreshStatus()} disabled={simulation.isStatusLoading}>
+              <button type="button" onClick={() => { if (requestServiceAccess()) void simulation.refreshAll(); }} disabled={!guest && simulation.isStatusLoading}>
                 <RefreshCw className={simulation.isStatusLoading ? "np-mmd-spin" : ""} />刷新
               </button>
             </div>
           </div>
         </div>
+        {!guest && (simulation.eventConnectionState === "unavailable" || simulation.eventConnectionState === "reconnecting") ? (
+          <p role="status">{simulation.eventConnectionState === "reconnecting" ? "状态通知连接中断，正在重连；可手动刷新。" : "状态通知暂不可用，请手动刷新。"}</p>
+        ) : null}
         <div className="np-mmd-scroll-region">
           <div className="np-mmd-content-column">
             {invalidDeepLink ? (
@@ -360,11 +376,12 @@ export function MonomerMdSimulationPage({
                         <div className="np-mmd-demo-warning"><TriangleAlert /><div><strong>真实计算，但尚未平衡</strong><span>Worker 会实际运行 MD；演示步数不足以使体系达到平衡，不能作为物理密度结论。</span></div></div>
                         <div className="np-mmd-submit-bar">
                           <div><span>提交状态</span><strong className="np-mmd-submit-status">{demoCanSubmit ? "真实模拟可提交" : servicePresentation.title}</strong><small>关闭提交时仍可浏览已有真实任务和结果</small></div>
-                          <div className="np-mmd-submit-bar__action"><span>{demoValidationError || (demoCanSubmit ? "将创建真实异步 Worker 任务，后端会继续验证化学结构" : "当前无法创建演示任务")}</span><button type="button" disabled={simulation.isSubmitting || !demoCanSubmit || Boolean(getMonomerMdSmilesValidationError(demoSmiles))} onClick={() => void submitDemo()}>{simulation.isSubmitting ? <LoaderCircle className="np-mmd-spin" /> : <Play />}{simulation.isSubmitting ? "正在创建真实任务" : "开始快速模拟"}</button></div>
+                          <div className="np-mmd-submit-bar__action"><span>{guest ? "请登录账号。" : demoValidationError || (demoCanSubmit ? "将创建真实异步 Worker 任务，后端会继续验证化学结构" : "当前无法创建演示任务")}</span><button type="button" disabled={!guest && (simulation.isSubmitting || !demoCanSubmit || Boolean(getMonomerMdSmilesValidationError(demoSmiles)))} onClick={() => void submitDemo()}>{simulation.isSubmitting ? <LoaderCircle className="np-mmd-spin" /> : <Play />}{simulation.isSubmitting ? "正在创建真实任务" : "开始快速模拟"}</button></div>
                         </div>
                       </div>
                     ) : (
                       <MonomerMdFormalConfig
+                        loginRequired={guest}
                         protocol={selectedProtocol}
                         config={currentConfig}
                         catalog={simulation.protocolCatalog}
@@ -397,9 +414,8 @@ export function MonomerMdSimulationPage({
                     cancellingJobIds={simulation.cancellingJobIds}
                     deletingJobIds={simulation.deletingJobIds}
                     deleteJobErrors={simulation.deleteJobErrors}
-                    onRefresh={() => { void simulation.refreshActiveJobs(); void simulation.refreshHistory(); }}
                     onSelect={(job) => { setActiveTab("results"); void simulation.selectJob(job.job_id); }}
-                    onCancel={(job) => { if (window.confirm("确定取消这个全局正式任务吗？")) void simulation.cancelJob(job); }}
+                    onCancel={(job) => { if (window.confirm("确定取消这个正式任务吗？")) void simulation.cancelJob(job); }}
                     onDelete={(job) => { if (window.confirm("删除后任务记录、结果和深链均无法恢复。确定继续吗？")) void simulation.deleteJobRecord(job); }}
                     onChangeQuery={simulation.changeHistoryQuery}
                   />

@@ -120,6 +120,9 @@ class MonomerDftWorkerClient:
         return await self._json_request("POST", "/resume", operation="resume request")
 
     async def submit_job(self, job: dict[str, Any]) -> dict[str, Any]:
+        health = await self.health()
+        if health.get("start_authorization_version") != 1:
+            raise MonomerDftWorkerError("DFT Worker does not enforce start authorization", code="start_authorization_protocol_unavailable", retryable=True)
         validated_request, validated_payload = self._validated_job_request(job)
         response = await self._json_request(
             "POST",

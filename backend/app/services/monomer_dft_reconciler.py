@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import copy_context
 import logging
 import time
 from typing import Any
@@ -9,13 +10,28 @@ from .monomer_dft_repository import (
     MonomerDftJobNotFound,
     MonomerDftRepository,
     MonomerDftStaleAttempt,
-    WORKER_STAGES,
     sanitize_public_text,
 )
 from .monomer_dft_worker_client import MonomerDftWorkerClient, MonomerDftWorkerError
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _finish_guard_operation(task: asyncio.Task[Any]) -> Any:
+    """Join a blocking guard operation before propagating task cancellation."""
+    cancellation: asyncio.CancelledError | None = None
+    while True:
+        try:
+            result = await asyncio.shield(task)
+            break
+        except asyncio.CancelledError as exc:
+            if task.cancelled():
+                raise
+            cancellation = exc
+    if cancellation is not None:
+        raise cancellation
+    return result
 
 
 class MonomerDftReconciler:
@@ -73,7 +89,7 @@ class MonomerDftReconciler:
                 if not claimed:
                     # A concurrent cancel/state transition won the row lock;
                     # never send the stale pending snapshot to the Worker.
-                    return await asyncio.to_thread(self._repository.get_job, job_id)
+                    return await asyncio.to_thread(self._repository.get_job_for_service, job_id)
                 snapshot = await self._worker.submit_job(job)
             elif status in {"queued", "running"}:
                 snapshot = await self._worker.get_job(job_id)
@@ -88,48 +104,9 @@ class MonomerDftReconciler:
                 snapshot=snapshot,
             )
         except MonomerDftWorkerError as exc:
-            if status == "cancel_requested" and exc.status_code == 404:
-                # Unknown to this Worker is not proof that a dispatched
-                # attempt stopped.  Keep the durable cancellation intent and
-                # retry until a fenced Worker snapshot proves a terminal state.
-                await asyncio.to_thread(
-                    self._repository.record_dispatch_error,
-                    job_id=job_id,
-                    attempt_token=attempt_token,
-                    code=exc.code,
-                    message=str(exc),
-                    retryable=True,
-                    details=exc.details,
-                )
-                return None
-            if not exc.retryable:
-                stage = str(job.get("stage") or "")
-                if stage not in WORKER_STAGES:
-                    stage = "validating"
-                snapshot = {
-                    "schema_version": 2,
-                    "job_id": job_id,
-                    "attempt_token": attempt_token,
-                    "request_sha256": job.get("request_sha256"),
-                    "enqueue_sequence": job.get("_enqueue_sequence"),
-                    "status": "failed",
-                    "stage": stage,
-                    "progress_percent": float(job.get("progress_percent") or 0.0),
-                    "error": {
-                        "code": exc.code,
-                        "message": str(exc),
-                        "retryable": False,
-                        "details": exc.details,
-                    },
-                    "timings": {},
-                    "artifacts": [],
-                }
-                return await asyncio.to_thread(
-                    self._repository.apply_worker_snapshot,
-                    job_id=job_id,
-                    attempt_token=attempt_token,
-                    snapshot=snapshot,
-                )
+            # Transport, protocol and resource errors do not prove that an
+            # accepted attempt or its GPU lease has stopped. Only a validated
+            # fenced Worker terminal snapshot may release task capacity.
             await asyncio.to_thread(
                 self._repository.record_dispatch_error,
                 job_id=job_id,
@@ -159,8 +136,15 @@ class MonomerDftReconciler:
                     # already-running reconciliation task.
                     return
             leader_guard = self._repository.reconciliation_leader()
-            is_leader = await asyncio.to_thread(leader_guard.__enter__)
+            # to_thread copies a new Context for every call, even when the
+            # executor reuses the same OS thread. The service identity token
+            # held across the guard's yield must be reset in its own Context.
+            leader_context = copy_context()
+            entering = asyncio.create_task(
+                asyncio.to_thread(leader_context.run, leader_guard.__enter__)
+            )
             try:
+                is_leader = await _finish_guard_operation(entering)
                 if not is_leader:
                     return
                 jobs = await asyncio.to_thread(self._repository.list_reconcilable_jobs, limit=100)
@@ -183,9 +167,13 @@ class MonomerDftReconciler:
                     self._last_sweep = now
                 await self._reconcile_artifact_deletions()
             finally:
-                await asyncio.shield(
-                    asyncio.to_thread(leader_guard.__exit__, None, None, None)
-                )
+                # Cancellation during lock acquisition cannot abandon a late
+                # successful __enter__: finish it, then close the exact guard.
+                if entering.done() and not entering.cancelled() and entering.exception() is None:
+                    leaving = asyncio.create_task(asyncio.to_thread(
+                        leader_context.run, leader_guard.__exit__, None, None, None,
+                    ))
+                    await _finish_guard_operation(leaving)
 
     async def _sweep_expired_artifacts(self) -> None:
         jobs = await asyncio.to_thread(
@@ -198,7 +186,7 @@ class MonomerDftReconciler:
             if not job_id:
                 continue
             try:
-                await asyncio.to_thread(self._repository.request_artifact_deletion, job_id)
+                await asyncio.to_thread(self._repository.request_artifact_deletion_for_service, job_id)
             except MonomerDftJobNotFound:
                 continue
             except Exception as exc:  # pragma: no cover - loop isolation

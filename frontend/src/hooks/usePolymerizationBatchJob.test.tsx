@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BATCH_HISTORY_KEY, usePolymerizationBatchJob } from "./usePolymerizationBatchJob";
 import type { BatchJob } from "../types/polymerizationBatch";
 
-const fetchJob = vi.hoisted(() => vi.fn());
-vi.mock("../services/polymerizationBatchApi", () => ({ fetchBatchJob: fetchJob }));
+const { fetchJob, fetchJobs } = vi.hoisted(() => ({ fetchJob: vi.fn(), fetchJobs: vi.fn() }));
+vi.mock("../services/polymerizationBatchApi", () => ({ fetchBatchJob: fetchJob, fetchBatchJobs: fetchJobs }));
 const first = "a".repeat(32), second = "b".repeat(32);
 function job(id: string): BatchJob {
   return { job_id: id, status: "completed", stage: "finished", target_class: "polyimide",
@@ -15,12 +15,35 @@ function job(id: string): BatchJob {
 }
 beforeEach(() => {
   fetchJob.mockReset();
+  fetchJobs.mockReset().mockResolvedValue({ items: [], total: 0, next_offset: null });
   localStorage.clear();
   window.history.replaceState(null, "", `/monomer-polymerization?mode=batch&job_id=${first}`);
 });
 afterEach(() => cleanup());
 
 describe("batch task identity", () => {
+  it("recovers owned tasks from server pages and ignores the legacy local history", async () => {
+    window.history.replaceState(null, "", "/monomer-polymerization?mode=batch");
+    localStorage.setItem(BATCH_HISTORY_KEY, JSON.stringify([second]));
+    fetchJobs.mockResolvedValueOnce({ items: [job(first)], total: 21, next_offset: 20 })
+      .mockResolvedValueOnce({ items: [job(second)], total: 21, next_offset: null });
+    fetchJob.mockResolvedValue(job(first));
+    const { result } = renderHook(usePolymerizationBatchJob);
+    await waitFor(() => expect(result.current.jobId).toBe(first));
+    expect(result.current.history).toEqual([first]); expect(result.current.historyTotal).toBe(21);
+    act(() => result.current.setHistoryOffset(20));
+    await waitFor(() => expect(result.current.history).toEqual([second]));
+    expect(fetchJobs).toHaveBeenLastCalledWith(20, expect.any(AbortSignal)); expect(result.current.historyNext).toBeNull();
+  });
+  it("can retry a failed personal list before selecting any task", async () => {
+    window.history.replaceState(null, "", "/monomer-polymerization?mode=batch");
+    fetchJobs.mockRejectedValueOnce(new Error("temporary list failure")).mockResolvedValueOnce({ items: [], total: 0, next_offset: null });
+    const { result } = renderHook(usePolymerizationBatchJob);
+    await waitFor(() => expect(result.current.historyError).toBe("temporary list failure"));
+    act(() => result.current.refreshHistory());
+    await waitFor(() => expect(result.current.historyLoading).toBe(false));
+    expect(result.current.historyError).toBeNull(); expect(fetchJobs).toHaveBeenCalledTimes(2);
+  });
   it("ignores a late response from an aborted history request", async () => {
     let resolve!: (value: BatchJob) => void;
     fetchJob.mockReturnValueOnce(new Promise((done) => { resolve = done; })).mockResolvedValue(job(second));
@@ -35,7 +58,7 @@ describe("batch task identity", () => {
     await act(async () => { resolve(job(first)); });
     expect(result.current.job?.job_id).toBe(second);
     expect(result.current.isCurrentJob(first)).toBe(false);
-    expect(JSON.parse(localStorage.getItem(BATCH_HISTORY_KEY)!)).toEqual([second]);
+    expect(localStorage.getItem(BATCH_HISTORY_KEY)).toBeNull();
   });
 
   it("does not remember an unreadable link or accept data for a different task", async () => {

@@ -6,9 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from test_monomer_private_support import private_test_client as TestClient
 
 from app.config import Settings
+from app.auth.context import current_owner_id, user_context
+from test_monomer_private_support import auth_database, monomer_identity, postgres_dsn, api_dsn, another_identity
 from app.postgres_database import postgres_connection
 from app.routers.monomer_dft import (
     MonomerDftPublicError,
@@ -86,7 +88,7 @@ class _DftRepository:
         self.job = job
         self.cas_expected = None
 
-    def get_job(self, _job_id: str):
+    def get_job_for_service(self, _job_id: str):
         return self.job
 
     def delete_job_cas(self, expected: dict):
@@ -195,6 +197,7 @@ def test_md_retention_uses_terminal_time_fallback_and_cas(
                 input_smiles="CCO",
                 canonical_smiles="CCO",
                 requested_steps=300,
+                owner_user_id=current_owner_id(),
             )
         connection.execute(
             """
@@ -264,14 +267,14 @@ class _ApiDeletion:
         self.error = error
         self.job_ids: list[str] = []
 
-    async def delete(self, job_id: str):
+    async def delete(self, job_id: str, *, expected: dict):
         self.job_ids.append(job_id)
         if self.error is not None:
             raise self.error
         return True
 
 
-def test_public_md_delete_is_idempotent_and_maps_conflict() -> None:
+def test_public_md_delete_authorizes_before_cleanup_and_maps_conflict(postgres_dsn) -> None:
     service = _ApiDeletion()
     app = FastAPI()
     app.state.settings = Settings()
@@ -279,9 +282,13 @@ def test_public_md_delete_is_idempotent_and_maps_conflict() -> None:
     app.include_router(monomer_md_router)
     client = TestClient(app)
     job_id = "a" * 32
+    with postgres_connection(postgres_dsn) as connection:
+        for value in (job_id, 'b' * 32):
+            create_monomer_md_job_postgres(connection, job_id=value, owner_user_id=current_owner_id(),
+                input_smiles='CCO', canonical_smiles='CCO', requested_steps=300)
 
     assert client.delete(f"/api/v1/monomer-md/jobs/{job_id}").status_code == 204
-    assert client.delete("/api/v1/monomer-md/jobs/not-a-job").status_code == 204
+    assert client.delete("/api/v1/monomer-md/jobs/not-a-job").status_code == 404
     assert service.job_ids == [job_id]
 
     service.error = MonomerJobDeletionConflict("active")
@@ -289,11 +296,16 @@ def test_public_md_delete_is_idempotent_and_maps_conflict() -> None:
     assert response.status_code == 409
 
 
-def test_public_dft_delete_returns_204_and_structured_503() -> None:
+def test_public_dft_delete_returns_204_and_structured_503(postgres_dsn) -> None:
     service = _ApiDeletion()
     app = FastAPI()
     app.state.settings = Settings()
-    app.state.monomer_dft_repository = object()
+    from app.services.monomer_dft_repository import MonomerDftRepository
+    from test_monomer_dft_repository_postgres import _prepared
+    repository = MonomerDftRepository(api_dsn())
+    job = repository.create_job(_prepared(), owner_user_id=current_owner_id(),
+        idempotency_key='delete-route-test', max_active_jobs=9).job
+    app.state.monomer_dft_repository = repository
     app.state.monomer_dft_job_deletion_service = service
     app.add_exception_handler(
         MonomerDftPublicError,
@@ -301,7 +313,7 @@ def test_public_dft_delete_returns_204_and_structured_503() -> None:
     )
     app.include_router(monomer_dft_router)
     client = TestClient(app)
-    job_id = "00000000-0000-4000-8000-000000000001"
+    job_id = job["job_id"]
 
     assert client.delete(f"/api/v1/monomer-dft/jobs/{job_id}").status_code == 204
     service.error = MonomerJobStorageUnavailable("offline")

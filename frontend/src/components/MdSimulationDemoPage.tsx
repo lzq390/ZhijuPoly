@@ -1,3 +1,6 @@
+import { useAuth } from "../auth/AuthProvider";
+import { requestServiceAccess } from "../auth/guestAccess";
+import { getSessionEpoch } from "../auth/session";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { useContentMotion } from "../hooks/useContentMotion";
@@ -39,7 +42,7 @@ import { MdStructureInput } from "./md-simulation/MdStructureInput";
 import {
   clearMdSimulationDraft,
   readMdSimulationDraft,
-  saveMdSimulationDraft,
+  saveMdSimulationDraft as persistPrivateDraft,
 } from "./md-simulation/session";
 
 type MdSimulationDemoPageProps = {
@@ -146,6 +149,11 @@ export function MdSimulationDemoPage({
   onEditStructure,
   resultRevealDelayMs,
 }: MdSimulationDemoPageProps) {
+  const identityEpoch = useRef(getSessionEpoch());
+  const saveMdSimulationDraft = (...args: Parameters<typeof persistPrivateDraft>) => {
+    if (identityEpoch.current === getSessionEpoch()) persistPrivateDraft(...args);
+  };
+
   const [initial] = useState(() => {
     const draft = readMdSimulationDraft();
     return {
@@ -176,7 +184,8 @@ export function MdSimulationDemoPage({
   const parameterButtonRef = useRef<HTMLButtonElement | null>(null);
   const restoreFocusFrameRef = useRef<number | null>(null);
   requestRef.current = request;
-  const simulation = useMdSimulationDemo({ resultRevealDelayMs });
+  const guest = useAuth()?.status === "guest";
+  const simulation = useMdSimulationDemo({ resultRevealDelayMs, enabled: !guest });
 
   const closeParameters = useCallback((restoreFocus = true) => {
     setParametersOpen(false);
@@ -209,6 +218,7 @@ export function MdSimulationDemoPage({
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
+    if (!requestServiceAccess()) return;
       closeParameters(true);
     }
     document.addEventListener("pointerdown", handlePointerDown);
@@ -324,6 +334,7 @@ export function MdSimulationDemoPage({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requestServiceAccess()) return;
     setSubmitAttempted(true);
     if (!canRun) {
       if (validationErrors.smiles) setWorkspaceTab("input");
@@ -530,7 +541,7 @@ export function MdSimulationDemoPage({
               panelRef={parameterPanelRef}
               request={request}
               errors={visibleErrors}
-              canRun={canRun}
+              canRun={guest || canRun}
               submitting={simulation.runLoading}
               statusMessage={parameterStatus}
               onChange={updateRequest}

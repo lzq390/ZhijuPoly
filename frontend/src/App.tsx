@@ -1,3 +1,5 @@
+import { useAuth } from "./auth/AuthProvider";
+import { requestServiceAccess } from "./auth/guestAccess";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KnowledgeRecordingProvider } from "./hooks/useKnowledgeRecording";
 import { BrowsingRecordingUIProvider } from "./components/browsing-recording/BrowsingRecording";
@@ -11,6 +13,7 @@ import {
   FlaskConical,
   Grid2X2,
   Microscope,
+  Route,
   Search,
   Sparkles
 } from "lucide-react";
@@ -23,11 +26,13 @@ import { AgentWorkspaceHomePage, agentWorkspaceUrl } from "./components/AgentWor
 import type { DatasetKey } from "./components/database-analysis/types";
 import type { LabDataView } from "./components/LabDataPage";
 import type { StructureCanvasOwnerHandle } from "./components/StructureWorkbenchPage";
+import type { StructureSyncResult } from "./structure/workspace";
+import type { MonomerRetrosynthesisInput } from "./components/monomer-retrosynthesis/session";
 import {
   ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
   ExperimentWorkflowDemoPage, HighThroughputWorkflowDemoPage, HomopolymerPropertyPredictionPage,
   KnowledgeSearch, LabDataPage, MdSimulationDemoPage, MonomerMdSimulationPage, MonomerDftPage,
-  MonomerPolymerizationPage, PolytaoGenerationPage, ReverseDesignPage,
+  MonomerPolymerizationPage, MonomerRetrosynthesisPage, PolytaoGenerationPage, ReverseDesignPage,
   PolymerSimilarityExplorerPage, StructureWorkbenchPage, preloadPage
 } from "./pages";
 import {
@@ -62,6 +67,7 @@ type AppNavigationRequest = ModuleNavigationRequest & {
   history: "push" | "none";
   knowledge?: { query: string; terms: string[] };
   jobId?: string | null;
+  importRetrosynthesisTarget?: boolean;
   onCommit?: () => void;
 };
 
@@ -104,6 +110,8 @@ export default function App() {
 }
 
 function AppContent() {
+  const auth = useAuth();
+  const isGuest = auth?.status === "guest";
   const [knowledgeLocalMode, setKnowledgeLocalMode] = useState(true);
   const [activeModule, setActiveModule] = useState<ActiveModule>(() => getInitialRoute().module);
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<DatasetKey | null>(() => getInitialRoute().datasetKey);
@@ -139,9 +147,21 @@ function AppContent() {
   const activeModuleRef = useRef(activeModule);
   activeModuleRef.current = activeModule;
   const structureCanvasOwnerRef = useRef<StructureCanvasOwnerHandle | null>(null);
+  const lastStructureSyncRef = useRef<StructureSyncResult | null>(null);
+  const [retrosynthesisInput, setRetrosynthesisInput] = useState<MonomerRetrosynthesisInput>();
   const moduleContentRef = useRef<HTMLDivElement | null>(null);
   const moduleMainRef = useRef<HTMLElement | null>(null);
-  const structureWorkspace = useStructureWorkspace();
+  const structureWorkspace = useStructureWorkspace({ guest: isGuest, initialSmiles: isGuest ? auth?.guestDraft : undefined });
+  const registerGuestCapture = auth?.registerGuestCapture;
+  useEffect(() => {
+    if (!isGuest || !registerGuestCapture) return;
+    registerGuestCapture(async () => {
+      const saved = await structureWorkspace.workspace.saveForNavigation();
+      if (saved.status !== "saved") throw new Error("游客画板尚未完成同步，请稍后重试登录。当前画板与草稿已保留。");
+      return structureWorkspace.workspace.getSnapshot().draft;
+    });
+    return () => registerGuestCapture(null);
+  }, [isGuest, registerGuestCapture, structureWorkspace.workspace]);
   const { request, setRequest, isLoading, error, data, submit } = useQuery();
   const tgAssistant = useTgAssistant();
   const agentWorkspaceIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -177,8 +197,13 @@ function AppContent() {
 
   const syncStructureBeforeNavigation = useCallback((signal: AbortSignal) => {
     const workspace = structureWorkspace.workspace;
+    lastStructureSyncRef.current = null;
     return syncStructureForNavigation(workspace,
-      () => structureCanvasOwnerRef.current?.syncBeforeLeave(signal) ?? workspace.saveForNavigation(), signal);
+      async () => {
+        const result = await (structureCanvasOwnerRef.current?.syncBeforeLeave(signal) ?? workspace.saveForNavigation());
+        if (!signal.aborted) lastStructureSyncRef.current = result;
+        return result;
+      }, signal);
   }, [structureWorkspace.workspace]);
 
   const moduleTransition = useModuleTransition<AppNavigationRequest>({
@@ -207,6 +232,14 @@ function AppContent() {
       }
       if (route.module === "monomerMdSimulation") setMonomerMdJobId(navigation.jobId ?? null);
       if (route.module === "monomerDft") setMonomerDftJobId(navigation.jobId ?? null);
+      if (route.module === "monomerRetrosynthesis") {
+        const document = structureWorkspace.workspace.getSnapshot();
+        const smiles = document.smiles.trim();
+        setRetrosynthesisInput(!navigation.importRetrosynthesisTarget ? undefined
+          : lastStructureSyncRef.current?.status !== "saved" || document.draftError || document.draft.trim() !== smiles
+            ? { notice: "共享结构同步未完成，已保留反推草稿。请在工作台检查结构后重试。" }
+            : smiles ? { smiles } : { notice: "当前共享结构为空，已保留反推草稿。" });
+      }
       applyRoute(route);
       activeModuleRef.current = route.module;
       if (navigation.source !== "state") window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -229,13 +262,14 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
+    if (isGuest) return;
     const handleMessage = (event: MessageEvent) => {
       projectBridge.handleMessage(event);
       generalSessionBridge.handleMessage(event);
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [generalSessionBridge, projectBridge]);
+  }, [generalSessionBridge, projectBridge, isGuest]);
 
   function applyRoute(route: AppRoute) {
     setActiveModule(route.module);
@@ -325,6 +359,10 @@ function AppContent() {
 
   function openMonomerPolymerization() {
     navigate({ module: "monomerPolymerization", datasetKey: null });
+  }
+
+  function openMonomerRetrosynthesis() {
+    navigate({ module: "monomerRetrosynthesis", datasetKey: null });
   }
 
   function openReverseDesign() {
@@ -426,6 +464,9 @@ function AppContent() {
       case "monomerPolymerization":
         navigate({ module: "monomerPolymerization", datasetKey: null }, { href: "/monomer-polymerization?mode=single" });
         break;
+      case "monomerRetrosynthesis":
+        navigate({ module: "monomerRetrosynthesis", datasetKey: null }, { importRetrosynthesisTarget: true });
+        break;
       case "reverseDesign":
         openReverseDesign();
         break;
@@ -445,6 +486,7 @@ function AppContent() {
   }
 
   function openAgentProject(directory: string) {
+    if (!requestServiceAccess()) return;
     navigate({ module: "home", datasetKey: null }, { kind: "command", onCommit: () => {
       setAgentWorkspaceView("project");
       projectBridge.openProject(directory);
@@ -452,6 +494,7 @@ function AppContent() {
   }
 
   function browseAgentProjects() {
+    if (!requestServiceAccess()) return;
     navigate({ module: "home", datasetKey: null }, { kind: "command", onCommit: () => {
       setAgentWorkspaceView("projects");
       projectBridge.browseProjects();
@@ -459,14 +502,17 @@ function AppContent() {
   }
 
   function createAgentProject() {
+    if (!requestServiceAccess()) return;
     navigate({ module: "home", datasetKey: null }, { kind: "command", onCommit: () => projectBridge.newProject() });
   }
 
   function setAgentProjectFavorite(directory: string, favorite: boolean) {
+    if (!requestServiceAccess()) return;
     projectBridge.setProjectFavorite(directory, favorite);
   }
 
   function archiveAgentProject(directory: string) {
+    if (!requestServiceAccess()) return;
     if (projectSnapshot?.activeDirectory === directory) {
       setAgentWorkspaceView("general");
       setGeneralSessionSnapshot(null);
@@ -496,6 +542,7 @@ function AppContent() {
   }
 
   function createGeneralSession() {
+    if (!requestServiceAccess()) return;
     navigate({ module: "home", datasetKey: null }, { kind: "command", onCommit: () => {
       setAgentWorkspaceView("general");
       generalSessionBridge.newSession();
@@ -503,6 +550,7 @@ function AppContent() {
   }
 
   function openGeneralSession(sessionID: string) {
+    if (!requestServiceAccess()) return;
     navigate({ module: "home", datasetKey: null }, { kind: "command", onCommit: () => {
       setAgentWorkspaceView("general");
       generalSessionBridge.openSession(sessionID);
@@ -543,6 +591,15 @@ function AppContent() {
           icon: <Sparkles className="h-4 w-4" />,
           isActive: activeModule === "polytaoGeneration",
           onClick: openPolytaoGeneration
+        },
+        {
+          id: "monomerRetrosynthesis",
+          label: "单体逆合成反推",
+          description: "从目标单体生成单步前体候选组合。",
+          route: "/monomer-retrosynthesis",
+          icon: <Route className="h-4 w-4" />,
+          isActive: activeModule === "monomerRetrosynthesis",
+          onClick: openMonomerRetrosynthesis
         },
         {
           id: "explorer",
@@ -685,6 +742,7 @@ function AppContent() {
     activeModule === "knowledge" ||
     activeModule === "structureWorkbench" ||
     activeModule === "monomerPolymerization" ||
+    activeModule === "monomerRetrosynthesis" ||
     activeModule === "polytaoGeneration" ||
     activeModule === "reverseDesign" ||
     activeModule === "conditionalGeneration" ||
@@ -717,7 +775,7 @@ function AppContent() {
       activeProjectDirectory={
         activeModule === "home" ? projectSnapshot?.activeDirectory ?? null : null
       }
-      isProjectBridgeReady={projectSnapshot !== null}
+      isProjectBridgeReady={isGuest || projectSnapshot !== null}
       onOpenProject={openAgentProject}
       onBrowseProjects={browseAgentProjects}
       onNewProject={createAgentProject}
@@ -728,14 +786,15 @@ function AppContent() {
       }
       generalSessions={generalSessionSnapshot?.sessions ?? []}
       activeGeneralSessionID={generalSessionSnapshot?.activeSessionID ?? null}
-      isGeneralSessionBridgeReady={generalSessionSnapshot !== null}
+      isGeneralSessionBridgeReady={isGuest || generalSessionSnapshot !== null}
       onOpenGeneralWorkspace={openGeneralWorkspace}
       onNewGeneralSession={createGeneralSession}
       onOpenGeneralSession={openGeneralSession}
-      onRenameGeneralSession={(sessionID, title) => generalSessionBridge.renameSession(sessionID, title)}
-      onDeleteGeneralSession={(sessionID) => generalSessionBridge.deleteSession(sessionID)}
+      onRenameGeneralSession={(sessionID, title) => { if (requestServiceAccess()) generalSessionBridge.renameSession(sessionID, title); }}
+      onDeleteGeneralSession={(sessionID) => { if (requestServiceAccess()) generalSessionBridge.deleteSession(sessionID); }}
       moduleTransition={moduleTransition}
     >
+      {isGuest && <div className="np-guest-service-notice" role="note"><span>游客可浏览各模块和使用本地画板；执行服务任务前，请登录账号。</span><button type="button" onClick={() => requestServiceAccess()}>登录账号</button></div>}
       <StructureWorkspaceNotice workspace={structureWorkspace.workspace} />
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
         <AgentWorkspaceHomePage
@@ -800,7 +859,7 @@ function AppContent() {
         />
       ) : null}
 
-      {activeModule === "labData" ? (
+      {activeModule === "labData" && !isGuest ? (
         <LabDataPage
           view={labDataView}
           onBackHome={() => navigate({ module: "home", datasetKey: null })}
@@ -808,7 +867,7 @@ function AppContent() {
         />
       ) : null}
 
-      {activeModule === "experimentWorkflowDemo" ? (
+      {activeModule === "experimentWorkflowDemo" && !isGuest ? (
         <ExperimentWorkflowDemoPage onBackHome={() => navigate({ module: "home", datasetKey: null })} />
       ) : null}
 
@@ -861,6 +920,11 @@ function AppContent() {
           structure={structureWorkspace}
           onEditStructure={openStructureWorkbench}
         />
+      ) : null}
+
+      {activeModule === "monomerRetrosynthesis" ? (
+        <MonomerRetrosynthesisPage structure={structureWorkspace}
+          initialInput={retrosynthesisInput} onEditStructure={openStructureWorkbench} />
       ) : null}
 
       {activeModule === "reverseDesign" || preserveReverseDesignForKnowledge ? (

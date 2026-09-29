@@ -268,6 +268,7 @@ POST_0013_BUSINESS_MUTABLE_TABLES = (
     ("monomer_dft", "job_attempts"),
     ("monomer_dft", "artifacts"),
 )
+USER_IDENTITY_AUDIT_TABLES = (("auth", "users"), ("auth", "sessions"))
 POST_0016_BUSINESS_MUTABLE_TABLES = (
     ("polymerization_batch", "imports"),
     ("polymerization_batch", "jobs"),
@@ -473,6 +474,21 @@ CANONICAL_MIGRATION_LEDGER = (
     ),
     ('0016_monomer_polymerization_batch', 'c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976'),
 )
+
+# The isolation cutover has its own evidence protocol. Historical v7 production
+# snapshots retain their exact original inventory and migration boundaries.
+USER_ISOLATION_MIGRATION_LEDGER = (*CANONICAL_MIGRATION_LEDGER,
+    ('0017_user_isolation_prepare', '0eeef0058fbda71770627005fe617f5a56261cf25e236c4a159d0b059db76adb'),
+    ('0018_user_isolation_cutover', '0755d9d802eba5fd69225a34f61bc01828b32a63f815802d2905636809c573f2'),
+)
+
+
+def validate_user_isolation_ledger(records: object) -> list[dict[str, str]]:
+    expected = [{"version": version, "checksum": checksum} for version, checksum in USER_ISOLATION_MIGRATION_LEDGER]
+    if records != expected:
+        raise SiteHelperContractError("user isolation requires the exact canonical ledger through 0018")
+    return [dict(record) for record in expected]
+
 
 HELPERS: dict[str, dict[str, str]] = {
     "bootstrap-quiesce": {

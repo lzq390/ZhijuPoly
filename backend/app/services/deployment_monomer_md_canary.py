@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator
 
 from app.postgres_database import postgres_connection
+from app.auth.context import service_context
 from app.services.monomer_md_repository import (
     create_monomer_md_job_postgres,
     mark_monomer_md_job_submitted_postgres,
@@ -660,7 +661,7 @@ def _create_or_load_owned_row(
     max_active_jobs: int,
     connection_factory: ConnectionFactory,
 ) -> dict[str, Any]:
-    with connection_factory(dsn) as connection:
+    with service_context(), connection_factory(dsn) as connection:
         _lock_capacity(connection)
         _require_exact_owned_sequence(connection)
         existing = _row_document(connection, marker["job_id"], lock=True)
@@ -671,6 +672,7 @@ def _create_or_load_owned_row(
                 )
             create_monomer_md_job_postgres(
                 connection,
+                owner_user_id="00000000-0000-0000-0000-000000000001",
                 job_id=marker["job_id"],
                 input_smiles="CCO",
                 canonical_smiles="CCO",
@@ -695,7 +697,7 @@ def _load_owned_row(
     lock: bool = False,
     connection_factory: ConnectionFactory,
 ) -> dict[str, Any] | None:
-    with connection_factory(dsn) as connection:
+    with service_context(), connection_factory(dsn) as connection:
         if lock:
             _lock_capacity(connection)
         _require_exact_owned_sequence(connection)
@@ -721,7 +723,7 @@ def _mark_submitted(
     *,
     connection_factory: ConnectionFactory,
 ) -> dict[str, Any]:
-    with connection_factory(dsn) as connection:
+    with service_context(), connection_factory(dsn) as connection:
         _lock_capacity(connection)
         current = _row_document(connection, marker["job_id"], lock=True)
         if current is None:
@@ -758,6 +760,7 @@ def _validate_worker_ready(
         or health.get("draining") is not False
         or health.get("db_configured") is not True
         or health.get("runtime_ready") is not True
+        or health.get("start_authorization_version") != 1
         or health.get("active_jobs") != 0
         or health.get("max_active_jobs") != 3
         or health.get("default_steps") != EXPECTED_STEPS
@@ -960,7 +963,7 @@ def validate_completed_canary(
             raise DeploymentMonomerMdCanaryError(
                 "cleaned canary has no successful validation evidence"
             )
-        with connection_factory(dsn) as connection:
+        with service_context(), connection_factory(dsn) as connection:
             _lock_capacity(connection)
             _require_exact_owned_sequence(connection)
             row = _row_document(connection, marker["job_id"], lock=True)
@@ -1084,7 +1087,7 @@ def _preflight_cleanup_row(
     *,
     connection_factory: ConnectionFactory,
 ) -> dict[str, Any] | None:
-    with connection_factory(dsn) as connection:
+    with service_context(), connection_factory(dsn) as connection:
         _lock_capacity(connection)
         _require_exact_owned_sequence(connection)
         row = _row_document(connection, marker["job_id"], lock=True)
@@ -1124,7 +1127,7 @@ def _delete_owned_row_with_intent(
     marker: dict[str, Any],
     connection_factory: ConnectionFactory,
 ) -> dict[str, Any]:
-    with connection_factory(dsn) as connection:
+    with service_context(), connection_factory(dsn) as connection:
         _lock_capacity(connection)
         _require_exact_owned_sequence(connection)
         row = _row_document(connection, marker["job_id"], lock=True)
@@ -1182,7 +1185,7 @@ def _prove_database_row_absent(
     *,
     connection_factory: ConnectionFactory,
 ) -> None:
-    with connection_factory(dsn) as connection:
+    with service_context(), connection_factory(dsn) as connection:
         _lock_capacity(connection)
         _require_exact_owned_sequence(connection)
         if _row_document(connection, marker["job_id"], lock=True) is not None:

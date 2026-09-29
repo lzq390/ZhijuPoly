@@ -1,3 +1,4 @@
+import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal } from "lucide-react";
@@ -108,6 +109,7 @@ export const PolymerSimilarityExplorerPage = forwardRef<
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
+    if (!requestServiceAccess()) return;
       closeParameters(true);
     }
     document.addEventListener("pointerdown", handlePointerDown);
@@ -135,6 +137,7 @@ export const PolymerSimilarityExplorerPage = forwardRef<
 
   async function submitSimilarity(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requestServiceAccess()) return;
     const thresholdValid = Number.isFinite(similarityThreshold) && similarityThreshold >= 0 && similarityThreshold <= 1;
     const topKValid = Number.isInteger(topK) && topK >= 1 && topK <= 100;
     if (!thresholdValid || !topKValid || isPreparing || isQueryLoading) return;

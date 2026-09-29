@@ -10,8 +10,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from app.auth.context import current_owner_id, service_context
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
+
+from test_auth_isolation import auth_database, activate
+from test_private_batch_support import batch_environment, admin_connection
 
 from app.config import Settings
 from app.main import create_app
@@ -32,17 +36,17 @@ DIANHYDRIDE = "O=C1OC(=O)c2cc3c(cc21)C(=O)OC3=O"
 
 
 @pytest.fixture
-def batch(tmp_path, postgres_dsn):
-    config = BatchSettings(enabled=True, storage_root=tmp_path / "batch", chunk_size=1)
-    service = BatchService(postgres_dsn, config)
-    app = create_app(Settings(app_postgres_dsn=postgres_dsn, model_enabled=False, retro_model_enabled=False))
-    app.state.polymerization_batch = service
-    worker = BatchWorker(postgres_dsn, config)
-    worker.engine = engine_fingerprint()
-    worker.heartbeat(force=True)
-    with service.repository.connection() as conn:
-        conn.execute("UPDATE governance.deployment_control SET drain_enabled=false,reason=NULL,release_sha=NULL,activated_by=NULL")
-    return service, worker, TestClient(app)
+def batch(tmp_path, auth_database):
+    with batch_environment(tmp_path, auth_database, chunk_size=1) as (service, worker, user, auth_settings):
+        app = create_app(Settings(app_postgres_dsn=auth_database['api'], model_enabled=False, retro_model_enabled=False))
+        app.state.auth.settings = auth_settings
+        app.state.polymerization_batch = service
+        worker.engine = engine_fingerprint()
+        worker.heartbeat(force=True)
+        client = TestClient(app)
+        activate(client, user)
+        yield service, worker, client
+        client.close()
 
 
 def import_pair(client, a=None, b=None):
@@ -65,7 +69,7 @@ def finish(worker, job_id):
         claimed = worker.repository.claim(worker.worker_id, worker.engine["fingerprint"])
         if claimed:
             worker.execute(*claimed)
-        job = worker.repository.get_job(job_id)
+        job = worker.repository.get_job(job_id, owner_user_id=current_owner_id())
         if job["status"] not in {"queued", "running", "cancelling"}:
             return job
     raise AssertionError("worker did not finish")
@@ -112,14 +116,15 @@ def test_recovery_fences_old_attempt_and_preserves_committed_chunks(batch):
     job_id = submit(client, preview).json()["job_id"]
     first = worker.repository.claim(worker.worker_id, worker.engine["fingerprint"])
     worker.execute(*first)
-    before = worker.repository.chunks(job_id, completed_only=True)
+    before = worker.repository.chunks(job_id, completed_only=True, owner_user_id=current_owner_id())
     abandoned = worker.repository.claim(worker.worker_id, worker.engine["fingerprint"])
-    worker.repository.recover()
-    assert not worker.repository.finish_unit(*abandoned, {"path": "untrusted", "size_bytes": 0}, 1)
-    restarted = BatchWorker(service.repository.dsn, service.config)
+    worker.recover()
+    with service_context():
+        assert not worker.repository.finish_unit(*abandoned, {"path": "untrusted", "size_bytes": 0}, 1)
+    restarted = BatchWorker(worker.repository.dsn, service.config)
     restarted.engine = worker.engine
     job = finish(restarted, job_id)
-    after = worker.repository.chunks(job_id, completed_only=True)
+    after = worker.repository.chunks(job_id, completed_only=True, owner_user_id=current_owner_id())
     assert after[0]["artifact"] == before[0]["artifact"]
     assert job["summary"]["candidate_count"] == 2
 
@@ -138,12 +143,14 @@ def test_cancel_retains_complete_pairs_accounting(batch):
 
 
 def test_stale_preview_empty_side_and_idempotency_conflict(batch):
-    _, _, client = batch
+    _, worker, client = batch
     first = import_pair(client)
     key = uuid4().hex
-    assert submit(client, first, key).status_code == 202
+    accepted = submit(client, first, key)
+    assert accepted.status_code == 202
     second = import_pair(client)
     assert submit(client, second, key).status_code == 409
+    finish(worker, accepted.json()["job_id"])
     replaced = client.post(f"{BASE_PATH}/imports/{first['import_id']}/preview", json={role: first["tables"][role]["mapping"] for role in ("a", "b")})
     assert replaced.status_code == 200
     assert submit(client, first).status_code == 409
@@ -156,7 +163,7 @@ def test_drain_blocks_claim_but_pending_jobs_do_not_block_deployment(batch):
     service, worker, client = batch
     preview = import_pair(client)
     submit(client, preview)
-    with service.repository.connection() as conn:
+    with admin_connection(service) as conn:
         summary = count_active_postgres_jobs(conn)
         assert summary.active_jobs_schema_version == 3
         assert summary.counts["polymerization_batch"] == 0
@@ -164,13 +171,13 @@ def test_drain_blocks_claim_but_pending_jobs_do_not_block_deployment(batch):
     try:
         assert worker.repository.claim(worker.worker_id, worker.engine["fingerprint"]) is None
     finally:
-        with service.repository.connection() as conn:
+        with admin_connection(service) as conn:
             disable_drain(conn, expected_activated_by="test", expected_release_sha="a" * 40)
     claim = worker.repository.claim(worker.worker_id, worker.engine["fingerprint"])
-    with service.repository.connection() as conn:
+    with admin_connection(service) as conn:
         assert count_active_postgres_jobs(conn).counts["polymerization_batch"] == 1
     worker.execute(*claim)
-    with service.repository.connection() as conn:
+    with admin_connection(service) as conn:
         assert count_active_postgres_jobs(conn).counts["polymerization_batch"] == 0
 
 
@@ -179,7 +186,7 @@ def test_retention_and_open_download_survive_unlink(batch):
     job_id = submit(client, import_pair(client)).json()["job_id"]
     finish(worker, job_id)
     handle, _ = service.artifact(job_id, "results.zip")
-    with service.repository.connection() as conn:
+    with admin_connection(service) as conn:
         conn.execute("UPDATE polymerization_batch.jobs SET expires_at=now()-interval '1 second' WHERE id=%s", (job_id,))
     worker.cleanup()
     with handle:
@@ -263,7 +270,7 @@ def test_export_has_no_twenty_result_cap_and_splits_excel_sheets(batch, monkeypa
     monkeypatch.setattr(exporting, "EXCEL_ROWS", 10)
     snapshot = read_json(service.root / job["options"]["snapshot_path"])
     output = service.root / "split-export"
-    exporting.export_job(service.root, job, snapshot, worker.repository.chunks(job_id, completed_only=True), output, service.config)
+    exporting.export_job(service.root, job, snapshot, worker.repository.chunks(job_id, completed_only=True, owner_user_id=current_owner_id()), output, service.config)
     workbook = load_workbook(output / "results.xlsx", read_only=True)
     assert [name for name in workbook.sheetnames if name.startswith("results")] == ["results", "results_2", "results_3"]
     assert sum(sum(1 for _ in workbook[name].rows) - 1 for name in workbook.sheetnames if name.startswith("results")) == 25
@@ -281,10 +288,10 @@ def test_failed_mapping_invalidates_old_preview_and_old_request_cannot_publish(b
     assert response.status_code in {200, 422}
     assert submit(client, preview).status_code == 409
     old, new = uuid4().hex, uuid4().hex
-    service.repository.begin_preview(preview["import_id"], old)
-    service.repository.begin_preview(preview["import_id"], new)
+    service.repository.begin_preview(preview["import_id"], old, owner_user_id=current_owner_id())
+    service.repository.begin_preview(preview["import_id"], new, owner_user_id=current_owner_id())
     with pytest.raises(BatchError, match="更新的预检"):
-        service.repository.save_preview(preview["import_id"], old, {})
+        service.repository.save_preview(preview["import_id"], old, {}, owner_user_id=current_owner_id())
 
 
 def test_queue_capacity_preserves_idempotent_retry_when_worker_unavailable(batch):
@@ -292,10 +299,12 @@ def test_queue_capacity_preserves_idempotent_retry_when_worker_unavailable(batch
     service.repository.config = replace(service.config, queue_capacity=1)
     preview = import_pair(client)
     key = uuid4().hex
-    first = submit(client, preview, key).json()
-    assert submit(client, preview).status_code == 202
-    assert submit(client, preview).status_code == 429
-    with service.repository.connection() as conn:
+    response = submit(client, preview, key)
+    assert response.status_code == 202, response.text
+    first = response.json()
+    rejected = submit(client, preview)
+    assert rejected.status_code == 429, rejected.text
+    with admin_connection(service) as conn:
         conn.execute("UPDATE polymerization_batch.worker_status SET available=false")
     assert submit(client, preview, key).json()["job_id"] == first["job_id"]
 
@@ -304,11 +313,11 @@ def test_changed_engine_fails_without_mixing_committed_results(batch):
     service, worker, client = batch
     job_id = submit(client, import_pair(client)).json()["job_id"]
     worker.execute(*worker.repository.claim(worker.worker_id, worker.engine["fingerprint"]))
-    committed = worker.repository.chunks(job_id, completed_only=True)
+    committed = worker.repository.chunks(job_id, completed_only=True, owner_user_id=current_owner_id())
     assert worker.repository.claim(worker.worker_id, "different-version") is None
-    job = service.repository.get_job(job_id)
+    job = service.repository.get_job(job_id, owner_user_id=current_owner_id())
     assert job["status"] == "failed" and job["error_code"] == "engine_version_mismatch"
-    assert worker.repository.chunks(job_id, completed_only=True) == committed
+    assert worker.repository.chunks(job_id, completed_only=True, owner_user_id=current_owner_id()) == committed
 
 
 def test_final_export_publish_failure_retries_without_duplicate_rows(batch, monkeypatch):
@@ -322,13 +331,13 @@ def test_final_export_publish_failure_retries_without_duplicate_rows(batch, monk
     original = worker.repository.finish_unit
     monkeypatch.setattr(worker.repository, "finish_unit", lambda *args: False)
     worker.execute(job, chunk)
-    assert service.repository.get_job(job_id)["artifacts"] == {}
+    assert service.repository.get_job(job_id, owner_user_id=current_owner_id())["artifacts"] == {}
     assert not (service.root / "jobs" / job_id / "attempts" / job["execution_token"]).exists()
     monkeypatch.setattr(worker.repository, "finish_unit", original)
-    worker.repository.recover()
+    worker.recover()
     completed = finish(worker, job_id)
     assert completed["summary"]["candidate_count"] == 2
-    exported = next(item for item in worker.repository.chunks(job_id) if item["kind"] == "export")
+    exported = next(item for item in worker.repository.chunks(job_id, owner_user_id=current_owner_id()) if item["kind"] == "export")
     assert exported["attempt"] == 2 and exported["lease_expires_at"] is None
 
 
@@ -381,23 +390,23 @@ def test_resource_limit_never_reports_truncated_success(batch, monkeypatch):
     job = finish(worker, job_id)
     assert job["status"] == "failed" and job["error_code"] == "result_limit"
     assert not job["artifacts"]
-    assert service.repository.chunks(job_id, completed_only=True)
+    assert service.repository.chunks(job_id, completed_only=True, owner_user_id=current_owner_id())
 
 
 def test_drain_freezes_worker_heartbeat_and_cleanup(batch):
     service, worker, client = batch
     preview = import_pair(client)
-    with service.repository.connection() as conn:
+    with admin_connection(service) as conn:
         previous = conn.execute("SELECT * FROM polymerization_batch.worker_status").fetchone()
         enable_drain(conn, reason="test", activated_by="test", release_sha="a" * 40)
     try:
         worker.heartbeat(force=True)
         worker.cleanup()
-        with service.repository.connection() as conn:
+        with admin_connection(service) as conn:
             assert conn.execute("SELECT * FROM polymerization_batch.worker_status").fetchone() == previous
-        assert service.repository.get_import(preview["import_id"])
+        assert service.repository.get_import(preview["import_id"], owner_user_id=current_owner_id())
     finally:
-        with service.repository.connection() as conn:
+        with admin_connection(service) as conn:
             disable_drain(conn, expected_activated_by="test", expected_release_sha="a" * 40)
 
 
@@ -411,6 +420,6 @@ def test_normal_export_obeys_overall_execution_budget(batch):
         worker.execute(job, chunk)
     worker.config = replace(worker.config, job_seconds=1)
     worker.execute(job, chunk)
-    stopped = worker.repository.get_job(job_id)
+    stopped = worker.repository.get_job(job_id, owner_user_id=current_owner_id())
     assert stopped["status"] == "failed" and stopped["error_code"] == "job_timeout"
     assert not stopped["artifacts"]

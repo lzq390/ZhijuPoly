@@ -9,6 +9,7 @@ from time import monotonic
 from typing import Any, Callable, ContextManager, Literal
 
 from app.postgres_database import postgres_connection
+from app.auth.context import service_context
 
 from .monomer_dft_repository import (
     ACTIVE_STATUSES as DFT_ACTIVE_STATUSES,
@@ -20,7 +21,7 @@ from .monomer_md_repository import (
     MONOMER_MD_ACTIVE_STATUSES,
     MONOMER_MD_TERMINAL_STATUSES,
     delete_monomer_md_job_cas_postgres,
-    get_monomer_md_job_postgres,
+    get_monomer_md_job_for_service_postgres,
     list_expired_monomer_md_jobs_postgres,
 )
 from .monomer_md_worker_client import MonomerMdWorkerClient, MonomerMdWorkerError
@@ -57,11 +58,11 @@ class MonomerMdJobDeletionService:
         self._worker = worker
 
     def _get(self, job_id: str) -> dict[str, Any] | None:
-        with postgres_connection(self._dsn) as connection:
-            return get_monomer_md_job_postgres(connection, job_id)
+        with service_context(), postgres_connection(self._dsn) as connection:
+            return get_monomer_md_job_for_service_postgres(connection, job_id)
 
     def _delete_cas(self, expected: dict[str, Any]) -> bool:
-        with postgres_connection(self._dsn) as connection:
+        with service_context(), postgres_connection(self._dsn) as connection:
             return delete_monomer_md_job_cas_postgres(
                 connection,
                 job_id=expected["job_id"],
@@ -125,7 +126,7 @@ class MonomerDftJobDeletionService:
         expected: dict[str, Any] | None = None,
     ) -> bool:
         current = expected or await asyncio.to_thread(
-            self._repository.get_job, job_id
+            self._repository.get_job_for_service, job_id
         )
         if current is None:
             return False
@@ -150,7 +151,7 @@ class MonomerDftJobDeletionService:
 
         if await asyncio.to_thread(self._repository.delete_job_cas, current):
             return True
-        reread = await asyncio.to_thread(self._repository.get_job, job_id)
+        reread = await asyncio.to_thread(self._repository.get_job_for_service, job_id)
         if reread is None:
             return False
         raise MonomerJobDeletionConflict(

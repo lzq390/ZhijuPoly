@@ -46,6 +46,8 @@ import {
   usePolytaoGeneration
 } from "../hooks/usePolytaoGeneration";
 import { calculatePolytaoDescriptors, fetchStructure2D } from "../services/api";
+import { useAuth } from "../auth/AuthProvider";
+import { requestServiceAccess } from "../auth/guestAccess";
 import {
   POLYTAO_DESCRIPTOR_NAMES,
   type PolytaoCandidate,
@@ -253,7 +255,8 @@ export function PolytaoGenerationPage({
   structure,
   onEditStructure
 }: PolytaoGenerationPageProps) {
-  const polytao = usePolytaoGeneration();
+  const guest = useAuth()?.status === "guest";
+  const polytao = usePolytaoGeneration(!guest);
   const [descriptorError, setDescriptorError] = useState<string | null>(null);
   const [isDescriptorLoading, setIsDescriptorLoading] = useState(false);
   const [descriptorSource, setDescriptorSource] = useState<DescriptorSource>("empty");
@@ -300,7 +303,7 @@ export function PolytaoGenerationPage({
     polytao.statusError,
     polytao.isStatusLoading
   );
-  const runtime = runtimePresentation(
+  const runtime = guest ? { className: "is-disabled", label: "请登录账号。" } : runtimePresentation(
     runtimeDisplayState,
     polytao.isLoading,
     polytao.serviceStatus?.active_jobs
@@ -319,11 +322,11 @@ export function PolytaoGenerationPage({
     polytao.request.max_length >= 16 &&
     polytao.request.max_length <= 512;
   const descriptorReady = filledCount === POLYTAO_DESCRIPTOR_NAMES.length;
-  const canSubmit =
+  const canSubmit = guest || (
     !polytao.isLoading &&
     polytao.serviceStatus?.available === true &&
     descriptorReady &&
-    samplingValid;
+    samplingValid);
 
   const showToast = useCallback((message: string) => {
     if (toastTimerRef.current !== null) {
@@ -392,7 +395,7 @@ export function PolytaoGenerationPage({
 
   useEffect(() => {
     const smiles = structure.smiles.trim();
-    if (!referenceOpen || !smiles || referenceSvg) {
+    if (guest || !referenceOpen || !smiles || referenceSvg) {
       return;
     }
 
@@ -416,7 +419,7 @@ export function PolytaoGenerationPage({
       });
 
     return () => controller.abort();
-  }, [referenceOpen, referenceSvg, structure.smiles]);
+  }, [guest, referenceOpen, referenceSvg, structure.smiles]);
 
   const closeParameterPanel = useCallback((restoreFocus = false) => {
     setParameterOpen(false);
@@ -504,6 +507,7 @@ export function PolytaoGenerationPage({
   }
 
   async function handleDescriptorPrefill() {
+    if (!requestServiceAccess()) return;
     setDescriptorError(null);
     setIsDescriptorLoading(true);
     try {
@@ -541,6 +545,7 @@ export function PolytaoGenerationPage({
   }
 
   async function handleSubmit() {
+    if (!requestServiceAccess()) return;
     setDescriptorError(null);
     if (polytao.serviceStatus && !polytao.serviceStatus.available) {
       setDescriptorError(polytao.serviceStatus.message);
@@ -687,6 +692,7 @@ export function PolytaoGenerationPage({
                     disabled={!hasStructure || structureFlipMotion.busy}
                     aria-busy={structureFlipMotion.busy || undefined}
                     onClick={() => {
+                      if (!requestServiceAccess()) return;
                       if (!structureFlipMotion.start()) return;
                       setHasActivated3D(true);
                       setStructureFlipped((flipped) => !flipped);
@@ -780,7 +786,7 @@ export function PolytaoGenerationPage({
                         className="polytao-secondary-button"
                         type="button"
                         onClick={() => void handleDescriptorPrefill()}
-                        disabled={isDescriptorLoading || !hasStructure}
+                        disabled={!guest && (isDescriptorLoading || !hasStructure)}
                       >
                         {isDescriptorLoading ? <LoaderCircle className="polytao-spinner" /> : <Wand2 />}
                         提取描述符

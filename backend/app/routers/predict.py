@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from time import perf_counter
+from starlette.concurrency import run_in_threadpool
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -28,7 +29,7 @@ async def predict(request_body: PredictRequest, request: Request) -> PredictResp
                 "unsupported prediction properties: " + ", ".join(invalid)
             )
 
-        predictions = predict_properties(
+        predictions = await run_in_threadpool(predict_properties,
             request_body.smiles,
             request_body.properties,
             model_dir=settings.model_dir_path,

@@ -1,3 +1,6 @@
+import { useAuth } from "../../auth/AuthProvider";
+import { requestServiceAccess } from "../../auth/guestAccess";
+import { createPrivateObjectURL, revokePrivateObjectURL } from "../../auth/objectUrls";
 import {
   AlertTriangle,
   BarChart3,
@@ -18,9 +21,7 @@ import {
 } from "lucide-react";
 import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ONLINE_KNOWLEDGE_DEFAULT_BASE_URL,
-  ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS,
-  ONLINE_KNOWLEDGE_DEFAULT_MODEL
+  ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS
 } from "../../constants/onlineKnowledgeDefaults";
 import { useOnlineKnowledgeSearch } from "../../hooks/useOnlineKnowledgeSearch";
 import { exportOnlineKnowledgeCsv, fetchOnlineKnowledgeDefaultConfig } from "../../services/api";
@@ -252,12 +253,11 @@ function OnlineProgress({ state }: { state: ReturnType<typeof useOnlineKnowledge
 }
 
 export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigation, toolbarActions }: OnlineKnowledgeSearchPanelProps) {
+  const guest = useAuth()?.status === "guest";
   const searchState = useOnlineKnowledgeSearch();
   const [material, setMaterial] = useState(initialMaterial.trim());
   const [mode, setMode] = useState<OnlineKnowledgeMode>("property");
   const [maxPapers, setMaxPapers] = useState(ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS);
-  const [baseUrl, setBaseUrl] = useState(ONLINE_KNOWLEDGE_DEFAULT_BASE_URL);
-  const [model, setModel] = useState(ONLINE_KNOWLEDGE_DEFAULT_MODEL);
   const [hasServerApiKey, setHasServerApiKey] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [csvError, setCsvError] = useState<string | null>(null);
@@ -270,8 +270,8 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
   const [confirmClearHistory, setConfirmClearHistory] = useState(false);
   const previousDataRef = useRef<OnlineKnowledgeSearchResponse | null>(null);
 
-  const hasModelAccess = hasServerApiKey && Boolean(baseUrl.trim()) && Boolean(model.trim());
-  const canSearch = Boolean(material.trim()) && hasModelAccess && maxPapers >= 1 && maxPapers <= 2000 && !searchState.isLoading;
+  const hasModelAccess = hasServerApiKey;
+  const canSearch = guest || Boolean(material.trim()) && hasModelAccess && maxPapers >= 1 && maxPapers <= 2000 && !searchState.isLoading;
   const data = searchState.data;
   const resultCount = data ? (data.mode === "property" ? data.propertyPoints.length : data.syntheses.length) : 0;
   const selectedProperty = data?.mode === "property" && selectedIndex !== null ? data.propertyPoints[selectedIndex] : null;
@@ -283,9 +283,10 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
   }, [initialMaterial]);
 
   useEffect(() => {
+    if (guest) return;
     void loadDefaultConfig();
     void searchState.loadHistory();
-    // First mount is the lazy-entry point for online configuration and shared history.
+    // First mount is the lazy-entry point for online configuration and owner history.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -307,8 +308,6 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
     setConfigError(null);
     try {
       const config = await fetchOnlineKnowledgeDefaultConfig();
-      setBaseUrl(config.base_url);
-      setModel(config.model);
       setHasServerApiKey(config.has_server_api_key);
       if (!config.has_server_api_key) {
         setConfigError("服务端模型 API Key 尚未配置，在线检索暂不可运行。");
@@ -322,13 +321,9 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
   function buildPayload(nextMaterial: string, nextMode: OnlineKnowledgeMode, nextMaxPapers: number): OnlineKnowledgeSearchRequest {
     return {
       material: nextMaterial,
-      api_key: null,
-      base_url: baseUrl.trim(),
-      model: model.trim(),
       mode: nextMode,
       max_papers: nextMaxPapers,
-      extraction_delay_seconds: 0.5,
-      use_server_default: true
+      extraction_delay_seconds: 0.5
     };
   }
 
@@ -343,6 +338,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requestServiceAccess()) return;
     if (!canSearch) return;
     await submitPayload(buildPayload(material.trim(), mode, maxPapers));
   }
@@ -356,12 +352,12 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
         `${data.material.replace(/\s+/g, "_")}_${data.mode}_results.csv`
       );
       const blob = new Blob([response.csv_content], { type: "text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
+      const url = createPrivateObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
       link.download = response.filename;
       link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      window.setTimeout(() => revokePrivateObjectURL(url), 0);
     } catch (error) {
       setCsvError(error instanceof Error ? error.message : "CSV 导出失败");
     }
@@ -415,7 +411,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
       ? "性质关系详情"
       : selectedSynthesis ? "合成记录详情" : "在线结果详情";
   const drawerSubtitle = drawerView === "history"
-    ? `${searchState.history.length} 条已完成记录 · 当前服务实例共享`
+    ? `${searchState.history.length} 条已完成记录 · 仅当前账号可见`
     : data
       ? `${data.material} · 在线文献`
       : "选择结果后查看";
@@ -449,7 +445,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
               <div className="ks-meta-row">
                 <span className={hasModelAccess ? "is-ready" : "is-warning"}><KeyRound aria-hidden="true" />{hasModelAccess ? "服务端模型配置可用" : "服务端模型配置不可用"}</span>
                 <span><Globe2 aria-hidden="true" />Semantic Scholar / PubMed / OpenAlex / arXiv / Crossref</span>
-                <span>异步任务 · 仅成功任务写入共享历史</span>
+                <span>异步任务 · 成功任务保存到我的历史</span>
               </div>
               {configError ? <div className="ks-inline-alert is-error" role="alert"><AlertTriangle aria-hidden="true" /><span>{configError}</span><button type="button" onClick={() => void loadDefaultConfig()}>重新检查</button></div> : null}
             </div>
@@ -531,10 +527,10 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
       >
         {drawerView === "history" ? (
           <div className="ks-drawer-stack">
-            <div className="ks-drawer-callout"><History aria-hidden="true" /><span>这里展示当前数据库服务实例最近 100 条已完成记录，不是按用户隔离的个人历史。</span></div>
+            <div className="ks-drawer-callout"><History aria-hidden="true" /><span>这里仅展示当前账号最近 100 条已完成记录。其他账号无法查看或清空这些记录。</span></div>
             <div className="ks-history-toolbar">
               <button className="ks-button" type="button" onClick={() => void searchState.loadHistory()} disabled={searchState.isHistoryLoading}><RefreshCw className={searchState.isHistoryLoading ? "is-spinning" : ""} aria-hidden="true" />刷新</button>
-              {!confirmClearHistory ? <button className="ks-button is-danger" type="button" disabled={!searchState.history.length} onClick={() => setConfirmClearHistory(true)}><Trash2 aria-hidden="true" />清空全部</button> : <div className="ks-confirm-row"><span>确认清空服务实例全部历史？</span><button type="button" onClick={() => void clearHistory()}>确认</button><button type="button" onClick={() => setConfirmClearHistory(false)}>取消</button></div>}
+              {!confirmClearHistory ? <button className="ks-button is-danger" type="button" disabled={!searchState.history.length} onClick={() => setConfirmClearHistory(true)}><Trash2 aria-hidden="true" />清空全部</button> : <div className="ks-confirm-row"><span>确认清空当前账号全部历史？</span><button type="button" onClick={() => void clearHistory()}>确认</button><button type="button" onClick={() => setConfirmClearHistory(false)}>取消</button></div>}
             </div>
             {searchState.historyError || historyActionError ? <div className="ks-inline-alert is-error" role="alert"><AlertTriangle aria-hidden="true" /><span>{historyActionError || searchState.historyError}</span></div> : null}
             <div className="ks-history-list">

@@ -5,6 +5,15 @@ from uuid import uuid4
 
 import pytest
 
+from app.auth.context import Identity, user_context
+
+
+@pytest.fixture(autouse=True)
+def authenticated_owner():
+    with user_context(Identity("11111111-1111-1111-1111-111111111111")):
+        yield
+
+
 from app.services.in_memory_jobs import (
     DEFAULT_JOB_RETENTION_SECONDS,
     DEFAULT_MAX_RETAINED_BYTES,
@@ -42,13 +51,13 @@ def test_lookup_distinguishes_not_found_from_gone() -> None:
         store.read("polytao", "not-a-job-id", lambda item: item)
     with pytest.raises(JobNotFoundError):
         store.read("conditional_generation", value.job_id, lambda item: item)
-    with pytest.raises(JobGoneError):
+    with pytest.raises(JobNotFoundError):
         store.read(
             "polytao",
             "123e4567-e89b-42d3-a456-426614174000",
             lambda item: item,
         )
-    with pytest.raises(JobGoneError):
+    with pytest.raises(JobNotFoundError):
         store.read(
             "polytao",
             uuid4().hex,
@@ -59,11 +68,11 @@ def test_lookup_distinguishes_not_found_from_gone() -> None:
         store.read("polytao", "0" * 32, lambda item: item)
 
     previous_instance_id = value.job_id.replace("." + "a" * 16 + ".", "." + "b" * 16 + ".")
-    with pytest.raises(JobGoneError):
+    with pytest.raises(JobNotFoundError):
         store.read("polytao", previous_instance_id, lambda item: item)
 
     store.delete("polytao", value.job_id)
-    with pytest.raises(JobGoneError):
+    with pytest.raises(JobNotFoundError):
         store.read("polytao", value.job_id, lambda item: item)
 
 
@@ -86,7 +95,7 @@ def test_shared_limit_evicts_oldest_reapable_terminal_across_namespaces() -> Non
     second = _create(store, "polytao")
     newest = _create(store, "conditional_generation")
 
-    with pytest.raises(JobGoneError):
+    with pytest.raises(JobNotFoundError):
         store.read("conditional_generation", oldest.job_id, lambda item: item)
     assert store.read("polytao", second.job_id, lambda item: item.job_id) == second.job_id
     assert store.read("conditional_generation", newest.job_id, lambda item: item.job_id) == newest.job_id
@@ -125,7 +134,7 @@ def test_terminal_ttl_starts_once_and_expires_only_after_future_is_reapable() ->
     assert store.read("polytao", value.job_id, lambda item: item.job_id) == value.job_id
 
     store.mark_reapable("polytao", value.job_id)
-    with pytest.raises(JobGoneError):
+    with pytest.raises(JobNotFoundError):
         store.read("polytao", value.job_id, lambda item: item)
 
 

@@ -1,0 +1,25 @@
+# Apply after docker-compose.yml + docker-compose.dev.yml, using an owner-private
+# --env-file based on ops/config/user-isolation.env.example. Run 0017 and the
+# dedicated cutover before starting private traffic. Never use for production.
+x-identity-environment: &identity-environment
+  APP_POSTGRES_DSN: "${APP_POSTGRES_DSN:?API role DSN is required}"
+  PI_POSTGRES_DSN: "${APP_POSTGRES_DSN:?API role DSN is required}"
+  AUTH_POSTGRES_DSN: "${AUTH_POSTGRES_DSN:?Auth role DSN is required}"
+  APP_SERVICE_POSTGRES_DSN: "${APP_SERVICE_POSTGRES_DSN:?Service role DSN is required}"
+  AUTH_COOKIE_NAME: "${AUTH_COOKIE_NAME:-nexpoly_dev_session}"
+  AUTH_COOKIE_SECURE: "false"
+  AUTH_DEV_HTTP_ORIGINS: "${AUTH_DEV_HTTP_ORIGINS:-}"
+  ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
+  WEB_CONCURRENCY: "1"
+  NEXPOLY_POSTGRES_PREFLIGHT_ARGS: "--strict --schema-target user-isolation-0018 --service-context"
+  MONOMER_DFT_START_AUTHORIZATION_TOKEN: "${MONOMER_DFT_START_AUTHORIZATION_TOKEN:?DFT start authorization service token is required}"
+services:
+  backend:
+    environment: *identity-environment
+  postgres-init:
+    environment:
+      APP_POSTGRES_DSN: "${AUTH_ADMIN_POSTGRES_DSN:?Migration administrator DSN is required}"
+  polymerization-batch-worker:
+    environment:
+      APP_POSTGRES_DSN: "${APP_SERVICE_POSTGRES_DSN:?Service role DSN is required}"
+      APP_SERVICE_POSTGRES_DSN: "${APP_SERVICE_POSTGRES_DSN:?Service role DSN is required}"

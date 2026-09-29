@@ -6,6 +6,8 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 
 from app.postgres_database import postgres_connection
+from app.auth.context import is_service_context
+from app.task_control import authorize_start
 from app.services.deployment_control import get_drain_state
 from .models import BatchError, BatchSettings, TERMINAL_STATUSES
 from .storage import check_id
@@ -43,90 +45,156 @@ class BatchRepository:
                 available=EXCLUDED.available, message=EXCLUDED.message, engine=EXCLUDED.engine, heartbeat_at=now()""",
                 (worker_id, available, message, Jsonb(engine)))
 
-    def create_import(self, import_id: str, files: dict) -> None:
-        with self.connection() as conn:
-            conn.execute("INSERT INTO polymerization_batch.imports(id,files,expires_at) VALUES (%s,%s,%s)",
-                         (import_id, Jsonb(files), datetime.now(timezone.utc) + timedelta(hours=self.config.import_hours)))
+    def check_import_quota(self, additional_bytes: int = 0, conn=None, *, owner_user_id: str) -> None:
+        owner = owner_user_id
+        if conn is None:
+            with self.connection() as connection:
+                return self.check_import_quota(additional_bytes, connection, owner_user_id=owner_user_id)
+        row = conn.execute("""SELECT count(*) AS n,
+            COALESCE(sum((SELECT COALESCE(sum((v->>'size_bytes')::bigint),0)
+                FROM jsonb_each(files) AS f(k,v))),0) AS bytes
+            FROM polymerization_batch.imports WHERE owner_user_id=%s::uuid AND expires_at>now()""", (owner,)).fetchone()
+        if row["n"] >= self.config.max_user_imports or row["bytes"] + additional_bytes > self.config.user_import_bytes:
+            raise BatchError("本人上传暂存数量或大小已达上限。", "import_quota", 429)
 
-    def get_import(self, import_id: str, conn=None, *, lock=False) -> dict:
+    def create_import(self, import_id: str, files: dict, *, owner_user_id: str) -> None:
+        owner = owner_user_id
+        with self.connection() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ("batch-import:" + owner,))
+            self.check_import_quota(sum(item["size_bytes"] for item in files.values()), conn, owner_user_id=owner_user_id)
+            conn.execute("INSERT INTO polymerization_batch.imports(id,owner_user_id,files,expires_at) VALUES (%s,%s::uuid,%s,%s)",
+                         (import_id, owner, Jsonb(files), datetime.now(timezone.utc) + timedelta(hours=self.config.import_hours)))
+
+    def discard_failed_import(self, import_id: str, *, owner_user_id: str) -> None:
+        with self.connection() as conn:
+            conn.execute("DELETE FROM polymerization_batch.imports WHERE id=%s AND owner_user_id=%s::uuid", (import_id, owner_user_id))
+
+    @staticmethod
+    def _require_service() -> None:
+        if not is_service_context():
+            raise RuntimeError("Batch global access requires an explicit service context")
+
+    def get_import(self, import_id: str, conn=None, *, owner_user_id: str, lock=False) -> dict:
         check_id(import_id)
         if conn is None:
             with self.connection() as connection:
-                return self.get_import(import_id, connection, lock=lock)
-        row = conn.execute("SELECT * FROM polymerization_batch.imports WHERE id=%s" + (" FOR UPDATE" if lock else ""), (import_id,)).fetchone()
+                return self.get_import(import_id, connection, owner_user_id=owner_user_id, lock=lock)
+        row = conn.execute("SELECT * FROM polymerization_batch.imports WHERE id=%s AND owner_user_id=%s::uuid" + (" FOR UPDATE" if lock else ""), (import_id, owner_user_id)).fetchone()
         if row is None:
-            raise BatchError("导入记录不存在或已过期，请重新上传。", "import_expired", 410)
+            raise BatchError("导入记录不存在。", "not_found", 404)
         if row["expires_at"] <= datetime.now(timezone.utc):
             raise BatchError("导入文件已过期，请重新上传。", "import_expired", 410)
         return row
 
-    def save_preview(self, import_id: str, revision: str, preview: dict) -> None:
+    def save_preview(self, import_id: str, revision: str, preview: dict, *, owner_user_id: str) -> None:
         with self.connection() as conn:
-            self.get_import(import_id, conn, lock=True)
-            updated = conn.execute("UPDATE polymerization_batch.imports SET preview=%s WHERE id=%s AND preview_revision=%s RETURNING id",
-                         (Jsonb(preview), import_id, revision)).fetchone()
+            self.get_import(import_id, conn, owner_user_id=owner_user_id, lock=True)
+            updated = conn.execute("UPDATE polymerization_batch.imports SET preview=%s WHERE id=%s AND preview_revision=%s AND owner_user_id=%s::uuid RETURNING id",
+                         (Jsonb(preview), import_id, revision, owner_user_id)).fetchone()
             if not updated:
                 raise BatchError("已有更新的预检请求，请使用最新结果。", "stale_preview", 409)
 
-    def begin_preview(self, import_id: str, revision: str) -> None:
+    def begin_preview(self, import_id: str, revision: str, *, owner_user_id: str) -> None:
         with self.connection() as conn:
-            self.get_import(import_id, conn, lock=True)
-            conn.execute("UPDATE polymerization_batch.imports SET preview_revision=%s,preview=NULL WHERE id=%s", (revision, import_id))
+            self.get_import(import_id, conn, owner_user_id=owner_user_id, lock=True)
+            conn.execute("UPDATE polymerization_batch.imports SET preview_revision=%s,preview=NULL WHERE id=%s AND owner_user_id=%s::uuid", (revision, import_id, owner_user_id))
 
-    def get_job(self, job_id: str, conn=None, *, lock=False) -> dict:
+    def get_job(self, job_id: str, conn=None, *, owner_user_id: str, lock=False) -> dict:
         check_id(job_id)
         if conn is None:
             with self.connection() as connection:
-                return self.get_job(job_id, connection, lock=lock)
-        row = conn.execute("SELECT * FROM polymerization_batch.jobs WHERE id=%s" + (" FOR UPDATE" if lock else ""), (job_id,)).fetchone()
+                return self.get_job(job_id, connection, owner_user_id=owner_user_id, lock=lock)
+        row = conn.execute("SELECT * FROM polymerization_batch.jobs WHERE id=%s AND owner_user_id=%s::uuid" + (" FOR UPDATE" if lock else ""), (job_id, owner_user_id)).fetchone()
         if row is None:
             raise BatchError("任务不存在。", "not_found", 404)
         return row
 
-    def existing_job(self, key: str, request_hash: str, conn) -> dict | None:
-        row = conn.execute("SELECT * FROM polymerization_batch.jobs WHERE idempotency_key=%s", (key,)).fetchone()
+    def get_job_for_service(self, job_id: str, conn=None, *, lock=False) -> dict:
+        self._require_service()
+        check_id(job_id)
+        if conn is None:
+            with self.connection() as connection:
+                return self.get_job_for_service(job_id, connection, lock=lock)
+        row = conn.execute("SELECT * FROM polymerization_batch.jobs WHERE id=%s" +
+                           (" FOR UPDATE" if lock else ""), (job_id,)).fetchone()
+        if row is None:
+            raise BatchError("任务不存在。", "not_found", 404)
+        return row
+
+    def list_jobs(self, *, owner_user_id: str, offset: int = 0, limit: int = 20, status: str | None = None) -> tuple[list[dict], int]:
+        owner = owner_user_id
+        where = "owner_user_id=%s::uuid"
+        params = [owner]
+        if status is not None:
+            where += " AND status=%s"
+            params.append(status)
+        with self.connection() as conn:
+            total = conn.execute("SELECT count(*) AS n FROM polymerization_batch.jobs WHERE " + where, tuple(params)).fetchone()["n"]
+            rows = conn.execute("SELECT * FROM polymerization_batch.jobs WHERE " + where +
+                                " ORDER BY created_at DESC,id DESC LIMIT %s OFFSET %s", (*params, limit, offset)).fetchall()
+        return rows, total
+
+    def existing_job(self, key: str, request_hash: str, conn, *, owner_user_id: str) -> dict | None:
+        row = conn.execute("SELECT * FROM polymerization_batch.jobs WHERE idempotency_key=%s AND owner_user_id=%s::uuid", (key, owner_user_id)).fetchone()
         if row and row["request_hash"] != request_hash:
             raise BatchError("此提交标识已用于不同参数。", "idempotency_conflict", 409)
         return row
 
-    def admit(self, conn, key: str, request_hash: str) -> dict | None:
+    def admit(self, conn, key: str, request_hash: str, *, owner_user_id: str) -> dict | None:
         draining = get_drain_state(conn, lock=True).enabled
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (CAPACITY_LOCK,))
-        existing = self.existing_job(key, request_hash, conn)
+        owner = owner_user_id
+        user = conn.execute("SELECT status,is_system FROM auth.users WHERE user_id=%s FOR UPDATE", (owner,)).fetchone()
+        if user is None or user["status"] != "active" or user["is_system"]:
+            raise BatchError("账号已禁用，无法提交任务。", "account_disabled", 403)
+        existing = self.existing_job(key, request_hash, conn, owner_user_id=owner_user_id)
         if existing:
             return existing
         if draining:
             raise BatchError("服务正在维护，请稍后提交。", "draining", 503)
         count = conn.execute("SELECT count(*) AS n FROM polymerization_batch.jobs WHERE status IN ('queued','running','cancelling')").fetchone()["n"]
+        own = conn.execute("SELECT count(*) AS n FROM polymerization_batch.jobs WHERE owner_user_id=%s::uuid AND status IN ('queued','running','cancelling')", (owner_user_id,)).fetchone()["n"]
+        if own >= 1:
+            raise BatchError("本人已有未完成的批量任务。", "user_capacity", 429)
         if count >= self.config.queue_capacity + 1:
             raise BatchError("批量任务队列已满，请稍后重试。", "queue_full", 429)
 
-    def insert_job(self, conn, job_id: str, options: dict, request_hash: str, key: str, engine: dict, summary: dict, chunks: list[dict]) -> dict:
+    def insert_job(self, conn, job_id: str, options: dict, request_hash: str, key: str, engine: dict, summary: dict, chunks: list[dict], *, owner_user_id: str) -> dict:
         row = conn.execute("""INSERT INTO polymerization_batch.jobs
-            (id,import_id,idempotency_key,request_hash,options,engine,summary)
-            VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
-            (job_id, options["import_id"], key, request_hash, Jsonb(options), Jsonb(engine), Jsonb(summary))).fetchone()
+            (id,owner_user_id,import_id,idempotency_key,request_hash,options,engine,summary)
+            VALUES (%s,%s::uuid,%s,%s,%s,%s,%s,%s) RETURNING *""",
+            (job_id, owner_user_id, options["import_id"], key, request_hash, Jsonb(options), Jsonb(engine), Jsonb(summary))).fetchone()
         with conn.cursor() as cursor:
             cursor.executemany("""INSERT INTO polymerization_batch.chunks
                 (job_id,chunk_id,phase,ordinal,kind,payload) VALUES (%s,%s,%s,%s,%s,%s)""",
                 [(job_id, chunk["chunk_id"], chunk["phase"], index, chunk["kind"], Jsonb(chunk["payload"])) for index, chunk in enumerate(chunks)])
         return row
 
-    def chunks(self, job_id: str, *, completed_only=False) -> list[dict]:
+    def chunks(self, job_id: str, *, owner_user_id: str, completed_only=False) -> list[dict]:
         with self.connection() as conn:
+            self.get_job(job_id, conn, owner_user_id=owner_user_id)
             return conn.execute("SELECT * FROM polymerization_batch.chunks WHERE job_id=%s" +
                                 (" AND status='completed'" if completed_only else "") + " ORDER BY phase,ordinal", (job_id,)).fetchall()
 
-    def cancel(self, job_id: str) -> dict:
+    def chunks_for_service(self, job_id: str, *, completed_only=False) -> list[dict]:
+        self._require_service()
         with self.connection() as conn:
-            job = self.get_job(job_id, conn, lock=True)
+            self.get_job_for_service(job_id, conn)
+            return conn.execute("SELECT * FROM polymerization_batch.chunks WHERE job_id=%s" +
+                                (" AND status='completed'" if completed_only else "") + " ORDER BY phase,ordinal", (job_id,)).fetchall()
+
+    def cancel(self, job_id: str, *, owner_user_id: str) -> dict:
+        with self.connection() as conn:
+            job = self.get_job(job_id, conn, owner_user_id=owner_user_id, lock=True)
             if job["status"] not in TERMINAL_STATUSES:
                 conn.execute("""UPDATE polymerization_batch.jobs SET terminal_intent='cancelled',status='cancelling',
-                    updated_at=now() WHERE id=%s AND terminal_intent IS NULL""", (job_id,))
-            return self.get_job(job_id, conn)
+                    updated_at=now() WHERE id=%s AND owner_user_id=%s::uuid AND terminal_intent IS NULL""", (job_id, owner_user_id))
+            return self.get_job(job_id, conn, owner_user_id=owner_user_id)
 
-    def recover(self) -> None:
-        # Only called while holding the session-level singleton worker lock.
+    def recover(self, *, cleanup_confirmed: bool = False) -> None:
+        if not cleanup_confirmed:
+            raise RuntimeError("Batch recovery requires confirmed resource and scratch cleanup")
+        # Only called while holding the database and inherited OS worker locks.
         # Attempt fencing makes files from a previous execution unpublishable.
         with self.connection() as conn:
             draining = get_drain_state(conn, lock=True).enabled
@@ -148,8 +216,20 @@ class BatchRepository:
                 return None
             job = conn.execute("""SELECT * FROM polymerization_batch.jobs
                 WHERE status IN ('queued','running','cancelling') AND execution_token IS NULL
-                ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone()
+                ORDER BY created_at,id LIMIT 1""").fetchone()
             if job is None:
+                return None
+            if job["start_authorized_at"] is None:
+                if not authorize_start(conn, owner_user_id=str(job["owner_user_id"]),
+                                       table="polymerization_batch.jobs", key_column="id", key=job["id"]):
+                    conn.execute("""UPDATE polymerization_batch.jobs SET status='cancelled',stage='finished',
+                        terminal_intent='cancelled',error_code='account_disabled',message='账号已禁用，任务未执行。',
+                        finished_at=now(),expires_at=now()+%s,updated_at=now() WHERE id=%s AND start_authorized_at IS NULL""",
+                        (timedelta(days=self.config.retention_days), job["id"]))
+                    conn.execute("UPDATE polymerization_batch.chunks SET status='skipped' WHERE job_id=%s AND status='pending'", (job["id"],))
+                    return None
+            job = conn.execute("SELECT * FROM polymerization_batch.jobs WHERE id=%s FOR UPDATE", (job["id"],)).fetchone()
+            if job["execution_token"] is not None or job["status"] in TERMINAL_STATUSES:
                 return None
             if job["engine"].get("fingerprint") != fingerprint:
                 conn.execute("""UPDATE polymerization_batch.jobs SET status='failed',stage='finished',
@@ -188,7 +268,7 @@ class BatchRepository:
 
     def finish_unit(self, job: dict, chunk: dict, artifact: dict, elapsed: float, counts: dict | None = None, export: dict | None = None) -> bool:
         with self.connection() as conn:
-            current = self.get_job(job["id"], conn, lock=True)
+            current = self.get_job_for_service(job["id"], conn, lock=True)
             if current["execution_token"] != job["execution_token"]:
                 return False
             # Cancellation arriving during export cannot publish a 'completed'

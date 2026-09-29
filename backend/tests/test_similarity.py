@@ -6,6 +6,7 @@ from time import sleep
 
 import pytest
 
+from app.auth.context import current_identity, user_context
 from app.postgres_database import postgres_connection
 from app.services.similarity import similarity_search_postgres
 from app.services.structure_similarity_index import (
@@ -15,6 +16,13 @@ from app.services.structure_similarity_index import (
     _source_signature,
 )
 from app.utils.exceptions import InvalidSmilesError
+from test_api import api_database, auth_database, test_app
+
+
+@pytest.fixture
+def postgres_dsn(test_app):
+    """Search as a real logged-in API role after the isolation cutover."""
+    return test_app.state.settings.app_postgres_dsn
 
 
 def test_similarity_search_returns_sorted_matches(postgres_dsn: str) -> None:
@@ -40,9 +48,9 @@ def test_similarity_search_rejects_invalid_smiles(postgres_dsn: str) -> None:
             similarity_search_postgres(connection, "not-a-smiles")
 
 
-def test_similarity_index_fails_closed_for_parseable_blank_candidate(postgres_dsn: str) -> None:
+def test_similarity_index_fails_closed_for_parseable_blank_candidate(postgres_dsn: str, test_app) -> None:
     index = StructureSimilarityIndex()
-    with postgres_connection(postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         connection.execute(
             """
             INSERT INTO core.polymers (polymer_id, polymer_name, smiles, canonical_smiles, rdkit_parse_ok)
@@ -50,6 +58,7 @@ def test_similarity_index_fails_closed_for_parseable_blank_candidate(postgres_ds
             """,
             (4, "blank", "", "", True),
         )
+    with postgres_connection(postgres_dsn) as connection:
         with pytest.raises(StructureSimilarityIndexUnavailableError):
             similarity_search_postgres(
                 connection,
@@ -108,13 +117,13 @@ def test_similarity_index_reuses_process_local_snapshot(postgres_dsn: str) -> No
     assert index.build_count == 1
 
 
-def test_similarity_index_rebuilds_after_governance_signature_changes(postgres_dsn: str) -> None:
+def test_similarity_index_rebuilds_after_governance_signature_changes(postgres_dsn: str, test_app) -> None:
     index = StructureSimilarityIndex()
 
     with postgres_connection(postgres_dsn) as connection:
         similarity_search_postgres(connection, "CCO", index=index)
 
-    with postgres_connection(postgres_dsn) as connection:
+    with postgres_connection(test_app.state.test_admin_dsn) as connection:
         source_row = connection.execute(
             """
             UPDATE governance.source_files
@@ -141,31 +150,34 @@ def test_similarity_index_rebuilds_after_governance_signature_changes(postgres_d
     assert index.build_count == 2
 
 
-def test_similarity_index_never_republishes_a_stale_signature(postgres_dsn: str) -> None:
+def test_similarity_index_never_republishes_a_stale_signature(postgres_dsn: str, test_app) -> None:
     index = StructureSimilarityIndex()
 
     with postgres_connection(postgres_dsn) as connection:
         similarity_search_postgres(connection, "CCO", index=index)
         stale_signature = _source_signature(connection)
 
-        source_row = connection.execute(
-            """
-            UPDATE governance.source_files
-            SET sha256 = %s, updated_at = clock_timestamp()
-            WHERE logical_name = 'core_property_csv'
-            RETURNING source_file_id
-            """,
-            ("c" * 64,),
-        ).fetchone()
-        connection.execute(
-            """
-            INSERT INTO governance.import_batches (
-              dataset_key, source_file_id, finished_at, status, row_count
+        # Governance changes are maintenance writes. The existing API
+        # transaction then observes the newly committed source signature.
+        with postgres_connection(test_app.state.test_admin_dsn) as maintenance:
+            source_row = maintenance.execute(
+                """
+                UPDATE governance.source_files
+                SET sha256 = %s, updated_at = clock_timestamp()
+                WHERE logical_name = 'core_property_csv'
+                RETURNING source_file_id
+                """,
+                ("c" * 64,),
+            ).fetchone()
+            maintenance.execute(
+                """
+                INSERT INTO governance.import_batches (
+                  dataset_key, source_file_id, finished_at, status, row_count
+                )
+                VALUES ('core', %s, clock_timestamp(), 'completed', %s)
+                """,
+                (int(source_row["source_file_id"]), 6),
             )
-            VALUES ('core', %s, clock_timestamp(), 'completed', %s)
-            """,
-            (int(source_row["source_file_id"]), 6),
-        )
         similarity_search_postgres(connection, "CCO", index=index)
 
         with pytest.raises(_StructureSimilaritySourceChanged):
@@ -177,12 +189,14 @@ def test_similarity_index_never_republishes_a_stale_signature(postgres_dsn: str)
 def test_similarity_index_has_only_one_concurrent_builder(
     postgres_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
+    test_app,
 ) -> None:
     index = StructureSimilarityIndex()
     original_build = index._build_snapshot
     build_calls = 0
     build_calls_lock = Lock()
     search_barrier = Barrier(4)
+    identity = current_identity()
 
     def slow_build(connection, signature):
         nonlocal build_calls
@@ -194,7 +208,7 @@ def test_similarity_index_has_only_one_concurrent_builder(
     monkeypatch.setattr(index, "_build_snapshot", slow_build)
 
     def search() -> int:
-        with postgres_connection(postgres_dsn) as connection:
+        with user_context(identity, test_app.state.auth.settings), postgres_connection(postgres_dsn) as connection:
             search_barrier.wait(timeout=2)
             results = similarity_search_postgres(connection, "CCO", index=index)
             return int(results[0][0]["polymer_id"])

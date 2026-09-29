@@ -140,7 +140,7 @@ async function advance(ms: number): Promise<void> {
   });
 }
 
-describe("useMonomerDftJob polling and operation fencing", () => {
+describe("useMonomerDftJob manual reads and operation fencing", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -150,28 +150,18 @@ describe("useMonomerDftJob polling and operation fencing", () => {
     apiMocks.fetchJobs.mockResolvedValue({ items: [], page: 1, page_size: 10, total: 0 });
   });
 
-  it("keeps retrying after more than three network failures and resets to polling on success", async () => {
-    apiMocks.fetchJob
-      .mockRejectedValueOnce(new TypeError("network-1"))
-      .mockRejectedValueOnce(new TypeError("network-2"))
-      .mockRejectedValueOnce(new TypeError("network-3"))
-      .mockRejectedValueOnce(new TypeError("network-4"))
-      .mockResolvedValue(makeJob(JOB_A));
-
+  it("stops after a read failure and only retries on manual refresh", async () => {
+    apiMocks.fetchJob.mockRejectedValueOnce(new TypeError("network-1")).mockResolvedValue(makeJob(JOB_A));
     const { result, unmount } = renderHook(() => useMonomerDftJob({ initialJobId: JOB_A }));
     await flush();
-    expect(result.current.pollState).toBe("degraded");
-
-    await advance(1_500);
-    await advance(3_000);
-    await advance(6_000);
-    expect(apiMocks.fetchJob).toHaveBeenCalledTimes(4);
-    expect(result.current.pollState).toBe("degraded");
-
-    await advance(10_000);
-    expect(apiMocks.fetchJob).toHaveBeenCalledTimes(5);
+    expect(result.current.pollState).toBe("stopped");
+    await advance(60_000);
+    expect(apiMocks.fetchJob).toHaveBeenCalledTimes(1);
+    await act(async () => { await result.current.refreshAll(); });
+    expect(apiMocks.fetchJob).toHaveBeenCalledTimes(2);
     expect(result.current.job?.job_id).toBe(JOB_A);
-    expect(result.current.pollState).toBe("polling");
+    expect(result.current.pollState).toBe("watching");
+    expect(result.current.isJobLoading).toBe(false);
     unmount();
   });
 
@@ -217,7 +207,7 @@ describe("useMonomerDftJob polling and operation fencing", () => {
     expect(apiMocks.fetchJob).not.toHaveBeenCalled();
     expect(result.current.serviceError).toBe("读取单体 DFT 服务状态失败。");
 
-    await advance(10_000);
+    await act(async () => { await result.current.refreshStatus(); });
     await flush();
     expect(apiMocks.fetchJob).toHaveBeenCalledTimes(1);
     expect(result.current.job?.job_id).toBe(JOB_A);
@@ -235,8 +225,8 @@ describe("useMonomerDftJob polling and operation fencing", () => {
 
     first.resolve(makeJob(JOB_A));
     await flush();
-    await advance(1_500);
-    expect(apiMocks.fetchJob).toHaveBeenCalledTimes(2);
+    await advance(60_000);
+    expect(apiMocks.fetchJob).toHaveBeenCalledTimes(1);
     unmount();
   });
 
@@ -437,7 +427,7 @@ describe("useMonomerDftJob polling and operation fencing", () => {
     expect(jobSignals).toHaveLength(1);
     expect(apiMocks.fetchJobs).toHaveBeenCalledTimes(1);
 
-    await advance(30_000);
+    await act(async () => { await result.current.refreshStatus(); });
     await flush();
     expect(jobSignals[0].aborted).toBe(true);
     expect(result.current.serviceStatus?.schema_ready).toBe(false);
@@ -476,7 +466,7 @@ describe("useMonomerDftJob polling and operation fencing", () => {
     await flush();
     expect(jobSignals).toHaveLength(1);
 
-    await advance(30_000);
+    await act(async () => { await result.current.refreshStatus(); });
     await flush();
 
     expect(jobSignals[0].aborted).toBe(true);
@@ -487,4 +477,9 @@ describe("useMonomerDftJob polling and operation fencing", () => {
     expect(onJobIdChange).toHaveBeenLastCalledWith(null);
     unmount();
   });
+});
+
+vi.mock("./useTaskEvents", () => {
+  const rememberJob = vi.fn(), forgetJob = vi.fn(), reconnect = vi.fn();
+  return { useTaskEvents: () => ({ connectionState: "live", rememberJob, forgetJob, reconnect }) };
 });

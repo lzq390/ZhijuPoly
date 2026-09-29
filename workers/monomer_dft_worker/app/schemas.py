@@ -583,6 +583,7 @@ class DrainResponse(StrictModel):
 
 
 class HealthResponse(StrictModel):
+    start_authorization_version: Literal[0, 1] = 0
     schema_version: Literal[1] = 1
     status: Literal["ok", "degraded"]
     runtime_ready: bool

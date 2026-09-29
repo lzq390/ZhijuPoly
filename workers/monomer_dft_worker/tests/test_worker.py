@@ -279,6 +279,7 @@ def test_full_job_http_protocol_and_manifest_artifact_access(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("workers.monomer_dft_worker.app.start_authorization.StartAuthorizer.__call__", lambda _self, _snapshot: None)
     runtime = FakeRuntime()
     app = create_app(
         _settings(tmp_path),

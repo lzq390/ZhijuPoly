@@ -1,3 +1,4 @@
+import { assertSessionEpoch, getSessionEpoch, onSessionRetired } from "../auth/session";
 import { fetchPropertyFilterHistogram } from "./api";
 import type { PropertyFilterHistogram, PropertyFilterHistogramResponse } from "../types";
 
@@ -87,6 +88,7 @@ export function loadPropertyFilterHistogram(
   const pending = inFlight.get(key);
   if (pending) return pending;
 
+  const epoch = getSessionEpoch();
   const request = (async () => {
     const controller = new AbortController();
     let timedOut = false;
@@ -99,9 +101,11 @@ export function loadPropertyFilterHistogram(
         etag: cached?.etag,
         signal: controller.signal
       });
+      assertSessionEpoch(epoch);
       if (result.status === "not-modified" && !cached) {
         result = await fetchPropertyFilterHistogram(optionKey, { signal: controller.signal });
       }
+      assertSessionEpoch(epoch);
       if (result.status === "not-modified") {
         return cached as PropertyFilterHistogramCache;
       }
@@ -139,3 +143,5 @@ export function resetPropertyFilterHistogramResourceForTests() {
   memoryCache.clear();
   inFlight.clear();
 }
+
+onSessionRetired(() => { memoryCache.clear(); inFlight.clear(); });

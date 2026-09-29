@@ -1,0 +1,15 @@
+-- Run as the database/role administrator after 0017, against the intended DEV
+-- database. These distinct LOGIN names are examples; no passwords are embedded.
+-- Use psql \password interactively or your existing credential provisioning tool.
+BEGIN;
+CREATE ROLE nexpoly_dev_api LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS IN ROLE nexpoly_api;
+CREATE ROLE nexpoly_dev_auth LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS IN ROLE nexpoly_auth;
+CREATE ROLE nexpoly_dev_service LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS IN ROLE nexpoly_service;
+CREATE ROLE nexpoly_dev_audit LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS IN ROLE nexpoly_mutable_audit;
+ALTER ROLE nexpoly_dev_audit SET default_transaction_read_only=on;
+ALTER ROLE nexpoly_dev_audit SET statement_timeout='5min';
+COMMIT;
+-- \password nexpoly_dev_api
+-- \password nexpoly_dev_auth
+-- \password nexpoly_dev_service
+-- \password nexpoly_dev_audit

@@ -1399,6 +1399,27 @@ class ExecutorPool:
         with self._lock:
             return bool(self._fatal and self._fatal_cleanup_proven)
 
+    def execution_cleanup_confirmed(self) -> bool:
+        """Only a finished, successful cleanup may release the task's quota."""
+        with self._lock:
+            return bool(
+                not self.admission_uncertain
+                and not self._suspect_resources
+                and not self._suspect_lease_ids
+                and self._active_execution_lease is None
+                and all(state.finished.is_set() and state.error is None
+                        for state in self._attempt_cleanup.values())
+            )
+
+    def recovery_cleanup_confirmed(self, request: JobSubmitRequest) -> bool:
+        """A new process cannot infer that an old attempt's resources vanished."""
+        checker = getattr(self.broker, "confirm_attempt_released", None)
+        if not callable(checker):
+            return False
+        request_ids = tuple(self._execution_request_id(request, placement)
+                            for placement in ("preferred", "overflow"))
+        return bool(checker(request_ids))
+
     def _rebuild_primary_bounded(self) -> bool:
         for attempt in range(PRIMARY_REBUILD_ATTEMPTS):
             try:
@@ -1428,16 +1449,7 @@ class ExecutorPool:
         wait_timeout_seconds: float,
         cancelled: Callable[[], bool],
     ) -> GpuLease:
-        request_identity = "|".join(
-            (
-                request.job_id,
-                request.attempt_token,
-                request.request_sha256,
-                str(request.enqueue_sequence),
-                placement,
-            )
-        ).encode("utf-8")
-        acquire_request_id = "dft-" + hashlib.sha256(request_identity).hexdigest()
+        acquire_request_id = self._execution_request_id(request, placement)
         try:
             return self.broker.acquire(
                 kind="execution",
@@ -1468,6 +1480,7 @@ class ExecutorPool:
                 "GPU Broker rejected a stale lease operation.",
                 retryable=True,
             ) from exc
+
         except (GpuCapacityUnavailable, GpuRuntimeUnhealthy):
             raise
         except GpuBrokerError as exc:
@@ -1476,6 +1489,13 @@ class ExecutorPool:
                 "The GPU Broker is unavailable for new execution leases.",
                 retryable=True,
             ) from exc
+
+    @staticmethod
+    def _execution_request_id(request: JobSubmitRequest, placement: str) -> str:
+        identity = "|".join((request.job_id, request.attempt_token,
+                            request.request_sha256, str(request.enqueue_sequence),
+                            placement)).encode("utf-8")
+        return "dft-" + hashlib.sha256(identity).hexdigest()
 
     def _admit_execution(
         self,

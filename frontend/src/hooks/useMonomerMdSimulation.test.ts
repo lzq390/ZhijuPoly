@@ -31,7 +31,7 @@ describe("useMonomerMdSimulation", () => {
     });
   });
 
-  it("aborts both in-flight status fetches when the hook unmounts", async () => {
+  it("aborts in-flight status fetches and the event subscription when the hook unmounts", async () => {
     const requests: ObservedRequest[] = [];
     const abortedUrls: string[] = [];
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -58,13 +58,13 @@ describe("useMonomerMdSimulation", () => {
 
     const { unmount } = renderHook(() => useMonomerMdSimulation());
 
-    await waitFor(() => expect(requests).toHaveLength(2));
+    await waitFor(() => expect(requests).toHaveLength(3));
     expect(requests.map(({ url }) => url).sort()).toEqual([
       "/api/v1/monomer-md/protocols",
-      "/api/v1/monomer-md/status"
+      "/api/v1/monomer-md/status",
+      "/api/v1/task-events?module=md"
     ]);
-    expect(requests[0].signal).toBe(requests[1].signal);
-    expect(requests[0].signal.aborted).toBe(false);
+    expect(requests.every(({ signal }) => !signal.aborted)).toBe(true);
 
     unmount();
 
@@ -72,7 +72,8 @@ describe("useMonomerMdSimulation", () => {
     await waitFor(() =>
       expect(abortedUrls.sort()).toEqual([
         "/api/v1/monomer-md/protocols",
-        "/api/v1/monomer-md/status"
+        "/api/v1/monomer-md/status",
+        "/api/v1/task-events?module=md"
       ])
     );
   });

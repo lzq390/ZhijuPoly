@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
+from test_api import api_database, auth_database, test_app
 
 
 def test_standardize_smiles_returns_rdkit_canonical_smiles(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post("/api/v1/structure/standardize-smiles", json={"smiles": "C(C)O"})
 
@@ -17,7 +17,7 @@ def test_standardize_smiles_returns_rdkit_canonical_smiles(test_app) -> None:
 
 
 def test_standardize_smiles_preserves_polymer_dummy_atoms(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post("/api/v1/structure/standardize-smiles", json={"smiles": "*CC*"})
 
@@ -28,7 +28,7 @@ def test_standardize_smiles_preserves_polymer_dummy_atoms(test_app) -> None:
 
 
 def test_standardize_smiles_rejects_invalid_smiles(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post("/api/v1/structure/standardize-smiles", json={"smiles": "not-a-smiles"})
 
@@ -37,7 +37,7 @@ def test_standardize_smiles_rejects_invalid_smiles(test_app) -> None:
 
 
 def test_render_structure_2d_returns_rdkit_svg(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post("/api/v1/structure/2d", json={"smiles": "*CC*"})
 
@@ -48,7 +48,7 @@ def test_render_structure_2d_returns_rdkit_svg(test_app) -> None:
 
 
 def test_render_structure_2d_rejects_invalid_smiles(test_app) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post("/api/v1/structure/2d", json={"smiles": "not-a-smiles"})
 

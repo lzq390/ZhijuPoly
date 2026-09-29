@@ -4,12 +4,16 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
+import json
 from time import perf_counter
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from app.config import Settings
+from app.auth.context import current_identity, current_owner_id, user_context, service_context, database_settings
+from app.task_control import admission, acquire_admission, authorize_memory_start, authorize_start
+from app.task_observability import TaskExecutionContext, log_task_event
 from app.models import (
     MutationResponse,
     OnlineKnowledgeDefaultConfigResponse,
@@ -41,6 +45,8 @@ from app.services.online_knowledge.search_service import (
     validate_model_access,
 )
 from app.services.ai_client import clean_ai_provider_error
+from app.services.private_quotas import PrivateQuotaSettings
+from app.services.online_knowledge.postgres_history_repository import OnlineKnowledgeQuotaError
 
 
 router = APIRouter(prefix="/api/v1/online-knowledge", tags=["online-knowledge"])
@@ -76,6 +82,16 @@ def search_online_knowledge(
     request_body: OnlineKnowledgeSearchRequest,
     request: Request,
 ) -> OnlineKnowledgeSearchResponse:
+    with admission("online"):
+        if not authorize_memory_start(current_owner_id()):
+            raise HTTPException(403, "Account disabled")
+        return _search_online_knowledge_under_admission(request_body, request)
+
+
+def _search_online_knowledge_under_admission(
+    request_body: OnlineKnowledgeSearchRequest,
+    request: Request,
+) -> OnlineKnowledgeSearchResponse:
     started_at = perf_counter()
     settings = request.app.state.settings
     _require_postgres_runtime(settings)
@@ -83,6 +99,8 @@ def search_online_knowledge(
     try:
         model_access = resolve_online_model_access(request_body, settings)
         result_data = _run_search_from_request(request_body, model_access)
+    except HTTPException:
+        raise
     except OnlineKnowledgeConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except OnlineKnowledgeModelError as exc:
@@ -90,13 +108,15 @@ def search_online_knowledge(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Online retrieval failed: {exc}") from exc
 
+    if len(json.dumps(result_data, ensure_ascii=False).encode("utf-8")) > PrivateQuotaSettings.from_environment().online_result_bytes:
+        raise HTTPException(413, "Search result exceeds retention budget")
     result_data["query_time_ms"] = (perf_counter() - started_at) * 1000
     response = OnlineKnowledgeSearchResponse.model_validate(result_data)
 
     try:
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
             save_online_history_postgres(
-                connection,
+                connection, owner_user_id=current_owner_id(),
                 material=response.material,
                 mode=response.mode,
                 max_papers=response.max_papers,
@@ -122,10 +142,12 @@ def create_online_knowledge_job(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     job_id = uuid4().hex
+    identity = current_identity()
+    lease = acquire_admission("online", task_type="online_knowledge", task_id=job_id)
     try:
-        with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+        with service_context(), request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
             create_online_job_postgres(
-                connection,
+                connection, owner_user_id=current_owner_id(),
                 job_id=job_id,
                 material=request_body.material,
                 mode=request_body.mode,
@@ -137,9 +159,16 @@ def create_online_knowledge_job(
             settings.app_postgres_dsn,
             request_body,
             model_access,
+            identity,
+            lease,
+            database_settings(),
         )
     except PostgresUnavailableError as exc:
+        lease.release()
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
+    except BaseException:
+        lease.release()
+        raise
     return OnlineKnowledgeJobCreateResponse(job_id=job_id, status="pending")
 
 
@@ -149,7 +178,7 @@ def get_online_knowledge_job(job_id: str, request: Request) -> OnlineKnowledgeJo
     _require_postgres_runtime(settings)
     try:
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
-            job = get_online_job_postgres(connection, job_id)
+            job = get_online_job_postgres(connection, job_id, owner_user_id=current_owner_id())
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     if job is None:
@@ -163,7 +192,7 @@ def get_online_knowledge_history(request: Request) -> OnlineKnowledgeHistoryResp
     _require_postgres_runtime(settings)
     try:
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
-            history = list_online_history_postgres(connection)
+            history = list_online_history_postgres(connection, owner_user_id=current_owner_id())
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     return OnlineKnowledgeHistoryResponse(history=history)
@@ -175,7 +204,7 @@ def delete_online_knowledge_history(history_id: int, request: Request) -> Mutati
     _require_postgres_runtime(settings)
     try:
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
-            deleted = delete_online_history_postgres(connection, history_id)
+            deleted = delete_online_history_postgres(connection, history_id, owner_user_id=current_owner_id())
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     if not deleted:
@@ -189,7 +218,7 @@ def clear_online_knowledge_search_history(request: Request) -> MutationResponse:
     _require_postgres_runtime(settings)
     try:
         with request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
-            clear_online_history_postgres(connection)
+            clear_online_history_postgres(connection, owner_user_id=current_owner_id())
     except PostgresUnavailableError as exc:
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     return MutationResponse(success=True)
@@ -197,6 +226,9 @@ def clear_online_knowledge_search_history(request: Request) -> MutationResponse:
 
 @router.post("/export-csv", response_model=OnlineKnowledgeExportResponse)
 def export_online_knowledge_csv(request_body: OnlineKnowledgeExportRequest) -> OnlineKnowledgeExportResponse:
+    current_owner_id()
+    if len(request_body.model_dump_json().encode("utf-8")) > PrivateQuotaSettings.from_environment().online_result_bytes:
+        raise HTTPException(413, "CSV export exceeds byte limit")
     fieldnames: list[str] = []
     for row in request_body.data:
         for key in row:
@@ -220,33 +252,40 @@ def export_online_knowledge_csv(request_body: OnlineKnowledgeExportRequest) -> O
 def _run_search_from_request(
     request_body: OnlineKnowledgeSearchRequest,
     model_access: OnlineModelAccess,
+    progress_callback=None,
 ) -> dict:
-    return run_online_knowledge_search(
-        material=request_body.material,
-        mode=request_body.mode,
-        api_key=model_access.api_key,
-        base_url=model_access.base_url,
-        model=model_access.model,
-        max_papers=request_body.max_papers,
-        extraction_delay_seconds=request_body.extraction_delay_seconds,
-        proxy_url=model_access.proxy_url,
-    )
+    deadline = perf_counter() + PrivateQuotaSettings.from_environment().online_execution_seconds
+    def progress(*args):
+        if perf_counter() >= deadline:
+            raise OnlineKnowledgeModelError("Online search exceeded its execution time budget")
+        if progress_callback is not None:
+            progress_callback(*args)
+    with admission("ai"):
+        return run_online_knowledge_search(
+            material=request_body.material,
+            mode=request_body.mode,
+            api_key=model_access.api_key,
+            base_url=model_access.base_url,
+            model=model_access.model,
+            max_papers=request_body.max_papers,
+            extraction_delay_seconds=request_body.extraction_delay_seconds,
+            proxy_url=model_access.proxy_url,
+            progress_callback=progress,
+        )
 
 
 def resolve_online_model_access(
     request_body: OnlineKnowledgeSearchRequest,
     settings: Settings,
 ) -> OnlineModelAccess:
-    api_key = request_body.api_key or ""
-    if request_body.use_server_default:
-        api_key = settings.online_knowledge_api_key
-        if not api_key:
-            raise OnlineKnowledgeConfigError("Server default API Key is not configured")
-
+    if request_body.max_papers > getattr(settings, "online_knowledge_max_papers", 100):
+        raise OnlineKnowledgeConfigError("Requested papers exceed the platform search budget")
+    if not settings.online_knowledge_api_key:
+        raise OnlineKnowledgeConfigError("Server default API Key is not configured")
     access = OnlineModelAccess(
-        api_key=api_key,
-        base_url=request_body.base_url,
-        model=request_body.model,
+        api_key=settings.online_knowledge_api_key,
+        base_url=settings.online_knowledge_base_url,
+        model=settings.online_knowledge_model,
         proxy_url=settings.online_knowledge_proxy_url,
     )
     validate_model_access(
@@ -257,24 +296,47 @@ def resolve_online_model_access(
     return access
 
 
-def _run_online_knowledge_job(
+def _run_online_knowledge_job(job_id, postgres_dsn, request_body, model_access, identity, lease, auth_settings):
+    try:
+        with user_context(identity, auth_settings):
+            _execute_online_knowledge_job(job_id, postgres_dsn, request_body, model_access)
+    finally:
+        lease.release()
+
+
+def _execute_online_knowledge_job(
     job_id: str,
     postgres_dsn: str,
     request_body: OnlineKnowledgeSearchRequest,
     model_access: OnlineModelAccess,
 ) -> None:
     def run_with_connection(callback):
-        with postgres_connection(str(postgres_dsn)) as connection:
+        with service_context(), postgres_connection(str(postgres_dsn)) as connection:
             return callback(connection)
 
-    run_with_connection(lambda connection: mark_online_job_running_postgres(connection, job_id))
+    def claim_start(connection):
+        if not authorize_start(connection, owner_user_id=current_owner_id(),
+                               table="online_knowledge.jobs", key_column="job_id", key=job_id):
+            mark_online_job_failed_postgres(connection, job_id, "account_disabled: task did not start", owner_user_id=current_owner_id())
+            return False
+        mark_online_job_running_postgres(connection, job_id, owner_user_id=current_owner_id())
+        return True
+
+    with service_context():
+        authorized = run_with_connection(claim_start)
+    identity = current_identity()
+    log_task_event(TaskExecutionContext(identity.user_id, identity.request_id, "online_knowledge", "online", job_id),
+                   "start_authorized" if authorized else "start_rejected",
+                   reason=None if authorized else "account_disabled")
+    if not authorized:
+        return
     started_at = perf_counter()
 
     def report_progress(stage: str, message: str, processed_papers: int, total_papers: int) -> None:
         run_with_connection(
             lambda connection: update_online_job_progress_postgres(
                 connection,
-                job_id,
+                job_id, owner_user_id=current_owner_id(),
                 stage=stage,
                 message=message,
                 processed_papers=processed_papers,
@@ -283,25 +345,17 @@ def _run_online_knowledge_job(
         )
 
     try:
-        result_data = run_online_knowledge_search(
-            material=request_body.material,
-            mode=request_body.mode,
-            api_key=model_access.api_key,
-            base_url=model_access.base_url,
-            model=model_access.model,
-            max_papers=request_body.max_papers,
-            extraction_delay_seconds=request_body.extraction_delay_seconds,
-            proxy_url=model_access.proxy_url,
-            progress_callback=report_progress,
-        )
+        result_data = _run_search_from_request(request_body, model_access, report_progress)
+        if len(json.dumps(result_data, ensure_ascii=False).encode("utf-8")) > PrivateQuotaSettings.from_environment().online_result_bytes:
+            raise OnlineKnowledgeModelError("Search result exceeds retention budget")
         result_data["query_time_ms"] = (perf_counter() - started_at) * 1000
         response = OnlineKnowledgeSearchResponse.model_validate(result_data)
         result_json = response.model_dump(mode="json")
 
         def complete(connection):
-            mark_online_job_completed_postgres(connection, job_id, result_json)
+            mark_online_job_completed_postgres(connection, job_id, result_json, owner_user_id=current_owner_id())
             save_online_history_postgres(
-                connection,
+                connection, owner_user_id=current_owner_id(),
                 material=response.material,
                 mode=response.mode,
                 max_papers=response.max_papers,
@@ -310,7 +364,7 @@ def _run_online_knowledge_job(
 
         run_with_connection(complete)
     except Exception as exc:
-        run_with_connection(lambda connection: mark_online_job_failed_postgres(connection, job_id, _public_job_error_message(exc)))
+        run_with_connection(lambda connection: mark_online_job_failed_postgres(connection, job_id, _public_job_error_message(exc), owner_user_id=current_owner_id()))
 
 
 def _safe_csv_value(value: object) -> object:
@@ -322,6 +376,14 @@ def _safe_csv_value(value: object) -> object:
 
 
 def _public_job_error_message(exc: Exception) -> str:
+    if isinstance(exc, HTTPException) and exc.status_code == 429 and isinstance(exc.detail, dict):
+        code = exc.detail.get("code")
+        if code == "user_capacity":
+            return "user_capacity: 此计算通道已有未完成任务，请等待当前任务结束后重试。"
+        if code == "channel_capacity":
+            return "channel_capacity: 计算通道繁忙，请稍后重试。"
+    if isinstance(exc, OnlineKnowledgeQuotaError):
+        return "online_retention_quota: Saved search count or bytes reached the user limit. Clear history or contact an administrator."
     if isinstance(exc, OnlineKnowledgeConfigError):
         return "Model access configuration is invalid."
     if isinstance(exc, OnlineKnowledgeModelError):

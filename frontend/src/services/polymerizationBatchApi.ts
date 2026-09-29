@@ -1,3 +1,4 @@
+import { privateFetch } from "../auth/session";
 import { API_BASE_URL, ApiRequestError } from "./api";
 import type { MonomerPolymerizationTargetClass } from "../types";
 import type { BatchImport, BatchImportPreview, BatchJob, BatchMapping, BatchResults } from "../types/polymerizationBatch";
@@ -6,7 +7,7 @@ export function batchUrl(path: string) {
   return `${API_BASE_URL}/monomer-polymerization/batch${path}`;
 }
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(batchUrl(path), { cache: "no-store", ...init });
+  const response = await privateFetch(batchUrl(path), { cache: "no-store", ...init });
   if (!response.ok) {
     const data = await response.json().catch(() => null);
     throw new ApiRequestError(response.status, data?.message ?? data?.detail ?? `请求失败 (${response.status})`);
@@ -47,7 +48,7 @@ export class BatchArtifactError extends Error {
 }
 
 export async function downloadBatchArtifact(id: string, name: string, signal?: AbortSignal): Promise<Blob> {
-  const response = await fetch(batchUrl(`/jobs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(name)}`), { cache: "no-store", signal });
+  const response = await privateFetch(batchUrl(`/jobs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(name)}`), { cache: "no-store", signal });
   if (!response.ok) {
     const data = await response.json().catch(() => null);
     const message = typeof data?.message === "string" ? data.message : typeof data?.detail === "string" ? data.detail
@@ -55,4 +56,9 @@ export async function downloadBatchArtifact(id: string, name: string, signal?: A
     throw new BatchArtifactError(response.status, message, typeof data?.code === "string" ? data.code : undefined);
   }
   return response.blob();
+}
+
+export type BatchJobPage = { items: BatchJob[]; total: number; next_offset: number | null };
+export function fetchBatchJobs(offset = 0, signal?: AbortSignal) {
+  return request<BatchJobPage>(`/jobs?offset=${offset}&limit=20`, { signal });
 }

@@ -17,7 +17,13 @@ class ExecutionStopped(Exception):
     pass
 
 
-def run_isolated(request: dict, config: BatchSettings, scratch: Path, *, guard=None, timeout: float | None = None) -> dict:
+class CleanupPendingError(RuntimeError):
+    """Execution occupancy must remain until process and scratch cleanup is proven."""
+
+    code = "cleanup_pending"
+
+
+def run_isolated(request: dict, config: BatchSettings, scratch: Path, *, guard=None, timeout: float | None = None, resource_lock_fd: int | None = None) -> dict:
     scratch.mkdir(parents=True, exist_ok=True)
     identity = uuid4().hex
     request_path, response_path = scratch / f"{identity}.request.json", scratch / f"{identity}.response.json"
@@ -33,7 +39,8 @@ def run_isolated(request: dict, config: BatchSettings, scratch: Path, *, guard=N
         with error_path.open("wb") as errors:
             process = subprocess.Popen([sys.executable, "-m", "app.services.polymerization_batch.process", str(request_path), str(response_path)],
                                        stdout=subprocess.DEVNULL, stderr=errors, env=environment,
-                                       start_new_session=True)
+                                       start_new_session=True,
+                                       pass_fds=(() if resource_lock_fd is None else (resource_lock_fd,)))
             while process.poll() is None:
                 if guard:
                     guard()
@@ -47,16 +54,25 @@ def run_isolated(request: dict, config: BatchSettings, scratch: Path, *, guard=N
             raise BatchError(result["message"], result["code"], result.get("status", 422))
         return result["data"]
     finally:
-        if process is not None and process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                # The child can exit between poll() and killpg(). Preserve the
-                # original cancellation/timeout instead of reporting a new error.
-                pass
-            process.wait(timeout=5)
-        for path in (request_path, response_path, error_path):
-            path.unlink(missing_ok=True)
+        try:
+            if process is not None and process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    # If a signal cannot be delivered, keep occupancy until
+                    # the actual child exits naturally. Never assume it died.
+                    pass
+                # A fixed wait timeout must not free capacity while a child
+                # remains alive (for example during uninterruptible kernel I/O).
+                process.wait()
+                if process.poll() is None:
+                    raise CleanupPendingError("Batch child exit cannot be confirmed")
+            for path in (request_path, response_path, error_path):
+                path.unlink(missing_ok=True)
+        except Exception as exc:
+            raise CleanupPendingError("Batch child or scratch cleanup is still pending") from exc
 
 
 SYSTEM_ERRORS = {"engine_unavailable", "engine_version_mismatch", "artifact_corrupt", "result_limit", "job_timeout"}

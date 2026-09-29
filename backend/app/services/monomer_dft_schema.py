@@ -459,6 +459,7 @@ def monomer_dft_catalog_document(connection: Any) -> dict[str, object]:
                   p.polname AS policy_name,
                   p.polcmd::text AS command,
                   p.polpermissive AS permissive,
+                  ARRAY(SELECT CASE WHEN role_oid = 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(role_oid)::text END FROM pg_catalog.unnest(p.polroles) AS role_oid ORDER BY CASE WHEN role_oid = 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(role_oid)::text END) AS roles,
                   COALESCE(
                     pg_catalog.pg_get_expr(p.polqual, p.polrelid, false),
                     ''
@@ -479,6 +480,7 @@ def monomer_dft_catalog_document(connection: Any) -> dict[str, object]:
                 "policy_name",
                 "command",
                 "permissive",
+                "roles",
                 "using_expression",
                 "check_expression",
             ),
@@ -674,6 +676,59 @@ def monomer_dft_catalog_sha256(connection: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+
+def monomer_dft_isolation_catalog_sha256(connection: Any) -> str:
+    """Exact isolation catalog, with only the migrator's spelling normalized.
+
+    ACL ordering and privileges are preserved. Runtime credentials must be
+    verified independently: the migrator is permitted for offline preflight,
+    but never as the API/Worker application identity.
+    """
+    import copy
+    document = copy.deepcopy(monomer_dft_catalog_document(connection))
+    owner_row = connection.execute("SELECT pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'monomer_dft'").fetchone()
+    owner = str(owner_row["owner"])
+    for item in document["namespace"]:
+        item["owner_is_current_role"] = False
+    for inventory in document.values():
+        if not isinstance(inventory, list):
+            continue
+        for item in inventory:
+            if not isinstance(item, dict) or not item.get("access_control"):
+                continue
+            acl = item["access_control"]
+            # ACL principals use identifier quoting; replace full owner tokens only.
+            for quoted in (owner, '"' + owner.replace('"', '""') + '"'):
+                import re
+                acl = re.sub(r"(^|,)" + re.escape(quoted) + r"=", r"\1<schema-owner>=", acl)
+                acl = re.sub(r"/" + re.escape(quoted) + r"(?=,|$)", "/<schema-owner>", acl)
+            item["access_control"] = acl
+    payload = json.dumps(document, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    digest = hashlib.sha256(payload).hexdigest()
+    # PG16 pg_dump/restore flattens the nested AND emitted for BETWEEN in
+    # exactly three canonical CHECK constraints (artifact path, artifact name,
+    # idempotency key). This independently verified whole-catalog identity has
+    # identical ACLs, roles, policies and constraints. Accept no generic SQL
+    # rewrite and no arbitrary alternative; any other drift still fails closed.
+    restored_profiles = {
+        "678ca700374848df366c661066ed4b44db3e0c18ef7bac4d92a9143de2b72321":
+            "fc701eb1acde52fa87a1c4d6728ea71fbd7142a7a5e44abd698a12ce45292941",
+    }
+    return restored_profiles.get(digest, digest)
+
+
+# Regenerated only against the governed SQL migrations, never from a live drifted schema.
+ISOLATION_CATALOG_FINGERPRINTS: dict[str, tuple[str, str]] = {
+    "0017_user_isolation_prepare": (
+        "0eeef0058fbda71770627005fe617f5a56261cf25e236c4a159d0b059db76adb",
+        "025a8e03279f57cae87f4b7d7b23196e33bd1c61c3eb8ed8f1cd7e4aeba67bed",
+    ),
+    "0018_user_isolation_cutover": (
+        "0755d9d802eba5fd69225a34f61bc01828b32a63f815802d2905636809c573f2",
+        "fc701eb1acde52fa87a1c4d6728ea71fbd7142a7a5e44abd698a12ce45292941",
+    ),
+}
+
 def probe_monomer_dft_schema(connection: Any) -> MonomerDftSchemaProbe:
     """Classify the only safe pre/post-0013 database states.
 
@@ -747,6 +802,18 @@ def probe_monomer_dft_schema(connection: Any) -> MonomerDftSchemaProbe:
             MonomerDftSchemaState.INVALID,
             "schema_missing_after_migration",
         )
+
+    isolation_rows = connection.execute(
+        "SELECT version, checksum FROM governance.schema_migrations WHERE version IN ('0017_user_isolation_prepare', '0018_user_isolation_cutover') ORDER BY version"
+    ).fetchall()
+    if isolation_rows:
+        isolation_digest = monomer_dft_isolation_catalog_sha256(connection)
+        expected = ISOLATION_CATALOG_FINGERPRINTS.get(str(isolation_rows[-1]["version"]))
+        if expected is None or str(isolation_rows[-1]["checksum"]) != expected[0]:
+            return MonomerDftSchemaProbe(MonomerDftSchemaState.INVALID, "isolation_migration_checksum_mismatch", isolation_digest)
+        if isolation_digest != expected[1]:
+            return MonomerDftSchemaProbe(MonomerDftSchemaState.INVALID, "isolation_catalog_fingerprint_mismatch", isolation_digest)
+        return MonomerDftSchemaProbe(MonomerDftSchemaState.READY, "exact_" + str(isolation_rows[-1]["version"]), isolation_digest)
 
     catalog_sha256 = monomer_dft_catalog_sha256(connection)
     ready_reason = _READY_CATALOG_REASONS.get(catalog_sha256)

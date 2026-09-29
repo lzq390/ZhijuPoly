@@ -2758,6 +2758,7 @@ def test_fatal_cleanup_prepare_failure_detaches_primary_and_never_releases_suspe
     assert execution_lease.lease_id not in broker.releases
     assert residency_lease.lease_id not in broker.releases
     assert pool.fatal_restart_safe() is False
+    assert pool.execution_cleanup_confirmed() is False
 
 
 def test_overflow_start_cleanup_failure_is_fatal_and_keeps_managed_lease_suspect(
@@ -2791,6 +2792,57 @@ def test_overflow_start_cleanup_failure_is_fatal_and_keeps_managed_lease_suspect
     )
     assert overflow_lease.lease_id in broker.abandons
     assert overflow_lease.lease_id not in broker.releases
+    assert pool.execution_cleanup_confirmed() is False
+
+
+@pytest.mark.parametrize("release_failed", [False, True])
+def test_task_quota_cleanup_confirmation_tracks_actual_execution_lease_release(tmp_path: Path, release_failed: bool):
+    class ReleaseBroker(ScriptedBroker):
+        def release(self, lease):
+            if release_failed and lease.kind == "execution":
+                raise RuntimeError("release not acknowledged")
+            return super().release(lease)
+
+    broker = ReleaseBroker()
+    pool = ExecutorPool(_settings(tmp_path), broker=broker, process_factory=HandleFactory())
+    pool.start()
+    arguments = dict(admitted=lambda: None, progress=lambda *_: None,
+                     cancelled=lambda: False, provenance={}, queue_wait_ms=0)
+    if release_failed:
+        with pytest.raises(ScientificComputationError, match="cleanup"):
+            pool.execute(_request(), tmp_path / "output", **arguments)
+    else:
+        pool.execute(_request(), tmp_path / "output", **arguments)
+    assert pool.execution_cleanup_confirmed() is (not release_failed)
+    if not release_failed:
+        pool.close()
+
+
+@pytest.mark.parametrize("status, expected", [
+    ({"schema_version": 1, "broker_instance_id": "broker", "quarantined_gpus": {}, "waiters": 0, "leases": []}, True),
+    ({"schema_version": 1, "broker_instance_id": "broker", "quarantined_gpus": {}, "waiters": 1, "leases": []}, False),
+    ({"schema_version": 1, "broker_instance_id": "broker", "quarantined_gpus": {"GPU": "unknown workload"}, "waiters": 0, "leases": []}, False),
+    ({"schema_version": 1, "broker_instance_id": "broker", "quarantined_gpus": {}, "waiters": 0,
+      "leases": [{"request_id": "attempt", "status": "suspect"}]}, False),
+    ({"schema_version": 1, "broker_instance_id": "broker", "quarantined_gpus": {}, "waiters": 0,
+      "leases": [{"request_id": "another-attempt"}]}, True),
+    ({"schema_version": 1, "broker_instance_id": "broker", "quarantined_gpus": {}, "waiters": 0, "leases": [{}]}, False),
+    ({}, False),
+])
+def test_recovery_requires_authoritative_absence_of_exact_attempt_requests(status, expected):
+    adapter = SharedGpuBrokerAdapter.__new__(SharedGpuBrokerAdapter)
+    adapter._client = SimpleNamespace(status=lambda: status)
+    assert adapter.confirm_attempt_released(("attempt",)) is expected
+
+
+def test_recovery_unavailable_broker_and_local_leases_cannot_prove_cleanup():
+    def unavailable():
+        raise OSError("broker unavailable")
+
+    adapter = SharedGpuBrokerAdapter.__new__(SharedGpuBrokerAdapter)
+    adapter._client = SimpleNamespace(status=unavailable)
+    assert adapter.confirm_attempt_released(("attempt",)) is False
+    assert DisabledBrokerClient().confirm_attempt_released(("attempt",)) is False
 
 
 class _AliveProcess:

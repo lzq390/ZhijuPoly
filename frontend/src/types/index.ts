@@ -1082,13 +1082,9 @@ export type OnlineKnowledgeMode = "synthesis" | "property";
 
 export type OnlineKnowledgeSearchRequest = {
   material: string;
-  api_key?: string | null;
-  base_url: string;
-  model: string;
   mode: OnlineKnowledgeMode;
   max_papers: number;
   extraction_delay_seconds: number;
-  use_server_default?: boolean;
 };
 
 export type OnlineKnowledgeDefaultConfigResponse = {

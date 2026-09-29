@@ -3,6 +3,7 @@ import { StructureWorkspace } from "../structure/workspace";
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GUEST_SESSION, installSession, retireSession } from "../auth/session";
 import { DEFAULT_POLYTAO_DESCRIPTORS } from "../hooks/usePolytaoGeneration";
 import { ModalFocusSuspendedContext } from "../hooks/useModalFocus";
 import {
@@ -17,12 +18,14 @@ import {
 import { PolytaoGenerationPage } from "./PolytaoGenerationPage";
 
 const api = vi.hoisted(() => ({
+  useAuth: vi.fn(),
   calculatePolytaoDescriptors: vi.fn(),
   createPolytaoJob: vi.fn(),
   fetchPolytaoJob: vi.fn(),
   fetchPolytaoStatus: vi.fn(),
   fetchStructure2D: vi.fn()
 }));
+vi.mock("../auth/AuthProvider", () => ({ useAuth: api.useAuth }));
 
 vi.mock("../services/api", async () => {
   const actual = await vi.importActual<typeof import("../services/api")>("../services/api");
@@ -195,6 +198,7 @@ function setTwoKViewport(matches: boolean) {
 }
 
 beforeEach(() => {
+  api.useAuth.mockReturnValue(null);
   vi.clearAllMocks();
   resizeObserverCallback = null;
   twoKMatches = false;
@@ -249,10 +253,30 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  retireSession();
   cleanup();
 });
 
 describe("PolytaoGenerationPage", () => {
+  it("keeps the full guest form with no service initialization and prompts before extraction or generation", () => {
+    api.useAuth.mockReturnValue({ status: "guest" });
+    installSession(GUEST_SESSION);
+    const login = vi.fn();
+    window.addEventListener("nexpoly:login-required", login);
+    try {
+      renderPage();
+      expect(api.fetchPolytaoStatus).not.toHaveBeenCalled();
+      expect(login).not.toHaveBeenCalled();
+      const reference = openReferenceSection();
+      fireEvent.click(within(reference).getByRole("button", { name: "提取描述符" }));
+      const panel = openParameterPanel();
+      fireEvent.click(within(panel).getByRole("button", { name: "开始生成" }));
+      expect(login).toHaveBeenCalledTimes(2);
+      expect(api.fetchStructure2D).not.toHaveBeenCalled();
+      expect(api.calculatePolytaoDescriptors).not.toHaveBeenCalled();
+      expect(api.createPolytaoJob).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("nexpoly:login-required", login); }
+  });
   it("renders the renamed page and all 15 descriptor fields in three expanded groups", () => {
     renderPage();
 

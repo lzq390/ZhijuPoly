@@ -6,6 +6,8 @@ from pydantic import TypeAdapter
 import pytest
 import psycopg
 
+from app.auth.context import current_owner_id, user_context
+from test_monomer_private_support import auth_database, monomer_identity, postgres_dsn, api_dsn, another_identity, legacy_dft_database
 from app.postgres_database import postgres_connection
 from app.services.monomer_dft_models import MonomerDftRunRequest
 from app.services.monomer_dft_protocol import prepare_monomer_dft_request
@@ -25,6 +27,13 @@ from app.services.monomer_dft_schema import (
     monomer_dft_catalog_sha256,
     probe_monomer_dft_schema,
 )
+
+
+@pytest.fixture
+def postgres_dsn(request, auth_database, monomer_identity):
+    if any(word in request.node.name for word in ('catalog', 'fingerprint', 'probe_distinguishes', 'exact_governed')):
+        return request.getfixturevalue('legacy_dft_database')
+    return auth_database['admin']
 
 
 REQUEST_ADAPTER = TypeAdapter(MonomerDftRunRequest)
@@ -55,13 +64,13 @@ def _prepared(smiles: str = "CCO"):
 def test_terminal_job_cas_delete_cascades_and_releases_idempotency_key(
     postgres_dsn: str,
 ) -> None:
-    repository = MonomerDftRepository(postgres_dsn)
+    repository = MonomerDftRepository(api_dsn())
     prepared = _prepared()
     created = repository.create_job(
         prepared,
         idempotency_key="dft-retention-cascade",
         max_active_jobs=9,
-    ).job
+    owner_user_id=current_owner_id()).job
     with postgres_connection(postgres_dsn) as connection:
         connection.execute(
             """
@@ -87,7 +96,7 @@ def test_terminal_job_cas_delete_cascades_and_releases_idempotency_key(
         )
     candidates = repository.list_expired_jobs(retention_days=30, limit=100)
     assert [job["job_id"] for job in candidates] == [created["job_id"]]
-    terminal = repository.get_job(created["job_id"])
+    terminal = repository.get_job(created["job_id"], owner_user_id=current_owner_id())
     assert terminal is not None
     assert repository.delete_job_cas(terminal)
     with postgres_connection(postgres_dsn) as connection:
@@ -108,32 +117,33 @@ def test_terminal_job_cas_delete_cascades_and_releases_idempotency_key(
         prepared,
         idempotency_key="dft-retention-cascade",
         max_active_jobs=9,
+        owner_user_id=current_owner_id(),
     )
     assert recreated.created is True
     assert recreated.job["job_id"] != created["job_id"]
 
 
 def test_postgres_repository_idempotency_capacity_fencing_artifacts_and_timings(postgres_dsn: str) -> None:
-    repository = MonomerDftRepository(postgres_dsn)
+    repository = MonomerDftRepository(api_dsn())
     prepared = _prepared()
 
-    first = repository.create_job(prepared, idempotency_key="dft-test-0001", max_active_jobs=1)
+    first = repository.create_job(prepared, idempotency_key="dft-test-0001", max_active_jobs=1, owner_user_id=current_owner_id())
     assert first.created is True
     assert first.job["status"] == "pending"
     assert first.job["job_id"].count("-") == 4
 
-    replay = repository.create_job(prepared, idempotency_key="dft-test-0001", max_active_jobs=1)
+    replay = repository.create_job(prepared, idempotency_key="dft-test-0001", max_active_jobs=1, owner_user_id=current_owner_id())
     assert replay.created is False
     assert replay.job["job_id"] == first.job["job_id"]
     assert repository.find_idempotent_job(
         idempotency_key="dft-test-0001",
         request_sha256=prepared.request_sha256,
-    )["job_id"] == first.job["job_id"]
+    owner_user_id=current_owner_id())["job_id"] == first.job["job_id"]
 
     with pytest.raises(MonomerDftIdempotencyConflict):
-        repository.create_job(_prepared("CC"), idempotency_key="dft-test-0001", max_active_jobs=1)
+        repository.create_job(_prepared("CC"), idempotency_key="dft-test-0001", max_active_jobs=1, owner_user_id=current_owner_id())
     with pytest.raises(MonomerDftCapacityError):
-        repository.create_job(_prepared("CCC"), idempotency_key="dft-test-0002", max_active_jobs=1)
+        repository.create_job(_prepared("CCC"), idempotency_key="dft-test-0002", max_active_jobs=1, owner_user_id=current_owner_id())
     with pytest.raises(MonomerDftStaleAttempt):
         repository.apply_worker_snapshot(
             job_id=first.job["job_id"],
@@ -227,6 +237,7 @@ def test_postgres_repository_idempotency_capacity_fencing_artifacts_and_timings(
     public_artifact = repository.get_artifact(
         job_id=first.job["job_id"],
         artifact_id="result_json",
+        owner_user_id=current_owner_id(),
     )
     assert public_artifact["sha256"] == "a" * 64
     assert "relative_location" not in public_artifact
@@ -253,7 +264,7 @@ def test_postgres_repository_idempotency_capacity_fencing_artifacts_and_timings(
         assert attempt["lease_expires_at"] is not None
         assert attempt["worker_instance_id"] == "worker-one"
 
-    page = repository.list_jobs(page=1, page_size=10, status="completed", calculation_type="single_point")
+    page = repository.list_jobs(page=1, page_size=10, status="completed", calculation_type="single_point", owner_user_id=current_owner_id())
     assert page.total == 1
     assert page.items[0]["job_id"] == first.job["job_id"]
     empty_page = repository.list_jobs(
@@ -261,6 +272,7 @@ def test_postgres_repository_idempotency_capacity_fencing_artifacts_and_timings(
         page_size=100,
         status="completed",
         calculation_type="single_point",
+        owner_user_id=current_owner_id(),
     )
     assert empty_page.total == 1
     assert empty_page.items == []
@@ -277,7 +289,7 @@ def test_postgres_repository_idempotency_capacity_fencing_artifacts_and_timings(
     expired = repository.list_expired_artifact_jobs(retention_days=30)
     assert [job["job_id"] for job in expired] == [first.job["job_id"]]
 
-    requested = repository.request_artifact_deletion(first.job["job_id"])
+    requested = repository.request_artifact_deletion(first.job["job_id"], owner_user_id=current_owner_id())
     assert requested["artifacts_state"] == "delete_requested"
     assert requested["artifacts_deleted"] is False
     assert [item["available"] for item in requested["artifacts"]] == [False]
@@ -285,7 +297,7 @@ def test_postgres_repository_idempotency_capacity_fencing_artifacts_and_timings(
         first.job["job_id"]
     ]
     with pytest.raises(MonomerDftArtifactNotFound):
-        repository.get_artifact(job_id=first.job["job_id"], artifact_id="result_json")
+        repository.get_artifact(job_id=first.job["job_id"], artifact_id="result_json", owner_user_id=current_owner_id())
     with postgres_connection(postgres_dsn) as connection:
         intent_row = connection.execute(
             """
@@ -299,7 +311,7 @@ def test_postgres_repository_idempotency_capacity_fencing_artifacts_and_timings(
         assert intent_row["deleted_at"] is None
     repository.mark_artifacts_deleted(first.job["job_id"])
     with pytest.raises(MonomerDftArtifactNotFound):
-        repository.get_artifact(job_id=first.job["job_id"], artifact_id="result_json")
+        repository.get_artifact(job_id=first.job["job_id"], artifact_id="result_json", owner_user_id=current_owner_id())
     deleted = repository.mark_artifacts_deleted(first.job["job_id"])
     assert deleted["artifacts_state"] == "deleted"
     assert deleted["artifacts_deleted"] is True
@@ -313,7 +325,7 @@ def test_postgres_repository_idempotency_capacity_fencing_artifacts_and_timings(
             (first.job["job_id"],),
         ).fetchone()["deleted"] is True
 
-    second = repository.create_job(_prepared("CCC"), idempotency_key="dft-test-0002", max_active_jobs=1)
+    second = repository.create_job(_prepared("CCC"), idempotency_key="dft-test-0002", max_active_jobs=1, owner_user_id=current_owner_id())
     repository.record_dispatch_error(
         job_id=second.job["job_id"],
         attempt_token=second.job["_attempt_token"],
@@ -322,7 +334,7 @@ def test_postgres_repository_idempotency_capacity_fencing_artifacts_and_timings(
         retryable=False,
         details={"reason": "unsupported", "runtime_path": "/private/location"},
     )
-    failed = repository.get_job(second.job["job_id"])
+    failed = repository.get_job(second.job["job_id"], owner_user_id=current_owner_id())
     assert failed is not None
     assert failed["status"] == "failed"
     assert failed["error"]["retryable"] is False
@@ -337,17 +349,21 @@ def test_postgres_repository_idempotency_capacity_fencing_artifacts_and_timings(
 
 
 def test_postgres_repository_advisory_capacity_is_one_running_plus_eight_queued(postgres_dsn: str) -> None:
-    repository = MonomerDftRepository(postgres_dsn)
+    repository = MonomerDftRepository(api_dsn())
     prepared = _prepared()
+
+    identities = [another_identity() for _ in range(12)]
 
     def submit(index: int) -> tuple[str, str]:
         idempotency_key = f"capacity-{index:04d}"
         try:
-            created = repository.create_job(
-                prepared,
-                idempotency_key=idempotency_key,
-                max_active_jobs=9,
-            )
+            with user_context(identities[index]):
+                created = repository.create_job(
+                    prepared,
+                    idempotency_key=idempotency_key,
+                    max_active_jobs=9,
+                    owner_user_id=current_owner_id(),
+                )
         except MonomerDftCapacityError:
             return "capacity", idempotency_key
         return ("created" if created.created else "replay"), idempotency_key
@@ -357,41 +373,43 @@ def test_postgres_repository_advisory_capacity_is_one_running_plus_eight_queued(
     outcome_states = [state for state, _key in outcomes]
     assert outcome_states.count("created") == 9
     assert outcome_states.count("capacity") == 3
-    assert repository.count_active_jobs() == 9
+    with postgres_connection(postgres_dsn) as connection:
+        assert connection.execute("SELECT count(*) AS n FROM monomer_dft.jobs").fetchone()["n"] == 9
 
     replay_key = next(key for state, key in outcomes if state == "created")
-    replay = repository.create_job(
-        prepared,
-        idempotency_key=replay_key,
-        max_active_jobs=9,
-    )
+    with user_context(identities[int(replay_key.rsplit("-", 1)[1])]):
+        replay = repository.create_job(
+            prepared,
+            idempotency_key=replay_key,
+            max_active_jobs=9,
+            owner_user_id=current_owner_id(),
+        )
     assert replay.created is False
 
 
 def test_postgres_reconcilable_jobs_follow_durable_enqueue_sequence(postgres_dsn: str) -> None:
-    repository = MonomerDftRepository(postgres_dsn)
+    repository = MonomerDftRepository(api_dsn())
     prepared = _prepared()
-    accepted = [
-        repository.create_job(
-            prepared,
-            idempotency_key=f"fifo-order-{index:04d}",
-            max_active_jobs=9,
-        ).job["job_id"]
-        for index in range(5)
-    ]
+    accepted = []
+    for index in range(5):
+        with user_context(another_identity()):
+            accepted.append(repository.create_job(
+                prepared, idempotency_key=f"fifo-order-{index:04d}",
+                max_active_jobs=9, owner_user_id=current_owner_id(),
+            ).job["job_id"])
     assert [job["job_id"] for job in repository.list_reconcilable_jobs()] == accepted
 
 
 def test_postgres_cancel_is_local_only_before_durable_dispatch_claim(postgres_dsn: str) -> None:
-    repository = MonomerDftRepository(postgres_dsn)
+    repository = MonomerDftRepository(api_dsn())
     prepared = _prepared()
 
     never_dispatched = repository.create_job(
         prepared,
         idempotency_key="cancel-before-dispatch",
         max_active_jobs=9,
-    ).job
-    cancelled = repository.request_cancel(never_dispatched["job_id"])
+    owner_user_id=current_owner_id()).job
+    cancelled = repository.request_cancel(never_dispatched["job_id"], owner_user_id=current_owner_id())
     assert cancelled["status"] == "cancelled"
     assert cancelled["cancel_requested"] is True
     assert cancelled["_dispatch_started"] is False
@@ -400,17 +418,17 @@ def test_postgres_cancel_is_local_only_before_durable_dispatch_claim(postgres_ds
         prepared,
         idempotency_key="cancel-after-dispatch",
         max_active_jobs=9,
-    ).job
+    owner_user_id=current_owner_id()).job
     assert repository.claim_pending_dispatch(
         job_id=possibly_dispatched["job_id"],
         attempt_token=possibly_dispatched["_attempt_token"],
     ) is True
-    claimed = repository.get_job(possibly_dispatched["job_id"])
+    claimed = repository.get_job(possibly_dispatched["job_id"], owner_user_id=current_owner_id())
     assert claimed is not None
     assert claimed["status"] == "pending"
     assert claimed["_dispatch_started"] is True
 
-    cancel_requested = repository.request_cancel(possibly_dispatched["job_id"])
+    cancel_requested = repository.request_cancel(possibly_dispatched["job_id"], owner_user_id=current_owner_id())
     assert cancel_requested["status"] == "cancel_requested"
     assert cancel_requested["_dispatch_started"] is True
     assert repository.claim_pending_dispatch(
@@ -1118,7 +1136,7 @@ def test_postgres_0013_probe_distinguishes_absent_and_partial_states(
 
 
 def test_postgres_migration_constraints_and_attempt_state_non_regression(postgres_dsn: str) -> None:
-    repository = MonomerDftRepository(postgres_dsn)
+    repository = MonomerDftRepository(api_dsn())
     with postgres_connection(postgres_dsn) as connection:
         tables = connection.execute(
             """
@@ -1175,7 +1193,7 @@ def test_postgres_migration_constraints_and_attempt_state_non_regression(postgre
         _prepared(),
         idempotency_key="state-test-0001",
         max_active_jobs=9,
-    ).job
+    owner_user_id=current_owner_id()).job
     invalid_locations = (
         "../escape.json",
         "/absolute/escape.json",
@@ -1285,7 +1303,7 @@ def test_postgres_migration_constraints_and_attempt_state_non_regression(postgre
         attempt_token=created["_attempt_token"],
         snapshot={**base, "status": "queued", "queue_position": 1},
     )["status"] == "running"
-    assert repository.request_cancel(created["job_id"])["status"] == "cancel_requested"
+    assert repository.request_cancel(created["job_id"], owner_user_id=current_owner_id())["status"] == "cancel_requested"
     assert repository.apply_worker_snapshot(
         job_id=created["job_id"],
         attempt_token=created["_attempt_token"],

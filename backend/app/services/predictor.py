@@ -145,7 +145,7 @@ def smiles_to_features(smiles: str) -> np.ndarray:
     return _normalize_feature_vector(descriptor_values)
 
 
-def predict(smiles: str, properties: list[str], model_dir: Path | None = None) -> dict[str, float]:
+def _predict_unbounded(smiles: str, properties: list[str], model_dir: Path | None = None) -> dict[str, float]:
     if not properties:
         raise UnsupportedPredictionPropertyError("at least one property must be requested")
 
@@ -162,3 +162,17 @@ def predict(smiles: str, properties: list[str], model_dir: Path | None = None) -
         predictions[property_name] = float(value)
 
     return predictions
+
+
+def predict(smiles: str, properties: list[str], model_dir: Path | None = None) -> dict[str, float]:
+    from app.task_control import admission, authorize_memory_start
+    from app.auth.context import current_owner_id
+    from fastapi import HTTPException
+    from app.services.private_quotas import PrivateQuotaSettings
+    if len(smiles) > PrivateQuotaSettings.from_environment().prediction_smiles_characters:
+        raise InvalidSmilesError("SMILES exceeds the prediction input limit")
+    properties = list(dict.fromkeys(properties))
+    with admission("cpu"):
+        if not authorize_memory_start(current_owner_id()):
+            raise HTTPException(403, "Account disabled before execution")
+        return _predict_unbounded(smiles, properties, model_dir)

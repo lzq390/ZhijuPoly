@@ -165,7 +165,7 @@ export function MonomerMdResultsPanel({
               className="is-danger-soft"
               disabled={cancelling}
               onClick={() => {
-                if (window.confirm("确定取消这个全局任务吗？正在运行的任务可能需要等待 Worker 响应。")) onCancel(job);
+                if (window.confirm("确定取消这个任务吗？正在运行的任务可能需要等待响应。")) onCancel(job);
               }}
             >{cancelling ? <LoaderCircle className="np-mmd-spin" /> : <Ban />}取消任务</button>
           ) : null}

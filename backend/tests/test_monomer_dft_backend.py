@@ -20,7 +20,9 @@ from uuid import uuid4
 import anyio
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from app.auth.context import current_owner_id
+from test_monomer_private_support import auth_database, monomer_identity, postgres_dsn, api_dsn, another_identity
+from test_monomer_private_support import private_test_client as TestClient
 from pydantic import TypeAdapter, ValidationError
 
 from app import main as main_module
@@ -795,7 +797,7 @@ def test_async_worker_client_uses_exact_payload_and_structured_error_contract() 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         if request.url.path == "/health":
-            return httpx.Response(200, json={"status": "ok", "runtime_ready": True})
+            return httpx.Response(200, json={"status": "ok", "runtime_ready": True, "start_authorization_version": 1})
         if request.url.path == "/jobs" and request.method == "POST":
             return httpx.Response(200, json=_worker_snapshot(json.loads(request.content)))
         if request.url.path.endswith("/cancel"):
@@ -1766,12 +1768,12 @@ def test_create_and_cancel_routes_only_write_database_then_kick_leader() -> None
         def find_idempotent_job(self, **_kwargs):
             return None
 
-        def create_job(self, _prepared, *, idempotency_key: str, max_active_jobs: int):
+        def create_job(self, _prepared, *, owner_user_id: str, idempotency_key: str, max_active_jobs: int):
             assert idempotency_key == "fifo-test-0001"
             self.max_active_jobs = max_active_jobs
             return CreateJobResult(job=dict(self.job), created=True)
 
-        def request_cancel(self, job_id: str):
+        def request_cancel(self, job_id: str, *, owner_user_id: str):
             assert job_id == self.job["job_id"]
             self.job = {
                 **self.job,
@@ -1795,6 +1797,7 @@ def test_create_and_cancel_routes_only_write_database_then_kick_leader() -> None
             return {
                 "status": "ok",
                 "runtime_ready": True,
+                "start_authorization_version": 1,
                 "accepting_jobs": True,
                 "draining": False,
                 "recovering": False,
@@ -1882,10 +1885,10 @@ def test_delete_route_records_intent_without_calling_worker() -> None:
     }
 
     class Repository:
-        def get_job(self, _job_id: str):
+        def get_job(self, _job_id: str, *, owner_user_id: str):
             return dict(job)
 
-        def request_artifact_deletion(self, _job_id: str):
+        def request_artifact_deletion(self, _job_id: str, *, owner_user_id: str):
             job["artifacts_state"] = "delete_requested"
             job["artifacts"] = [{**job["artifacts"][0], "available": False}]
             return dict(job)
@@ -1952,7 +1955,7 @@ def test_delete_route_reports_persisted_count_after_async_deletion() -> None:
     }
 
     class Repository:
-        def get_job(self, _job_id: str):
+        def get_job(self, _job_id: str, *, owner_user_id: str):
             return dict(job)
 
     app = create_app(Settings())
@@ -2120,6 +2123,7 @@ def test_rdkit_validation_uses_dedicated_anyio_limiter_off_event_loop(
             return {
                 "status": "ok",
                 "runtime_ready": True,
+                "start_authorization_version": 1,
                 "accepting_jobs": True,
                 "draining": False,
             }
@@ -2139,11 +2143,14 @@ def test_rdkit_validation_uses_dedicated_anyio_limiter_off_event_loop(
     app.state.monomer_dft_worker_client = Worker()
     app.state.monomer_dft_reconciler = Reconciler()
 
+    browser = TestClient(app)
+
     async def scenario() -> None:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
             transport=transport,
             base_url="http://testserver",
+            cookies=browser.cookies, headers=browser.headers,
         ) as client:
             responses = await asyncio.gather(
                 *(
@@ -2179,7 +2186,7 @@ def test_cancel_racing_inflight_submit_is_eventually_cancelled_without_orphan() 
             self.current = {**self.current, "_dispatch_started": True}
             return True
 
-        def get_job(self, job_id: str):
+        def get_job_for_service(self, job_id: str):
             assert job_id == self.current["job_id"]
             return dict(self.current)
 
@@ -2305,12 +2312,14 @@ def test_fifo_reconciler_stops_after_retryable_unknown_outcome() -> None:
     asyncio.run(scenario())
 
 
-def test_cancel_404_never_proves_a_dispatched_attempt_stopped() -> None:
+@pytest.mark.parametrize('job_status', ['queued', 'running', 'cancel_requested'])
+@pytest.mark.parametrize('http_status', [404, 409, 502])
+def test_worker_error_never_proves_a_dispatched_attempt_stopped(job_status, http_status) -> None:
     prepared = prepare_monomer_dft_request(
         REQUEST_ADAPTER.validate_python(_single_point_request())
     )
     job = _pending_database_job(prepared)
-    job["status"] = "cancel_requested"
+    job["status"] = job_status
     job["cancel_requested"] = True
     job["_dispatch_started"] = True
 
@@ -2331,10 +2340,13 @@ def test_cancel_404_never_proves_a_dispatched_attempt_stopped() -> None:
             assert cancelled_job["job_id"] == job["job_id"]
             raise MonomerDftWorkerError(
                 "unknown job",
-                status_code=404,
+                status_code=http_status,
                 code="worker_resource_not_found",
                 retryable=False,
             )
+
+        async def get_job(self, _job_id):
+            return await self.cancel_job(job)
 
     async def scenario() -> None:
         repository = Repository()
@@ -2434,7 +2446,7 @@ def test_artifact_stream_requires_upstream_length_and_quoted_etag_handshake() ->
     job_id = str(uuid4())
 
     class Repository:
-        def get_artifact(self, *, job_id: str, artifact_id: str):
+        def get_artifact(self, *, job_id: str, artifact_id: str, owner_user_id: str):
             assert artifact_id == "scientific_result"
             return {
                 "artifact_id": artifact_id,
@@ -2863,7 +2875,7 @@ def test_monomer_dft_capacity_configuration_is_fail_closed_at_nine() -> None:
 
 def test_capabilities_publish_fixed_capacity_and_scientific_model_meanings() -> None:
     class Repository:
-        def count_active_jobs(self):
+        def count_active_jobs(self, *, owner_user_id: str):
             return 0
 
     class Worker:
@@ -2871,6 +2883,7 @@ def test_capabilities_publish_fixed_capacity_and_scientific_model_meanings() -> 
             return {
                 "status": "ok",
                 "runtime_ready": True,
+                "start_authorization_version": 1,
                 "accepting_jobs": True,
                 "draining": False,
                 "gpu_guard_mode": "observe",
@@ -2949,7 +2962,7 @@ def test_schema_boundary_keeps_status_safe_and_blocks_database_routes_before_sql
         def schema_ready(self):
             return False
 
-        def count_active_jobs(self):
+        def count_active_jobs(self, *, owner_user_id: str):
             raise AssertionError("status must not query DFT tables before 0013")
 
         def list_jobs(self, **_kwargs):
@@ -3003,7 +3016,7 @@ def test_schema_boundary_keeps_status_safe_and_blocks_database_routes_before_sql
     client.close()
 
 
-def test_backend_startup_uses_through_0012_schema_profile(monkeypatch) -> None:
+def test_backend_startup_uses_user_isolation_schema_profile(monkeypatch) -> None:
     observed: dict[str, object] = {}
 
     def fake_run_preflight(
@@ -3024,7 +3037,7 @@ def test_backend_startup_uses_through_0012_schema_profile(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "run_preflight", fake_run_preflight)
     monkeypatch.setattr(main_module, "preflight_blockers", lambda report: [])
     settings = object()
-    app = SimpleNamespace(state=SimpleNamespace(settings=settings))
+    app = SimpleNamespace(state=SimpleNamespace(settings=settings, auth=SimpleNamespace(assert_application_ready=lambda: None)))
 
     main_module._run_database_startup_preflight(app, required=True)
 
@@ -3032,7 +3045,7 @@ def test_backend_startup_uses_through_0012_schema_profile(monkeypatch) -> None:
         "settings": settings,
         "mode": "runtime",
         "strict": True,
-        "schema_target": main_module.SCHEMA_TARGET_STARTUP,
+        "schema_target": main_module.SCHEMA_TARGET_ISOLATION,
     }
     assert app.state.database_preflight_errors == ()
 
@@ -3046,7 +3059,14 @@ def test_repository_schema_readiness_uses_shared_exact_probe(
     probe_ready: bool,
     expected: bool,
 ) -> None:
-    connection = object()
+    class Connection:
+        def execute(self, query):
+            assert "pg_has_role" in query
+            return SimpleNamespace(fetchone=lambda: {
+                'rolsuper':False, 'rolbypassrls':False,
+                'owns_schema':False, 'service_member':True,
+            })
+    connection = Connection()
     observed: list[object] = []
 
     @contextmanager
@@ -3172,6 +3192,7 @@ def test_submit_maps_scientific_idempotency_capacity_and_recovery_errors() -> No
         health_payload = {
             "status": "ok",
             "runtime_ready": True,
+                "start_authorization_version": 1,
             "accepting_jobs": False,
             "draining": False,
             "recovering": False,
@@ -3218,3 +3239,14 @@ def test_submit_maps_scientific_idempotency_capacity_and_recovery_errors() -> No
     for response in (invalid, conflict, capacity, unavailable):
         assert set(response.json()) == {"code", "message", "retryable", "details"}
     client.close()
+
+
+def test_cancel_requested_before_gpu_start_preserves_unset_started_at():
+    prepared = prepare_monomer_dft_request(REQUEST_ADAPTER.validate_python(_single_point_request()))
+    payload = {'schema_version':2, 'job_id':str(uuid4()), 'attempt_token':'a'*64,
+               'request_sha256':prepared.request_sha256, 'enqueue_sequence':1, **prepared.worker_request}
+    snapshot = _worker_snapshot(payload)
+    snapshot.update(status='cancel_requested', queue_position=None)
+    validated = InternalWorkerSnapshot.model_validate(snapshot)
+    assert validated.started_at is None
+    assert validated.finished_at is None

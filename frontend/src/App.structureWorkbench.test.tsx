@@ -3,22 +3,25 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import type { StructureWorkspaceContext } from "./types";
+import { MONOMER_RETROSYNTHESIS_DRAFT_KEY } from "./components/monomer-retrosynthesis/session";
 import { preloadPage } from "./pages";
 
 // These cases exercise routing after transport; cold loading is covered separately.
 beforeAll(async () => {
-  await Promise.all(["structureWorkbench", "knowledge", "databaseFilter", "monomerDft", "databaseQuery", "explorer", "homopolymerPrediction", "conditionalGeneration", "reverseDesign"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
+  await Promise.all(["monomerRetrosynthesis", "structureWorkbench", "knowledge", "databaseFilter", "monomerDft", "databaseQuery", "explorer", "homopolymerPrediction", "conditionalGeneration", "reverseDesign"].map(module => preloadPage(module as Parameters<typeof preloadPage>[0])));
 });
 
 vi.mock("@structure-editor-engine", () => import("./test/structureEditorEngineMock"));
 
 const mocks = vi.hoisted(() => ({
   syncSmilesFromCanvas: vi.fn(),
+  syncStatus: "saved" as "saved" | "failed",
   fileInputRef: { current: null as HTMLInputElement | null }
 }));
 
 vi.mock("./hooks/useTgStructureCanvas", () => ({
-  useTgStructureCanvas: () => ({
+  useTgStructureCanvas: ({ structure }: { structure: StructureWorkspaceContext }) => ({
     fileInputRef: mocks.fileInputRef,
     handleEditorLoad: vi.fn(),
     isEditorReady: true,
@@ -45,8 +48,9 @@ vi.mock("./hooks/useTgStructureCanvas", () => ({
     importImageFile: vi.fn().mockResolvedValue(true),
     syncSmilesFromCanvas: mocks.syncSmilesFromCanvas,
     syncBeforeLeave: async () => {
-      await mocks.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
-      return { status: "saved" as const };
+      const smiles = await mocks.syncSmilesFromCanvas({ preserveExisting: true, quiet: true });
+      if (mocks.syncStatus === "saved") structure.workspace.commitSmiles(smiles);
+      return { status: mocks.syncStatus };
     },
     peekCanvasState: vi.fn().mockResolvedValue({
       smiles: "*CC*",
@@ -91,6 +95,8 @@ function openBuildGroup() {
 }
 
 beforeEach(() => {
+  sessionStorage.clear();
+  mocks.syncStatus = "saved";
   window.history.replaceState({}, "", "/structure-workbench");
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
   mocks.syncSmilesFromCanvas.mockReset().mockResolvedValue("");
@@ -342,5 +348,51 @@ describe("App 结构工作台挂载与导航", () => {
     expect(screen.queryByTestId("database-filter")).toBeNull();
     expect(window.location.pathname).toBe("/knowledge");
     expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("App 单体反推导航", () => {
+  function draft() {
+    sessionStorage.setItem(MONOMER_RETROSYNTHESIS_DRAFT_KEY, JSON.stringify({ version: 1,
+      smiles: "CCN", targetRole: "diamine", returnCount: "7" }));
+  }
+  it("工作台快捷入口等待一次同步，在提交导航后带入当前结构", async () => {
+    draft();
+    let resolve!: (smiles: string) => void;
+    mocks.syncSmilesFromCanvas.mockReturnValue(new Promise<string>(done => { resolve = done; }));
+    const view = render(<App />);
+    const editor = structureEditor(view.container);
+    fireEvent.click(screen.getByRole("button", { name: "功能参数" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开单体逆合成反推" }));
+    await waitFor(() => expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1));
+    expect(window.location.pathname).toBe("/structure-workbench");
+    expect(JSON.parse(sessionStorage.getItem(MONOMER_RETROSYNTHESIS_DRAFT_KEY)!).smiles).toBe("CCN");
+    resolve("CCO");
+    await screen.findByRole("heading", { name: "单体逆合成反推" });
+    expect((screen.getByLabelText("目标单体 SMILES") as HTMLTextAreaElement).value).toBe("CCO");
+    expect((screen.getByLabelText("反推候选数") as HTMLInputElement).value).toBe("7");
+    expect(structureEditor(view.container)).toBe(editor);
+    expect(screen.getByRole("button", { name: "单体逆合成反推" }).getAttribute("aria-current")).toBe("page");
+  });
+  it.each(["saved", "failed"] as const)("同步为 %s 且无新结构时保留反推草稿", async status => {
+    draft(); mocks.syncStatus = status; render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "功能参数" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开单体逆合成反推" }));
+    await screen.findByRole("heading", { name: "单体逆合成反推" });
+    expect((screen.getByLabelText("目标单体 SMILES") as HTMLTextAreaElement).value).toBe("CCN");
+    expect(screen.getByText(status === "saved" ? "当前共享结构为空，已保留反推草稿。"
+      : "共享结构同步未完成，已保留反推草稿。请在工作台检查结构后重试。")).toBeTruthy();
+  });
+  it("侧栏与深链恢复草稿，刷新不启动画板", async () => {
+    draft(); mocks.syncSmilesFromCanvas.mockResolvedValue("CCO");
+    const view = render(<App />); openDiscoverGroup();
+    fireEvent.click(screen.getByRole("button", { name: "单体逆合成反推" }));
+    await screen.findByRole("heading", { name: "单体逆合成反推" });
+    expect((screen.getByLabelText("目标单体 SMILES") as HTMLTextAreaElement).value).toBe("CCN");
+    view.unmount(); const deepLink = render(<App />);
+    await screen.findByRole("heading", { name: "单体逆合成反推" });
+    expect(deepLink.container.querySelector('[data-structure-editor]')).toBeNull();
+    expect((screen.getByLabelText("目标单体 SMILES") as HTMLTextAreaElement).value).toBe("CCN");
   });
 });

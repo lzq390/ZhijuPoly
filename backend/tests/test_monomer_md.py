@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from test_monomer_private_support import private_test_client as TestClient
 
 from app.routers import monomer_md as monomer_md_routes
 from app.config import Settings
+from app.auth.context import current_owner_id, user_context
+from test_monomer_private_support import auth_database, monomer_identity, postgres_dsn, api_dsn, another_identity, other_private_test_client
 from app.postgres_database import postgres_connection
 from app.routers.monomer_md import router as monomer_md_router
 from app.services import monomer_md_repository as monomer_md_repository_module
@@ -49,6 +51,7 @@ def test_formal_queue_broker_transition_is_narrowly_classified():
         "status": "degraded",
         "mode": "real",
         "db_configured": True,
+            "start_authorization_version": 1,
         "byteff2_root_exists": True,
         "runtime_ready": True,
         "gpu_broker_enabled": True,
@@ -94,6 +97,7 @@ class FakeWorkerClient:
             "status": "ok",
             "mode": self.mode,
             "db_configured": True,
+            "start_authorization_version": 1,
             "runtime_ready": True,
             "active_jobs": 0,
             "protocols": self.protocols,
@@ -146,6 +150,7 @@ class DegradedWorkerClient:
             "status": "ok",
             "mode": "real",
             "db_configured": False,
+            "start_authorization_version": 1,
             "byteff2_root_exists": True,
             "runtime_ready": True,
             "active_jobs": 0,
@@ -161,6 +166,7 @@ class DegradedFormalReadyWorkerClient:
             "status": "degraded",
             "mode": "real",
             "db_configured": False,
+            "start_authorization_version": 1,
             "byteff2_root_exists": True,
             "runtime_ready": True,
             "active_jobs": 0,
@@ -177,6 +183,7 @@ class DrainingWorkerClient:
             "status": "ok",
             "mode": "real",
             "db_configured": True,
+            "start_authorization_version": 1,
             "byteff2_root_exists": True,
             "runtime_ready": True,
             "active_jobs": 1,
@@ -196,6 +203,7 @@ class SubmitFailingWorkerClient:
             "status": "ok",
             "mode": "dry-run",
             "db_configured": True,
+            "start_authorization_version": 1,
             "active_jobs": 0,
         }
 
@@ -544,7 +552,7 @@ def test_monomer_md_job_rejects_when_active_capacity_is_full_without_creating_ex
 
     assert first_response.status_code == 202
     assert second_response.status_code == 429
-    assert second_response.json()["detail"] == "monomer MD job capacity is full; please wait for the active job to finish"
+    assert second_response.json()["detail"] == "user MD task capacity is full"
     assert _monomer_md_job_count(postgres_dsn) == 1
     assert len(fake_worker.payloads) == 1
 
@@ -810,7 +818,7 @@ def test_monomer_md_formal_capacity_allows_one_running_and_two_queued(postgres_d
     client = TestClient(app)
 
     responses = [
-        client.post(
+        other_private_test_client(app).post(
             "/api/v1/monomer-md/jobs",
             json={"protocol": "Density", "run_mode": "formal", "config_json": _density_formal_config()},
         )
@@ -836,6 +844,7 @@ def test_monomer_md_formal_queue_allows_exact_broker_admission_transition(
         "status": "degraded",
         "mode": "real",
         "db_configured": True,
+            "start_authorization_version": 1,
         "byteff2_root_exists": True,
         "runtime_ready": True,
         "gpu_broker_enabled": True,
@@ -893,15 +902,18 @@ def test_monomer_md_list_and_cancel_formal_jobs(postgres_dsn: str):
     client = TestClient(app)
 
     job_ids = []
-    for _ in range(3):
+    for index in range(3):
         response = client.post(
             "/api/v1/monomer-md/jobs",
             json={"protocol": "Density", "run_mode": "formal", "config_json": _density_formal_config()},
         )
         assert response.status_code == 202
         job_ids.append(response.json()["job_id"])
+        if index < 2:
+            with postgres_connection(postgres_dsn) as connection:
+                mark_monomer_md_job_completed_postgres(connection, job_id=job_ids[-1], result_data={})
     with postgres_connection(postgres_dsn) as connection:
-        for job_id in job_ids[1:]:
+        for job_id in job_ids[2:]:
             connection.execute(
                 """
                 UPDATE md.monomer_md_jobs
@@ -918,17 +930,17 @@ def test_monomer_md_list_and_cancel_formal_jobs(postgres_dsn: str):
     )
     assert active.status_code == 200
     active_payload = active.json()
-    assert active_payload["total"] == 3
-    assert [item["queue_position"] for item in active_payload["items"]] == [None, 1, 2]
+    assert active_payload["total"] == 1
+    assert [item["queue_position"] for item in active_payload["items"]] == [1]
 
-    cancel = client.post(f"/api/v1/monomer-md/jobs/{job_ids[1]}/cancel")
+    cancel = client.post(f"/api/v1/monomer-md/jobs/{job_ids[2]}/cancel")
     assert cancel.status_code == 202
     assert cancel.json()["status"] == "cancel_requested"
-    assert fake_worker.cancelled_jobs == [job_ids[1]]
+    assert fake_worker.cancelled_jobs == [job_ids[2]]
 
-    repeated = client.post(f"/api/v1/monomer-md/jobs/{job_ids[1]}/cancel")
+    repeated = client.post(f"/api/v1/monomer-md/jobs/{job_ids[2]}/cancel")
     assert repeated.status_code == 202
-    assert fake_worker.cancelled_jobs == [job_ids[1], job_ids[1]]
+    assert fake_worker.cancelled_jobs == [job_ids[2], job_ids[2]]
 
     filtered = client.get(
         "/api/v1/monomer-md/jobs",
@@ -936,7 +948,7 @@ def test_monomer_md_list_and_cancel_formal_jobs(postgres_dsn: str):
     )
     assert filtered.status_code == 200
     assert filtered.json()["total"] == 1
-    assert filtered.json()["items"][0]["job_id"] == job_ids[1]
+    assert filtered.json()["items"][0]["job_id"] == job_ids[2]
 
 
 def test_monomer_md_lightweight_list_projects_out_large_json(monkeypatch) -> None:
@@ -981,6 +993,7 @@ def test_monomer_md_lightweight_list_projects_out_large_json(monkeypatch) -> Non
         connection,
         run_mode="formal",
         include_result=False,
+        owner_user_id=current_owner_id(),
     )
 
     select = connection.queries[1]
@@ -1004,6 +1017,7 @@ def test_monomer_md_cancel_handles_pending_terminal_and_unknown_jobs(
             input_smiles="CCO",
             canonical_smiles="CCO",
             requested_steps=300,
+            owner_user_id=current_owner_id(),
         )
         create_monomer_md_job_postgres(
             connection,
@@ -1011,6 +1025,7 @@ def test_monomer_md_cancel_handles_pending_terminal_and_unknown_jobs(
             input_smiles="CCO",
             canonical_smiles="CCO",
             requested_steps=300,
+            owner_user_id=current_owner_id(),
         )
         mark_monomer_md_job_failed_postgres(
             connection,
@@ -1047,6 +1062,7 @@ def test_monomer_md_worker_repository_persists_fifo_and_cancel_cleanup(
                 protocol="Density",
                 run_mode="formal",
                 config_json={"protocol": "Density"},
+                owner_user_id=current_owner_id(),
             )
 
     assert worker_repository.accept_job(
@@ -1071,6 +1087,7 @@ def test_monomer_md_worker_repository_persists_fifo_and_cancel_cleanup(
             run_mode="formal",
             active_only=True,
             page_size=3,
+            owner_user_id=current_owner_id(),
         )
     assert [item["job_id"] for item in items] == [
         "fifo-running",
@@ -1086,6 +1103,7 @@ def test_monomer_md_worker_repository_persists_fifo_and_cancel_cleanup(
         cancelled_job, changed = request_monomer_md_job_cancel_postgres(
             connection,
             job_id="fifo-queued-2",
+            owner_user_id=current_owner_id(),
         )
     assert changed is True
     assert cancelled_job is not None
@@ -1098,6 +1116,7 @@ def test_monomer_md_worker_repository_persists_fifo_and_cancel_cleanup(
         _, changed = request_monomer_md_job_cancel_postgres(
             connection,
             job_id="fifo-queued-1",
+            owner_user_id=current_owner_id(),
         )
     assert changed is True
     assert worker_repository.update_status(
@@ -1223,6 +1242,7 @@ def test_monomer_md_repository_completed_update_does_not_override_failed(postgre
             input_smiles="CCO",
             canonical_smiles="CCO",
             requested_steps=300,
+            owner_user_id=current_owner_id(),
         )
         mark_monomer_md_job_failed_postgres(connection, job_id, "worker failed")
         mark_monomer_md_job_completed_postgres(
@@ -1252,6 +1272,7 @@ def test_monomer_md_repository_failed_update_does_not_override_failed(postgres_d
             input_smiles="CCO",
             canonical_smiles="CCO",
             requested_steps=300,
+            owner_user_id=current_owner_id(),
         )
         mark_monomer_md_job_failed_postgres(connection, job_id, "first failure")
         mark_monomer_md_job_failed_postgres(connection, job_id, "late failure")
@@ -1347,6 +1368,7 @@ def test_monomer_md_status_reports_database_capacity(postgres_dsn: str):
             input_smiles="CCO",
             canonical_smiles="CCO",
             requested_steps=300,
+            owner_user_id=current_owner_id(),
         )
 
     response = TestClient(app).get("/api/v1/monomer-md/status")
@@ -1356,7 +1378,7 @@ def test_monomer_md_status_reports_database_capacity(postgres_dsn: str):
     assert payload["available"] is True
     assert payload["can_submit"] is False
     assert payload["busy"] is True
-    assert payload["active_jobs"] == 0
+    assert payload["active_jobs"] == 1
     assert payload["database_active_jobs"] == 1
     assert payload["max_active_jobs"] == 1
     assert payload["oldest_active_heartbeat_age_seconds"] is not None
@@ -1417,6 +1439,7 @@ def test_expired_unclaimed_pending_job_is_failed_before_capacity_count(postgres_
             input_smiles="CCO",
             canonical_smiles="CCO",
             requested_steps=300,
+            owner_user_id=current_owner_id(),
         )
         connection.execute(
             "UPDATE md.monomer_md_jobs SET lease_expires_at = now() - interval '1 second' WHERE job_id = %s",
@@ -1446,6 +1469,7 @@ def test_status_reconciles_expired_unclaimed_pending_job(postgres_dsn: str):
             input_smiles="CCO",
             canonical_smiles="CCO",
             requested_steps=300,
+            owner_user_id=current_owner_id(),
         )
         connection.execute(
             "UPDATE md.monomer_md_jobs SET lease_expires_at = now() - interval '1 second' WHERE job_id = %s",

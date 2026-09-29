@@ -1,3 +1,4 @@
+import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal } from "lucide-react";
@@ -90,6 +91,7 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
+    if (!requestServiceAccess()) return;
       closeParameters(true);
     }
     document.addEventListener("pointerdown", handlePointerDown);
@@ -117,6 +119,7 @@ export const HomopolymerPropertyPredictionPage = forwardRef<
 
   async function submitPrediction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requestServiceAccess()) return;
     if (selectedProperties.length === 0) return;
     const smiles = await canvas.resolveSmilesForSearch();
     if (!smiles) {

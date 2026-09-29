@@ -3,6 +3,7 @@ import { StructureWorkspace } from "../structure/workspace";
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GUEST_SESSION, installSession, retireSession } from "../auth/session";
 import type {
   MonomerDftCapabilitiesResponse,
   MonomerDftJobCreateRequest,
@@ -12,11 +13,13 @@ import type {
 } from "../types";
 
 const mocks = vi.hoisted(() => ({
+  useAuth: vi.fn(),
   useMonomerDftJob: vi.fn(),
   downloadMonomerDftBundle: vi.fn(),
   standardizeSmiles: vi.fn(),
   fetchStructure2D: vi.fn()
 }));
+vi.mock("../auth/AuthProvider", () => ({ useAuth: mocks.useAuth }));
 
 vi.mock("../hooks/useMonomerDftJob", async () => {
   const actual = await vi.importActual<typeof import("../hooks/useMonomerDftJob")>("../hooks/useMonomerDftJob");
@@ -104,6 +107,8 @@ function controller(overrides: Partial<DftController> = {}): DftController {
     serviceError: null,
     historyError: null,
     jobError: null,
+    eventConnectionState: "live",
+    refreshAll: vi.fn().mockResolvedValue(undefined),
     refreshStatus: vi.fn(),
     refreshHistory: vi.fn(),
     changeHistoryQuery: vi.fn(),
@@ -185,6 +190,7 @@ function renderPage(structure = makeStructure()) {
 
 describe("MonomerDftPage workbench", () => {
   beforeEach(() => {
+    mocks.useAuth.mockReturnValue(null);
     vi.clearAllMocks();
     window.history.replaceState({}, "", "/monomer-dft");
     mocks.useMonomerDftJob.mockReturnValue(controller());
@@ -196,13 +202,37 @@ describe("MonomerDftPage workbench", () => {
   });
 
   afterEach(() => {
+    retireSession();
     cleanup();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
+  it("prompts guests to login before standardization or task creation without requiring capabilities", () => {
+    mocks.useAuth.mockReturnValue({ status: "guest" });
+    installSession(GUEST_SESSION);
+    const dft = controller({ serviceStatus: null, capabilities: null });
+    mocks.useMonomerDftJob.mockReturnValue(dft);
+    const login = vi.fn();
+    window.addEventListener("nexpoly:login-required", login);
+    try {
+      renderPage();
+      expect(mocks.useMonomerDftJob).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+      expect(login).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "提交计算" }));
+      expect(login).toHaveBeenCalledOnce();
+      expect(mocks.standardizeSmiles).not.toHaveBeenCalled();
+      expect(dft.submit).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("nexpoly:login-required", login); }
+  });
+
   it("uses one full-height scroll workbench and exposes keyboard-operable primary tabs", () => {
+    const dft = controller();
+    mocks.useMonomerDftJob.mockReturnValue(dft);
     const { view } = renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    expect(dft.refreshAll).toHaveBeenCalledOnce();
 
     expect(view.container.querySelector(".np-dft-scroll-region")).toBeTruthy();
     expect(view.container.querySelector("iframe")).toBeNull();

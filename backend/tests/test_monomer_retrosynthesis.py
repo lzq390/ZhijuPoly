@@ -5,10 +5,10 @@ from threading import Event, Thread
 from time import perf_counter
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.main import create_app
+from test_authenticated_app_support import auth_database, private_app, private_client
+from app.auth.context import Identity, user_context
 from app.models import MonomerRetrosynthesisResponse
 from app.services.gpu_runtime_registry import GpuRuntimeRegistry
 from app.services.monomer_retrosynthesis import _get_runtime, _resolve_device
@@ -25,16 +25,20 @@ def _settings(tmp_path: Path, *, retro_model_enabled: bool = True) -> Settings:
     )
 
 
-def _app_with_fake_retro_runtime(tmp_path: Path):
-    app = create_app(_settings(tmp_path))
+def _app_with_fake_retro_runtime(tmp_path: Path, private_app):
+    app = private_app(_settings(tmp_path))
     registry = GpuRuntimeRegistry()
     registry.register("retrosynthesis", enabled=True, loader=object)
     app.state.gpu_runtime_registry = registry
     return app
 
 
-def test_monomer_retrosynthesis_route_reports_disabled_service(tmp_path: Path) -> None:
-    client = TestClient(create_app(_settings(tmp_path, retro_model_enabled=False)))
+def test_monomer_retrosynthesis_route_reports_disabled_service(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
+    client = private_client(private_app(_settings(tmp_path, retro_model_enabled=False)))
 
     response = client.post(
         "/api/v1/monomer-retrosynthesis",
@@ -51,6 +55,8 @@ def test_monomer_retrosynthesis_route_reports_disabled_service(tmp_path: Path) -
 
 
 def test_monomer_retrosynthesis_route_returns_model_unavailable_as_503(
+    private_app,
+    private_client,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -58,7 +64,7 @@ def test_monomer_retrosynthesis_route_returns_model_unavailable_as_503(
         raise ModelArtifactError("retrosynthesis model is unavailable")
 
     monkeypatch.setattr("app.routers.monomer_retrosynthesis.predict_monomer_precursors", fail_model)
-    client = TestClient(_app_with_fake_retro_runtime(tmp_path))
+    client = private_client(_app_with_fake_retro_runtime(tmp_path, private_app))
 
     response = client.post(
         "/api/v1/monomer-retrosynthesis",
@@ -74,7 +80,11 @@ def test_monomer_retrosynthesis_route_returns_model_unavailable_as_503(
     assert response.json()["detail"] == "retrosynthesis service is unavailable"
 
 
-def test_monomer_retrosynthesis_route_returns_candidates(tmp_path: Path, monkeypatch) -> None:
+def test_monomer_retrosynthesis_route_returns_candidates(
+    private_app,
+    private_client,
+    tmp_path: Path, monkeypatch,
+) -> None:
     def fake_model(*args, **kwargs) -> MonomerRetrosynthesisResponse:
         return MonomerRetrosynthesisResponse(
             input_smiles="Nc1ccc(N)cc1",
@@ -89,7 +99,7 @@ def test_monomer_retrosynthesis_route_returns_candidates(tmp_path: Path, monkeyp
         )
 
     monkeypatch.setattr("app.routers.monomer_retrosynthesis.predict_monomer_precursors", fake_model)
-    client = TestClient(_app_with_fake_retro_runtime(tmp_path))
+    client = private_client(_app_with_fake_retro_runtime(tmp_path, private_app))
 
     response = client.post(
         "/api/v1/monomer-retrosynthesis",
@@ -105,7 +115,11 @@ def test_monomer_retrosynthesis_route_returns_candidates(tmp_path: Path, monkeyp
     assert response.json()["inferred_target_role"] == "diamine"
 
 
-def test_retrosynthesis_inference_does_not_block_health_endpoint(tmp_path: Path, monkeypatch) -> None:
+def test_retrosynthesis_inference_does_not_block_health_endpoint(
+    private_app,
+    private_client,
+    tmp_path: Path, monkeypatch,
+) -> None:
     started = Event()
     release = Event()
 
@@ -125,10 +139,10 @@ def test_retrosynthesis_inference_does_not_block_health_endpoint(tmp_path: Path,
         )
 
     monkeypatch.setattr("app.routers.monomer_retrosynthesis.predict_monomer_precursors", blocking_model)
-    app = _app_with_fake_retro_runtime(tmp_path)
+    app = _app_with_fake_retro_runtime(tmp_path, private_app)
     response_holder = []
 
-    with TestClient(app) as client:
+    with private_client(app) as client:
         inference_thread = Thread(
             target=lambda: response_holder.append(
                 client.post(
@@ -155,8 +169,12 @@ def test_retrosynthesis_inference_does_not_block_health_endpoint(tmp_path: Path,
     assert response_holder[0].status_code == 200
 
 
-def test_invalid_retrosynthesis_input_does_not_trigger_lazy_model_load(tmp_path: Path) -> None:
-    app = create_app(_settings(tmp_path))
+def test_invalid_retrosynthesis_input_does_not_trigger_lazy_model_load(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
+    app = private_app(_settings(tmp_path))
     load_calls = 0
 
     def load_runtime():
@@ -167,7 +185,7 @@ def test_invalid_retrosynthesis_input_does_not_trigger_lazy_model_load(tmp_path:
     registry = GpuRuntimeRegistry()
     registry.register("retrosynthesis", enabled=True, loader=load_runtime)
     app.state.gpu_runtime_registry = registry
-    client = TestClient(app)
+    client = private_client(app)
 
     response = client.post(
         "/api/v1/monomer-retrosynthesis",
@@ -183,20 +201,26 @@ def test_invalid_retrosynthesis_input_does_not_trigger_lazy_model_load(tmp_path:
     assert load_calls == 0
 
 
-def test_retrosynthesis_queue_full_returns_429_with_retry_after(tmp_path: Path) -> None:
-    app = _app_with_fake_retro_runtime(tmp_path)
+def test_retrosynthesis_queue_full_returns_429_with_retry_after(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
+    app = _app_with_fake_retro_runtime(tmp_path, private_app)
     registry = GpuRuntimeRegistry(max_concurrent_inferences=1, max_waiting_inferences=0)
     registry.register("retrosynthesis", enabled=True, loader=object)
     app.state.gpu_runtime_registry = registry
     holder_started = Event()
     release_holder = Event()
+    holder_client = private_client(app)
 
     def hold_gpu() -> None:
-        with registry.inference_session("retrosynthesis", timeout_seconds=2):
+        with user_context(Identity(holder_client.test_owner_id), app.state.auth.settings), \
+                registry.inference_session("retrosynthesis", timeout_seconds=2):
             holder_started.set()
             assert release_holder.wait(timeout=2)
 
-    with TestClient(app) as client:
+    with private_client(app) as client:
         holder = Thread(target=hold_gpu)
         holder.start()
         assert holder_started.wait(timeout=2)

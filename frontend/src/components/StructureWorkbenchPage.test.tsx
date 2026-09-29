@@ -186,7 +186,7 @@ describe("StructureWorkbenchPage", () => {
     expect(screen.getByRole("button", { name: "生成SMILES" }).classList.contains("is-primary")).toBe(true);
   });
 
-  it("外部功能先同步一次再导航，内置反推不导航", async () => {
+  it("外部功能保持同步，反推快捷入口交给应用导航守卫同步", async () => {
     const onOpenModule = vi.fn();
     renderPage(makeStructure(), onOpenModule);
 
@@ -196,9 +196,11 @@ describe("StructureWorkbenchPage", () => {
     expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole("button", { name: "功能参数" }));
-    fireEvent.click(screen.getByRole("button", { name: "设置单体逆合成反推参数" }));
-    expect(screen.getByLabelText("目标单体 SMILES")).toBeTruthy();
-    expect(onOpenModule).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "打开单体逆合成反推" }));
+    expect(screen.queryByLabelText("目标单体 SMILES")).toBeNull();
+    expect(onOpenModule).toHaveBeenLastCalledWith("monomerRetrosynthesis");
+    expect(onOpenModule).toHaveBeenCalledTimes(2);
+    expect(mocks.syncSmilesFromCanvas).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -238,60 +240,6 @@ describe("StructureWorkbenchPage", () => {
 
     expect(screen.getByTitle("结构工作台结构编辑器")).toBeTruthy();
     expect(screen.queryByText("文本优先模式")).toBeNull();
-  });
-
-  it("反推保持固定 payload，并把 AbortSignal 传给请求", async () => {
-    mocks.predictMonomerPrecursors.mockResolvedValue({
-      input_smiles: "CC",
-      canonical_smiles: "CC",
-      target_role: "auto",
-      inferred_target_role: "other",
-      query_time_ms: 12,
-      total: 0,
-      candidates: []
-    });
-    renderPage();
-
-    fireEvent.click(screen.getByRole("button", { name: "功能参数" }));
-    fireEvent.click(screen.getByRole("button", { name: "设置单体逆合成反推参数" }));
-    fireEvent.change(screen.getByLabelText("反推候选数"), { target: { value: "3" } });
-    fireEvent.click(screen.getByRole("button", { name: "运行反推" }));
-
-    await waitFor(() => expect(mocks.predictMonomerPrecursors).toHaveBeenCalledOnce());
-    expect(mocks.predictMonomerPrecursors).toHaveBeenCalledWith(
-      {
-        smiles: "C=C(C)C(=O)OC",
-        target_role: "auto",
-        num_beams: 5,
-        num_return_sequences: 3,
-        max_new_tokens: 128
-      },
-      expect.any(AbortSignal)
-    );
-    expect(await screen.findByText("未找到可展示候选")).toBeTruthy();
-  });
-
-  it("重新运行反推会取消旧请求，卸载也会取消当前请求", async () => {
-    const signals: AbortSignal[] = [];
-    mocks.predictMonomerPrecursors.mockImplementation((_payload, signal: AbortSignal) => {
-      signals.push(signal);
-      return new Promise(() => undefined);
-    });
-    const view = renderPage();
-
-    fireEvent.click(screen.getByRole("button", { name: "功能参数" }));
-    fireEvent.click(screen.getByRole("button", { name: "设置单体逆合成反推参数" }));
-    fireEvent.click(screen.getByRole("button", { name: "运行反推" }));
-    await waitFor(() => expect(signals).toHaveLength(1));
-
-    fireEvent.click(screen.getByRole("button", { name: "关闭单体反推结果" }));
-    fireEvent.click(screen.getByRole("button", { name: "功能参数" }));
-    fireEvent.click(screen.getByRole("button", { name: "运行反推" }));
-    await waitFor(() => expect(signals).toHaveLength(2));
-    expect(signals[0].aborted).toBe(true);
-
-    view.unmount();
-    expect(signals[1].aborted).toBe(true);
   });
 
   it("暴露导航前静默同步接口", async () => {

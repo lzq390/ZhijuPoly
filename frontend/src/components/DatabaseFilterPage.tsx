@@ -1,3 +1,5 @@
+import { useAuth } from "../auth/AuthProvider";
+import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import {
@@ -510,6 +512,7 @@ const ConditionRow = memo(function ConditionRow({
 });
 
 export function DatabaseFilterPage() {
+  const guest = useAuth()?.status === "guest";
   const filter = usePropertyFilter();
   const drawerSizing = useDatabaseFilterDrawerSizing();
   const [openPickerId, setOpenPickerId] = useState<number | null>(null);
@@ -604,7 +607,7 @@ export function DatabaseFilterPage() {
             <div className="dbf-module-toolbar" aria-label="数据库筛选状态" data-recording-header>
               <span className={`dbf-tool-status${sourceError ? " is-error" : sourceReady ? " is-ready" : ""}`}>
                 <i aria-hidden="true" />
-                {filter.optionsPending
+                {guest ? "请登录账号。" : filter.optionsPending
                   ? "正在加载数据"
                   : filter.optionsRefreshing
                     ? "正在更新筛选属性"
@@ -629,7 +632,7 @@ export function DatabaseFilterPage() {
                     <button
                       type="button"
                       className="dbf-surface-action is-refresh"
-                      onClick={filter.retryOptions}
+                      onClick={() => { if (requestServiceAccess()) filter.retryOptions(); }}
                       disabled={filter.optionsPending || filter.optionsRefreshing}
                       aria-label="刷新筛选属性和分布统计"
                       title="刷新筛选属性和分布统计"
@@ -664,7 +667,7 @@ export function DatabaseFilterPage() {
                   <div className="dbf-options-state is-error" role="alert">
                     <AlertTriangle aria-hidden="true" />
                     <div><strong>筛选属性加载失败</strong><span>{filter.optionsError}</span></div>
-                    <button type="button" onClick={filter.retryOptions}><RefreshCw aria-hidden="true" />重新加载</button>
+                    <button type="button" onClick={() => { if (requestServiceAccess()) filter.retryOptions(); }}><RefreshCw aria-hidden="true" />重新加载</button>
                   </div>
                 ) : null}
 
@@ -672,18 +675,18 @@ export function DatabaseFilterPage() {
                   <div className="dbf-options-refresh-warning" role="status">
                     <AlertTriangle aria-hidden="true" />
                     <span>筛选属性更新失败，将继续使用已加载的数据。</span>
-                    <button type="button" onClick={filter.retryOptions}>重新加载</button>
+                    <button type="button" onClick={() => { if (requestServiceAccess()) filter.retryOptions(); }}>重新加载</button>
                   </div>
                 ) : null}
 
-                {!filter.optionsLoading && !filter.optionsError && filter.options.length === 0 ? (
+                {!guest && !filter.optionsLoading && !filter.optionsError && filter.options.length === 0 ? (
                   <div className="dbf-options-state">
                     <Info aria-hidden="true" />
                     <div><strong>暂无可筛选属性</strong><span>当前没有可用于筛选的属性。</span></div>
                   </div>
                 ) : null}
 
-                {!filter.optionsLoading && !filter.optionsError && filter.options.length > 0 ? (
+                {!filter.optionsLoading && !filter.optionsError && (guest || filter.options.length > 0) ? (
                   <form className="dbf-filter-form" onSubmit={handleSubmit} noValidate>
                     <div className="dbf-conditions-header">
                       <div>

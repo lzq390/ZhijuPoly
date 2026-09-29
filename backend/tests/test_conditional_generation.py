@@ -6,11 +6,11 @@ from time import sleep
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.config import Settings
-from app.main import create_app
+from test_authenticated_app_support import auth_database, private_app, private_client
+from app.auth.context import Identity, user_context
 from app.models import (
     ConditionalGenerationCandidate,
     ConditionalGenerationTgRequest,
@@ -424,7 +424,11 @@ def test_conditional_generation_runtime_propagates_non_cuda_model_failure(
         )
 
 
-def test_conditional_generation_job_api_reports_disabled_service(tmp_path: Path) -> None:
+def test_conditional_generation_job_api_reports_disabled_service(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
     settings = Settings(
         sqlite_db_path=str(tmp_path / "polyprop.db"),
         csv_source_path=str(tmp_path / "source.csv"),
@@ -432,7 +436,7 @@ def test_conditional_generation_job_api_reports_disabled_service(tmp_path: Path)
         model_enabled=False,
         gen_model_enabled=False,
     )
-    client = TestClient(create_app(settings))
+    client = private_client(private_app(settings))
 
     response = client.post(
         "/api/v1/conditional-generation/tg/jobs",
@@ -446,7 +450,11 @@ def test_conditional_generation_job_api_reports_disabled_service(tmp_path: Path)
     assert response.json()["detail"] == "conditional generation service is disabled"
 
 
-def test_conditional_generation_status_reports_missing_artifacts(tmp_path: Path) -> None:
+def test_conditional_generation_status_reports_missing_artifacts(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
     settings = Settings(
         sqlite_db_path=str(tmp_path / "polyprop.db"),
         csv_source_path=str(tmp_path / "source.csv"),
@@ -455,7 +463,7 @@ def test_conditional_generation_status_reports_missing_artifacts(tmp_path: Path)
         gen_model_enabled=True,
         gen_model_dir=str(tmp_path / "missing-generation-model"),
     )
-    client = TestClient(create_app(settings))
+    client = private_client(private_app(settings))
 
     response = client.get("/api/v1/conditional-generation/tg/status")
 
@@ -467,7 +475,11 @@ def test_conditional_generation_status_reports_missing_artifacts(tmp_path: Path)
     assert "ChemBerta/config.json" in payload["missing_artifacts"]
 
 
-def test_conditional_generation_job_api_rejects_missing_artifacts_before_job(tmp_path: Path) -> None:
+def test_conditional_generation_job_api_rejects_missing_artifacts_before_job(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
     settings = Settings(
         sqlite_db_path=str(tmp_path / "polyprop.db"),
         csv_source_path=str(tmp_path / "source.csv"),
@@ -476,7 +488,7 @@ def test_conditional_generation_job_api_rejects_missing_artifacts_before_job(tmp
         gen_model_enabled=True,
         gen_model_dir=str(tmp_path / "missing-generation-model"),
     )
-    client = TestClient(create_app(settings))
+    client = private_client(private_app(settings))
 
     response = client.post(
         "/api/v1/conditional-generation/tg/jobs",
@@ -490,7 +502,11 @@ def test_conditional_generation_job_api_rejects_missing_artifacts_before_job(tmp
     assert "conditional generation artifacts are missing" in response.json()["detail"]
 
 
-def test_conditional_generation_job_api_rejects_non_finite_tg_without_500(tmp_path: Path) -> None:
+def test_conditional_generation_job_api_rejects_non_finite_tg_without_500(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
     settings = Settings(
         sqlite_db_path=str(tmp_path / "polyprop.db"),
         csv_source_path=str(tmp_path / "source.csv"),
@@ -498,7 +514,7 @@ def test_conditional_generation_job_api_rejects_non_finite_tg_without_500(tmp_pa
         model_enabled=False,
         gen_model_enabled=True,
     )
-    client = TestClient(create_app(settings), raise_server_exceptions=False)
+    client = private_client(private_app(settings), raise_server_exceptions=False)
 
     response = client.post(
         "/api/v1/conditional-generation/tg/jobs",
@@ -510,7 +526,11 @@ def test_conditional_generation_job_api_rejects_non_finite_tg_without_500(tmp_pa
     assert "detail" in response.json()
 
 
-def test_conditional_generation_job_api_returns_terminal_result(tmp_path: Path) -> None:
+def test_conditional_generation_job_api_returns_terminal_result(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
     model_dir = tmp_path / "conditional-generation"
     for artifact in missing_artifact_paths(model_dir):
         artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -524,7 +544,7 @@ def test_conditional_generation_job_api_returns_terminal_result(tmp_path: Path) 
         gen_model_dir=str(model_dir),
         gen_job_workers=1,
     )
-    app = create_app(settings)
+    app = private_app(settings)
     app.state.conditional_generation_runner = lambda request_body: ConditionalGenerationTgResponse(
         input_smiles=request_body.smiles,
         normalized_input_smiles="*CC*",
@@ -548,7 +568,7 @@ def test_conditional_generation_job_api_returns_terminal_result(tmp_path: Path) 
     )
     _install_fake_generation_registry(app)
 
-    with TestClient(app) as client:
+    with private_client(app) as client:
         create_response = client.post(
             "/api/v1/conditional-generation/tg/jobs",
             json={
@@ -576,7 +596,11 @@ def test_conditional_generation_job_api_returns_terminal_result(tmp_path: Path) 
     assert status_payload["result"]["results"][0]["generated_smiles"] == "*COC*"
 
 
-def test_conditional_generation_job_capacity_returns_429(tmp_path: Path) -> None:
+def test_conditional_generation_job_capacity_returns_429(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
     model_dir = tmp_path / "conditional-generation"
     for artifact in missing_artifact_paths(model_dir):
         artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -591,7 +615,7 @@ def test_conditional_generation_job_capacity_returns_429(tmp_path: Path) -> None
         gen_job_workers=1,
         gen_max_active_jobs=1,
     )
-    app = create_app(settings)
+    app = private_app(settings)
     runner_started = Event()
     release_runner = Event()
 
@@ -612,7 +636,7 @@ def test_conditional_generation_job_capacity_returns_429(tmp_path: Path) -> None
 
     app.state.conditional_generation_runner = blocking_runner
     _install_fake_generation_registry(app)
-    with TestClient(app) as client:
+    with private_client(app) as client:
         first = client.post(
             "/api/v1/conditional-generation/tg/jobs",
             json={"smiles": "*CC*", "delta_tg": 30, "candidate_count": 1},
@@ -630,7 +654,11 @@ def test_conditional_generation_job_capacity_returns_429(tmp_path: Path) -> None
     assert "capacity is full" in second.json()["detail"]
 
 
-def test_conditional_generation_gpu_queue_full_becomes_failed_job(tmp_path: Path) -> None:
+def test_conditional_generation_gpu_queue_full_becomes_failed_job(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
     model_dir = tmp_path / "conditional-generation"
     for artifact in missing_artifact_paths(model_dir):
         artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -645,19 +673,23 @@ def test_conditional_generation_gpu_queue_full_becomes_failed_job(tmp_path: Path
         gen_job_workers=1,
         gen_max_active_jobs=2,
     )
-    app = create_app(settings)
+    app = private_app(settings)
     registry = GpuRuntimeRegistry(max_concurrent_inferences=1, max_waiting_inferences=0)
     registry.register("conditional_generation", enabled=True, loader=object)
     app.state.gpu_runtime_registry = registry
     holder_started = Event()
     release_holder = Event()
+    holder_client = private_client(app)
 
     def hold_gpu() -> None:
-        with registry.inference_session("conditional_generation", timeout_seconds=2):
+        # A second real user owns the occupied GPU slot; the HTTP submitter
+        # must reach the global scheduler rather than their per-user limit.
+        with user_context(Identity(holder_client.test_owner_id), app.state.auth.settings), \
+                registry.inference_session("conditional_generation", timeout_seconds=2):
             holder_started.set()
             assert release_holder.wait(timeout=2)
 
-    with TestClient(app) as client:
+    with private_client(app) as client:
         holder = Thread(target=hold_gpu)
         holder.start()
         assert holder_started.wait(timeout=2)
@@ -681,7 +713,11 @@ def test_conditional_generation_gpu_queue_full_becomes_failed_job(tmp_path: Path
     assert terminal["error"].startswith("GPU_QUEUE_FULL:")
 
 
-def test_conditional_generation_job_lookup_distinguishes_404_and_410(tmp_path: Path) -> None:
+def test_conditional_generation_job_lookup_hides_unowned_and_legacy_identifiers(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
     settings = Settings(
         sqlite_db_path=str(tmp_path / "polyprop.db"),
         csv_source_path=str(tmp_path / "source.csv"),
@@ -689,11 +725,11 @@ def test_conditional_generation_job_lookup_distinguishes_404_and_410(tmp_path: P
         model_enabled=False,
         gen_model_enabled=False,
     )
-    app = create_app(settings)
+    app = private_app(settings)
     current_instance = app.state.in_memory_job_store.instance_id
     token = "0" * 32
 
-    with TestClient(app) as client:
+    with private_client(app) as client:
         malformed = client.get("/api/v1/conditional-generation/tg/jobs/not-a-job")
         wrong_namespace = client.get(
             "/api/v1/conditional-generation/tg/jobs/"
@@ -712,8 +748,10 @@ def test_conditional_generation_job_lookup_distinguishes_404_and_410(tmp_path: P
             "123e4567e89b42d3a456426614174000"
         )
 
-    assert malformed.status_code == 404
-    assert wrong_namespace.status_code == 404
-    assert old_instance.status_code == 410
-    assert legacy_uuid.status_code == 410
-    assert legacy_uuid_hex.status_code == 410
+    # No retained owner record can establish ownership of these identifiers.
+    # The isolation contract deliberately makes expired/legacy ids look like
+    # nonexistent ids, rather than revealing another user's task history.
+    for response in (malformed, wrong_namespace, old_instance, legacy_uuid, legacy_uuid_hex):
+        assert response.status_code == 404
+        assert response.json() == malformed.json()
+        assert response.headers["cache-control"] == "private, no-store"

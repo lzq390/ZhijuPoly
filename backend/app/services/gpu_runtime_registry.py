@@ -154,16 +154,38 @@ class GpuRuntimeRegistry:
     @contextmanager
     def inference_session(self, name: str, *, timeout_seconds: float) -> Iterator[Any]:
         """Acquire FIFO capacity, then hold it across lazy load and inference."""
-        entry = self._entry(name)
-        if not entry.enabled:
-            raise RuntimeError(f"GPU runtime is disabled: {name}")
-        self._acquire_inference(name, timeout_seconds=max(0.0, float(timeout_seconds)))
+        from app.auth.context import current_identity, current_owner_id, is_service_context
+        from app.task_control import acquire_admission, authorize_memory_start
+        from app.task_observability import TaskExecutionContext, log_task_event
+        from app.services.private_execution import held_channel, held_task_context
+        service = is_service_context()
+        owner = None if service else current_owner_id()
+        identity = current_identity(required=False)
+        task_context = held_task_context.get() or (TaskExecutionContext(
+            owner, identity.request_id if identity else None, name, "backend_gpu"
+        ) if owner else None)
+        lease = None
+        if not service and held_channel.get() != "backend_gpu":
+            lease = acquire_admission("backend_gpu", owner_user_id=owner)
         try:
-            if self._admission_guard is not None:
-                self._admission_guard()
-            yield self.ensure_loaded(name)
+            entry = self._entry(name)
+            if not entry.enabled:
+                raise RuntimeError(f"GPU runtime is disabled: {name}")
+            self._acquire_inference(name, timeout_seconds=max(0.0, float(timeout_seconds)))
+            try:
+                if not service and not authorize_memory_start(owner):
+                    log_task_event(task_context, "start_rejected", reason="account_disabled")
+                    raise GpuSchedulerClosedError("Account disabled before GPU execution", model_name=name)
+                if self._admission_guard is not None:
+                    self._admission_guard()
+                if task_context is not None:
+                    log_task_event(task_context, "start_authorized")
+                yield self.ensure_loaded(name)
+            finally:
+                self._release_inference(name)
         finally:
-            self._release_inference(name)
+            if lease is not None:
+                lease.release()
 
     def stop_accepting(self) -> None:
         with self._scheduler_condition:

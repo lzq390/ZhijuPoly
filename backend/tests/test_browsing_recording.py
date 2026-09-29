@@ -1,6 +1,7 @@
-"""Formal entrypoint regression; uses full backend dependencies, no live services."""
+"""Formal entrypoint regression with a real authenticated PostgreSQL session."""
 
-from fastapi.testclient import TestClient
+from test_auth_isolation import auth_database
+from test_private_http_support import authenticated_client
 
 from app.config import Settings
 from app.main import create_app
@@ -9,7 +10,7 @@ from app.routers import database_browser, knowledge
 from app.services import browsing_recording
 
 
-def test_main_records_both_modules_and_reuses_frozen_summary(monkeypatch):
+def test_main_records_both_modules_and_reuses_frozen_summary(monkeypatch, auth_database):
     def search(body, app):
         return KnowledgeSearchResponse(query=body.query, query_time_ms=1, total=1, results=[
             KnowledgeDocumentResult(knowledge_id=1, source_file="sample.pdf", source_row_number=1,
@@ -31,7 +32,7 @@ def test_main_records_both_modules_and_reuses_frozen_summary(monkeypatch):
     app = create_app(Settings(app_postgres_dsn="postgresql://unused:unused@127.0.0.1:1/unused",
         deployment_drain_enabled=False, model_enabled=False))
     # Test route registration and middleware; do not run scientific startup or background database jobs.
-    client = TestClient(app)
+    client = authenticated_client(app, auth_database)
     try:
         base = "/api/v1/knowledge"
         assert client.post(base + "/recordings", json={"recording_id": "formal"}).status_code == 200

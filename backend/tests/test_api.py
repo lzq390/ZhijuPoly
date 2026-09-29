@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Event, get_ident
@@ -14,7 +15,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.requests import Request
 
-from app.config import Settings
+from app.config import PROJECT_ROOT, Settings
+from app.auth.context import user_context
 from app.main import create_app, health
 from app.models import (
     ExperimentalProcessBrowseResponse,
@@ -30,12 +32,74 @@ from app.routers import database_browser
 from app.routers import query as query_routes
 from app.routers.predict import predict
 from app.postgres_database import postgres_connection
-from app.routers.query import generate_structure_3d, get_polymer_detail, query_smiles, router as query_router
+from app.routers.query import generate_structure_3d, get_polymer_detail, query_smiles
 from app.services.database_browser import browse_csv_records
 from app.services.gpu_runtime_registry import GpuRuntimeRegistry
 from app.services.image_recognition import RecognizedStructure
 from app.services.structure_3d import generate_3d_molblock
 from app.utils.exceptions import StructureRecognitionError
+from conftest import reset_postgres_fixture
+from test_auth_isolation import auth_database
+from test_private_http_support import authenticated_client
+
+
+@pytest.fixture
+def api_database(auth_database):
+    """Seed through maintenance credentials; HTTP always uses actual API roles."""
+    reset_postgres_fixture(auth_database['admin'])
+    return auth_database
+
+
+def _private_app(database, monkeypatch, *, model_dir=None):
+    monkeypatch.setenv('AUTH_POSTGRES_DSN', database['auth'])
+    monkeypatch.setenv('APP_SERVICE_POSTGRES_DSN', database['service'])
+    monkeypatch.setenv('AUTH_COOKIE_SECURE', 'false')
+    settings = Settings(
+        app_postgres_dsn=database['api'], pi_postgres_dsn=database['api'],
+        lab_data_postgres_dsn=database['api'], allowed_origins='http://testserver',
+        csv_source_path='database/data1.csv',
+        experimental_process_csv_path='database/missing_process.csv',
+        experimental_property_csv_path='database/missing_property.csv',
+        structured_data_backend='postgres', pi_reverse_backend='postgres',
+        model_enabled=model_dir is not None,
+        **({'model_dir': str(model_dir)} if model_dir is not None else {}),
+    )
+    app = create_app(settings)
+    app.state.test_admin_dsn = database['admin']
+    app.state.test_client = authenticated_client(app, database)
+    return app
+
+
+@contextmanager
+def _authenticated_call_context(app):
+    # Direct route-function unit tests get the identity of the real logged-in
+    # session. HTTP tests still traverse the unchanged authentication middleware.
+    token = app.state.test_client.cookies.get(app.state.auth.settings.cookie_name)
+    session = app.state.auth.resolve(token)
+    assert session is not None
+    try:
+        with user_context(app.state.auth.identity(session), app.state.auth.settings):
+            yield app
+    finally:
+        app.state.test_client.close()
+
+
+@pytest.fixture
+def test_app(api_database, monkeypatch):
+    app = _private_app(api_database, monkeypatch)
+    with _authenticated_call_context(app):
+        yield app
+
+
+@pytest.fixture
+def predict_enabled_app(api_database, monkeypatch, tmp_path):
+    model_dir = tmp_path / 'models'
+    model_dir.mkdir()
+    for name in ('rf_Glass transition temperature_exp.pkl', 'rf_Tensile stress strength at break_exp.pkl'):
+        shutil.copy2(PROJECT_ROOT / 'model' / name, model_dir / name)
+    app = _private_app(api_database, monkeypatch, model_dir=model_dir)
+    with _authenticated_call_context(app):
+        yield app
 
 
 def make_request(app: FastAPI) -> Request:
@@ -66,7 +130,9 @@ async def post_structure_image(
     content_type: str = "image/png",
 ) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    browser = app.state.test_client
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver",
+                                cookies=browser.cookies, headers=browser.headers) as client:
         return await client.post(
             "/api/v1/structure/recognize-image",
             files={"image": (filename, content, content_type)},
@@ -87,7 +153,7 @@ async def test_health() -> None:
 
 
 def _insert_experimental_process_rows(app: FastAPI, source_file: str = "process.csv") -> None:
-    with postgres_connection(app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(app.state.test_admin_dsn) as connection:
         with connection.cursor() as cursor:
             cursor.executemany(
                 """
@@ -104,7 +170,7 @@ def _insert_experimental_process_rows(app: FastAPI, source_file: str = "process.
 
 
 def _insert_experimental_property_rows(app: FastAPI, source_file: str = "properties.csv") -> None:
-    with postgres_connection(app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(app.state.test_admin_dsn) as connection:
         with connection.cursor() as cursor:
             cursor.executemany(
                 """
@@ -121,7 +187,7 @@ def _insert_experimental_property_rows(app: FastAPI, source_file: str = "propert
 
 
 def test_structure_property_browser_lists_records_with_total_count(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get("/api/v1/database-browser/structure-property", params={"page": 1, "page_size": 2})
 
@@ -147,8 +213,30 @@ def test_structure_property_browser_lists_records_with_total_count(test_app: Fas
     }
 
 
+def test_guest_cannot_query_or_upload_with_an_authenticated_app(test_app: FastAPI) -> None:
+    guest = TestClient(test_app)
+    try:
+        assert guest.get('/api/v1/database-browser/structure-property').status_code == 401
+        response = guest.post('/api/v1/structure/recognize-image',
+                              content=b'not a valid multipart request',
+                              headers={'Origin': 'http://testserver', 'Content-Type': 'multipart/form-data'})
+        assert response.status_code == 401
+    finally:
+        guest.close()
+
+
+@pytest.mark.parametrize('path', [
+    '/api/v1/database-browser/datasets/analytics?refresh=true',
+    '/api/v1/lab-data/test-projects',
+    '/api/v1/lab-data/sample-measurements',
+])
+def test_member_cannot_use_maintenance_or_hidden_lab_operations(test_app: FastAPI, path: str) -> None:
+    response = test_app.state.test_client.get(path)
+    assert response.status_code == 403
+
+
 def test_api_rejects_browser_cross_site_fetch_requests(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get(
         "/api/v1/database-browser/structure-property",
@@ -163,7 +251,7 @@ def test_api_rejects_browser_cross_site_fetch_requests(test_app: FastAPI) -> Non
 
 
 def test_api_rejects_untrusted_browser_origin_without_fetch_metadata(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get(
         "/api/v1/database-browser/structure-property",
@@ -175,7 +263,7 @@ def test_api_rejects_untrusted_browser_origin_without_fetch_metadata(test_app: F
 
 
 def test_structure_property_browser_searches_properties_and_smiles(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     property_response = client.get(
         "/api/v1/database-browser/structure-property",
@@ -205,7 +293,7 @@ def test_structure_property_browser_searches_properties_and_smiles(test_app: Fas
 
 
 def test_smiles_lookup_finds_canonical_match_in_polymers(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post(
         "/api/v1/database-browser/smiles-lookup",
@@ -229,7 +317,7 @@ def test_smiles_lookup_finds_canonical_match_in_polymers(test_app: FastAPI) -> N
 
 
 def test_smiles_lookup_finds_property_rows_for_selected_smiles(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post(
         "/api/v1/database-browser/smiles-lookup",
@@ -250,7 +338,7 @@ def test_smiles_lookup_finds_property_rows_for_selected_smiles(test_app: FastAPI
 
 
 def test_smiles_lookup_rejects_invalid_smiles(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post(
         "/api/v1/database-browser/smiles-lookup",
@@ -262,7 +350,7 @@ def test_smiles_lookup_rejects_invalid_smiles(test_app: FastAPI) -> None:
 
 
 def test_smiles_lookup_searches_pi_candidate_table(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.post(
         "/api/v1/database-browser/smiles-lookup",
@@ -298,7 +386,7 @@ def test_settings_rejects_sqlite_runtime_backends() -> None:
         )
 
 def test_dft_browser_lists_molecule_final_records(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get("/api/v1/database-browser/dft/molecules", params={"page": 1, "page_size": 1})
 
@@ -319,7 +407,7 @@ def test_dft_browser_lists_molecule_final_records(test_app: FastAPI) -> None:
 
 
 def test_dft_browser_searches_molecules_by_mol_id(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get(
         "/api/v1/database-browser/dft/molecules",
@@ -335,7 +423,7 @@ def test_dft_browser_searches_molecules_by_mol_id(test_app: FastAPI) -> None:
 
 
 def test_dft_browser_lists_and_filters_energy_steps(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get(
         "/api/v1/database-browser/dft/steps",
@@ -368,7 +456,7 @@ def test_dft_browser_lists_and_filters_energy_steps(test_app: FastAPI) -> None:
 
 
 def test_dft_browser_filters_energy_steps_by_exact_mol_id(test_app: FastAPI) -> None:
-    client = TestClient(test_app)
+    client = test_app.state.test_client
 
     response = client.get(
         "/api/v1/database-browser/dft/steps",
@@ -462,7 +550,7 @@ def test_experimental_csv_and_filter_options_routes_are_sync_for_threadpool() ->
     assert not inspect.iscoroutinefunction(database_browser.get_property_filter_options)
 
 
-def test_property_filter_search_runs_synchronous_work_off_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_property_filter_search_runs_synchronous_work_off_event_loop(test_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import Response
     from app.recording_models import RecordedFilterSearchRequest
     from app.services.browsing_recording import BrowsingRecordingStore
@@ -477,7 +565,7 @@ def test_property_filter_search_runs_synchronous_work_off_event_loop(monkeypatch
         )
 
     monkeypatch.setattr(database_browser, "_search_property_filter_sync", recording_search)
-    app = FastAPI()
+    app = test_app
     app.state.browsing_recording = BrowsingRecordingStore(Settings())
     body = RecordedFilterSearchRequest(
         q="polyimide", filters=[{"filter_type": "standardized", "property_key": "tg", "min_value": 100}],
@@ -496,7 +584,7 @@ def test_property_filter_search_runs_synchronous_work_off_event_loop(monkeypatch
 def test_experimental_process_browser_endpoint_returns_typed_records(test_app: FastAPI) -> None:
     _insert_experimental_process_rows(test_app)
 
-    response = TestClient(test_app).get(
+    response = test_app.state.test_client.get(
         "/api/v1/database-browser/experimental-process",
         params={"q": "dmf", "page": 1, "page_size": 10},
     )
@@ -522,7 +610,7 @@ def test_experimental_process_browser_endpoint_returns_typed_records(test_app: F
 def test_experimental_property_browser_endpoint_returns_typed_records(test_app: FastAPI) -> None:
     _insert_experimental_property_rows(test_app)
 
-    response = TestClient(test_app).get(
+    response = test_app.state.test_client.get(
         "/api/v1/database-browser/experimental-property",
         params={"q": "thermal conductivity", "page": 2, "page_size": 1},
     )
@@ -774,7 +862,7 @@ async def test_query_smiles_property_top_k_counts_unique_polymers(
         "app.services.property_similarity.predict",
         lambda smiles, properties, *, model_dir: {properties[0]: 210.0},
     )
-    with postgres_connection(predict_enabled_app.state.settings.app_postgres_dsn) as connection:
+    with postgres_connection(predict_enabled_app.state.test_admin_dsn) as connection:
         connection.execute(
             """
             INSERT INTO core.polymer_properties (
@@ -888,7 +976,7 @@ async def test_predict_uses_app_level_model_dir(predict_enabled_app: FastAPI) ->
 
 
 def test_api_uses_temporary_postgres_database(test_app: FastAPI) -> None:
-    assert "zhijupoly_test_" in test_app.state.settings.app_postgres_dsn
+    assert "auth_test_" in test_app.state.settings.app_postgres_dsn
     assert test_app.state.settings.structured_data_backend == "postgres"
 
 
@@ -992,7 +1080,7 @@ async def test_recognize_structure_image_returns_molfile_first(
 
 @pytest.mark.asyncio
 async def test_recognize_structure_image_does_not_block_health(
-    tmp_path: Path,
+    test_app: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     inference_started = Event()
@@ -1004,19 +1092,13 @@ async def test_recognize_structure_image_does_not_block_health(
         return RecognizedStructure(smiles="CCO", molfile="mock molfile V2000", confidence=0.9)
 
     monkeypatch.setattr("app.routers.query.recognize_structure_image_from_bytes", blocking_recognize)
-    test_app = FastAPI()
-    test_app.state.settings = Settings(
-        sqlite_db_path=str(tmp_path / "polyprop.db"),
-        csv_source_path=str(tmp_path / "source.csv"),
-        model_enabled=False,
-        ocsr_enabled=True,
-    )
+    test_app.state.settings.ocsr_enabled = True
     install_fake_ocsr_runtime(test_app)
-    test_app.include_router(query_router)
-    test_app.add_api_route("/health", health, methods=["GET"])
 
     transport = httpx.ASGITransport(app=test_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    browser = test_app.state.test_client
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver",
+                                cookies=browser.cookies, headers=browser.headers) as client:
         inference_task = asyncio.create_task(
             client.post(
                 "/api/v1/structure/recognize-image",

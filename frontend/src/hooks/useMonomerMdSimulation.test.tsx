@@ -121,87 +121,48 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("Monomer MD service status polling", () => {
-  it("refreshes a busy service after five seconds and stops when capacity recovers", async () => {
-    api.fetchMonomerMdStatus
-      .mockResolvedValueOnce(busyStatus)
-      .mockResolvedValueOnce(readyStatus);
-
+describe("Monomer MD manual status refresh", () => {
+  it("does not poll a busy service for 60 seconds and refreshes manually", async () => {
+    api.fetchMonomerMdStatus.mockResolvedValueOnce(busyStatus).mockResolvedValueOnce(readyStatus);
     let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<Harness />);
-    });
-
+    await act(async () => { renderer = create(<Harness />); });
     expect(api.fetchMonomerMdStatus).toHaveBeenCalledOnce();
-    expect(currentHook().serviceStatus).toEqual(busyStatus);
-    expect(timers.size).toBe(1);
-
-    await advanceTime(4_999);
+    expect(timers.size).toBe(0);
+    await advanceTime(60_000);
     expect(api.fetchMonomerMdStatus).toHaveBeenCalledOnce();
-
-    await advanceTime(1);
+    await act(async () => { await currentHook().refreshStatus(); });
     expect(api.fetchMonomerMdStatus).toHaveBeenCalledTimes(2);
     expect(currentHook().serviceStatus).toEqual(readyStatus);
     expect(timers.size).toBe(0);
-
-    await advanceTime(10_000);
-    expect(api.fetchMonomerMdStatus).toHaveBeenCalledTimes(2);
-
     act(() => renderer!.unmount());
   });
 
-  it("keeps polling a draining service across a transient refresh failure", async () => {
-    api.fetchMonomerMdStatus
-      .mockResolvedValueOnce(drainingStatus)
-      .mockRejectedValueOnce(new Error("temporary status failure"))
-      .mockResolvedValueOnce(readyStatus);
-
+  it("keeps existing status after a failed manual refresh and never schedules a retry", async () => {
+    api.fetchMonomerMdStatus.mockResolvedValueOnce(drainingStatus).mockRejectedValueOnce(new Error("temporary status failure")).mockResolvedValueOnce(readyStatus);
     let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<Harness />);
-    });
-
-    await advanceTime(5_000);
-    expect(api.fetchMonomerMdStatus).toHaveBeenCalledTimes(2);
+    await act(async () => { renderer = create(<Harness />); });
+    await act(async () => { await currentHook().refreshStatus(); });
     expect(currentHook().serviceStatus).toEqual(drainingStatus);
     expect(currentHook().statusError).toBe("temporary status failure");
-    expect(timers.size).toBe(1);
-
-    await advanceTime(5_000);
-    expect(api.fetchMonomerMdStatus).toHaveBeenCalledTimes(3);
+    await advanceTime(60_000);
+    expect(api.fetchMonomerMdStatus).toHaveBeenCalledTimes(2);
+    await act(async () => { await currentHook().refreshStatus(); });
     expect(currentHook().serviceStatus).toEqual(readyStatus);
-    expect(currentHook().statusError).toBeNull();
-    expect(timers.size).toBe(0);
-
     act(() => renderer!.unmount());
   });
 
-  it("does not schedule another refresh after unmounting during a request", async () => {
+  it("does not schedule another refresh after unmounting during a manual request", async () => {
     let resolveStatus: ((status: MonomerMdServiceStatusResponse) => void) | null = null;
-    api.fetchMonomerMdStatus
-      .mockResolvedValueOnce(busyStatus)
-      .mockImplementationOnce(() => new Promise((resolve) => {
-        resolveStatus = resolve;
-      }));
-
+    api.fetchMonomerMdStatus.mockResolvedValueOnce(busyStatus).mockImplementationOnce(() => new Promise(resolve => { resolveStatus = resolve; }));
     let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<Harness />);
-    });
-    await advanceTime(5_000);
+    await act(async () => { renderer = create(<Harness />); });
+    await act(async () => { void currentHook().refreshStatus(); await Promise.resolve(); });
     expect(api.fetchMonomerMdStatus).toHaveBeenCalledTimes(2);
-    expect(timers.size).toBe(0);
-
     act(() => renderer!.unmount());
-    await act(async () => {
-      resolveStatus?.(busyStatus);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(timers.size).toBe(0);
-
-    await advanceTime(10_000);
+    await act(async () => { resolveStatus?.(busyStatus); });
+    await advanceTime(60_000);
     expect(api.fetchMonomerMdStatus).toHaveBeenCalledTimes(2);
+    expect(timers.size).toBe(0);
   });
 });
 
@@ -285,4 +246,9 @@ describe("Monomer MD task response isolation", () => {
     );
     act(() => renderer!.unmount());
   });
+});
+
+vi.mock("./useTaskEvents", () => {
+  const rememberJob = vi.fn(), forgetJob = vi.fn(), reconnect = vi.fn();
+  return { useTaskEvents: () => ({ connectionState: "live", rememberJob, forgetJob, reconnect }) };
 });

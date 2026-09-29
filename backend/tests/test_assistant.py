@@ -7,7 +7,33 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
-from fastapi.testclient import TestClient
+import pytest
+from fastapi.testclient import TestClient as PlainTestClient
+from test_auth_isolation import auth_database
+from test_private_http_support import authenticated_client
+from app.auth.context import Identity, user_context
+
+_test_request = None
+
+@pytest.fixture(autouse=True)
+def private_identity(request, monkeypatch):
+    global _test_request
+    _test_request = request
+    monkeypatch.setattr("app.task_control._start_checker", lambda _: True)
+    with user_context(Identity("11111111-1111-1111-1111-111111111111")):
+        yield
+    _test_request = None
+
+def TestClient(app):
+    return authenticated_client(app, _test_request.getfixturevalue("auth_database"))
+
+@pytest.fixture
+def postgres_dsn(auth_database):
+    import psycopg
+    with psycopg.connect(auth_database['admin']) as connection:
+        connection.execute('TRUNCATE pi.monomer_iupac')
+    return auth_database['admin']
+
 
 from app.config import Settings
 from app.main import create_app
@@ -82,8 +108,9 @@ def make_ocsr_app(
 
 
 async def async_post_structure_image(app, image_bytes: bytes, *, content_type: str = "image/png"):
+    session = TestClient(app)
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver", cookies=session.cookies, headers=dict(session.headers)) as client:
         return await client.post(
             "/api/v1/structure/recognize-image",
             files={"image": ("structure.png", image_bytes, content_type)},

@@ -1,10 +1,28 @@
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
+import pytest
+
+from app.config import Settings
+from app.main import create_app
+from test_auth_isolation import auth_database
+from test_private_http_support import authenticated_client
 
 
-def test_md_demo_defaults_returns_fixture_metadata(test_app):
-    client = TestClient(test_app)
+@pytest.fixture
+def md_demo_client(auth_database):
+    """Exercise the full application with a real ordinary account and roles."""
+    app = create_app(Settings(app_postgres_dsn=auth_database["api"], model_enabled=False,
+                              gen_model_enabled=False, retro_model_enabled=False,
+                              gpu_broker_enabled=False))
+    client = authenticated_client(app, auth_database)
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+def test_md_demo_defaults_returns_fixture_metadata(md_demo_client):
+    client = md_demo_client
 
     response = client.get("/api/v1/md-demo/defaults")
 
@@ -18,8 +36,8 @@ def test_md_demo_defaults_returns_fixture_metadata(test_app):
     assert data["fixture_metadata"]["fixture_version"] == 1
 
 
-def test_md_demo_run_rejects_blank_smiles(test_app):
-    client = TestClient(test_app)
+def test_md_demo_run_rejects_blank_smiles(md_demo_client):
+    client = md_demo_client
 
     response = client.post(
         "/api/v1/md-demo/run",
@@ -36,8 +54,8 @@ def test_md_demo_run_rejects_blank_smiles(test_app):
     assert response.status_code == 422
 
 
-def test_md_demo_run_returns_completed_fixture_result(test_app):
-    client = TestClient(test_app)
+def test_md_demo_run_returns_completed_fixture_result(md_demo_client):
+    client = md_demo_client
 
     response = client.post(
         "/api/v1/md-demo/run",
@@ -65,8 +83,8 @@ def test_md_demo_run_returns_completed_fixture_result(test_app):
     assert data["atom_distance_series"] is None
 
 
-def test_md_demo_atom_distance_rejects_same_atom(test_app):
-    client = TestClient(test_app)
+def test_md_demo_atom_distance_rejects_same_atom(md_demo_client):
+    client = md_demo_client
 
     response = client.post(
         "/api/v1/md-demo/atom-distance",
@@ -76,8 +94,8 @@ def test_md_demo_atom_distance_rejects_same_atom(test_app):
     assert response.status_code == 422
 
 
-def test_md_demo_atom_distance_rejects_missing_atom(test_app):
-    client = TestClient(test_app)
+def test_md_demo_atom_distance_rejects_missing_atom(md_demo_client):
+    client = md_demo_client
 
     response = client.post(
         "/api/v1/md-demo/atom-distance",
@@ -87,8 +105,8 @@ def test_md_demo_atom_distance_rejects_missing_atom(test_app):
     assert response.status_code == 404
 
 
-def test_md_demo_atom_distance_returns_series_for_selected_atoms(test_app):
-    client = TestClient(test_app)
+def test_md_demo_atom_distance_returns_series_for_selected_atoms(md_demo_client):
+    client = md_demo_client
 
     response = client.post(
         "/api/v1/md-demo/atom-distance",

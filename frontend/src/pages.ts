@@ -22,6 +22,7 @@ const pages = {
   monomerMdSimulation: page(() => import("./components/MonomerMdSimulationPage"), m => m.MonomerMdSimulationPage),
   monomerDft: page(() => import("./components/MonomerDftPage"), m => m.MonomerDftPage),
   monomerPolymerization: page(() => import("./components/MonomerPolymerizationPage"), m => m.MonomerPolymerizationPage),
+  monomerRetrosynthesis: page(() => import("./components/MonomerRetrosynthesisPage"), m => m.MonomerRetrosynthesisPage),
   polytaoGeneration: page(() => import("./components/PolytaoGenerationPage"), m => m.PolytaoGenerationPage),
   reverseDesign: page(() => import("./components/ReverseDesignPage"), m => m.ReverseDesignPage),
   explorer: page(() => import("./components/PolymerSimilarityExplorerPage"), m => m.PolymerSimilarityExplorerPage),
@@ -41,6 +42,7 @@ export const MdSimulationDemoPage = pages.mdSimulationDemo.Page;
 export const MonomerMdSimulationPage = pages.monomerMdSimulation.Page;
 export const MonomerDftPage = pages.monomerDft.Page;
 export const MonomerPolymerizationPage = pages.monomerPolymerization.Page;
+export const MonomerRetrosynthesisPage = pages.monomerRetrosynthesis.Page;
 export const PolytaoGenerationPage = pages.polytaoGeneration.Page;
 export const ReverseDesignPage = pages.reverseDesign.Page;
 export const PolymerSimilarityExplorerPage = pages.explorer.Page;

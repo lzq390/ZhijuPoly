@@ -1,11 +1,29 @@
 from __future__ import annotations
 
 from pathlib import Path
-from threading import Event, Lock, Thread
+from threading import Event, Lock, Thread as BaseThread
+from contextvars import copy_context
+from app.auth.context import service_context
+
+
+class Thread(BaseThread):
+    def __init__(self, *args, **kwargs):
+        self.context = copy_context()
+        super().__init__(*args, **kwargs)
+
+    def run(self):
+        self.context.run(super().run)
+
 from time import sleep
 from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def trusted_scheduler_context():
+    with service_context():
+        yield
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

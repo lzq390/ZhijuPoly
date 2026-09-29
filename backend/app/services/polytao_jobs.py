@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.auth.context import service_context
+
 import inspect
 from concurrent.futures import Future, ThreadPoolExecutor, wait as wait_for_futures
 from dataclasses import dataclass, field
@@ -7,6 +9,8 @@ from datetime import UTC, datetime
 from threading import Lock
 from time import monotonic
 from typing import Callable
+
+from app.services.private_execution import submit_private_job
 
 from app.models import PolytaoGenerationResponse, PolytaoJobStatusResponse
 from app.services.gpu_runtime_registry import (
@@ -145,7 +149,12 @@ class PolytaoJobManager:
             )
             self._mark_submitted(job.job_id)
             try:
-                future = self._executor.submit(self._run_job, job.job_id, runner)
+                future = submit_private_job(
+                    self._executor, self._run_job, job.job_id, runner,
+                    channel="backend_gpu",
+                    task_type="polytao", task_id=job.job_id,
+                    on_disabled=lambda: self._mark_cancelled(job.job_id, "Account disabled before execution."),
+                )
             except Exception:
                 self._store.delete(NAMESPACE, job.job_id)
                 raise
@@ -311,6 +320,10 @@ class PolytaoJobManager:
         self._store.mutate(NAMESPACE, job_id, update, terminal=True)
 
     def _on_future_done(self, job_id: str, future: Future[None]) -> None:
+        with service_context():
+            self._finish_future(job_id, future)
+
+    def _finish_future(self, job_id: str, future: Future[None]) -> None:
         try:
             if future.cancelled():
                 self._mark_cancelled(job_id, "PolyTAO job was cancelled before execution.")

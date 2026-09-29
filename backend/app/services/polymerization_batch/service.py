@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from app.auth.context import current_owner_id, service_context
+
 from .execution import run_isolated
 from .models import BatchError, BatchJobCreate, BatchPreviewRequest, BatchSettings, TableMapping
 from .repository import BatchRepository
@@ -43,7 +45,7 @@ class BatchService:
             raise BatchError("批量计算 worker 尚未就绪。", "worker_unavailable", 503)
 
     def inspect_import(self, import_id: str, mappings: dict | None = None) -> dict:
-        item = self.repository.get_import(import_id)
+        item = self.repository.get_import(import_id, owner_user_id=current_owner_id())
         tables = run_isolated({"action": "inspect", "files": item["files"],
                                "mappings": mappings or {role: TableMapping().model_dump() for role in ("a", "b")}},
                               self.config, self.root / "imports" / import_id / "scratch")
@@ -55,9 +57,9 @@ class BatchService:
 
     def preview(self, import_id: str, request: BatchPreviewRequest) -> dict:
         self.require_enabled()
-        item = self.repository.get_import(import_id)
+        item = self.repository.get_import(import_id, owner_user_id=current_owner_id())
         revision = uuid4().hex
-        self.repository.begin_preview(import_id, revision)
+        self.repository.begin_preview(import_id, revision, owner_user_id=current_owner_id())
         inspected = self.inspect_import(import_id, request.model_dump())
         mappings = {role: inspected["tables"][role]["mapping"] for role in ("a", "b")}
         if not all(mapping["smiles_column"] for mapping in mappings.values()) or any(table.get("error") for table in inspected["tables"].values()):
@@ -71,13 +73,14 @@ class BatchService:
         statistics["tables"] = {role: {key: table[key] for key in ("row_count", "valid_rows", "unique_count", "duplicate_rows", "invalid_rows", "blank_rows")}
                                 for role, table in snapshot["tables"].items()}
         metadata = {"snapshot": file_manifest(self.root, path, "application/json"), "statistics": statistics, "can_submit": snapshot["can_submit"]}
-        self.repository.save_preview(import_id, revision, metadata)
+        self.repository.save_preview(import_id, revision, metadata, owner_user_id=current_owner_id())
         errors = [{**{key: row[key] for key in ("source_key", "row_number", "id", "input_smiles", "error_code", "message")}, "role": role}
                   for role, table in snapshot["tables"].items() for row in table["rows"] if row["error_code"]]
         return {**inspected, "preview_revision": revision, "can_submit": snapshot["can_submit"],
                 "statistics": statistics, "input_errors": errors[:100], "input_error_count": len(errors)}
 
     def create_job(self, request: BatchJobCreate, key: str) -> dict:
+        current_owner_id()
         self.require_enabled()
         if not key or len(key) > 128:
             raise BatchError("提交标识须为 1–128 个字符。", "invalid_idempotency_key")
@@ -87,9 +90,9 @@ class BatchService:
         directory = self.root / "jobs" / job_id
         commit_pending = False
         try:
-            with self.repository.connection() as conn:
+            with service_context(), self.repository.connection() as conn:
                 # Serialize admission and idempotency, including concurrent retries.
-                previous = self.repository.admit(conn, key, request_hash)
+                previous = self.repository.admit(conn, key, request_hash, owner_user_id=current_owner_id())
                 if previous:
                     return self.public_job(previous)
                 worker = self.repository.worker_status()
@@ -97,7 +100,7 @@ class BatchService:
                     raise BatchError("批量计算 worker 尚未就绪。", "worker_unavailable", 503)
                 if shutil.disk_usage(self.root).free < self.config.result_bytes * 2:
                     raise BatchError("批量文件存储空间不足。", "storage_full", 503)
-                imported = self.repository.get_import(request.import_id, conn, lock=True)
+                imported = self.repository.get_import(request.import_id, conn, lock=True, owner_user_id=current_owner_id())
                 if imported["preview_revision"] != request.preview_revision:
                     raise BatchError("预检已更新，请使用最新预检结果提交。", "stale_preview", 409)
                 preview = imported["preview"]
@@ -129,7 +132,7 @@ class BatchService:
                 chunks.append({"chunk_id": "export", "phase": 2, "kind": "export", "payload": {}})
                 options["limits"] = {name: getattr(self.config, name) for name in self.config.__dataclass_fields__ if name not in {"enabled", "storage_root"}}
                 summary = {**preview["statistics"], "processed_pairs": 0, "computed_unique_pairs": 0, "candidate_count": 0, "pair_errors": 0}
-                row = self.repository.insert_job(conn, job_id, options, request_hash, key, worker["engine"], summary, chunks)
+                row = self.repository.insert_job(conn, job_id, options, request_hash, key, worker["engine"], summary, chunks, owner_user_id=current_owner_id())
                 # A connection can fail after PostgreSQL commits but before its
                 # acknowledgement arrives. Preserve inputs once commit begins;
                 # idempotent retries recover the job, and cleanup reaps orphans.
@@ -149,7 +152,7 @@ class BatchService:
                 "expires_at": job["expires_at"], "error_code": job["error_code"], "message": job["message"]}
 
     def artifact(self, job_id: str, name: str):
-        job = self.repository.get_job(job_id)
+        job = self.repository.get_job(job_id, owner_user_id=current_owner_id())
         if job["status"] == "expired" or (job["expires_at"] and job["expires_at"] <= datetime.now(timezone.utc)):
             raise BatchError("文件已过期。", "expired", 410)
         item = job["artifacts"].get(name)
@@ -164,7 +167,7 @@ class BatchService:
         return handle, item
 
     def results(self, job_id: str, offset: int, limit: int) -> dict:
-        job = self.repository.get_job(job_id)
+        job = self.repository.get_job(job_id, owner_user_id=current_owner_id())
         if job["status"] == "expired" or (job["expires_at"] and job["expires_at"] <= datetime.now(timezone.utc)):
             raise BatchError("文件已过期。", "expired", 410)
         if not job["artifacts"]:

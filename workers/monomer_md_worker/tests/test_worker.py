@@ -922,7 +922,7 @@ def test_formal_runner_writes_config_and_parses_density_result(tmp_path: Path):
         ),
         encoding="utf-8",
     )
-    runner = ByteFF2FormalRunner(settings)
+    runner = ByteFF2FormalRunner(settings, entrypoint=run_md)
     request = JobRequest(
         job_id="formal-density-1",
         smiles='{"DMC": "COC(=O)OC"}',
@@ -996,7 +996,7 @@ def test_formal_runner_cancellation_terminates_process_group(
         ),
         encoding="utf-8",
     )
-    runner = ByteFF2FormalRunner(settings)
+    runner = ByteFF2FormalRunner(settings, entrypoint=run_md)
     request = JobRequest(
         job_id="formal-cancel-1",
         smiles='{"DMC": "COC(=O)OC"}',
@@ -1265,6 +1265,7 @@ def test_recovery_reconciles_previous_worker_instance(tmp_path: Path, monkeypatc
         def reconcile_cancel_requested_jobs(self):
             return 0
 
+    monkeypatch.setattr(worker_main, "runner", SimpleNamespace(recovery_resources_released=lambda: True))
     fake_repository = RecoveringRepository()
     monkeypatch.setattr(worker_main, "settings", settings)
     monkeypatch.setattr(worker_main, "repository", fake_repository)
@@ -1311,3 +1312,109 @@ def test_heartbeat_renews_active_instance_jobs(tmp_path: Path, monkeypatch):
 
 def test_empty_asyncio_timeout_is_classified_as_timeout() -> None:
     assert worker_main._classify_error(asyncio.TimeoutError()) == "timeout"
+
+
+@pytest.mark.parametrize('failure', ['compute', 'authorization', 'running_write'])
+def test_cleanup_uncertainty_holds_active_task_until_broker_proof(monkeypatch, failure):
+    """A failed operation is not evidence that its GPU lease was released."""
+    observed = []
+    cleanup_confirmed = False
+    lease = SimpleNamespace(termination_unsafe=True, abandon=lambda: None)
+
+    class Repository:
+        def authorize_start(self, *_args, **_kwargs):
+            return failure != 'authorization'
+
+        def update_status(self, _job_id, state, **kwargs):
+            observed.append((state, kwargs))
+            if failure == 'running_write' and state == 'running':
+                raise RuntimeError('simulated state write failure')
+            return worker_main.JobUpdateResult.UPDATED
+
+    class Runner:
+        gpu_admission_uncertain = False
+
+        async def acquire_execution_lease(self, _job_id):
+            return lease
+
+        async def run(self, *_args, **_kwargs):
+            raise RuntimeError('compute failed before safe cleanup')
+
+        def recovery_resources_released(self):
+            return cleanup_confirmed
+
+    monkeypatch.setattr(worker_main, 'repository', Repository())
+    monkeypatch.setattr(worker_main, 'runner', Runner())
+    monkeypatch.setattr(worker_main, 'settings', SimpleNamespace(db_configured=True, recovery_retry_seconds=0.001))
+    monkeypatch.setattr(worker_main, 'shutting_down', False)
+    monkeypatch.setattr(worker_main, 'cancel_requested_jobs', set())
+
+    async def scenario():
+        nonlocal cleanup_confirmed
+        start = asyncio.Event()
+        start.set()
+        monkeypatch.setattr(worker_main, 'job_start_events', {'cleanup-job':start})
+        monkeypatch.setattr(worker_main, 'semaphore', asyncio.Semaphore(1))
+        task = asyncio.create_task(worker_main._run_job(JobRequest(job_id='cleanup-job', smiles='CCO'), 300))
+        for _ in range(1000):
+            if any(state == 'cancel_requested' for state, _ in observed):
+                break
+            await asyncio.sleep(0.001)
+        assert any(state == 'cancel_requested' for state, _ in observed)
+        assert not task.done()
+        assert not any(state in {'failed','cancelled','completed'} for state, _ in observed)
+        cleanup_confirmed = True
+        await asyncio.wait_for(task, timeout=2)
+        assert observed[-1][0] == ('cancelled' if failure == 'authorization' else 'failed')
+
+    asyncio.run(scenario())
+
+
+def test_restart_cannot_reconcile_jobs_without_resource_cleanup_proof(monkeypatch):
+    monkeypatch.setattr(worker_main, 'settings', SimpleNamespace(db_configured=True))
+    monkeypatch.setattr(worker_main, 'runner', SimpleNamespace(recovery_resources_released=lambda: False))
+    monkeypatch.setattr(worker_main, 'repository', SimpleNamespace(
+        reconcile_cancel_requested_jobs=lambda: pytest.fail('unsafe cancellation release'),
+        reconcile_orphaned_jobs=lambda *_: pytest.fail('unsafe failure release'),
+    ))
+    monkeypatch.setattr(worker_main, 'recovery_ready', True)
+    assert asyncio.run(worker_main._attempt_recovery()) is False
+    assert worker_main.recovery_ready is False
+
+
+@pytest.mark.parametrize('snapshot', [
+    {}, {'leases':[], 'waiters':1},
+    {'leases':[], 'waiters':0, 'quarantined_gpus':{'gpu-1':{'reason':'unknown_workload'}}},
+    {'leases':[{'component':'md','environment':'dev','status':'suspect'}], 'waiters':0},
+])
+def test_md_recovery_requires_complete_broker_absence(snapshot):
+    from workers.monomer_md_worker.app.runner import MonomerMdRunner
+    runner = object.__new__(MonomerMdRunner)
+    runner._settings = SimpleNamespace(mode='real',gpu_broker_environment='dev')
+    runner._gpu_admission_uncertain = False
+    runner._gpu_broker_client = SimpleNamespace(status=lambda: {'schema_version':1,'broker_instance_id':'test-broker','quarantined_gpus':{},**snapshot})
+    assert not runner.recovery_resources_released()
+    runner._gpu_broker_client = SimpleNamespace(status=lambda: {'schema_version':1,'broker_instance_id':'test-broker','quarantined_gpus':{},'leases':[], 'waiters':0})
+    assert runner.recovery_resources_released()
+    runner._gpu_admission_uncertain = True
+    assert not runner.recovery_resources_released()
+
+
+@pytest.mark.parametrize("length,cutoff,valid", [(1.42,1.0,False),(2.67,1.0,True),(2.0,1.0,True),(1.999,1.0,False),(0,1.0,False)])
+def test_formal_periodic_box_guard_matches_actual_cutoff(length, cutoff, valid):
+    from workers.monomer_md_worker.app.byteff2_system_geometry import FormalSystemSizeError, validate_periodic_box
+    vectors = ((length,0,0),(0,length,0),(0,0,length))
+    if valid:
+        assert validate_periodic_box(vectors,cutoff)["cutoff_nm"] == cutoff
+    else:
+        with pytest.raises(FormalSystemSizeError):
+            validate_periodic_box(vectors,cutoff)
+
+
+def test_formal_box_guard_uses_face_height_and_does_not_change_cutoff():
+    from workers.monomer_md_worker.app.byteff2_system_geometry import FormalSystemSizeError, validate_periodic_box
+    # Long vector lengths alone do not make a skewed periodic box safe.
+    with pytest.raises(FormalSystemSizeError):
+        validate_periodic_box(((3,0,0),(2.9,.2,0),(0,0,3)),1.0)
+    from workers.monomer_md_worker.app.main import _classify_error
+    assert _classify_error(FormalSystemSizeError("too small")) == "invalid_periodic_box"

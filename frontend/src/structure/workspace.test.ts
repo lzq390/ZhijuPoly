@@ -47,6 +47,47 @@ async function mounted(smiles = "CC", standardize?: (smiles: string) => Promise<
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("shared structure documents", () => {
+  it("clears a failed autosave notice only after a later snapshot succeeds", async () => {
+    vi.useFakeTimers();
+    const { workspace, editor, edit, lease } = await mounted();
+    vi.mocked(editor.getKet).mockRejectedValueOnce(new Error("Transient export failure"));
+    edit("CO");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(workspace.getSnapshot().notice).toContain("最新画板暂未保存");
+    expect(workspace.getSnapshot().smiles).toBe("CC");
+    expect(await workspace.saveSnapshot()).toEqual({ status: "saved" });
+    expect(workspace.getSnapshot()).toMatchObject({ smiles: "CO", dirty: false, notice: null });
+    lease.dispose();
+  });
+
+  it("retains the autosave warning while a retry still fails", async () => {
+    vi.useFakeTimers();
+    const { workspace, editor, edit, lease } = await mounted();
+    const saved = workspace.getSnapshot().ket;
+    vi.mocked(editor.getKet).mockRejectedValue(new Error("Export unavailable"));
+    edit("CO");
+    await vi.advanceTimersByTimeAsync(300);
+    const warning = workspace.getSnapshot().notice;
+    expect(warning).toContain("最新画板暂未保存");
+    expect((await workspace.saveSnapshot()).status).toBe("failed");
+    expect(workspace.getSnapshot()).toMatchObject({ ket: saved, notice: warning });
+    lease.dispose();
+  });
+
+  it("keeps unsynchronized draft warnings when the canvas itself saves successfully", async () => {
+    const { workspace, editor, lease } = await mounted();
+    workspace.setDraft("CC(", "Incomplete SMILES");
+    workspace.recoverForNavigation("failed");
+    lease.dispose();
+    const warning = workspace.getSnapshot().notice;
+    expect(warning).toContain("文本草稿尚未完成同步");
+    const next = workspace.mountEditor();
+    await next.initialize(editor);
+    expect((await workspace.saveSnapshot()).status).toBe("saved");
+    expect(workspace.getSnapshot()).toMatchObject({ draft: "CC(", notice: warning });
+    next.dispose();
+  });
+
   it("adopts a declared startup document once and retains its layout through restore checks", async () => {
     const workspace = new StructureWorkspace();
     const fixture = editorFixture();

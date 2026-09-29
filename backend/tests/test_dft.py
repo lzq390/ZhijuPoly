@@ -6,6 +6,7 @@ from starlette.requests import Request
 
 from app.config import Settings
 from app.routers.dft import get_dft_molecule, get_pca_sample
+from test_api import api_database, auth_database, test_app
 
 
 def make_request(app: FastAPI) -> Request:

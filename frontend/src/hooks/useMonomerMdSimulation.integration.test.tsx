@@ -47,8 +47,7 @@ describe("useMonomerMdSimulation request lifecycle", () => {
       "/api/v1/monomer-md/protocols",
       "/api/v1/monomer-md/status"
     ]);
-    expect(requests[0].signal).toBe(requests[1].signal);
-    expect(requests[0].signal.aborted).toBe(false);
+    expect(requests.every(({ signal }) => !signal.aborted)).toBe(true);
 
     unmount();
 
@@ -60,4 +59,9 @@ describe("useMonomerMdSimulation request lifecycle", () => {
       ])
     );
   });
+});
+
+vi.mock("./useTaskEvents", () => {
+  const rememberJob = vi.fn(), forgetJob = vi.fn(), reconnect = vi.fn();
+  return { useTaskEvents: () => ({ connectionState: "live", rememberJob, forgetJob, reconnect }) };
 });

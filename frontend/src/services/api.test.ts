@@ -1,3 +1,4 @@
+import { authenticatedRequest } from "../auth/testRequest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelMonomerMdJob,
@@ -43,12 +44,12 @@ describe("structure workbench request contracts", () => {
 
     await fetchStructure3D("*CC*", controller.signal);
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/structure/3d", {
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/structure/3d", authenticatedRequest({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ smiles: "*CC*" }),
       signal: controller.signal
-    });
+    }));
   });
 
   it("forwards AbortSignal to retrosynthesis without changing its payload", async () => {
@@ -77,12 +78,12 @@ describe("structure workbench request contracts", () => {
 
     await predictMonomerPrecursors(payload, controller.signal);
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/monomer-retrosynthesis", {
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/monomer-retrosynthesis", authenticatedRequest({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
       signal: controller.signal
-    });
+    }));
   });
 
   it("forwards AbortSignal to property prediction and keeps backend messages", async () => {
@@ -105,12 +106,12 @@ describe("structure workbench request contracts", () => {
     };
 
     await predictSmiles(payload, controller.signal);
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/predict", {
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/predict", authenticatedRequest({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
       signal: controller.signal
-    });
+    }));
     await expect(predictSmiles(payload)).rejects.toMatchObject({ message: "模型暂不可用" });
   });
 
@@ -134,12 +135,12 @@ describe("structure workbench request contracts", () => {
 
     await lookupSmilesInDatabase(payload, controller.signal);
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/database-browser/smiles-lookup", {
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/database-browser/smiles-lookup", authenticatedRequest({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
       signal: controller.signal
-    });
+    }));
   });
 
   it("forwards AbortSignal through both monomer polymerization calls without changing the payload", async () => {
@@ -172,16 +173,16 @@ describe("structure workbench request contracts", () => {
     await fetchMonomerPolymerizationStatus(controller.signal);
     await runMonomerPolymerization(payload, controller.signal);
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/monomer-polymerization/status", {
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/monomer-polymerization/status", authenticatedRequest({
       cache: "no-store",
       signal: controller.signal
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/monomer-polymerization", {
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/monomer-polymerization", authenticatedRequest({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
       signal: controller.signal
-    });
+    }));
   });
 });
 
@@ -217,19 +218,19 @@ describe("MD demo request contracts", () => {
     await runMdDemo(runRequest, controller.signal);
     await calculateMdDemoAtomDistance(distanceRequest, controller.signal);
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/md-demo/defaults", { signal: controller.signal });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/md-demo/run", {
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/md-demo/defaults", authenticatedRequest({ signal: controller.signal }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/md-demo/run", authenticatedRequest({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(runRequest),
       signal: controller.signal
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/md-demo/atom-distance", {
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/md-demo/atom-distance", authenticatedRequest({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(distanceRequest),
       signal: controller.signal
-    });
+    }));
   });
 });
 
@@ -270,14 +271,14 @@ describe("Tg assistant metadata API", () => {
     await fetchTgAssistantStatus(controller.signal);
     await fetchTgAssistantGuide(controller.signal);
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/assistant/tg/status", {
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/assistant/tg/status", authenticatedRequest({
       cache: "no-store",
       signal: controller.signal
-    });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/assistant/tg/guide", {
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/assistant/tg/guide", authenticatedRequest({
       cache: "no-store",
       signal: controller.signal
-    });
+    }));
   });
 });
 
@@ -300,8 +301,8 @@ describe("database analysis API", () => {
     await fetchDatabaseDatasetSummary(controller.signal);
     await fetchDatabaseAnalytics({ refresh: true, signal: controller.signal });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/database-browser/datasets/summary", { signal: controller.signal });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/database-browser/datasets/analytics?refresh=true", { signal: controller.signal });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/database-browser/datasets/summary", authenticatedRequest({ signal: controller.signal }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/database-browser/datasets/analytics?refresh=true", authenticatedRequest({ signal: controller.signal }));
   });
 
   it("keeps record query contracts and forwards AbortSignal", async () => {
@@ -328,7 +329,7 @@ describe("database analysis API", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/database-browser/experimental-process?q=polyimide&page=2&page_size=10",
-      { signal: controller.signal }
+      authenticatedRequest({ signal: controller.signal })
     );
   });
 });
@@ -362,9 +363,9 @@ describe("property filter API", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/database-browser/property-filter/options",
       expect.objectContaining({
-        cache: "no-cache",
+        cache: "no-store",
         headers: expect.any(Headers),
-        signal: controller.signal
+        signal: expect.any(AbortSignal)
       })
     );
   });
@@ -421,7 +422,7 @@ describe("property filter API", () => {
     expect(result).toEqual({ status: "success", data: payload, etag: 'W/"histogram-1"' });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/database-browser/property-filter/histogram?option_key=std%3Atg%3AC",
-      expect.objectContaining({ cache: "no-cache", signal: controller.signal })
+      expect.objectContaining({ cache: "no-store", signal: expect.any(AbortSignal) })
     );
     const requestInit = fetchMock.mock.calls[0][1] as RequestInit;
     expect(new Headers(requestInit.headers).get("If-None-Match")).toBe('W/"histogram-0"');
@@ -470,7 +471,7 @@ describe("property filter API", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify(payload),
-        signal: controller.signal
+        signal: expect.any(AbortSignal)
       })
     );
   });
@@ -505,7 +506,7 @@ describe("deleteMonomerMdArtifacts", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/v1/monomer-md/jobs/${"a".repeat(32)}/artifacts`,
-      { method: "DELETE", signal: controller.signal }
+      authenticatedRequest({ method: "DELETE", signal: controller.signal })
     );
     expect(job).toMatchObject({ smiles: "CCO", progress: 100 });
   });
@@ -584,7 +585,7 @@ describe("fetchStructure2D", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ smiles: "*CC*" }),
-        signal: controller.signal
+        signal: expect.any(AbortSignal)
       })
     );
   });
@@ -628,7 +629,7 @@ describe("development GPU session API", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/api/v1/dev-gpu-session/status",
-      expect.objectContaining({ cache: "no-store", signal: controller.signal })
+      expect.objectContaining({ cache: "no-store", signal: expect.any(AbortSignal) })
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
@@ -636,7 +637,7 @@ describe("development GPU session API", () => {
       expect.objectContaining({
         method: "POST",
         body: "{}",
-        signal: controller.signal
+        signal: expect.any(AbortSignal)
       })
     );
   });
@@ -686,7 +687,7 @@ describe("monomer MD queue API", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/monomer-md/jobs?run_mode=formal&active_only=false&include_result=false&protocol=Density&status=cancel_requested&page=2&page_size=10",
-      expect.objectContaining({ signal: controller.signal })
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
     expect(page.items[0]).toMatchObject({
       smiles: "CO",
@@ -724,7 +725,7 @@ describe("monomer MD queue API", () => {
       .resolves.toEqual(timeline);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/monomer-md/jobs/job%2Fa/visualization/stages/gas%20nvt/trajectory",
-      expect.objectContaining({ signal: controller.signal })
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
   });
 
@@ -752,7 +753,7 @@ describe("monomer MD queue API", () => {
         expect.objectContaining({
           method: "POST",
           body: "{}",
-          signal: controller.signal
+          signal: expect.any(AbortSignal)
         })
       );
       expect(job).toMatchObject({

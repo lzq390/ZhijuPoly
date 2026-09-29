@@ -1,3 +1,4 @@
+import { authenticatedRequest } from "../auth/testRequest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BatchArtifactError, downloadBatchArtifact } from "./polymerizationBatchApi";
 
@@ -12,7 +13,7 @@ describe("batch artifact download", () => {
     const blob = await downloadBatchArtifact("a".repeat(32), "results.zip", signal);
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(bytes);
     expect(blob.type).toBe("application/zip");
-    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/artifacts/results.zip"), { cache: "no-store", signal });
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/artifacts/results.zip"), authenticatedRequest({ cache: "no-store", signal }));
   });
 
   it("rejects a 410 JSON error instead of treating it as a downloadable file", async () => {

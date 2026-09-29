@@ -1,18 +1,20 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GUEST_SESSION, installSession, retireSession } from "../../auth/session";
 import { BatchPolymerizationPanel } from "./BatchPolymerizationPanel";
 import { BATCH_HISTORY_KEY } from "../../hooks/usePolymerizationBatchJob";
 import { BatchArtifactError } from "../../services/polymerizationBatchApi";
 import type { BatchImportPreview, BatchJob } from "../../types/polymerizationBatch";
 import type { MonomerPolymerizationStatusResponse } from "../../types";
 
-const mocks = vi.hoisted(() => ({ upload: vi.fn(), preview: vi.fn(), submit: vi.fn(), job: vi.fn(), results: vi.fn(), cancel: vi.fn(), download: vi.fn(), structure: vi.fn() }));
+const mocks = vi.hoisted(() => ({ useAuth: vi.fn(), upload: vi.fn(), preview: vi.fn(), submit: vi.fn(), jobs: vi.fn(), job: vi.fn(), results: vi.fn(), cancel: vi.fn(), download: vi.fn(), structure: vi.fn() }));
+vi.mock("../../auth/AuthProvider", () => ({ useAuth: mocks.useAuth }));
 vi.mock("../../services/polymerizationBatchApi", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../services/polymerizationBatchApi")>(),
   batchUrl: (path: string) => `/api/v1/monomer-polymerization/batch${path}`,
   uploadBatchTables: mocks.upload, previewBatchTables: mocks.preview, submitBatchJob: mocks.submit,
-  fetchBatchJob: mocks.job, fetchBatchResults: mocks.results, cancelBatchJob: mocks.cancel, downloadBatchArtifact: mocks.download
+  fetchBatchJob: mocks.job, fetchBatchJobs: mocks.jobs, fetchBatchResults: mocks.results, cancelBatchJob: mocks.cancel, downloadBatchArtifact: mocks.download
 }));
 vi.mock("../../services/api", () => ({ fetchStructure2D: mocks.structure }));
 const id = "a".repeat(32);
@@ -66,20 +68,40 @@ function files() {
   fireEvent.change(screen.getByLabelText("上传单体表 B"), { target: { files: [new File(["SMILES\nCO"], "b.csv")] } });
 }
 beforeEach(() => {
+  mocks.useAuth.mockReturnValue(null);
   localStorage.clear();
   window.history.replaceState(null, "", "/monomer-polymerization?mode=batch");
   mocks.upload.mockReset().mockResolvedValue(preview);
   mocks.preview.mockReset().mockResolvedValue(preview);
   mocks.submit.mockReset().mockResolvedValue(job);
   mocks.job.mockReset().mockResolvedValue(job);
+  mocks.jobs.mockReset().mockResolvedValue({ items: [], total: 0, next_offset: null });
   mocks.results.mockReset().mockResolvedValue({ items: [], total: 0, next_offset: null });
   mocks.cancel.mockReset().mockResolvedValue({ ...job, status: "cancelling" });
   mocks.download.mockReset().mockResolvedValue(new Blob(["results"], { type: "application/zip" }));
   mocks.structure.mockReset();
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); retireSession(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("batch polymerization", () => {
+  it("shows the guest batch form without loading private history and prompts before upload or task creation", () => {
+    mocks.useAuth.mockReturnValue({ status: "guest" });
+    installSession(GUEST_SESSION);
+    const login = vi.fn();
+    window.addEventListener("nexpoly:login-required", login);
+    try {
+      render(<BatchPolymerizationPanel status={null} target="polyimide">{({ inputs, settings, taskPanel }) => <>{inputs}{settings}{taskPanel}</>}</BatchPolymerizationPanel>);
+      expect(mocks.jobs).not.toHaveBeenCalled();
+      expect(login).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByLabelText("上传单体表 A"));
+      fireEvent.click(screen.getByRole("button", { name: "上传并预检" }));
+      fireEvent.click(screen.getByRole("button", { name: "开始批量聚合" }));
+      expect(login).toHaveBeenCalledTimes(3);
+      expect(mocks.upload).not.toHaveBeenCalled();
+      expect(mocks.preview).not.toHaveBeenCalled();
+      expect(mocks.submit).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("nexpoly:login-required", login); }
+  });
   it("uploads, maps, validates and submits once, preserving the task link", async () => {
     page(); files();
     fireEvent.click(screen.getByRole("button", { name: "上传并预检" }));
@@ -93,7 +115,7 @@ describe("batch polymerization", () => {
     await screen.findByText("等待计算");
     expect(screen.getByRole("button", { name: "收起批量任务" }).getAttribute("aria-expanded")).toBe("true");
     expect(mocks.submit).toHaveBeenCalledWith(preview.import_id, preview.preview_revision, "polyimide", expect.any(String), expect.any(AbortSignal));
-    expect(localStorage.getItem(BATCH_HISTORY_KEY)).toContain(id);
+    expect(localStorage.getItem(BATCH_HISTORY_KEY)).toBeNull();
     expect(window.location.search).toContain(`job_id=${id}`);
     expect((screen.getByRole("button", { name: "任务已提交" }) as HTMLButtonElement).disabled).toBe(true);
     expect(mocks.structure).not.toHaveBeenCalled();
@@ -218,7 +240,7 @@ describe("batch polymerization", () => {
     expect(task.getAllByRole("button", { name: /^下载/ })).toHaveLength(3);
     expect(task.queryByRole("table")).toBeNull();
     expect(task.queryByText(/候选预览/)).toBeNull();
-    expect(task.queryByRole("button", { name: /查看结构|上一页|下一页/ })).toBeNull();
+    expect(task.queryByRole("button", { name: /查看结构/ })).toBeNull();
     expect(mocks.results).not.toHaveBeenCalled();
     expect(mocks.structure).not.toHaveBeenCalled();
     fireEvent.click(task.getByRole("button", { name: "收起批量任务" }));
@@ -227,7 +249,7 @@ describe("batch polymerization", () => {
     expect(task.getByText("已完成")).toBeTruthy();
     expect(task.getByText(/已处理 1 \/ 1/)).toBeTruthy();
     expect(task.queryByRole("button", { name: /^下载/ })).toBeNull();
-    expect(task.queryByRole("combobox", { name: "最近任务" })).toBeNull();
+    expect(task.queryByRole("combobox", { name: "我的批量任务" })).toBeNull();
     fireEvent.click(expand);
     expect(task.getAllByRole("button", { name: /^下载/ })).toHaveLength(3);
     expect(task.getByText("24")).toBeTruthy();
@@ -344,18 +366,19 @@ describe("batch polymerization", () => {
     expect(mocks.cancel).toHaveBeenCalledTimes(1);
   });
 
-  it("remembers a successfully opened task link and restores it without a job_id", async () => {
+  it("restores the first server-owned task without local history or a job_id", async () => {
     window.history.replaceState(null, "", `/monomer-polymerization?mode=batch&job_id=${id}`);
     mocks.job.mockResolvedValue(completedJob());
     const first = page();
     await screen.findByText("已完成");
-    expect(JSON.parse(localStorage.getItem(BATCH_HISTORY_KEY)!)).toEqual([id]);
+    expect(localStorage.getItem(BATCH_HISTORY_KEY)).toBeNull();
+    mocks.jobs.mockResolvedValue({ items: [completedJob()], total: 1, next_offset: null });
     first.unmount();
     window.history.replaceState(null, "", "/monomer-polymerization?mode=batch");
     page();
     await screen.findByText(id);
     expect(mocks.job).toHaveBeenLastCalledWith(id, expect.any(AbortSignal));
-    expect(screen.getByRole("combobox", { name: "最近任务" }).textContent).toContain(id.slice(0, 12));
+    expect(screen.getByRole("combobox", { name: "我的批量任务" }).textContent).toContain(id.slice(0, 12));
   });
 
   it("keeps cancellation progress and failure inside the task, including while collapsed or files are replaced", async () => {

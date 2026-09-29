@@ -11,11 +11,11 @@ type ConditionalGenerationStatusState = {
 
 export const CONDITIONAL_STATUS_RETRY_DELAYS_MS = JOB_POLL_BACKOFF_MS;
 
-export function useConditionalGenerationStatus() {
+export function useConditionalGenerationStatus(enabled = true) {
   const [state, setState] = useState<ConditionalGenerationStatusState>({
     serviceStatus: null,
     serviceStatusError: null,
-    isStatusLoading: true
+    isStatusLoading: enabled
   });
   const requestTokenRef = useRef(0);
   const requestAbortRef = useRef<AbortController | null>(null);
@@ -68,13 +68,14 @@ export function useConditionalGenerationStatus() {
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     void refreshStatus();
     return () => {
       requestTokenRef.current += 1;
       requestAbortRef.current?.abort();
       requestAbortRef.current = null;
     };
-  }, [refreshStatus]);
+  }, [enabled, refreshStatus]);
 
   return {
     ...state,

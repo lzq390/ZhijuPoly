@@ -1,3 +1,5 @@
+import { useAuth } from "../auth/AuthProvider";
+import { requestServiceAccess } from "../auth/guestAccess";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { searchPropertyFilterRecords } from "../services/api";
 import { useKnowledgeRecording } from "./useKnowledgeRecording";
@@ -148,6 +150,7 @@ function optionsCatalogRevision(cache: { etag: string | null; cachedAt: number }
 }
 
 export function usePropertyFilter() {
+  const guest = useAuth()?.status === "guest";
   const recording = useKnowledgeRecording();
   const track = recording?.track;
   const isRecording = recording?.isRecording;
@@ -159,7 +162,7 @@ export function usePropertyFilter() {
   const [optionsRevision, setOptionsRevision] = useState(
     optionsCatalogRevision(initialOptionsCache)
   );
-  const [optionsPending, setOptionsPending] = useState(!initialOptionsCache);
+  const [optionsPending, setOptionsPending] = useState(!guest && !initialOptionsCache);
   const [optionsRefreshing, setOptionsRefreshing] = useState(false);
   const [optionsError, setOptionsError] = useState<string | null>(null);
   const [optionsRefreshError, setOptionsRefreshError] = useState<string | null>(null);
@@ -186,6 +189,7 @@ export function usePropertyFilter() {
   }, []);
 
   useEffect(() => {
+    if (guest) return;
     let subscribed = true;
     const cached = readPropertyFilterOptionsCache();
     const applyOptions = (
@@ -236,7 +240,7 @@ export function usePropertyFilter() {
     return () => {
       subscribed = false;
     };
-  }, [optionsRetryKey]);
+  }, [guest, optionsRetryKey]);
 
   useEffect(() => {
     if (!submitted) {
@@ -383,6 +387,7 @@ export function usePropertyFilter() {
   }, []);
 
   const run = useCallback((): boolean => {
+    if (!requestServiceAccess()) return false;
     const trimmedQuery = queryDraft.trim();
     if (trimmedQuery.length > 200) {
       setValidationError("关键词最多输入 200 个字符。");
@@ -502,6 +507,7 @@ export function usePropertyFilter() {
     setSearchRetryKey((current) => current + 1);
   }, [submitted]);
   const retryOptions = useCallback(() => {
+    if (!requestServiceAccess()) return;
     setOptionsError(null);
     setOptionsRefreshError(null);
     setOptionsRetryKey((current) => current + 1);

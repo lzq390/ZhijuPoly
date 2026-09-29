@@ -36,8 +36,8 @@ SELECT
     t.id AS pi_id,
     t.tg_celsius,
     p.morgan_fp
-FROM pi_tg_predictions t
-JOIN pi_polymers p ON p.id = t.id
+FROM pi.tg_predictions t
+JOIN pi.polymers p ON p.id = t.id
 WHERE t.smiles_valid = TRUE
   AND p.morgan_fp IS NOT NULL
   AND t.tg_celsius >= %s
@@ -52,8 +52,8 @@ SELECT
     t.id AS pi_id,
     t.tg_celsius,
     p.morgan_fp
-FROM pi_tg_predictions t
-JOIN pi_polymers p ON p.id = t.id
+FROM pi.tg_predictions t
+JOIN pi.polymers p ON p.id = t.id
 WHERE t.smiles_valid = TRUE
   AND p.morgan_fp IS NOT NULL
   AND t.tg_celsius < %s
@@ -73,12 +73,22 @@ SELECT
     t.tg_celsius,
     m1.iupac_name AS mon1_iupac_name,
     m2.iupac_name AS mon2_iupac_name
-FROM pi_polymers p
-JOIN pi_tg_predictions t ON t.id = p.id
-LEFT JOIN pi_monomer_iupac m1 ON m1.smiles = p.mon1
-LEFT JOIN pi_monomer_iupac m2 ON m2.smiles = p.mon2
+FROM pi.polymers p
+JOIN pi.tg_predictions t ON t.id = p.id
+LEFT JOIN pi.monomer_iupac m1 ON m1.smiles = p.mon1
+LEFT JOIN pi.monomer_iupac m2 ON m2.smiles = p.mon2
 WHERE p.id = ANY(%s)
 """
+
+
+def verify_reverse_design_query_access(connection: Any) -> None:
+    """Check the exact read dependencies without fetching scientific records."""
+    for query, parameters in (
+        (POSTGRES_UP_CANDIDATE_SQL, (0, 0, 0, 0, 0)),
+        (POSTGRES_DOWN_CANDIDATE_SQL, (0, 0, 0, 0, 0)),
+        (POSTGRES_DETAILS_SQL + " LIMIT 0", ([],)),
+    ):
+        connection.execute(query, parameters)
 
 
 @dataclass(slots=True)

@@ -1,3 +1,5 @@
+import { createPrivateObjectURL, revokePrivateObjectURL } from "../auth/objectUrls";
+import { assertSessionEpoch, getSessionEpoch } from "../auth/session";
 const DATABASE_NAME = "nexpoly-assistant-previews";
 const DATABASE_VERSION = 1;
 const STORE_NAME = "tg-message-images";
@@ -88,6 +90,7 @@ function requestResult<T>(request: IDBRequest<T>) {
 }
 
 async function decodeImage(blob: Blob): Promise<DecodedImage> {
+  const epoch = getSessionEpoch();
   if (typeof createImageBitmap === "function") {
     try {
       const bitmap = await createImageBitmap(blob);
@@ -105,7 +108,7 @@ async function decodeImage(blob: Blob): Promise<DecodedImage> {
     }
   }
 
-  const objectUrl = URL.createObjectURL(blob);
+  const objectUrl = createPrivateObjectURL(blob, epoch);
   const image = new Image();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -120,10 +123,10 @@ async function decodeImage(blob: Blob): Promise<DecodedImage> {
       source: image,
       width: image.naturalWidth,
       height: image.naturalHeight,
-      dispose: () => URL.revokeObjectURL(objectUrl)
+      dispose: () => revokePrivateObjectURL(objectUrl)
     };
   } catch (error) {
-    URL.revokeObjectURL(objectUrl);
+    revokePrivateObjectURL(objectUrl);
     throw error;
   }
 }
@@ -167,8 +170,11 @@ export async function saveTgAssistantImagePreview(
   messageId: string,
   source: Blob
 ) {
+  const epoch = getSessionEpoch();
   const thumbnail = await createTgAssistantImageThumbnail(source);
+  assertSessionEpoch(epoch);
   const database = await openDatabase();
+  assertSessionEpoch(epoch);
   const transaction = database.transaction(STORE_NAME, "readwrite");
   transaction.objectStore(STORE_NAME).put({
     key: previewKey(sessionId, messageId),
@@ -222,5 +228,14 @@ export async function pruneExpiredTgAssistantImagePreviews(now = Date.now()) {
     if (typeof record.createdAt !== "number" || record.createdAt < cutoff) cursor.delete();
     cursor.continue();
   };
+  await transactionDone(transaction);
+}
+
+/** Clears all accounts, including previews created by pre-auth versions. */
+export async function clearAllTgAssistantImagePreviews() {
+  if (typeof indexedDB === "undefined") return;
+  const database = await openDatabase();
+  const transaction = database.transaction(STORE_NAME, "readwrite");
+  transaction.objectStore(STORE_NAME).clear();
   await transactionDone(transaction);
 }

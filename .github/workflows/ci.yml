@@ -154,6 +154,7 @@ jobs:
               ! -name 'test_dev_gpu_session.py' \
               ! -name 'test_dev_worker_process.py' \
               ! -name 'test_monomer_md_worker_launcher.py' \
+              ! -name 'test_user_isolation_release_contract.py' \
               ! -name 'test_worker_slot_runtime.py' -print | sort
           )
           python3 -m unittest -v "${unittest_files[@]}"
@@ -301,10 +302,14 @@ jobs:
           --health-retries 10
     env:
       APP_POSTGRES_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
+      ISOLATION_TEST_ADMIN_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
+      NEXPOLY_ISOLATION_TEST_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
+      NEXPOLY_MULTIUSER_REQUIRED: "1"
+      PYTEST_PLUGINS: multiuser_pytest_gate
       PI_POSTGRES_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
       LAB_DATA_POSTGRES_DSN: postgresql://nexpoly_ci:nexpoly_ci@127.0.0.1:5432/nexpoly_ci
       STRUCTURED_DATA_BACKEND: postgres
-      PYTHONPATH: backend
+      PYTHONPATH: backend:scripts
     steps:
       - name: Check out candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -327,7 +332,10 @@ jobs:
         run: |
           mapfile -t tests < <(python3 scripts/ci/backend_test_shards.py --shards 3 --shard "$SHARD")
           [[ "${#tests[@]}" -gt 0 ]]
-          python -m pytest "${tests[@]}"
+          python -m pytest "${tests[@]}" --assert=plain --tb=short --junitxml=multiuser-backend.xml
+          if [[ "$SHARD" == "0" ]]; then
+            python -m pytest scripts/tests/test_user_isolation_release_contract.py --assert=plain --tb=short
+          fi
 
   frontend:
     name: Frontend Vitest and build

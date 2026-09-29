@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from contextvars import copy_context
+from contextlib import closing
+from app.services.private_execution import bounded_stream, PrivateStreamingResponse
+
 import json
 import logging
 import queue
@@ -248,7 +252,7 @@ def _stream_tg_chat_response(
 
         def worker() -> None:
             try:
-                for event in stream_tg_assistant_events(
+                with closing(stream_tg_assistant_events(
                     messages=request_body.messages,
                     page_context=request_body.page_context,
                     api_key=settings.tg_assistant_api_key,
@@ -264,10 +268,11 @@ def _stream_tg_chat_response(
                     transport=getattr(settings, "tg_assistant_transport", "auto"),
                     cancelled=cancelled.is_set,
                     on_route_complete=note_route_complete,
-                ):
-                    if cancelled.is_set():
-                        break
-                    event_queue.put(event)
+                )) as stream:
+                    for event in stream:
+                        if cancelled.is_set():
+                            break
+                        event_queue.put(event)
             except BaseException as exc:  # passed back to the response generator
                 if not cancelled.is_set():
                     event_queue.put(exc)
@@ -288,7 +293,8 @@ def _stream_tg_chat_response(
                 "user_image_attached": user_image is not None,
             },
         )
-        thread = threading.Thread(target=worker, name=f"tg-assistant-{request_id[:8]}", daemon=True)
+        context = copy_context()
+        thread = threading.Thread(target=lambda: context.run(worker), name=f"tg-assistant-{request_id[:8]}", daemon=True)
         thread.start()
         try:
             while True:
@@ -341,6 +347,19 @@ def _stream_tg_chat_response(
                 yield _sse(item.event, item.payload)
                 if terminal_sent:
                     break
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            capacity = detail.get("code") if exc.status_code == 429 else None
+            if capacity in {"user_capacity", "channel_capacity"}:
+                terminal = capacity
+                message = ("此计算通道已有未完成任务。" if capacity == "user_capacity"
+                           else "计算通道繁忙，请稍后重试。")
+            else:
+                terminal = "internal_error"
+                message = "AI 助手发生内部错误，请稍后重试。"
+            terminal_sent = True
+            yield _sse("error", {"request_id": request_id, "code": terminal,
+                                 "message": message, "retryable": True})
         except TgAssistantProviderError:
             terminal = "provider_error"
             terminal_sent = True
@@ -418,7 +437,7 @@ def _stream_tg_chat_response(
                 ",".join(sorted(action_types)) or "none",
             )
 
-    return StreamingResponse(
+    return PrivateStreamingResponse(
         events(),
         media_type="text/event-stream",
         headers={
@@ -443,7 +462,7 @@ def stream_chat(
                 with request.app.state.postgres_connection_factory(settings.pi_postgres_dsn) as connection:
                     return find_iupac_smiles_matches_postgres(connection, text)
 
-            for event in stream_assistant_events(
+            with closing(stream_assistant_events(
                 messages=request_body.messages,
                 modules=request_body.context.modules,
                 active_module=request_body.context.active_module,
@@ -454,8 +473,9 @@ def stream_chat(
                 model_dir=settings.model_dir_path,
                 proxy_url=settings.ai_proxy_url,
                 iupac_match_finder=iupac_match_finder,
-            ):
-                yield _sse(event.event, event.payload)
+            )) as stream:
+                for event in stream:
+                    yield _sse(event.event, event.payload)
         except AssistantChatConfigError as exc:
             yield _sse("error", {"detail": str(exc)})
         except PostgresUnavailableError as exc:
@@ -466,7 +486,7 @@ def stream_chat(
             logger.exception("Assistant chat stream failed")
             yield _sse("error", {"detail": "Assistant chat failed. Check backend logs for details."})
 
-    return StreamingResponse(
+    return PrivateStreamingResponse(
         events(),
         media_type="text/event-stream",
         headers={
@@ -502,6 +522,7 @@ async def stream_image_chat(
     finally:
         await image.close()
 
+    @bounded_stream("ai")
     def events() -> Iterable[str]:
         full_message: list[str] = []
         try:
@@ -529,7 +550,7 @@ async def stream_image_chat(
             logger.exception("Assistant image chat stream failed")
             yield _sse("error", {"detail": "Assistant image chat failed. Check backend logs for details."})
 
-    return StreamingResponse(
+    return PrivateStreamingResponse(
         events(),
         media_type="text/event-stream",
         headers={

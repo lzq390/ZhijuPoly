@@ -7,7 +7,14 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
+import json
 from uuid import uuid4
+from time import monotonic
+
+from app.auth.context import current_owner_id
+from app.task_control import admission, authorize_memory_start
+from app.services.private_quotas import PrivateQuotaSettings
+from app.services.in_memory_jobs import _deep_sizeof
 
 from fastapi import HTTPException
 from app.config import Settings
@@ -34,6 +41,10 @@ def now() -> str:
 
 @dataclass
 class Recording:
+    owner_user_id: str
+    max_bytes: int = field(default_factory=lambda: PrivateQuotaSettings.from_environment().browsing_record_bytes)
+    capacity_check: Callable | None = field(default=None, repr=False)
+    touched_at: float = field(default_factory=monotonic)
     started_at: str = field(default_factory=now)
     ended_at: str | None = None
     events: list[dict] = field(default_factory=list)
@@ -44,20 +55,68 @@ class Recording:
     summary_lock: Lock = field(default_factory=Lock)
 
     def append(self, event: dict):
-        self.events.append({"sequence": len(self.events) + 1, "time": now(), **event})
+        payload = {"sequence": len(self.events) + 1, "time": now(), **event}
+        if _deep_sizeof(self.events) + _deep_sizeof(payload) > self.max_bytes:
+            raise HTTPException(413, "本次记录内容超过大小限制")
+        if self.capacity_check is not None:
+            self.capacity_check(payload)
+        self.touched_at = monotonic()
+        self.events.append(payload)
 
 
 class BrowsingRecordingStore:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.recent_searches: OrderedDict[str, tuple[KnowledgeSearchResponse, str | None]] = OrderedDict()
-        self.recordings: OrderedDict[str, Recording] = OrderedDict()
-        self.filter_searches: OrderedDict[str, tuple[PropertyFilterSearchRequest, PropertyFilterSearchResponse]] = OrderedDict()
+        self.snapshot_times: dict[tuple[str, str], float] = {}
+        self.quotas = PrivateQuotaSettings.from_environment()
+        self.idle_seconds = self.quotas.browsing_idle_seconds
+        self.max_user_bytes = self.quotas.browsing_bytes_per_user
+        self.recent_searches: OrderedDict[tuple[str, str], tuple[KnowledgeSearchResponse, str | None]] = OrderedDict()
+        self.recordings: OrderedDict[tuple[str, str], Recording] = OrderedDict()
+        self.filter_searches: OrderedDict[tuple[str, str], tuple[PropertyFilterSearchRequest, PropertyFilterSearchResponse]] = OrderedDict()
+
+    @staticmethod
+    def _key(identifier: str) -> tuple[str, str]:
+        return current_owner_id(), identifier
+
+    def _prune(self) -> None:
+        cutoff = monotonic() - self.idle_seconds
+        for key, record in list(self.recordings.items()):
+            if record.touched_at < cutoff and not record.pending and not record.summary_lock.locked():
+                del self.recordings[key]
+        for key, timestamp in list(self.snapshot_times.items()):
+            if timestamp < cutoff:
+                self.recent_searches.pop(key, None)
+                self.filter_searches.pop(key, None)
+                self.snapshot_times.pop(key, None)
+
+    def _check_size(self, extra=None) -> None:
+        owner = current_owner_id()
+        values = [value for mapping in (self.recordings, self.recent_searches, self.filter_searches)
+                  for key, value in mapping.items() if key[0] == owner]
+        if _deep_sizeof(values) + _deep_sizeof(extra) > self.max_user_bytes:
+            raise HTTPException(413, "本人浏览记录和检索快照超过大小限制")
+
+    def _retain_snapshot(self, mapping, search_id: str, value) -> None:
+        self._check_size(value)
+        key = self._key(search_id)
+        own = [k for k in mapping if k[0] == key[0]]
+        if len(own) >= self.quotas.browsing_snapshots_per_user:
+            removed = own[0]
+            mapping.pop(removed)
+            self.snapshot_times.pop(removed, None)
+        mapping[key] = value
+        self.snapshot_times[key] = monotonic()
+        if len(mapping) > MAX_RECENT_SEARCHES:
+            removed, _ = mapping.popitem(last=False)
+            self.snapshot_times.pop(removed, None)
 
     def get_recording(self, recording_id: str, active: bool = True) -> Recording:
-        record = self.recordings.get(recording_id)
+        self._prune()
+        record = self.recordings.get(self._key(recording_id))
         if record is None:
-            raise HTTPException(410, "记录已失效，请刷新页面后重新开始")
+            raise HTTPException(404, "记录不存在或已失效")
+        record.touched_at = monotonic()
         if active and record.ended_at is not None:
             raise HTTPException(409, "记录已结束")
         if active and len(record.events) + record.pending >= MAX_RECORDING_EVENTS:
@@ -65,14 +124,20 @@ class BrowsingRecordingStore:
         return record
 
     async def start_recording(self, body: RecordingStart):
-        if body.recording_id not in self.recordings:
+        self._prune()
+        key = self._key(body.recording_id)
+        if key not in self.recordings:
+            if sum(k[0] == key[0] for k in self.recordings) >= self.quotas.browsing_recordings_per_user:
+                raise HTTPException(429, "本人记录数量已达上限")
+            new_record = Recording(owner_user_id=key[0], max_bytes=self.quotas.browsing_record_bytes, capacity_check=self._check_size)
+            self._check_size(new_record)
             if len(self.recordings) >= MAX_RECORDINGS:
                 # Do not silently discard an active record.
                 expired = next((key for key, value in self.recordings.items() if value.ended_at and not value.summary_lock.locked()), None)
                 if expired is None:
                     raise HTTPException(409, "记录容量已满，请结束已有记录或联系管理员")
                 del self.recordings[expired]
-            self.recordings[body.recording_id] = Recording()
+            self.recordings[key] = new_record
         record = self.get_recording(body.recording_id, active=False)
         return {"recording_id": body.recording_id, "status": "stopped" if record.ended_at else "recording"}
 
@@ -91,7 +156,14 @@ class BrowsingRecordingStore:
             raise HTTPException(409, "请先结束记录再生成总结")
         async with record.summary_lock:
             if record.summary is None:
-                record.summary = await generate_knowledge_summary(record.events, self.settings)
+                with admission("ai"):
+                    if not authorize_memory_start(current_owner_id()):
+                        raise HTTPException(403, "Account disabled before execution")
+                    summary = await generate_knowledge_summary(record.events, self.settings)
+                if len(json.dumps(summary, ensure_ascii=False).encode("utf-8")) > self.quotas.summary_output_bytes:
+                    raise HTTPException(413, "总结超过大小限制")
+                self._check_size(summary)
+                record.summary = summary
             return {"recording_id": recording_id, **record.summary}
 
     def stream_summary(self, recording_id: str):
@@ -107,10 +179,18 @@ class BrowsingRecordingStore:
                 try:
                     if record.summary is None:
                         parts = []
-                        async with aclosing(stream_knowledge_summary(record.events, self.settings)) as stream:
-                            async for delta in stream:
-                                parts.append(delta)
-                                yield "delta", {"text": delta}
+                        with admission("ai"):
+                            if not authorize_memory_start(current_owner_id()):
+                                raise HTTPException(403, "Account disabled before execution")
+                            async with aclosing(stream_knowledge_summary(record.events, self.settings)) as stream:
+                                size = 0
+                                async for delta in stream:
+                                    size += len(delta.encode("utf-8"))
+                                    if size > self.quotas.summary_output_bytes:
+                                        raise HTTPException(413, "总结超过大小限制")
+                                    parts.append(delta)
+                                    yield "delta", {"text": delta}
+                        self._check_size(parts)
                         record.summary = {"summary": "".join(parts).strip(), "generated": bool(record.events)}
                     yield "done", {"recording_id": recording_id, **record.summary}
                 except HTTPException as exc:
@@ -121,6 +201,8 @@ class BrowsingRecordingStore:
         return events()
 
     async def filter_search(self, body: RecordedFilterSearchRequest, execute: Callable[[], Awaitable[PropertyFilterSearchResponse]]):
+        self._prune()
+        current_owner_id()
         record = self.get_recording(body.recording_id) if body.recording_id else None
         filters = [condition.model_dump() for condition in body.filters]
         if record:
@@ -136,9 +218,7 @@ class BrowsingRecordingStore:
             if record:
                 record.pending -= 1
         search_id = uuid4().hex
-        self.filter_searches[search_id] = (body, result)
-        if len(self.filter_searches) > MAX_RECENT_SEARCHES:
-            self.filter_searches.popitem(last=False)
+        self._retain_snapshot(self.filter_searches, search_id, (body, result))
         if record:
             record.filter_searches[search_id] = (body, result)
             record.append({"event": "property_filter.search_completed", "search_id": search_id,
@@ -147,14 +227,16 @@ class BrowsingRecordingStore:
         return RecordedFilterSearchResponse(**result.model_dump(), search_id=search_id)
 
     async def observe_filter(self, body: FilterObservation):
+        self._prune()
+        current_owner_id()
         record = self.get_recording(body.recording_id) if body.recording_id else None
         snapshot = record.filter_searches.get(body.search_id) if record else None
         if snapshot is None:
-            snapshot = self.filter_searches.get(body.search_id)
+            snapshot = self.filter_searches.get(self._key(body.search_id))
             if snapshot and body.recording_id and getattr(snapshot[0], "recording_id", None) not in (None, body.recording_id):
                 raise HTTPException(409, "筛选属于另一条记录，请重新筛选")
         if snapshot is None:
-            raise HTTPException(410, "筛选快照已失效，请重新筛选")
+            raise HTTPException(404, "筛选快照不存在或已失效")
         submitted, result = snapshot
         if body.result_index >= len(result.results):
             raise HTTPException(404, "材料不属于这次筛选结果")
@@ -179,6 +261,8 @@ class BrowsingRecordingStore:
         return observation
 
     async def search(self, body: RecordedKnowledgeSearchRequest, execute: Callable[[], Awaitable[KnowledgeSearchResponse]]):
+        self._prune()
+        current_owner_id()
         record = self.get_recording(body.recording_id) if body.recording_id else None
         if record:
             record.pending += 1
@@ -193,9 +277,7 @@ class BrowsingRecordingStore:
             if record:
                 record.pending -= 1
         search_id = uuid4().hex
-        self.recent_searches[search_id] = (result, body.recording_id)
-        if len(self.recent_searches) > MAX_RECENT_SEARCHES:
-            self.recent_searches.popitem(last=False)
+        self._retain_snapshot(self.recent_searches, search_id, (result, body.recording_id))
         if record:
             record.searches[search_id] = result
             record.append({"event": "search.completed", "search_id": search_id,
@@ -206,15 +288,17 @@ class BrowsingRecordingStore:
         return RecordedKnowledgeSearchResponse(**result.model_dump(), search_id=search_id)
 
     async def observe_article(self, body: ArticleObservation):
+        self._prune()
+        current_owner_id()
         record = self.get_recording(body.recording_id) if body.recording_id else None
         result = record.searches.get(body.search_id) if record else None
         if result is None:
-            snapshot = self.recent_searches.get(body.search_id)
+            snapshot = self.recent_searches.get(self._key(body.search_id))
             if snapshot and body.recording_id and snapshot[1] not in (None, body.recording_id):
                 raise HTTPException(409, "检索属于另一条记录，请重新搜索")
             result = snapshot[0] if snapshot else None
         if result is None:
-            raise HTTPException(410, "Search snapshot expired; search again before observing articles")
+            raise HTTPException(404, "Search snapshot not found or expired")
         article = next((row for row in result.results if row.knowledge_id == body.knowledge_id), None)
         if article is None:
             raise HTTPException(404, "Article is not in this search result")

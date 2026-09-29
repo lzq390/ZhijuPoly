@@ -1,3 +1,4 @@
+import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import type { StructureSyncResult } from "../structure/workspace";
 import { ModulePageHeader } from "./ModulePageHeader";
@@ -7,28 +8,19 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
-  useState,
-  type CSSProperties,
-  type FormEvent
+  useState
 } from "react";
 import { SlidersHorizontal, Sparkles } from "lucide-react";
 import { REVERSE_DESIGN_DEMO_SMILES } from "../constants/reverseDesignDefaults";
 import { useTgStructureCanvas } from "../hooks/useTgStructureCanvas";
-import { predictMonomerPrecursors } from "../services/api";
-import type {
-  MonomerRetrosynthesisResponse,
-  MonomerRetrosynthesisTargetRole,
-  StructureWorkspaceContext
-} from "../types";
+import type { StructureWorkspaceContext } from "../types";
 import "../styles/structure-workbench.css";
 import {
   StructureCanvasSurface,
   type StructureUtilityPanel
 } from "./structure-workbench/StructureCanvasSurface";
-import { RetrosynthesisDrawer } from "./structure-workbench/RetrosynthesisDrawer";
 import {
   StructureUtilityPanels,
-  type StructureModulePanelView,
   type StructureWorkbenchModuleId
 } from "./structure-workbench/StructureUtilityPanels";
 
@@ -46,22 +38,11 @@ type StructureWorkbenchPageProps = {
   onOpenModule: (moduleId: StructureWorkbenchModuleId) => void;
 };
 
-const DEFAULT_RETROSYNTHESIS_MONOMER_SMILES = "C=C(C)C(=O)OC";
-
-function isAbortError(error: unknown) {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
-function errorMessage(error: unknown, fallback: string) {
-  return error instanceof Error && error.message.trim() ? error.message : fallback;
-}
-
 export const StructureWorkbenchPage = forwardRef<
   StructureWorkbenchHandle,
   StructureWorkbenchPageProps
 >(function StructureWorkbenchPage({ structure, onOpenModule }, forwardedRef) {
   const [openPanel, setOpenPanel] = useState<StructureUtilityPanel>(null);
-  const [modulePanelView, setModulePanelView] = useState<StructureModulePanelView>("grid");
   const [selectedModuleName, setSelectedModuleName] = useState("尚未选择任务");
   const [openingModuleId, setOpeningModuleId] = useState<StructureWorkbenchModuleId | null>(null);
   const [assistantInput, setAssistantInput] = useState("");
@@ -69,25 +50,11 @@ export const StructureWorkbenchPage = forwardRef<
 
   const [hasActivated3D, setHasActivated3D] = useState(false);
 
-  const [retroSmiles, setRetroSmiles] = useState(DEFAULT_RETROSYNTHESIS_MONOMER_SMILES);
-  const [retroTargetRole, setRetroTargetRole] = useState<MonomerRetrosynthesisTargetRole>("auto");
-  const [retroReturnCount, setRetroReturnCount] = useState("5");
-  const [showRetroValidation, setShowRetroValidation] = useState(false);
-  const [retroData, setRetroData] = useState<MonomerRetrosynthesisResponse | null>(null);
-  const [selectedRetroCandidateIndex, setSelectedRetroCandidateIndex] = useState(0);
-  const [retroError, setRetroError] = useState<string | null>(null);
-  const [isRetrosynthesizing, setIsRetrosynthesizing] = useState(false);
-  const [hasRetroRun, setHasRetroRun] = useState(false);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [drawerWidth, setDrawerWidth] = useState(380);
-
   const modulePanelRef = useRef<HTMLElement | null>(null);
   const assistantPanelRef = useRef<HTMLElement | null>(null);
   const moduleButtonRef = useRef<HTMLButtonElement | null>(null);
   const assistantButtonRef = useRef<HTMLButtonElement | null>(null);
   const restoreFocusFrameRef = useRef<number | null>(null);
-  const retroAbortRef = useRef<AbortController | null>(null);
-  const retroRequestRevisionRef = useRef(0);
 
   const handleStructureChanged = useCallback(() => setAssistantNotice(null), []);
   const canvas = useTgStructureCanvas({
@@ -95,15 +62,6 @@ export const StructureWorkbenchPage = forwardRef<
     onStructureChanged: handleStructureChanged
   });
 
-  const parsedRetroReturnCount = Number(retroReturnCount);
-  const retroTargetValidation = retroSmiles.trim() ? null : "请输入目标单体的 SMILES。";
-  const retroCountValidation =
-    retroReturnCount.trim() &&
-    Number.isInteger(parsedRetroReturnCount) &&
-    parsedRetroReturnCount >= 1 &&
-    parsedRetroReturnCount <= 10
-      ? null
-      : "候选数必须是 1–10 的整数。";
   const operationBusy = canvas.isBusy || Boolean(openingModuleId);
 
   useEffect(() => {
@@ -112,9 +70,6 @@ export const StructureWorkbenchPage = forwardRef<
         window.cancelAnimationFrame(restoreFocusFrameRef.current);
         restoreFocusFrameRef.current = null;
       }
-      retroRequestRevisionRef.current += 1;
-      retroAbortRef.current?.abort();
-      retroAbortRef.current = null;
     };
   }, []);
 
@@ -183,15 +138,11 @@ export const StructureWorkbenchPage = forwardRef<
     const panel = openPanel === "modules" ? modulePanelRef.current : assistantPanelRef.current;
     const frame = window.requestAnimationFrame(() => {
       panel
-        ?.querySelector<HTMLElement>(
-          modulePanelView === "retrosynthesis"
-            ? ".np-sw-module-back, textarea, button"
-            : "button, textarea"
-        )
+        ?.querySelector<HTMLElement>("button, textarea")
         ?.focus();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [modulePanelView, openPanel]);
+  }, [openPanel]);
 
   async function loadExample() {
     await canvas.loadStructure(REVERSE_DESIGN_DEMO_SMILES);
@@ -218,6 +169,12 @@ export const StructureWorkbenchPage = forwardRef<
   async function openExternalModule(id: StructureWorkbenchModuleId, shortName: string) {
     if (openingModuleId) return;
     setSelectedModuleName(shortName);
+    // This destination imports only after App commits its guarded navigation.
+    if (id === "monomerRetrosynthesis") {
+      closePanel(false);
+      onOpenModule(id);
+      return;
+    }
     setOpeningModuleId(id);
     try {
       if (!(await canvas.flushSmilesDraft())) return;
@@ -229,99 +186,19 @@ export const StructureWorkbenchPage = forwardRef<
     onOpenModule(id);
   }
 
-  async function useCurrentStructureForRetrosynthesis() {
-    if (!(await canvas.flushSmilesDraft())) return;
-    const currentSmiles = await canvas.syncSmilesFromCanvas({
-      preserveExisting: true,
-      quiet: true
-    });
-    if (!currentSmiles) {
-      canvas.setFeedback("当前结构为空，请先绘制、导入或加载结构。");
-      return;
-    }
-    setRetroSmiles(currentSmiles);
-    setShowRetroValidation(false);
-    setRetroError(null);
-  }
-
-  function submitRetrosynthesis(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setShowRetroValidation(true);
-    if (retroTargetValidation || retroCountValidation) return;
-
-    retroAbortRef.current?.abort();
-    const controller = new AbortController();
-    const requestRevision = retroRequestRevisionRef.current + 1;
-    retroRequestRevisionRef.current = requestRevision;
-    retroAbortRef.current = controller;
-
-    setHasRetroRun(true);
-    setIsDrawerOpen(true);
-    closePanel(false);
-    setIsRetrosynthesizing(true);
-    setRetroError(null);
-    setRetroData(null);
-    setSelectedRetroCandidateIndex(0);
-
-    void predictMonomerPrecursors(
-      {
-        smiles: retroSmiles.trim(),
-        target_role: retroTargetRole,
-        num_beams: Math.max(5, parsedRetroReturnCount),
-        num_return_sequences: parsedRetroReturnCount,
-        max_new_tokens: 128
-      },
-      controller.signal
-    )
-      .then((data) => {
-        if (!controller.signal.aborted && retroRequestRevisionRef.current === requestRevision) {
-          setRetroData(data);
-        }
-      })
-      .catch((error) => {
-        if (
-          controller.signal.aborted ||
-          isAbortError(error) ||
-          retroRequestRevisionRef.current !== requestRevision
-        ) {
-          return;
-        }
-        console.error("Failed to run monomer retrosynthesis", error);
-        setRetroError(errorMessage(error, "单体逆合成反推失败。"));
-      })
-      .finally(() => {
-        if (retroRequestRevisionRef.current === requestRevision) {
-          if (retroAbortRef.current === controller) retroAbortRef.current = null;
-          setIsRetrosynthesizing(false);
-        }
-      });
-  }
-
-  function openRetroParametersFromDrawer() {
-    setIsDrawerOpen(false);
-    setModulePanelView("retrosynthesis");
-    setSelectedModuleName("单体反推");
-    setOpenPanel("modules");
-  }
-
   function updateAssistantInput(value: string) {
     setAssistantInput(value);
     setAssistantNotice(null);
   }
 
-  const workbenchStyle = {
-    "--np-sw-drawer-width": `${drawerWidth}px`
-  } as CSSProperties;
-
   return (
     <div
       className="np-module-page np-structure-workbench"
       data-module="structure-workbench"
-      style={workbenchStyle}
     >
       <ModulePageHeader actions={<BrowsingRecordingControls module="structureWorkbench" />}>结构工作台</ModulePageHeader>
-      <div className={`np-sw-page np-module-page-body${isDrawerOpen ? " has-open-drawer" : ""}`}>
-        <div className={`np-sw-layout${isDrawerOpen ? " has-open-drawer" : ""}`}>
+      <div className="np-sw-page np-module-page-body">
+        <div className="np-sw-layout">
           <main className="np-sw-workspace">
             <StructureCanvasSurface
               structure={structure}
@@ -357,7 +234,6 @@ export const StructureWorkbenchPage = forwardRef<
 
             <StructureUtilityPanels
               openPanel={openPanel}
-              modulePanelView={modulePanelView}
               modulePanelRef={modulePanelRef}
               assistantPanelRef={assistantPanelRef}
               openingModuleId={openingModuleId}
@@ -365,62 +241,21 @@ export const StructureWorkbenchPage = forwardRef<
               structureSmiles={structure.smiles}
               assistantInput={assistantInput}
               assistantNotice={assistantNotice}
-              retroSmiles={retroSmiles}
-              retroTargetRole={retroTargetRole}
-              retroReturnCount={retroReturnCount}
-              showRetroValidation={showRetroValidation}
-              retroTargetValidation={retroTargetValidation}
-              retroCountValidation={retroCountValidation}
-              isRetrosynthesizing={isRetrosynthesizing}
-              retroError={retroError}
-              retroData={retroData}
-              operationBusy={operationBusy}
               onClose={closePanel}
-              onShowGrid={() => {
-                setModulePanelView("grid");
-                setSelectedModuleName("尚未选择任务");
-              }}
-              onShowRetrosynthesis={() => {
-                setModulePanelView("retrosynthesis");
-                setSelectedModuleName("单体反推");
-                setRetroError(null);
-              }}
               onOpenExternal={(id, name) => void openExternalModule(id, name)}
-              onUseCurrentStructure={() => void useCurrentStructureForRetrosynthesis()}
-              onSubmitRetrosynthesis={submitRetrosynthesis}
-              onRetroSmilesChange={(value) => {
-                setRetroSmiles(value);
-                setRetroError(null);
-              }}
-              onRetroTargetRoleChange={setRetroTargetRole}
-              onRetroReturnCountChange={setRetroReturnCount}
               onAssistantInputChange={updateAssistantInput}
               onAssistantNew={() => {
                 setAssistantInput("");
                 setAssistantNotice(null);
               }}
               onAssistantSend={() => {
+                if (!requestServiceAccess()) return;
                 if (assistantInput.trim()) {
                   setAssistantNotice("AI 对话接口尚未接入，本次内容未发送。");
                 }
               }}
             />
           </main>
-
-          <RetrosynthesisDrawer
-            open={isDrawerOpen}
-            hasRun={hasRetroRun}
-            width={drawerWidth}
-            loading={isRetrosynthesizing}
-            error={retroError}
-            data={retroData}
-            selectedCandidateIndex={selectedRetroCandidateIndex}
-            onWidthChange={setDrawerWidth}
-            onSelectedCandidateIndexChange={setSelectedRetroCandidateIndex}
-            onClose={() => setIsDrawerOpen(false)}
-            onOpen={() => setIsDrawerOpen(true)}
-            onAdjustParameters={openRetroParametersFromDrawer}
-          />
         </div>
       </div>
     </div>

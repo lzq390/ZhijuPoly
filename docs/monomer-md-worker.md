@@ -170,8 +170,11 @@ The public browser never connects to the Worker. Backend remains the only
 public interface and the only writer of platform orchestration state.
 
 Maximum production execution concurrency is one, with two additional admitted
-queue positions as described above. Formal protocols use the reviewed 300-step
-contract. The Worker tracks its process group and any governed GPU lease so
+queue positions as described above. The 300-step contract is a DensityDemo
+operations smoke, not formal protocol acceptance. Formal runs retain their
+complete protocol stages (Density 1.5M, HVap 6.5M, Transport 15M steps;
+Dielectric and Compressibility follow their explicit reviewed configuration).
+The Worker tracks its process group and any governed GPU lease so
 cancellation, timeout and shutdown cannot leave child processes or GPU capacity
 behind.
 
