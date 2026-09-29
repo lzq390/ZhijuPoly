@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import json
@@ -888,11 +889,45 @@ def validate_database_schema_state_contract(
                 f"Postgres startup/final schema profile is missing: {marker}"
             )
 
+    manifest = _load_json(root, "backend/migrations/postgres/manifest.json", failures)
+    entries = manifest.get("migrations", [])
+    versions = [entry.get("version") for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
+    isolation_versions = ("0017_user_isolation_prepare", "0018_user_isolation_cutover")
+    isolated = any(version in versions for version in isolation_versions)
+    if isolated:
+        if any(versions.count(version) != 1 for version in isolation_versions):
+            failures.append("user isolation startup requires both 0017 and 0018 exactly once")
+        for version in isolation_versions:
+            _read_text(root, f"backend/migrations/postgres/{version}.sql", failures)
+        if 'SCHEMA_TARGET_ISOLATION = "user-isolation-0018"' not in preflight:
+            failures.append("Postgres user-isolation-0018 schema profile is missing")
+
+    # Historical releases retain their through-0012 startup contract. A release
+    # carrying the isolation migrations must instead enforce the complete schema
+    # and the application's authentication readiness check at startup.
+    expected_target = "SCHEMA_TARGET_ISOLATION" if isolated else "SCHEMA_TARGET_STARTUP"
     main_text = _read_text(root, "backend/app/main.py", failures)
-    if "schema_target=SCHEMA_TARGET_STARTUP" not in main_text:
-        failures.append(
-            "backend startup must use the through-0012 compatibility profile"
-        )
+    try:
+        main_tree = ast.parse(main_text)
+    except SyntaxError:
+        failures.append("backend startup source is not valid Python")
+        main_tree = ast.Module(body=[], type_ignores=[])
+    startup = next((node for node in main_tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "_run_database_startup_preflight"), None)
+    calls = [node for node in ast.walk(startup) if isinstance(node, ast.Call)] if startup else []
+    preflight_calls = [call for call in calls if isinstance(call.func, ast.Name)
+                       and call.func.id == "run_preflight"]
+    if len(preflight_calls) != 1 or not any(
+        keyword.arg == "schema_target" and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == expected_target
+        for call in preflight_calls for keyword in call.keywords
+    ):
+        failures.append(f"backend startup must use {expected_target}")
+    if isolated and not any(
+        ast.unparse(call.func) == "api_app.state.auth.assert_application_ready"
+        and not call.args and not call.keywords for call in calls
+    ):
+        failures.append("user isolation startup must assert application authentication readiness")
 
     release_controller = _read_text(
         root,

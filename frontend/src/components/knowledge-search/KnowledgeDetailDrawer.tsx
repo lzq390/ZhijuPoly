@@ -183,6 +183,8 @@ export function KnowledgeDetailDrawer({
     }
     if (!presence.present && wasOpenRef.current) {
       frame = window.requestAnimationFrame(() => {
+        const active = document.activeElement;
+        if (active && active !== document.body && !drawerRef.current?.contains(active)) return;
         const target = returnFocusRef.current;
         if (target?.isConnected && !target.closest('[inert], [aria-hidden="true"]')) target.focus({ preventScroll: true });
       });

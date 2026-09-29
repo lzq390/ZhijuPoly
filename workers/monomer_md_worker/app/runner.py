@@ -66,6 +66,33 @@ class MonomerMdRunner:
     def gpu_admission_uncertain(self) -> bool:
         return self._gpu_admission_uncertain
 
+    def recovery_resources_released(self) -> bool:
+        """Prove the old MD executions absent using the existing Broker authority."""
+        if self._settings.mode != "real":
+            return True
+        if self._gpu_admission_uncertain or self._gpu_broker_client is None:
+            return False
+        snapshot = self._gpu_broker_client.status()
+        if (
+            snapshot.get("schema_version") != 1
+            or not isinstance(snapshot.get("broker_instance_id"), str)
+            or not snapshot["broker_instance_id"]
+            or snapshot.get("quarantined_gpus") != {}
+        ):
+            return False
+        leases = snapshot.get("leases")
+        waiters = snapshot.get("waiters")
+        if not isinstance(leases, list) or isinstance(waiters, bool) or waiters != 0:
+            return False
+        # A live, suspect or terminating lease still owns resources. Broker
+        # removal requires its existing workload/process-group safety checks.
+        for lease in leases:
+            if not isinstance(lease, dict) or not all(key in lease for key in ("component", "environment")):
+                return False
+            if lease["component"] == "md" and lease["environment"] == self._settings.gpu_broker_environment:
+                return False
+        return True
+
     @property
     def byteff2_environment(self) -> ByteFF2SubprocessEnvironment:
         return self._byteff2_environment

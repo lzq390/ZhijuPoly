@@ -19,7 +19,8 @@ import type {
   MonomerMdServiceStatusResponse,
   MonomerMdSimulationResult
 } from "../types";
-import { isAbortError, pollJobWithBackoff } from "./jobPolling";
+import { isAbortError } from "./jobPolling";
+import { useTaskEvents } from "./useTaskEvents";
 import {
   MonomerMdStatusLoader,
   monomerMdStatusLoadError
@@ -52,13 +53,12 @@ type MonomerMdSimulationState = {
 };
 
 export type UseMonomerMdSimulationOptions = {
+  enabled?: boolean;
   initialJobId?: string | null;
   onJobIdChange?: (jobId: string | null) => void;
   taskCenterActive?: boolean;
 };
 
-const POLL_INTERVAL_MS = 1400;
-const FORMAL_LIST_POLL_INTERVAL_MS = 5000;
 const HISTORY_PAGE_SIZE = 10;
 const TERMINAL_STATUSES = new Set<MonomerMdJobStatus>([
   "completed",
@@ -123,7 +123,7 @@ function isTerminal(job: MonomerMdJobResponse | null): boolean {
 export function useMonomerMdSimulation(
   options: UseMonomerMdSimulationOptions = {}
 ) {
-  const { initialJobId = null, taskCenterActive = false } = options;
+  const { initialJobId = null, taskCenterActive = false, enabled = true } = options;
   const [historyQuery, setHistoryQuery] = useState<MonomerMdJobListQuery>(
     DEFAULT_HISTORY_QUERY
   );
@@ -151,7 +151,12 @@ export function useMonomerMdSimulation(
     deleteJobErrors: {}
   });
 
+  const eventHandler = useRef<(change: { ids: string[]; resync: boolean }) => Promise<unknown>>(async () => {});
+  const { connectionState: eventConnectionState, reconnect } =
+    useTaskEvents("md", enabled, change => eventHandler.current(change));
+
   const mountedRef = useRef(true);
+  const deferredEventRefresh = useRef(false);
   const pollRevisionRef = useRef(0);
   const pollAbortRef = useRef<AbortController | null>(null);
   const submitRevisionRef = useRef(0);
@@ -291,52 +296,6 @@ export function useMonomerMdSimulation(
     }
   }, []);
 
-  const pollJob = useCallback(async (
-    jobId: string,
-    revision: number,
-    controller: AbortController
-  ) => {
-    try {
-      await pollJobWithBackoff({
-        signal: controller.signal,
-        fetchJob: (signal) => fetchMonomerMdJob(jobId, signal),
-        isTerminal: (job) => TERMINAL_STATUSES.has(job.status),
-        intervalMs: POLL_INTERVAL_MS,
-        onExpired: () => {
-          if (!mountedRef.current || controller.signal.aborted || pollRevisionRef.current !== revision) return;
-          setState((current) => ({
-            ...current,
-            isJobLoading: false,
-            error: "任务不存在或已到期。",
-            jobLoadErrorKind: "not_found"
-          }));
-        },
-        onJob: (job) => {
-          if (!mountedRef.current || controller.signal.aborted || pollRevisionRef.current !== revision) return;
-          const terminal = TERMINAL_STATUSES.has(job.status);
-          setState((current) => ({
-            ...current,
-            job,
-            data: getMonomerMdJobResult(job) ?? (terminal ? null : current.data),
-            isJobLoading: !terminal,
-            error:
-              job.status === "failed" || job.status === "cancelled"
-                ? jobErrorMessage(job)
-                : null,
-            jobLoadErrorKind: null
-          }));
-          if (terminal && job.run_mode === "formal") {
-            void refreshActiveJobs();
-            void refreshHistory();
-            void refreshStatus();
-          }
-        }
-      });
-    } finally {
-      if (pollAbortRef.current === controller) pollAbortRef.current = null;
-    }
-  }, [refreshActiveJobs, refreshHistory, refreshStatus]);
-
   const loadJob = useCallback(async (jobId: string) => {
     selectedJobIdRef.current = jobId;
     pollRevisionRef.current += 1;
@@ -355,34 +314,31 @@ export function useMonomerMdSimulation(
     try {
       const job = await fetchMonomerMdJob(jobId, controller.signal);
       if (!mountedRef.current || controller.signal.aborted || pollRevisionRef.current !== revision) return;
-      const terminal = TERMINAL_STATUSES.has(job.status);
       setState((current) => ({
         ...current,
         job,
         data: getMonomerMdJobResult(job),
-        isJobLoading: !terminal,
+        isJobLoading: false,
         error:
           job.status === "failed" || job.status === "cancelled"
             ? jobErrorMessage(job)
             : null,
         jobLoadErrorKind: null
       }));
-      if (!terminal) {
-        void pollJob(jobId, revision, controller);
-      } else if (pollAbortRef.current === controller) {
-        pollAbortRef.current = null;
-      }
+      if (pollAbortRef.current === controller) pollAbortRef.current = null;
     } catch (error) {
       if (!mountedRef.current || controller.signal.aborted || isAbortError(error) || pollRevisionRef.current !== revision) return;
       const notFound = isNotFoundError(error);
       setState((current) => ({
         ...current,
         isJobLoading: false,
+        job: notFound ? null : current.job,
+        data: notFound ? null : current.data,
         error: notFound ? "任务不存在或已到期。" : errorText(error, "读取单体 MD 任务失败。"),
         jobLoadErrorKind: notFound ? "not_found" : "request"
       }));
     }
-  }, [pollJob]);
+  }, []);
 
   const clearSelectedJob = useCallback((notify = true) => {
     selectedJobIdRef.current = null;
@@ -455,7 +411,7 @@ export function useMonomerMdSimulation(
       }));
       return null;
     } finally {
-      if (submitAbortRef.current === controller) submitAbortRef.current = null;
+      if (submitAbortRef.current === controller) { submitAbortRef.current = null; flushDeferredEvent(); }
     }
   }, [loadJob, refreshActiveJobs, refreshHistory, refreshStatus]);
 
@@ -495,6 +451,7 @@ export function useMonomerMdSimulation(
     } finally {
       if (actionControllersRef.current.get(key) === controller) {
         actionControllersRef.current.delete(key);
+        flushDeferredEvent();
         if (mountedRef.current) {
           setState((current) => ({
             ...current,
@@ -535,7 +492,7 @@ export function useMonomerMdSimulation(
         artifactDeleteError: errorText(error, "删除输出文件失败。")
       }));
     } finally {
-      if (artifactAbortRef.current === controller) artifactAbortRef.current = null;
+      if (artifactAbortRef.current === controller) { artifactAbortRef.current = null; flushDeferredEvent(); }
     }
   }, []);
 
@@ -595,6 +552,7 @@ export function useMonomerMdSimulation(
     } finally {
       if (actionRevisionsRef.current.get(key) === revision) {
         actionControllersRef.current.delete(key);
+        flushDeferredEvent();
         if (mountedRef.current) {
           setState((current) => ({
             ...current,
@@ -616,7 +574,7 @@ export function useMonomerMdSimulation(
 
   useEffect(() => {
     mountedRef.current = true;
-    void refreshStatus();
+    if (enabled) void refreshStatus();
     return () => {
       mountedRef.current = false;
       selectedJobIdRef.current = null;
@@ -633,80 +591,59 @@ export function useMonomerMdSimulation(
       statusLoaderRef.current?.cancel();
       for (const controller of actionControllersRef.current.values()) controller.abort();
     };
-  }, [refreshStatus]);
+  }, [enabled, refreshStatus]);
 
   useEffect(() => {
+    if (!enabled) return;
     if (initialJobId) {
       if (selectedJobIdRef.current !== initialJobId) void loadJob(initialJobId);
       return;
     }
     if (selectedJobIdRef.current) clearSelectedJob(false);
-  }, [clearSelectedJob, initialJobId, loadJob]);
+  }, [clearSelectedJob, enabled, initialJobId, loadJob]);
 
   useEffect(() => {
-    const shouldPoll =
-      state.serviceStatus?.busy === true ||
-      state.serviceStatus?.draining === true ||
-      (state.serviceStatus?.database_active_jobs ?? 0) > 0;
-    if (!shouldPoll) return;
-    let cancelled = false;
-    let timer: number | null = null;
-    const schedule = () => {
-      timer = window.setTimeout(() => {
-        void refreshStatus().finally(() => {
-          if (!cancelled) schedule();
-        });
-      }, FORMAL_LIST_POLL_INTERVAL_MS);
-    };
-    schedule();
-    return () => {
-      cancelled = true;
-      if (timer != null) window.clearTimeout(timer);
-    };
-  }, [
-    refreshStatus,
-    state.serviceStatus?.busy,
-    state.serviceStatus?.database_active_jobs,
-    state.serviceStatus?.draining
-  ]);
-
-  useEffect(() => {
-    if (!taskCenterActive) return;
+    if (!enabled || !taskCenterActive) return;
     void refreshHistory(historyQuery);
-  }, [historyQuery, refreshHistory, taskCenterActive]);
-
-  const selectedFormalActive =
-    state.job?.run_mode === "formal" && state.job != null && !isTerminal(state.job);
-  const knownFormalActivity =
-    selectedFormalActive ||
-    state.activeJobs.length > 0 ||
-    (state.serviceStatus?.formal_running_jobs ?? 0) > 0 ||
-    (state.serviceStatus?.formal_queued_jobs ?? 0) > 0;
+  }, [enabled, historyQuery, refreshHistory, taskCenterActive]);
 
   useEffect(() => {
-    if (!taskCenterActive && !knownFormalActivity) return;
-    let cancelled = false;
-    let timer: number | null = null;
-    void refreshActiveJobs();
-    const schedule = () => {
-      timer = window.setTimeout(() => {
-        void Promise.allSettled([refreshActiveJobs(), refreshStatus()]).finally(() => {
-          if (!cancelled) schedule();
-        });
-      }, FORMAL_LIST_POLL_INTERVAL_MS);
-    };
-    schedule();
-    return () => {
-      cancelled = true;
-      if (timer != null) window.clearTimeout(timer);
-    };
-  }, [knownFormalActivity, refreshActiveJobs, refreshStatus, taskCenterActive]);
+    if (enabled && taskCenterActive) void refreshActiveJobs();
+  }, [enabled, taskCenterActive, refreshActiveJobs]);
+
+  const refreshAll = useCallback(async () => {
+    const selected = selectedJobIdRef.current;
+    await Promise.allSettled([
+      refreshStatus(), refreshActiveJobs(), refreshHistory(),
+      ...(selected ? [loadJob(selected)] : [])
+    ]);
+  }, [refreshStatus, refreshActiveJobs, refreshHistory, loadJob]);
+
+  function flushDeferredEvent() {
+    if (deferredEventRefresh.current && actionControllersRef.current.size === 0 && !submitAbortRef.current && !artifactAbortRef.current) {
+      deferredEventRefresh.current = false;
+      void eventHandler.current({ ids: [], resync: true });
+    }
+  }
+  eventHandler.current = async ({ ids, resync }) => {
+    if (actionControllersRef.current.size > 0 || submitAbortRef.current || artifactAbortRef.current) {
+      deferredEventRefresh.current = true;
+      return;
+    }
+    const selected = selectedJobIdRef.current;
+    await Promise.allSettled([
+      refreshActiveJobs(), refreshHistory(), refreshStatus(),
+      ...(selected && (resync || ids.includes(selected)) ? [loadJob(selected)] : [])
+    ]);
+  };
 
   return {
     historyQuery,
     ...state,
     isLoading: state.isSubmitting || state.isJobLoading,
     submit,
+    eventConnectionState,
+    refreshAll: async () => { if (eventConnectionState === "unavailable") reconnect(); await refreshAll(); },
     refreshStatus,
     refreshActiveJobs,
     refreshHistory,

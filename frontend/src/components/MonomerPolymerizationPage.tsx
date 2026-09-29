@@ -1,3 +1,4 @@
+import { getSessionEpoch } from "../auth/session";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import {
@@ -45,7 +46,7 @@ import {
 import {
   clearMonomerPolymerizationDraft,
   readMonomerPolymerizationDraft,
-  saveMonomerPolymerizationDraft,
+  saveMonomerPolymerizationDraft as persistPrivateDraft,
   type MonomerPolymerizationDraft
 } from "./monomer-polymerization/session";
 
@@ -97,6 +98,11 @@ export function MonomerPolymerizationPage({
   structure,
   onEditStructure
 }: MonomerPolymerizationPageProps) {
+  const identityEpoch = useRef(getSessionEpoch());
+  const saveMonomerPolymerizationDraft = (...args: Parameters<typeof persistPrivateDraft>) => {
+    if (identityEpoch.current === getSessionEpoch()) persistPrivateDraft(...args);
+  };
+
   const [initialForm] = useState<MonomerPolymerizationDraft>(() =>
     readMonomerPolymerizationDraft() ?? defaultForm(structure.smiles)
   );

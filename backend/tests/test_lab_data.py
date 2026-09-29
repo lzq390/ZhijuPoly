@@ -4,12 +4,17 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from app.config import Settings
 from app.main import create_app
 from app.postgres_database import PostgresUnavailableError
+from app.routers.lab_data import router as lab_data_router
 from app.services.lab_data_repository import DEFAULT_TEST_PROJECTS, LabDataRepository
+from test_auth_isolation import auth_database
+from test_private_http_support import authenticated_client
 
 
 class UniqueViolation(Exception):
@@ -155,38 +160,57 @@ def make_client_with_fake_lab_data(fake_connection: FakeLabDataConnection) -> Te
         lab_data_postgres_dsn="",
         model_enabled=False,
     )
-    app = create_app(settings)
+    # Repository/route unit tests deliberately mount this router alone. The
+    # complete application's closed operations boundary is tested below using
+    # real guest/ordinary sessions; this helper is not an authentication bypass
+    # installed in create_app or any shared fixture.
+    app = FastAPI()
+    app.state.settings = settings
+    app.include_router(lab_data_router)
 
     @contextmanager
     def fake_connection_factory(dsn: str):
         assert dsn == "postgresql://pi-user:pi-pass@example.invalid/nexpoly"
         yield fake_connection
 
-    @contextmanager
-    def fake_deployment_control_connection_factory(dsn: str):
-        assert dsn == "postgresql://pi-user:pi-pass@example.invalid/nexpoly"
-
-        class DeploymentControlConnection:
-            def execute(self, sql: str, params=None) -> FakeCursor:
-                assert "from governance.deployment_control" in " ".join(sql.lower().split())
-                return FakeCursor(
-                    [
-                        {
-                            "drain_enabled": False,
-                            "reason": None,
-                            "release_sha": None,
-                            "activated_at": None,
-                            "activated_by": None,
-                            "updated_at": datetime.now(),
-                        }
-                    ]
-                )
-
-        yield DeploymentControlConnection()
-
     app.state.postgres_connection_factory = fake_connection_factory
-    app.state.deployment_control_connection_factory = fake_deployment_control_connection_factory
     return TestClient(app)
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/api/v1/lab-data/test-projects"),
+    ("POST", "/api/v1/lab-data/sample-measurements"),
+    ("GET", "/api/v1/lab-data/sample-measurements"),
+    ("GET", "/api/v1/lab-data/sample-measurements/count"),
+    ("GET", "/api/v1/lab-data/sample-measurements/stats/by-project"),
+    ("GET", "/api/v1/lab-data/sample-measurements/stats/summary"),
+])
+def test_full_app_lab_routes_deny_guest_and_ordinary_user_before_business_access(auth_database, method, path):
+    app = create_app(Settings(app_postgres_dsn=auth_database["api"], model_enabled=False,
+                              gen_model_enabled=False, retro_model_enabled=False,
+                              gpu_broker_enabled=False))
+
+    @contextmanager
+    def forbidden_business_access(_dsn):
+        raise AssertionError("Lab access must be denied before opening a business connection")
+        yield
+
+    app.state.postgres_connection_factory = forbidden_business_access
+    app.state.deployment_control_connection_factory = forbidden_business_access
+    ordinary = authenticated_client(app, auth_database)
+    guest = TestClient(app)
+    try:
+        # Invalid write input proves policy rejection happens before validation.
+        options = {"content": b"invalid-json", "headers": {"Content-Type": "application/json", "Origin": "http://testserver"}}
+        guest_response = guest.request(method, path, **options)
+        assert guest_response.status_code == 401, guest_response.text
+        response = ordinary.request(method, path, **options)
+        assert response.status_code == 403, response.text
+        assert response.json()["code"] == "operation_forbidden"
+        assert guest.get("/health").status_code == 200
+    finally:
+        ordinary.close()
+        guest.close()
 
 
 def test_lab_data_schema_initialization_tolerates_concurrent_schema_create() -> None:
@@ -286,7 +310,7 @@ def test_lab_data_rejects_invalid_pagination() -> None:
     assert response.json()["detail"] == "page 必须大于等于 1。"
 
 
-def test_lab_data_database_unavailable_is_scoped_to_lab_data_routes() -> None:
+def test_lab_data_router_database_unavailable_returns_domain_error() -> None:
     settings = Settings(
         pi_reverse_backend="postgres",
         app_postgres_dsn="postgresql://pi-user:pi-pass@example.invalid/nexpoly",
@@ -294,7 +318,9 @@ def test_lab_data_database_unavailable_is_scoped_to_lab_data_routes() -> None:
         lab_data_postgres_dsn="",
         model_enabled=False,
     )
-    app = create_app(settings)
+    app = FastAPI()
+    app.state.settings = settings
+    app.include_router(lab_data_router)
 
     @contextmanager
     def unavailable_connection_factory(dsn: str):
@@ -305,8 +331,6 @@ def test_lab_data_database_unavailable_is_scoped_to_lab_data_routes() -> None:
     client = TestClient(app)
 
     lab_response = client.get("/api/v1/lab-data/test-projects")
-    health_response = client.get("/health")
 
     assert lab_response.status_code == 503
     assert lab_response.json()["detail"] == "Lab data PostgreSQL database is not reachable"
-    assert health_response.status_code == 200

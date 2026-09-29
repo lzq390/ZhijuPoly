@@ -360,6 +360,8 @@ class WorkerSettings:
     gpu_guard_mode: Literal["enforce", "observe"] = "enforce"
     release_sha: str | None = None
     runtime_contract_sha256: str | None = None
+    start_authorization_url: str = ""
+    start_authorization_token: str = ""
 
     def __post_init__(self) -> None:
         code_root = REPO_ROOT.resolve(strict=False)
@@ -769,4 +771,6 @@ def load_settings() -> WorkerSettings:
         gpu_guard_mode=gpu_guard_mode,
         release_sha=release_sha,
         runtime_contract_sha256=runtime_contract_sha256,
+        start_authorization_url=os.getenv("MONOMER_DFT_START_AUTHORIZATION_URL", ""),
+        start_authorization_token=os.getenv("MONOMER_DFT_START_AUTHORIZATION_TOKEN", ""),
     )

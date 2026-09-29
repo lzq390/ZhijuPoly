@@ -1,3 +1,4 @@
+import { requestServiceAccess } from "../auth/guestAccess";
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
 import { isApiRequestError, startKnowledgeRecording, stopKnowledgeRecording, summarizeKnowledgeRecording } from "../services/api";
 import type { KnowledgeRecording, KnowledgeRecordingSummary } from "../types";
@@ -49,6 +50,7 @@ export function KnowledgeRecordingProvider({ children }: { children: ReactNode }
   }, []);
 
   const start = useCallback(async () => {
+    if (!requestServiceAccess()) return;
     if (!["idle", "stopped"].includes(phaseRef.current)) return;
     setError(null);
     try {

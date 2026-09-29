@@ -96,7 +96,10 @@ def create_app(
     scientific_engine: Any | None = None,
     job_manager: JobManager | None = None,
 ) -> FastAPI:
+    from .start_authorization import StartAuthorizer
+
     settings = worker_settings or load_settings()
+    start_authorizer = StartAuthorizer(base_url=settings.start_authorization_url, token=settings.start_authorization_token)
     if job_manager is not None:
         manager = job_manager
         runtime = worker_runtime or manager.runtime
@@ -124,6 +127,7 @@ def create_app(
             max_queued_jobs=settings.max_queued_jobs,
             single_point_timeout_seconds=settings.single_point_timeout_seconds,
             optimization_timeout_seconds=settings.optimization_timeout_seconds,
+            start_authorizer=start_authorizer,
             # The host wrapper restarts only this explicit status. JobManager
             # invokes it solely after a durable terminal journal and after the
             # executor pool proves MPS/process/lease cleanup safe.
@@ -239,6 +243,7 @@ def create_app(
         }
         ready = bool(probe.ready) and not state["fatal"]
         return HealthResponse(
+            start_authorization_version=1 if start_authorizer.configured else 0,
             status="ok" if ready else "degraded",
             runtime_ready=bool(probe.ready),
             accepting_jobs=state["accepting_jobs"],

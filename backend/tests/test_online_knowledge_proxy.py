@@ -7,7 +7,16 @@ import pytest
 from starlette.requests import Request
 
 import app.config as config_module
+from app.auth.context import Identity, current_identity, user_context
+from app.task_control import acquire_admission
 from app.config import Settings, _normalize_http_proxy_url
+
+@pytest.fixture(autouse=True)
+def private_identity(monkeypatch):
+    monkeypatch.setattr("app.task_control._start_checker", lambda _: True)
+    with user_context(Identity("11111111-1111-1111-1111-111111111111")):
+        yield
+
 from app.models import OnlineKnowledgeSearchRequest
 from app.routers import online_knowledge as online_routes
 from app.services import ai_client
@@ -23,11 +32,8 @@ def _request_with_settings(settings: object) -> Request:
 def _search_request() -> OnlineKnowledgeSearchRequest:
     return OnlineKnowledgeSearchRequest(
         material="polyethylene",
-        base_url="https://api.example.test/v1",
-        model="test-model",
         max_papers=1,
         extraction_delay_seconds=0,
-        use_server_default=True,
     )
 
 
@@ -178,6 +184,8 @@ def test_sync_and_async_routes_propagate_scoped_proxy(
     request_body = _search_request()
     settings = SimpleNamespace(
         online_knowledge_api_key="server-key",
+        online_knowledge_base_url="https://api.example.test/v1",
+        online_knowledge_model="test-model",
         online_knowledge_proxy_url="http://proxy.example.test:17892",
     )
     access = online_routes.resolve_online_model_access(request_body, settings)
@@ -197,8 +205,9 @@ def test_sync_and_async_routes_propagate_scoped_proxy(
         fake_run_online_knowledge_search,
     )
     monkeypatch.setattr(online_routes, "postgres_connection", fake_postgres_connection)
-    monkeypatch.setattr(online_routes, "mark_online_job_running_postgres", lambda *_: None)
-    monkeypatch.setattr(online_routes, "mark_online_job_failed_postgres", lambda *_: None)
+    monkeypatch.setattr(online_routes, "authorize_start", lambda *args, **kwargs: True)
+    monkeypatch.setattr(online_routes, "mark_online_job_running_postgres", lambda *_, **__: None)
+    monkeypatch.setattr(online_routes, "mark_online_job_failed_postgres", lambda *_, **__: None)
 
     with pytest.raises(RuntimeError, match="stop after proxy propagation"):
         online_routes._run_search_from_request(request_body, access)
@@ -207,6 +216,9 @@ def test_sync_and_async_routes_propagate_scoped_proxy(
         "postgresql://example.test/db",
         request_body,
         access,
+        current_identity(),
+        acquire_admission("online"),
+        None,
     )
 
     assert captured == [

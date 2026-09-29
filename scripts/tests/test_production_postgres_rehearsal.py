@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from scripts.tests.bridge_manifest_fixtures import F_MANIFEST_RECORDS
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -71,9 +72,9 @@ class ProductionPostgresRehearsalTests(unittest.TestCase):
 
     @staticmethod
     def reviewed_manifest() -> list[dict[str, object]]:
-        return json.loads(
-            (ROOT.parent / "backend/migrations/postgres/manifest.json").read_text()
-        )["migrations"]
+        # These rehearsal paths end at 0016; today's isolation manifest is not
+        # a reviewed legacy deployment target.
+        return copy.deepcopy(F_MANIFEST_RECORDS)
 
     def expected_migration_records(self) -> list[dict[str, str]]:
         return [
@@ -529,6 +530,15 @@ class ProductionPostgresRehearsalTests(unittest.TestCase):
                     self.build_mocked_plan(report["source_before"])
                 with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal predecessor"):
                     self.validate(report)
+
+    def test_current_isolation_manifest_cannot_use_legacy_rehearsal(self) -> None:
+        manifest = json.loads(
+            (ROOT.parent / "backend/migrations/postgres/manifest.json").read_text()
+        )["migrations"]
+        self.assertEqual(manifest[-1]["version"], "0018_user_isolation_cutover")
+        with mock.patch.object(self, "manifest", return_value=manifest):
+            with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal target"):
+                self.build_mocked_plan(self.source_evidence())
 
     def test_new_profiles_reject_migration_output_tampering(self) -> None:
         for source_count, target_count in ((15, 15), (15, 16), (16, 16)):

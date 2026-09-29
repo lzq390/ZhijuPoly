@@ -1,3 +1,4 @@
+import { createPrivateObjectURL, revokePrivateObjectURL } from "../auth/objectUrls";
 import {
   ArrowUp,
   BookOpen,
@@ -535,7 +536,7 @@ export function TgAssistantPanel({
   useEffect(() => {
     const url = selectedImage?.url;
     return () => {
-      if (url) URL.revokeObjectURL(url);
+      if (url) revokePrivateObjectURL(url);
     };
   }, [selectedImage?.url]);
 
@@ -589,7 +590,7 @@ export function TgAssistantPanel({
       return;
     }
     try {
-      setSelectedImage({ file, url: URL.createObjectURL(file) });
+      setSelectedImage({ file, url: createPrivateObjectURL(file) });
       setImageError(null);
     } catch {
       setImageError("图片预览创建失败，请重新选择。");

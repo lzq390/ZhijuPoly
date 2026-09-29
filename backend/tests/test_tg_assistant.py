@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.auth.context import Identity, user_context
+TEST_OWNER = Identity("11111111-1111-1111-1111-111111111111")
+SECOND_OWNER = Identity("22222222-2222-2222-2222-222222222222")
+
+
 import json
 import logging
 from pathlib import Path
@@ -11,6 +16,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.formparsers import MultiPartParser
+
+@pytest.fixture(autouse=True)
+def private_test_identity(monkeypatch):
+    monkeypatch.setattr("app.task_control._start_checker", lambda _: True)
+    with user_context(TEST_OWNER):
+        yield
+
 
 from app import config as config_module
 from app.config import Settings

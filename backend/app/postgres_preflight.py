@@ -111,10 +111,13 @@ STARTUP_RUNTIME_TABLES = tuple(
 )
 SCHEMA_TARGET_STARTUP = "startup-through-0012"
 SCHEMA_TARGET_FINAL = "final-0013"
-SCHEMA_TARGETS = frozenset({SCHEMA_TARGET_STARTUP, SCHEMA_TARGET_FINAL})
+SCHEMA_TARGET_ISOLATION = "user-isolation-0018"
+SCHEMA_TARGETS = frozenset({SCHEMA_TARGET_STARTUP, SCHEMA_TARGET_FINAL, SCHEMA_TARGET_ISOLATION})
 
 
 def _required_migrations(schema_target: str) -> tuple[str, ...]:
+    if schema_target == SCHEMA_TARGET_ISOLATION:
+        return tuple(migration.version for migration in _MIGRATION_POLICY)
     if schema_target == SCHEMA_TARGET_STARTUP:
         return STARTUP_REQUIRED_MIGRATIONS
     if schema_target == SCHEMA_TARGET_FINAL:
@@ -125,6 +128,10 @@ def _required_migrations(schema_target: str) -> tuple[str, ...]:
 def _required_runtime_tables(
     schema_target: str,
 ) -> tuple[tuple[str, str], ...]:
+    if schema_target == SCHEMA_TARGET_ISOLATION:
+        # Hidden lab modules are not part of the authenticated v1 product.
+        # Their rows must not require extra API/service privileges at startup.
+        return tuple(table for table in STRICT_RUNTIME_TABLES if table[0] != "lab")
     if schema_target == SCHEMA_TARGET_STARTUP:
         return STARTUP_RUNTIME_TABLES
     if schema_target == SCHEMA_TARGET_FINAL:
@@ -268,6 +275,9 @@ def _analytics_snapshot_report(connection) -> dict[str, object]:
 
 def strict_preflight_errors(report: dict[str, object]) -> list[str]:
     errors: list[str] = []
+    reverse_access = report.get("reverse_design_access")
+    if isinstance(reverse_access, dict) and reverse_access.get("ready") is not True:
+        errors.append("Reverse design PI connection cannot read required query dependencies")
     postgres = report.get("postgres")
     if not isinstance(postgres, dict) or not postgres.get("reachable"):
         detail = postgres.get("error") if isinstance(postgres, dict) else None
@@ -324,7 +334,7 @@ def strict_preflight_errors(report: dict[str, object]) -> list[str]:
             f"{reason or 'unknown reason'}"
         )
     elif (
-        schema_target == SCHEMA_TARGET_FINAL
+        schema_target in {SCHEMA_TARGET_FINAL, SCHEMA_TARGET_ISOLATION}
         and dft_state != MonomerDftSchemaState.READY.value
     ):
         errors.append(
@@ -366,6 +376,20 @@ def strict_preflight_errors(report: dict[str, object]) -> list[str]:
 
 def preflight_blockers(report: dict[str, object]) -> list[str]:
     return strict_preflight_errors(report)
+
+
+def reverse_design_readiness(dsn: str) -> dict[str, object]:
+    """Use the actual PI connection, never the ambient service DSN override."""
+    import psycopg
+    from app.services.postgres_reverse_design import verify_reverse_design_query_access
+
+    try:
+        with psycopg.connect(dsn, connect_timeout=3) as connection:
+            connection.execute("SET TRANSACTION READ ONLY")
+            verify_reverse_design_query_access(connection)
+        return {"ready": True}
+    except psycopg.Error as exc:
+        return {"ready": False, "error_type": type(exc).__name__, "sqlstate": exc.sqlstate}
 
 
 def run_preflight(
@@ -484,10 +508,15 @@ def run_preflight(
                 .difference(_MIGRATION_CHECKSUMS)
                 .difference(forward_compatible_migrations)
             )
+            if schema_target == SCHEMA_TARGET_ISOLATION:
+                from app.auth.schema import validate_runtime_role, validate_isolation_schema
+                report["service_identity"] = validate_runtime_role(connection, "nexpoly_service")
+                report["user_isolation_schema"] = validate_isolation_schema(connection)
             dft_schema = probe_monomer_dft_schema(connection)
             table_counts = {
                 f"{schema}.{table}": _postgres_count(connection, schema, table)
                 for schema, table in STARTUP_RUNTIME_TABLES
+                if schema_target != SCHEMA_TARGET_ISOLATION or schema != "lab"
             }
             table_counts.update(
                 {
@@ -556,6 +585,9 @@ def run_preflight(
     except PostgresUnavailableError as exc:
         report["postgres"] = {"reachable": False, "error": str(exc), "tables": {}}
 
+    if schema_target == SCHEMA_TARGET_ISOLATION:
+        report["reverse_design_access"] = reverse_design_readiness(settings.pi_postgres_dsn)
+
     blockers = preflight_blockers(report)
     strict_errors = strict_preflight_errors(report)
     report["status"] = "failed" if blockers else "ok"
@@ -566,10 +598,15 @@ def run_preflight(
 
 
 def main() -> None:
+    from contextlib import nullcontext
+    import os
+    from app.auth.context import service_context
+
     parser = argparse.ArgumentParser(description="Read-only PolyProp Postgres governance preflight.")
     parser.add_argument("--dsn", default=None)
     parser.add_argument("--mode", choices=["runtime", "migration", "schema"], default="runtime")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when required migrations or runtime tables are missing.")
+    parser.add_argument("--service-context", action="store_true", help="Use the explicitly configured APP_SERVICE_POSTGRES_DSN for global runtime checks.")
     parser.add_argument("--expected-source-sha", help="Require the stored analytics snapshot to match this release SHA.")
     parser.add_argument(
         "--schema-target",
@@ -577,19 +614,23 @@ def main() -> None:
         default=SCHEMA_TARGET_FINAL,
         help=(
             "Validate startup compatibility through 0012 or strict readiness "
-            "through the current canonical manifest (currently 0016). The "
+            "through the historical manifest; user-isolation-0018 requires the dedicated cutover. The "
             "final-0013 choice is retained as a compatibility identifier."
         ),
     )
     args = parser.parse_args()
-    report = run_preflight(
-        Settings(),
-        args.dsn,
-        args.mode,
-        strict=args.strict,
-        expected_source_sha=args.expected_source_sha,
-        schema_target=args.schema_target,
-    )
+    service_dsn = os.getenv("APP_SERVICE_POSTGRES_DSN", "")
+    if args.service_context and (not service_dsn or args.dsn):
+        parser.error("--service-context requires APP_SERVICE_POSTGRES_DSN and cannot be combined with --dsn")
+    with service_context() if args.service_context else nullcontext():
+        report = run_preflight(
+            Settings(),
+            service_dsn if args.service_context else args.dsn,
+            args.mode,
+            strict=args.strict,
+            expected_source_sha=args.expected_source_sha,
+            schema_target=args.schema_target,
+        )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if args.strict and report["strict_errors"]:
         sys.exit(1)

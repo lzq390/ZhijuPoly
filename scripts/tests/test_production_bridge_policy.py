@@ -86,15 +86,15 @@ class ProductionBridgePolicyPinTests(unittest.TestCase):
         self.document = policy_document()
 
     def validate(self, document: dict[str, object]) -> dict[str, object]:
-        return VALIDATOR.validate_policy_payload(payload(document))
+        return VALIDATOR.validate_policy_payload(payload(document), historical=True)
 
-    def test_tracked_policy_cross_binds_dynamic_f_and_frozen_b(self) -> None:
+    def test_historical_policy_cross_binds_frozen_f_and_frozen_b(self) -> None:
         with mock.patch.object(
             VALIDATOR,
             "_snapshot_head_bound_inputs",
             return_value=clean_head_binding_snapshot(),
         ):
-            evidence = VALIDATOR.validate_tracked_policy()
+            evidence = VALIDATOR.validate_tracked_policy(historical=True)
         self.assertEqual(evidence["target"]["sha"], VALIDATOR.TARGET_SHA)
         self.assertEqual(evidence["target"]["tree"], VALIDATOR.TARGET_TREE)
         self.assertEqual(
@@ -124,7 +124,7 @@ class ProductionBridgePolicyPinTests(unittest.TestCase):
         )
         self.assertEqual(
             evidence["authority"]["identity_source"],
-            "current-HEAD-not-policy-self-reference",
+            "frozen-pre-isolation-F",
         )
         self.assertEqual(
             evidence["asset"]["manifest_sha256"],
@@ -169,7 +169,7 @@ class ProductionBridgePolicyPinTests(unittest.TestCase):
         )
 
     def test_current_authority_rejects_nonexact_0016_manifests(self) -> None:
-        authority_sha = VALIDATOR._head_commit(ROOT)
+        authority_sha = VALIDATOR.LEGACY_AUTHORITY_SHA
         revision_path = (
             f"{authority_sha}:backend/migrations/postgres/manifest.json"
         )
@@ -202,7 +202,7 @@ class ProductionBridgePolicyPinTests(unittest.TestCase):
                     self.validate(self.document)
 
     def test_current_authority_rejects_batch_sql_drift(self) -> None:
-        authority_sha = VALIDATOR._head_commit(ROOT)
+        authority_sha = VALIDATOR.LEGACY_AUTHORITY_SHA
         revision_path = (
             f"{authority_sha}:backend/migrations/postgres/"
             "0016_monomer_polymerization_batch.sql"
@@ -571,25 +571,64 @@ class ProductionBridgeHeadBindingTests(unittest.TestCase):
             VALIDATOR.ProductionBridgePolicyError,
             "inputs changed during",
         ):
-            VALIDATOR.validate_tracked_policy()
+            VALIDATOR.validate_tracked_policy(historical=True)
 
 
 class ProductionBridgeReadinessTests(unittest.TestCase):
-    def test_live_entrypoint_reports_ready_for_tracked_policy(self) -> None:
+    def test_historical_ci_success_does_not_authorize_deployment(self) -> None:
+        with mock.patch.object(
+            VALIDATOR, "_snapshot_head_bound_inputs",
+            return_value=clean_head_binding_snapshot(),
+        ), mock.patch.object(VALIDATOR.sys, "argv", [str(SCRIPT), "--historical"]):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = VALIDATOR.main()
+        status = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(status["status"], "historical_policy_valid")
+        self.assertIs(status["deployment_ready"], False)
+        self.assertEqual(status["evidence"]["authority"]["sha"], VALIDATOR.LEGACY_AUTHORITY_SHA)
+        self.assertEqual(status["evidence"]["candidate"]["sha"], VALIDATOR._head_commit(ROOT))
+
+    def test_historical_validation_rejects_changed_candidate_prefix(self) -> None:
+        revision = f"{VALIDATOR._head_commit(ROOT)}:backend/migrations/postgres/manifest.json"
+        original_git = VALIDATOR._git
+        def changed_git(root, *arguments):
+            data = original_git(root, *arguments)
+            if arguments == ("show", revision):
+                manifest = json.loads(data)
+                manifest["migrations"][0]["checksum"] = "0" * 64
+                return payload(manifest)
+            return data
+        with mock.patch.object(VALIDATOR, "_git", side_effect=changed_git):
+            with self.assertRaisesRegex(VALIDATOR.ProductionBridgePolicyError, "historical migration prefix"):
+                VALIDATOR.validate_policy_payload(POLICY.read_bytes(), historical=True)
+
+    def test_historical_validation_rejects_nonancestor_authority(self) -> None:
+        original_git = VALIDATOR._git
+        def changed_git(root, *arguments):
+            if arguments[:3] == ("merge-base", "--is-ancestor", VALIDATOR.LEGACY_AUTHORITY_SHA):
+                raise VALIDATOR.ProductionBridgePolicyError("frozen F is not an ancestor")
+            return original_git(root, *arguments)
+        with mock.patch.object(VALIDATOR, "_git", side_effect=changed_git):
+            with self.assertRaisesRegex(VALIDATOR.ProductionBridgePolicyError, "not an ancestor"):
+                VALIDATOR.validate_policy_payload(POLICY.read_bytes(), historical=True)
+
+    def test_live_entrypoint_rejects_isolation_as_legacy_deployment(self) -> None:
         with mock.patch.object(
             VALIDATOR,
             "_snapshot_head_bound_inputs",
             return_value=clean_head_binding_snapshot(),
         ):
             status = VALIDATOR.readiness_status()
-            self.assertEqual(status["status"], "ready")
-            self.assertIs(status["ready"], True)
-            self.assertEqual(status["blockers"], [])
+            self.assertEqual(status["status"], "not_ready")
+            self.assertIs(status["ready"], False)
+            self.assertIn("current F migration manifest differs", status["blockers"][0]["detail"])
 
             output = io.StringIO()
-            with contextlib.redirect_stdout(output):
+            with contextlib.redirect_stdout(output), mock.patch.object(VALIDATOR.sys, "argv", [str(SCRIPT)]):
                 result = VALIDATOR.main()
-        self.assertEqual(result, 0)
+        self.assertEqual(result, 2)
         self.assertEqual(json.loads(output.getvalue()), status)
 
     def test_live_entrypoint_fails_closed_on_policy_error(self) -> None:

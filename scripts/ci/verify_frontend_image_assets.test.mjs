@@ -6,7 +6,8 @@ import { test } from "node:test";
 import { verifyFrontendImageAssets } from "./verify_frontend_image_assets.mjs";
 
 const WORKSPACE_URL = "http://114.214.255.154:9011/";
-const APP = "src/mountApp.tsx";
+const BOOTSTRAP = "src/mountApp.tsx";
+const APP = "src/App.tsx";
 const CANVAS = "src/components/StructureWorkbenchPage.tsx";
 const HOME = 'const title="智聚万物智能体工作台",status="正在同步";';
 
@@ -18,7 +19,8 @@ function fixture(t, { workspaceUrl = "", sharedHome = false } = {}) {
     writeFileSync(join(root, file), contents);
   };
   const manifest = {
-    "index.html": { file: "assets/index.js", isEntry: true, dynamicImports: [APP, CANVAS, "unrelated.ts"] },
+    "index.html": { file: "assets/index.js", isEntry: true, dynamicImports: [BOOTSTRAP, CANVAS, "unrelated.ts"] },
+    [BOOTSTRAP]: { file: "assets/mountApp.js", src: BOOTSTRAP, dynamicImports: [APP] },
     [APP]: { file: "assets/app.js", src: APP, imports: sharedHome ? ["_home.js"] : [] },
     [CANVAS]: { file: "assets/canvas.js", src: CANVAS, imports: ["_preview.js"], css: ["assets/canvas.css"] },
     "_preview.js": { file: "assets/preview.js" },
@@ -27,7 +29,8 @@ function fixture(t, { workspaceUrl = "", sharedHome = false } = {}) {
   if (sharedHome) manifest["_home.js"] = { file: "assets/home.js" };
   const home = sharedHome ? "assets/home.js" : "assets/app.js";
   write("index.html", '<script type="module" crossorigin src="/assets/index.js"></script>');
-  write("assets/index.js", 'import("./app.js");');
+  write("assets/index.js", 'import("./mountApp.js");');
+  write("assets/mountApp.js", 'export const mountApp=()=>import("./app.js");');
   write("assets/app.js", "export const mountApp=()=>{};");
   write(home, `${HOME}const workspace=${JSON.stringify(workspaceUrl)};`);
   write("assets/canvas.js", 'import "./preview.js";');
@@ -39,10 +42,12 @@ function fixture(t, { workspaceUrl = "", sharedHome = false } = {}) {
   return { root, write, manifest, saveManifest, home };
 }
 
-test("accepts lazy chunks when the HTML entry contains no feature markers", t => {
+test("accepts App loaded lazily after the authentication bootstrap", t => {
   const f = fixture(t);
   const result = verifyFrontendImageAssets(f.root);
   assert.equal(result.home, f.home);
+  assert.ok(result.checkedAssets.includes("assets/mountApp.js"));
+  assert.ok(result.checkedAssets.includes("assets/app.js"));
   assert.ok(result.checkedAssets.includes("assets/preview.js"));
   assert.ok(result.checkedAssets.includes("assets/canvas.css"));
   assert.ok(!result.checkedAssets.includes("assets/unrelated.js"));
@@ -56,6 +61,20 @@ test("finds configured home in a shared static chunk", t => {
 test("correct URL in an unrelated lazy page cannot hide wrong home configuration", t => {
   const f = fixture(t, { workspaceUrl: "https://wrong.example/" });
   assert.throws(() => verifyFrontendImageAssets(f.root, WORKSPACE_URL), /configured URL/);
+});
+
+test("home markers in the bootstrap cannot hide wrong App configuration", t => {
+  const f = fixture(t, { workspaceUrl: "https://wrong.example/" });
+  f.write("assets/mountApp.js", `${HOME}const workspace=${JSON.stringify(WORKSPACE_URL)};`);
+  assert.throws(() => verifyFrontendImageAssets(f.root, WORKSPACE_URL), /configured URL/);
+});
+
+test("App reachable outside the bootstrap cannot satisfy the authentication entry graph", t => {
+  const f = fixture(t);
+  f.manifest[BOOTSTRAP].dynamicImports = [];
+  f.manifest["index.html"].dynamicImports.push(APP);
+  f.saveManifest();
+  assert.throws(() => verifyFrontendImageAssets(f.root), /not reachable from mountApp/);
 });
 
 test("correct URL in another App dependency cannot hide wrong home configuration", t => {

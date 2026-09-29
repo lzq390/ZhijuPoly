@@ -1,8 +1,8 @@
-"""Exact frozen-B and current-F migration fixtures for bridge tests.
+"""Exact frozen-B and frozen-F migration fixtures for bridge tests.
 
 The bridge is intentionally asymmetric: B ends at 0012 while F is the unique
-B-plus-0013/0014/0015/0016 extension. Reading B from its pinned Git object prevents a
-current F checkout from being mistaken for the historical bridge target.
+B-plus-0013/0014/0015/0016 extension. Both sides are pinned Git objects so a
+later user-isolation checkout cannot redefine historical deployment authority.
 """
 
 from __future__ import annotations
@@ -155,13 +155,14 @@ B_MIGRATION_FILES = {
     Path(path).name: _git("show", f"{B_SHA}:{path}") for path in B_MIGRATION_PATHS
 }
 
-F_MANIFEST_PAYLOAD = (REPOSITORY_ROOT / MANIFEST_PATH).read_bytes()
+F_SHA = "d9e9d2246aa2ab29c74d4b99f06f7e6afa1afa58"
+F_MANIFEST_PAYLOAD = _git("show", f"{F_SHA}:{MANIFEST_PATH}")
 if _sha256(F_MANIFEST_PAYLOAD) != F_MANIFEST_SHA256:
-    raise RuntimeError("current F migration manifest differs from its reviewed digest")
-F_MANIFEST_RECORDS = _manifest_records(F_MANIFEST_PAYLOAD, label="current F")
+    raise RuntimeError("frozen F migration manifest differs from its reviewed digest")
+F_MANIFEST_RECORDS = _manifest_records(F_MANIFEST_PAYLOAD, label="frozen F")
 if F_MANIFEST_RECORDS != [*B_MANIFEST_RECORDS, *FINAL_MIGRATION_RECORDS]:
     raise RuntimeError(
-        "current F migration manifest is not the unique frozen-B plus "
+        "frozen F migration manifest is not the unique frozen-B plus "
         "0013/0014/0015/0016 extension"
     )
 

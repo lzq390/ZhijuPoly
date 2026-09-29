@@ -3,7 +3,8 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const APP_SOURCE = "src/mountApp.tsx";
+const BOOTSTRAP_SOURCE = "src/mountApp.tsx";
+const APP_SOURCE = "src/App.tsx";
 const CANVAS_SOURCE = "src/components/StructureWorkbenchPage.tsx";
 const HOME_TITLE = "智聚万物智能体工作台";
 
@@ -61,7 +62,12 @@ export function verifyFrontendImageAssets(directory, expectedWorkspaceUrl = "") 
     assert.equal(matches.length, 1, `Expected one reachable entry for ${source}`);
     return matches[0];
   };
-  const app = visit([locate(APP_SOURCE)], false);
+  const bootstrap = locate(BOOTSTRAP_SOURCE);
+  const appEntry = locate(APP_SOURCE);
+  assert.ok(visit([bootstrap], true).has(appEntry), "App entry is not reachable from mountApp");
+  // Authentication loads App lazily. Inspect its own static dependencies, not
+  // only the bootstrap's imports or unrelated reachable feature pages.
+  const app = visit([appEntry], false);
   const canvas = visit([locate(CANVAS_SOURCE)], false);
   const jsFor = (keys) => filesFor(keys).filter(file => file.endsWith(".js"));
   // AgentWorkspaceHomePage is statically imported by App. Its title and status
@@ -84,7 +90,9 @@ export function verifyFrontendImageAssets(directory, expectedWorkspaceUrl = "") 
   return {
     entry: entry.file,
     home: homeChunks[0],
-    checkedAssets: filesFor(new Set([...visit(["index.html"], false), ...app, ...canvas]))
+    checkedAssets: filesFor(new Set([
+      ...visit(["index.html"], false), ...visit([bootstrap], false), ...app, ...canvas
+    ]))
   };
 }
 

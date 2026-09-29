@@ -1,12 +1,12 @@
 """Exercise the real business routers without scientific runtimes or a database."""
 
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.models import PropertyFilterSearchResponse
 from app.routers import database_browser, knowledge
 from test_knowledge_poc_recording import sample_search
+from test_knowledge_poc_app import acting_as_test_user, authenticated_client
 
 
 def test_existing_python_callers_can_use_the_original_search_request(monkeypatch):
@@ -19,8 +19,9 @@ def test_existing_python_callers_can_use_the_original_search_request(monkeypatch
     app = FastAPI()
     app.state.settings = Settings()
     app.state.browsing_recording = BrowsingRecordingStore(app.state.settings)
-    response = asyncio.run(knowledge.search_knowledge(
-        KnowledgeSearchRequest(query="legacy"), Request({"type": "http", "app": app})))
+    with acting_as_test_user():
+        response = asyncio.run(knowledge.search_knowledge(
+            KnowledgeSearchRequest(query="legacy"), Request({"type": "http", "app": app})))
     assert response.query == "legacy"
     assert response.search_id
 
@@ -33,7 +34,7 @@ def test_formal_search_routes_preserve_payload_and_add_recording_snapshots(monke
     app.state.browsing_recording = BrowsingRecordingStore(app.state.settings)
     app.include_router(knowledge.router)
     app.include_router(database_browser.router)
-    with TestClient(app) as client:
+    with authenticated_client(app) as client:
         response = client.post("/api/v1/knowledge/search", json={"query": "polyimide"})
         assert response.status_code == 200
         assert response.json()["results"][0]["title_en"] == "polyimide"
@@ -58,7 +59,7 @@ def test_formal_routers_share_recording_and_freeze_both_modules(monkeypatch):
     app.include_router(knowledge.router)
     app.include_router(database_browser.router)
     app.include_router(router)
-    with TestClient(app) as client:
+    with authenticated_client(app) as client:
         assert client.post("/api/v1/knowledge/recordings", json={"recording_id": "formal"}).status_code == 200
         search = client.post("/api/v1/knowledge/search", json={"query": "polyimide", "recording_id": "formal"})
         assert search.status_code == 200

@@ -1,3 +1,4 @@
+import { privateFetch } from "../auth/session";
 import { API_BASE_URL, ApiRequestError } from "./api";
 import { parseSseBlock } from "./sse";
 import type { KnowledgeRecordingSummary } from "../types";
@@ -11,7 +12,7 @@ function completedSummary(value: unknown, recordingId: string): KnowledgeRecordi
 }
 
 export async function streamRecordingSummary(recordingId: string, onPartial: (text: string) => void): Promise<KnowledgeRecordingSummary> {
-  const response = await fetch(`${API_BASE_URL}/knowledge/recordings/${encodeURIComponent(recordingId)}/summary`, {
+  const response = await privateFetch(`${API_BASE_URL}/knowledge/recordings/${encodeURIComponent(recordingId)}/summary`, {
     method: "POST", headers: { "Accept": "text/event-stream", "Content-Type": "application/json" }, body: "{}"
   });
   if (!response.ok) {

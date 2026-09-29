@@ -10,6 +10,7 @@ from typing import Any
 
 from .byteff2_env import ByteFF2SubprocessEnvironment, build_byteff2_environment
 from .config import WorkerSettings
+from .byteff2_system_geometry import FormalSystemSizeError
 from .formal_protocols import (
     estimate_requested_steps,
     required_result_file,
@@ -39,9 +40,11 @@ class ByteFF2FormalRunner:
         settings: WorkerSettings,
         *,
         environment: ByteFF2SubprocessEnvironment | None = None,
+        entrypoint: Path | None = None,
     ) -> None:
         self._settings = settings
         self._environment = environment or build_byteff2_environment(settings)
+        self._entrypoint = entrypoint or Path(__file__).with_name("byteff2_formal_entrypoint.py")
 
     async def run(
         self,
@@ -83,13 +86,24 @@ class ByteFF2FormalRunner:
             env["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = "50"
             result_gpu_device = self._settings.cuda_visible_devices
 
+        # Keep failure correlation inside the task directory so the acceptance
+        # collector never needs unrelated Worker/Broker logs or credentials.
+        context = {"job_id": request.job_id, "protocol": protocol,
+                   "worker_id": self._settings.worker_id,
+                   "worker_version": self._settings.worker_version,
+                   "gpu_device": result_gpu_device}
+        if execution_lease is not None:
+            context.update({key: value for key, value in _lease_provenance(execution_lease).items()
+                            if key != "gpu_fencing_token"})
+        _write_json(output_dir / "execution_context.json", context)
+
         stdout_path = output_dir / "worker_stdout.log"
         stderr_path = output_dir / "worker_stderr.log"
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             process = await create_fenced_subprocess_exec(
                 (
                     self._settings.byteff2_python,
-                    str(run_md_path),
+                    str(self._entrypoint),
                     "--config",
                     str(config_path),
                 ),
@@ -110,6 +124,14 @@ class ByteFF2FormalRunner:
                     f"ByteFF2 {protocol} timed out after {self._settings.formal_timeout_seconds}s"
                 ) from exc
         if return_code != 0:
+            failure_path = output_dir / "formal_failure.json"
+            if failure_path.is_file() and not failure_path.is_symlink() and failure_path.stat().st_size <= 4096:
+                try:
+                    failure = json.loads(failure_path.read_text())
+                except (OSError, UnicodeError, ValueError):
+                    failure = None
+                if isinstance(failure, dict) and failure.get("error_category") == "invalid_periodic_box":
+                    raise FormalSystemSizeError(str(failure.get("message", "Invalid periodic system size")))
             raise RuntimeError(
                 f"ByteFF2 {protocol} failed with exit code {return_code}; "
                 f"see {stdout_path.name} and {stderr_path.name}"

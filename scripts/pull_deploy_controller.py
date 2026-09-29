@@ -6296,6 +6296,12 @@ def canonical_ledger_history(
 
     if not isinstance(rows, list) or not isinstance(manifest, list):
         raise PullDeployError("migration manifest or ledger evidence is invalid")
+    if any(isinstance(record, dict) and str(record.get("version", "")) >= "0017_" for record in [*rows, *manifest]):
+        raise PullDeployError(
+            "User isolation 0017/0018 requires the dedicated app.auth.cutover maintenance "
+            "workflow and user_isolation_audit.py preflight; this historical production "
+            "controller cannot deploy or roll back across the authentication boundary"
+        )
     if not rows or len(rows) > len(manifest) + 4:
         raise PullDeployError(
             "database migration ledger is empty or beyond the manifest"

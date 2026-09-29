@@ -1,3 +1,4 @@
+import { requestServiceAccess } from "../../auth/guestAccess";
 import {
   Atom,
   Box,
@@ -136,7 +137,7 @@ export function StructureCanvasSurface({
         aria-label="导入结构图片"
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
-          if (file) void runCanvasMutation(() => onImportFile(file));
+          if (file && requestServiceAccess()) void runCanvasMutation(() => onImportFile(file));
         }}
       />
 
@@ -156,7 +157,7 @@ export function StructureCanvasSurface({
             busy={canvas.isImportingImage}
             icon={<ImagePlus aria-hidden="true" />}
             disabled={operationBusy}
-            onClick={() => canvas.fileInputRef.current?.click()}
+            onClick={() => { if (requestServiceAccess()) canvas.fileInputRef.current?.click(); }}
           />
           <ToolButton
             label="清空画布"
@@ -183,7 +184,7 @@ export function StructureCanvasSurface({
             icon={<Box aria-hidden="true" />}
             disabled={operationBusy || canvas.smilesDraftState !== "synced" || !canvas.isEditorReady}
             active={canvas.isFlipped}
-            onClick={onToggle3D}
+            onClick={() => { if (requestServiceAccess()) void onToggle3D(); }}
           />
           {utilityActions.length ? <span className="np-sw-toolbar-separator" aria-hidden="true" /> : null}
           {utilityActions.map((action) => (

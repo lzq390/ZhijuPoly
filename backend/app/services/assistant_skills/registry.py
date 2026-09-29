@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
+from app.auth.context import current_owner_id
 
 
 class SkillExecutionError(RuntimeError):
@@ -37,6 +38,7 @@ class AssistantSkill:
         return self.input_model.model_validate(arguments)
 
     def execute(self, arguments: BaseModel, context: AssistantSkillContext) -> dict[str, Any]:
+        current_owner_id()
         return self.executor(arguments, context)
 
     def prompt_catalog_line(self) -> str:

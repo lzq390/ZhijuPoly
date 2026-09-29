@@ -1,3 +1,6 @@
+import { createPrivateObjectURL, revokePrivateObjectURL } from "../auth/objectUrls";
+import { useAuth } from "../auth/AuthProvider";
+import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { useContentMotion } from "../hooks/useContentMotion";
@@ -307,7 +310,7 @@ function SelectedJobCard({
     try {
       const bundle = await downloadMonomerDftBundle(jobId, controller.signal);
       if (controller.signal.aborted) return;
-      objectUrl = URL.createObjectURL(bundle);
+      objectUrl = createPrivateObjectURL(bundle);
       const link = document.createElement("a");
       link.href = objectUrl;
       link.download = `monomer-dft-${jobId}.zip`;
@@ -316,7 +319,7 @@ function SelectedJobCard({
       link.remove();
       const completedObjectUrl = objectUrl;
       objectUrl = null;
-      window.setTimeout(() => URL.revokeObjectURL(completedObjectUrl), 0);
+      window.setTimeout(() => revokePrivateObjectURL(completedObjectUrl), 0);
       setDownloadFeedback("结果下载已开始。");
     } catch (error) {
       if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) return;
@@ -327,7 +330,7 @@ function SelectedJobCard({
         })
         : "结果下载失败，请稍后重试。");
     } finally {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (objectUrl) revokePrivateObjectURL(objectUrl);
       if (downloadAbortRef.current === controller) {
         downloadAbortRef.current = null;
         setIsDownloading(false);
@@ -481,14 +484,6 @@ function TaskCenter({
         onRerun={onRerun}
       />
 
-      <div className="np-dft-trust-notice">
-        <Info />
-        <div>
-          <strong>共享任务记录</strong>
-          <span>此工作区中的访问者都可以查看和管理这些任务。</span>
-        </div>
-      </div>
-
       <section className="np-dft-history" aria-labelledby="np-dft-history-title">
         <header className="np-dft-section-heading is-row">
           <div>
@@ -501,7 +496,7 @@ function TaskCenter({
             className="np-dft-icon-button"
             aria-label="刷新任务历史"
             title="刷新任务历史"
-            onClick={() => void dft.refreshHistory()}
+            onClick={() => { if (requestServiceAccess()) void dft.refreshHistory(); }}
             disabled={dft.isHistoryLoading}
           >
             <RefreshCw className={dft.isHistoryLoading ? "np-dft-spin" : ""} />
@@ -666,7 +661,8 @@ export function MonomerDftPage({
   onJobIdChange,
   onEditStructure
 }: MonomerDftPageProps) {
-  const dft = useMonomerDftJob({ initialJobId, onJobIdChange });
+  const guest = useAuth()?.status === "guest";
+  const dft = useMonomerDftJob({ initialJobId, onJobIdChange, enabled: !guest });
   const [activeTab, setActiveTab] = useState<PrimaryTab>(initialJobId ? "results" : "config");
   const tabContentRef = useRef<HTMLDivElement | null>(null);
   useContentMotion(tabContentRef, activeTab, "tab");
@@ -837,7 +833,7 @@ export function MonomerDftPage({
   );
   const activeJob = dft.job && !isMonomerDftTerminal(dft.job.status);
   const configLocked = Boolean(activeJob) || isPreparingSubmission || dft.isSubmitting;
-  const canSubmit = serviceReady && validationIssues.length === 0 && !configLocked;
+  const canSubmit = guest || (serviceReady && validationIssues.length === 0 && !configLocked);
   const invalidJobDeepLink = typeof window !== "undefined" && hasInvalidMonomerDftJobSearch(window.location.search);
   const activeTabDefinition = PRIMARY_TABS.find((tab) => tab.id === activeTab) ?? PRIMARY_TABS[0];
   const SurfaceIcon = activeTabDefinition.icon;
@@ -894,6 +890,7 @@ export function MonomerDftPage({
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (!requestServiceAccess()) return;
     if (submissionPreparingRef.current) return;
     submissionPreparingRef.current = true;
     submissionPreparationAbortRef.current?.abort();
@@ -972,6 +969,7 @@ export function MonomerDftPage({
   }
 
   async function rerunSelectedJob() {
+    if (!requestServiceAccess()) return;
     const jobId = await dft.rerun();
     if (jobId) showResultsAtTop();
   }
@@ -990,7 +988,7 @@ export function MonomerDftPage({
     document.getElementById(`monomer-dft-main-tab-${nextTab.id}`)?.focus();
   }
 
-  const serviceTone = dft.isServiceLoading
+  const serviceTone = guest ? "warning" : dft.isServiceLoading
     ? "loading"
     : dft.serviceError
       ? "error"
@@ -1005,7 +1003,7 @@ export function MonomerDftPage({
             : serviceReady
               ? "ready"
               : "error";
-  const serviceLabel = dft.isServiceLoading
+  const serviceLabel = guest ? "请登录账号。" : dft.isServiceLoading
     ? "正在检查"
     : dft.serviceError
       ? "状态检查失败"
@@ -1020,13 +1018,13 @@ export function MonomerDftPage({
             : serviceReady
               ? "准备就绪"
               : "暂时不可用";
-  const pollStatusLabel = dft.pollState === "degraded"
-    ? "连接中断，正在自动重试"
-    : dft.pollState === "stopped"
-      ? "任务进度同步已暂停"
-      : dft.pollState === "polling"
-        ? "正在同步任务进度"
-        : null;
+  const pollStatusLabel = dft.eventConnectionState === "reconnecting"
+    ? "状态通知连接中断，正在重连；可手动刷新。"
+    : dft.eventConnectionState === "unavailable"
+      ? "状态通知暂不可用，请手动刷新。"
+      : dft.pollState === "stopped"
+        ? "任务读取失败，请手动刷新。"
+        : dft.pollState === "polling" ? "正在读取任务" : null;
   const structureIssue = validationIssues.find((issue) => issue.field === "smiles")?.message ?? null;
 
   return (
@@ -1045,8 +1043,8 @@ export function MonomerDftPage({
             </span>
             <button
               type="button"
-              onClick={() => void dft.refreshStatus()}
-              disabled={dft.isServiceLoading}
+              onClick={() => { if (requestServiceAccess()) void dft.refreshAll(); }}
+              disabled={!guest && dft.isServiceLoading}
             >
               <RefreshCw className={dft.isServiceLoading ? "np-dft-spin" : ""} />刷新
             </button>
@@ -1366,7 +1364,7 @@ export function MonomerDftPage({
                       <div>
                         <span>任务提交</span>
                         <strong>{activeJob ? "任务运行中" : serviceReady ? "准备就绪" : serviceLabel}</strong>
-                        <small>{canSubmit ? "提交后将固定当前结构与参数" : validationIssues[0]?.message ?? "当前无法创建任务"}</small>
+                        <small>{guest ? "请登录账号。" : canSubmit ? "提交后将固定当前结构与参数" : validationIssues[0]?.message ?? "当前无法创建任务"}</small>
                       </div>
                       <button type="submit" disabled={!canSubmit}>
                         {isPreparingSubmission || dft.isSubmitting ? <Loader2 className="np-dft-spin" /> : <Play />}

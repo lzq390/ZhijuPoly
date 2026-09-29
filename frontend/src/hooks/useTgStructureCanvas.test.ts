@@ -2,6 +2,7 @@
 import { structureFixture } from "../test/structureFixture";
 import { StructureWorkspace } from "../structure/workspace";
 import { createKetcherAdapter } from "../structure/editor";
+import { retireSession } from "../auth/session";
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import {
   adoptKetcherPng,
   isProtectedCanvasConsistent,
   isEmptyKetcherDocument,
+  normalizeTgCanvasImage,
   shouldAdoptEditorSmiles,
   stripKetcherSelectedFields,
   useTgStructureCanvas,
@@ -41,6 +43,32 @@ describe("Tg structure canvas wildcard protection", () => {
   function textStructure(smiles: string) {
     return structureFixture(smiles);
   }
+
+  it("does not create a private Blob URL from a late image decoding fallback", async () => {
+    let reject!: (reason: Error) => void;
+    vi.stubGlobal("createImageBitmap", vi.fn(() => new Promise((_resolve, fail) => { reject = fail; })));
+    const create = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL: create, revokeObjectURL: vi.fn() });
+    const pending = normalizeTgCanvasImage(new Blob(["account-a-private-image"]));
+    retireSession();
+    reject(new Error("bitmap decoding is unavailable"));
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("does not standardize account A's input when its local snapshot finishes after a switch", async () => {
+    const structure = textStructure("account-a-private-input");
+    let complete!: (value: { status: "saved" }) => void;
+    const save = vi.spyOn(structure.workspace, "saveSnapshot").mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+    let pending!: Promise<string>;
+    await act(async () => { pending = result.current.resolveSmilesForSearch(); });
+    expect(save).toHaveBeenCalledOnce();
+    retireSession();
+    await act(async () => { complete({ status: "saved" }); expect(await pending).toBe(""); });
+    expect(apiMocks.standardizeSmiles).not.toHaveBeenCalled();
+    unmount();
+  });
 
   it("leaves an incoming loading canvas without attempting to import its pending draft", async () => {
     const structure = textStructure("CC");

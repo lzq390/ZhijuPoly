@@ -10,10 +10,10 @@ import anyio
 import pandas as pd
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app.config import Settings
+from test_authenticated_app_support import auth_database, private_app, private_client
 from app.main import create_app
 from app.models import (
     MonomerPolymerizationRequest,
@@ -56,8 +56,12 @@ def _settings(tmp_path: Path, *, smipoly_enabled: bool = True) -> Settings:
     )
 
 
-def test_monomer_polymerization_status_reports_disabled_service(tmp_path: Path) -> None:
-    client = TestClient(create_app(_settings(tmp_path, smipoly_enabled=False)))
+def test_monomer_polymerization_status_reports_disabled_service(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
+    client = private_client(private_app(_settings(tmp_path, smipoly_enabled=False)))
 
     response = client.get("/api/v1/monomer-polymerization/status")
 
@@ -370,8 +374,12 @@ async def test_monomer_polymerization_limiter_recovers_after_smipoly_failure(
     assert sys.stdout is original_stdout
 
 
-def test_monomer_polymerization_post_reports_disabled_service(tmp_path: Path) -> None:
-    client = TestClient(create_app(_settings(tmp_path, smipoly_enabled=False)))
+def test_monomer_polymerization_post_reports_disabled_service(
+    private_app,
+    private_client,
+    tmp_path: Path,
+) -> None:
+    client = private_client(private_app(_settings(tmp_path, smipoly_enabled=False)))
 
     response = client.post(
         "/api/v1/monomer-polymerization",
@@ -382,12 +390,16 @@ def test_monomer_polymerization_post_reports_disabled_service(tmp_path: Path) ->
     assert response.json()["detail"] == "monomer polymerization service is disabled"
 
 
-def test_monomer_polymerization_status_reports_missing_smipoly(tmp_path: Path, monkeypatch) -> None:
+def test_monomer_polymerization_status_reports_missing_smipoly(
+    private_app,
+    private_client,
+    tmp_path: Path, monkeypatch,
+) -> None:
     def missing_runtime():
         raise ModelArtifactError("SMiPoly is not installed or cannot load its rule files")
 
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", missing_runtime)
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.get("/api/v1/monomer-polymerization/status")
 
@@ -398,7 +410,11 @@ def test_monomer_polymerization_status_reports_missing_smipoly(tmp_path: Path, m
     assert "SMiPoly" in data["message"]
 
 
-def test_monomer_polymerization_status_reports_available_service(tmp_path: Path, monkeypatch) -> None:
+def test_monomer_polymerization_status_reports_available_service(
+    private_app,
+    private_client,
+    tmp_path: Path, monkeypatch,
+) -> None:
     runtime = SimpleNamespace(
         pd=pd,
         monc=SimpleNamespace(),
@@ -406,7 +422,7 @@ def test_monomer_polymerization_status_reports_available_service(tmp_path: Path,
         target_classes=("polyimide", "polyether"),
     )
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", lambda: runtime)
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.get("/api/v1/monomer-polymerization/status")
 
@@ -432,6 +448,8 @@ def test_monomer_polymerization_status_reports_available_service(tmp_path: Path,
     ],
 )
 def test_monomer_polymerization_status_exposes_target_requirement_matrix(
+    private_app,
+    private_client,
     tmp_path: Path,
     monkeypatch,
     target_class: str,
@@ -454,7 +472,7 @@ def test_monomer_polymerization_status_exposes_target_requirement_matrix(
         target_classes=tuple(rule_classes.keys()),
     )
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", lambda: runtime)
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.get("/api/v1/monomer-polymerization/status")
 
@@ -465,12 +483,16 @@ def test_monomer_polymerization_status_exposes_target_requirement_matrix(
     assert requirement["monomer_b_required"] is expected_required
 
 
-def test_monomer_polymerization_post_reports_missing_smipoly_as_503(tmp_path: Path, monkeypatch) -> None:
+def test_monomer_polymerization_post_reports_missing_smipoly_as_503(
+    private_app,
+    private_client,
+    tmp_path: Path, monkeypatch,
+) -> None:
     def missing_runtime():
         raise ModelArtifactError("SMiPoly is not installed or cannot load its rule files")
 
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", missing_runtime)
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.post(
         "/api/v1/monomer-polymerization",
@@ -483,6 +505,8 @@ def test_monomer_polymerization_post_reports_missing_smipoly_as_503(tmp_path: Pa
 
 @pytest.mark.parametrize("target_class", REQUIRED_SECOND_MONOMER_TARGETS)
 def test_monomer_polymerization_rejects_missing_required_second_monomer_before_loading_smipoly(
+    private_app,
+    private_client,
     tmp_path: Path,
     monkeypatch,
     target_class: str,
@@ -491,7 +515,7 @@ def test_monomer_polymerization_rejects_missing_required_second_monomer_before_l
         raise AssertionError("SMiPoly should not load when monomer B is required")
 
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", fail_if_loaded)
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.post(
         "/api/v1/monomer-polymerization",
@@ -512,6 +536,8 @@ def test_monomer_polymerization_rejects_missing_required_second_monomer_before_l
     ],
 )
 def test_monomer_polymerization_allows_single_monomer_for_optional_targets(
+    private_app,
+    private_client,
     tmp_path: Path,
     monkeypatch,
     target_class: str,
@@ -544,7 +570,7 @@ def test_monomer_polymerization_allows_single_monomer_for_optional_targets(
         target_classes=("polyolefin", "polyether", "polyoxazolidone"),
     )
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", lambda: runtime)
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.post(
         "/api/v1/monomer-polymerization",
@@ -559,12 +585,16 @@ def test_monomer_polymerization_allows_single_monomer_for_optional_targets(
     assert captured["targ"] == expected_targ
 
 
-def test_monomer_polymerization_rejects_invalid_smiles_before_loading_smipoly(tmp_path: Path, monkeypatch) -> None:
+def test_monomer_polymerization_rejects_invalid_smiles_before_loading_smipoly(
+    private_app,
+    private_client,
+    tmp_path: Path, monkeypatch,
+) -> None:
     def fail_if_loaded():
         raise AssertionError("SMiPoly should not load for invalid SMILES")
 
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", fail_if_loaded)
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.post(
         "/api/v1/monomer-polymerization",
@@ -575,12 +605,16 @@ def test_monomer_polymerization_rejects_invalid_smiles_before_loading_smipoly(tm
     assert "invalid smiles" in response.json()["detail"]
 
 
-def test_monomer_polymerization_rejects_dummy_atom_inputs(tmp_path: Path, monkeypatch) -> None:
+def test_monomer_polymerization_rejects_dummy_atom_inputs(
+    private_app,
+    private_client,
+    tmp_path: Path, monkeypatch,
+) -> None:
     def fail_if_loaded():
         raise AssertionError("SMiPoly should not load for dummy atom input")
 
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", fail_if_loaded)
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.post(
         "/api/v1/monomer-polymerization",
@@ -591,7 +625,11 @@ def test_monomer_polymerization_rejects_dummy_atom_inputs(tmp_path: Path, monkey
     assert "without attachment points" in response.json()["detail"]
 
 
-def test_monomer_polymerization_returns_candidates(tmp_path: Path, monkeypatch) -> None:
+def test_monomer_polymerization_returns_candidates(
+    private_app,
+    private_client,
+    tmp_path: Path, monkeypatch,
+) -> None:
     class FakeMonc:
         @staticmethod
         def moncls(df, smiColn: str, dsp_rsl: bool = False):
@@ -627,7 +665,7 @@ def test_monomer_polymerization_returns_candidates(tmp_path: Path, monkeypatch) 
     )
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", lambda: runtime)
     monkeypatch.setattr("app.services.monomer_polymerization.generate_2d_svg", lambda smiles: "<svg />")
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.post(
         "/api/v1/monomer-polymerization",
@@ -648,7 +686,11 @@ def test_monomer_polymerization_returns_candidates(tmp_path: Path, monkeypatch) 
     assert data["results"][0]["structure_svg"] == "<svg />"
 
 
-def test_monomer_polymerization_returns_empty_result_warning(tmp_path: Path, monkeypatch) -> None:
+def test_monomer_polymerization_returns_empty_result_warning(
+    private_app,
+    private_client,
+    tmp_path: Path, monkeypatch,
+) -> None:
     class FakeMonc:
         @staticmethod
         def moncls(df, smiColn: str, dsp_rsl: bool = False):
@@ -668,7 +710,7 @@ def test_monomer_polymerization_returns_empty_result_warning(tmp_path: Path, mon
         target_classes=("polyimide",),
     )
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", lambda: runtime)
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.post(
         "/api/v1/monomer-polymerization",
@@ -683,6 +725,8 @@ def test_monomer_polymerization_returns_empty_result_warning(tmp_path: Path, mon
 
 
 def test_monomer_polymerization_filters_non_input_rows_and_truncates_results(
+    private_app,
+    private_client,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -741,7 +785,7 @@ def test_monomer_polymerization_filters_non_input_rows_and_truncates_results(
     )
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", lambda: runtime)
     monkeypatch.setattr("app.services.monomer_polymerization.generate_2d_svg", lambda smiles: "<svg />")
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.post(
         "/api/v1/monomer-polymerization",
@@ -763,6 +807,8 @@ def test_monomer_polymerization_filters_non_input_rows_and_truncates_results(
 
 
 def test_monomer_polymerization_optional_target_with_second_monomer_filters_to_both_inputs(
+    private_app,
+    private_client,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -814,7 +860,7 @@ def test_monomer_polymerization_optional_target_with_second_monomer_filters_to_b
     )
     monkeypatch.setattr("app.services.monomer_polymerization._load_smipoly_runtime", lambda: runtime)
     monkeypatch.setattr("app.services.monomer_polymerization.generate_2d_svg", lambda smiles: "<svg />")
-    client = TestClient(create_app(_settings(tmp_path)))
+    client = private_client(private_app(_settings(tmp_path)))
 
     response = client.post(
         "/api/v1/monomer-polymerization",

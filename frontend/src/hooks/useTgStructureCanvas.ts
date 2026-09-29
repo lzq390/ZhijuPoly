@@ -1,4 +1,7 @@
+import { useAuth } from "../auth/AuthProvider";
+import { createPrivateObjectURL, revokePrivateObjectURL } from "../auth/objectUrls";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { assertSessionEpoch, getSessionEpoch } from "../auth/session";
 import { shouldAdoptEditorSmiles, wildcardCount, type StructureEditorHandle } from "../structure/editor";
 export { shouldAdoptEditorSmiles, wildcardCount } from "../structure/editor";
 import { useFlipMotion } from "./useFlipMotion";
@@ -178,6 +181,7 @@ async function withTimeout<T>(
 }
 
 async function decodeCanvasImage(blob: Blob) {
+  const epoch = getSessionEpoch();
   if (typeof createImageBitmap === "function") {
     try {
       const bitmap = await createImageBitmap(blob);
@@ -192,7 +196,7 @@ async function decodeCanvasImage(blob: Blob) {
       // The object-URL path below provides the same bounded rasterization.
     }
   }
-  const url = URL.createObjectURL(blob);
+  const url = createPrivateObjectURL(blob, epoch);
   const image = new Image();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -204,10 +208,10 @@ async function decodeCanvasImage(blob: Blob) {
       source: image as CanvasImageSource,
       width: image.naturalWidth,
       height: image.naturalHeight,
-      dispose: () => URL.revokeObjectURL(url)
+      dispose: () => revokePrivateObjectURL(url)
     };
   } catch (error) {
-    URL.revokeObjectURL(url);
+    revokePrivateObjectURL(url);
     throw error;
   }
 }
@@ -275,7 +279,9 @@ export function useTgStructureCanvas({
   structure,
   onStructureChanged
 }: UseTgStructureCanvasOptions) {
+  const guest = useAuth()?.status === "guest";
   const workspace = structure.workspace;
+  const identityEpoch = useRef(getSessionEpoch()).current;
   const document = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const smilesRef = useRef(document.smiles);
@@ -416,8 +422,10 @@ export function useTgStructureCanvas({
   }
 
   function canonicalizeSmiles(value: string): Promise<string | null> {
+    if (!mountedRef.current || identityEpoch !== getSessionEpoch()) return Promise.resolve(null);
     const normalized = value.trim();
     if (!normalized) return Promise.resolve("");
+    if (guest) return Promise.resolve(normalized);
     const cached = canonicalSmilesCacheRef.current.get(normalized);
     if (cached) return cached;
     const pending = standardizeSmiles({ smiles: normalized })
@@ -545,6 +553,7 @@ export function useTgStructureCanvas({
     setIsSyncing(true);
     try {
       const result = await workspace.saveSnapshot();
+      if (!mountedRef.current || identityEpoch !== getSessionEpoch()) return "";
       if (result.status !== "saved") throw new Error(result.message);
       const value = workspace.getSnapshot().smiles;
       const changed = value !== smilesRef.current;
@@ -553,6 +562,7 @@ export function useTgStructureCanvas({
       if (!options.quiet) setFeedback(value ? "SMILES 与画板布局已同步。" : "画板暂无可同步结构。");
       return value;
     } catch (error) {
+      if (!mountedRef.current || identityEpoch !== getSessionEpoch()) return "";
       if (!options.quiet) setFeedback("画板同步失败，将保留上次成功的内容。");
       return options.preserveExisting ? workspace.getSnapshot().smiles : "";
     } finally {
@@ -680,7 +690,7 @@ export function useTgStructureCanvas({
     const active = workspace.guard();
     const sourceRevision = workspace.getSnapshot().revision;
     const requestedCurrent = options.isCurrent;
-    options = { isCurrent: () => mountedRef.current && active() && (!requestedCurrent || requestedCurrent()) };
+    options = { isCurrent: () => mountedRef.current && identityEpoch === getSessionEpoch() && active() && (!requestedCurrent || requestedCurrent()) };
     const normalizedSource = sourceSmiles.trim();
     if (!normalizedSource) {
       throw new Error("请输入要应用的 SMILES。");
@@ -689,7 +699,7 @@ export function useTgStructureCanvas({
       return { applied: false, smiles: smilesRef.current.trim() };
     }
 
-    const result = await standardizeSmiles({ smiles: normalizedSource });
+    const result = guest ? { standardized_smiles: normalizedSource } : await standardizeSmiles({ smiles: normalizedSource });
     if ((options.isCurrent && !options.isCurrent()) || workspace.getSnapshot().revision !== sourceRevision) {
       return { applied: false, smiles: smilesRef.current.trim() };
     }
@@ -706,7 +716,7 @@ export function useTgStructureCanvas({
       applySmiles(reliableSmiles);
       setFeedback(
         reliableSmiles === standardized
-          ? "结构已标准化并应用。"
+          ? guest ? "结构已应用到本地画板。" : "结构已标准化并应用。"
           : "结构已应用，并保留聚合物端基。"
       );
       return { applied: true, smiles: reliableSmiles };
@@ -889,7 +899,7 @@ export function useTgStructureCanvas({
 
     try {
       previousSnapshot = await captureEditorSnapshot(ketcher);
-      if (controller.signal.aborted || (ketcher.isCurrent && !ketcher.isCurrent())) return false;
+      if (!mountedRef.current || identityEpoch !== getSessionEpoch() || controller.signal.aborted || (ketcher.isCurrent && !ketcher.isCurrent())) return false;
       const result = await recognizeStructureImage(file, controller.signal);
       if (controller.signal.aborted || (ketcher.isCurrent && !ketcher.isCurrent())) return false;
       const molfile = result.molfile?.trim() ?? "";
@@ -968,6 +978,7 @@ export function useTgStructureCanvas({
 
   async function resolveSmilesForSearch() {
     const current = workspace.guard();
+    if (!mountedRef.current || identityEpoch !== getSessionEpoch()) return "";
     if (!(await flushSmilesDraft())) {
       setFeedback("请先修正当前 SMILES，再提交任务。");
       return "";
@@ -982,8 +993,9 @@ export function useTgStructureCanvas({
     }
     try {
       const revision = workspace.getSnapshot().revision;
-      const result = await standardizeSmiles({ smiles: synchronized });
-      if (!mountedRef.current || !current() || revision !== workspace.getSnapshot().revision) return "";
+      assertSessionEpoch(identityEpoch);
+      const result = guest ? { standardized_smiles: synchronized } : await standardizeSmiles({ smiles: synchronized });
+      if (!mountedRef.current || identityEpoch !== getSessionEpoch() || !current() || revision !== workspace.getSnapshot().revision) return "";
       const standardized = result.standardized_smiles.trim();
       const reliableSmiles = shouldAdoptEditorSmiles(synchronized, standardized)
         ? standardized
@@ -992,6 +1004,7 @@ export function useTgStructureCanvas({
       smilesRef.current = reliableSmiles;
       return reliableSmiles;
     } catch (error) {
+      if (!mountedRef.current || identityEpoch !== getSessionEpoch()) return "";
       console.error("Failed to standardize Tg search SMILES", error);
       setFeedback("SMILES 标准化失败，任务未提交。请检查结构有效性后重试。");
       return "";
@@ -999,6 +1012,7 @@ export function useTgStructureCanvas({
   }
 
   async function captureCanvasImage(signal?: AbortSignal): Promise<Blob | null> {
+    assertSessionEpoch(identityEpoch);
     const ketcher = getKetcher();
     if (!ketcher || typeof ketcher.getKet !== "function" || typeof ketcher.generateImage !== "function") {
       throw new Error("画板图片接口尚未就绪，AI 将使用 SMILES 作为兜底。请稍后可重试。");
@@ -1091,11 +1105,13 @@ export function useTgStructureCanvas({
         TG_CANVAS_RENDER_TIMEOUT_MS,
         signal
       );
+      assertSessionEpoch(identityEpoch);
       const normalized = await withTimeout(
         normalizeTgCanvasImage(parentRealmPng),
         TG_CANVAS_RENDER_TIMEOUT_MS,
         signal
       );
+      assertSessionEpoch(identityEpoch);
       canvasImageCacheRef.current = { sourceKey, blob: normalized };
       return normalized;
     } catch (error) {

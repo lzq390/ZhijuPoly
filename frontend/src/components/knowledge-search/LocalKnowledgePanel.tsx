@@ -1,3 +1,5 @@
+import { useAuth } from "../../auth/AuthProvider";
+import { requestServiceAccess } from "../../auth/guestAccess";
 import {
   AlertTriangle,
   BookOpenText,
@@ -211,6 +213,7 @@ function ResultSkeletons() {
 }
 
 export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], modeNavigation, toolbarActions }: LocalKnowledgePanelProps) {
+  const guest = useAuth()?.status === "guest";
   const searchState = useKnowledgeSearch();
   const observeKnowledge = useKnowledgeObservation(searchState.data?.search_id);
   const [query, setQuery] = useState(() => {
@@ -262,7 +265,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
   useEffect(() => {
     const groups = knowledgeSearchGroupsFromTerms(initialTerms);
     const nextQuery = groups.length ? serializeKnowledgeSearchGroups(groups) : initialQuery.trim();
-    if (!nextQuery) return;
+    if (!nextQuery || guest) return;
     setQuery(nextQuery);
     void executeSearch(nextQuery, 1, 20, groups.length ? groups : undefined);
     // Initial route parameters are the trigger; executeSearch intentionally reads no mutable form state here.
@@ -271,6 +274,7 @@ export function LocalKnowledgePanel({ initialQuery = "", initialTerms = [], mode
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requestServiceAccess()) return;
     if (!query.trim() || parsedExpression.error || parsedExpression.groups.length === 0 || searchState.isLoading) return;
     await executeSearch(query, 1, pageSize, parsedExpression.groups);
   }

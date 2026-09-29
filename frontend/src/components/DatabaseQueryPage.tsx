@@ -1,3 +1,4 @@
+import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal } from "lucide-react";
@@ -106,6 +107,7 @@ export const DatabaseQueryPage = forwardRef<
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
+    if (!requestServiceAccess()) return;
       closeParameters(true);
     }
     document.addEventListener("pointerdown", handlePointerDown);
@@ -133,6 +135,7 @@ export const DatabaseQueryPage = forwardRef<
 
   async function submitDatabaseQuery(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requestServiceAccess()) return;
     if (isPreparing || isLoading) return;
 
     const hadAttempt = hasAttempt;

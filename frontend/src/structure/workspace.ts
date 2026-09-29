@@ -18,6 +18,7 @@ type Standardize = (smiles: string) => Promise<string>;
 const deferredDraftNotice = "文本草稿已保留，画板就绪后将继续同步。";
 const unsyncedDraftNotice = "文本草稿尚未完成同步，已保留草稿和上次保存的画板。";
 const unsyncedDraftWithoutSnapshotNotice = "文本草稿尚未完成同步，草稿已保留；暂无可恢复的画板。";
+const autosaveNotice = "最新画板暂未保存，切页时可能恢复上一次同步的内容。";
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const stale = () => new DOMException("画板操作已失效。", "AbortError");
 function bounded<T>(task: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
@@ -87,7 +88,7 @@ export class StructureWorkspace {
       this.saveTimer = null;
       void this.saveSnapshot({ reuseSaved: true }).then((result) => {
         if (current() && result.status === "failed" && this.state.status === "ready") {
-          this.publish({ notice: "最新画板暂未保存，切页时可能恢复上一次同步的内容。" });
+          this.publish({ notice: autosaveNotice });
         }
       });
     }, 300);
@@ -400,6 +401,7 @@ export class StructureWorkspace {
         this.lastGood = snapshot;
         this.publish({
           ...snapshot, dirty: false,
+          ...(this.state.notice === autosaveNotice ? { notice: null } : {}),
           ...(this.state.draft === source && !this.state.draftError ? { draft: smiles } : {})
         });
         return { status: "saved" };

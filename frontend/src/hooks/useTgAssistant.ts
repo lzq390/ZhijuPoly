@@ -1,3 +1,7 @@
+import { useAuth } from "../auth/AuthProvider";
+import { requestServiceAccess } from "../auth/guestAccess";
+import { createPrivateObjectURL, revokePrivateObjectURL } from "../auth/objectUrls";
+import { assertSessionEpoch, getSessionEpoch } from "../auth/session";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchTgAssistantGuide, fetchTgAssistantStatus } from "../services/api";
 import {
@@ -347,6 +351,8 @@ function loadConsent(): "unknown" | "granted" | "denied" {
 }
 
 export function useTgAssistant() {
+  const guest = useAuth()?.status === "guest";
+  const identityEpoch = useRef(getSessionEpoch());
   const [initial] = useState(loadSession);
   const [initialImagePreviewSessionId] = useState(loadImagePreviewSessionId);
   const [items, setItems] = useState<TgAssistantItem[]>(initial.items);
@@ -380,7 +386,7 @@ export function useTgAssistant() {
     if (!previewUrl) return;
     imagePreviewUrlsRef.current.delete(userItemId);
     try {
-      URL.revokeObjectURL(previewUrl);
+      revokePrivateObjectURL(previewUrl);
     } catch {
       // The in-memory preview is optional; attachment delivery and retry remain available.
     }
@@ -398,6 +404,7 @@ export function useTgAssistant() {
   }, [reportImagePreviewStorageError]);
 
   const updateItems = useCallback((updater: (current: TgAssistantItem[]) => TgAssistantItem[]) => {
+    if (identityEpoch.current !== getSessionEpoch()) return;
     const previousImageIds = new Set(itemsRef.current.flatMap((item) =>
       item.kind === "message" && item.role === "user" && item.image ? [item.id] : []
     ));
@@ -419,6 +426,7 @@ export function useTgAssistant() {
   }, [deleteStoredImagePreview, releaseImagePreview]);
 
   useEffect(() => {
+    if (identityEpoch.current !== getSessionEpoch()) return;
     try {
       const persisted = items.filter((item) =>
         item.kind === "message" ||
@@ -455,7 +463,7 @@ export function useTgAssistant() {
       messageId,
       thumbnail: await loadTgAssistantImagePreview(sessionId, messageId)
     }))).then((results) => {
-      if (cancelled) return;
+      if (cancelled || identityEpoch.current !== getSessionEpoch()) return;
       let changed = false;
       let failed = false;
       for (const result of results) {
@@ -470,7 +478,7 @@ export function useTgAssistant() {
         if (!thumbnail || !stillRetained) continue;
         try {
           releaseImagePreview(messageId);
-          imagePreviewUrlsRef.current.set(messageId, URL.createObjectURL(thumbnail));
+          imagePreviewUrlsRef.current.set(messageId, createPrivateObjectURL(thumbnail));
           changed = true;
         } catch {
           failed = true;
@@ -487,6 +495,7 @@ export function useTgAssistant() {
   }, [releaseImagePreview, reportImagePreviewStorageError]);
 
   const loadMetadata = useCallback(async () => {
+    if (guest) return;
     if (metadataLoadedRef.current || metadataLoading) return;
     metadataLoadedRef.current = true;
     setMetadataLoading(true);
@@ -501,9 +510,10 @@ export function useTgAssistant() {
       setMetadataError("AI 助手状态或使用指南加载失败。");
     }
     setMetadataLoading(false);
-  }, [metadataLoading]);
+  }, [guest, metadataLoading]);
 
   const setConsent = useCallback((next: "granted" | "denied" | "unknown") => {
+    if (identityEpoch.current !== getSessionEpoch()) return;
     setConsentState(next);
     try {
       if (next === "unknown") localStorage.removeItem(CONSENT_KEY);
@@ -546,7 +556,7 @@ export function useTgAssistant() {
     appendUser: boolean,
     image?: File
   ) => {
-    if (controllerRef.current) return;
+    if (controllerRef.current || identityEpoch.current !== getSessionEpoch()) return;
     const controller = new AbortController();
     controllerRef.current = controller;
     stopRequestedRef.current = false;
@@ -811,6 +821,7 @@ export function useTgAssistant() {
     };
 
     try {
+      assertSessionEpoch(identityEpoch.current);
       await streamTgAssistant(
         { messages: requestMessages(historyItems), ...(pageContext ? { page_context: pageContext } : {}) },
         handleEvent,
@@ -852,6 +863,7 @@ export function useTgAssistant() {
   }, [requestMessages, updateItems]);
 
   const send = useCallback(async (content: string, attachContext: boolean, image?: File) => {
+    if (!requestServiceAccess()) return false;
     const normalized = content.trim();
     if (!normalized || normalized.length > 8000 || controllerRef.current) return false;
     const userItem: TgAssistantMessageItem = {
@@ -866,7 +878,7 @@ export function useTgAssistant() {
     if (image) {
       imageFilesRef.current.set(userItem.id, image);
       try {
-        imagePreviewUrlsRef.current.set(userItem.id, URL.createObjectURL(image));
+        imagePreviewUrlsRef.current.set(userItem.id, createPrivateObjectURL(image));
       } catch {
         // Keep the attachment usable even when this browser cannot create a preview URL.
       }
@@ -924,6 +936,7 @@ export function useTgAssistant() {
   }, []);
 
   const newConversation = useCallback(() => {
+    if (identityEpoch.current !== getSessionEpoch()) return;
     const previousPreviewSessionId = imagePreviewSessionIdRef.current;
     const pendingPreviewWrites = Array.from(imagePreviewPersistenceRef.current.values())
       .filter((entry) => entry.sessionId === previousPreviewSessionId)

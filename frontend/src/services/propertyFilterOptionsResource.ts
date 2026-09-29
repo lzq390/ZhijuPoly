@@ -1,3 +1,4 @@
+import { assertSessionEpoch, getSessionEpoch, onSessionRetired } from "../auth/session";
 import {
   API_BASE_URL,
   fetchPropertyFilterOptions
@@ -154,6 +155,7 @@ export function isPropertyFilterOptionsCacheFresh(
 
 export function refreshPropertyFilterOptions(): Promise<PropertyFilterOptionsCache> {
   if (inFlight) return inFlight;
+  const epoch = getSessionEpoch();
   const request = (async () => {
     const cached = readPropertyFilterOptionsCache();
     const controller = new AbortController();
@@ -167,9 +169,11 @@ export function refreshPropertyFilterOptions(): Promise<PropertyFilterOptionsCac
         etag: cached?.etag,
         signal: controller.signal
       });
+      assertSessionEpoch(epoch);
       if (result.status === "not-modified" && !cached) {
         result = await fetchPropertyFilterOptions({ signal: controller.signal });
       }
+      assertSessionEpoch(epoch);
       if (result.status === "not-modified") {
         const refreshed = {
           ...cached as PropertyFilterOptionsCache,
@@ -213,3 +217,5 @@ export function resetPropertyFilterOptionsResourceForTests() {
   inFlight = null;
   removePersistedCache();
 }
+
+onSessionRetired(() => { memoryCache = null; inFlight = null; });

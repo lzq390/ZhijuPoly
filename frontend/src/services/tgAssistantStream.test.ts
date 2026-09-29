@@ -121,7 +121,8 @@ describe("Tg assistant SSE parser", () => {
 
     expect(fetchMock.mock.calls[0][0]).toContain("/assistant/tg/chat/image-stream");
     const options = fetchMock.mock.calls[0][1] as RequestInit;
-    expect(options.headers).toBeUndefined();
+    expect(new Headers(options.headers).has("Content-Type")).toBe(false);
+    expect(new Headers(options.headers).get("X-CSRF-Token")).toBe("test-csrf");
     expect(options.body).toBeInstanceOf(FormData);
     const form = options.body as FormData;
     expect(form.get("image")).toBe(image);

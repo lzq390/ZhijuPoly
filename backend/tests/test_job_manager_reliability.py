@@ -1,10 +1,23 @@
 from __future__ import annotations
 
-from threading import Event, Thread
+from app.auth.context import Identity, user_context
+TEST_OWNER = Identity("11111111-1111-1111-1111-111111111111")
+SECOND_OWNER = Identity("22222222-2222-2222-2222-222222222222")
+
+
+from threading import Event, Thread as BaseThread
+from contextvars import copy_context
 from time import monotonic, sleep
 from types import SimpleNamespace
 
 import pytest
+
+@pytest.fixture(autouse=True)
+def private_test_identity(monkeypatch):
+    monkeypatch.setattr("app.task_control._start_checker", lambda _: True)
+    with user_context(TEST_OWNER):
+        yield
+
 
 from app.main import _shutdown_in_process_job_managers
 from app.models import (
@@ -25,6 +38,20 @@ from app.services.reverse_design_jobs import (
     ReverseDesignJobManager,
     ReverseDesignJobUnavailableError,
 )
+
+
+class Thread(BaseThread):
+    def __init__(self, *args, **kwargs):
+        self.context = copy_context()
+        super().__init__(*args, **kwargs)
+
+    def run(self):
+        self.context.run(super().run)
+
+
+def _as_second(function, *args, **kwargs):
+    with user_context(SECOND_OWNER):
+        return function(*args, **kwargs)
 
 
 def _wait_until(predicate, *, timeout: float = 3.0) -> None:
@@ -224,15 +251,16 @@ def test_reverse_design_queued_cancel_never_runs_the_runner() -> None:
         )[2],
     )
     assert first_started.wait(timeout=3)
-    second = manager.create_job(
-        _reverse_design_request(),
-        lambda progress, cancelled: (
-            second_called.set(),
-            _reverse_design_result(),
-        )[1],
-    )
+    with user_context(SECOND_OWNER):
+        second = manager.create_job(
+            _reverse_design_request(),
+            lambda progress, cancelled: (
+                second_called.set(),
+                _reverse_design_result(),
+            )[1],
+        )
 
-    cancelled = manager.cancel_job(second.job_id)
+    cancelled = _as_second(manager.cancel_job, second.job_id)
 
     assert cancelled.status == "cancelled"
     assert second_called.is_set() is False
@@ -319,16 +347,17 @@ def test_conditional_deadline_starts_when_api_accepts_the_job() -> None:
         timeout_seconds=100,
     )
     assert first_started.wait(timeout=3)
-    second = manager.create_job(
-        request,
-        lambda: (second_called.set(), _conditional_result(request))[1],
-        timeout_seconds=5,
-    )
+    with user_context(SECOND_OWNER):
+        second = manager.create_job(
+            request,
+            lambda: (second_called.set(), _conditional_result(request))[1],
+            timeout_seconds=5,
+        )
     clock[0] = 6.0
     release_first.set()
 
-    _wait_until(lambda: manager.get_job(second.job_id).status == "failed")
-    assert manager.get_job(second.job_id).error.startswith("GPU_QUEUE_TIMEOUT:")
+    _wait_until(lambda: _as_second(manager.get_job, second.job_id).status == "failed")
+    assert _as_second(manager.get_job, second.job_id).error.startswith("GPU_QUEUE_TIMEOUT:")
     assert second_called.is_set() is False
     _wait_until(lambda: manager.get_job(first.job_id).status == "completed")
     manager.shutdown(wait=True)
@@ -354,16 +383,17 @@ def test_polytao_deadline_starts_when_api_accepts_the_job() -> None:
         timeout_seconds=100,
     )
     assert first_started.wait(timeout=3)
-    second = _create_polytao_job(
-        manager,
-        lambda: (second_called.set(), _polytao_result())[1],
-        timeout_seconds=5,
-    )
+    with user_context(SECOND_OWNER):
+        second = _create_polytao_job(
+            manager,
+            lambda: (second_called.set(), _polytao_result())[1],
+            timeout_seconds=5,
+        )
     clock[0] = 6.0
     release_first.set()
 
-    _wait_until(lambda: manager.get_job(second.job_id).status == "failed")
-    assert manager.get_job(second.job_id).error_message.startswith("GPU_QUEUE_TIMEOUT:")
+    _wait_until(lambda: _as_second(manager.get_job, second.job_id).status == "failed")
+    assert _as_second(manager.get_job, second.job_id).error_message.startswith("GPU_QUEUE_TIMEOUT:")
     assert second_called.is_set() is False
     _wait_until(lambda: manager.get_job(first.job_id).status == "completed")
     manager.shutdown(wait=True)
@@ -383,13 +413,14 @@ def test_shutdown_cancels_queued_work_but_preserves_running_success() -> None:
         )[2],
     )
     assert first_started.wait(timeout=3)
-    queued = _create_polytao_job(
-        manager,
-        lambda: (second_called.set(), _polytao_result())[1],
-    )
+    with user_context(SECOND_OWNER):
+        queued = _create_polytao_job(
+            manager,
+            lambda: (second_called.set(), _polytao_result())[1],
+        )
 
     manager.shutdown(wait=False)
-    _wait_until(lambda: manager.get_job(queued.job_id).status == "cancelled")
+    _wait_until(lambda: _as_second(manager.get_job, queued.job_id).status == "cancelled")
     release_first.set()
     _wait_until(lambda: manager.get_job(running.job_id).status == "completed")
 
@@ -561,10 +592,11 @@ def test_shared_store_exposes_per_lane_retention_and_execution_counts() -> None:
     polytao = PolytaoJobManager(store=store)
     request = _conditional_request()
     conditional_job = conditional.create_job(request, lambda: _conditional_result(request))
-    polytao_job = _create_polytao_job(polytao, _polytao_result)
+    with user_context(SECOND_OWNER):
+        polytao_job = _create_polytao_job(polytao, _polytao_result)
 
     _wait_until(lambda: conditional.get_job(conditional_job.job_id).status == "completed")
-    _wait_until(lambda: polytao.get_job(polytao_job.job_id).status == "completed")
+    _wait_until(lambda: _as_second(polytao.get_job, polytao_job.job_id).status == "completed")
 
     assert conditional.retained_jobs == 1
     assert conditional.retained_bytes > 0
@@ -598,7 +630,7 @@ def test_lane_capacity_rejects_before_retaining_a_job() -> None:
     polytao_started = Event()
     release_polytao = Event()
     polytao = PolytaoJobManager(max_active_jobs=1)
-    _create_polytao_job(
+    _as_second(_create_polytao_job,
         polytao,
         lambda: (
             polytao_started.set(),
@@ -608,7 +640,7 @@ def test_lane_capacity_rejects_before_retaining_a_job() -> None:
     )
     assert polytao_started.wait(timeout=3)
     with pytest.raises(PolytaoJobCapacityError):
-        _create_polytao_job(polytao, _polytao_result)
+        _as_second(_create_polytao_job, polytao, _polytao_result)
     assert polytao.retained_jobs == 1
 
     release_conditional.set()

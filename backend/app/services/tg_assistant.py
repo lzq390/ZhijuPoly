@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.private_execution import bounded_stream
+
 import base64
 import json
 import logging
@@ -1151,6 +1153,7 @@ def _validated_decision(
     return "chat", {}
 
 
+@bounded_stream("ai")
 def stream_tg_assistant_events(
     *,
     messages: Sequence[AssistantChatMessage],

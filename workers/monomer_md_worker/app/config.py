@@ -166,7 +166,7 @@ def load_settings() -> WorkerSettings:
 
     return WorkerSettings(
         mode=_get_mode(),
-        app_postgres_dsn=os.getenv("APP_POSTGRES_DSN") or None,
+        app_postgres_dsn=os.getenv("APP_SERVICE_POSTGRES_DSN") or os.getenv("APP_POSTGRES_DSN") or None,
         job_table=os.getenv("MONOMER_MD_JOB_TABLE", "md.monomer_md_jobs"),
         job_id_column=os.getenv("MONOMER_MD_JOB_ID_COLUMN", "job_id"),
         status_column=os.getenv("MONOMER_MD_STATUS_COLUMN", "status"),

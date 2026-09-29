@@ -130,3 +130,8 @@ describe("useMonomerMdSimulation deep links", () => {
     await waitFor(() => expect(result.current.job?.job_id).toBe(secondId));
   });
 });
+
+vi.mock("./useTaskEvents", () => {
+  const rememberJob = vi.fn(), forgetJob = vi.fn(), reconnect = vi.fn();
+  return { useTaskEvents: () => ({ connectionState: "live", rememberJob, forgetJob, reconnect }) };
+});

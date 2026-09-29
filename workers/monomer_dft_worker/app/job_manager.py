@@ -151,6 +151,7 @@ class JobManager:
         journal_writer: Callable[[Path, Any], None] = atomic_write_json,
         single_point_timeout_seconds: float = SINGLE_POINT_TIMEOUT_SECONDS,
         optimization_timeout_seconds: float = OPTIMIZATION_TIMEOUT_SECONDS,
+        start_authorizer: Callable[[Any], None] | None = None,
     ) -> None:
         if max_queued_jobs != 8:
             raise ValueError("the monomer DFT worker queue capacity must be exactly 8")
@@ -165,6 +166,7 @@ class JobManager:
         self._journal_writer = journal_writer
         self.single_point_timeout_seconds = float(single_point_timeout_seconds)
         self.optimization_timeout_seconds = float(optimization_timeout_seconds)
+        self._start_authorizer = start_authorizer
         self._records: dict[str, _JobRecord] = {}
         self._sequence_to_job: dict[int, str] = {}
         self._purging_job_ids: set[str] = set()
@@ -306,6 +308,15 @@ class JobManager:
             snapshot.timings = normalized_timings
             self._records[snapshot.job_id] = record
             self._sequence_to_job[envelope.enqueue_sequence] = snapshot.job_id
+            if (snapshot.status in {"pending", "queued", "running", "cancel_requested"}
+                    and not self._runtime_recovery_cleanup_confirmed(snapshot.request)):
+                # Queued journals may already have an in-flight Broker acquire.
+                # A new supervisor/root lock does not prove that old GPU work or
+                # an old stable acquire has disappeared.
+                record.cancel_event.set()
+                self._update_snapshot(record, status="cancel_requested")
+                self._mark_fatal("gpu_cleanup_unconfirmed")
+                continue
             if snapshot.status in {"pending", "queued"}:
                 candidates.append(record)
             elif snapshot.status in {"running", "cancel_requested"}:
@@ -510,6 +521,7 @@ class JobManager:
                         raise JobConflict(
                             "enqueue_sequence already belongs to another durable job"
                         )
+                    cleanup_confirmed = self._runtime_recovery_cleanup_confirmed(request)
                     now = _utcnow()
                     snapshot = JobSnapshot(
                         enqueue_sequence=request.enqueue_sequence,
@@ -517,12 +529,12 @@ class JobManager:
                         attempt_token=request.attempt_token,
                         request_sha256=request.request_sha256 or "",
                         worker_instance_id=self.worker_instance_id,
-                        status="cancelled",
+                        status="cancelled" if cleanup_confirmed else "cancel_requested",
                         stage="queued",
                         progress_percent=0,
                         created_at=now,
                         updated_at=now,
-                        finished_at=now,
+                        finished_at=now if cleanup_confirmed else None,
                         request=request,
                     )
                     record = _JobRecord(
@@ -530,13 +542,14 @@ class JobManager:
                         enqueue_sequence=request.enqueue_sequence,
                         enqueue_sequence_source="backend",
                     )
-                    # Persist first.  A crash after this atomic write is
-                    # recovered as cancelled; a crash before it leaves no
-                    # partially visible in-memory identity.
+                    # Persist the cancellation fence before publishing it;
+                    # unknown external resource ownership stays nonterminal.
                     self._persist_record(record)
                     self._records[job_id] = record
                     self._sequence_to_job[request.enqueue_sequence] = job_id
                     record.cancel_event.set()
+                    if not cleanup_confirmed:
+                        self._mark_fatal("gpu_cleanup_unconfirmed")
                     return self._public_snapshot(record)
                 # Reuse submit's exact identity/scientific-payload fencing.
                 self._existing_submission_locked(request)
@@ -547,7 +560,7 @@ class JobManager:
             status = record.snapshot.status
             if status in TERMINAL_STATUSES:
                 return self._public_snapshot(record)
-            if status in {"pending", "queued"}:
+            if status in {"pending", "queued"} and self._running_job_id != job_id:
                 self._cleanup_partial_artifacts(record.snapshot)
                 self._update_snapshot(
                     record,
@@ -924,6 +937,11 @@ class JobManager:
                 )
 
         def admitted() -> float:
+            # The engine owns its GPU lease here, but no science has started.
+            # Do not retain the scheduler lock across the Backend callback.
+            if self._start_authorizer is None:
+                raise RuntimeError("DFT start authorization is not configured")
+            self._start_authorizer(snapshot)
             with self._state_lock:
                 if record.cancel_event.is_set():
                     raise ComputationCancelled("calculation was cancelled")
@@ -988,19 +1006,24 @@ class JobManager:
         # Start the 600/1800 second calculation deadline only after the fenced
         # execution lease wins admission and queued -> running is durable.
         admission_task = asyncio.create_task(admission_event.wait())
-        done, _ = await asyncio.wait(
-            {execute_task, admission_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if execute_task in done:
-            timed_out = False
-        else:
-            done, _ = await asyncio.wait({execute_task}, timeout=timeout)
-            timed_out = not done
-        if not admission_task.done():
-            admission_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await admission_task
+        timed_out = False
+        try:
+            done, _ = await asyncio.wait(
+                {execute_task, admission_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if execute_task not in done:
+                done, _ = await asyncio.wait({execute_task}, timeout=timeout)
+                timed_out = not done
+        except asyncio.CancelledError:
+            # Cancelling asyncio.to_thread does not stop its Python thread.
+            # Keep the dispatcher/root lock until that exact execution ends.
+            record.cancel_event.set()
+        finally:
+            if not admission_task.done():
+                admission_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await admission_task
         if timed_out:
             record.cancel_event.set()
             terminator = getattr(self.runtime, "terminate_active", None)
@@ -1022,11 +1045,19 @@ class JobManager:
 
         execution: EngineExecution | None = None
         failure: BaseException | None = None
-        try:
-            # Never release the only GPU slot while the underlying thread is alive.
-            execution = await execute_task
-        except BaseException as exc:  # noqa: BLE001 - converted to a stable public error.
-            failure = exc
+        while True:
+            try:
+                execution = await asyncio.shield(execute_task)
+                break
+            except asyncio.CancelledError as exc:
+                record.cancel_event.set()
+                if execute_task.cancelled():
+                    failure = exc
+                    break
+                # Repeated shutdown cancellation cannot discard the join.
+            except BaseException as exc:  # noqa: BLE001 - converted to a stable public error.
+                failure = exc
+                break
 
         # A bounded Broker cancellation may return before its unique detached
         # ownership thread can prove grant-or-cancel. Preserve the durable FIFO
@@ -1036,6 +1067,18 @@ class JobManager:
         # being recovered fail-closed.
         if self._runtime_admission_uncertain():
             self._mark_admission_uncertain()
+
+        if not self._runtime_execution_cleanup_confirmed():
+            with self._state_lock:
+                # A returned Python thread can still leave a live child or a
+                # suspect Broker lease. An active journal keeps Backend owner
+                # admission occupied and survives supervisor restart.
+                record.cancel_event.set()
+                self._update_snapshot(record, status="cancel_requested")
+                with contextlib.suppress(ValueError):
+                    self._queue.remove(record.snapshot.job_id)
+                self._mark_fatal("gpu_cleanup_unconfirmed")
+            return
 
         if timed_out or failure is not None or record.cancel_event.is_set():
             # Partial result trees can approach the artifact contract limits.
@@ -1073,6 +1116,8 @@ class JobManager:
             ):
                 return
             if record.cancel_event.is_set() or isinstance(failure, ComputationCancelled):
+                with contextlib.suppress(ValueError):
+                    self._queue.remove(record.snapshot.job_id)
                 self._update_snapshot(
                     record,
                     status="cancelled",
@@ -1325,10 +1370,9 @@ class JobManager:
         return self._records.get(job_id) if job_id is not None else None
 
     def _active_job_count(self) -> int:
-        record = self._record_or_none(self._running_job_id)
-        return int(
-            record is not None
-            and record.snapshot.status in {"running", "cancel_requested"}
+        return sum(
+            record.snapshot.status in {"running", "cancel_requested"}
+            for record in self._records.values()
         )
 
     def _public_snapshot(self, record: _JobRecord) -> PublicJobSnapshot:
@@ -1464,6 +1508,24 @@ class JobManager:
             return bool(value() if callable(value) else value)
         except Exception:
             return True
+
+    def _runtime_execution_cleanup_confirmed(self) -> bool:
+        if self._runtime_admission_uncertain():
+            return False
+        checker = getattr(self.runtime, "execution_cleanup_confirmed", None)
+        try:
+            # CPU-only injected engines own no external resource. The deployed
+            # ExecutorPool supplies a check over its actual cleanup ownership.
+            return not callable(checker) or bool(checker())
+        except Exception:
+            return False
+
+    def _runtime_recovery_cleanup_confirmed(self, request: JobSubmitRequest) -> bool:
+        checker = getattr(self.runtime, "recovery_cleanup_confirmed", None)
+        try:
+            return not callable(checker) or bool(checker(request))
+        except Exception:
+            return False
 
     def _mark_admission_uncertain(self) -> None:
         with self._state_lock:

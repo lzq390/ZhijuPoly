@@ -1,3 +1,4 @@
+import { assertSessionEpoch, getSessionEpoch, privateFetch } from "../auth/session";
 import type {
   PropertyFilterObservationRequest,
   ConditionalGenerationJobCreateResponse,
@@ -109,6 +110,7 @@ async function errorMessageFromResponse(response: Response): Promise<string> {
   if (typeof data?.detail === "string") {
     return data.detail;
   }
+  if (typeof data?.detail?.message === "string") return data.detail.message;
   if (typeof data?.message === "string") {
     return data.message;
   }
@@ -119,7 +121,7 @@ async function errorMessageFromResponse(response: Response): Promise<string> {
 }
 
 async function postJSON<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await privateFetch(`${API_BASE_URL}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -134,7 +136,7 @@ async function postJSON<T>(path: string, body: unknown, signal?: AbortSignal): P
 }
 
 async function postForm<T>(path: string, body: FormData, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await privateFetch(`${API_BASE_URL}${path}`, {
     method: "POST",
     body,
     signal
@@ -148,7 +150,7 @@ async function postForm<T>(path: string, body: FormData, signal?: AbortSignal): 
 }
 
 async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  const response = await privateFetch(`${API_BASE_URL}${path}`, init);
 
   if (!response.ok) {
     throw new ApiRequestError(response.status, await errorMessageFromResponse(response));
@@ -267,7 +269,7 @@ async function monomerDftResponseError(response: Response): Promise<MonomerDftAp
 }
 
 async function monomerDftRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  const response = await privateFetch(`${API_BASE_URL}${path}`, init);
   if (!response.ok) {
     throw await monomerDftResponseError(response);
   }
@@ -460,7 +462,7 @@ export function getMonomerDftBundleUrl(jobId: string): string {
 }
 
 export async function downloadMonomerDftBundle(jobId: string, signal?: AbortSignal): Promise<Blob> {
-  const response = await fetch(getMonomerDftBundleUrl(jobId), { signal });
+  const response = await privateFetch(getMonomerDftBundleUrl(jobId), { signal });
   if (!response.ok) throw await monomerDftResponseError(response);
   return response.blob();
 }
@@ -541,7 +543,7 @@ export async function deleteMonomerMdArtifacts(
   jobId: string,
   signal?: AbortSignal
 ): Promise<MonomerMdJobResponse> {
-  const response = await fetch(`${API_BASE_URL}/monomer-md/jobs/${encodeURIComponent(jobId)}/artifacts`, {
+  const response = await privateFetch(`${API_BASE_URL}/monomer-md/jobs/${encodeURIComponent(jobId)}/artifacts`, {
     method: "DELETE",
     signal
   });
@@ -557,7 +559,7 @@ export async function deleteMonomerMdJob(
   jobId: string,
   signal?: AbortSignal
 ): Promise<void> {
-  const response = await fetch(
+  const response = await privateFetch(
     `${API_BASE_URL}/monomer-md/jobs/${encodeURIComponent(jobId)}`,
     { method: "DELETE", signal }
   );
@@ -591,7 +593,9 @@ export function stopKnowledgeRecording(recordingId: string): Promise<KnowledgeRe
 
 export async function summarizeKnowledgeRecording(recordingId: string, onPartial?: (text: string) => void): Promise<KnowledgeRecordingSummary> {
   if (onPartial) {
+    const epoch = getSessionEpoch();
     const { streamRecordingSummary } = await import("./recordingSummaryStream");
+    assertSessionEpoch(epoch);
     return streamRecordingSummary(recordingId, onPartial);
   }
   return postJSON(`/knowledge/recordings/${encodeURIComponent(recordingId)}/summary`, {});
@@ -627,7 +631,7 @@ export function clearOnlineKnowledgeHistory(): Promise<{ success: boolean }> {
 }
 
 export async function deleteOnlineKnowledgeHistory(historyId: number): Promise<{ success: boolean }> {
-  const response = await fetch(`${API_BASE_URL}/online-knowledge/history/${historyId}`, {
+  const response = await privateFetch(`${API_BASE_URL}/online-knowledge/history/${historyId}`, {
     method: "DELETE"
   });
 
@@ -800,7 +804,7 @@ export async function fetchPropertyFilterOptions(options: {
 } = {}): Promise<PropertyFilterOptionsFetchResult> {
   const headers = new Headers();
   if (options.etag) headers.set("If-None-Match", options.etag);
-  const response = await fetch(`${API_BASE_URL}/database-browser/property-filter/options`, {
+  const response = await privateFetch(`${API_BASE_URL}/database-browser/property-filter/options`, {
     cache: "no-cache",
     headers,
     signal: options.signal
@@ -830,7 +834,7 @@ export async function fetchPropertyFilterHistogram(
   const headers = new Headers();
   if (options.etag) headers.set("If-None-Match", options.etag);
   const searchParams = new URLSearchParams({ option_key: optionKey });
-  const response = await fetch(
+  const response = await privateFetch(
     `${API_BASE_URL}/database-browser/property-filter/histogram?${searchParams.toString()}`,
     { cache: "no-cache", headers, signal: options.signal }
   );

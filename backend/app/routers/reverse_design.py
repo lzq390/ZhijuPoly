@@ -6,6 +6,10 @@ from typing import Any, Callable
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
+from app.task_control import admission, authorize_memory_start
+from app.auth.context import current_owner_id
+from app.services.private_quotas import PrivateQuotaSettings
+
 from app.models import (
     ReverseDesignTgCandidate,
     ReverseDesignTgJobCreateResponse,
@@ -113,7 +117,7 @@ def _search_by_tg_response(
                     {
                         "batch_size": settings.pi_reverse_job_batch_size,
                         "max_scan_rows": None,
-                        "timeout_seconds": 0,
+                        "timeout_seconds": PrivateQuotaSettings.from_environment().reverse_execution_seconds,
                         "progress_callback": forward_progress,
                         "progress_interval_rows": settings.pi_reverse_progress_interval_rows,
                         "cancellation_check": cancellation_check,
@@ -155,7 +159,12 @@ async def search_by_tg(
     request_body: ReverseDesignTgRequest,
     request: Request,
 ) -> ReverseDesignTgResponse:
-    return await run_in_threadpool(_search_by_tg_response, request_body, request.app)
+    def execute():
+        if not authorize_memory_start(current_owner_id()):
+            raise HTTPException(403, "Account disabled before execution")
+        return _search_by_tg_response(request_body, request.app)
+    with admission("reverse"):
+        return await run_in_threadpool(execute)
 
 
 @router.post("/tg/jobs", response_model=ReverseDesignTgJobCreateResponse, status_code=202)

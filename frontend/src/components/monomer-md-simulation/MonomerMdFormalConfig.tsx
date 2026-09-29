@@ -28,6 +28,7 @@ import {
 import { formatNumber } from "./presentation";
 
 type MonomerMdFormalConfigProps = {
+  loginRequired?: boolean;
   protocol: MonomerMdFormalProtocol;
   config: Record<string, unknown> | null;
   catalog: MonomerMdProtocolCatalogResponse | null;
@@ -55,6 +56,7 @@ function updateRow(
 }
 
 export function MonomerMdFormalConfig({
+  loginRequired = false,
   protocol,
   config,
   catalog,
@@ -99,12 +101,12 @@ export function MonomerMdFormalConfig({
   const configValidation = config ? validateFormalConfig(config, protocol) : { valid: false, errors: ["等待服务协议模板。"] };
   const steps = config ? estimatedFormalSteps(protocol, config) : null;
   const hasUnappliedChanges = formDirty || jsonDirty;
-  const submitDisabled =
+  const submitDisabled = !loginRequired && (
     isSubmitting ||
     !canSubmit ||
     !protocolReady ||
     !configValidation.valid ||
-    hasUnappliedChanges;
+    hasUnappliedChanges);
 
   function confirmDiscardUnapplied() {
     if (!hasUnappliedChanges) return true;
@@ -409,7 +411,7 @@ export function MonomerMdFormalConfig({
           ) : null}
         </div>
         <div className="np-mmd-submit-bar__action">
-          <span>{hasUnappliedChanges ? "请先应用编辑器修改" : protocolReady ? submissionReason : "当前协议尚未确认运行时就绪"}</span>
+          <span>{loginRequired ? "请登录账号。" : hasUnappliedChanges ? "请先应用编辑器修改" : protocolReady ? submissionReason : "当前协议尚未确认运行时就绪"}</span>
           <button type="button" disabled={submitDisabled} onClick={onSubmit}>
             {isSubmitting ? "正在创建任务" : "提交完整 MD 模拟任务"}
           </button>

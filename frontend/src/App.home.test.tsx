@@ -3,6 +3,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { AuthProvider } from "./auth/AuthProvider";
+import { GUEST_SESSION } from "./auth/session";
 import { preloadPage } from "./pages";
 
 // These cases exercise routing after transport; cold loading is covered separately.
@@ -52,7 +54,7 @@ describe("智聚万物首页", () => {
     const expectedModules = new Map([
       [
         "材料发现 Discover",
-        ["知识检索", "聚合物生成", "聚合物相似性探索", "数据库查询", "数据库筛选", "数据库分析"]
+        ["知识检索", "聚合物生成", "单体逆合成反推", "聚合物相似性探索", "数据库查询", "数据库筛选", "数据库分析"]
       ],
       [
         "材料设计 Build",
@@ -558,5 +560,40 @@ describe("智聚万物首页", () => {
           candidate.getAttribute("data-project-directory") === "/home/codexlab/DevTool/Alpha"
       );
     expect(inactiveProject?.getAttribute("aria-current")).toBeNull();
+  });
+});
+
+
+describe("游客共享工作空间", () => {
+  function guestPage() {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(GUEST_SESSION), { headers: { "Content-Type": "application/json" } }));
+    render(<AuthProvider><App /></AuthProvider>);
+    return fetch;
+  }
+
+  it("使用普通模块导航和对话布局，且不连接 OpenScience 或后台服务", async () => {
+    const fetch = guestPage();
+    await screen.findByRole("button", { name: "游客账号菜单" });
+    expect(screen.getByRole("navigation", { name: "业务模块" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "对话", level: 1 })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "聊天" })).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent(window, new MessageEvent("message", { origin: WORKSPACE_ORIGIN, data: { type: "openscience:projects", projects: [{ directory: "/secret", name: "旧私人项目" }] } }));
+    expect(screen.queryByText("旧私人项目")).toBeNull();
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual(["/api/v1/auth/session"]);
+  });
+
+  it("允许游客切换真实模块页面，任务入口弹出登录表单", async () => {
+    const fetch = guestPage();
+    await screen.findByRole("button", { name: "游客账号菜单" });
+    fireEvent.click(screen.getByRole("button", { name: "材料发现 Discover" }));
+    fireEvent.click(screen.getByRole("button", { name: "数据库筛选" }));
+    expect(await screen.findByTestId("database-filter-page")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "登录账号" }));
+    expect(screen.getByRole("dialog", { name: "登录工作空间" })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe("请登录账号。");
+    expect(fetch).toHaveBeenCalledOnce();
   });
 });

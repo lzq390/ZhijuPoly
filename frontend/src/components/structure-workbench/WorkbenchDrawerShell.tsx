@@ -99,7 +99,7 @@ export function WorkbenchDrawerShell({
       reopenTriggerRef.current = null;
     }
     if (!presence.present && wasPresent.current) {
-      const restoreTarget = restoreFocusRef.current;
+      const restoreTarget = restoreFocusTarget ?? restoreFocusRef.current;
       restoreFocusFrameRef.current = window.requestAnimationFrame(() => {
         restoreFocusFrameRef.current = null;
         const hiddenAncestor = restoreTarget?.closest<HTMLElement>("[inert], [aria-hidden='true']");

@@ -17,6 +17,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.errors import DependentObjectsStillExist
 import pytest
+from conftest import reset_postgres_fixture
 
 from app import postgres_migrations, postgres_preflight
 from app.config import Settings
@@ -55,6 +56,42 @@ _DFT_MIGRATION_VERSION = "0013_monomer_dft_jobs"
 _MD_QUEUE_MIGRATION_VERSION = "0014_monomer_md_task_queue_cancel"
 _PROPERTY_FILTER_MIGRATION_VERSION = "0015_property_filter_performance"
 _BATCH_MIGRATION_VERSION = "0016_monomer_polymerization_batch"
+_ISOLATION_PREPARE_VERSION = "0017_user_isolation_prepare"
+
+
+def _historical_migrations(tmp_path: Path, last_version: str) -> Path:
+    """Reconstruct a release's actual SQL and manifest, without future epochs."""
+    directory = tmp_path / ("migrations-through-" + last_version)
+    directory.mkdir()
+    manifest = json.loads((MIGRATIONS_DIR / "manifest.json").read_text(encoding="utf-8"))
+    manifest["migrations"] = [entry for entry in manifest["migrations"] if entry["version"] <= last_version]
+    for entry in manifest["migrations"]:
+        filename = entry["version"] + ".sql"
+        shutil.copy2(MIGRATIONS_DIR / filename, directory / filename)
+    (directory / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return directory
+
+
+@pytest.fixture
+def historical_postgres_dsn(postgres_test_dsn: str, tmp_path: Path):
+    """Historical DDL tests own a pre-isolation database, never the shared fixture.
+
+    Deleting old migration rows in a current database leaves 0017 owner columns
+    and ledger state behind. Starting from the exact historical release also
+    prevents a failed restoration from cascading into unrelated tests.
+    """
+    name = "governance_history_" + uuid.uuid4().hex[:16]
+    dsn = make_conninfo(postgres_test_dsn, dbname=name)
+    with psycopg.connect(postgres_test_dsn, autocommit=True) as connection:
+        connection.execute(sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(sql.Identifier(name)))
+    try:
+        apply_postgres_migrations(dsn, _historical_migrations(tmp_path, _BATCH_MIGRATION_VERSION),
+            allowed_kinds={"baseline", "expand"}, allow_contract_on_fresh_database=True)
+        reset_postgres_fixture(dsn)
+        yield dsn
+    finally:
+        with psycopg.connect(postgres_test_dsn, autocommit=True) as connection:
+            connection.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
 
 
 def _canonical_json(value: object) -> str:
@@ -914,8 +951,9 @@ def test_epoch_two_migration_requires_exact_prior_contract_before_any_ddl(
     tmp_path: Path,
     postgres_dsn: str,
 ) -> None:
-    migrations_dir = tmp_path / "migrations"
-    shutil.copytree(MIGRATIONS_DIR, migrations_dir)
+    # This probe belongs to epoch 2. The current release also has the later
+    # epoch-3 identity contract, which must not precede an epoch-2 probe.
+    migrations_dir = _historical_migrations(tmp_path, _ISOLATION_PREPARE_VERSION)
     epoch_two_version = "9999_epoch_bridge_probe"
     epoch_two_path = migrations_dir / f"{epoch_two_version}.sql"
     epoch_two_path.write_text(
@@ -1375,18 +1413,31 @@ def test_strict_runtime_preflight_passes_after_migrations(tmp_path: Path, postgr
         assert report["postgres"]["tables"][f"polymerization_batch.{table}"] == 0
     assert report["monomer_dft_schema"] == {
         "state": "ready",
-        "reason": "exact_0013",
+        "reason": "exact_0017_user_isolation_prepare",
         "catalog_sha256": (
-            "6dc2e6ca7e1bb052836afec2bbdd46c6aa0928e97efdbbc6669b9b220f9bf6f8"
+            "025a8e03279f57cae87f4b7d7b23196e33bd1c61c3eb8ed8f1cd7e4aeba67bed"
         ),
     }
 
 
 def test_batch_compatibility_baseline_passes_before_and_after_0016(
-    tmp_path: Path, postgres_dsn: str, monkeypatch,
+    tmp_path: Path, historical_postgres_dsn: str, monkeypatch,
 ) -> None:
+    postgres_dsn = historical_postgres_dsn
     settings = _governance_settings(tmp_path, postgres_dsn)
     version = "0016_monomer_polymerization_batch"
+    # Compare the real 0015 rollback artifact with the 0016 release. A current
+    # 0017/0018 artifact is outside that registered forward-compatibility chain.
+    monkeypatch.setattr(postgres_preflight, "_MIGRATION_CHECKSUMS", {
+        name: checksum for name, checksum in postgres_preflight._MIGRATION_CHECKSUMS.items()
+        if name <= version
+    })
+    monkeypatch.setattr(postgres_preflight, "STRICT_REQUIRED_MIGRATIONS", tuple(
+        name for name in postgres_preflight.STRICT_REQUIRED_MIGRATIONS if name <= version
+    ))
+    monkeypatch.setattr(postgres_preflight, "_MIGRATION_POLICY", tuple(
+        record for record in postgres_preflight._MIGRATION_POLICY if record.version <= version
+    ))
 
     with postgres_connection(postgres_dsn) as connection:
         @contextmanager
@@ -1436,9 +1487,10 @@ def test_batch_compatibility_baseline_passes_before_and_after_0016(
 
 def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
     tmp_path: Path,
-    postgres_dsn: str,
+    historical_postgres_dsn: str,
     monkeypatch,
 ) -> None:
+    postgres_dsn = historical_postgres_dsn
     settings = _governance_settings(tmp_path, postgres_dsn)
     statements: list[tuple[str, object]] = []
     original_connection_factory = postgres_preflight.postgres_connection
@@ -1509,7 +1561,7 @@ def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
             schema_target=postgres_preflight.SCHEMA_TARGET_FINAL,
         )
 
-        assert startup["status"] == "ok"
+        assert startup["status"] == "ok", startup["strict_errors"]
         assert startup["strict_ok"] is True
         assert startup["migrations"]["missing"] == []
         assert startup["migrations"]["required"][-1] == "0012_drop_polytao_jobs"
@@ -1529,6 +1581,7 @@ def test_runtime_preflight_profiles_accept_exact_0012_and_reject_partial_0013(
             _MD_QUEUE_MIGRATION_VERSION,
             _PROPERTY_FILTER_MIGRATION_VERSION,
             _BATCH_MIGRATION_VERSION,
+            _ISOLATION_PREPARE_VERSION,
         ]
         assert any(
             "checksum-exact 0013" in error for error in final["strict_errors"]
@@ -1647,11 +1700,11 @@ def test_polytao_database_contract_is_applied(postgres_dsn: str) -> None:
 
 def test_historical_expand_defers_0012_but_f_startup_rejects_that_state(
     tmp_path: Path,
-    postgres_dsn: str,
+    historical_postgres_dsn: str,
     monkeypatch,
 ) -> None:
     """The first controller cutover may deploy 0009-0011 before approving 0012."""
-
+    postgres_dsn = historical_postgres_dsn
     settings = _governance_settings(tmp_path, postgres_dsn)
     version = "0012_drop_polytao_jobs"
     dft_version = _DFT_MIGRATION_VERSION
@@ -1747,7 +1800,7 @@ def test_historical_expand_defers_0012_but_f_startup_rejects_that_state(
         assert report["status"] == "failed"
         assert report["strict_ok"] is False
         assert report["migrations"]["missing"] == [version]
-        assert report["migrations"]["pending_contracts"] == [version]
+        assert report["migrations"]["pending_contracts"] == [version, "0018_user_isolation_cutover"]
         assert any(
             version in error for error in report["strict_errors"]
         )
@@ -1784,8 +1837,9 @@ def test_historical_expand_defers_0012_but_f_startup_rejects_that_state(
 
 
 def test_polytao_contract_rolls_back_when_generation_schema_is_not_empty(
-    postgres_dsn: str,
+    historical_postgres_dsn: str,
 ) -> None:
+    postgres_dsn = historical_postgres_dsn
     version = "0012_drop_polytao_jobs"
     guard_json, guard_sha256 = _prepare_polytao_contract_state(
         postgres_dsn,
@@ -1823,8 +1877,9 @@ def test_polytao_contract_rolls_back_when_generation_schema_is_not_empty(
 
 
 def test_polytao_contract_guard_applies_and_supports_exact_post_state_retry(
-    postgres_dsn: str,
+    historical_postgres_dsn: str,
 ) -> None:
+    postgres_dsn = historical_postgres_dsn
     guard_json, guard_sha256 = _prepare_polytao_contract_state(
         postgres_dsn,
         completed_job=True,
@@ -1876,8 +1931,9 @@ def test_polytao_contract_guard_applies_and_supports_exact_post_state_retry(
 
 
 def test_polytao_contract_guard_rejects_event_trigger_side_effects(
-    postgres_dsn: str,
+    historical_postgres_dsn: str,
 ) -> None:
+    postgres_dsn = historical_postgres_dsn
     guard_json, guard_sha256 = _prepare_polytao_contract_state(
         postgres_dsn,
         completed_job=True,
@@ -1945,9 +2001,10 @@ def test_polytao_contract_guard_rejects_event_trigger_side_effects(
 
 
 def test_polytao_contract_post_verifier_failure_rolls_back_transaction(
-    postgres_dsn: str,
+    historical_postgres_dsn: str,
     monkeypatch,
 ) -> None:
+    postgres_dsn = historical_postgres_dsn
     guard_json, guard_sha256 = _prepare_polytao_contract_state(
         postgres_dsn,
         completed_job=True,
@@ -2005,8 +2062,9 @@ def test_polytao_contract_post_verifier_failure_rolls_back_transaction(
 
 
 def test_polytao_contract_guard_rejects_same_count_update_committed_while_waiting(
-    postgres_dsn: str,
+    historical_postgres_dsn: str,
 ) -> None:
+    postgres_dsn = historical_postgres_dsn
     guard_json, guard_sha256 = _prepare_polytao_contract_state(
         postgres_dsn,
         completed_job=True,
@@ -2061,9 +2119,10 @@ def test_polytao_contract_guard_rejects_same_count_update_committed_while_waitin
 
 
 def test_polytao_contract_guard_access_exclusive_blocks_late_writer(
-    postgres_dsn: str,
+    historical_postgres_dsn: str,
     monkeypatch,
 ) -> None:
+    postgres_dsn = historical_postgres_dsn
     guard_json, guard_sha256 = _prepare_polytao_contract_state(
         postgres_dsn,
         completed_job=True,
@@ -2132,8 +2191,9 @@ def test_polytao_contract_guard_access_exclusive_blocks_late_writer(
 
 
 def test_polytao_contract_guard_rejects_active_persistent_job_before_sql(
-    postgres_dsn: str,
+    historical_postgres_dsn: str,
 ) -> None:
+    postgres_dsn = historical_postgres_dsn
     guard_json, guard_sha256 = _prepare_polytao_contract_state(postgres_dsn)
     with postgres_connection(postgres_dsn) as connection:
         connection.execute(
@@ -2176,9 +2236,10 @@ def test_polytao_contract_guard_rejects_active_persistent_job_before_sql(
 
 @pytest.mark.parametrize("replacement", ["oid", "schema"])
 def test_polytao_contract_guard_rejects_relation_or_schema_replacement_before_sql(
-    postgres_dsn: str,
+    historical_postgres_dsn: str,
     replacement: str,
 ) -> None:
+    postgres_dsn = historical_postgres_dsn
     guard_json, guard_sha256 = _prepare_polytao_contract_state(
         postgres_dsn,
         completed_job=True,
@@ -2224,8 +2285,9 @@ def test_polytao_contract_guard_rejects_relation_or_schema_replacement_before_sq
 
 
 def test_polytao_contract_guard_revalidates_ledger_after_waiting_for_writer(
-    postgres_dsn: str,
+    historical_postgres_dsn: str,
 ) -> None:
+    postgres_dsn = historical_postgres_dsn
     guard_json, guard_sha256 = _prepare_polytao_contract_state(postgres_dsn)
     application_name = "contract-guard-ledger-race"
     migration_dsn = make_conninfo(
@@ -2412,6 +2474,38 @@ def test_runtime_preflight_cli_returns_zero_for_ready_report(monkeypatch, capsys
     postgres_preflight.main()
 
     assert '"strict_ok": true' in capsys.readouterr().out
+
+
+def test_runtime_preflight_cli_uses_explicit_service_context(monkeypatch, capsys) -> None:
+    from app.auth.context import is_service_context
+
+    service_dsn = "postgresql://test_service:test@localhost/test"
+    monkeypatch.setenv("APP_SERVICE_POSTGRES_DSN", service_dsn)
+    observed = []
+
+    def preflight(settings, dsn, mode, **options):
+        observed.append((dsn, mode, is_service_context(), options["schema_target"]))
+        return {"strict_errors": [], "strict_ok": True}
+
+    monkeypatch.setattr(postgres_preflight, "run_preflight", preflight)
+    monkeypatch.setattr(sys, "argv", ["postgres_preflight", "--strict", "--service-context", "--schema-target", "user-isolation-0018"])
+    postgres_preflight.main()
+    assert observed == [(service_dsn, "runtime", True, "user-isolation-0018")]
+    assert not is_service_context()
+    assert '"strict_ok": true' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("explicit_dsn", [False, True])
+def test_runtime_preflight_cli_rejects_ambiguous_service_identity(monkeypatch, explicit_dsn) -> None:
+    monkeypatch.delenv("APP_SERVICE_POSTGRES_DSN", raising=False)
+    arguments = ["postgres_preflight", "--service-context"]
+    if explicit_dsn:
+        monkeypatch.setenv("APP_SERVICE_POSTGRES_DSN", "postgresql://test_service:test@localhost/test")
+        arguments += ["--dsn", "postgresql://test_admin:test@localhost/test"]
+    monkeypatch.setattr(sys, "argv", arguments)
+    with pytest.raises(SystemExit) as error:
+        postgres_preflight.main()
+    assert error.value.code == 2
 
 
 def test_formulation_analytics_counts_single_percent_symbol(postgres_dsn: str) -> None:

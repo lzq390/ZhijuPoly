@@ -15,6 +15,42 @@ DIGEST_B = "ghcr.io/lzq390/nexpoly-web@sha256:" + "b" * 64
 
 
 class ComposeDeliveryPolicyTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("docker"), "Docker Compose is not available")
+    def test_isolated_cpu_and_gpu_healthchecks_use_service_role_and_schema_0018(self) -> None:
+        environment = dict(os.environ)
+        environment.update({
+            "NEXPOLY_POSTGRES_PASSWORD": "test-only-not-production",
+            "APP_POSTGRES_DSN": "postgresql://test_api:test@lab-postgres:5432/nexpoly",
+            "PI_POSTGRES_DSN": "postgresql://test_api:test@lab-postgres:5432/nexpoly",
+            "AUTH_POSTGRES_DSN": "postgresql://test_auth:test@lab-postgres:5432/nexpoly",
+            "APP_SERVICE_POSTGRES_DSN": "postgresql://test_service:test@lab-postgres:5432/nexpoly",
+            "AUTH_ADMIN_POSTGRES_DSN": "postgresql://test_admin:test@lab-postgres:5432/nexpoly",
+            "MONOMER_DFT_START_AUTHORIZATION_TOKEN": "test-only-service-token",
+            "NEXPOLY_ASSET_ROOT": "/tmp/nexpoly-test-assets",
+            "NEXPOLY_GPU_STATE_ROOT": "/tmp/nexpoly-test-gpu",
+            "NEXPOLY_DEV_GPU_SESSION_ID": "a" * 32,
+        })
+        for gpu in (False, True):
+            with self.subTest(gpu=gpu):
+                files = ["docker-compose.yml", "docker-compose.dev.yml", "docker-compose.user-isolation-dev.yml"]
+                if gpu:
+                    files.append("docker-compose.dev-gpu-session.yml")
+                command = ["docker", "compose", "-p", "nexpoly_test"]
+                for filename in files:
+                    command += ["-f", str(REPOSITORY_ROOT / filename)]
+                result = subprocess.run(command + ["config", "--format", "json", "--no-env-resolution"], env=environment, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                services = json.loads(result.stdout)["services"]
+                backend = services["backend"]
+                self.assertEqual(backend["environment"]["APP_POSTGRES_DSN"], environment["APP_POSTGRES_DSN"])
+                self.assertEqual(backend["environment"]["APP_SERVICE_POSTGRES_DSN"], environment["APP_SERVICE_POSTGRES_DSN"])
+                self.assertEqual(backend["environment"]["NEXPOLY_POSTGRES_PREFLIGHT_ARGS"], "--strict --schema-target user-isolation-0018 --service-context")
+                health = backend["healthcheck"]["test"][1]
+                self.assertIn("NEXPOLY_POSTGRES_PREFLIGHT_ARGS", health)
+                self.assertIn("--mode configured" if gpu else "--mode disabled", health)
+                self.assertEqual(services["postgres-init"]["environment"]["APP_POSTGRES_DSN"], environment["AUTH_ADMIN_POSTGRES_DSN"])
+                self.assertEqual(services["polymerization-batch-worker"]["environment"]["APP_POSTGRES_DSN"], environment["APP_SERVICE_POSTGRES_DSN"])
+
     def test_nexpoly_compose_does_not_set_global_outbound_proxy(self) -> None:
         compose = "\n".join(
             path.read_text(encoding="utf-8")
@@ -88,11 +124,18 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("python -m app.postgres_migrations --mode bootstrap", workflow)
+        smoke = (REPOSITORY_ROOT / "scripts/ci/test_isolated_backend_image.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('scripts/ci/test_isolated_backend_image.sh "$BACKEND_IMAGE"', workflow)
+        self.assertIn("allow_contract_on_fresh_database=True", smoke)
+        self.assertIn("apply_identity_cutover(dsn, str(owner['user_id']))", smoke)
+        self.assertIn("--schema-target user-isolation-0018 --service-context", smoke)
         self.assertNotIn(
             "python -m app.postgres_migrations --mode bootstrap-expand",
             workflow,
         )
+        self.assertNotIn("bootstrap-expand", smoke)
         self.assertIn('"bootstrap-expand"', controller)
         self.assertIn('descriptor["previous_deployment"] is None', controller)
         self.assertIn('else "expand"', controller)

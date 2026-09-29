@@ -60,6 +60,7 @@ class JobAccepted(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    start_authorization_version: Literal[1] = 1
     status: str
     mode: str
     source_sha: str | None = None

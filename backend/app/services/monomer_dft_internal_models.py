@@ -768,7 +768,7 @@ class InternalWorkerSnapshot(InternalWorkerModel):
                 raise ValueError("worker queued snapshot has invalid queue/start state")
         elif self.queue_position is not None:
             raise ValueError("only queued worker snapshots may have queue_position")
-        if self.status in {"running", "cancel_requested", "completed"} and self.started_at is None:
+        if self.status in {"running", "completed"} and self.started_at is None:
             raise ValueError("worker execution status is missing started_at")
 
         if self.status == "completed":

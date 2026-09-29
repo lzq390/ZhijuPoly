@@ -145,7 +145,7 @@ export function polytaoDescriptorMapFromEntries(entries: { name: string; value: 
   return next;
 }
 
-export function usePolytaoGeneration() {
+export function usePolytaoGeneration(enabled = true) {
   const [request, setRequest] = useState<PolytaoGenerationRequest>(cloneRequest(DEFAULT_POLYTAO_REQUEST));
   const [state, setState] = useState<PolytaoGenerationState>({
     isLoading: false,
@@ -153,7 +153,7 @@ export function usePolytaoGeneration() {
     data: null,
     job: null,
     serviceStatus: null,
-    isStatusLoading: true,
+    isStatusLoading: enabled,
     statusError: null
   });
   const pollTokenRef = useRef(0);
@@ -183,15 +183,16 @@ export function usePolytaoGeneration() {
   }, []);
 
   useEffect(() => {
-    void refreshStatus();
+    if (enabled) void refreshStatus();
     return () => {
       pollTokenRef.current += 1;
       statusTokenRef.current += 1;
     };
-  }, [refreshStatus]);
+  }, [enabled, refreshStatus]);
 
   useEffect(() => {
     if (
+      !enabled ||
       state.isStatusLoading ||
       !shouldAutoRefreshPolytaoStatus(state.serviceStatus, state.statusError)
     ) {
@@ -201,15 +202,16 @@ export function usePolytaoGeneration() {
       void refreshStatus();
     }, STATUS_POLL_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [refreshStatus, state.isStatusLoading, state.serviceStatus, state.statusError]);
+  }, [enabled, refreshStatus, state.isStatusLoading, state.serviceStatus, state.statusError]);
 
   useEffect(() => {
+    if (!enabled) return;
     const refreshOnFocus = () => {
       void refreshStatus();
     };
     window.addEventListener("focus", refreshOnFocus);
     return () => window.removeEventListener("focus", refreshOnFocus);
-  }, [refreshStatus]);
+  }, [enabled, refreshStatus]);
 
   async function pollJob(jobId: string, token: number) {
     let failureCount = 0;

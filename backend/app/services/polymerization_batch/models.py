@@ -21,6 +21,8 @@ class BatchError(Exception):
 class BatchSettings:
     enabled: bool = False
     storage_root: Path = Path(".runtime/monomer-polymerization-batch")
+    max_user_imports: int = 10
+    user_import_bytes: int = 100 * 1024**2
     file_bytes: int = 10 * 1024**2
     request_bytes: int = 22 * 1024**2
     max_rows: int = 5000
@@ -61,6 +63,7 @@ class BatchSettings:
     def public_limits(self) -> dict:
         return {key: getattr(self, key) for key in (
             "file_bytes", "request_bytes", "max_rows", "max_pairs", "max_columns",
+            "max_user_imports", "user_import_bytes",
             "chunk_size", "queue_capacity", "retention_days", "result_bytes",
         )}
 
@@ -116,6 +119,12 @@ class BatchJob(BaseModel):
     expires_at: datetime | None
     error_code: str | None
     message: str | None
+
+
+class BatchJobPage(BaseModel):
+    items: list[BatchJob]
+    total: int
+    next_offset: int | None
 
 
 class BatchCandidate(BaseModel):

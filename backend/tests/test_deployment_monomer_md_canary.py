@@ -43,6 +43,7 @@ class FakeCanaryWorker:
             "draining": False,
             "db_configured": True,
             "runtime_ready": True,
+            "start_authorization_version": 1,
             "active_jobs": len(self.active_jobs),
             "max_active_jobs": 3,
             "default_steps": 300,
@@ -81,6 +82,14 @@ class FakeCanaryWorker:
 
     def finish(self, job_id: str) -> None:
         self.active_jobs.discard(job_id)
+
+
+@pytest.mark.parametrize("version", [None, 0, 2])
+def test_canary_rejects_worker_without_start_authorization_contract(version: object) -> None:
+    health = FakeCanaryWorker().get_health()
+    health["start_authorization_version"] = version
+    with pytest.raises(canary.DeploymentMonomerMdCanaryBusy):
+        canary._validate_worker_ready(health, source_sha=SOURCE_SHA)
 
 
 @pytest.fixture
@@ -642,6 +651,9 @@ def test_pending_active_terminal_and_unowned_rows_fail_closed_or_clean_exactly(
         create_monomer_md_job_postgres(
             connection,
             job_id=unowned_job_id,
+            # The row has an asset owner but deliberately lacks the deployment
+            # operation capability; cleanup must still refuse it.
+            owner_user_id="00000000-0000-0000-0000-000000000001",
             input_smiles="CCO",
             canonical_smiles="CCO",
             requested_steps=300,

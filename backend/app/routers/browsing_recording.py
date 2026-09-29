@@ -3,7 +3,7 @@
 import json
 
 from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
+from app.services.private_execution import PrivateStreamingResponse
 from app.recording_models import ArticleObservation, FilterObservation, RecordingStart
 
 router = APIRouter(prefix="/api/v1", tags=["browsing-recording"])
@@ -32,7 +32,7 @@ async def summarize_recording(recording_id: str, request: Request):
             finally:
                 await events.aclose()
 
-        return StreamingResponse(frames(), media_type="text/event-stream", headers={
+        return PrivateStreamingResponse(frames(), media_type="text/event-stream", headers={
             "Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Vary": "Accept",
         })
     return await store.summarize_recording(recording_id)

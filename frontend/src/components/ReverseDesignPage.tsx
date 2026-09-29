@@ -1,3 +1,4 @@
+import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal, Sparkles } from "lucide-react";
@@ -348,6 +349,7 @@ export const ReverseDesignPage = forwardRef<
   }
 
   async function performSearch(draft: ReverseDesignTgRequest) {
+    if (!requestServiceAccess()) return false;
     if (smilesSyncBlocked) {
       canvas.setFeedback("请等待 SMILES 同步完成，或先修正当前输入。");
       return false;

@@ -14,11 +14,13 @@ from starlette.requests import Request
 from app.database import sqlite_connection
 from app.import_knowledge import import_knowledge_directory_to_sqlite, import_knowledge_zip_to_sqlite
 from app.models import KnowledgeSearchGroup, KnowledgeSearchRequest
+from app.recording_models import RecordedKnowledgeSearchRequest
 from app.postgres_database import postgres_connection
 from app.routers import knowledge as knowledge_routes
 from app.routers.knowledge import search_knowledge
 from app.services.knowledge_search import KnowledgeSearchExpressionError, normalize_search_groups, parse_search_groups
 from app.services.postgres_knowledge_search import _build_search_sql_parts
+from test_api import api_database, auth_database, test_app
 
 
 def make_request(app: FastAPI) -> Request:
@@ -335,7 +337,8 @@ def test_import_knowledge_directory_incrementally_adds_new_workbooks(tmp_path: P
 
 
 def _insert_knowledge_documents(app: FastAPI, rows: list[dict[str, str]]) -> None:
-    with postgres_connection(app.state.settings.app_postgres_dsn) as connection:
+    # Fixture writes use maintenance credentials; route reads retain the API role.
+    with postgres_connection(app.state.test_admin_dsn) as connection:
         with connection.cursor() as cursor:
             cursor.executemany(
                 """
@@ -382,7 +385,7 @@ async def test_search_knowledge_api_returns_matches_from_abstract(test_app: Fast
     )
 
     response = await search_knowledge(
-        KnowledgeSearchRequest(query="epoxy", top_k=5),
+        RecordedKnowledgeSearchRequest(query="epoxy", top_k=5),
         make_request(test_app),
     )
 
@@ -398,7 +401,7 @@ async def test_search_knowledge_api_returns_matches_from_abstract(test_app: Fast
 async def test_search_knowledge_api_rejects_incomplete_boolean_expression(test_app: FastAPI) -> None:
     with pytest.raises(HTTPException) as raised:
         await search_knowledge(
-            KnowledgeSearchRequest(query="epoxy；", top_k=5),
+            RecordedKnowledgeSearchRequest(query="epoxy；", top_k=5),
             make_request(test_app),
         )
 
@@ -426,7 +429,7 @@ async def test_search_knowledge_runs_synchronous_work_off_event_loop(
     monkeypatch.setattr(knowledge_routes, "_search_knowledge_sync", recording_search)
 
     response = await search_knowledge(
-        KnowledgeSearchRequest(query="epoxy", top_k=5),
+        RecordedKnowledgeSearchRequest(query="epoxy", top_k=5),
         make_request(test_app),
     )
 
@@ -457,7 +460,7 @@ async def test_search_knowledge_api_matches_structured_terms_across_fields(test_
     )
 
     response = await search_knowledge(
-        KnowledgeSearchRequest(query="monomer pair", terms=["ethanol", "propane"], top_k=5),
+        RecordedKnowledgeSearchRequest(query="monomer pair", terms=["ethanol", "propane"], top_k=5),
         make_request(test_app),
     )
 
@@ -470,7 +473,7 @@ async def test_search_knowledge_api_matches_structured_terms_across_fields(test_
     assert response.results[0].matched_fields == ["Formulation"]
 
     fallback_response = await search_knowledge(
-        KnowledgeSearchRequest(query="ethanol OR propane", top_k=5),
+        RecordedKnowledgeSearchRequest(query="ethanol OR propane", top_k=5),
         make_request(test_app),
     )
 
@@ -480,7 +483,7 @@ async def test_search_knowledge_api_matches_structured_terms_across_fields(test_
     assert fallback_response.results[0].title_en == "Pair formulation"
 
     symbol_response = await search_knowledge(
-        KnowledgeSearchRequest(query="ethanol；propane", top_k=5),
+        RecordedKnowledgeSearchRequest(query="ethanol；propane", top_k=5),
         make_request(test_app),
     )
 
@@ -488,7 +491,7 @@ async def test_search_knowledge_api_matches_structured_terms_across_fields(test_
     assert symbol_response.total == 1
 
     grouped_response = await search_knowledge(
-        KnowledgeSearchRequest(
+        RecordedKnowledgeSearchRequest(
             query="ethanol | ethyl alcohol；propane",
             groups=[{"terms": ["ethanol", "ethyl alcohol"]}, {"terms": ["propane"]}],
             top_k=5,
@@ -521,7 +524,7 @@ async def test_search_knowledge_api_keeps_space_delimited_phrases_intact(test_ap
     )
 
     response = await search_knowledge(
-        KnowledgeSearchRequest(query="thermal stability", top_k=5),
+        RecordedKnowledgeSearchRequest(query="thermal stability", top_k=5),
         make_request(test_app),
     )
 
@@ -549,7 +552,7 @@ async def test_search_knowledge_api_expands_iupac_leading_locant_variant(test_ap
     )
 
     response = await search_knowledge(
-        KnowledgeSearchRequest(query="monomer", terms=["4-Aminophenyl"], top_k=5),
+        RecordedKnowledgeSearchRequest(query="monomer", terms=["4-Aminophenyl"], top_k=5),
         make_request(test_app),
     )
 
@@ -584,7 +587,7 @@ async def test_search_knowledge_api_does_not_double_score_group_fragments(test_a
     )
 
     response = await search_knowledge(
-        KnowledgeSearchRequest(query="monomer", terms=["benzophenone/aminobenzoate"], top_k=5),
+        RecordedKnowledgeSearchRequest(query="monomer", terms=["benzophenone/aminobenzoate"], top_k=5),
         make_request(test_app),
     )
 
@@ -608,7 +611,7 @@ async def test_search_knowledge_api_returns_requested_result_page(test_app: Fast
     )
 
     response = await search_knowledge(
-        KnowledgeSearchRequest(query="epoxy", top_k=100, page=2, page_size=20),
+        RecordedKnowledgeSearchRequest(query="epoxy", top_k=100, page=2, page_size=20),
         make_request(test_app),
     )
 

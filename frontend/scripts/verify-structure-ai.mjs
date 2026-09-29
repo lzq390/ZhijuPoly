@@ -16,12 +16,15 @@ page.on('pageerror', e => report.errors.push(e.stack || e.message));
 await page.addInitScript(appOrigin => {
   // Playwright also runs init scripts in child/error documents; only seed the app page.
   if (window !== window.top || window.location.origin !== appOrigin) return;
-  localStorage.setItem('nexpoly.assistant.tg.page-context-consent.v1', 'granted');
   window.__sdk = () => document.querySelector('[data-structure-editor] iframe')?.contentWindow?.ketcher || window.ketcher;
 }, new URL(base).origin);
 await page.route('**/*', async route => {
   const request = route.request(), url = new URL(request.url());
   if (url.origin !== new URL(base).origin && !['data:', 'blob:'].includes(url.protocol)) return route.abort();
+  if (url.pathname === '/api/v1/auth/session') return route.fulfill({ json: {
+    authenticated: true, user: { id: 'structure-ci-user', username: 'structure-ci', must_change_password: false },
+    session_id: 'structure-ci-session', csrf_token: 'structure-ci-csrf', capabilities: {}
+  } });
   if (url.pathname.endsWith('/structure/standardize-smiles')) return route.fulfill({ json: { standardized_smiles: request.postDataJSON().smiles } });
   if (url.pathname.endsWith('/assistant/tg/status')) return route.fulfill({ json: { enabled: true, configured: true, image: { supported: true, max_files: 2, max_canvas_snapshots: 1, max_user_upload_files: 1, max_bytes: 5242880, max_total_bytes: 10485760, accepted_mime_types: ['image/png'] } } });
   if (url.pathname.endsWith('/assistant/tg/guide')) return route.fulfill({ json: { module: 'reverseDesign', version: 3, language: 'zh-CN', defaults: {}, sections: [] } });
@@ -81,6 +84,8 @@ try {
   });
   await page.getByRole('button', { name: 'AI 助手', exact: true }).click();
   await page.getByRole('checkbox', { name: '附带当前页面' }).waitFor();
+  await page.getByRole('checkbox', { name: '附带当前页面' }).click();
+  await page.getByRole('button', { name: '同意并附带', exact: true }).click();
   assert.equal(await page.getByRole('checkbox', { name: '附带当前页面' }).isChecked(), true);
   await send('分析当前画板', 1);
   await send('再次读取相同画板', 2);
@@ -115,7 +120,7 @@ try {
   await page.waitForFunction(() => !document.querySelector('[data-workbench-tool="3d"]').disabled);
   await send('读取聚合物端基画板图片', 5);
   assert.ok(report.requests[4].pngBytes > 100, 'Polymer PNG fallback failed');
-  assert.equal(report.requests[4].payload.page_context.structure.smiles, '*CC*');
+  assert.match(report.requests[4].payload.page_context.structure.smiles, /^\*CC\*(?: \|\$star_e;;;star_e\$\|)?$/);
   report.polymerPng = true;
   assert.deepEqual(report.errors, []);
   report.passed = true;

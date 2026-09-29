@@ -409,6 +409,7 @@ def _manager(tmp_path: Path, engine, **kwargs) -> JobManager:
         runtime=kwargs.pop("runtime", ReadyRuntime()),
         worker_version="test",
         fatal_exit=kwargs.pop("fatal_exit", None),
+        start_authorizer=kwargs.pop("start_authorizer", lambda _snapshot: None),
         **kwargs,
     )
 
@@ -598,7 +599,8 @@ def test_gpu_capacity_outage_keeps_fifo_head_queued_cancelable_and_accumulates_w
         cancel_manager.submit(_request(1))
         await _wait_until(lambda: bool(cancel_engine.attempts))
         cancelled = cancel_manager.cancel("job-0")
-        assert cancelled.status == "cancelled"
+        assert cancelled.status in {"cancel_requested", "cancelled"}
+        await _wait_until(lambda: cancel_manager.get("job-0").status == "cancelled")
         await _wait_until(lambda: "job-1" in cancel_engine.attempts)
         assert cancel_manager.get("job-1").status == "queued"
         assert cancel_manager.get("job-1").queue_position == 1
@@ -621,8 +623,8 @@ def test_shutdown_during_unresolved_admission_is_bounded_and_preserves_fifo_head
         await asyncio.wait_for(manager.stop(), timeout=0.5)
 
         snapshot = manager.get("job-0")
-        assert snapshot.status == "queued"
-        assert snapshot.queue_position == 1
+        assert snapshot.status == "cancel_requested"
+        assert snapshot.queue_position is None
         assert engine.attempts == 1
         state = manager.health_state()
         assert state["fatal"] is True
@@ -631,7 +633,7 @@ def test_shutdown_during_unresolved_admission_is_bounded_and_preserves_fifo_head
         with pytest.raises(WorkerUnavailable):
             manager.submit(_request(1))
         journal = tmp_path / "runs" / "job-0" / f"{1:032x}" / "journal.json"
-        assert JobJournalV2.model_validate_json(journal.read_bytes()).snapshot.status == "queued"
+        assert JobJournalV2.model_validate_json(journal.read_bytes()).snapshot.status == "cancel_requested"
 
     asyncio.run(scenario())
 
@@ -970,6 +972,175 @@ def test_queued_and_running_cancel_are_cooperative(tmp_path: Path) -> None:
         await _wait_until(lambda: manager.get("job-0").status == "cancelled")
         assert manager.get("job-1").status == "cancelled"
         await manager.stop()
+
+    asyncio.run(scenario())
+
+
+def test_admission_cancel_retains_quota_until_the_thread_finishes_cleanup(tmp_path: Path) -> None:
+    class CleaningAdmissionEngine:
+        def __init__(self):
+            self.started = threading.Event()
+            self.cleaning = threading.Event()
+            self.cleaned = threading.Event()
+
+        def execute(self, _request, _output, *, cancelled, **_kwargs):
+            self.started.set()
+            while not cancelled():
+                time.sleep(0.005)
+            self.cleaning.set()
+            assert self.cleaned.wait(3)
+            raise ComputationCancelled("admission cancelled after collecting its lease")
+
+    async def scenario():
+        engine = CleaningAdmissionEngine()
+        manager = _manager(tmp_path, engine)
+        await manager.start()
+        try:
+            manager.submit(_request(0))
+            assert await asyncio.to_thread(engine.started.wait, 1)
+            assert manager.cancel("job-0").status == "cancel_requested"
+            assert await asyncio.to_thread(engine.cleaning.wait, 1)
+            snapshot = manager.get("job-0")
+            assert snapshot.finished_at is None
+            assert snapshot.started_at is None
+            assert manager.health_state()["active_jobs"] == 1
+            with pytest.raises(JobConflict):
+                manager.delete_artifacts("job-0")
+            engine.cleaned.set()
+            await _wait_until(lambda: manager.get("job-0").status == "cancelled")
+            assert manager.health_state()["active_jobs"] == 0
+        finally:
+            engine.cleaned.set()
+            await manager.stop()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("calculation_failed", [False, True])
+def test_unconfirmed_cleanup_retains_active_journal_across_restart(tmp_path: Path, calculation_failed: bool) -> None:
+    class UnconfirmedRuntime(ReadyRuntime):
+        cleanup_proven = False
+
+        def execution_cleanup_confirmed(self):
+            return self.cleanup_proven
+
+        def recovery_cleanup_confirmed(self, _request):
+            return self.cleanup_proven
+
+    class FinishedEngine(ControlledEngine):
+        def execute(self, request, directory, **kwargs):
+            if calculation_failed:
+                kwargs["admitted"]()
+                raise ScientificComputationError("cuda_fatal", "lease cleanup unconfirmed", retryable=True)
+            return super().execute(request, directory, **kwargs)
+
+    async def scenario():
+        runtime = UnconfirmedRuntime()
+        manager = _manager(tmp_path, FinishedEngine(blocked=False), runtime=runtime)
+        await manager.start()
+        manager.submit(_request(0))
+        await _wait_until(lambda: manager.health_state()["fatal"])
+        snapshot = manager.get("job-0")
+        assert snapshot.status == "cancel_requested"
+        assert snapshot.finished_at is None
+        assert snapshot.result is None and snapshot.artifacts == []
+        assert manager.health_state()["active_jobs"] == 1
+        assert manager.health_state()["fatal_reason"] == "gpu_cleanup_unconfirmed"
+        await manager.stop()
+
+        recovered = _manager(tmp_path, ControlledEngine(), runtime=runtime)
+        await recovered.start()
+        assert recovered.get("job-0").status == "cancel_requested"
+        assert recovered.health_state()["active_jobs"] == 1
+        with pytest.raises(WorkerUnavailable):
+            recovered.submit(_request(1))
+        await recovered.stop()
+
+        runtime.cleanup_proven = True
+        confirmed = _manager(tmp_path, ControlledEngine(), runtime=runtime)
+        await confirmed.start()
+        assert confirmed.get("job-0").status == "failed"
+        assert confirmed.get("job-0").error.code == "worker_restarted"
+        assert confirmed.health_state()["active_jobs"] == 0
+        await confirmed.stop()
+
+    asyncio.run(scenario())
+
+
+def test_queued_recovery_does_not_reexecute_an_unresolved_old_admission(tmp_path: Path):
+    class UnconfirmedRuntime(ReadyRuntime):
+        def recovery_cleanup_confirmed(self, _request):
+            return False
+
+    initial = _manager(tmp_path, ControlledEngine())
+    initial.submit(_request(0))
+
+    async def scenario():
+        engine = ControlledEngine(blocked=False)
+        recovered = _manager(tmp_path, engine, runtime=UnconfirmedRuntime())
+        await recovered.start()
+        assert recovered.get("job-0").status == "cancel_requested"
+        assert recovered.get("job-0").finished_at is None
+        assert recovered.health_state()["active_jobs"] == 1
+        assert recovered.health_state()["accepting_jobs"] is False
+        assert engine.started == []
+        await recovered.stop()
+
+    asyncio.run(scenario())
+
+
+def test_fenced_unknown_cancel_cannot_release_an_unconfirmed_old_attempt(tmp_path: Path):
+    class UnconfirmedRuntime(ReadyRuntime):
+        def recovery_cleanup_confirmed(self, _request):
+            return False
+
+    manager = _manager(tmp_path, ControlledEngine(), runtime=UnconfirmedRuntime())
+    request = _request(0)
+    snapshot = manager.cancel(request.job_id, request=request)
+    assert snapshot.status == "cancel_requested"
+    assert snapshot.finished_at is None
+    assert manager.health_state()["active_jobs"] == 1
+    replay, created = manager.submit(request)
+    assert not created
+    assert replay.status == "cancel_requested"
+
+
+@pytest.mark.parametrize("admitted_already", [False, True])
+def test_dispatcher_cancellation_joins_the_actual_execution_thread(tmp_path: Path, admitted_already: bool):
+    class ShutdownEngine:
+        started = threading.Event()
+        cleaning = threading.Event()
+        cleaned = threading.Event()
+
+        def execute(self, _request, _directory, *, admitted, cancelled, **_kwargs):
+            if admitted_already:
+                admitted()
+            self.started.set()
+            while not cancelled():
+                time.sleep(0.005)
+            self.cleaning.set()
+            assert self.cleaned.wait(3)
+            raise ComputationCancelled("cleanup completed")
+
+    async def scenario():
+        engine = ShutdownEngine()
+        manager = _manager(tmp_path, engine)
+        await manager.start()
+        try:
+            manager.submit(_request(0))
+            assert await asyncio.to_thread(engine.started.wait, 1)
+            manager._dispatcher_task.cancel()
+            assert await asyncio.to_thread(engine.cleaning.wait, 1)
+            manager._dispatcher_task.cancel()
+            await asyncio.sleep(0)
+            assert not manager._dispatcher_task.done()
+            assert manager.get("job-0").status in {"queued", "running", "cancel_requested"}
+            assert manager.get("job-0").finished_at is None
+            engine.cleaned.set()
+            await _wait_until(lambda: manager.get("job-0").status == "cancelled")
+        finally:
+            engine.cleaned.set()
+            await manager.stop()
 
     asyncio.run(scenario())
 
@@ -1691,3 +1862,39 @@ def test_artifact_limits_and_case_insensitive_bundle_names(tmp_path: Path) -> No
                     tmp_path / "duplicate-case.zip",
                     [(first, first_stream), (second, second_stream)],
                 )
+
+
+def test_start_authorization_denial_never_runs_scientific_progress(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        calls = []
+
+        def deny(snapshot):
+            calls.append(snapshot.attempt_token)
+            raise ComputationCancelled("Account disabled before execution")
+
+        engine = ControlledEngine()
+        manager = _manager(tmp_path, engine, start_authorizer=deny)
+        await manager.start()
+        request = _request(0)
+        manager.submit(request)
+        await _wait_until(lambda: manager.get(request.job_id).status == "cancelled")
+        assert calls == [request.attempt_token]
+        assert manager.get(request.job_id).started_at is None
+        assert manager.get(request.job_id).artifacts == []
+        await manager.stop()
+
+    asyncio.run(scenario())
+
+
+def test_missing_start_authorizer_fails_closed(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        manager = _manager(tmp_path, ControlledEngine(), start_authorizer=None)
+        await manager.start()
+        request = _request(0)
+        manager.submit(request)
+        await _wait_until(lambda: manager.get(request.job_id).status == "failed")
+        assert manager.get(request.job_id).started_at is None
+        assert manager.get(request.job_id).artifacts == []
+        await manager.stop()
+
+    asyncio.run(scenario())

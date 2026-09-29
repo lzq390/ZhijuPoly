@@ -1,3 +1,5 @@
+import { useAuth } from "../auth/AuthProvider";
+import { requestServiceAccess } from "../auth/guestAccess";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { SlidersHorizontal, Sparkles } from "lucide-react";
@@ -74,13 +76,14 @@ export const ConditionalGenerationPage = forwardRef<
   StructureCanvasOwnerHandle,
   ConditionalGenerationPageProps
 >(function ConditionalGenerationPage({ structure }, forwardedRef) {
+  const guest = useAuth()?.status === "guest";
   const generation = useConditionalGeneration();
   const {
     serviceStatus,
     serviceStatusError,
     isStatusLoading,
     refreshStatus
-  } = useConditionalGenerationStatus();
+  } = useConditionalGenerationStatus(!guest);
   const [openPanel, setOpenPanel] = useState<ConditionalGenerationOpenPanel>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [hasActivated3D, setHasActivated3D] = useState(false);
@@ -202,6 +205,7 @@ export const ConditionalGenerationPage = forwardRef<
   }
 
   async function handleGenerate() {
+    if (!requestServiceAccess()) return;
     setStructureError(null);
     if (validationMessage || operationBusy || !serviceReady) return;
 
@@ -228,11 +232,13 @@ export const ConditionalGenerationPage = forwardRef<
   }
 
   function handleAssistantSend() {
+    if (!requestServiceAccess()) return;
     if (!assistantInput.trim()) return;
     setAssistantNotice("AI 对话接口尚未接入，本次内容未发送。");
   }
 
   function parameterStatusText() {
+    if (guest) return "请登录账号。";
     if (structureError) return structureError;
     if (validationMessage) return validationMessage;
     if (isStatusLoading) return "正在检查条件生成服务…";
@@ -308,7 +314,7 @@ export const ConditionalGenerationPage = forwardRef<
               serviceNeedsRefresh={Boolean(serviceStatusError || (serviceStatus && !serviceStatus.available))}
               isStatusLoading={isStatusLoading}
               submitting={generation.isLoading}
-              canSubmit={!validationMessage && !operationBusy && serviceReady}
+              canSubmit={guest || (!validationMessage && !operationBusy && serviceReady)}
               structureSmiles={structure.smiles}
               resultStatus={resultStatus}
               assistantInput={assistantInput}

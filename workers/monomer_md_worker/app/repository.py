@@ -29,6 +29,49 @@ class PostgresJobRepository:
     def __init__(self, settings: WorkerSettings) -> None:
         self._settings = settings
 
+    def authorize_start(self, job_id: str, *, worker_instance_id: str) -> bool:
+        """Account then job lock matches administrative disable ordering."""
+        from backend.app.task_observability import TaskExecutionContext, log_task_event
+        if not self._settings.db_configured or psycopg is None:
+            return False
+        owner_id = None
+        reason = "task_or_worker_invalid"
+
+        def decide(cursor):
+            nonlocal owner_id, reason
+            cursor.execute("SELECT owner_user_id FROM md.monomer_md_jobs WHERE job_id = %s", (job_id,))
+            owner = cursor.fetchone()
+            if owner is None:
+                return False
+            owner_id = str(owner[0] if not isinstance(owner, dict) else owner["owner_user_id"])
+            cursor.execute("SELECT status, is_system FROM auth.users WHERE user_id = %s FOR UPDATE", (owner_id,))
+            account = cursor.fetchone()
+            cursor.execute("SELECT status, start_authorized_at, worker_instance_id FROM md.monomer_md_jobs WHERE job_id = %s FOR UPDATE", (job_id,))
+            job = cursor.fetchone()
+            if job is None:
+                return False
+            values = list(job.values()) if isinstance(job, dict) else job
+            if values[0] not in {"submitted", "running"} or values[2] != worker_instance_id:
+                return False
+            if values[1] is not None:
+                reason = "already_authorized"
+                return True
+            account_values = list(account.values()) if isinstance(account, dict) else account
+            if account_values is None or (account_values[0] != "active" and not account_values[1]):
+                reason = "account_disabled"
+                return False
+            reason = "authorized"
+            cursor.execute("UPDATE md.monomer_md_jobs SET start_authorized_at = now() WHERE job_id = %s", (job_id,))
+            return True
+
+        with psycopg.connect(self._settings.app_postgres_dsn) as connection:
+            with connection.cursor() as cursor:
+                authorized = decide(cursor)
+        if owner_id is not None:
+            log_task_event(TaskExecutionContext(owner_id, None, "monomer_md", "md", job_id, worker_instance_id),
+                           "start_authorized" if authorized else "start_rejected", reason=reason)
+        return authorized
+
     def update_status(
         self,
         job_id: str,
@@ -205,18 +248,26 @@ class PostgresJobRepository:
             "running": ("submitted", "running"),
             "completed": ("running",),
             "failed": failed_statuses,
-            "cancelled": ("cancel_requested",),
+            "cancelled": ("pending", "submitted", "cancel_requested"),
+            "cancel_requested": ("pending", "submitted", "running", "cancel_requested"),
         }.get(status, (status,))
+        instance_fence = (
+            sql.SQL(" AND {} = %s").format(sql.Identifier(settings.worker_instance_id_column))
+            if worker_instance_id is not None else sql.SQL("")
+        )
         query = sql.SQL(
-            "UPDATE {} SET {} WHERE {} = %s AND {} = ANY(%s) RETURNING {}"
+            "UPDATE {} SET {} WHERE {} = %s AND {} = ANY(%s){} RETURNING {}"
         ).format(
             _qualified_identifier(settings.job_table),
             sql.SQL(", ").join(assignments),
             sql.Identifier(settings.job_id_column),
             sql.Identifier(settings.status_column),
+            instance_fence,
             sql.Identifier(settings.status_column),
         )
         params.extend((job_id, list(allowed_statuses)))
+        if worker_instance_id is not None:
+            params.append(worker_instance_id)
         return query, params
 
     def accept_job(

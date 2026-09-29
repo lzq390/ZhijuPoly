@@ -1,3 +1,5 @@
+import { useAuth } from "../../auth/AuthProvider";
+import { requestServiceAccess } from "../../auth/guestAccess";
 import { BrowsingRecordingControls } from "../browsing-recording/BrowsingRecording";
 import { ModulePageHeader } from "../ModulePageHeader";
 import {
@@ -131,13 +133,14 @@ function datasetIcon(key: AnalysisViewKey, className?: string) {
   return <TableProperties {...props} />;
 }
 
-function useDatasetSummary() {
+function useDatasetSummary(enabled = true) {
   const [summary, setSummary] = useState<DatasetSummaryResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
+    if (!requestServiceAccess()) return false;
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -157,17 +160,18 @@ function useDatasetSummary() {
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     void load();
     return () => controllerRef.current?.abort();
-  }, [load]);
+  }, [enabled, load]);
 
   return { summary, loading, error, reload: load };
 }
 
-function useDatabaseAnalytics() {
+function useDatabaseAnalytics(enabled = true) {
   const [state, setState] = useState<AnalyticsState>({
     analytics: null,
-    loading: true,
+    loading: enabled,
     refreshing: false,
     error: null,
     source: null,
@@ -177,6 +181,7 @@ function useDatabaseAnalytics() {
   const controllerRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async (refresh: boolean) => {
+    if (!requestServiceAccess()) return false;
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -215,9 +220,10 @@ function useDatabaseAnalytics() {
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     void load(false);
     return () => controllerRef.current?.abort();
-  }, [load]);
+  }, [enabled, load]);
 
   return { ...state, reload: () => load(false), refresh: () => load(true) };
 }
@@ -235,8 +241,9 @@ function focusableElements(container: HTMLElement) {
 }
 
 export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
-  const summaryState = useDatasetSummary();
-  const analyticsState = useDatabaseAnalytics();
+  const guest = useAuth()?.status === "guest";
+  const summaryState = useDatasetSummary(!guest);
+  const analyticsState = useDatabaseAnalytics(!guest);
   const [datasetPopoverOpen, setDatasetPopoverOpen] = useState(false);
   const [transientMessage, setTransientMessage] = useState<string | null>(null);
   const [drawerRequest, setDrawerRequest] = useState<DrawerRequest | null>(null);
@@ -389,7 +396,7 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
     setDrawerOpen(true);
   }
 
-  const banner = analyticsState.refreshing
+  const banner = guest ? { tone: "info", message: "请登录账号。" } : analyticsState.refreshing
     ? {
         tone: "info",
         message: "正在检查数据更新，期间保留当前结果。"

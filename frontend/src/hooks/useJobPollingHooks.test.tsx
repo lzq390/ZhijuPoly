@@ -290,8 +290,6 @@ describe("job polling hook wiring", () => {
   it("stops Online Knowledge polling on HTTP 410 without another POST", async () => {
     const payload: OnlineKnowledgeSearchRequest = {
       material: "polyimide",
-      base_url: "https://example.invalid/v1",
-      model: "test-model",
       mode: "synthesis",
       max_papers: 100,
       extraction_delay_seconds: 0
@@ -323,4 +321,9 @@ describe("job polling hook wiring", () => {
     expect(apiMocks.fetchOnline).toHaveBeenCalledOnce();
     unmount();
   });
+});
+
+vi.mock("./useTaskEvents", () => {
+  const rememberJob = vi.fn(), forgetJob = vi.fn(), reconnect = vi.fn();
+  return { useTaskEvents: () => ({ connectionState: "live", rememberJob, forgetJob, reconnect }) };
 });

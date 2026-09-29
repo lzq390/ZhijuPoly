@@ -335,6 +335,9 @@ load_env() {
   local session_id="${NEXPOLY_DEV_GPU_SESSION_ID:-}"
   local session_version="${MONOMER_DFT_WORKER_VERSION:-}"
   local session_start_timeout="${MONOMER_DFT_START_TIMEOUT_SECONDS:-60}"
+  local isolation_enabled="${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}"
+  local start_authorization_url="${MONOMER_DFT_START_AUTHORIZATION_URL:-}"
+  local start_authorization_token="${MONOMER_DFT_START_AUTHORIZATION_TOKEN:-}"
   [[ ! -L "$ENV_FILE" ]] || fail "environment file must not be a symlink: $ENV_FILE"
   if [[ ! -f "$ENV_FILE" ]]; then
     [[ "$required" == "false" ]] && return 0
@@ -351,6 +354,12 @@ load_env() {
     # shellcheck disable=SC1090
     source "$ENV_FILE"
     set +a
+  fi
+  if [[ "$isolation_enabled" == "true" ]]; then
+    # The development launcher supplies the same credential as its Backend;
+    # a legacy Worker dotenv must not silently replace either callback value.
+    export MONOMER_DFT_START_AUTHORIZATION_URL="$start_authorization_url"
+    export MONOMER_DFT_START_AUTHORIZATION_TOKEN="$start_authorization_token"
   fi
   if [[ "$session_mode" == "1" ]]; then
     # The controller's exact GPU1-only authority is stricter than the general
@@ -848,6 +857,8 @@ start_worker() {
     MONOMER_DFT_FATAL_RESTART_RESET_SECONDS="${MONOMER_DFT_FATAL_RESTART_RESET_SECONDS:-300}" \
     MONOMER_DFT_WORKER_VERSION="${MONOMER_DFT_WORKER_VERSION:-0.1.0}" \
     MONOMER_DFT_WORKER_INSTANCE="$REPO_ROOT" \
+    MONOMER_DFT_START_AUTHORIZATION_URL="${MONOMER_DFT_START_AUTHORIZATION_URL:-}" \
+    MONOMER_DFT_START_AUTHORIZATION_TOKEN="${MONOMER_DFT_START_AUTHORIZATION_TOKEN:-}" \
     NEXPOLY_DEV_GPU_SESSION_ID="${NEXPOLY_DEV_GPU_SESSION_ID:-}" \
     MONOMER_DFT_DEPLOYMENT=dev \
     NEXPOLY_DEV_GPU1_ONLY_SESSION="${NEXPOLY_DEV_GPU1_ONLY_SESSION:-0}" \

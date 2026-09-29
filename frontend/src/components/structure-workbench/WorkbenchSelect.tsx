@@ -95,7 +95,12 @@ export function WorkbenchSelect<T extends string>({
   useEffect(() => {
     if (!presence.present && restoreAfterExit.current) {
       restoreAfterExit.current = false;
-      triggerRef.current?.focus({ preventScroll: true });
+      // The user may already have moved to another control while this menu
+      // was animating out. Restore only focus that still belongs to this select.
+      const active = document.activeElement;
+      if (!active || active === document.body || rootRef.current?.contains(active)) {
+        triggerRef.current?.focus({ preventScroll: true });
+      }
     }
   }, [presence.present]);
 

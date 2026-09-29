@@ -11,6 +11,7 @@ export type ActiveModule =
   | "monomerMdSimulation"
   | "monomerDft"
   | "monomerPolymerization"
+  | "monomerRetrosynthesis"
   | "reverseDesign"
   | "conditionalGeneration"
   | "polytaoGeneration"
@@ -82,6 +83,10 @@ export function routeFromPath(pathname: string): AppRoute {
 
   if (path === "/monomer-polymerization") {
     return { module: "monomerPolymerization", datasetKey: null };
+  }
+
+  if (path === "/monomer-retrosynthesis") {
+    return { module: "monomerRetrosynthesis", datasetKey: null };
   }
 
   if (path === canvasRoutePaths.reverseDesign) {
@@ -163,6 +168,10 @@ export function pathFromRoute(route: AppRoute) {
 
   if (route.module === "monomerPolymerization") {
     return "/monomer-polymerization";
+  }
+
+  if (route.module === "monomerRetrosynthesis") {
+    return "/monomer-retrosynthesis";
   }
 
   if (route.module === "reverseDesign") {

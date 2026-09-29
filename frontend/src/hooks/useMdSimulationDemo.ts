@@ -111,11 +111,11 @@ function waitForReveal(delay: number, signal: AbortSignal) {
   });
 }
 
-export function useMdSimulationDemo(options: { resultRevealDelayMs?: number } = {}) {
+export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; enabled?: boolean } = {}) {
   const resultRevealDelayMs = options.resultRevealDelayMs ?? RESULT_REVEAL_AT_MS;
   const [state, setState] = useState<MdSimulationDemoState>({
     defaults: null,
-    defaultsLoading: true,
+    defaultsLoading: options.enabled !== false,
     defaultsError: null,
     data: null,
     runLoading: false,
@@ -146,7 +146,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number } = 
     const revision = defaultsRevisionRef.current + 1;
     defaultsRevisionRef.current = revision;
     defaultsAbortRef.current = controller;
-    setState((current) => ({ ...current, defaultsLoading: true, defaultsError: null }));
+    setState((current) => ({ ...current, defaultsLoading: options.enabled !== false, defaultsError: null }));
     try {
       const defaults = await fetchMdDemoDefaults(controller.signal);
       if (controller.signal.aborted || defaultsRevisionRef.current !== revision) return null;
@@ -292,7 +292,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number } = 
   }, [stopProgress]);
 
   useEffect(() => {
-    void refreshDefaults();
+    if (options.enabled !== false) void refreshDefaults();
     return () => {
       defaultsRevisionRef.current += 1;
       runRevisionRef.current += 1;
@@ -302,7 +302,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number } = 
       distanceAbortRef.current?.abort();
       stopProgress();
     };
-  }, [refreshDefaults, stopProgress]);
+  }, [options.enabled, refreshDefaults, stopProgress]);
 
   return {
     ...state,

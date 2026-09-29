@@ -37,6 +37,7 @@ def create_monomer_md_job_postgres(
     connection: Any,
     *,
     job_id: str,
+    owner_user_id: str,
     input_smiles: str,
     canonical_smiles: str,
     requested_steps: int,
@@ -49,16 +50,17 @@ def create_monomer_md_job_postgres(
     connection.execute(
         """
         INSERT INTO md.monomer_md_jobs (
-          job_id, status, input_smiles, canonical_smiles, requested_steps, progress_stage, progress_message,
+          job_id, owner_user_id, status, input_smiles, canonical_smiles, requested_steps, progress_stage, progress_message,
           protocol, run_mode, config_json, components, engine, lease_expires_at
         )
-        VALUES (%s, 'pending', %s, %s, %s, 'pending', 'Waiting for the monomer MD worker to start.',
+        VALUES (%s, %s::uuid, 'pending', %s, %s, %s, 'pending', 'Waiting for the monomer MD worker to start.',
                 %s, %s, %s::jsonb, %s::jsonb,
                 CASE WHEN %s = 'formal' THEN 'byteff2-formal-worker' ELSE 'byteff2-density-demo-worker' END,
                 now() + make_interval(secs => %s))
         """,
         (
             job_id,
+            owner_user_id,
             input_smiles,
             canonical_smiles,
             requested_steps,
@@ -258,10 +260,10 @@ def mark_monomer_md_artifacts_deleted_postgres(connection: Any, *, job_id: str, 
     )
 
 
-def get_monomer_md_job_postgres(connection: Any, job_id: str) -> dict[str, Any] | None:
+def get_monomer_md_job_postgres(connection: Any, job_id: str, *, owner_user_id: str) -> dict[str, Any] | None:
     row = connection.execute(
         """
-        SELECT job_id, status, input_smiles, canonical_smiles, protocol, run_mode, config_json, components,
+        SELECT job_id, owner_user_id, status, input_smiles, canonical_smiles, protocol, run_mode, config_json, components,
                requested_steps, completed_steps, progress_percent,
                progress_stage, progress_message, worker_id, worker_job_id, worker_version, engine, artifact_root,
                artifacts, artifact_manifest, artifact_deleted_at, artifact_delete_message, result_summary,
@@ -272,16 +274,17 @@ def get_monomer_md_job_postgres(connection: Any, job_id: str) -> dict[str, Any] 
                  ELSE (
                    SELECT count(*) + 1
                    FROM md.monomer_md_jobs queued
-                   WHERE queued.run_mode = 'formal'
+                   WHERE queued.owner_user_id = job.owner_user_id
+                     AND queued.run_mode = 'formal'
                      AND queued.status IN ('pending', 'submitted', 'running', 'cancel_requested')
                      AND queued.queue_sequence IS NOT NULL
                      AND queued.queue_sequence < job.queue_sequence
                  )
                END AS queue_position
         FROM md.monomer_md_jobs job
-        WHERE job_id = %s
+        WHERE job_id = %s AND owner_user_id = %s::uuid
         """,
-        (job_id,),
+        (job_id, owner_user_id),
     ).fetchone()
     if row is None:
         return None
@@ -293,6 +296,7 @@ def get_monomer_md_trajectory_timeline_postgres(
     *,
     job_id: str,
     stage_id: str,
+    owner_user_id: str,
 ) -> dict[str, Any] | None:
     """Return one bounded trajectory timeline without loading the full job result."""
 
@@ -307,12 +311,12 @@ def get_monomer_md_trajectory_timeline_postgres(
             ELSE '[]'::jsonb
           END
         ) AS stage(value)
-        WHERE job.job_id = %s
+        WHERE job.job_id = %s AND job.owner_user_id = %s::uuid
           AND stage.value ->> 'stage_id' = %s
           AND jsonb_typeof(stage.value -> 'trajectory_timeline') = 'object'
         LIMIT 1
         """,
-        (job_id, stage_id),
+        (job_id, owner_user_id, stage_id),
     ).fetchone()
     if row is None:
         return None
@@ -396,6 +400,7 @@ def delete_monomer_md_job_cas_postgres(
 def list_monomer_md_jobs_postgres(
     connection: Any,
     *,
+    owner_user_id: str,
     run_mode: str | None = None,
     active_only: bool = False,
     include_result: bool = True,
@@ -404,8 +409,8 @@ def list_monomer_md_jobs_postgres(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[dict[str, Any]], int]:
-    where_parts = ["TRUE"]
-    params: list[Any] = []
+    where_parts = ["job.owner_user_id = %s::uuid"]
+    params: list[Any] = [owner_user_id]
     if run_mode is not None:
         where_parts.append("job.run_mode = %s")
         params.append(run_mode)
@@ -430,7 +435,7 @@ def list_monomer_md_jobs_postgres(
     )
     rows = connection.execute(
         f"""
-        SELECT job_id, status, input_smiles, canonical_smiles, protocol, run_mode, config_json, components,
+        SELECT job_id, owner_user_id, status, input_smiles, canonical_smiles, protocol, run_mode, config_json, components,
                requested_steps, completed_steps, progress_percent,
                progress_stage, progress_message, worker_id, worker_job_id, worker_version, engine, artifact_root,
                {result_projection}, artifact_deleted_at, artifact_delete_message, result_summary,
@@ -441,7 +446,8 @@ def list_monomer_md_jobs_postgres(
                  ELSE (
                    SELECT count(*) + 1
                    FROM md.monomer_md_jobs queued
-                   WHERE queued.run_mode = 'formal'
+                   WHERE queued.owner_user_id = job.owner_user_id
+                     AND queued.run_mode = 'formal'
                      AND queued.status IN ('pending', 'submitted', 'running', 'cancel_requested')
                      AND queued.queue_sequence IS NOT NULL
                      AND queued.queue_sequence < job.queue_sequence
@@ -467,6 +473,7 @@ def request_monomer_md_job_cancel_postgres(
     connection: Any,
     *,
     job_id: str,
+    owner_user_id: str,
 ) -> tuple[dict[str, Any] | None, bool]:
     cursor = connection.execute(
         """
@@ -476,14 +483,14 @@ def request_monomer_md_job_cancel_postgres(
             progress_stage = 'cancel_requested',
             progress_message = 'Cancellation requested; waiting for worker cleanup.',
             updated_at = now()
-        WHERE job_id = %s
+        WHERE job_id = %s AND owner_user_id = %s::uuid
           AND status IN ('submitted', 'running')
         RETURNING job_id
         """,
-        (job_id,),
+        (job_id, owner_user_id),
     )
     changed = cursor.fetchone() is not None
-    return get_monomer_md_job_postgres(connection, job_id), changed
+    return get_monomer_md_job_postgres(connection, job_id, owner_user_id=owner_user_id), changed
 
 
 def _monomer_md_job_from_row(row: Any) -> dict[str, Any]:
@@ -523,4 +530,36 @@ def _monomer_md_job_from_row(row: Any) -> dict[str, Any]:
         "error_category": row["error_category"],
         "error_message": row["error_message"],
         "result": result_data or None,
+    }
+
+
+def get_monomer_md_job_for_service_postgres(connection: Any, job_id: str) -> dict[str, Any] | None:
+    """Global lookup for callers using an explicit service connection."""
+    row = connection.execute("SELECT owner_user_id FROM md.monomer_md_jobs WHERE job_id = %s", (job_id,)).fetchone()
+    if row is None:
+        return None
+    return get_monomer_md_job_postgres(connection, job_id, owner_user_id=str(row["owner_user_id"]))
+
+
+def count_user_active_monomer_md_jobs_postgres(connection: Any, *, owner_user_id: str) -> int:
+    row = connection.execute(
+        "SELECT count(*) AS count FROM md.monomer_md_jobs WHERE owner_user_id = %s::uuid AND status = ANY(%s)",
+        (owner_user_id, list(MONOMER_MD_ACTIVE_STATUSES)),
+    ).fetchone()
+    return int(row["count"] if row else 0)
+
+
+def get_user_monomer_md_capacity_postgres(connection: Any, *, owner_user_id: str) -> tuple[int, int | None, dict[str, int]]:
+    """Public status counts never use a global maintenance query."""
+    row = connection.execute("""
+        SELECT count(*) AS count,
+            floor(extract(epoch FROM now()-min(COALESCE(heartbeat_at,updated_at))))::bigint AS age,
+            count(*) FILTER (WHERE run_mode='demo') AS demo_active,
+            count(*) FILTER (WHERE run_mode='formal' AND queue_sequence IS NULL) AS formal_running,
+            count(*) FILTER (WHERE run_mode='formal' AND queue_sequence IS NOT NULL) AS formal_queued
+        FROM md.monomer_md_jobs
+        WHERE owner_user_id=%s::uuid AND status = ANY(%s)
+    """, (owner_user_id, list(MONOMER_MD_ACTIVE_STATUSES))).fetchone()
+    return int(row["count"]), max(0,int(row["age"])) if row["age"] is not None else None, {
+        name: int(row[name]) for name in ("demo_active", "formal_running", "formal_queued")
     }

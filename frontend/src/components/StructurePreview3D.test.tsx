@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ fetchStructure3D: vi.fn() }));
@@ -40,6 +40,60 @@ afterEach(() => {
 });
 
 describe("StructurePreview3D", () => {
+  it("clears generated models between identities while retaining the current account cache", async () => {
+    installViewer();
+    const first = await renderPreview("private-model");
+    await waitFor(() => expect(mocks.fetchStructure3D).toHaveBeenCalledOnce());
+    first.unmount();
+    const sameAccount = await renderPreview("private-model");
+    await act(async () => {});
+    expect(mocks.fetchStructure3D).toHaveBeenCalledOnce();
+    sameAccount.unmount();
+    const { retireSession } = await import("../auth/session");
+    retireSession();
+    await renderPreview("private-model");
+    await waitFor(() => expect(mocks.fetchStructure3D).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not submit the old structure when script loading completes after identity retirement", async () => {
+    await renderPreview("account-a-input");
+    const script = document.getElementById("3dmol-script")!;
+    const { retireSession } = await import("../auth/session");
+    retireSession();
+    const viewer = installViewer();
+    await act(async () => { fireEvent.load(script); });
+    expect(mocks.fetchStructure3D).not.toHaveBeenCalled();
+    expect(viewer.addModel).not.toHaveBeenCalled();
+  });
+
+  it("does not refill the cleared cache from a late model response", async () => {
+    const viewer = installViewer();
+    let complete!: (value: { molblock: string; capped_smiles: string }) => void;
+    mocks.fetchStructure3D.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const view = await renderPreview("private-late-model");
+    await waitFor(() => expect(mocks.fetchStructure3D).toHaveBeenCalledOnce());
+    const { retireSession } = await import("../auth/session");
+    retireSession();
+    await act(async () => { complete({ molblock: "account-a-model", capped_smiles: "private-late-model" }); });
+    expect(viewer.addModel).not.toHaveBeenCalled();
+    view.unmount();
+    await renderPreview("private-late-model");
+    await waitFor(() => expect(mocks.fetchStructure3D).toHaveBeenCalledTimes(2));
+    expect(viewer.addModel).not.toHaveBeenCalledWith("account-a-model", "mol");
+  });
+
+  it("discards a late error after identity retirement", async () => {
+    installViewer();
+    let reject!: (value: Error) => void;
+    mocks.fetchStructure3D.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    await renderPreview("private-late-error");
+    await waitFor(() => expect(mocks.fetchStructure3D).toHaveBeenCalledOnce());
+    const { retireSession } = await import("../auth/session");
+    retireSession();
+    await act(async () => { reject(new Error("account-a-private-error")); });
+    expect(screen.queryByText("account-a-private-error")).toBeNull();
+  });
+
   it("空结构不加载脚本也不请求构象", async () => {
     await renderPreview("");
     expect(document.getElementById("3dmol-script")).toBeNull();

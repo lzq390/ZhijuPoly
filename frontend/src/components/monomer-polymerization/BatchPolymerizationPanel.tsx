@@ -1,3 +1,6 @@
+import { createPrivateObjectURL, revokePrivateObjectURL } from "../../auth/objectUrls";
+import { useAuth } from "../../auth/AuthProvider";
+import { requestServiceAccess } from "../../auth/guestAccess";
 import { ChevronDown, Download, FileSpreadsheet, FlaskConical, ListChecks, LoaderCircle, Play, RefreshCw, SlidersHorizontal, Square, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { MonomerPolymerizationStatusResponse, MonomerPolymerizationTargetClass } from "../../types";
@@ -107,6 +110,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
   target: MonomerPolymerizationTargetClass;
   children: (sections: BatchPolymerizationSections) => ReactNode;
 }) {
+  const guest = useAuth()?.status === "guest";
   const capability = status?.batch;
   const [files, setFiles] = useState<Partial<Record<"a" | "b", File>>>({});
   const [imported, setImported] = useState<BatchImport | null>(null);
@@ -124,7 +128,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
   const operation = useRef<AbortController | null>(null);
   const taskOperation = useRef<AbortController | null>(null);
   const idempotency = useRef<{ signature: string; key: string } | null>(null);
-  const tasks = usePolymerizationBatchJob();
+  const tasks = usePolymerizationBatchJob(!guest);
   useEffect(() => () => operation.current?.abort(), []);
   useEffect(() => {
     setTaskAction(null);
@@ -168,6 +172,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
     setPreview(data);
   }
   async function upload() {
+    if (!requestServiceAccess()) return;
     if (!files.a || !files.b) return;
     if (capability && [files.a, files.b].some((file) => file.size > capability.limits.file_bytes)) {
       setError(`每个文件不能超过 ${Math.floor(capability.limits.file_bytes / 1024 ** 2)} MiB。`);
@@ -188,6 +193,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
     finally { if (!controller.signal.aborted) setBusy(null); }
   }
   async function revalidate() {
+    if (!requestServiceAccess()) return;
     if (!imported) return;
     const controller = begin("正在预检…");
     setPreview(null);
@@ -203,6 +209,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
     idempotency.current = null;
   }
   async function submit() {
+    if (!requestServiceAccess()) return;
     if (busy || !preview?.can_submit || !preview.preview_revision || preview.import_id !== imported?.import_id) return;
     const signature = `${preview.import_id}:${preview.preview_revision}:${target}`;
     if (idempotency.current?.signature !== signature) idempotency.current = { signature, key: Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) => value.toString(16).padStart(2, "0")).join("") };
@@ -235,6 +242,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
     }
   }
   async function cancel() {
+    if (!requestServiceAccess()) return;
     const current = tasks.job;
     if (!current || !isBatchActive(current) || current.status === "cancelling") return;
     const id = current.job_id;
@@ -251,6 +259,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
     } finally { finishTaskAction(controller); }
   }
   async function download(name: string) {
+    if (!requestServiceAccess()) return;
     const current = tasks.job;
     if (!current?.artifacts[name] || current.status === "expired") return;
     const id = current.job_id;
@@ -261,7 +270,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
     try {
       const blob = await downloadBatchArtifact(id, name, controller.signal);
       if (!isCurrentTaskAction(id, controller)) return;
-      objectUrl = URL.createObjectURL(blob);
+      objectUrl = createPrivateObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectUrl;
       link.download = name;
@@ -270,7 +279,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
       link.remove();
       const completedUrl = objectUrl;
       objectUrl = null;
-      window.setTimeout(() => URL.revokeObjectURL(completedUrl), 1000);
+      window.setTimeout(() => revokePrivateObjectURL(completedUrl), 1000);
       setTaskNotice({ jobId: id, message: `已开始下载 ${name}。` });
     } catch (reason) {
       if (!isCurrentTaskAction(id, controller)) return;
@@ -280,7 +289,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
         else setUnavailableArtifacts((current) => ({ jobId: id, names: [...(current?.jobId === id ? current.names : []), name] }));
       }
     } finally {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (objectUrl) revokePrivateObjectURL(objectUrl);
       finishTaskAction(controller);
     }
   }
@@ -298,11 +307,11 @@ export function BatchPolymerizationPanel({ status, target, children }: {
   const progress = job ? Math.min(100, Math.round(job.summary.processed_pairs / Math.max(1, job.summary.valid_pairs) * 100)) : 0;
   const alreadySubmitted = preview && submittedRevision === `${preview.import_id}:${preview.preview_revision}:${target}`;
   const inputs = <div className="np-batch-panel">
-      {!capability?.available ? <p className="np-batch-notice" role="status"><TriangleAlert size={18} />{capability?.message ?? "正在检查批量服务…"}</p> : null}
+      {guest || !capability?.available ? <p className="np-batch-notice" role="status"><TriangleAlert size={18} />{guest ? "请登录账号。" : capability?.message ?? "正在检查批量服务…"}</p> : null}
       <div className="np-batch-inputs">
         {(["a", "b"] as const).map((role) => <section className="np-batch-file" key={role} aria-label={`单体表 ${role.toUpperCase()}`}>
           <header className="np-mp-monomer__header"><div><span className="np-mp-monomer__index">{role.toUpperCase()}</span><div><h3>单体表 {role.toUpperCase()}</h3><p>MONOMER {role.toUpperCase()}</p></div></div><div className="np-batch-templates"><a href={batchUrl(`/templates/${role}.csv`)} download>CSV 模板</a><a href={batchUrl(`/templates/${role}.xlsx`)} download>Excel 模板</a></div></header>
-          <label className="np-batch-upload">选择 CSV / XLSX<input type="file" aria-label={`上传单体表 ${role.toUpperCase()}`} accept=".csv,.xlsx" onChange={(event) => replaceFile(role, event.target.files?.[0])} /></label>
+          <label className="np-batch-upload">选择 CSV / XLSX<input type="file" aria-label={`上传单体表 ${role.toUpperCase()}`} accept=".csv,.xlsx" onClick={(event) => { if (!requestServiceAccess()) event.preventDefault(); }} onChange={(event) => { if (requestServiceAccess()) replaceFile(role, event.target.files?.[0]); }} /></label>
           <span className="np-batch-filename">{files[role]?.name ?? "尚未选择文件"}</span>
           {imported ? <BatchImportSummary role={role} imported={imported} mapping={mappings[role]}
             preview={preview} busy={Boolean(busy)} /> : null}
@@ -320,7 +329,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
         </div> : null}
       </div> : null}
       <p className="np-batch-hint">每表最多 {count(capability?.limits.max_rows ?? 5000)} 条非空记录，组合不超过 {count(capability?.limits.max_pairs ?? 50000)} 对。SMILES 使用普通单体结构，不含 * 连接点。</p>
-      <div className="np-batch-actions"><button type="button" onClick={() => void upload()} disabled={Boolean(busy) || !files.a || !files.b || !capability?.enabled}><FileSpreadsheet size={16} />上传并预检</button>{imported ? <button type="button" onClick={() => void revalidate()} disabled={Boolean(busy)}><RefreshCw size={16} />重新预检</button> : null}</div>
+      <div className="np-batch-actions"><button type="button" onClick={() => void upload()} disabled={!guest && (Boolean(busy) || !files.a || !files.b || !capability?.enabled)}><FileSpreadsheet size={16} />上传并预检</button>{imported ? <button type="button" onClick={() => void revalidate()} disabled={Boolean(busy)}><RefreshCw size={16} />重新预检</button> : null}</div>
       {preview?.statistics ? <section className="np-batch-validation" aria-label="预检结果">
         <div className="np-batch-metrics"><div><span>原始组合</span><strong>{count(preview.statistics.raw_pairs)}</strong></div><div><span>有效组合</span><strong>{count(preview.statistics.valid_pairs)}</strong></div><div><span>独立计算组合</span><strong>{count(preview.statistics.unique_pairs)}</strong></div></div>
         {preview.input_error_count > 0 ? <details><summary>{preview.input_error_count} 条输入错误，运行时将跳过（显示前 100 条）</summary><ul>{preview.input_errors.map((item, index) => <li key={index}>表 {item.role.toUpperCase()} 第 {item.row_number} 行：{item.message}</li>)}</ul></details> : null}
@@ -332,7 +341,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
         <FlaskConical aria-hidden="true" />
         <p>生成的候选不代表一定可以合成，也不代表相关性质已经得到验证；请结合实验条件进一步评估。</p>
       </div>
-      <div className="np-batch-actions np-mp-form-actions"><button type="button" className="np-sw-primary-button" onClick={() => void submit()} disabled={Boolean(busy) || !preview?.can_submit || preview.import_id !== imported?.import_id || !capability?.available || Boolean(alreadySubmitted)}><Play size={16} />{alreadySubmitted ? "任务已提交" : "开始批量聚合"}</button>{busy ? <span role="status"><LoaderCircle className="np-sw-spin" size={16} />{busy}</span> : null}</div>
+      <div className="np-batch-actions np-mp-form-actions"><button type="button" className="np-sw-primary-button" onClick={() => void submit()} disabled={!guest && (Boolean(busy) || !preview?.can_submit || preview.import_id !== imported?.import_id || !capability?.available || Boolean(alreadySubmitted))}><Play size={16} />{alreadySubmitted ? "任务已提交" : "开始批量聚合"}</button>{busy ? <span role="status"><LoaderCircle className="np-sw-spin" size={16} />{busy}</span> : null}</div>
       {error ? <p role="alert" className="np-batch-error">{error}</p> : null}
   </div>;
   const taskPanel = <section className={`np-batch-panel np-batch-job np-mp-surface np-sw-accented-surface${taskPanelOpen ? " is-open" : ""}`} aria-label="批量任务">
@@ -359,9 +368,12 @@ export function BatchPolymerizationPanel({ status, target, children }: {
       {taskPanelOpen ? <>
       <div className="np-batch-job-header">
         {historyIds.length ? <div className="np-batch-mapping-field">
-          <label htmlFor="np-batch-history">最近任务</label>
-          <WorkbenchSelect id="np-batch-history" ariaLabel="最近任务" value={tasks.jobId ?? ""}
-            options={historyIds.map((id) => ({ value: id, label: id.slice(0, 12) }))}
+          <label htmlFor="np-batch-history">我的批量任务</label>
+          <WorkbenchSelect id="np-batch-history" ariaLabel="我的批量任务" value={tasks.jobId ?? ""}
+            options={historyIds.map((id) => {
+              const item = tasks.historyJobs.find(item => item.job_id === id);
+              return { value: id, label: item ? `${id.slice(0, 12)} · ${STATUS_LABELS[item.status]}` : id.slice(0, 12) };
+            })}
             onChange={tasks.selectJob} />
         </div> : null}
         <button type="button" onClick={refreshTask} disabled={!tasks.jobId || tasks.refreshing || Boolean(currentTaskAction)} aria-busy={tasks.refreshing}>
@@ -369,6 +381,13 @@ export function BatchPolymerizationPanel({ status, target, children }: {
           {tasks.refreshing ? "刷新中…" : "刷新状态"}
         </button>
       </div>
+      <div className="np-batch-actions" aria-label="我的批量任务分页">
+        <button type="button" disabled={tasks.historyLoading} onClick={() => { if (requestServiceAccess()) tasks.refreshHistory(); }}>刷新列表</button>
+        <button type="button" disabled={tasks.historyLoading || tasks.historyOffset === 0} onClick={() => tasks.setHistoryOffset(Math.max(0, tasks.historyOffset - 20))}>上一页</button>
+        <span>{tasks.historyLoading ? "读取我的任务…" : `共 ${tasks.historyTotal} 个任务 · 第 ${Math.floor(tasks.historyOffset / 20) + 1} 页`}</span>
+        <button type="button" disabled={tasks.historyLoading || tasks.historyNext === null} onClick={() => tasks.setHistoryOffset(tasks.historyNext ?? 0)}>下一页</button>
+      </div>
+      {tasks.historyError ? <p role="alert" className="np-batch-error">{tasks.historyError}</p> : null}
       {tasks.error ? <p role="alert" className="np-batch-error">{tasks.error}</p> : null}
       {currentTaskError ? <p role="alert" className="np-batch-error">{currentTaskError}</p> : null}
       {currentTaskAction ? <p className="np-batch-hint np-batch-task-feedback" role="status"><LoaderCircle className="np-sw-spin" size={16} aria-hidden="true" />{currentTaskAction.message}</p> : null}

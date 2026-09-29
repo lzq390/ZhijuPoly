@@ -1,5 +1,6 @@
 import { Orbit, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { getSessionEpoch, onSessionRetired } from "../auth/session";
 import { fetchStructure3D } from "../services/api";
 import { cn } from "../lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
@@ -7,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 const D3MOL_SRC = "/vendor/3Dmol-min.js";
 const structureCache = new Map<string, { molblock: string; capped_smiles: string }>();
 const CACHE_MAX = 50;
+onSessionRetired(() => structureCache.clear());
 type ThreeDMolViewer = ReturnType<NonNullable<Window["$3Dmol"]>["createViewer"]>;
 let scriptLoadPromise: Promise<void> | null = null;
 
@@ -120,7 +122,9 @@ export function StructurePreview3D({
     }
 
     let cancelled = false;
+    const epoch = getSessionEpoch();
     const controller = new AbortController();
+    const current = () => !cancelled && !controller.signal.aborted && epoch === getSessionEpoch();
     viewerInstanceRef.current?.clear();
     viewerInstanceRef.current?.render();
 
@@ -130,6 +134,7 @@ export function StructurePreview3D({
 
       try {
         await loadScriptOnce(D3MOL_SRC, "3dmol-script");
+        if (!current()) return;
         if (!window.$3Dmol) {
           throw new Error("3Dmol 不可用");
         }
@@ -137,13 +142,13 @@ export function StructurePreview3D({
         let payload = structureCache.get(source);
         if (!payload) {
           payload = await fetchStructure3D(source, controller.signal);
-          if (controller.signal.aborted) {
+          if (!current()) {
             return;
           }
           setCacheEntry(source, payload);
         }
 
-        if (cancelled || !viewerRef.current) {
+        if (!current() || !viewerRef.current) {
           return;
         }
 
@@ -182,11 +187,11 @@ export function StructurePreview3D({
         viewer.zoomTo();
         viewer.render();
       } catch (nextError) {
-        if (!cancelled && !controller.signal.aborted) {
+        if (current()) {
           setError(nextError instanceof Error ? nextError.message : "3D 渲染失败");
         }
       } finally {
-        if (!cancelled) {
+        if (current()) {
           setIsLoading(false);
         }
       }

@@ -1,3 +1,4 @@
+import { useAuth } from "../auth/AuthProvider";
 import type { ReactNode, RefObject } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Menu, MessageSquare } from "lucide-react";
@@ -155,7 +156,10 @@ export function AppShell({
   }, [moduleTransition?.exitRevision]);
   const scrollbarHideTimersRef = useRef<Map<HTMLElement, number>>(new Map());
   const scrollbarAnimationsRef = useRef<Map<HTMLElement, Animation>>(new Map());
-  const gpuSessionControl = useDevGpuSessionControl(DEV_GPU_SESSION_CONTROL_ENABLED);
+  const auth = useAuth();
+  const canControlGpuSession = DEV_GPU_SESSION_CONTROL_ENABLED &&
+    auth?.status === "authenticated" && auth.session.capabilities["operations.use"] === true;
+  const gpuSessionControl = useDevGpuSessionControl(canControlGpuSession);
 
   const isHome = activeModule === "home";
   const isReverseDesignWorkbench = activeModule === "reverseDesign";
@@ -163,6 +167,7 @@ export function AppShell({
   const isStructureWorkbench = activeModule === "structureWorkbench";
   const isHomopolymerPredictionWorkbench = activeModule === "homopolymerPrediction";
   const isMonomerPolymerizationWorkbench = activeModule === "monomerPolymerization";
+  const isMonomerRetrosynthesisWorkbench = activeModule === "monomerRetrosynthesis";
   const isMdSimulationWorkbench = activeModule === "mdSimulationDemo";
   const isMonomerMdSimulationWorkbench = activeModule === "monomerMdSimulation";
   const isMonomerDftWorkbench = activeModule === "monomerDft";
@@ -182,6 +187,7 @@ export function AppShell({
     isPolytaoWorkbench ||
     isHomopolymerPredictionWorkbench ||
     isMonomerPolymerizationWorkbench ||
+    isMonomerRetrosynthesisWorkbench ||
     isMdSimulationWorkbench ||
     isMonomerMdSimulationWorkbench ||
     isMonomerDftWorkbench ||
@@ -387,7 +393,7 @@ export function AppShell({
     onDeleteGeneralSession,
     generalSessionQuery,
     onGeneralSessionQueryChange: setGeneralSessionQuery,
-    gpuSessionControl: DEV_GPU_SESSION_CONTROL_ENABLED ? gpuSessionControl : null
+    gpuSessionControl: canControlGpuSession ? gpuSessionControl : null
   };
 
   return (
@@ -431,6 +437,7 @@ export function AppShell({
                     isStructureWorkbench ||
                     isHomopolymerPredictionWorkbench ||
                     isMonomerPolymerizationWorkbench ||
+                    isMonomerRetrosynthesisWorkbench ||
                     isMdSimulationWorkbench ||
                     isMonomerMdSimulationWorkbench ||
                     isMonomerDftWorkbench ||

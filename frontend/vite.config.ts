@@ -19,11 +19,14 @@ export default defineConfig(({ mode }) => {
   const proxy = {
     "/api": {
       target: proxyTarget,
-      changeOrigin: true
+      // Preserve the browser-facing Host for the API's Origin/Referer check.
+      // Plain HTTP browsers can omit Sec-Fetch-Site; rewriting Host to the
+      // internal Backend address would reject legitimate guest requests.
+      changeOrigin: false
     },
     "/health": {
       target: proxyTarget,
-      changeOrigin: true
+      changeOrigin: false
     }
   };
 
@@ -34,7 +37,11 @@ export default defineConfig(({ mode }) => {
       "@structure-editor-preload": editor.preload
     } },
     build: { manifest: true },
-    test: { exclude: [...configDefaults.exclude, "sdk/*.test.mjs"] },
+    test: {
+      setupFiles: ["./src/auth/testSession.ts"],
+      // These suites use node:test and run via test:multiuser-tools in CI.
+      exclude: [...configDefaults.exclude, "sdk/*.test.mjs", "scripts/multiuser*.test.mjs"]
+    },
     server: {
       port: 5173,
       proxy

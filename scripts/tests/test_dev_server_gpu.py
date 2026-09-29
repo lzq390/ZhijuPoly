@@ -22,6 +22,163 @@ DEV_BUILDKIT_CONFIG = REPOSITORY_ROOT / "ops" / "config" / "buildkitd.dev.toml"
 
 
 class DevServerGpuScriptTests(unittest.TestCase):
+    def test_prebuilt_isolation_start_checks_identity_and_schema_before_traffic(self) -> None:
+        function = self._shell_function_source("up_prebuilt")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            controller = root / "controller.py"
+            controller.write_text('print(\'{"status":"stopped"}\')\n')
+            log = root / "events"
+            harness = f'''
+set -euo pipefail
+GPU_SESSION_PYTHON="$1"
+GPU_SESSION_CONTROLLER="$2"
+EVENT_LOG="$3"
+NEXPOLY_DEV_USER_ISOLATION_ENABLED="$4"
+NEXPOLY_DEV_GPU_DIRECT_START=1
+NEXPOLY_DEV_GPU_LAUNCHER_ENABLED=true
+NEXPOLY_DEV_FRONTEND_PORT=9001
+COMPOSE=(compose)
+event() {{ printf '%s\\n' "$*" >> "$EVENT_LOG"; }}
+verify_backend_image_build_identity() {{ event image-verified; }}
+validate_asset_release() {{ event assets-verified; }}
+prepare_canary_state_directory() {{ :; }}
+prepare_worker_runtime_directories() {{ :; }}
+prepare_dft_runtime_directories() {{ :; }}
+gpu_operator_up() {{ event operator-up; }}
+compose() {{ event "$*"; }}
+wait_backend_configured() {{ event backend-healthy; }}
+verify_backend_drift() {{ event backend-verified; }}
+build_backend_image() {{ exit 97; }}
+run_dev_migrations() {{ exit 98; }}
+{function}
+up_prebuilt
+'''
+            rejected = subprocess.run(["bash", "-c", harness, "prebuilt-test", sys.executable, str(controller), str(log), "false"], capture_output=True, text=True)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertFalse(log.exists())
+            accepted = subprocess.run(["bash", "-c", harness, "prebuilt-test", sys.executable, str(controller), str(log), "true"], capture_output=True, text=True)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertEqual(log.read_text().splitlines(), [
+                "image-verified", "assets-verified", "operator-up",
+                "run --rm --no-deps backend python -m app.postgres_preflight --strict --schema-target user-isolation-0018 --service-context",
+                "up -d --no-deps --force-recreate backend", "backend-healthy", "backend-verified",
+                "up -d --no-deps --force-recreate --wait --wait-timeout 120 polymerization-batch-worker",
+                "up -d --no-deps frontend-dev",
+            ])
+
+    def test_user_isolation_environment_requires_explicit_opt_in_and_private_file(self) -> None:
+        function = self._shell_function_source("load_user_isolation_environment")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            auth = root / ".env.dev.auth"
+            auth.write_text("export TEST_AUTH_LOADED=yes\n")
+            auth.chmod(0o600)
+            for enabled, mode, expected in (("false", 0o644, 0), ("true", 0o644, 2), ("true", 0o600, 0), ("invalid", 0o600, 2)):
+                with self.subTest(enabled=enabled, mode=mode):
+                    auth.chmod(mode)
+                    result = subprocess.run(["bash", "-c", f'''
+set -euo pipefail
+ROOT_DIR="$1"
+NEXPOLY_DEV_USER_ISOLATION_ENABLED="$2"
+{function}
+load_user_isolation_environment
+if [[ "$2" == true ]]; then [[ "$TEST_AUTH_LOADED" == yes ]]; else [[ -z "${{TEST_AUTH_LOADED:-}}" ]]; fi
+''', "auth-env-test", str(root), enabled], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, expected, result.stderr)
+            auth.unlink()
+            auth.symlink_to(root / "real.env")
+            (root / "real.env").write_text("exit 99\n")
+            (root / "real.env").chmod(0o600)
+            result = subprocess.run(["bash", "-c", f'ROOT_DIR="$1"; NEXPOLY_DEV_USER_ISOLATION_ENABLED=true; {function}\nload_user_isolation_environment', "symlink-test", str(root)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+
+    def test_dft_control_preserves_launcher_callback_across_legacy_worker_dotenv(self) -> None:
+        source = (REPOSITORY_ROOT / "scripts/monomer_dft_worker_ctl.sh").read_text()
+        start = source.index("load_env() {")
+        function = source[start:source.index("\n}\n", start) + 3]
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            env = root / "worker.env"
+            env.write_text("MONOMER_DFT_START_AUTHORIZATION_URL=http://wrong.invalid\nMONOMER_DFT_START_AUTHORIZATION_TOKEN=old-worker-token\n")
+            env.chmod(0o600)
+            result = subprocess.run(["bash", "-c", f'''
+set -euo pipefail
+REPO_ROOT="$1"
+ENV_FILE="$1/worker.env"
+FORMAL_ACCEPTANCE=0
+NEXPOLY_DEV_USER_ISOLATION_ENABLED=true
+MONOMER_DFT_START_AUTHORIZATION_URL=http://127.0.0.1:18000
+MONOMER_DFT_START_AUTHORIZATION_TOKEN=test-only-new-token
+fail() {{ exit 98; }}
+{function}
+load_env true
+[[ "$MONOMER_DFT_START_AUTHORIZATION_URL" == http://127.0.0.1:18000 ]]
+[[ "$MONOMER_DFT_START_AUTHORIZATION_TOKEN" == test-only-new-token ]]
+''', "dft-callback-test", str(root)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        spawn = source[source.index("  env -i "):]
+        self.assertIn('MONOMER_DFT_START_AUTHORIZATION_URL="${MONOMER_DFT_START_AUTHORIZATION_URL:-}"', spawn)
+        self.assertIn('MONOMER_DFT_START_AUTHORIZATION_TOKEN="${MONOMER_DFT_START_AUTHORIZATION_TOKEN:-}"', spawn)
+
+    def test_operator_reuse_requires_matching_isolation_configuration(self) -> None:
+        function = self._shell_function_source("gpu_operator_status_is_current")
+        with tempfile.TemporaryDirectory() as raw:
+            identity = Path(raw) / "operator.json"
+            for recorded, expected in ((False, 1), (True, 0)):
+                identity.write_text(json.dumps({"user_isolation_enabled": recorded}))
+                result = subprocess.run(["bash", "-c", f'''
+set -euo pipefail
+GPU_OPERATOR_IDENTITY="$1"
+CURRENT_SOURCE_REVISION=revision
+CURRENT_SOURCE_TREE=tree
+NEXPOLY_DEV_USER_ISOLATION_ENABLED=true
+gpu_operator_request() {{ printf '%s' '{{"schema_version":1,"operator_available":true,"source_sha":"revision","source_tree":"tree"}}'; }}
+{function}
+gpu_operator_status_is_current
+''', "operator-configuration-test", str(identity)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, expected, result.stderr)
+        self.assertIn('--setenv="NEXPOLY_DEV_USER_ISOLATION_ENABLED=${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}"', self._shell_function_source("gpu_operator_up"))
+
+    def test_maintenance_stop_releases_only_owned_session_without_cpu_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            controller = root / "controller.py"
+            log = root / "events"
+            payload = {"status": "ready", "direct_start": True, "session_id": "d" * 32,
+                       "source_sha": "a" * 40, "source_tree": "b" * 40}
+            controller.write_text(
+                "import json, os, sys\n"
+                "with open(os.environ['EVENT_LOG'], 'a') as log: log.write('controller:' + sys.argv[1] + '\\n')\n"
+                "print(json.dumps(" + repr(payload) + "))\n"
+            )
+            functions = "\n".join(self._shell_function_source(name) for name in (
+                "gpu_session_adopt_direct_start", "gpu_session_stop_workers", "gpu_session_maintenance_stop",
+            ))
+            completed = subprocess.run(["bash", "-c", f'''
+set -euo pipefail
+GPU_SESSION_PYTHON="$1"
+GPU_SESSION_CONTROLLER="$2"
+export EVENT_LOG="$3"
+NEXPOLY_DEV_GPU_SESSION_EXECUTE=1
+DFT_WORKER_LOCK_SHA256=sha256:lock
+event() {{ printf '%s\\n' "$*" >> "$EVENT_LOG"; }}
+gpu_backend_stop_exact_session() {{ event backend-stop; }}
+worker_drain_stop() {{ event "md:$CURRENT_SOURCE_REVISION"; }}
+dft_worker_drain_stop() {{ event "dft:$CURRENT_SOURCE_REVISION"; }}
+dft_worker_assert_stopped_runtime() {{ :; }}
+verify_gpu_session_runtime_paths_removed() {{ event verified; }}
+wait_backend_configured() {{ exit 97; }}
+docker() {{ exit 98; }}
+{functions}
+gpu_session_maintenance_stop
+''', "maintenance-test", sys.executable, str(controller), str(log)], text=True, capture_output=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(log.read_text().splitlines(), [
+                "controller:status", "controller:drain", "backend-stop",
+                "md:" + "a" * 40, "dft:" + "a" * 40, "controller:down", "verified",
+            ])
+
     def test_down_retains_worker_identity_after_a_lease_free_controller_exits(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

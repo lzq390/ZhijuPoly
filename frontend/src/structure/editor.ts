@@ -24,6 +24,10 @@ export type KetcherInstance = {
   getSmiles(isExtended?: boolean): Promise<string>;
   getKet?(): Promise<string>;
   getMolfile?(format?: "v2000" | "v3000"): Promise<string>;
+  containsReaction?(): boolean;
+  structService?: {
+    convert(data: { struct: string; input_format?: string; output_format: string }, options?: Record<string, unknown>): Promise<{ struct: string }>;
+  };
   setMolecule?(source: string): Promise<unknown>;
   clear?(): unknown;
   generateImage?(source: string, options: StructureImageOptions): Promise<Blob>;
@@ -33,6 +37,7 @@ export type KetcherInstance = {
     setStereoLabelsToAtoms(): void; markFragments(): void;
   }> } };
   editor?: {
+    serverSettings?: Record<string, unknown>;
     struct?(value: unknown, center?: boolean): unknown;
     zoomAccordingContent?(value: unknown): unknown;
     centerStruct?(): void;
@@ -46,11 +51,38 @@ export function createKetcherAdapter(
   isCurrent: () => boolean = () => true
 ): StructureEditorHandle {
   const missing = (method: string): never => { throw new Error(`结构编辑器不支持 ${method}。`); };
+  const checkCurrent = () => { if (!isCurrent()) throw new DOMException("画板操作已失效。", "AbortError"); };
+  const readMolfile = async () => {
+    if (!ketcher.getMolfile) return missing("Molfile 导出");
+    // Explicit formats avoid the SDK's stateful automatic-format conversion.
+    try { return await ketcher.getMolfile("v2000"); }
+    catch (error) { checkCurrent(); return ketcher.getMolfile("v3000"); }
+  };
   return {
     getSmiles: async () => {
-      // Request ordinary SMILES. Indigo 3.8 can still append an entirely empty
-      // CX atom-label block for wildcard atoms; it carries no chemical content.
-      const value = await ketcher.getSmiles(false);
+      checkCurrent();
+      let value: string;
+      if (ketcher.structService && ketcher.getMolfile && !ketcher.containsReaction?.()) {
+        // Indigo's KET→SMILES path can lose implicit H at tetrahedral carbon
+        // next to a wildcard/query atom. The same native canvas's Molfile
+        // preserves H and stereo; convert it with the existing local service.
+        const molfile = await readMolfile();
+        checkCurrent();
+        if (!/V2000|V3000/.test(molfile) || !/^M  END\s*$/m.test(molfile)) {
+          throw new Error("结构编辑器未返回有效的 Molfile，已保留上次成功的内容。");
+        }
+        // A valid empty canvas needs no conversion and remains valid SMILES.
+        const empty = /^\s*0\s+0\s+.*V2000\s*$/m.test(molfile) || /^M  V30 COUNTS 0 0 /m.test(molfile);
+        value = empty ? "" : (await ketcher.structService.convert({ struct: molfile,
+          input_format: "chemical/x-mdl-molfile", output_format: "chemical/x-daylight-smiles" }, ketcher.editor?.serverSettings)).struct;
+        checkCurrent();
+      } else {
+        // Older handles and reaction documents retain their supported path.
+        value = await ketcher.getSmiles(false);
+        checkCurrent();
+      }
+      // Indigo may append an entirely empty CX atom-label block to wildcard
+      // structures. Only that chemically empty suffix is discarded.
       const trimmed = value.trim();
       // Never treat a serializer's Molfile/KET response as business SMILES.
       if (/[\r\n]/.test(trimmed) || (trimmed.startsWith("{") && trimmed !== "{}")) {
@@ -59,14 +91,7 @@ export function createKetcherAdapter(
       return value.replace(/\s+\|\$;*\$\|\s*$/, "");
     },
     getKet: () => ketcher.getKet?.() ?? missing("KET 导出"),
-    getMolfile: async () => {
-      if (!ketcher.getMolfile) return missing("Molfile 导出");
-      // 3.7 auto/server conversion can affect subsequent SMILES exports for
-      // annotated documents. Prefer the explicit local V2000 serializer;
-      // V3000 remains available for structures V2000 cannot represent.
-      try { return await ketcher.getMolfile("v2000"); }
-      catch { return ketcher.getMolfile("v3000"); }
-    },
+    getMolfile: readMolfile,
     setMolecule: async (source) => {
       // Public setMolecule unconditionally rescales every imported structure.
       // Use the SDK's KET decoder and the instance's normal canvas commit so

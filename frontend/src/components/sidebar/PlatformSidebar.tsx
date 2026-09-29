@@ -1,3 +1,4 @@
+import { AccountMenu } from "../../auth/AuthProvider";
 import type { KeyboardEvent, ReactNode, RefObject } from "react";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -179,6 +180,7 @@ export function PlatformSidebar({
       <div className="np-sidebar-navigation-status" role="status" aria-live="polite" aria-atomic="true">
         {showPending && pendingTarget ? `正在切换到${pendingTarget.label}…` : ""}
       </div>
+      <AccountMenu />
     </div>
   );
 }

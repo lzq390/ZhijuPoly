@@ -1,34 +1,42 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchBatchJob } from "../services/polymerizationBatchApi";
+import { fetchBatchJob, fetchBatchJobs } from "../services/polymerizationBatchApi";
 import type { BatchJob } from "../types/polymerizationBatch";
 
 export const BATCH_HISTORY_KEY = "nexpoly:polymerization-batch:history";
 export const isBatchActive = (job: BatchJob) => ["queued", "running", "cancelling"].includes(job.status);
-function rememberJob(id: string): string[] {
-  const ids = [id, ...recentJobs().filter((item) => item !== id)].slice(0, 20);
-  try { localStorage.setItem(BATCH_HISTORY_KEY, JSON.stringify(ids)); } catch { /* History is optional. */ }
-  return ids;
-}
 function withFileExpiry(job: BatchJob): BatchJob {
   return job.status === "expired" || (!isBatchActive(job) && job.expires_at && Date.parse(job.expires_at) <= Date.now())
     ? { ...job, status: "expired", artifacts: {} }
     : job;
 }
-function recentJobs(): string[] {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(BATCH_HISTORY_KEY) ?? "[]");
-    return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && /^[0-9a-f]{32}$/.test(id)).slice(0, 20) : [];
-  } catch { return []; }
-}
 function currentJobId(): string | null {
   const id = new URLSearchParams(window.location.search).get("job_id");
-  return id && /^[0-9a-f]{32}$/.test(id) ? id : recentJobs()[0] ?? null;
+  return id && /^[0-9a-f]{32}$/.test(id) ? id : null;
 }
-export function usePolymerizationBatchJob() {
-  const [jobId, setJobId] = useState(currentJobId);
+export function usePolymerizationBatchJob(enabled = true) {
+  const [jobId, setJobId] = useState(() => enabled ? currentJobId() : null);
   const [job, setJob] = useState<BatchJob | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState(recentJobs);
+  const [historyJobs, setHistoryJobs] = useState<BatchJob[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyOffset, setHistoryOffset] = useState(0);
+  const [historyNext, setHistoryNext] = useState<number | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyRevision, setHistoryRevision] = useState(0);
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    setHistoryLoading(true); setHistoryError(null);
+    void fetchBatchJobs(historyOffset, controller.signal).then(page => {
+      if (controller.signal.aborted) return;
+      setHistoryJobs(page.items.map(withFileExpiry)); setHistoryTotal(page.total); setHistoryNext(page.next_offset);
+      if (!currentId.current && page.items[0]) changeJob(page.items[0].job_id);
+    }).catch(reason => {
+      if (!controller.signal.aborted) setHistoryError(reason instanceof Error ? reason.message : "无法读取我的任务。");
+    }).finally(() => { if (!controller.signal.aborted) setHistoryLoading(false); });
+    return () => controller.abort();
+  }, [enabled, historyOffset, historyRevision]);
   const [revision, setRevision] = useState(0);
   const [settledRevision, setSettledRevision] = useState(-1);
   const currentId = useRef(jobId);
@@ -45,7 +53,7 @@ export function usePolymerizationBatchJob() {
   const selectJob = useCallback((id: string) => {
     if (!/^[0-9a-f]{32}$/.test(id)) return;
     changeJob(id);
-    setHistory(rememberJob(id));
+    setHistoryRevision(value => value + 1);
     const url = new URL(window.location.href);
     // A submission may finish after the user has switched to the single tab.
     if (url.searchParams.get("mode") !== "single") url.searchParams.set("mode", "batch");
@@ -53,19 +61,19 @@ export function usePolymerizationBatchJob() {
     window.history.replaceState(window.history.state, "", url);
   }, [changeJob]);
   useEffect(() => {
+    if (!enabled) return;
     const changed = () => {
       const id = currentJobId();
       if (id !== currentId.current) changeJob(id);
     };
     window.addEventListener("popstate", changed);
     return () => window.removeEventListener("popstate", changed);
-  }, [changeJob]);
+  }, [changeJob, enabled]);
   useEffect(() => {
-    if (!jobId) return;
+    if (!enabled || !jobId) return;
     const controller = new AbortController();
     request.current = controller;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let remembered = false;
     const load = async () => {
       try {
         const next = await fetchBatchJob(jobId, controller.signal);
@@ -73,10 +81,6 @@ export function usePolymerizationBatchJob() {
         if (next.job_id !== jobId) throw new Error("返回的任务标识不一致，请重新刷新。");
         setJob(withFileExpiry(expiredJobs.current.has(jobId) ? { ...next, status: "expired" } : next));
         setError(null);
-        if (!remembered) {
-          setHistory(rememberJob(jobId));
-          remembered = true;
-        }
         if (isBatchActive(next)) timer = setTimeout(() => void load(), 2000);
       } catch (reason) {
         if (controller.signal.aborted || currentId.current !== jobId) return;
@@ -92,7 +96,7 @@ export function usePolymerizationBatchJob() {
       clearTimeout(timer);
       if (request.current === controller) request.current = null;
     };
-  }, [jobId, revision]);
+  }, [enabled, jobId, revision]);
   // Completed tasks stop polling, but their download deadline still applies.
   useEffect(() => {
     if (!job || job.job_id !== jobId || isBatchActive(job) || job.status === "expired" || !job.expires_at) return;
@@ -116,9 +120,10 @@ export function usePolymerizationBatchJob() {
   const refresh = useCallback(() => {
     request.current?.abort();
     setRevision((value) => value + 1);
+    setHistoryRevision(value => value + 1);
   }, []);
   return {
-    job: job?.job_id === jobId ? job : null, jobId, error, history, selectJob, isCurrentJob, markFilesExpired,
+    job: job?.job_id === jobId ? job : null, jobId, error, history: historyJobs.map(item => item.job_id), historyJobs, historyTotal, historyOffset, historyNext, historyLoading, historyError, setHistoryOffset, refreshHistory: () => setHistoryRevision(value => value + 1), selectJob, isCurrentJob, markFilesExpired,
     refreshing: Boolean(jobId) && revision !== settledRevision, refresh
   };
 }

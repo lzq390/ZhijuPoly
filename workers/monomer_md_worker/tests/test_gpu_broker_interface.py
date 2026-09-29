@@ -801,7 +801,7 @@ def test_formal_child_receives_leased_device_and_mps_cap(
     )
 
     result = asyncio.run(
-        ByteFF2FormalRunner(settings).run(
+        ByteFF2FormalRunner(settings, entrypoint=run_md).run(
             _formal_request(),
             tmp_path / "job",
             execution_lease=managed,  # type: ignore[arg-type]

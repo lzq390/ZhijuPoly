@@ -30,3 +30,5 @@ safetensors==0.8.0
 openpyxl==3.1.5
 
 defusedxml==0.7.1
+
+argon2-cffi==25.1.0

@@ -17,11 +17,18 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings, get_settings
+from app.auth.context import service_context
+from app.auth.middleware import AuthenticationMiddleware
+from app.auth.router import router as auth_router
+from app.auth.service import AuthService
+from app.auth.settings import AuthSettings
+from app.task_control import configure_task_control
 from app.deployment_drain_middleware import DeploymentDrainMiddleware
 from app.middleware import BrowserCrossSiteProtectionMiddleware
 from app.postgres_database import postgres_connection
 from app.postgres_preflight import (
     SCHEMA_TARGET_STARTUP,
+    SCHEMA_TARGET_ISOLATION,
     preflight_blockers,
     run_preflight,
 )
@@ -41,8 +48,10 @@ from app.routers.monomer_dft import (
     MonomerDftPublicError,
     monomer_dft_public_error_handler,
     router as monomer_dft_router,
+    internal_router as monomer_dft_internal_router,
 )
 from app.routers.monomer_md import router as monomer_md_router
+from app.routers.task_events import router as task_events_router
 from app.routers.monomer_polymerization import router as monomer_polymerization_router
 from app.routers.monomer_polymerization_batch import router as polymerization_batch_router, batch_error_handler, BatchUploadLimitMiddleware
 from app.services.polymerization_batch.models import BatchError, BatchSettings
@@ -128,8 +137,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         residency_lease: ManagedGpuLease | None = None
         try:
             required_startup = api_app.state.settings.gpu_preload_mode == "required"
-            _run_database_startup_preflight(api_app, required=required_startup)
-            _mark_expired_monomer_md_jobs_failed(api_app)
+            with service_context(api_app.state.auth.settings):
+                _run_database_startup_preflight(api_app, required=required_startup)
+                _mark_expired_monomer_md_jobs_failed(api_app)
+                _fail_interrupted_online_jobs(api_app)
             if api_app.state.settings.gpu_broker_enabled:
                 residency_lease = await run_in_threadpool(
                     _acquire_backend_gpu_residency,
@@ -141,7 +152,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     residency_lease,
                 )
             if required_startup:
-                api_app.state.gpu_runtime_registry.preload_enabled()
+                with service_context(api_app.state.auth.settings):
+                    api_app.state.gpu_runtime_registry.preload_enabled()
                 if residency_lease is not None:
                     # Warmup may take long enough for a Broker restart or
                     # fencing response to arrive.  Never advertise a fully
@@ -248,6 +260,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(BatchError, batch_error_handler)
     app.add_middleware(BatchUploadLimitMiddleware, max_bytes=batch_config.request_bytes)
     app.state.settings = app_settings
+    app.state.auth = AuthService(AuthSettings.from_settings(app_settings))
+    configure_task_control(app.state.auth.authorize_memory_start)
     app.state.browsing_recording = BrowsingRecordingStore(app_settings)
     app.state.dev_gpu_operator_client = None
     if app_settings.dev_gpu_operator_enabled:
@@ -394,6 +408,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ),
     )
 
+    app.add_middleware(BrowserCrossSiteProtectionMiddleware)
+    app.add_middleware(DeploymentDrainMiddleware)
+    # Last registered is outermost: reject before uploads and business parsing.
+    app.add_middleware(AuthenticationMiddleware, auth_service=app.state.auth)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=app_settings.allowed_origins_list,
@@ -402,10 +420,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
         expose_headers=["ETag", "Server-Timing"],
     )
-    app.add_middleware(BrowserCrossSiteProtectionMiddleware)
-    app.add_middleware(DeploymentDrainMiddleware)
 
     app.add_api_route("/health", health, methods=["GET"])
+    app.include_router(auth_router)
+    app.include_router(monomer_dft_internal_router)
     app.include_router(deployment_status_router)
     if app_settings.dev_gpu_operator_enabled:
         app.include_router(dev_gpu_session_router)
@@ -420,6 +438,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(lab_data_router)
     app.include_router(md_demo_router)
     app.include_router(monomer_md_router)
+    app.include_router(task_events_router)
     app.include_router(monomer_dft_router)
     app.include_router(monomer_polymerization_router)
     app.include_router(polymerization_batch_router)
@@ -634,9 +653,10 @@ def _run_database_startup_preflight(api_app: FastAPI, *, required: bool) -> None
             api_app.state.settings,
             mode="runtime",
             strict=True,
-            schema_target=SCHEMA_TARGET_STARTUP,
+            schema_target=SCHEMA_TARGET_ISOLATION,
         )
         errors = preflight_blockers(report)
+        api_app.state.auth.assert_application_ready()
     except Exception as exc:
         errors = [f"database preflight failed: {type(exc).__name__}"]
     api_app.state.database_preflight_errors = tuple(errors)
@@ -654,6 +674,15 @@ def _mark_expired_monomer_md_jobs_failed(api_app: FastAPI) -> None:
             mark_expired_unclaimed_monomer_md_jobs_failed_postgres(connection)
     except Exception as exc:  # pragma: no cover - runtime preflight reports database readiness.
         logger.warning("Failed to mark expired monomer MD jobs during startup: %s", exc)
+
+
+def _fail_interrupted_online_jobs(api_app: FastAPI) -> None:
+    from app.services.online_knowledge.postgres_history_repository import fail_interrupted_online_jobs_postgres
+    try:
+        with api_app.state.postgres_connection_factory(api_app.state.settings.app_postgres_dsn) as connection:
+            fail_interrupted_online_jobs_postgres(connection)
+    except Exception as exc:
+        logger.warning("Failed to reconcile interrupted online jobs: %s", type(exc).__name__)
 
 
 app = create_app()

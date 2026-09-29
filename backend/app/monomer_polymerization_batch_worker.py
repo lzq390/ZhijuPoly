@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 
 from app.config import Settings
@@ -13,7 +14,8 @@ def main():
     parser = argparse.ArgumentParser(description="Durable CPU-only SMiPoly batch worker")
     parser.add_argument("--healthcheck", action="store_true")
     arguments = parser.parse_args()
-    worker = BatchWorker(Settings().app_postgres_dsn, BatchSettings.from_env())
+    settings = Settings()
+    worker = BatchWorker(os.getenv("APP_SERVICE_POSTGRES_DSN") or settings.app_postgres_dsn, BatchSettings.from_env())
     if arguments.healthcheck:
         if not worker.config.enabled:
             raise SystemExit(0)

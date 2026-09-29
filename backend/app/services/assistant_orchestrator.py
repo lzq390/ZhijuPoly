@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.private_execution import bounded_stream
+
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +43,7 @@ class AssistantStreamEvent:
     payload: dict[str, Any]
 
 
+@bounded_stream("ai")
 def stream_assistant_events(
     *,
     messages: Sequence[AssistantChatMessage],

@@ -14,6 +14,7 @@ __pycache__/
 backend/.env
 /.env.dev
 /.env.dev.ai
+/.env.dev.auth
 /ops/config/postgres-media-credentials.json
 
 # Generated SQLite databases
@@ -80,6 +81,21 @@ nexpoly-release-*.tar.gz
 /scripts/prepare_pi_reverse_design_demo_data.py
 /scripts/prepare_pi_reverse_design_test_data.py
 /backend/tests/*
+!/backend/tests/test_multiuser_contract.py
+!/backend/tests/test_multiuser_support.py
+!/backend/tests/test_multiuser_restore.py
+!/backend/tests/test_authenticated_app_support.py
+!/backend/tests/test_auth_isolation.py
+!/backend/tests/test_auth_settings.py
+!/backend/tests/test_auth_stream_revocation.py
+!/backend/tests/test_task_events.py
+!/backend/tests/test_task_events_postgres.py
+!/backend/tests/test_monomer_private_support.py
+!/backend/tests/test_private_batch_support.py
+!/backend/tests/test_private_http_support.py
+!/backend/tests/test_private_asset_isolation.py
+!/backend/tests/test_private_assets_postgres.py
+!/backend/tests/test_monomer_user_isolation_postgres.py
 !/backend/tests/test_assistant.py
 !/backend/tests/test_browsing_recording.py
 !/backend/tests/test_tg_assistant.py

@@ -6,14 +6,18 @@ import io
 import os
 import shutil
 from pathlib import Path
+from functools import partial
 from uuid import uuid4
 
 import anyio
-from fastapi import APIRouter, Header, Query, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from app.auth.context import current_owner_id
+from app.task_control import admission, authorize_memory_start
+from fastapi import APIRouter, Header, Query, Request, HTTPException
+from fastapi.responses import JSONResponse, Response
+from app.services.private_execution import PrivateStreamingResponse
 from starlette.datastructures import UploadFile
 
-from app.services.polymerization_batch.models import BatchError, BatchJobCreate, BatchPreviewRequest, BatchJob, BatchResults, BatchImport, BatchImportPreview
+from app.services.polymerization_batch.models import BatchError, BatchJobCreate, BatchPreviewRequest, BatchJob, BatchResults, BatchImport, BatchImportPreview, BatchJobPage, BatchJobStatus
 from app.services.polymerization_batch.service import BatchService
 
 
@@ -48,12 +52,22 @@ def service(request: Request) -> BatchService:
 
 @router.post("/imports", status_code=201, response_model=BatchImport)
 async def create_import(request: Request):
+    current_owner_id()
+    with admission("preflight"):
+        if not await anyio.to_thread.run_sync(authorize_memory_start, current_owner_id()):
+            raise HTTPException(403, "Account disabled before execution")
+        return await _create_import(request)
+
+
+async def _create_import(request: Request):
     batch = service(request)
     batch.require_enabled()
+    await anyio.to_thread.run_sync(partial(batch.repository.check_import_quota, owner_user_id=current_owner_id()))
     import_id = uuid4().hex
     directory = batch.root / "imports" / import_id
     directory.mkdir(parents=True)
     files = {}
+    inserted = False
     try:
         async with request.form(max_files=2, max_fields=0) as form:
             if set(form.keys()) != {"file_a", "file_b"} or len(form.multi_items()) != 2:
@@ -77,17 +91,29 @@ async def create_import(request: Request):
                         await handle.write(data)
                 files[role] = {"filename": filename, "path": str(path.relative_to(batch.root)),
                                "size_bytes": size, "sha256": checksum.hexdigest(), "format": suffix[1:]}
-        await anyio.to_thread.run_sync(batch.repository.create_import, import_id, files)
+        await anyio.to_thread.run_sync(partial(batch.repository.create_import, import_id, files, owner_user_id=current_owner_id()))
+        inserted = True
         return await anyio.to_thread.run_sync(batch.inspect_import, import_id, limiter=request.app.state.polymerization_batch_validation_limiter)
     except BaseException:
-        # No job references this directory yet; failed multipart uploads leave no blobs.
-        shutil.rmtree(directory, ignore_errors=True)
+        try:
+            with anyio.CancelScope(shield=True):
+                if inserted:
+                    await anyio.to_thread.run_sync(partial(batch.repository.discard_failed_import, import_id, owner_user_id=current_owner_id()))
+        finally:
+            # Failed/cancelled uploads cannot retain unreferenced files.
+            shutil.rmtree(directory, ignore_errors=True)
         raise
 
 
 @router.post("/imports/{import_id}/preview", response_model=BatchImportPreview)
 async def preview_import(import_id: str, body: BatchPreviewRequest, request: Request):
-    return await anyio.to_thread.run_sync(service(request).preview, import_id, body, limiter=request.app.state.polymerization_batch_validation_limiter)
+    with admission("preflight"):
+        owner = current_owner_id()
+        def execute():
+            if not authorize_memory_start(owner):
+                raise HTTPException(403, "Account disabled before execution")
+            return service(request).preview(import_id, body)
+        return await anyio.to_thread.run_sync(execute, limiter=request.app.state.polymerization_batch_validation_limiter)
 
 
 @router.post("/jobs", status_code=202, response_model=BatchJob)
@@ -95,10 +121,21 @@ async def create_job(body: BatchJobCreate, request: Request, idempotency_key: st
     return await anyio.to_thread.run_sync(service(request).create_job, body, idempotency_key)
 
 
+@router.get("/jobs", response_model=BatchJobPage)
+async def list_jobs(request: Request, offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
+                    status: BatchJobStatus | None = None):
+    batch = service(request)
+    def load():
+        rows, total = batch.repository.list_jobs(offset=offset, limit=limit, status=status, owner_user_id=current_owner_id())
+        return {"items": [batch.public_job(row) for row in rows], "total": total,
+                "next_offset": offset + len(rows) if offset + len(rows) < total else None}
+    return await anyio.to_thread.run_sync(load)
+
+
 @router.get("/jobs/{job_id}", response_model=BatchJob)
 async def get_job(job_id: str, request: Request):
     batch = service(request)
-    job = await anyio.to_thread.run_sync(batch.repository.get_job, job_id)
+    job = await anyio.to_thread.run_sync(partial(batch.repository.get_job, job_id, owner_user_id=current_owner_id()))
     return batch.public_job(job)
 
 
@@ -110,7 +147,7 @@ async def get_results(job_id: str, request: Request, offset: int = Query(0, ge=0
 @router.post("/jobs/{job_id}/cancel", response_model=BatchJob)
 async def cancel_job(job_id: str, request: Request):
     batch = service(request)
-    job = await anyio.to_thread.run_sync(batch.repository.cancel, job_id)
+    job = await anyio.to_thread.run_sync(partial(batch.repository.cancel, job_id, owner_user_id=current_owner_id()))
     return batch.public_job(job)
 
 
@@ -119,13 +156,21 @@ async def download_artifact(job_id: str, name: str, request: Request):
     if name.startswith("preview"):
         raise BatchError("文件不存在。", "artifact_not_found", 404)
     handle, meta = await anyio.to_thread.run_sync(service(request).artifact, job_id, name)
-    def chunks():
-        try:
-            while chunk := handle.read(64 * 1024):
-                yield chunk
-        finally:
+    class FileChunks:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            chunk = handle.read(64 * 1024)
+            if not chunk:
+                self.close()
+                raise StopIteration
+            return chunk
+
+        def close(self):
             handle.close()
-    return StreamingResponse(chunks(), media_type=meta["media_type"], headers={
+
+    return PrivateStreamingResponse(FileChunks(), media_type=meta["media_type"], headers={
         "Content-Disposition": f'attachment; filename="{name}"', "Content-Length": str(meta["size_bytes"]),
         "ETag": f'"{meta["sha256"]}"', "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
 

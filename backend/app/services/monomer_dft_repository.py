@@ -11,6 +11,7 @@ from typing import Any, Callable, Iterable
 from uuid import uuid4
 
 from app.postgres_database import postgres_connection
+from app.auth.context import service_context
 
 from .monomer_dft_models import MAX_ARTIFACT_BYTES, validate_portable_artifact_filename
 from .monomer_dft_protocol import PreparedMonomerDftRequest
@@ -362,6 +363,11 @@ class MonomerDftRepository:
         self._dsn = dsn
         self._connection_factory = connection_factory
 
+    @contextmanager
+    def _service_connection(self):
+        with service_context(), self._connection_factory(self._dsn) as connection:
+            yield connection
+
     def schema_ready(self) -> bool:
         """Return true only for the exact governed DFT schema.
 
@@ -371,13 +377,22 @@ class MonomerDftRepository:
         deployment boundary.
         """
 
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
+            role = connection.execute("""
+                SELECT r.rolsuper, r.rolbypassrls,
+                  pg_has_role(current_user, 'nexpoly_service', 'member') AS service_member,
+                  n.nspowner = r.oid AS owns_schema
+                FROM pg_roles r LEFT JOIN pg_namespace n ON n.nspname = 'monomer_dft'
+                WHERE r.rolname = current_user
+            """).fetchone()
+            if role is None or role["rolsuper"] or role["rolbypassrls"] or role["owns_schema"] or not role["service_member"]:
+                return False
             return probe_monomer_dft_schema(connection).ready
 
     @contextmanager
     def reconciliation_leader(self):
         """Hold a PostgreSQL session advisory lock for one reconciliation cycle."""
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
             row = connection.execute(
                 "SELECT pg_try_advisory_lock(%s) AS acquired",
                 (RECONCILER_ADVISORY_LOCK_ID,),
@@ -395,7 +410,7 @@ class MonomerDftRepository:
     @contextmanager
     def retention_leader(self):
         """Hold the DFT retention session lock, isolated from reconciliation."""
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
             row = connection.execute(
                 "SELECT pg_try_advisory_lock(%s) AS acquired",
                 (RETENTION_ADVISORY_LOCK_ID,),
@@ -414,14 +429,18 @@ class MonomerDftRepository:
         self,
         prepared: PreparedMonomerDftRequest,
         *,
+        owner_user_id: str,
         idempotency_key: str,
         max_active_jobs: int,
     ) -> CreateJobResult:
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
+            account = connection.execute("SELECT status, is_system FROM auth.users WHERE user_id = %s::uuid FOR UPDATE", (owner_user_id,)).fetchone()
+            if account is None or (account["status"] != "active" and not account["is_system"]):
+                raise MonomerDftJobStateConflict("account disabled")
             connection.execute("SELECT pg_advisory_xact_lock(%s)", (CAPACITY_ADVISORY_LOCK_ID,))
             existing = connection.execute(
-                "SELECT job_id, request_sha256 FROM monomer_dft.jobs WHERE idempotency_key = %s FOR UPDATE",
-                (idempotency_key,),
+                "SELECT job_id, request_sha256 FROM monomer_dft.jobs WHERE idempotency_key = %s AND owner_user_id = %s::uuid FOR UPDATE",
+                (idempotency_key, owner_user_id),
             ).fetchone()
             if existing is not None:
                 if str(existing["request_sha256"]) != prepared.request_sha256:
@@ -432,6 +451,10 @@ class MonomerDftRepository:
                 if job is None:  # pragma: no cover - protected by the selected row
                     raise MonomerDftJobNotFound("DFT job not found")
                 return CreateJobResult(job=job, created=False)
+
+            own_count = connection.execute("SELECT count(*) AS count FROM monomer_dft.jobs WHERE owner_user_id = %s::uuid AND status = ANY(%s)", (owner_user_id, list(ACTIVE_STATUSES))).fetchone()
+            if own_count and own_count["count"]:
+                raise MonomerDftCapacityError("user DFT task capacity is full")
 
             count_row = connection.execute(
                 "SELECT count(*) AS count FROM monomer_dft.jobs WHERE status = ANY(%s)",
@@ -447,16 +470,17 @@ class MonomerDftRepository:
             connection.execute(
                 """
                 INSERT INTO monomer_dft.jobs (
-                  job_id, idempotency_key, request_sha256, request_json, request_warnings,
+                  job_id, owner_user_id, idempotency_key, request_sha256, request_json, request_warnings,
                   calculation_type, model_name, input_smiles, canonical_smiles,
                   effective_charge, multiplicity, status, current_attempt, attempt_token
                 ) VALUES (
-                  %s::uuid, %s, %s, %s::jsonb, %s::jsonb,
+                  %s::uuid, %s::uuid, %s, %s, %s::jsonb, %s::jsonb,
                   %s, %s, %s, %s, %s, %s, 'pending', 1, %s
                 )
                 """,
                 (
                     job_id,
+                    owner_user_id,
                     idempotency_key,
                     prepared.request_sha256,
                     _jsonb(request),
@@ -483,24 +507,77 @@ class MonomerDftRepository:
                 raise MonomerDftJobNotFound("DFT job not found")
             return CreateJobResult(job=job, created=True)
 
-    def count_active_jobs(self) -> int:
+    def authorize_start(self, *, job_id: str, attempt_token: str, request_sha256: str, enqueue_sequence: int) -> bool:
+        """Commit the disable/start ordering without holding a lock across Worker I/O."""
+        from app.task_observability import TaskExecutionContext, log_task_event
+        owner_id = None
+        attempt_id = None
+        reason = "task_or_attempt_invalid"
+
+        def decide(connection):
+            nonlocal owner_id, attempt_id, reason
+            owner = connection.execute("SELECT owner_user_id FROM monomer_dft.jobs WHERE job_id = %s::uuid", (job_id,)).fetchone()
+            if owner is None:
+                return False
+            owner_id = str(owner["owner_user_id"])
+            account = connection.execute("SELECT status, is_system FROM auth.users WHERE user_id = %s FOR UPDATE", (owner["owner_user_id"],)).fetchone()
+            job = connection.execute("SELECT status, current_attempt, attempt_token, request_sha256, enqueue_sequence FROM monomer_dft.jobs WHERE job_id = %s::uuid FOR UPDATE", (job_id,)).fetchone()
+            if job is None or job["status"] not in {"pending", "queued", "running"}:
+                return False
+            attempt_id = str(job["current_attempt"])
+            if (str(job["attempt_token"]) != attempt_token or str(job["request_sha256"]) != request_sha256 or int(job["enqueue_sequence"]) != enqueue_sequence):
+                return False
+            attempt = connection.execute("SELECT start_authorized_at FROM monomer_dft.job_attempts WHERE job_id = %s::uuid AND attempt = %s AND attempt_token = %s FOR UPDATE", (job_id, job["current_attempt"], attempt_token)).fetchone()
+            if attempt is None:
+                return False
+            if attempt["start_authorized_at"] is not None:
+                reason = "already_authorized"
+                return True
+            if account is None or (account["status"] != "active" and not account["is_system"]):
+                reason = "account_disabled"
+                # The Worker already owns its execution lease at this boundary.
+                # Cancellation intent occupies quota until its fenced journal
+                # confirms that the lease and executor have been cleaned up.
+                connection.execute("UPDATE monomer_dft.jobs SET status = 'cancel_requested', cancel_requested_at = COALESCE(cancel_requested_at, now()), error_code = 'account_disabled', error_message = 'Account disabled before execution', updated_at = now() WHERE job_id = %s::uuid", (job_id,))
+                connection.execute("UPDATE monomer_dft.job_attempts SET status = 'cancel_requested', error_code = 'account_disabled', error_message = 'Account disabled before execution' WHERE job_id = %s::uuid AND attempt = %s", (job_id, job["current_attempt"]))
+                return False
+            reason = "authorized"
+            connection.execute("UPDATE monomer_dft.job_attempts SET start_authorized_at = now() WHERE job_id = %s::uuid AND attempt = %s AND attempt_token = %s", (job_id, job["current_attempt"], attempt_token))
+            return True
+
+        with self._service_connection() as connection:
+            authorized = decide(connection)
+        if owner_id is not None:
+            log_task_event(TaskExecutionContext(owner_id, None, "monomer_dft", "dft", job_id, attempt_id),
+                           "start_authorized" if authorized else "start_rejected", reason=reason)
+        return authorized
+
+    def request_artifact_deletion_for_service(self, job_id: str) -> dict[str, Any]:
+        with service_context():
+            job = self.get_job_for_service(job_id)
+            if job is None:
+                raise MonomerDftJobNotFound("DFT job not found")
+            return self.request_artifact_deletion(job_id, owner_user_id=job["_owner_user_id"])
+
+    def count_active_jobs(self, *, owner_user_id: str) -> int:
         with self._connection_factory(self._dsn) as connection:
             row = connection.execute(
-                "SELECT count(*) AS count FROM monomer_dft.jobs WHERE status = ANY(%s)",
-                (list(ACTIVE_STATUSES),),
+                "SELECT count(*) AS count FROM monomer_dft.jobs WHERE status = ANY(%s) AND owner_user_id = %s::uuid",
+                (list(ACTIVE_STATUSES), owner_user_id),
             ).fetchone()
             return int(row["count"] if row is not None else 0)
 
     def find_idempotent_job(
         self,
         *,
+        owner_user_id: str,
         idempotency_key: str,
         request_sha256: str,
     ) -> dict[str, Any] | None:
         with self._connection_factory(self._dsn) as connection:
             row = connection.execute(
-                "SELECT job_id, request_sha256 FROM monomer_dft.jobs WHERE idempotency_key = %s",
-                (idempotency_key,),
+                "SELECT job_id, request_sha256 FROM monomer_dft.jobs WHERE idempotency_key = %s AND owner_user_id = %s::uuid",
+                (idempotency_key, owner_user_id),
             ).fetchone()
             if row is None:
                 return None
@@ -510,8 +587,13 @@ class MonomerDftRepository:
                 )
             return self._get_job(connection, str(row["job_id"]))
 
-    def get_job(self, job_id: str) -> dict[str, Any] | None:
+    def get_job(self, job_id: str, *, owner_user_id: str) -> dict[str, Any] | None:
         with self._connection_factory(self._dsn) as connection:
+            row = connection.execute("SELECT job_id FROM monomer_dft.jobs WHERE job_id = %s::uuid AND owner_user_id = %s::uuid", (job_id, owner_user_id)).fetchone()
+            return self._get_job(connection, job_id) if row else None
+
+    def get_job_for_service(self, job_id: str) -> dict[str, Any] | None:
+        with self._service_connection() as connection:
             return self._get_job(connection, job_id)
 
     def list_expired_jobs(
@@ -535,7 +617,7 @@ class MonomerDftRepository:
             """
             params.extend((after_terminal_at, after_job_id))
         params.append(limit)
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
             rows = connection.execute(
                 f"""
                 {self._job_select_sql()}
@@ -552,7 +634,7 @@ class MonomerDftRepository:
             return [self._row_to_job(row, []) for row in rows]
 
     def delete_job_cas(self, expected: dict[str, Any]) -> bool:
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
             row = connection.execute(
                 """
                 DELETE FROM monomer_dft.jobs
@@ -582,6 +664,7 @@ class MonomerDftRepository:
     def list_jobs(
         self,
         *,
+        owner_user_id: str,
         page: int,
         page_size: int,
         status: str | None = None,
@@ -591,8 +674,8 @@ class MonomerDftRepository:
             raise ValueError(f"page must be between 1 and {MAX_PAGE}")
         if not 1 <= page_size <= 100:
             raise ValueError("page_size must be between 1 and 100")
-        clauses: list[str] = []
-        params: list[Any] = []
+        clauses: list[str] = ["owner_user_id = %s::uuid"]
+        params: list[Any] = [owner_user_id]
         if status is not None:
             clauses.append("status = %s")
             params.append(status)
@@ -630,7 +713,7 @@ class MonomerDftRepository:
         )
 
     def list_reconcilable_jobs(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
             rows = connection.execute(
                 f"""
                 {self._job_select_sql()}
@@ -653,10 +736,14 @@ class MonomerDftRepository:
         Worker submit protocol is independently idempotent.
         """
 
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
+            owner = connection.execute("SELECT owner_user_id FROM monomer_dft.jobs WHERE job_id = %s::uuid", (job_id,)).fetchone()
+            if owner is None:
+                raise MonomerDftJobNotFound("DFT job not found")
+            account = connection.execute("SELECT status,is_system FROM auth.users WHERE user_id = %s FOR UPDATE", (owner["owner_user_id"],)).fetchone()
             row = connection.execute(
                 """
-                SELECT status, attempt_token
+                SELECT status, attempt_token, submitted_at
                 FROM monomer_dft.jobs
                 WHERE job_id = %s::uuid
                 FOR UPDATE
@@ -669,6 +756,18 @@ class MonomerDftRepository:
                 raise MonomerDftStaleAttempt("DFT attempt token is stale")
             if str(row["status"]) != "pending":
                 return False
+            if account is None or (account["status"] != "active" and not account["is_system"]):
+                authorized = connection.execute("SELECT start_authorized_at FROM monomer_dft.job_attempts WHERE job_id=%s::uuid AND attempt_token=%s", (job_id, attempt_token)).fetchone()
+                if authorized is None or authorized["start_authorized_at"] is None:
+                    # A prior dispatch with a lost response may already hold
+                    # a Worker lease; only a never-dispatched task is final here.
+                    if row["submitted_at"] is None:
+                        connection.execute("UPDATE monomer_dft.jobs SET status='cancelled',error_code='account_disabled',error_message='Account disabled before dispatch',finished_at=now(),updated_at=now() WHERE job_id=%s::uuid", (job_id,))
+                        connection.execute("UPDATE monomer_dft.job_attempts SET status='cancelled',finished_at=now() WHERE job_id=%s::uuid AND attempt_token=%s", (job_id,attempt_token))
+                    else:
+                        connection.execute("UPDATE monomer_dft.jobs SET status='cancel_requested',cancel_requested_at=COALESCE(cancel_requested_at,now()),error_code='account_disabled',error_message='Account disabled while dispatch outcome was unconfirmed',updated_at=now() WHERE job_id=%s::uuid", (job_id,))
+                        connection.execute("UPDATE monomer_dft.job_attempts SET status='cancel_requested' WHERE job_id=%s::uuid AND attempt_token=%s", (job_id,attempt_token))
+                    return False
             connection.execute(
                 """
                 UPDATE monomer_dft.jobs
@@ -700,7 +799,7 @@ class MonomerDftRepository:
         safe_code = code if _SAFE_ERROR_CODE.fullmatch(code) else "worker_unavailable"
         safe_message = sanitize_public_text(message, fallback="DFT worker is unavailable")
         safe_details = sanitize_public_json(details)
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
             connection.execute(
                 """
                 UPDATE monomer_dft.jobs
@@ -778,7 +877,7 @@ class MonomerDftRepository:
         provenance = _safe_json(result.get("provenance", {}) if result else {})
         artifacts = normalize_artifacts(snapshot.get("artifacts"))
 
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
             current = connection.execute(
                 """
                 SELECT status, current_attempt, attempt_token, request_sha256,
@@ -931,16 +1030,16 @@ class MonomerDftRepository:
                 raise MonomerDftJobNotFound("DFT job not found")
             return job
 
-    def request_cancel(self, job_id: str) -> dict[str, Any]:
+    def request_cancel(self, job_id: str, *, owner_user_id: str) -> dict[str, Any]:
         with self._connection_factory(self._dsn) as connection:
             row = connection.execute(
                 """
                 SELECT status, submitted_at
                 FROM monomer_dft.jobs
-                WHERE job_id = %s::uuid
+                WHERE job_id = %s::uuid AND owner_user_id = %s::uuid
                 FOR UPDATE
                 """,
-                (job_id,),
+                (job_id, owner_user_id),
             ).fetchone()
             if row is None:
                 raise MonomerDftJobNotFound("DFT job not found")
@@ -994,7 +1093,7 @@ class MonomerDftRepository:
                 raise MonomerDftJobNotFound("DFT job not found")
             return job
 
-    def get_artifact(self, *, job_id: str, artifact_id: str) -> dict[str, Any]:
+    def get_artifact(self, *, owner_user_id: str, job_id: str, artifact_id: str) -> dict[str, Any]:
         with self._connection_factory(self._dsn) as connection:
             row = connection.execute(
                 """
@@ -1002,19 +1101,19 @@ class MonomerDftRepository:
                        a.sha256, a.metadata, a.available
                 FROM monomer_dft.artifacts a
                 JOIN monomer_dft.jobs j ON j.job_id = a.job_id
-                WHERE a.job_id = %s::uuid AND a.artifact_id = %s
+                WHERE a.job_id = %s::uuid AND a.artifact_id = %s AND j.owner_user_id = %s::uuid
                   AND a.available = true
                   AND j.artifacts_delete_requested_at IS NULL
                   AND j.artifacts_deleted_at IS NULL
                 """,
-                (job_id, artifact_id),
+                (job_id, artifact_id, owner_user_id),
             ).fetchone()
             if row is None:
                 raise MonomerDftArtifactNotFound("DFT artifact not found")
             return self._artifact_row(row)
 
     def mark_artifacts_deleted(self, job_id: str) -> dict[str, Any]:
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
             row = connection.execute(
                 """
                 SELECT status, artifacts_delete_requested_at, artifacts_deleted_at
@@ -1048,16 +1147,16 @@ class MonomerDftRepository:
                 raise MonomerDftJobNotFound("DFT job not found")
             return job
 
-    def request_artifact_deletion(self, job_id: str) -> dict[str, Any]:
+    def request_artifact_deletion(self, job_id: str, *, owner_user_id: str) -> dict[str, Any]:
         with self._connection_factory(self._dsn) as connection:
             row = connection.execute(
                 """
                 SELECT status, artifacts_delete_requested_at, artifacts_deleted_at
                 FROM monomer_dft.jobs
-                WHERE job_id = %s::uuid
+                WHERE job_id = %s::uuid AND owner_user_id = %s::uuid
                 FOR UPDATE
                 """,
-                (job_id,),
+                (job_id, owner_user_id),
             ).fetchone()
             if row is None:
                 raise MonomerDftJobNotFound("DFT job not found")
@@ -1102,7 +1201,7 @@ class MonomerDftRepository:
             return job
 
     def list_pending_artifact_deletions(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
             rows = connection.execute(
                 f"""
                 {self._job_select_sql()}
@@ -1117,7 +1216,7 @@ class MonomerDftRepository:
             return [self._row_to_job(row, []) for row in rows]
 
     def list_expired_artifact_jobs(self, *, retention_days: int = 30, limit: int = 100) -> list[dict[str, Any]]:
-        with self._connection_factory(self._dsn) as connection:
+        with self._service_connection() as connection:
             rows = connection.execute(
                 f"""
                 {self._job_select_sql()}
@@ -1185,7 +1284,7 @@ class MonomerDftRepository:
     @staticmethod
     def _job_select_sql() -> str:
         return """
-            SELECT job_id, idempotency_key, request_sha256, request_json, request_warnings,
+            SELECT job_id, owner_user_id, idempotency_key, request_sha256, request_json, request_warnings,
                    enqueue_sequence,
                    calculation_type, model_name, input_smiles, canonical_smiles, effective_charge,
                    multiplicity, status, current_attempt, attempt_token, worker_job_id,
@@ -1286,6 +1385,7 @@ class MonomerDftRepository:
             "updated_at": row["updated_at"],
             "started_at": row["started_at"],
             "finished_at": row["finished_at"],
+            "_owner_user_id": str(row["owner_user_id"]),
             "_idempotency_key": str(row["idempotency_key"]),
             "_attempt_token": str(row["attempt_token"]),
             "_enqueue_sequence": int(row["enqueue_sequence"]),

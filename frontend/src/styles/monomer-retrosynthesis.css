@@ -1,0 +1,533 @@
+/* Follow the generation, polymerization and MD form surfaces. Header and drawer
+   geometry remain owned by the shared workbench shell. */
+.np-structure-workbench.np-monomer-retrosynthesis {
+  --np-sw-layout-max-width: 1040px;
+  --np-mr-control-height: 38px;
+  --np-mr-target-height: 252px;
+  --np-mr-label-size: 12px;
+  --np-mr-hint-size: 11px;
+  --np-mr-text-size: 13px;
+  --np-mr-field-gap: 6px;
+  overflow: hidden;
+}
+.np-monomer-retrosynthesis .np-sw-page { height: 100%; overflow: hidden; padding: 0 24px 24px; }
+.np-monomer-retrosynthesis .np-sw-layout,
+.np-monomer-retrosynthesis .np-sw-workspace { height: 100%; min-height: 0; }
+.np-monomer-retrosynthesis .np-mr-content {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: 2px 3px 64px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--np-theme-input-border) transparent;
+}
+.np-monomer-retrosynthesis .np-mr-form { container: np-mr-form / inline-size; }
+.np-monomer-retrosynthesis .np-mr-module-toolbar {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.np-monomer-retrosynthesis .np-mr-module-toolbar::before {
+  width: min(180px, 22vw);
+  height: 1px;
+  margin-right: auto;
+  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.32), rgba(34, 211, 238, 0.5));
+  content: "";
+}
+.np-monomer-retrosynthesis .np-mr-scope,
+.np-monomer-retrosynthesis .np-mr-module-toolbar .np-sw-secondary-button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid var(--np-theme-border);
+  border-radius: 6px;
+  color: var(--np-theme-muted);
+  background: var(--np-theme-surface);
+  box-shadow: 0 5px 15px rgba(30, 64, 175, 0.055);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.np-monomer-retrosynthesis .np-mr-scope svg,
+.np-monomer-retrosynthesis .np-mr-module-toolbar svg { width: 14px; height: 14px; }
+.np-monomer-retrosynthesis .np-mr-scope svg { color: var(--np-theme-cyan); }
+.np-monomer-retrosynthesis .np-mr-module-toolbar .np-sw-secondary-button:hover:not(:disabled) {
+  border-color: var(--np-theme-focus);
+  color: var(--np-theme-blue-strong);
+  background: var(--np-theme-info-soft);
+}
+.np-monomer-retrosynthesis .np-mr-surface {
+  position: relative;
+  border: 1px solid var(--np-theme-surface-border);
+  border-radius: var(--np-theme-surface-radius);
+  background: var(--np-theme-surface);
+  box-shadow: var(--np-theme-surface-shadow);
+}
+.np-monomer-retrosynthesis .np-mr-surface-header {
+  display: flex;
+  min-height: 82px;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--np-theme-border-soft);
+  border-radius: var(--np-theme-surface-radius) var(--np-theme-surface-radius) 0 0;
+  background: linear-gradient(110deg, rgba(255, 255, 255, 0.99) 10%, rgba(239, 246, 255, 0.75) 72%, rgba(236, 254, 255, 0.54) 118%);
+}
+.np-monomer-retrosynthesis .np-mr-surface-header > div { min-width: 0; }
+.np-monomer-retrosynthesis .np-mr-surface-header h2 {
+  margin: 0;
+  color: var(--np-theme-ink);
+  font-family: var(--font-heading);
+  font-size: 18px;
+  font-weight: 750;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+.np-monomer-retrosynthesis .np-mr-surface-header p { margin: 4px 0 0; color: var(--np-theme-muted); font-size: 13px; line-height: 1.55; }
+.np-monomer-retrosynthesis .np-mr-mark {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: var(--np-theme-surface);
+  background: linear-gradient(145deg, var(--np-theme-blue-strong) 0%, #3b82f6 58%, #06b6d4 135%);
+  box-shadow: 0 9px 20px rgba(37, 99, 235, 0.21), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+.np-monomer-retrosynthesis .np-mr-mark svg { width: 19px; height: 19px; }
+.np-monomer-retrosynthesis .np-mr-section { padding: 20px 24px 22px; }
+.np-monomer-retrosynthesis .np-mr-section + .np-mr-section { border-top: 1px solid var(--np-theme-border-soft); }
+.np-monomer-retrosynthesis .np-mr-section-header { display: flex; align-items: center; gap: 11px; margin-bottom: 15px; }
+.np-monomer-retrosynthesis .np-mr-section-header > span {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--np-theme-info-border);
+  border-radius: 8px;
+  color: var(--np-theme-blue-strong);
+  background: linear-gradient(145deg, #f8fbff, #eef8ff);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+.np-monomer-retrosynthesis .np-mr-section-header h3 { margin: 0; color: var(--np-theme-ink); font-family: var(--font-heading); font-size: 15px; font-weight: 720; line-height: 1.35; }
+.np-monomer-retrosynthesis .np-mr-target-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.95fr); gap: 14px; align-items: start; }
+.np-monomer-retrosynthesis .np-mr-input { min-width: 0; min-height: var(--np-mr-target-height); padding: 12px; border: 1px solid var(--np-theme-border); border-radius: 10px; background: #fbfdff; }
+.np-monomer-retrosynthesis .np-mr-form .np-sw-field { min-width: 0; gap: var(--np-mr-field-gap); color: var(--np-theme-muted); font-size: var(--np-mr-label-size); font-weight: 500; line-height: 1.5; }
+.np-monomer-retrosynthesis .np-mr-form .np-sw-field input,
+.np-monomer-retrosynthesis .np-mr-form .np-sw-field textarea { border-radius: 8px; background: var(--np-theme-surface); }
+.np-monomer-retrosynthesis .np-mr-input textarea { min-height: 116px; padding: 10px 11px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; resize: vertical; }
+.np-monomer-retrosynthesis .np-mr-input.has-error,
+.np-monomer-retrosynthesis .np-mr-form [aria-invalid="true"] { border-color: var(--np-theme-danger-border); }
+.np-monomer-retrosynthesis .np-mr-input-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.np-monomer-retrosynthesis .np-mr-input-actions .np-sw-secondary-button,
+.np-monomer-retrosynthesis .np-mr-input-actions .np-sw-icon-button { min-height: 30px; height: 30px; gap: 6px; padding: 0 9px; border-radius: 6px; font-size: 11px; }
+.np-monomer-retrosynthesis .np-mr-input-actions .np-sw-icon-button { width: 30px; min-width: 30px; padding: 0; }
+.np-monomer-retrosynthesis .np-mr-input-actions svg { width: 13px; height: 13px; }
+.np-monomer-retrosynthesis .np-mr-edit { margin-left: auto; }
+.np-monomer-retrosynthesis .np-mr-notice { min-height: 18px; margin: 6px 0 0; color: var(--np-theme-muted); font-size: var(--np-mr-hint-size); line-height: 1.5; }
+.np-monomer-retrosynthesis .np-mr-error { display: block; min-height: 18px; color: var(--np-theme-danger-text); font-size: var(--np-mr-hint-size); font-weight: 400; line-height: 1.5; }
+.np-monomer-retrosynthesis .np-mr-preview { display: flex; height: var(--np-mr-target-height); min-width: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--np-theme-border); border-radius: 10px; background: #f8fbff; }
+.np-monomer-retrosynthesis .np-mr-preview-label {
+  display: flex;
+  min-height: 30px;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--np-theme-border-soft);
+  color: var(--np-theme-muted);
+  background: var(--np-theme-surface);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 650;
+}
+.np-monomer-retrosynthesis .np-mr-preview-label small { font: inherit; font-family: var(--font-body); font-weight: 400; }
+.np-monomer-retrosynthesis .np-mr-preview-canvas {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background-image: linear-gradient(var(--np-sw-grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--np-sw-grid-line) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.np-monomer-retrosynthesis .np-mr-preview-state { display: flex; max-width: 100%; max-height: 100%; flex-direction: column; align-items: center; gap: 8px; overflow-y: auto; padding: 12px; color: var(--np-theme-muted); font-size: 12px; line-height: 1.5; text-align: center; overflow-wrap: anywhere; }
+.np-monomer-retrosynthesis .np-mr-preview-state > svg { width: 22px; height: 22px; flex: none; color: var(--np-theme-faint); }
+.np-monomer-retrosynthesis .np-mr-preview-state p { margin: 0; }
+.np-monomer-retrosynthesis .np-mr-preview-state.is-error,
+.np-monomer-retrosynthesis .np-mr-preview-state.is-error > svg { color: var(--np-theme-danger-text); }
+.np-monomer-retrosynthesis .np-mr-preview-media { width: 100%; height: 100%; min-width: 0; }
+.np-monomer-retrosynthesis .np-mr-parameters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.65fr) auto; align-items: start; gap: 14px; }
+.np-monomer-retrosynthesis .np-mr-parameters .np-sw-field > small:not(.np-mr-error) { color: var(--np-theme-muted); font-size: var(--np-mr-hint-size); font-weight: 400; }
+.np-monomer-retrosynthesis .np-mr-parameters .np-sw-select__trigger,
+.np-monomer-retrosynthesis .np-mr-parameters input { height: var(--np-mr-control-height); border-radius: 8px; font-size: var(--np-mr-text-size); }
+.np-monomer-retrosynthesis .np-mr-parameters input { font-family: var(--font-mono); }
+.np-monomer-retrosynthesis .np-mr-run { min-height: var(--np-mr-control-height); margin-top: calc(var(--np-mr-label-size) * 1.5 + var(--np-mr-field-gap)); padding: 0 20px; }
+.np-monomer-retrosynthesis .np-mr-stale { margin: 0 0 12px; padding: 10px; border: 1px solid var(--np-theme-warning-border); border-radius: 8px; color: var(--np-theme-warning-text); background: var(--np-theme-warning-soft); font-size: var(--np-mr-label-size); }
+.np-monomer-retrosynthesis .np-mr-results { display: grid; gap: 12px; }
+
+@container np-mr-form (max-width: 760px) {
+  .np-monomer-retrosynthesis .np-mr-target-grid { grid-template-columns: minmax(0, 1fr); }
+  .np-monomer-retrosynthesis .np-mr-parameters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .np-monomer-retrosynthesis .np-mr-run { grid-column: 1 / -1; margin-top: 0; }
+}
+@container np-mr-form (max-width: 480px) {
+  .np-monomer-retrosynthesis .np-mr-module-toolbar::before { display: none; }
+  .np-monomer-retrosynthesis .np-mr-module-toolbar { justify-content: space-between; }
+  .np-monomer-retrosynthesis .np-mr-surface-header { padding: 15px 14px; }
+  .np-monomer-retrosynthesis .np-mr-section { padding: 17px 14px 18px; }
+  .np-monomer-retrosynthesis .np-mr-parameters { grid-template-columns: minmax(0, 1fr); }
+  .np-monomer-retrosynthesis .np-mr-edit { margin-left: 0; }
+}
+@container np-sw-workbench (max-width: 899px) {
+  .np-monomer-retrosynthesis .np-sw-page { padding: 0 14px 14px; }
+  .np-monomer-retrosynthesis .np-sw-layout { width: 100%; margin: 0; }
+}
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-structure-workbench.np-monomer-retrosynthesis { --np-sw-layout-max-width: 1560px; --np-mr-control-height: 57px; --np-mr-target-height: 378px; --np-mr-label-size: 16px; --np-mr-hint-size: 16px; --np-mr-text-size: 18px; --np-mr-field-gap: 8px; }
+  .np-monomer-retrosynthesis .np-mr-content { padding-bottom: 88px; }
+  .np-monomer-retrosynthesis .np-mr-module-toolbar { min-height: 54px; gap: 12px; margin-bottom: 18px; }
+  .np-monomer-retrosynthesis .np-mr-module-toolbar::before { width: min(270px, 22vw); }
+  .np-monomer-retrosynthesis .np-mr-scope,
+  .np-monomer-retrosynthesis .np-mr-module-toolbar .np-sw-secondary-button { min-height: 54px; gap: 10px; padding: 0 16px; border-radius: 9px; font-size: 18px; }
+  .np-monomer-retrosynthesis .np-mr-scope svg,
+  .np-monomer-retrosynthesis .np-mr-module-toolbar svg { width: 19px; height: 19px; }
+  .np-monomer-retrosynthesis .np-mr-surface-header { min-height: 123px; padding: 22px 27px; gap: 18px; }
+  .np-monomer-retrosynthesis .np-mr-surface-header h2 { font-size: 24px; }
+  .np-monomer-retrosynthesis .np-mr-surface-header p { margin-top: 6px; font-size: 17px; }
+  .np-monomer-retrosynthesis .np-mr-mark { width: 60px; height: 60px; border-radius: 14px; }
+  .np-monomer-retrosynthesis .np-mr-mark svg { width: 28px; height: 28px; }
+  .np-monomer-retrosynthesis .np-mr-section { padding: 28px 34px 31px; }
+  .np-monomer-retrosynthesis .np-mr-section-header { gap: 16px; margin-bottom: 22px; }
+  .np-monomer-retrosynthesis .np-mr-section-header > span { width: 44px; height: 44px; border-radius: 11px; font-size: 14px; }
+  .np-monomer-retrosynthesis .np-mr-section-header h3 { font-size: 22px; }
+  .np-monomer-retrosynthesis .np-mr-target-grid,
+  .np-monomer-retrosynthesis .np-mr-parameters { gap: 21px; }
+  .np-monomer-retrosynthesis .np-mr-input { padding: 18px; border-radius: 14px; }
+  .np-monomer-retrosynthesis .np-mr-input textarea { min-height: 174px; padding: 15px 16px; font-size: 18px; }
+  .np-monomer-retrosynthesis .np-mr-form .np-sw-field textarea,
+  .np-monomer-retrosynthesis .np-mr-parameters .np-sw-select__trigger,
+  .np-monomer-retrosynthesis .np-mr-parameters input { border-radius: 11px; }
+  .np-monomer-retrosynthesis .np-mr-input-actions { gap: 9px; margin-top: 12px; }
+  .np-monomer-retrosynthesis .np-mr-input-actions .np-sw-secondary-button,
+  .np-monomer-retrosynthesis .np-mr-input-actions .np-sw-icon-button { min-height: 45px; height: 45px; gap: 8px; padding: 0 13px; border-radius: 9px; font-size: 16px; }
+  .np-monomer-retrosynthesis .np-mr-input-actions .np-sw-icon-button { width: 45px; min-width: 45px; padding: 0; }
+  .np-monomer-retrosynthesis .np-mr-input-actions svg { width: 19px; height: 19px; }
+  .np-monomer-retrosynthesis .np-mr-notice { min-height: 27px; margin-top: 9px; }
+  .np-monomer-retrosynthesis .np-mr-error { min-height: 27px; }
+  .np-monomer-retrosynthesis .np-mr-preview { border-radius: 14px; }
+  .np-monomer-retrosynthesis .np-mr-preview-label { min-height: 45px; padding: 0 15px; font-size: 14px; }
+  .np-monomer-retrosynthesis .np-mr-preview-canvas { padding: 12px; background-size: 36px 36px; }
+  .np-monomer-retrosynthesis .np-mr-preview-state { gap: 12px; padding: 18px; font-size: 17px; }
+  .np-monomer-retrosynthesis .np-mr-preview-state > svg { width: 30px; height: 30px; }
+  .np-monomer-retrosynthesis .np-mr-run { padding: 0 30px; }
+  .np-monomer-retrosynthesis .np-mr-results { gap: 18px; }
+}
+
+/* Candidate presentation migrated from the workbench. */
+
+
+.np-monomer-retrosynthesis .np-mr-result-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--np-sw-muted);
+  background: var(--np-theme-neutral-soft);
+  font-size: 9.5px;
+  font-weight: 650;
+}
+
+.np-monomer-retrosynthesis .np-mr-result-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.np-monomer-retrosynthesis .np-mr-result-summary > div,
+.np-monomer-retrosynthesis .np-mr-target-card,
+.np-monomer-retrosynthesis .np-mr-candidate-card {
+  border: 1px solid rgba(51, 83, 126, 0.15);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.np-monomer-retrosynthesis .np-mr-result-summary > div {
+  padding: 10px;
+  background: #f7faff;
+}
+
+.np-monomer-retrosynthesis .np-mr-result-summary span,
+.np-monomer-retrosynthesis .np-mr-target-card span,
+.np-monomer-retrosynthesis .np-mr-reactant span {
+  display: block;
+  color: var(--np-sw-faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.np-monomer-retrosynthesis .np-mr-result-summary strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--np-sw-ink);
+  font-size: 13px;
+}
+
+.np-monomer-retrosynthesis .np-mr-target-card,
+.np-monomer-retrosynthesis .np-mr-reactant {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px;
+}
+
+.np-monomer-retrosynthesis .np-mr-target-card > div,
+.np-monomer-retrosynthesis .np-mr-reactant > div {
+  min-width: 0;
+}
+
+.np-monomer-retrosynthesis .np-mr-target-card code,
+.np-monomer-retrosynthesis .np-mr-reactant code {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-top: 4px;
+  color: var(--np-sw-ink);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.np-monomer-retrosynthesis .np-mr-candidate-card {
+  overflow: hidden;
+}
+
+.np-monomer-retrosynthesis .np-mr-candidate-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px;
+  border-bottom: 1px solid rgba(51, 83, 126, 0.12);
+  background: #fbfdff;
+}
+
+.np-monomer-retrosynthesis .np-mr-result-badge.is-valid {
+  color: var(--np-theme-success-text);
+  background: var(--np-theme-success-soft);
+}
+
+.np-monomer-retrosynthesis .np-mr-result-badge.is-warning {
+  color: var(--np-theme-warning-text);
+  background: var(--np-theme-warning-soft);
+}
+
+.np-monomer-retrosynthesis .np-mr-candidate-card h3 {
+  margin: 7px 0 0;
+  color: var(--np-sw-ink);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.np-monomer-retrosynthesis .np-mr-candidate-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.np-monomer-retrosynthesis .np-mr-candidate-pager button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--np-sw-border);
+  border-radius: 6px;
+  color: var(--np-sw-muted);
+  background: #fff;
+  cursor: pointer;
+}
+
+.np-monomer-retrosynthesis .np-mr-candidate-pager button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.np-monomer-retrosynthesis .np-mr-candidate-pager svg {
+  width: 13px;
+  height: 13px;
+}
+
+.np-monomer-retrosynthesis .np-mr-candidate-pager span {
+  min-width: 28px;
+  color: var(--np-sw-muted);
+  font-size: 9.5px;
+  text-align: center;
+}
+
+.np-monomer-retrosynthesis .np-mr-reactant-list {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+}
+
+.np-monomer-retrosynthesis .np-mr-reactant {
+  border: 1px solid rgba(51, 83, 126, 0.12);
+  border-radius: 7px;
+  background: #fff;
+}
+
+@container np-sw-workbench (max-width: 767px) {
+
+  .np-monomer-retrosynthesis .np-mr-result-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-result-badge {
+    min-height: 36px;
+    padding: 5px 12px;
+    font-size: 14px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-result-summary {
+    gap: 12px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-result-summary > div,
+.np-monomer-retrosynthesis .np-mr-target-card,
+.np-monomer-retrosynthesis .np-mr-candidate-card {
+    border-radius: 14px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-result-summary > div,
+.np-monomer-retrosynthesis .np-mr-target-card,
+.np-monomer-retrosynthesis .np-mr-reactant {
+    padding: 15px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-result-summary span,
+.np-monomer-retrosynthesis .np-mr-target-card span,
+.np-monomer-retrosynthesis .np-mr-reactant span {
+    font-size: 13.5px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-result-summary strong {
+    margin-top: 5px;
+    font-size: 19px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-target-card code,
+.np-monomer-retrosynthesis .np-mr-reactant code {
+    margin-top: 6px;
+    font-size: 15px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-target-card,
+.np-monomer-retrosynthesis .np-mr-reactant {
+    gap: 12px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-candidate-card > header {
+    gap: 12px;
+    padding: 17px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-candidate-card h3 {
+    margin-top: 10px;
+    font-size: 18px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-candidate-pager {
+    gap: 6px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-candidate-pager button {
+    width: 39px;
+    height: 39px;
+    border-radius: 9px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-candidate-pager svg {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-candidate-pager span {
+    min-width: 42px;
+    font-size: 14px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-reactant-list {
+    gap: 11px;
+    padding: 15px;
+  }
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+
+  .np-monomer-retrosynthesis .np-mr-reactant {
+    border-radius: 11px;
+  }
+}

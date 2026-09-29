@@ -5,7 +5,6 @@ from time import sleep
 
 import pytest
 from fastapi import FastAPI, HTTPException
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.requests import Request
 
@@ -19,6 +18,45 @@ from app.services.postgres_reverse_design import (
     search_reverse_design_by_tg_postgres,
 )
 from app.services.reverse_design_jobs import ReverseDesignJobManager
+from test_api import api_database, auth_database, test_app
+
+
+def test_restricted_reverse_queries_ignore_public_views_and_search_path(api_database):
+    import psycopg
+    from psycopg.rows import dict_row
+    from app.services.postgres_reverse_design import verify_reverse_design_query_access
+    for role in ("api", "service"):
+        with psycopg.connect(api_database[role], row_factory=dict_row) as connection:
+            for view in ("pi_polymers", "pi_tg_predictions", "pi_monomer_iupac"):
+                assert not connection.execute("SELECT has_table_privilege(current_user,%s,'SELECT') AS allowed", ("public." + view,)).fetchone()["allowed"]
+            connection.execute("SET LOCAL search_path=pg_catalog")
+            verify_reverse_design_query_access(connection)
+            result = search_reverse_design_by_tg_postgres(
+                connection, smiles="CCO", target_tg=215, similarity_threshold=0.0, result_limit=1,
+            )
+            assert len(result.results) == 1
+
+
+def test_reverse_preflight_uses_pi_dsn_even_inside_service_context(api_database, monkeypatch):
+    import psycopg
+    from app.auth.context import service_context
+    from app.postgres_preflight import reverse_design_readiness, strict_preflight_errors
+    monkeypatch.setenv("APP_SERVICE_POSTGRES_DSN", api_database["service"])
+    with service_context():
+        assert reverse_design_readiness(api_database["api"])["ready"] is True
+    with psycopg.connect(api_database["admin"]) as connection:
+        connection.execute("REVOKE SELECT ON pi.monomer_iupac FROM nexpoly_api")
+    try:
+        # Service retains SELECT: an ambient service DSN substitution would
+        # incorrectly hide the missing privilege on the real PI connection.
+        with service_context():
+            result = reverse_design_readiness(api_database["api"])
+        assert result["ready"] is False
+        assert result["sqlstate"] == "42501"
+        assert any("Reverse design PI" in e for e in strict_preflight_errors({"reverse_design_access": result}))
+    finally:
+        with psycopg.connect(api_database["admin"]) as connection:
+            connection.execute("GRANT SELECT ON pi.monomer_iupac TO nexpoly_api")
 
 
 def make_request(app: FastAPI) -> Request:
@@ -195,10 +233,10 @@ def test_postgres_reverse_design_scans_by_tg_distance_and_fetches_details_after_
     assert [candidate.pi_id for candidate in result.results] == [3, 1]
     assert result.results[0].tg_difference == 1.0
     assert result.results[0].monomer_b_iupac == "propane"
-    assert "pi_monomer_iupac" not in connection.executions[0][0]
+    assert "pi.monomer_iupac" not in connection.executions[0][0]
     assert "ORDER BY t.tg_celsius ASC" in connection.executions[0][0]
     assert "ORDER BY t.tg_celsius DESC" in connection.executions[1][0]
-    assert "pi_monomer_iupac" in connection.executions[-1][0]
+    assert "pi.monomer_iupac" in connection.executions[-1][0]
 
 
 def test_tanimoto_fingerprint_bytes_matches_rdkit_tanimoto() -> None:
@@ -249,7 +287,7 @@ def test_postgres_reverse_design_reports_exhaustion_after_scanning_all_rows() ->
     assert progress_events[-1].exhausted is True
 
 
-def test_reverse_design_job_manager_reports_found_enough_status() -> None:
+def test_reverse_design_job_manager_reports_found_enough_status(test_app: FastAPI) -> None:
     manager = ReverseDesignJobManager(max_workers=1)
 
     def run_search(progress_callback, is_cancelled):
@@ -279,7 +317,7 @@ def test_reverse_design_job_manager_reports_found_enough_status() -> None:
 
 
 def test_reverse_design_job_api_returns_terminal_status(test_app: FastAPI) -> None:
-    with TestClient(test_app) as client:
+    with test_app.state.test_client as client:
         response = client.post(
             "/api/v1/reverse-design/tg/jobs",
             json={
@@ -302,13 +340,13 @@ def test_reverse_design_job_api_returns_terminal_status(test_app: FastAPI) -> No
             sleep(0.05)
 
         assert status_payload is not None
-        assert status_payload["status"] == "found_enough"
+        assert status_payload["status"] == "found_enough", status_payload.get("error")
         assert status_payload["scanned_rows"] >= 1
         assert status_payload["result"]["total"] == 1
 
 
 def test_reverse_design_job_api_returns_503_when_executor_rejects(test_app: FastAPI) -> None:
-    with TestClient(test_app) as client:
+    with test_app.state.test_client as client:
         manager = test_app.state.reverse_design_job_manager
         manager._executor.shutdown(wait=False)
 

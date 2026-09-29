@@ -12,7 +12,7 @@ describe("module transition focus and portals", () => {
     const renderPage = (blocked: boolean) => <ModuleTransitionContext.Provider value={blocked}>
       <MonomerMdTaskCenter selectedJob={null} activeJobs={[]} isActiveJobsLoading={false} activeJobsError={null}
         history={null} historyQuery={{ page: 1 }} isHistoryLoading={false} historyError={null}
-        cancellingJobIds={[]} deletingJobIds={[]} deleteJobErrors={{}} onRefresh={vi.fn()} onSelect={vi.fn()}
+        cancellingJobIds={[]} deletingJobIds={[]} deleteJobErrors={{}}  onSelect={vi.fn()}
         onCancel={vi.fn()} onDelete={vi.fn()} onChangeQuery={vi.fn()} />
     </ModuleTransitionContext.Provider>;
     const view = render(renderPage(false));

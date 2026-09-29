@@ -1,3 +1,4 @@
+import { privateFetch } from "../auth/session";
 import { API_BASE_URL, ApiRequestError } from "./api";
 import type { TgAssistantStreamRequest } from "../types";
 import { parseSseBlock as parseTgAssistantSseBlock } from "./sse";
@@ -34,7 +35,7 @@ export async function streamTgAssistant(
     if (images?.canvasImage) form.append("canvas_image", images.canvasImage, "tg-canvas.png");
     if (images?.userImage) form.append("image", images.userImage);
   }
-  const response = await fetch(
+  const response = await privateFetch(
     `${API_BASE_URL}/assistant/tg/chat/${hasImages ? "image-stream" : "stream"}`,
     {
       method: "POST",

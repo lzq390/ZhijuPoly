@@ -10,6 +10,29 @@ set -a
 source .env.dev
 set +a
 
+load_user_isolation_environment() {
+  case "${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" in
+    false) return 0 ;;
+    true) ;;
+    *) echo "NEXPOLY_DEV_USER_ISOLATION_ENABLED must be exactly true or false." >&2; return 2 ;;
+  esac
+  local auth_environment="$ROOT_DIR/.env.dev.auth"
+  [[ -f "$auth_environment" && ! -L "$auth_environment" &&
+    "$(stat -c '%u' "$auth_environment")" == "$(id -u)" &&
+    "$(stat -c '%a' "$auth_environment")" == "600" ]] || {
+    echo "User isolation requires an owner-private regular .env.dev.auth file with mode 0600." >&2
+    return 2
+  }
+  set -a
+  # shellcheck disable=SC1090
+  source "$auth_environment"
+  set +a
+  # The explicit opt-in cannot be downgraded by an imported configuration.
+  export NEXPOLY_DEV_USER_ISOLATION_ENABLED=true
+}
+load_user_isolation_environment
+export NEXPOLY_DEV_USER_ISOLATION_ENABLED="${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}"
+
 case "${NEXPOLY_DEV_GPU_LAUNCHER_ENABLED:-false}" in
   true|false) ;;
   *)
@@ -44,14 +67,16 @@ BACKEND_DEPENDENCY_LOCK_SHA256="sha256:$(
     backend/requirements-ci.lock |
     sha256sum | awk '{print $1}'
 )"
+BACKEND_BUILD_CONFIG_FILES=(
+  Dockerfile docker-compose.yml docker-compose.dev.yml
+  docker-compose.dev-gpu-launcher.yml docker-compose.gpu-governed.yml
+  docker-compose.dev-gpu-session.yml
+)
+if [[ "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == "true" ]]; then
+  BACKEND_BUILD_CONFIG_FILES+=(docker-compose.user-isolation-dev.yml)
+fi
 BACKEND_BUILD_CONFIG_SHA256="sha256:$(
-  sha256sum \
-    Dockerfile \
-    docker-compose.yml \
-    docker-compose.dev.yml \
-    docker-compose.dev-gpu-launcher.yml \
-    docker-compose.gpu-governed.yml \
-    docker-compose.dev-gpu-session.yml |
+  sha256sum "${BACKEND_BUILD_CONFIG_FILES[@]}" |
     sha256sum | awk '{print $1}'
 )"
 NEXPOLY_BUILD_REVISION="${NEXPOLY_BUILD_REVISION:-$CURRENT_SOURCE_REVISION}"
@@ -69,15 +94,20 @@ export NEXPOLY_BACKEND_DEPENDENCY_LOCK_SHA256="$BACKEND_DEPENDENCY_LOCK_SHA256"
 export NEXPOLY_BACKEND_BUILD_CONFIG_SHA256="$BACKEND_BUILD_CONFIG_SHA256"
 
 DEV_COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.dev.yml)
+DEV_COMPOSE_ENV_FILES=(--env-file .env.dev)
 if [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]]; then
   DEV_COMPOSE_FILES+=(-f docker-compose.dev-gpu-launcher.yml)
 fi
-COMPOSE=(docker compose -p nexpoly_dev "${DEV_COMPOSE_FILES[@]}" --env-file .env.dev)
+if [[ "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == "true" ]]; then
+  DEV_COMPOSE_FILES+=(-f docker-compose.user-isolation-dev.yml)
+  DEV_COMPOSE_ENV_FILES+=(--env-file .env.dev.auth)
+fi
+COMPOSE=(docker compose -p nexpoly_dev "${DEV_COMPOSE_FILES[@]}" "${DEV_COMPOSE_ENV_FILES[@]}")
 GPU_COMPOSE=(
   docker compose -p nexpoly_dev
   "${DEV_COMPOSE_FILES[@]}"
   -f docker-compose.dev-gpu-session.yml
-  --env-file .env.dev
+  "${DEV_COMPOSE_ENV_FILES[@]}"
 )
 GPU_SESSION_CONTROLLER="$ROOT_DIR/scripts/dev_gpu_session.py"
 GPU_SESSION_PYTHON="/usr/bin/python3"
@@ -223,13 +253,16 @@ gpu_operator_status_is_current() {
   gpu_operator_request status | python3 -c '
 import json
 import sys
+from pathlib import Path
 
 value = json.load(sys.stdin)
 assert value.get("schema_version") == 1, value
 assert value.get("operator_available") is True, value
 assert value.get("source_sha") == sys.argv[1], value
 assert value.get("source_tree") == sys.argv[2], value
-' "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE"
+identity = json.loads(Path(sys.argv[4]).read_text())
+assert identity.get("user_isolation_enabled", False) is (sys.argv[3] == "true"), "GPU operator user isolation configuration differs"
+' "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE" "${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" "$GPU_OPERATOR_IDENTITY"
 }
 
 gpu_operator_cleanup_stale_identity() {
@@ -319,6 +352,7 @@ gpu_operator_up() {
       --unit="$GPU_OPERATOR_UNIT" \
       --working-directory="$ROOT_DIR" \
       --setenv="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      --setenv="NEXPOLY_DEV_USER_ISOLATION_ENABLED=${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" \
       --property="StandardOutput=append:$GPU_OPERATOR_LOG" \
       --property="StandardError=append:$GPU_OPERATOR_LOG" \
       "$GPU_SESSION_PYTHON" -I "$GPU_OPERATOR_SCRIPT" serve \
@@ -1181,7 +1215,10 @@ worker_up() {
 
   (
     cd "$ROOT_DIR/workers/monomer_md_worker"
-    export APP_POSTGRES_DSN="postgresql://nexpoly_dev:nexpoly_dev@127.0.0.1:${NEXPOLY_DEV_POSTGRES_PORT:-15532}/nexpoly_dev"
+    if [[ "${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" == "true" ]]; then
+      export APP_SERVICE_POSTGRES_DSN="${MONOMER_MD_DEV_SERVICE_POSTGRES_DSN:-${APP_SERVICE_POSTGRES_DSN:?APP_SERVICE_POSTGRES_DSN is required for the isolated MD Worker}}"
+      export APP_POSTGRES_DSN="$APP_SERVICE_POSTGRES_DSN"
+    fi
     export BYTEFF2_PYTHON="$WORKER_PYTHON"
     export BYTEFF2_OPENMM_DIR="$WORKER_OPENMM_DIR"
     export BYTEFF2_ROOT
@@ -2329,6 +2366,10 @@ gpu_session_up_locked() {
 
 verify_gpu_session_stopped_runtime() {
   verify_backend_drift
+  verify_gpu_session_runtime_paths_removed
+}
+
+verify_gpu_session_runtime_paths_removed() {
   local path
   for path in \
     "$ROOT_DIR/.runtime/gpu-session/controller.json" \
@@ -2450,6 +2491,32 @@ gpu_session_down() {
   echo "Development backend restored to CPU-only idle mode."
 }
 
+gpu_session_maintenance_stop() {
+  if [[ "${NEXPOLY_DEV_GPU_SESSION_EXECUTE:-0}" != "1" ]]; then
+    echo "Dry run: drain the exact development GPU session, stop its Backend and Workers, then release its Broker/MPS; keep Backend stopped for maintenance."
+    return 0
+  fi
+  local payload state
+  payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status)"
+  state="$(printf '%s' "$payload" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status", "invalid"))')"
+  if [[ "$state" == "stopped" ]]; then
+    verify_gpu_session_runtime_paths_removed
+    echo "Development GPU session is already stopped."
+    return 0
+  fi
+  # Automatic recovery may be concurrently restoring CPU service. Only a
+  # healthy, explicitly drained session supports this maintenance boundary.
+  NEXPOLY_DEV_GPU_SESSION_ID="$(printf '%s' "$payload" | python3 -c 'import json, re, sys; value=json.load(sys.stdin); session=value.get("session_id"); assert value.get("status") in {"ready", "plane-ready"} and not value.get("contaminated") and isinstance(session,str) and re.fullmatch(r"[0-9a-f]{32}",session), "Maintenance stop requires a healthy exact development session"; print(session)')"
+  export NEXPOLY_DEV_GPU_SESSION_ID
+  gpu_session_adopt_direct_start "$payload"
+  "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" drain --execute >/dev/null
+  gpu_backend_stop_exact_session
+  gpu_session_stop_workers "$payload"
+  "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" down --execute
+  verify_gpu_session_runtime_paths_removed
+  echo "Development GPU session stopped; Backend remains stopped for maintenance."
+}
+
 gpu_session_stop_owned_internal() {
   [[ "${NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY:-0}" == "1" ]] || {
     echo "Internal GPU recovery command is controller-only." >&2
@@ -2472,6 +2539,32 @@ gpu_session_restore_cpu_internal() {
   "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
   wait_backend_configured
   verify_backend_drift
+}
+
+up_prebuilt() {
+  [[ "${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" == "true" &&
+    "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" &&
+    "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" &&
+    "${NEXPOLY_DEV_FRONTEND_PORT:-}" == "9001" ]] || {
+    echo "up-prebuilt requires explicit user isolation and the 9001 direct-start development launcher." >&2
+    return 2
+  }
+  "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status | python3 -c \
+    'import json, sys; assert json.load(sys.stdin).get("status") == "stopped", "stop the existing GPU session before up-prebuilt"'
+  verify_backend_image_build_identity
+  validate_asset_release
+  prepare_canary_state_directory
+  prepare_worker_runtime_directories
+  prepare_dft_runtime_directories
+  gpu_operator_up
+  # This read-only gate deliberately never bootstraps or applies migrations.
+  "${COMPOSE[@]}" run --rm --no-deps backend python -m app.postgres_preflight \
+    --strict --schema-target user-isolation-0018 --service-context
+  "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
+  wait_backend_configured
+  verify_backend_drift
+  "${COMPOSE[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 120 polymerization-batch-worker
+  "${COMPOSE[@]}" up -d --no-deps frontend-dev
 }
 
 test_backend() (
@@ -2752,6 +2845,9 @@ NEXPOLY_DEV_CONFIG_HASH="$(compute_backend_config_hash)"
 export NEXPOLY_DEV_CONFIG_HASH
 
 case "${1:-up}" in
+  up-prebuilt)
+    up_prebuilt
+    ;;
   up)
     "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status | python3 -c \
       'import json, sys; value=json.load(sys.stdin); assert value.get("status") == "stopped", "use gpu-session-down before ordinary up"'
@@ -2792,7 +2888,11 @@ case "${1:-up}" in
     "${COMPOSE[@]}" logs -f "${@:2}"
     ;;
   preflight)
-    "${COMPOSE[@]}" exec -T backend python -m app.postgres_preflight --mode runtime --strict
+    postgres_preflight_args=(--mode runtime --strict)
+    if [[ "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == "true" ]]; then
+      postgres_preflight_args+=(--schema-target user-isolation-0018 --service-context)
+    fi
+    "${COMPOSE[@]}" exec -T backend python -m app.postgres_preflight "${postgres_preflight_args[@]}"
     preflight_session_payload="$($GPU_SESSION_PYTHON -I "$GPU_SESSION_CONTROLLER" status)"
     preflight_session_state="$(printf '%s' "$preflight_session_payload" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status", "invalid"))')"
     if [[ "$preflight_session_state" == "stopped" ]]; then
@@ -2832,6 +2932,9 @@ case "${1:-up}" in
     ;;
   gpu-session-up)
     gpu_session_up_locked
+    ;;
+  gpu-session-maintenance-stop)
+    gpu_session_maintenance_stop
     ;;
   gpu-session-up-locked-internal)
     gpu_session_assert_up_lock_held
@@ -2873,7 +2976,7 @@ case "${1:-up}" in
     echo "ssh -N -L ${NEXPOLY_DEV_FRONTEND_PORT:-9001}:127.0.0.1:${NEXPOLY_DEV_FRONTEND_PORT:-9001} -L 9011:127.0.0.1:9011 ${NEXPOLY_DEV_SSH_USER:-$USER}@$NEXPOLY_DEV_SSH_HOST"
     ;;
   *)
-    echo "usage: $0 {up|stop|down|ps|logs|preflight|refresh-data|contract-migrate|smoke|worker-base-identity|worker-venv|worker-up|worker-stop|worker-status|gpu-session-up|gpu-session-status|gpu-session-down|test-backend|build-frontend|check-frontend|cleanup-legacy-builder|tunnel}" >&2
+    echo "usage: $0 {up|up-prebuilt|stop|down|ps|logs|preflight|refresh-data|contract-migrate|smoke|worker-base-identity|worker-venv|worker-up|worker-stop|worker-status|gpu-session-up|gpu-session-status|gpu-session-down|gpu-session-maintenance-stop|test-backend|build-frontend|check-frontend|cleanup-legacy-builder|tunnel}" >&2
     exit 2
     ;;
 esac

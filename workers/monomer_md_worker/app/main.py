@@ -349,7 +349,7 @@ async def lifespan(_: FastAPI):
                 )
             except asyncio.TimeoutError:
                 logger.error("timed out waiting for active monomer MD tasks during shutdown")
-        if settings.db_configured:
+        if settings.db_configured and await _execution_resources_released():
             try:
                 await asyncio.to_thread(
                     repository.fail_instance_jobs,
@@ -924,6 +924,20 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             # Keep the durable job in submitted state while waiting for host
             # capacity.  No ByteFF2/OpenMM child exists before this succeeds.
             execution_lease = await runner.acquire_execution_lease(request.job_id)
+            authorized = await asyncio.to_thread(repository.authorize_start, request.job_id, worker_instance_id=worker_instance_id)
+            if not authorized:
+                cleanup_safe = await _release_execution_lease_safely(execution_lease, request.job_id)
+                if not cleanup_safe and not await _wait_for_safe_resource_cleanup(request.job_id):
+                    return
+                execution_lease = None
+                await _persist_terminal_status(
+                    request.job_id, "cancelled",
+                    error="Account or task no longer authorized to start",
+                    error_category="start_authorization_denied",
+                    progress_stage="cancelled",
+                    progress_message="Execution authorization denied",
+                )
+                return
             running_update_result = await _safe_update_status(
                 request.job_id,
                 "running",
@@ -937,16 +951,19 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             )
             if settings.db_configured and running_update_result is not JobUpdateResult.UPDATED:
                 logger.warning("monomer MD job stopped before execution: %s", request.job_id)
+                cleanup_safe = await _release_execution_lease_safely(execution_lease, request.job_id)
+                if not cleanup_safe and not await _wait_for_safe_resource_cleanup(request.job_id):
+                    return
                 if running_update_result is None:
                     await _persist_terminal_status(
-                        request.job_id,
-                        "failed",
+                        request.job_id, "failed",
                         error="Monomer MD worker could not persist the running state.",
                         error_category="worker_status_update_failed",
                         progress_stage="failed",
                         progress_message="Monomer MD worker could not persist the running state.",
                     )
-                await _release_execution_lease_safely(execution_lease, request.job_id)
+                elif running_update_result is JobUpdateResult.CANCEL_REQUESTED:
+                    await _persist_terminal_status(request.job_id, "cancelled", progress_stage="cancelled")
                 return
             result = await runner.run(
                 request,
@@ -960,6 +977,10 @@ async def _run_job(request: JobRequest, steps: int) -> None:
                 execution_lease,
                 request.job_id,
             )
+            if not cleanup_safe:
+                if not await _wait_for_safe_resource_cleanup(request.job_id):
+                    raise
+                cleanup_safe = True
             user_cancelled = request.job_id in cancel_requested_jobs
             cancellation_completed = user_cancelled and cleanup_safe
             cleanup_error = (
@@ -999,6 +1020,8 @@ async def _run_job(request: JobRequest, steps: int) -> None:
                 execution_lease,
                 request.job_id,
             )
+            if not cleanup_safe and not await _wait_for_safe_resource_cleanup(request.job_id):
+                return
             user_cancelled = request.job_id in cancel_requested_jobs
             logger.exception("monomer MD job failed: %s", request.job_id)
             await _persist_terminal_status(
@@ -1059,6 +1082,31 @@ async def _run_job(request: JobRequest, steps: int) -> None:
                 ),
             )
             raise
+
+
+async def _execution_resources_released() -> bool:
+    try:
+        return bool(await asyncio.to_thread(runner.recovery_resources_released))
+    except Exception:
+        logger.warning("MD resource cleanup remains unconfirmed", exc_info=True)
+        return False
+
+
+async def _wait_for_safe_resource_cleanup(job_id: str) -> bool:
+    """Keep the existing task active until the Broker proves resource absence."""
+    await _safe_update_status(
+        job_id, "cancel_requested",
+        error="GPU resource cleanup remains unconfirmed; task capacity is retained.",
+        error_category="resource_cleanup_unconfirmed",
+        progress_stage="cleanup_pending",
+        progress_message="Waiting for verified execution-resource cleanup.",
+    )
+    while True:
+        if await _execution_resources_released():
+            return True
+        if shutting_down:
+            return False
+        await asyncio.sleep(settings.recovery_retry_seconds)
 
 
 async def _release_execution_lease_safely(
@@ -1162,6 +1210,9 @@ async def _attempt_recovery() -> bool:
     if not settings.db_configured:
         recovery_ready = True
         return True
+    if not await _execution_resources_released():
+        recovery_ready = False
+        return False
     try:
         cancelled = await asyncio.to_thread(
             repository.reconcile_cancel_requested_jobs,
@@ -1205,6 +1256,9 @@ async def _heartbeat_loop() -> None:
 
 
 def _classify_error(exc: Exception) -> str:
+    from .byteff2_system_geometry import FormalSystemSizeError
+    if isinstance(exc, FormalSystemSizeError):
+        return "invalid_periodic_box"
     message = str(exc).lower()
     if isinstance(exc, GpuBrokerClientError):
         if exc.code == "gpu_capacity_unavailable":

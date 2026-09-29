@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.services.ai_client import clean_ai_provider_error, create_openai_client
+from app.services.private_quotas import PrivateQuotaSettings
 
 
 Paper = dict[str, Any]
@@ -33,6 +34,8 @@ class PolymerExtractor:
         self.client.close()
 
     def create_extraction_prompt(self, title: str, abstract: str, mode: str) -> str:
+        if len(title) + len(abstract) > PrivateQuotaSettings.from_environment().model_input_characters:
+            raise ValueError("Paper evidence exceeds model input quota")
         if mode == "synthesis":
             return f"""You are an expert polymer chemist. Analyze this paper abstract and extract COMPLETE polymerization reaction information.
 
@@ -140,6 +143,8 @@ Return only valid JSON. No markdown."""
                 max_tokens=4000,
             )
             result_text = response.choices[0].message.content or ""
+            if len(result_text.encode("utf-8")) > PrivateQuotaSettings.from_environment().model_output_bytes:
+                raise ValueError("Model output exceeds retention quota")
             result = json.loads(_strip_json_fence(result_text))
             if not isinstance(result, dict):
                 raise ValueError("model returned a non-object JSON value")

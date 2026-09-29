@@ -624,6 +624,7 @@ class DevGpuOperator:
                     "start_ticks": start_ticks,
                     "source_sha": self.source_sha,
                     "source_tree": self.source_tree,
+                    "user_isolation_enabled": os.getenv("NEXPOLY_DEV_USER_ISOLATION_ENABLED", "false") == "true",
                 },
             )
             server.listen(8)

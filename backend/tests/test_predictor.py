@@ -3,6 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from app.auth.context import Identity, user_context
+
+
+@pytest.fixture(autouse=True)
+def private_identity(monkeypatch):
+    monkeypatch.setattr("app.task_control._start_checker", lambda _: True)
+    with user_context(Identity("11111111-1111-1111-1111-111111111111")):
+        yield
 
 from app.services import predictor
 from app.utils.exceptions import (
