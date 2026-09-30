@@ -4,6 +4,7 @@ import os
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -45,6 +46,7 @@ def _wait_for(predicate: object, *, timeout: float = 10.0) -> None:
 class SupervisorSandbox:
     root: Path
     repo: Path
+    runner: Path
     controller: Path
     behavior_file: Path
     attempts_file: Path
@@ -53,6 +55,19 @@ class SupervisorSandbox:
     pid_file: Path
     socket_path: Path
     env: dict[str, str]
+    runner_env: dict[str, str]
+
+    def run_runner(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(self.runner)],
+            cwd=self.repo,
+            env=self.runner_env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10.0,
+            check=False,
+        )
 
     def run_controller(
         self,
@@ -289,6 +304,7 @@ def _make_sandbox(root: Path) -> SupervisorSandbox:
     return SupervisorSandbox(
         root=root,
         repo=repo,
+        runner=runner,
         controller=controller,
         behavior_file=behavior_file,
         attempts_file=attempts_file,
@@ -297,6 +313,7 @@ def _make_sandbox(root: Path) -> SupervisorSandbox:
         pid_file=runtime / "monomer-dft-worker.pid",
         socket_path=socket_path,
         env=env,
+        runner_env={"PATH": f"{fake_home}/.local/bin:/usr/bin:/bin", **values},
     )
 
 
@@ -330,6 +347,175 @@ def supervisor_sandbox() -> SupervisorSandbox:
     finally:
         _terminate_fixture_processes(sandbox)
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_fresh_supervisor_recovers_a_stale_socket(
+    supervisor_sandbox: SupervisorSandbox,
+) -> None:
+    sandbox = supervisor_sandbox
+    sandbox.behavior_file.write_text("healthy\n", encoding="utf-8")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
+        stale.bind(str(sandbox.socket_path))
+        stale.listen(1)
+    assert sandbox.socket_path.is_socket()
+
+    # systemd starts the runner directly, without a controller PID record.
+    runner = subprocess.Popen(
+        [str(sandbox.runner)],
+        cwd=sandbox.repo,
+        env=sandbox.runner_env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _wait_for(lambda: sandbox.run_controller("health").returncode == 0)
+        assert runner.poll() is None
+        assert sandbox.attempts() == [1]
+        assert sandbox.socket_path.is_socket()
+    finally:
+        runner.terminate()
+        stdout, stderr = runner.communicate(timeout=10.0)
+
+    assert runner.returncode == 0, stdout + stderr
+    assert not sandbox.socket_path.exists()
+    assert all(not _process_is_running(pid) for pid in sandbox.child_pids())
+
+
+def test_fresh_supervisor_preserves_a_bound_socket_before_listen(
+    supervisor_sandbox: SupervisorSandbox,
+) -> None:
+    sandbox = supervisor_sandbox
+    sandbox.behavior_file.write_text("healthy\n", encoding="utf-8")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(sandbox.socket_path))
+        identity = sandbox.socket_path.stat()
+
+        rejected = sandbox.run_runner()
+
+        assert rejected.returncode == 2, rejected.stdout + rejected.stderr
+        assert "registered worker socket" in rejected.stderr
+        assert sandbox.socket_path.stat() == identity
+        assert sandbox.attempts() == []
+        # The original owner can still finish starting its bound socket.
+        server.listen(1)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(1.0)
+            client.connect(str(sandbox.socket_path))
+
+
+@pytest.mark.parametrize("registry_fault", ["unreadable", "malformed"])
+def test_fresh_supervisor_preserves_socket_when_registry_is_uncertain(
+    supervisor_sandbox: SupervisorSandbox,
+    registry_fault: str,
+) -> None:
+    sandbox = supervisor_sandbox
+    sandbox.behavior_file.write_text("healthy\n", encoding="utf-8")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
+        stale.bind(str(sandbox.socket_path))
+    identity = sandbox.socket_path.stat()
+    # Inject only the procfs read fault inside the runner's Python probe;
+    # keep the runner, filesystem checks and fake Worker launch unchanged.
+    injection = textwrap.dedent(f"""
+        import builtins
+        import io
+        import sys
+
+        original_open = builtins.open
+        def registry_open(path, *args, **kwargs):
+            if path == "/proc/net/unix":
+                if {registry_fault!r} == "unreadable":
+                    raise PermissionError("synthetic procfs read failure")
+                return io.StringIO("Num RefCount Protocol Flags Type St Inode Path\\ninvalid-row\\n")
+            return original_open(path, *args, **kwargs)
+        builtins.open = registry_open
+        sys.argv = sys.argv[1:]
+        exec(compile(sys.stdin.read(), "<runner-socket-probe>", "exec"))
+    """)
+    python_wrapper = Path(sandbox.runner_env["MONOMER_DFT_PYTHON"])
+    original = python_wrapper.read_text(encoding="utf-8")
+    probe_branch = (
+        'if [[ "${1:-}" == "-" ]]; then\n'
+        f'  exec {shlex.quote(sys.executable)} -c {shlex.quote(injection)} "$@"\n'
+        'fi\n'
+    )
+    python_wrapper.write_text(
+        original.replace("set -euo pipefail\n", "set -euo pipefail\n" + probe_branch, 1),
+        encoding="utf-8",
+    )
+
+    rejected = sandbox.run_runner()
+
+    assert rejected.returncode == 2, rejected.stdout + rejected.stderr
+    assert "could not be verified as stale" in rejected.stderr
+    assert sandbox.socket_path.stat() == identity
+    assert sandbox.attempts() == []
+
+
+def test_fresh_supervisor_preserves_a_listening_socket(
+    supervisor_sandbox: SupervisorSandbox,
+) -> None:
+    sandbox = supervisor_sandbox
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(sandbox.socket_path))
+        server.listen(8)
+        identity = sandbox.socket_path.stat()
+
+        rejected = sandbox.run_runner()
+
+        assert rejected.returncode == 2, rejected.stdout + rejected.stderr
+        assert "refusing to remove a listening worker socket" in rejected.stderr
+        assert sandbox.socket_path.stat() == identity
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(1.0)
+            client.connect(str(sandbox.socket_path))
+        assert sandbox.attempts() == []
+
+
+@pytest.mark.parametrize("dangling", [False, True])
+def test_fresh_supervisor_preserves_a_socket_symlink(
+    supervisor_sandbox: SupervisorSandbox,
+    dangling: bool,
+) -> None:
+    sandbox = supervisor_sandbox
+    target = sandbox.root / "symlink-target"
+    if not dangling:
+        target.write_text("must remain unchanged", encoding="utf-8")
+    sandbox.socket_path.symlink_to(target)
+    identity = sandbox.socket_path.lstat()
+
+    rejected = sandbox.run_runner()
+
+    assert rejected.returncode == 2, rejected.stdout + rejected.stderr
+    assert "worker socket must not be a symlink" in rejected.stderr
+    assert sandbox.socket_path.lstat() == identity
+    if dangling:
+        assert not target.exists()
+    else:
+        assert target.read_text(encoding="utf-8") == "must remain unchanged"
+    assert sandbox.attempts() == []
+
+
+@pytest.mark.parametrize("kind", ["file", "directory"])
+def test_fresh_supervisor_preserves_a_non_socket(
+    supervisor_sandbox: SupervisorSandbox,
+    kind: str,
+) -> None:
+    sandbox = supervisor_sandbox
+    if kind == "file":
+        sandbox.socket_path.write_text("must remain unchanged", encoding="utf-8")
+    else:
+        sandbox.socket_path.mkdir()
+    identity = sandbox.socket_path.stat()
+
+    rejected = sandbox.run_runner()
+
+    assert rejected.returncode == 2, rejected.stdout + rejected.stderr
+    assert "worker socket path contains a non-socket" in rejected.stderr
+    assert sandbox.socket_path.stat() == identity
+    if kind == "file":
+        assert sandbox.socket_path.read_text(encoding="utf-8") == "must remain unchanged"
+    assert sandbox.attempts() == []
 
 
 def test_exit_70_restarts_once_then_becomes_healthy(

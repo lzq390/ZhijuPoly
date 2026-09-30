@@ -1800,7 +1800,7 @@ def test_historical_expand_defers_0012_but_f_startup_rejects_that_state(
         assert report["status"] == "failed"
         assert report["strict_ok"] is False
         assert report["migrations"]["missing"] == [version]
-        assert report["migrations"]["pending_contracts"] == [version, "0018_user_isolation_cutover"]
+        assert report["migrations"]["pending_contracts"] == [version, "0018_user_isolation_cutover", "0019_service_auth_least_privilege"]
         assert any(
             version in error for error in report["strict_errors"]
         )
@@ -2488,9 +2488,9 @@ def test_runtime_preflight_cli_uses_explicit_service_context(monkeypatch, capsys
         return {"strict_errors": [], "strict_ok": True}
 
     monkeypatch.setattr(postgres_preflight, "run_preflight", preflight)
-    monkeypatch.setattr(sys, "argv", ["postgres_preflight", "--strict", "--service-context", "--schema-target", "user-isolation-0018"])
+    monkeypatch.setattr(sys, "argv", ["postgres_preflight", "--strict", "--service-context", "--schema-target", "user-isolation-0019"])
     postgres_preflight.main()
-    assert observed == [(service_dsn, "runtime", True, "user-isolation-0018")]
+    assert observed == [(service_dsn, "runtime", True, "user-isolation-0019")]
     assert not is_service_context()
     assert '"strict_ok": true' in capsys.readouterr().out
 

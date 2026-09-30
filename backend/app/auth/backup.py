@@ -15,6 +15,22 @@ from psycopg.rows import dict_row
 
 from .cutover import private_data_seal, auth_metadata_seal, backup_state_seal
 from .assets import archive_assets, file_sha256
+from .isolation_ledger import (PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION,
+                               validate_service_migration_ledger, validate_service_members)
+
+
+def validate_backup_schema(connection):
+    row = connection.execute("SELECT max(version) AS version FROM governance.schema_migrations").fetchone()
+    version = row["version"]
+    if version not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION}:
+        raise ValueError("Identity backup requires exact 0017, historical 0018, or current 0019")
+    ledger = validate_service_migration_ledger(connection, version)
+    if version != PREPARE_VERSION:
+        from .schema import validate_isolation_schema
+        validate_isolation_schema(connection)
+    privileges = validate_service_members(connection) if version == CURRENT_VERSION else None
+    return {"migration_ledger": ledger, "current_readiness": version == CURRENT_VERSION,
+            "service_auth_privileges": privileges}
 
 
 def postgres_environment(dsn: str):
@@ -43,6 +59,7 @@ def backup_and_verify(source_dsn: str, restore_dsn: str, directory: Path, *, ass
             raise ValueError('Restore target must be empty')
         if restored.execute("SELECT 1 FROM pg_class WHERE relnamespace='public'::regnamespace LIMIT 1").fetchone():
             raise ValueError('Restore target must have no public relations')
+        source_schema = validate_backup_schema(source)
         source_seal = private_data_seal(source)
         source_auth_seal = auth_metadata_seal(source)
         source_backup_seal = backup_state_seal(source)
@@ -61,18 +78,18 @@ def backup_and_verify(source_dsn: str, restore_dsn: str, directory: Path, *, ass
     subprocess.run([restore_command,'--exit-on-error','--no-owner','--dbname='+conninfo_to_dict(restore_dsn)['dbname'],str(dump)],
                    env=postgres_environment(restore_dsn),check=True)
     with psycopg.connect(restore_dsn,row_factory=dict_row) as restored:
+        restore_schema = validate_backup_schema(restored)
         restore_seal = private_data_seal(restored)
         restore_auth_seal = auth_metadata_seal(restored)
         restore_backup_seal = backup_state_seal(restored)
-        cutover = restored.execute("SELECT 1 FROM governance.schema_migrations WHERE version='0018_user_isolation_cutover'").fetchone()
-        if cutover:
-            from .schema import validate_isolation_schema
-            validate_isolation_schema(restored)
+    if source_schema != restore_schema:
+        raise RuntimeError('Backup restored with a different isolation schema or service ACL')
     if source_seal != restore_seal or source_auth_seal != restore_auth_seal or source_backup_seal != restore_backup_seal:
         raise RuntimeError('Backup restored with a different private business-data seal')
     assets = archive_assets(asset_roots or {},directory,source_backup_seal)
     result = {'source':source_id,'restore_target':restore_id,'backup_path':str(dump.resolve()),
               'backup_sha256':file_sha256(dump),
+              'isolation_schema':restore_schema,
               'restore_verified':True,'business_data':source_seal,'auth_metadata':source_auth_seal,'backup_state':source_backup_seal,'assets':assets}
     receipt = directory/'receipt.json'
     receipt.write_text(json.dumps(result,indent=2)+'\n')

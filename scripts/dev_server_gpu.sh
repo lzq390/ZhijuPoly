@@ -2559,7 +2559,7 @@ up_prebuilt() {
   gpu_operator_up
   # This read-only gate deliberately never bootstraps or applies migrations.
   "${COMPOSE[@]}" run --rm --no-deps backend python -m app.postgres_preflight \
-    --strict --schema-target user-isolation-0018 --service-context
+    --strict --schema-target user-isolation-0019 --service-context
   "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
   wait_backend_configured
   verify_backend_drift
@@ -2890,7 +2890,7 @@ case "${1:-up}" in
   preflight)
     postgres_preflight_args=(--mode runtime --strict)
     if [[ "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == "true" ]]; then
-      postgres_preflight_args+=(--schema-target user-isolation-0018 --service-context)
+      postgres_preflight_args+=(--schema-target user-isolation-0019 --service-context)
     fi
     "${COMPOSE[@]}" exec -T backend python -m app.postgres_preflight "${postgres_preflight_args[@]}"
     preflight_session_payload="$($GPU_SESSION_PYTHON -I "$GPU_SESSION_CONTROLLER" status)"

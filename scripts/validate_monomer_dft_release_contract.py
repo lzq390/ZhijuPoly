@@ -892,15 +892,17 @@ def validate_database_schema_state_contract(
     manifest = _load_json(root, "backend/migrations/postgres/manifest.json", failures)
     entries = manifest.get("migrations", [])
     versions = [entry.get("version") for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
-    isolation_versions = ("0017_user_isolation_prepare", "0018_user_isolation_cutover")
+    isolation_versions = ("0017_user_isolation_prepare", "0018_user_isolation_cutover", "0019_service_auth_least_privilege")
     isolated = any(version in versions for version in isolation_versions)
     if isolated:
         if any(versions.count(version) != 1 for version in isolation_versions):
-            failures.append("user isolation startup requires both 0017 and 0018 exactly once")
+            failures.append("user isolation startup requires 0017, 0018 and 0019 exactly once")
         for version in isolation_versions:
             _read_text(root, f"backend/migrations/postgres/{version}.sql", failures)
-        if 'SCHEMA_TARGET_ISOLATION = "user-isolation-0018"' not in preflight:
-            failures.append("Postgres user-isolation-0018 schema profile is missing")
+        if 'SCHEMA_TARGET_ISOLATION = "user-isolation-0019"' not in preflight:
+            failures.append("Postgres user-isolation-0019 schema profile is missing")
+        if 'SCHEMA_TARGET_ISOLATION_HISTORICAL = "user-isolation-0018"' not in preflight:
+            failures.append("Postgres historical user-isolation-0018 schema profile is missing")
 
     # Historical releases retain their through-0012 startup contract. A release
     # carrying the isolation migrations must instead enforce the complete schema

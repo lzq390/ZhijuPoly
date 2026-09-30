@@ -124,9 +124,10 @@ def test_repository_migration_manifest_classifies_every_sql_file() -> None:
     assert kinds["0015_property_filter_performance"] == "expand"
     assert set(kinds) == {path.stem for path in MIGRATIONS_DIR.glob("*.sql")}
     assert {entry.manifest_schema_version for entry in entries} == {2}
-    assert {entry.epoch for entry in entries} == {1, 2, 3}
+    assert {entry.epoch for entry in entries} == {1, 2, 3, 4}
     assert kinds['0017_user_isolation_prepare'] == 'expand'
     assert kinds['0018_user_isolation_cutover'] == 'contract'
+    assert kinds['0019_service_auth_least_privilege'] == 'contract'
     contract = next(
         entry for entry in entries if entry.version == "0012_drop_polytao_jobs"
     )

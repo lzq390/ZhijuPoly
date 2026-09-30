@@ -292,6 +292,9 @@ def test_safe_cutover_audit_includes_auth_without_credentials(isolated):
         connection.execute("UPDATE auth.users SET password_hash='NEVER_EXPORT_CREDENTIAL' WHERE user_id=%s", (A,))
     with psycopg.connect(isolated.audit, row_factory=dict_row) as connection:
         evidence = capture(connection)
+    assert evidence["schema_version"] == 2
+    assert evidence["current_readiness"] is True
+    assert evidence["migration_ledger"][-1]["version"] == "0019_service_auth_least_privilege"
     assert evidence["business_tables"]["auth.users"]["row_count"] == 3
     assert "auth" in evidence["backup_required_schemas"]
     assert "NEVER_EXPORT_CREDENTIAL" not in json.dumps(evidence)

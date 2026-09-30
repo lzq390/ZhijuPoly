@@ -1,0 +1,3597 @@
+{
+  "schema_version": 1,
+  "scope_version": "acceptance-scope-v2",
+  "scope_decision": "approved",
+  "scientific_execution_authorized": false,
+  "legacy": {
+    "scope_version": "fixed128-v1",
+    "reported_counts": {
+      "PASS": 126,
+      "FAIL": 1,
+      "BLOCKED": 1,
+      "NOT_RUN": 0
+    },
+    "exceptions": {
+      "WF-DFT-active_child.A": "FAIL",
+      "WF-MD-formal_gromacs_child.C": "BLOCKED"
+    },
+    "expected_report_sha256": "15c0170336ad19d80959025ad49b0cba6fea3e2389fcbba8105ceea82a42f196",
+    "original_availability": "deleted_by_user",
+    "replayed": false,
+    "summary_source": ".runtime/multiuser-followup/next-session-20260929.md",
+    "integration_receipt": ".runtime/multiuser-followup/md-archive-20260929-01/integration/application.json",
+    "case_ids": [
+      "WF-MD-baseline.A",
+      "WF-MD-baseline.B",
+      "WF-MD-baseline.C",
+      "WF-MD-active_child.A",
+      "WF-MD-parent_restart.B",
+      "WF-MD-lost_submit_ack.C",
+      "WF-MD-terminal_commit_ack.A",
+      "WF-MD-cleanup_release_ack.B",
+      "WF-MD-artifact_unique.C",
+      "WF-MD-stale_identity.A",
+      "WF-MD-uncertain_cleanup.B",
+      "WF-MD-reentry.C",
+      "WF-MD-private_six_directions",
+      "WF-MD-formal_gromacs_child.C",
+      "WF-MD-formal_openmm_child.C",
+      "WF-DFT-baseline.A",
+      "WF-DFT-baseline.B",
+      "WF-DFT-baseline.C",
+      "WF-DFT-active_child.A",
+      "WF-DFT-parent_restart.B",
+      "WF-DFT-lost_submit_ack.C",
+      "WF-DFT-terminal_commit_ack.A",
+      "WF-DFT-cleanup_release_ack.B",
+      "WF-DFT-artifact_unique.C",
+      "WF-DFT-stale_identity.A",
+      "WF-DFT-uncertain_cleanup.B",
+      "WF-DFT-reentry.C",
+      "WF-DFT-private_six_directions",
+      "WF-DFT-queued_restart_order.ABC",
+      "AT-GPU-NATIVE.ocsr.result.A.before",
+      "AT-GPU-NATIVE.ocsr.result.A.headers",
+      "AT-GPU-NATIVE.ocsr.result.A.body",
+      "AT-GPU-NATIVE.ocsr.result.B.before",
+      "AT-GPU-NATIVE.ocsr.result.B.headers",
+      "AT-GPU-NATIVE.ocsr.result.B.body",
+      "AT-GPU-NATIVE.ocsr.result.C.before",
+      "AT-GPU-NATIVE.ocsr.result.C.headers",
+      "AT-GPU-NATIVE.ocsr.result.C.body",
+      "AT-GPU-NATIVE.retrosynthesis.result.A.before",
+      "AT-GPU-NATIVE.retrosynthesis.result.A.headers",
+      "AT-GPU-NATIVE.retrosynthesis.result.A.body",
+      "AT-GPU-NATIVE.retrosynthesis.result.B.before",
+      "AT-GPU-NATIVE.retrosynthesis.result.B.headers",
+      "AT-GPU-NATIVE.retrosynthesis.result.B.body",
+      "AT-GPU-NATIVE.retrosynthesis.result.C.before",
+      "AT-GPU-NATIVE.retrosynthesis.result.C.headers",
+      "AT-GPU-NATIVE.retrosynthesis.result.C.body",
+      "AT-GPU-NATIVE.conditional-generation.result.A.before",
+      "AT-GPU-NATIVE.conditional-generation.result.A.headers",
+      "AT-GPU-NATIVE.conditional-generation.result.A.body",
+      "AT-GPU-NATIVE.conditional-generation.result.B.before",
+      "AT-GPU-NATIVE.conditional-generation.result.B.headers",
+      "AT-GPU-NATIVE.conditional-generation.result.B.body",
+      "AT-GPU-NATIVE.conditional-generation.result.C.before",
+      "AT-GPU-NATIVE.conditional-generation.result.C.headers",
+      "AT-GPU-NATIVE.conditional-generation.result.C.body",
+      "AT-GPU-NATIVE.polytao.result.A.before",
+      "AT-GPU-NATIVE.polytao.result.A.headers",
+      "AT-GPU-NATIVE.polytao.result.A.body",
+      "AT-GPU-NATIVE.polytao.result.B.before",
+      "AT-GPU-NATIVE.polytao.result.B.headers",
+      "AT-GPU-NATIVE.polytao.result.B.body",
+      "AT-GPU-NATIVE.polytao.result.C.before",
+      "AT-GPU-NATIVE.polytao.result.C.headers",
+      "AT-GPU-NATIVE.polytao.result.C.body",
+      "AT-GPU-NATIVE.conditional-generation.submission.A.before",
+      "AT-GPU-NATIVE.conditional-generation.submission.A.headers",
+      "AT-GPU-NATIVE.conditional-generation.submission.A.body",
+      "AT-GPU-NATIVE.conditional-generation.submission.B.before",
+      "AT-GPU-NATIVE.conditional-generation.submission.B.headers",
+      "AT-GPU-NATIVE.conditional-generation.submission.B.body",
+      "AT-GPU-NATIVE.conditional-generation.submission.C.before",
+      "AT-GPU-NATIVE.conditional-generation.submission.C.headers",
+      "AT-GPU-NATIVE.conditional-generation.submission.C.body",
+      "AT-GPU-NATIVE.polytao.submission.A.before",
+      "AT-GPU-NATIVE.polytao.submission.A.headers",
+      "AT-GPU-NATIVE.polytao.submission.A.body",
+      "AT-GPU-NATIVE.polytao.submission.B.before",
+      "AT-GPU-NATIVE.polytao.submission.B.headers",
+      "AT-GPU-NATIVE.polytao.submission.B.body",
+      "AT-GPU-NATIVE.polytao.submission.C.before",
+      "AT-GPU-NATIVE.polytao.submission.C.headers",
+      "AT-GPU-NATIVE.polytao.submission.C.body",
+      "AT-GPU-NATIVE.formal-md.result.A.before",
+      "AT-GPU-NATIVE.formal-md.result.A.headers",
+      "AT-GPU-NATIVE.formal-md.result.A.body",
+      "AT-GPU-NATIVE.formal-md.result.B.before",
+      "AT-GPU-NATIVE.formal-md.result.B.headers",
+      "AT-GPU-NATIVE.formal-md.result.B.body",
+      "AT-GPU-NATIVE.formal-md.result.C.before",
+      "AT-GPU-NATIVE.formal-md.result.C.headers",
+      "AT-GPU-NATIVE.formal-md.result.C.body",
+      "AT-GPU-NATIVE.formal-md.trajectory.A.before",
+      "AT-GPU-NATIVE.formal-md.trajectory.A.headers",
+      "AT-GPU-NATIVE.formal-md.trajectory.A.body",
+      "AT-GPU-NATIVE.formal-md.trajectory.B.before",
+      "AT-GPU-NATIVE.formal-md.trajectory.B.headers",
+      "AT-GPU-NATIVE.formal-md.trajectory.B.body",
+      "AT-GPU-NATIVE.formal-md.trajectory.C.before",
+      "AT-GPU-NATIVE.formal-md.trajectory.C.headers",
+      "AT-GPU-NATIVE.formal-md.trajectory.C.body",
+      "AT-GPU-NATIVE.formal-dft.result.A.before",
+      "AT-GPU-NATIVE.formal-dft.result.A.headers",
+      "AT-GPU-NATIVE.formal-dft.result.A.body",
+      "AT-GPU-NATIVE.formal-dft.result.B.before",
+      "AT-GPU-NATIVE.formal-dft.result.B.headers",
+      "AT-GPU-NATIVE.formal-dft.result.B.body",
+      "AT-GPU-NATIVE.formal-dft.result.C.before",
+      "AT-GPU-NATIVE.formal-dft.result.C.headers",
+      "AT-GPU-NATIVE.formal-dft.result.C.body",
+      "AT-GPU-NATIVE.formal-dft.bundle.A.before",
+      "AT-GPU-NATIVE.formal-dft.bundle.A.headers",
+      "AT-GPU-NATIVE.formal-dft.bundle.A.body",
+      "AT-GPU-NATIVE.formal-dft.bundle.B.before",
+      "AT-GPU-NATIVE.formal-dft.bundle.B.headers",
+      "AT-GPU-NATIVE.formal-dft.bundle.B.body",
+      "AT-GPU-NATIVE.formal-dft.bundle.C.before",
+      "AT-GPU-NATIVE.formal-dft.bundle.C.headers",
+      "AT-GPU-NATIVE.formal-dft.bundle.C.body",
+      "AT-GPU-NATIVE.formal-dft.trajectory.A.before",
+      "AT-GPU-NATIVE.formal-dft.trajectory.A.headers",
+      "AT-GPU-NATIVE.formal-dft.trajectory.A.body",
+      "AT-GPU-NATIVE.formal-dft.trajectory.B.before",
+      "AT-GPU-NATIVE.formal-dft.trajectory.B.headers",
+      "AT-GPU-NATIVE.formal-dft.trajectory.B.body",
+      "AT-GPU-NATIVE.formal-dft.trajectory.C.before",
+      "AT-GPU-NATIVE.formal-dft.trajectory.C.headers",
+      "AT-GPU-NATIVE.formal-dft.trajectory.C.body"
+    ]
+  },
+  "inventory_origin": {
+    "method": "literal AST extraction; old runner modules were not imported",
+    "limitation": "Definitions reconstructed from surviving snapshots; not reconstructed execution evidence",
+    "sources": [
+      {
+        "path": ".runtime/multiuser-followup/20260922-gpu-01/integration-gpu-final-20260923-01/preimages/scripts/multiuser_gpu_fault_gate.py",
+        "sha256": "3712c2a0016cd9d738566b1749bd3b4b7a9dd9dfa298e143c94c517ab6d079f1"
+      },
+      {
+        "path": ".runtime/multiuser-followup/md-trajectory-20260924-01/integration/before/scripts/multiuser_gpu_faults.py",
+        "sha256": "42dd3397bb5575e3e69e745c155600355038b9a081790eb72b21489e120a7a00"
+      },
+      {
+        "path": ".runtime/multiuser-followup/md-trajectory-20260924-01/integration/before/scripts/multiuser_auth_timing_gpu.py",
+        "sha256": "142cc3890e3f8ed6ef214e2346bf232076e4b9f5711a5f76d2ef1ff86668101e"
+      }
+    ]
+  },
+  "counts": {
+    "md": 14,
+    "dft": 15,
+    "gpu_auth": 99,
+    "total": 128
+  },
+  "removed_requirements": [
+    "WF-DFT-active_child.A",
+    "WF-MD-formal_gromacs_child.C"
+  ],
+  "environment_gate": {
+    "id": "AC-v2.managed-environment-recovery",
+    "counted": false,
+    "required_per_real_run": true,
+    "applies_to_layers": [
+      "real_gpu_worker_fault",
+      "native_ui_real_gpu"
+    ]
+  },
+  "independent_requirements": [
+    "service-least-privilege",
+    "SCI-MIX-v1"
+  ],
+  "ac_policy": {
+    "phase": "finite_result_before_ipc",
+    "normal_trigger": "native_timeout",
+    "single_point_timeout_seconds": 600,
+    "unproven_trigger": "exact_pidfd_sigkill",
+    "quarantine_auto_clear": false,
+    "historical_failure_closed": false,
+    "future_science_requires_separate_budget": true
+  },
+  "cases": [
+    {
+      "id": "WF-MD-baseline.A",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "normal_completion",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-baseline.B",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "normal_completion",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-baseline.C",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "normal_completion",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-active_child.A",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "active_execution_before_terminal",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-parent_restart.B",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "active_execution_parent_exit",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-lost_submit_ack.C",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "submit_accepted_before_ack",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-terminal_commit_ack.A",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "durable_terminal_commit_before_ack",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-cleanup_release_ack.B",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "cleanup_release_before_ack",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-artifact_unique.C",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "completed_artifact_replay",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-stale_identity.A",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "retired_attempt_replay",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-uncertain_cleanup.B",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "cleanup_release_unconfirmed",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-reentry.C",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "post_cleanup_readmission",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-private_six_directions",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "cross_owner_private_access",
+      "required_parameters": {
+        "smiles": "CCO",
+        "protocol": "DensityDemo",
+        "steps": 300
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-MD-formal_openmm_child.C",
+      "group": "md",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "byteff2_openmm",
+      "fault_point": "formal_density_openmm_npt_active",
+      "required_parameters": {
+        "protocol": "Density",
+        "run_mode": "formal",
+        "config_json": {
+          "protocol": "Density",
+          "temperature": 298,
+          "natoms": 2000,
+          "components": {
+            "CCO": 1
+          },
+          "smiles": {
+            "CCO": "CCO"
+          },
+          "params_dir": "managed_params",
+          "output_dir": "managed_output",
+          "working_dir": "managed_working"
+        },
+        "steps": 1500000,
+        "timestep_fs": 2
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-baseline.A",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "normal_completion",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-baseline.B",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "normal_completion",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-baseline.C",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "normal_completion",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-parent_restart.B",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "finite_result_before_ipc_parent_exit",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-lost_submit_ack.C",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "submit_accepted_before_ack",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-terminal_commit_ack.A",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "durable_terminal_commit_before_ack",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-cleanup_release_ack.B",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "cleanup_release_before_ack",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-artifact_unique.C",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "completed_artifact_replay",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-stale_identity.A",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "retired_attempt_replay",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-uncertain_cleanup.B",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "cleanup_release_unconfirmed",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-reentry.C",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "post_cleanup_readmission",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-private_six_directions",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "cross_owner_private_access",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "WF-DFT-queued_restart_order.ABC",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "queued_journal_parent_restart",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.ocsr.result.A.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "ocsr",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.ocsr.result.A.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "ocsr",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.ocsr.result.A.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "ocsr",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.ocsr.result.B.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "ocsr",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.ocsr.result.B.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "ocsr",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.ocsr.result.B.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "ocsr",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.ocsr.result.C.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "ocsr",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.ocsr.result.C.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "ocsr",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.ocsr.result.C.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "ocsr",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.retrosynthesis.result.A.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "retrosynthesis",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.retrosynthesis.result.A.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "retrosynthesis",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.retrosynthesis.result.A.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "retrosynthesis",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.retrosynthesis.result.B.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "retrosynthesis",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.retrosynthesis.result.B.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "retrosynthesis",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.retrosynthesis.result.B.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "retrosynthesis",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.retrosynthesis.result.C.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "retrosynthesis",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.retrosynthesis.result.C.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "retrosynthesis",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.retrosynthesis.result.C.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "retrosynthesis",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.result.A.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.result.A.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.result.A.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.result.B.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.result.B.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.result.B.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.result.C.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.result.C.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.result.C.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.result.A.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.result.A.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.result.A.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.result.B.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.result.B.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.result.B.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.result.C.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.result.C.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.result.C.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.submission.A.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "submission",
+        "owner": "A",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.submission.A.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "submission",
+        "owner": "A",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.submission.A.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "submission",
+        "owner": "A",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.submission.B.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "submission",
+        "owner": "B",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.submission.B.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "submission",
+        "owner": "B",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.submission.B.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "submission",
+        "owner": "B",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.submission.C.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "submission",
+        "owner": "C",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.submission.C.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "submission",
+        "owner": "C",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.conditional-generation.submission.C.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "conditional-generation",
+        "scenario_id": "submission",
+        "owner": "C",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.submission.A.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "submission",
+        "owner": "A",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.submission.A.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "submission",
+        "owner": "A",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.submission.A.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "submission",
+        "owner": "A",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.submission.B.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "submission",
+        "owner": "B",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.submission.B.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "submission",
+        "owner": "B",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.submission.B.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "submission",
+        "owner": "B",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.submission.C.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "submission",
+        "owner": "C",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.submission.C.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "submission",
+        "owner": "C",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.polytao.submission.C.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_real_gpu",
+      "engine": "native_backend_model",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "polytao",
+        "scenario_id": "submission",
+        "owner": "C",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.result.A.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.result.A.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.result.A.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.result.B.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.result.B.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.result.B.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.result.C.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.result.C.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.result.C.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.trajectory.A.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "trajectory",
+        "owner": "A",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.trajectory.A.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "trajectory",
+        "owner": "A",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.trajectory.A.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "trajectory",
+        "owner": "A",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.trajectory.B.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "trajectory",
+        "owner": "B",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.trajectory.B.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "trajectory",
+        "owner": "B",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.trajectory.B.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "trajectory",
+        "owner": "B",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.trajectory.C.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "trajectory",
+        "owner": "C",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.trajectory.C.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "trajectory",
+        "owner": "C",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-md.trajectory.C.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "byteff2_openmm",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-md",
+        "scenario_id": "trajectory",
+        "owner": "C",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.result.A.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.result.A.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.result.A.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "result",
+        "owner": "A",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.result.B.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.result.B.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.result.B.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "result",
+        "owner": "B",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.result.C.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.result.C.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.result.C.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "result",
+        "owner": "C",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.bundle.A.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "bundle",
+        "owner": "A",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.bundle.A.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "bundle",
+        "owner": "A",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.bundle.A.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "bundle",
+        "owner": "A",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.bundle.B.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "bundle",
+        "owner": "B",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.bundle.B.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "bundle",
+        "owner": "B",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.bundle.B.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "bundle",
+        "owner": "B",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.bundle.C.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "bundle",
+        "owner": "C",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.bundle.C.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "bundle",
+        "owner": "C",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.bundle.C.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "bundle",
+        "owner": "C",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.trajectory.A.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "trajectory",
+        "owner": "A",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.trajectory.A.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "trajectory",
+        "owner": "A",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.trajectory.A.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "trajectory",
+        "owner": "A",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.trajectory.B.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "trajectory",
+        "owner": "B",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.trajectory.B.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "trajectory",
+        "owner": "B",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.trajectory.B.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "trajectory",
+        "owner": "B",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.trajectory.C.before",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_before",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "trajectory",
+        "owner": "C",
+        "phase": "before"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.trajectory.C.headers",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_headers",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "trajectory",
+        "owner": "C",
+        "phase": "headers"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AT-GPU-NATIVE.formal-dft.trajectory.C.body",
+      "group": "gpu_auth",
+      "execution_layer": "native_ui_owned_gpu_artifact",
+      "engine": "aimnet",
+      "fault_point": "auth_context_retired_body",
+      "required_parameters": {
+        "module": "formal-dft",
+        "scenario_id": "trajectory",
+        "owner": "C",
+        "phase": "body"
+      },
+      "new_instance": false
+    },
+    {
+      "id": "AC-v2.proven-recovery.A",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "finite_result_before_ipc",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": true
+    },
+    {
+      "id": "AC-v2.unproven-containment.A",
+      "group": "dft",
+      "execution_layer": "real_gpu_worker_fault",
+      "engine": "aimnet",
+      "fault_point": "finite_result_before_ipc",
+      "required_parameters": {
+        "smiles": "CCO",
+        "calculation_type": "single_point"
+      },
+      "new_instance": true
+    }
+  ],
+  "relationships": [
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-baseline.A"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-baseline.A"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-baseline.B"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-baseline.B"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-baseline.C"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-baseline.C"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-active_child.A"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-active_child.A"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-parent_restart.B"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-parent_restart.B"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-lost_submit_ack.C"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-lost_submit_ack.C"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-terminal_commit_ack.A"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-terminal_commit_ack.A"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-cleanup_release_ack.B"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-cleanup_release_ack.B"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-artifact_unique.C"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-artifact_unique.C"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-stale_identity.A"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-stale_identity.A"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-uncertain_cleanup.B"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-uncertain_cleanup.B"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-reentry.C"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-reentry.C"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-private_six_directions"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-private_six_directions"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-formal_openmm_child.C"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-formal_openmm_child.C"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-baseline.A"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-baseline.A"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-baseline.B"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-baseline.B"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-baseline.C"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-baseline.C"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-parent_restart.B"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-parent_restart.B"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-lost_submit_ack.C"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-lost_submit_ack.C"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-terminal_commit_ack.A"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-terminal_commit_ack.A"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-cleanup_release_ack.B"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-cleanup_release_ack.B"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-artifact_unique.C"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-artifact_unique.C"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-stale_identity.A"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-stale_identity.A"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-uncertain_cleanup.B"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-uncertain_cleanup.B"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-reentry.C"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-reentry.C"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-private_six_directions"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-private_six_directions"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-queued_restart_order.ABC"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-DFT-queued_restart_order.ABC"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.ocsr.result.A.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.ocsr.result.A.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.ocsr.result.A.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.ocsr.result.A.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.ocsr.result.A.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.ocsr.result.A.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.ocsr.result.B.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.ocsr.result.B.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.ocsr.result.B.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.ocsr.result.B.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.ocsr.result.B.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.ocsr.result.B.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.ocsr.result.C.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.ocsr.result.C.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.ocsr.result.C.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.ocsr.result.C.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.ocsr.result.C.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.ocsr.result.C.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.retrosynthesis.result.A.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.retrosynthesis.result.A.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.retrosynthesis.result.A.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.retrosynthesis.result.A.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.retrosynthesis.result.A.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.retrosynthesis.result.A.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.retrosynthesis.result.B.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.retrosynthesis.result.B.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.retrosynthesis.result.B.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.retrosynthesis.result.B.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.retrosynthesis.result.B.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.retrosynthesis.result.B.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.retrosynthesis.result.C.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.retrosynthesis.result.C.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.retrosynthesis.result.C.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.retrosynthesis.result.C.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.retrosynthesis.result.C.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.retrosynthesis.result.C.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.result.A.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.result.A.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.result.A.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.result.A.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.result.A.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.result.A.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.result.B.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.result.B.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.result.B.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.result.B.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.result.B.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.result.B.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.result.C.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.result.C.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.result.C.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.result.C.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.result.C.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.result.C.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.result.A.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.result.A.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.result.A.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.result.A.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.result.A.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.result.A.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.result.B.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.result.B.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.result.B.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.result.B.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.result.B.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.result.B.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.result.C.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.result.C.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.result.C.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.result.C.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.result.C.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.result.C.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.submission.A.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.submission.A.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.submission.A.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.submission.A.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.submission.A.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.submission.A.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.submission.B.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.submission.B.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.submission.B.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.submission.B.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.submission.B.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.submission.B.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.submission.C.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.submission.C.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.submission.C.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.submission.C.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.conditional-generation.submission.C.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.conditional-generation.submission.C.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.submission.A.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.submission.A.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.submission.A.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.submission.A.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.submission.A.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.submission.A.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.submission.B.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.submission.B.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.submission.B.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.submission.B.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.submission.B.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.submission.B.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.submission.C.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.submission.C.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.submission.C.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.submission.C.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.polytao.submission.C.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.polytao.submission.C.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.result.A.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.result.A.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.result.A.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.result.A.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.result.A.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.result.A.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.result.B.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.result.B.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.result.B.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.result.B.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.result.B.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.result.B.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.result.C.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.result.C.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.result.C.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.result.C.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.result.C.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.result.C.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.trajectory.A.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.trajectory.A.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.trajectory.A.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.trajectory.A.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.trajectory.A.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.trajectory.A.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.trajectory.B.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.trajectory.B.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.trajectory.B.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.trajectory.B.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.trajectory.B.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.trajectory.B.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.trajectory.C.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.trajectory.C.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.trajectory.C.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.trajectory.C.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-md.trajectory.C.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-md.trajectory.C.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.result.A.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.result.A.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.result.A.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.result.A.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.result.A.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.result.A.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.result.B.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.result.B.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.result.B.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.result.B.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.result.B.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.result.B.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.result.C.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.result.C.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.result.C.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.result.C.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.result.C.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.result.C.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.bundle.A.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.bundle.A.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.bundle.A.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.bundle.A.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.bundle.A.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.bundle.A.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.bundle.B.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.bundle.B.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.bundle.B.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.bundle.B.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.bundle.B.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.bundle.B.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.bundle.C.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.bundle.C.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.bundle.C.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.bundle.C.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.bundle.C.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.bundle.C.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.trajectory.A.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.trajectory.A.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.trajectory.A.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.trajectory.A.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.trajectory.A.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.trajectory.A.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.trajectory.B.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.trajectory.B.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.trajectory.B.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.trajectory.B.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.trajectory.B.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.trajectory.B.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.trajectory.C.before"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.trajectory.C.before"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.trajectory.C.headers"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.trajectory.C.headers"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "AT-GPU-NATIVE.formal-dft.trajectory.C.body"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AT-GPU-NATIVE.formal-dft.trajectory.C.body"
+      ],
+      "type": "continues_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-active_child.A"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AC-v2.proven-recovery.A"
+      ],
+      "type": "contract_supersedes",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-active_child.A"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AC-v2.unproven-containment.A"
+      ],
+      "type": "contract_supersedes",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-formal_gromacs_child.C"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "WF-MD-formal_openmm_child.C"
+      ],
+      "type": "covered_by_existing_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-DFT-active_child.A"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "$scope"
+      ],
+      "type": "scope_removes_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "fixed128-v1",
+        "WF-MD-formal_gromacs_child.C"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "$scope"
+      ],
+      "type": "scope_removes_requirement",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "acceptance-scope-v2",
+        "$scope"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "AC-v2.managed-environment-recovery"
+      ],
+      "type": "requires_environment_gate",
+      "closes_failure": false
+    },
+    {
+      "from": [
+        "acceptance-scope-v2",
+        "$scope"
+      ],
+      "to": [
+        "acceptance-scope-v2",
+        "UI-v2.fixture-environment-preserved"
+      ],
+      "type": "requires_environment_gate",
+      "closes_failure": false
+    }
+  ],
+  "md_engine_policy": {
+    "dynamics": "byteff2_openmm",
+    "preparation": "gromacs_box_tools",
+    "gromacs_mdrun": false,
+    "formal_density": {
+      "protocol": "Density",
+      "run_mode": "formal",
+      "config_json": {
+        "protocol": "Density",
+        "temperature": 298,
+        "natoms": 2000,
+        "components": {
+          "CCO": 1
+        },
+        "smiles": {
+          "CCO": "CCO"
+        },
+        "params_dir": "managed_params",
+        "output_dir": "managed_output",
+        "working_dir": "managed_working"
+      },
+      "steps": 1500000,
+      "timestep_fs": 2
+    }
+  },
+  "artifact_ui_environment_gate": {
+    "id": "UI-v2.fixture-environment-preserved",
+    "counted": false,
+    "required_layer": "native_ui_owned_gpu_artifact"
+  }
+}

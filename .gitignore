@@ -86,6 +86,9 @@ nexpoly-release-*.tar.gz
 !/backend/tests/test_multiuser_restore.py
 !/backend/tests/test_authenticated_app_support.py
 !/backend/tests/test_auth_isolation.py
+!/backend/tests/test_service_privilege_contract.py
+!/backend/tests/test_service_privileges_migration.py
+!/backend/tests/test_service_isolation_readiness.py
 !/backend/tests/test_auth_settings.py
 !/backend/tests/test_auth_stream_revocation.py
 !/backend/tests/test_task_events.py

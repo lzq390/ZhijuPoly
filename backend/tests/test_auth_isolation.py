@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 import psycopg
 from psycopg import sql
-from psycopg.conninfo import make_conninfo
+from psycopg.conninfo import make_conninfo, conninfo_to_dict
 from psycopg.rows import dict_row
 import pytest
 
@@ -47,6 +47,9 @@ def auth_database():
                 group = 'nexpoly_mutable_audit' if kind == 'audit' else 'nexpoly_'+kind
                 connection.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD 'test-only' IN ROLE {}").format(sql.Identifier(role),sql.Identifier(group)))
         apply_identity_cutover(dsn,str(legacy['user_id']))
+        from app.auth.service_privileges import apply_service_auth_least_privilege
+        apply_service_auth_least_privilege(dsn, service_roles=[roles['service']],
+                                          expected_database=conninfo_to_dict(dsn)['dbname'])
         yield {'admin':dsn,**{kind:make_conninfo(dsn,user=role,password='test-only') for kind,role in roles.items()}}
     finally:
         with psycopg.connect(base,autocommit=True) as connection:

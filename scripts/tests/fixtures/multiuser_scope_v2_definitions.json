@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "document_kind": "definition_only_fixture",
+  "contains_execution_evidence": false,
+  "original_file_verification": "Source files were checked locally when extracting this fixture; CI validates the frozen excerpts, not availability of the deleted or ignored source files.",
+  "extraction_method": "ast.get_source_segment on literal definitions; old modules were never imported",
+  "definitions": {
+    "common_worker_names": {
+      "original_path": ".runtime/multiuser-followup/20260922-gpu-01/integration-gpu-final-20260923-01/preimages/scripts/multiuser_gpu_fault_gate.py",
+      "reviewed_original_file_sha256": "3712c2a0016cd9d738566b1749bd3b4b7a9dd9dfa298e143c94c517ab6d079f1",
+      "original_line": 105,
+      "literal_expression": "[\"baseline.A\", \"baseline.B\", \"baseline.C\", \"active_child.A\", \"parent_restart.B\",\n             \"lost_submit_ack.C\", \"terminal_commit_ack.A\", \"cleanup_release_ack.B\", \"artifact_unique.C\",\n             \"stale_identity.A\", \"uncertain_cleanup.B\", \"reentry.C\", \"private_six_directions\"]",
+      "literal_expression_sha256": "ba2781de4ed3b5d3f0daf40d1fb6e46067547a4717e37f2d33ac0315a92d0334"
+    },
+    "formal_md_request_body": {
+      "original_path": ".runtime/multiuser-followup/md-trajectory-20260924-01/integration/before/scripts/multiuser_gpu_faults.py",
+      "reviewed_original_file_sha256": "42dd3397bb5575e3e69e745c155600355038b9a081790eb72b21489e120a7a00",
+      "original_line": 456,
+      "literal_expression": "{\"protocol\": \"Density\", \"run_mode\": \"formal\", \"config_json\": {\"protocol\": \"Density\",\n            \"temperature\": 298, \"natoms\": 2000, \"components\": {\"CCO\": 1}, \"smiles\": {\"CCO\": \"CCO\"},\n            \"params_dir\": \"managed_params\", \"output_dir\": \"managed_output\", \"working_dir\": \"managed_working\"}}",
+      "literal_expression_sha256": "d86bcd44ac0acd3931941d1b727c10b62fc726fdc3f3da56e23ec0e3111a3164"
+    },
+    "existing_openmm_case_name": {
+      "original_path": ".runtime/multiuser-followup/md-trajectory-20260924-01/integration/before/scripts/multiuser_gpu_faults.py",
+      "reviewed_original_file_sha256": "42dd3397bb5575e3e69e745c155600355038b9a081790eb72b21489e120a7a00",
+      "original_line": 1021,
+      "literal_expression": "\"formal_openmm_child.C\"",
+      "literal_expression_sha256": "aeb95fc4fe92c5ac15ce20e33e2e484e3d8e71f604e99abfc4bf59cd046a3fd0"
+    },
+    "gpu_auth_scenarios": {
+      "original_path": ".runtime/multiuser-followup/md-trajectory-20260924-01/integration/before/scripts/multiuser_auth_timing_gpu.py",
+      "reviewed_original_file_sha256": "142cc3890e3f8ed6ef214e2346bf232076e4b9f5711a5f76d2ef1ff86668101e",
+      "original_line": 27,
+      "literal_expression": "(\n        ('ocsr', 'result', 'JSON'), ('retrosynthesis', 'result', 'JSON'),\n        ('conditional-generation', 'result', 'JSON'), ('polytao', 'result', 'JSON'),\n        ('conditional-generation', 'submission', 'JSON'), ('polytao', 'submission', 'JSON'),\n        ('formal-md', 'result', 'JSON'), ('formal-md', 'trajectory', 'JSON'),\n        ('formal-dft', 'result', 'JSON'), ('formal-dft', 'bundle', 'Blob'), ('formal-dft', 'trajectory', 'JSON'))",
+      "literal_expression_sha256": "e417a6ee520ee6a47a41ba335637adcd657245acf82f17c5ed1a59c98aa64761"
+    }
+  }
+}

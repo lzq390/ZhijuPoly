@@ -11,6 +11,8 @@ REQUIRED = {
     "test_monomer_user_isolation_postgres.py", "test_multiuser_contract.py",
     "test_multiuser_restore.py",
     "test_user_isolation_release_contract.py",
+    "test_service_privilege_contract.py", "test_service_privileges_migration.py",
+    "test_service_isolation_readiness.py",
 }
 
 

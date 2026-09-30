@@ -156,6 +156,22 @@
           "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
         }
       ]
+    },
+    {
+      "version": "0019_service_auth_least_privilege",
+      "kind": "contract",
+      "epoch": 4,
+      "checksum": "23f950f17126af7f73495938da41544585186e13dc44e060cfecf90bad207f23",
+      "requires_contracts": [
+        {
+          "version": "0012_drop_polytao_jobs",
+          "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+        },
+        {
+          "version": "0018_user_isolation_cutover",
+          "checksum": "0755d9d802eba5fd69225a34f61bc01828b32a63f815802d2905636809c573f2"
+        }
+      ]
     }
   ]
 }

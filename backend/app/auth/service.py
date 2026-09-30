@@ -175,14 +175,24 @@ class AuthService:
         import psycopg
         from psycopg.rows import dict_row
         from .schema import validate_runtime_role, validate_isolation_schema
+        from .isolation_ledger import database_identity, validate_service_migration_ledger
+        from .service_privilege_contract import validate_service_auth_privileges
         with psycopg.connect(self.settings.application_dsn, row_factory=dict_row, connect_timeout=3) as connection:
             validate_runtime_role(connection, 'nexpoly_api')
-            if not connection.execute('SELECT 1 FROM governance.schema_migrations WHERE version=%s', (CUTOVER_VERSION,)).fetchone():
-                raise RuntimeError('User isolation cutover has not completed')
+            try:
+                validate_service_migration_ledger(connection)
+            except ValueError as exc:
+                raise RuntimeError('User isolation cutover has not completed: exact 0019 ledger required') from exc
             validate_isolation_schema(connection)
+            target_database = database_identity(connection)
         for dsn,group in ((self.settings.auth_dsn,'nexpoly_auth'),(self.settings.service_dsn,'nexpoly_service')):
             with psycopg.connect(dsn,row_factory=dict_row,connect_timeout=3) as connection:
+                if database_identity(connection) != target_database:
+                    raise ValueError('Runtime identities connect to different databases')
                 validate_runtime_role(connection,group)
                 other = 'nexpoly_service' if group == 'nexpoly_auth' else 'nexpoly_auth'
                 if connection.execute("SELECT pg_has_role(current_user,%s,'MEMBER') AS mixed",(other,)).fetchone()['mixed']:
                     raise ValueError('Authentication and execution database roles must be separate')
+                if group == 'nexpoly_service':
+                    validate_service_migration_ledger(connection)
+                    validate_service_auth_privileges(connection, require_login=True)

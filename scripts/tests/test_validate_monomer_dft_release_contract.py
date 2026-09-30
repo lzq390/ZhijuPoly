@@ -49,7 +49,7 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
         manifest = json.loads((REPOSITORY_ROOT / manifest_path).read_text())
         manifest["migrations"] = [entry for entry in manifest["migrations"]
                                   if entry["version"] not in {
-                                      "0017_user_isolation_prepare", "0018_user_isolation_cutover"}]
+                                      "0017_user_isolation_prepare", "0018_user_isolation_cutover", "0019_service_auth_least_privilege"}]
         main_path = "backend/app/main.py"
         main = (REPOSITORY_ROOT / main_path).read_text().replace(
             "schema_target=SCHEMA_TARGET_ISOLATION", "schema_target=SCHEMA_TARGET_STARTUP"
@@ -78,21 +78,22 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
                 self.assertNotEqual(source, main)
                 self.assertIn(expected, self._schema_failures_with_sources({main_path: source}))
 
-    def test_isolated_startup_requires_complete_migration_pair(self) -> None:
+    def test_isolated_startup_requires_complete_migration_chain(self) -> None:
         relative = "backend/migrations/postgres/manifest.json"
         manifest = json.loads((REPOSITORY_ROOT / relative).read_text())
-        for missing in ("0017_user_isolation_prepare", "0018_user_isolation_cutover"):
+        for missing in ("0017_user_isolation_prepare", "0018_user_isolation_cutover", "0019_service_auth_least_privilege"):
             with self.subTest(missing=missing):
                 incomplete = dict(manifest, migrations=[entry for entry in manifest["migrations"]
                                                        if entry["version"] != missing])
-                self.assertIn("user isolation startup requires both 0017 and 0018 exactly once",
+                self.assertIn("user isolation startup requires 0017, 0018 and 0019 exactly once",
                               self._schema_failures_with_sources({relative: json.dumps(incomplete)}))
 
     def test_isolated_startup_preserves_both_schema_profiles(self) -> None:
         relative = "backend/app/postgres_preflight.py"
         source = (REPOSITORY_ROOT / relative).read_text()
         for marker in ('SCHEMA_TARGET_STARTUP = "startup-through-0012"',
-                       'SCHEMA_TARGET_ISOLATION = "user-isolation-0018"'):
+                       'SCHEMA_TARGET_ISOLATION = "user-isolation-0019"',
+                       'SCHEMA_TARGET_ISOLATION_HISTORICAL = "user-isolation-0018"'):
             with self.subTest(marker=marker):
                 self.assertIn(marker, source)
                 failures = self._schema_failures_with_sources({relative: source.replace(marker, "")})

@@ -481,12 +481,22 @@ USER_ISOLATION_MIGRATION_LEDGER = (*CANONICAL_MIGRATION_LEDGER,
     ('0017_user_isolation_prepare', '0eeef0058fbda71770627005fe617f5a56261cf25e236c4a159d0b059db76adb'),
     ('0018_user_isolation_cutover', '0755d9d802eba5fd69225a34f61bc01828b32a63f815802d2905636809c573f2'),
 )
+USER_ISOLATION_V2_MIGRATION_LEDGER = (*USER_ISOLATION_MIGRATION_LEDGER,
+    ('0019_service_auth_least_privilege', '23f950f17126af7f73495938da41544585186e13dc44e060cfecf90bad207f23'),
+)
 
 
 def validate_user_isolation_ledger(records: object) -> list[dict[str, str]]:
     expected = [{"version": version, "checksum": checksum} for version, checksum in USER_ISOLATION_MIGRATION_LEDGER]
     if records != expected:
         raise SiteHelperContractError("user isolation requires the exact canonical ledger through 0018")
+    return [dict(record) for record in expected]
+
+
+def validate_user_isolation_v2_ledger(records: object) -> list[dict[str, str]]:
+    expected = [{"version": version, "checksum": checksum} for version, checksum in USER_ISOLATION_V2_MIGRATION_LEDGER]
+    if records != expected:
+        raise SiteHelperContractError("user isolation v2 requires the exact canonical ledger through 0019")
     return [dict(record) for record in expected]
 
 
