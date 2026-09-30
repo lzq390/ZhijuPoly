@@ -49,6 +49,7 @@ def service_acl_database():
     suffix = uuid4().hex[:16]
     database, login = "service_acl_" + suffix, "service_login_" + suffix
     extra = "service_extra_" + suffix
+    password = "test-only"
     dsn = make_conninfo(base, dbname=database)
     with psycopg.connect(base, autocommit=True) as administrator:
         assert administrator.info.server_version // 10000 == 16
@@ -57,7 +58,7 @@ def service_acl_database():
               CREATE ROLE nexpoly_service NOLOGIN;
             END IF;
           END $$""")
-        administrator.execute(sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS IN ROLE nexpoly_service").format(sql.Identifier(login)))
+        administrator.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS IN ROLE nexpoly_service").format(sql.Identifier(login), sql.Literal(password)))
         administrator.execute(sql.SQL("CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS").format(sql.Identifier(extra)))
         administrator.execute(sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(sql.Identifier(database)))
     try:
@@ -83,7 +84,7 @@ def service_acl_database():
             connection.execute(MIGRATION.read_text())
             connection.commit()
             yield {"admin": connection, "dsn": dsn, "login": login, "extra": extra,
-                   "service_dsn": make_conninfo(dsn, user=login)}
+                   "service_dsn": make_conninfo(dsn, user=login, password=password)}
             connection.rollback()
     finally:
         with psycopg.connect(base, autocommit=True) as administrator:
