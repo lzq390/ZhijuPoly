@@ -14,6 +14,7 @@ from psycopg.rows import dict_row
 
 from app.migration_policy import validate_migration_manifest_entries
 from app.postgres_migrations import MIGRATIONS_DIR
+from .isolation_ledger import CURRENT_VERSION, expected_isolation_ledger, validate_service_members
 
 VERSION = '0018_user_isolation_cutover'
 TABLES = ('online_knowledge.history','online_knowledge.jobs','md.monomer_md_jobs',
@@ -86,9 +87,19 @@ def apply_identity_cutover(dsn: str, owner_user_id: str, *, expected_business_da
         connection.execute("SET LOCAL lock_timeout='10s'")
         connection.execute("SET LOCAL statement_timeout='10min'")
         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended('nexpoly-identity-cutover',0))")
-        ledger = {row['version']:row['checksum'] for row in connection.execute('SELECT version,checksum FROM governance.schema_migrations')}
+        rows = [dict(row) for row in connection.execute('SELECT version,checksum FROM governance.schema_migrations ORDER BY version')]
+        if rows == expected_isolation_ledger(CURRENT_VERSION):
+            # Do not run historical 0018 grants or read any data seal on 0019.
+            from .schema import validate_isolation_schema
+            validate_isolation_schema(connection)
+            validate_service_members(connection)
+            return {'version':VERSION,'already_applied':True,'current_version':CURRENT_VERSION,
+                    'current_readiness':False}
+        ledger = {row['version']:row['checksum'] for row in rows}
+        if len(ledger) != len(rows):
+            raise RuntimeError('Duplicate identity migration ledger entry')
         if ledger == {**prefix,VERSION:target.checksum}:
-            return {'version':VERSION,'already_applied':True}
+            return {'version':VERSION,'already_applied':True,'current_readiness':False}
         if ledger != prefix:
             raise RuntimeError('Cutover requires the exact canonical migration ledger through 0017')
         # Stable row set throughout the ownership change; API/Workers must also

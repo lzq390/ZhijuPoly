@@ -61,7 +61,7 @@ up_prebuilt
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
             self.assertEqual(log.read_text().splitlines(), [
                 "image-verified", "assets-verified", "operator-up",
-                "run --rm --no-deps backend python -m app.postgres_preflight --strict --schema-target user-isolation-0018 --service-context",
+                "run --rm --no-deps backend python -m app.postgres_preflight --strict --schema-target user-isolation-0019 --service-context",
                 "up -d --no-deps --force-recreate backend", "backend-healthy", "backend-verified",
                 "up -d --no-deps --force-recreate --wait --wait-timeout 120 polymerization-batch-worker",
                 "up -d --no-deps frontend-dev",

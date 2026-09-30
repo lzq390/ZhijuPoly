@@ -11,7 +11,7 @@ x-identity-environment: &identity-environment
   AUTH_DEV_HTTP_ORIGINS: "${AUTH_DEV_HTTP_ORIGINS:-}"
   ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
   WEB_CONCURRENCY: "1"
-  NEXPOLY_POSTGRES_PREFLIGHT_ARGS: "--strict --schema-target user-isolation-0018 --service-context"
+  NEXPOLY_POSTGRES_PREFLIGHT_ARGS: "--strict --schema-target user-isolation-0019 --service-context"
   MONOMER_DFT_START_AUTHORIZATION_TOKEN: "${MONOMER_DFT_START_AUTHORIZATION_TOKEN:?DFT start authorization service token is required}"
 services:
   backend:

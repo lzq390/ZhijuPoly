@@ -111,13 +111,17 @@ STARTUP_RUNTIME_TABLES = tuple(
 )
 SCHEMA_TARGET_STARTUP = "startup-through-0012"
 SCHEMA_TARGET_FINAL = "final-0013"
-SCHEMA_TARGET_ISOLATION = "user-isolation-0018"
-SCHEMA_TARGETS = frozenset({SCHEMA_TARGET_STARTUP, SCHEMA_TARGET_FINAL, SCHEMA_TARGET_ISOLATION})
+SCHEMA_TARGET_ISOLATION = "user-isolation-0019"
+SCHEMA_TARGET_ISOLATION_HISTORICAL = "user-isolation-0018"
+ISOLATION_TARGETS = frozenset({SCHEMA_TARGET_ISOLATION, SCHEMA_TARGET_ISOLATION_HISTORICAL})
+SCHEMA_TARGETS = frozenset({SCHEMA_TARGET_STARTUP, SCHEMA_TARGET_FINAL, *ISOLATION_TARGETS})
 
 
 def _required_migrations(schema_target: str) -> tuple[str, ...]:
-    if schema_target == SCHEMA_TARGET_ISOLATION:
-        return tuple(migration.version for migration in _MIGRATION_POLICY)
+    if schema_target in ISOLATION_TARGETS:
+        boundary = ("0019_service_auth_least_privilege" if schema_target == SCHEMA_TARGET_ISOLATION
+                    else "0018_user_isolation_cutover")
+        return tuple(migration.version for migration in _MIGRATION_POLICY if migration.version <= boundary)
     if schema_target == SCHEMA_TARGET_STARTUP:
         return STARTUP_REQUIRED_MIGRATIONS
     if schema_target == SCHEMA_TARGET_FINAL:
@@ -128,7 +132,7 @@ def _required_migrations(schema_target: str) -> tuple[str, ...]:
 def _required_runtime_tables(
     schema_target: str,
 ) -> tuple[tuple[str, str], ...]:
-    if schema_target == SCHEMA_TARGET_ISOLATION:
+    if schema_target in ISOLATION_TARGETS:
         # Hidden lab modules are not part of the authenticated v1 product.
         # Their rows must not require extra API/service privileges at startup.
         return tuple(table for table in STRICT_RUNTIME_TABLES if table[0] != "lab")
@@ -275,6 +279,8 @@ def _analytics_snapshot_report(connection) -> dict[str, object]:
 
 def strict_preflight_errors(report: dict[str, object]) -> list[str]:
     errors: list[str] = []
+    if report.get("isolation_contract_error"):
+        errors.append(str(report["isolation_contract_error"]))
     reverse_access = report.get("reverse_design_access")
     if isinstance(reverse_access, dict) and reverse_access.get("ready") is not True:
         errors.append("Reverse design PI connection cannot read required query dependencies")
@@ -334,7 +340,7 @@ def strict_preflight_errors(report: dict[str, object]) -> list[str]:
             f"{reason or 'unknown reason'}"
         )
     elif (
-        schema_target in {SCHEMA_TARGET_FINAL, SCHEMA_TARGET_ISOLATION}
+        schema_target in {SCHEMA_TARGET_FINAL, *ISOLATION_TARGETS}
         and dft_state != MonomerDftSchemaState.READY.value
     ):
         errors.append(
@@ -416,6 +422,7 @@ def run_preflight(
         "mode": mode,
         "strict": strict,
         "schema_target": schema_target,
+        "current_readiness": False,
         "expected_source_sha": expected_source_sha,
         "structured_data_backend": settings.structured_data_backend,
         "app_postgres_dsn": _safe_dsn_label(target_dsn),
@@ -508,15 +515,32 @@ def run_preflight(
                 .difference(_MIGRATION_CHECKSUMS)
                 .difference(forward_compatible_migrations)
             )
-            if schema_target == SCHEMA_TARGET_ISOLATION:
+            if schema_target in ISOLATION_TARGETS:
                 from app.auth.schema import validate_runtime_role, validate_isolation_schema
+                from app.auth.isolation_ledger import (CURRENT_VERSION, CUTOVER_VERSION,
+                    validate_service_migration_ledger, database_identity)
+                validate_service_migration_ledger(connection, CURRENT_VERSION if
+                    schema_target == SCHEMA_TARGET_ISOLATION else CUTOVER_VERSION)
                 report["service_identity"] = validate_runtime_role(connection, "nexpoly_service")
                 report["user_isolation_schema"] = validate_isolation_schema(connection)
+                if schema_target == SCHEMA_TARGET_ISOLATION:
+                    import psycopg
+                    from psycopg.rows import dict_row
+                    from app.auth.service_privilege_contract import validate_service_auth_privileges
+                    report["service_auth_privileges"] = validate_service_auth_privileges(connection, require_login=True)
+                    service_database = database_identity(connection)
+                    # Bypass the ambient service override: test the actual API login.
+                    with psycopg.connect(settings.app_postgres_dsn, row_factory=dict_row, connect_timeout=3) as api:
+                        report["api_identity"] = validate_runtime_role(api, "nexpoly_api")
+                        if database_identity(api) != service_database:
+                            raise ValueError("API and service identities connect to different databases")
+                        validate_service_migration_ledger(api)
+                    report["runtime_database"] = service_database
             dft_schema = probe_monomer_dft_schema(connection)
             table_counts = {
                 f"{schema}.{table}": _postgres_count(connection, schema, table)
                 for schema, table in STARTUP_RUNTIME_TABLES
-                if schema_target != SCHEMA_TARGET_ISOLATION or schema != "lab"
+                if schema_target not in ISOLATION_TARGETS or schema != "lab"
             }
             table_counts.update(
                 {
@@ -584,8 +608,12 @@ def run_preflight(
             report["analytics_snapshot"] = _analytics_snapshot_report(connection)
     except PostgresUnavailableError as exc:
         report["postgres"] = {"reachable": False, "error": str(exc), "tables": {}}
+    except ValueError as exc:
+        if schema_target not in ISOLATION_TARGETS:
+            raise
+        report["isolation_contract_error"] = str(exc)
 
-    if schema_target == SCHEMA_TARGET_ISOLATION:
+    if schema_target in ISOLATION_TARGETS:
         report["reverse_design_access"] = reverse_design_readiness(settings.pi_postgres_dsn)
 
     blockers = preflight_blockers(report)
@@ -594,6 +622,7 @@ def run_preflight(
     report["blockers"] = blockers
     report["strict_ok"] = not strict_errors
     report["strict_errors"] = strict_errors
+    report["current_readiness"] = schema_target == SCHEMA_TARGET_ISOLATION and not strict_errors
     return report
 
 
@@ -614,7 +643,8 @@ def main() -> None:
         default=SCHEMA_TARGET_FINAL,
         help=(
             "Validate startup compatibility through 0012 or strict readiness "
-            "through the historical manifest; user-isolation-0018 requires the dedicated cutover. The "
+            "through the historical manifest; user-isolation-0019 requires dedicated identity/ACL migrations. "
+            "user-isolation-0018 is historical-only and never current readiness. The "
             "final-0013 choice is retained as a compatibility identifier."
         ),
     )

@@ -44,7 +44,7 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
                 backend = services["backend"]
                 self.assertEqual(backend["environment"]["APP_POSTGRES_DSN"], environment["APP_POSTGRES_DSN"])
                 self.assertEqual(backend["environment"]["APP_SERVICE_POSTGRES_DSN"], environment["APP_SERVICE_POSTGRES_DSN"])
-                self.assertEqual(backend["environment"]["NEXPOLY_POSTGRES_PREFLIGHT_ARGS"], "--strict --schema-target user-isolation-0018 --service-context")
+                self.assertEqual(backend["environment"]["NEXPOLY_POSTGRES_PREFLIGHT_ARGS"], "--strict --schema-target user-isolation-0019 --service-context")
                 health = backend["healthcheck"]["test"][1]
                 self.assertIn("NEXPOLY_POSTGRES_PREFLIGHT_ARGS", health)
                 self.assertIn("--mode configured" if gpu else "--mode disabled", health)
@@ -130,7 +130,7 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
         self.assertIn('scripts/ci/test_isolated_backend_image.sh "$BACKEND_IMAGE"', workflow)
         self.assertIn("allow_contract_on_fresh_database=True", smoke)
         self.assertIn("apply_identity_cutover(dsn, str(owner['user_id']))", smoke)
-        self.assertIn("--schema-target user-isolation-0018 --service-context", smoke)
+        self.assertIn("--schema-target user-isolation-0019 --service-context", smoke)
         self.assertNotIn(
             "python -m app.postgres_migrations --mode bootstrap-expand",
             workflow,

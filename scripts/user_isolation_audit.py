@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only isolation preflight and safe evidence for the dedicated 0018 cutover.
+"""Read-only current 0019 audit; explicit schema-version 1 preserves historical 0018.
 
 The production v7 helper is intentionally a separate, frozen evidence protocol.
 This tool never exports passwords, session token digests, or business rows.
@@ -21,9 +21,11 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from app.migration_policy import validate_migration_manifest_entries
-from scripts.site_helper_contracts import validate_user_isolation_ledger
+from scripts.site_helper_contracts import validate_user_isolation_ledger, validate_user_isolation_v2_ledger
 from app.auth.schema import OWNER_TABLES, CHILD_TABLES, validate_runtime_role, validate_isolation_schema
+from app.auth.isolation_ledger import (CURRENT_VERSION, CUTOVER_VERSION, database_identity,
+    expected_isolation_ledger, validate_service_migration_ledger, validate_service_members)
+from app.auth.service_privilege_contract import validate_service_auth_privileges
 
 # Full-database backups must retain these schemas; credential-bearing auth data
 # belongs only inside the owner-private backup, never the public audit projection.
@@ -58,7 +60,9 @@ def _digest_rows(connection, relation: str, *, legacy: bool = False):
 
 
 
-def capture(connection, *, require_audit_role: bool = True):
+def capture(connection, *, require_audit_role: bool = True, schema_version: int = 2):
+    if schema_version not in {1, 2}:
+        raise ValueError("isolation audit schema version must be 1 or 2")
     connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
     connection.execute("SET LOCAL search_path=pg_catalog")
     connection.execute("SET LOCAL statement_timeout='5min'")
@@ -67,12 +71,12 @@ def capture(connection, *, require_audit_role: bool = True):
         secrets = connection.execute("SELECT has_column_privilege(current_user,'auth.users','password_hash','SELECT') OR has_column_privilege(current_user,'auth.sessions','token_hash','SELECT') AS readable").fetchone()
         if secrets["readable"]:
             raise ValueError("audit identity can read credential columns")
-    entries = validate_migration_manifest_entries(REPO_ROOT / "backend/migrations/postgres")
     ledger = [dict(row) for row in connection.execute("SELECT version,checksum FROM governance.schema_migrations ORDER BY version")]
-    expected_ledger = [{"version": entry.version, "checksum": entry.checksum} for entry in entries]
-    validate_user_isolation_ledger(ledger)
+    expected_ledger = expected_isolation_ledger(CURRENT_VERSION if schema_version == 2 else CUTOVER_VERSION)
+    (validate_user_isolation_v2_ledger if schema_version == 2 else validate_user_isolation_ledger)(ledger)
     if ledger != expected_ledger:
-        raise ValueError("isolation audit requires the exact complete 0018 migration ledger")
+        raise ValueError("isolation audit requires its exact version-bounded migration ledger")
+    service_privileges = validate_service_members(connection) if schema_version == 2 else None
     schema_proof = validate_isolation_schema(connection)
     ownership = {}
     for relation in OWNER_TABLES:
@@ -87,7 +91,9 @@ def capture(connection, *, require_audit_role: bool = True):
         ownership[relation] = dict(counts)
     relations = (*AUTH_COLUMNS, *OWNER_TABLES, *CHILD_TABLES)
     return {
-        "schema_version": 1,
+        "schema_version": schema_version,
+        "current_readiness": schema_version == 2,
+        "service_auth_privileges": service_privileges,
         "database": connection.execute("SELECT current_database() AS name").fetchone()["name"],
         "audit_identity": role,
         "migration_ledger": ledger,
@@ -101,17 +107,28 @@ def capture(connection, *, require_audit_role: bool = True):
     }
 
 
-def preflight(dsns: dict[str, str]):
+def preflight(dsns: dict[str, str], *, schema_version: int = 2):
+    if schema_version not in {1, 2}:
+        raise ValueError("isolation audit schema version must be 1 or 2")
+    if set(dsns) != {"nexpoly_api", "nexpoly_auth", "nexpoly_service"}:
+        raise ValueError("all three separate runtime identities are required")
     result = {}
     database = None
     for group, dsn in dsns.items():
         with psycopg.connect(dsn, row_factory=dict_row, connect_timeout=5) as connection:
             result[group] = validate_runtime_role(connection, group)
-            current = connection.execute("SELECT current_database() AS database,inet_server_addr()::text AS host,inet_server_port() AS port").fetchone()
+            current = database_identity(connection)
             if database is not None and current != database:
                 raise ValueError("runtime identities connect to different databases")
             database = current
-    return {"database": dict(database), "identities": result, "rollback_before_0018_allowed": False}
+            if group != "nexpoly_auth":
+                ledger = validate_service_migration_ledger(connection,
+                    CURRENT_VERSION if schema_version == 2 else CUTOVER_VERSION)
+                (validate_user_isolation_v2_ledger if schema_version == 2 else validate_user_isolation_ledger)(ledger)
+            if group == "nexpoly_service" and schema_version == 2:
+                result[group]["service_auth_privileges"] = validate_service_auth_privileges(connection, require_login=True)
+    return {"schema_version":schema_version, "current_readiness":schema_version == 2,
+            "database": dict(database), "identities": result, "rollback_before_0018_allowed": False}
 
 
 def main():
@@ -119,12 +136,14 @@ def main():
     parser.add_argument("operation", choices=("capture", "preflight"))
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--audit-dsn-env", default="AUTH_AUDIT_POSTGRES_DSN")
+    parser.add_argument("--schema-version", type=int, choices=(1, 2), default=2,
+                        help="1 is historical 0018 only; 2 validates current 0019")
     args = parser.parse_args()
     if args.operation == "capture":
         with psycopg.connect(os.environ[args.audit_dsn_env], row_factory=dict_row, connect_timeout=5) as connection:
-            evidence = capture(connection)
+            evidence = capture(connection, schema_version=args.schema_version)
     else:
-        evidence = preflight({"nexpoly_api": os.environ["APP_POSTGRES_DSN"], "nexpoly_auth": os.environ["AUTH_POSTGRES_DSN"], "nexpoly_service": os.environ["APP_SERVICE_POSTGRES_DSN"]})
+        evidence = preflight({"nexpoly_api": os.environ["APP_POSTGRES_DSN"], "nexpoly_auth": os.environ["AUTH_POSTGRES_DSN"], "nexpoly_service": os.environ["APP_SERVICE_POSTGRES_DSN"]}, schema_version=args.schema_version)
     payload = (json.dumps(evidence, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode()
     descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "wb") as stream:

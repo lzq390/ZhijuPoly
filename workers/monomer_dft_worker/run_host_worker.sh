@@ -281,19 +281,43 @@ client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 client.settimeout(0.25)
 try:
     client.connect(sys.argv[1])
-except (ConnectionRefusedError, FileNotFoundError):
-    raise SystemExit(1)
+except ConnectionRefusedError:
+    pass
 except OSError:
     raise SystemExit(2)
+else:
+    raise SystemExit(0)
 finally:
     client.close()
-raise SystemExit(0)
+
+# ECONNREFUSED also occurs while a live owner has bound but not yet listened.
+# Require the pathname to be absent from the kernel registry before unlinking;
+# an unreadable or malformed registry cannot establish that the socket is stale.
+try:
+    with open("/proc/net/unix", encoding="utf-8") as registry:
+        if registry.readline().split() != ["Num", "RefCount", "Protocol", "Flags", "Type", "St", "Inode", "Path"]:
+            raise ValueError("unexpected Unix socket registry header")
+        for line in registry:
+            fields = line.rstrip("\n").split(maxsplit=7)
+            if len(fields) not in {7, 8} or not fields[0].endswith(":"):
+                raise ValueError("malformed Unix socket registry row")
+            int(fields[0][:-1], 16)
+            for field in fields[1:6]:
+                int(field, 16)
+            int(fields[6], 10)
+            if len(fields) == 8 and fields[7] == sys.argv[1]:
+                raise SystemExit(3)
+except (OSError, ValueError):
+    raise SystemExit(2)
+raise SystemExit(1)
 PY
   then
     fail "refusing to remove a listening worker socket: $MONOMER_DFT_WORKER_UDS"
   else
     probe_status=$?
   fi
+  [[ "$probe_status" != "3" ]] || fail \
+    "refusing to remove a registered worker socket: $MONOMER_DFT_WORKER_UDS"
   [[ "$probe_status" == "1" ]] || fail \
     "worker socket could not be verified as stale: $MONOMER_DFT_WORKER_UDS"
   [[ -S "$MONOMER_DFT_WORKER_UDS" && ! -L "$MONOMER_DFT_WORKER_UDS" ]] || fail \
@@ -597,7 +621,6 @@ ensure_runtime_directory HF_HOME "$HF_HOME" true
 ensure_runtime_directory TMPDIR "$TMPDIR" true
 ensure_runtime_directory HOME "$HOME" true
 [[ -x "$MONOMER_DFT_PYTHON" ]] || fail "MONOMER_DFT_PYTHON is not executable: $MONOMER_DFT_PYTHON"
-[[ ! -e "$MONOMER_DFT_WORKER_UDS" && ! -L "$MONOMER_DFT_WORKER_UDS" ]] || fail "worker socket already exists or is a symlink: $MONOMER_DFT_WORKER_UDS"
 
 # Launch from the repository root so release-local shared packages such as
 # gpu_resource are importable without weakening the isolated PYTHONPATH policy.
@@ -617,6 +640,8 @@ trap 'supervisor_exit_cleanup $?' EXIT
 fatal_restarts=0
 while true; do
   [[ "$SHUTDOWN_REQUESTED" != "true" ]] || exit 0
+  # This also handles a fresh supervisor after SIGKILL/OOM left a socket
+  # behind. Keep the listening, symlink, type, and inode checks in this path.
   remove_verified_stale_socket
   child_started_at=$SECONDS
   launch_supervised_worker

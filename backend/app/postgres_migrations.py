@@ -1014,9 +1014,11 @@ def apply_postgres_migrations(
                 )
 
         effective_allowed_kinds: set[MigrationKind] | None = None
-        # Identity cutover always needs its dedicated maintenance command and
-        # explicit legacy owner, even on an otherwise empty bootstrap database.
-        deferred_versions: set[str] = {"0018_user_isolation_cutover"}
+        # Identity cutover and service privilege contraction always need their
+        # dedicated maintenance commands, including on a fresh database.
+        deferred_versions: set[str] = {
+            "0018_user_isolation_cutover", "0019_service_auth_least_privilege",
+        }
         if allowed_kinds is not None:
             effective_allowed_kinds = set(allowed_kinds)
             if fresh_bootstrap:
