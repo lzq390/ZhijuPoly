@@ -134,3 +134,6 @@ nexpoly-release-*.tar.gz
 /.venv-monomer-md-worker.staging-*/
 /.venv-monomer-md-worker.previous-*/
 /docs/plan/
+
+# Personal structure-library integration coverage
+!/backend/tests/test_structure_library.py

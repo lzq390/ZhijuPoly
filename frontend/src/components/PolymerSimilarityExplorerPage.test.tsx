@@ -342,7 +342,7 @@ describe("PolymerSimilarityExplorerPage", () => {
         submitQuery={vi.fn().mockResolvedValue(undefined)}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: "加载结构" }));
+    fireEvent.click(screen.getByRole("button", { name: "加载示例" }));
     await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledWith("*CC*"));
 
     await ref.current?.syncBeforeLeave();

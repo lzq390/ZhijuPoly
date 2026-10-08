@@ -15,21 +15,21 @@ from psycopg.rows import dict_row
 
 from .cutover import private_data_seal, auth_metadata_seal, backup_state_seal
 from .assets import archive_assets, file_sha256
-from .isolation_ledger import (PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION,
+from .isolation_ledger import (PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, LIBRARY_VERSION,
                                validate_service_migration_ledger, validate_service_members)
 
 
 def validate_backup_schema(connection):
     row = connection.execute("SELECT max(version) AS version FROM governance.schema_migrations").fetchone()
     version = row["version"]
-    if version not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION}:
-        raise ValueError("Identity backup requires exact 0017, historical 0018, or current 0019")
+    if version not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, LIBRARY_VERSION}:
+        raise ValueError("Identity backup requires exact 0017, historical 0018/0019, or current 0020")
     ledger = validate_service_migration_ledger(connection, version)
     if version != PREPARE_VERSION:
         from .schema import validate_isolation_schema
-        validate_isolation_schema(connection)
-    privileges = validate_service_members(connection) if version == CURRENT_VERSION else None
-    return {"migration_ledger": ledger, "current_readiness": version == CURRENT_VERSION,
+        validate_isolation_schema(connection, version)
+    privileges = validate_service_members(connection) if version in {CURRENT_VERSION, LIBRARY_VERSION} else None
+    return {"migration_ledger": ledger, "current_readiness": version in {CURRENT_VERSION, LIBRARY_VERSION},
             "service_auth_privileges": privileges}
 
 

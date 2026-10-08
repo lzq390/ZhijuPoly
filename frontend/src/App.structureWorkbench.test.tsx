@@ -357,7 +357,7 @@ describe("App 单体反推导航", () => {
     sessionStorage.setItem(MONOMER_RETROSYNTHESIS_DRAFT_KEY, JSON.stringify({ version: 1,
       smiles: "CCN", targetRole: "diamine", returnCount: "7" }));
   }
-  it("工作台快捷入口等待一次同步，在提交导航后带入当前结构", async () => {
+  it("工作台快捷入口等待同步后只导航，保留独立目标", async () => {
     draft();
     let resolve!: (smiles: string) => void;
     mocks.syncSmilesFromCanvas.mockReturnValue(new Promise<string>(done => { resolve = done; }));
@@ -370,7 +370,7 @@ describe("App 单体反推导航", () => {
     expect(JSON.parse(sessionStorage.getItem(MONOMER_RETROSYNTHESIS_DRAFT_KEY)!).smiles).toBe("CCN");
     resolve("CCO");
     await screen.findByRole("heading", { name: "单体逆合成反推" });
-    expect((screen.getByLabelText("目标单体 SMILES") as HTMLTextAreaElement).value).toBe("CCO");
+    expect((screen.getByLabelText("目标单体 SMILES") as HTMLTextAreaElement).value).toBe("CCN");
     expect((screen.getByLabelText("反推候选数") as HTMLInputElement).value).toBe("7");
     expect(structureEditor(view.container)).toBe(editor);
     expect(screen.getByRole("button", { name: "单体逆合成反推" }).getAttribute("aria-current")).toBe("page");
@@ -381,8 +381,7 @@ describe("App 单体反推导航", () => {
     fireEvent.click(screen.getByRole("button", { name: "打开单体逆合成反推" }));
     await screen.findByRole("heading", { name: "单体逆合成反推" });
     expect((screen.getByLabelText("目标单体 SMILES") as HTMLTextAreaElement).value).toBe("CCN");
-    expect(screen.getByText(status === "saved" ? "当前共享结构为空，已保留反推草稿。"
-      : "共享结构同步未完成，已保留反推草稿。请在工作台检查结构后重试。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "选择结构" })).toBeTruthy();
   });
   it("侧栏与深链恢复草稿，刷新不启动画板", async () => {
     draft(); mocks.syncSmilesFromCanvas.mockResolvedValue("CCO");

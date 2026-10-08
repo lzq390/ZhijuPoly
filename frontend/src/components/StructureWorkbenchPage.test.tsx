@@ -138,7 +138,7 @@ describe("StructureWorkbenchPage", () => {
     expect(screen.getByRole("heading", { name: "结构工作台" })).toBeTruthy();
     expect(screen.queryByTestId("structure-preview-3d")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "加载结构" }));
+    fireEvent.click(screen.getByRole("button", { name: "加载示例" }));
     await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledWith(REVERSE_DESIGN_DEMO_SMILES));
 
     expect(document.querySelector("[data-structure-editor]")).not.toBeNull();

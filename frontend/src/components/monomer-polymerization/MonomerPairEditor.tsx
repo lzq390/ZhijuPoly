@@ -1,3 +1,4 @@
+import { useStructureImport } from "../../structure-library/StructureLibraryProvider";
 import {
   Atom,
   Check,
@@ -26,7 +27,6 @@ type MonomerPairEditorProps = {
   onMonomerAChange: (value: string) => void;
   onMonomerBChange: (value: string) => void;
   onTouched: (slot: MonomerSlot) => void;
-  getSharedSmiles: () => Promise<string>;
   onEditStructure: () => void;
 };
 
@@ -61,7 +61,6 @@ function MonomerInputSlot({
   recommendedExample,
   onValueChange,
   onTouched,
-  getSharedSmiles
 }: {
   slot: MonomerSlot;
   value: string;
@@ -71,7 +70,6 @@ function MonomerInputSlot({
   recommendedExample: string;
   onValueChange: (value: string) => void;
   onTouched: () => void;
-  getSharedSmiles: () => Promise<string>;
 }) {
   const inputId = `monomer-${slot.toLowerCase()}-smiles`;
   const hintId = `${inputId}-hint`;
@@ -135,24 +133,10 @@ function MonomerInputSlot({
     }
   }, [preview.error, preview.loading, preview.smiles, value]);
 
-  async function importSharedStructure() {
-    setImporting(true);
-    setImportError(null);
-    try {
-      const smiles = (await getSharedSmiles()).trim();
-      if (!smiles) throw new Error("共享结构为空，请先在结构工作台绘制或输入单体。");
-      onValueChange(smiles);
-      onTouched();
-      await loadPreview(smiles);
-    } catch (sharedError) {
-      setImportError(
-        sharedError instanceof Error && sharedError.message.trim()
-          ? sharedError.message
-          : "无法读取共享结构。"
-      );
-    } finally {
-      setImporting(false);
-    }
+  const selection = useStructureImport(value, (smiles) => { onValueChange(smiles); onTouched(); void loadPreview(smiles); }, `单体 ${slot}`);
+  async function chooseStructure() {
+    setImporting(true); setImportError(null);
+    try { await selection.choose(); } finally { setImporting(false); }
   }
 
   async function copySmiles() {
@@ -226,11 +210,11 @@ function MonomerInputSlot({
           <button
             type="button"
             className="np-mp-compact-button"
-            onClick={() => void importSharedStructure()}
+            onClick={() => void chooseStructure()}
             disabled={importing}
           >
             {importing ? <LoaderCircle className="np-sw-spin" /> : <Clipboard />}
-            {importing ? "导入中" : "导入共享结构"}
+            {importing ? "导入中" : "选择结构"}
           </button>
           <button
             type="button"
@@ -262,6 +246,7 @@ function MonomerInputSlot({
 
         <p id={hintId} className="np-mp-monomer__hint">{requirementNote}</p>
         {error ? <p id={errorId} className="np-mp-field-error" role="alert">{error}</p> : null}
+        {selection.source && <small>来自：{selection.source}</small>}
         {importError ? <p className="np-mp-field-error" role="status">{importError}</p> : null}
 
         <div className={`np-mp-preview${previewIsStale ? " is-stale" : ""}`}>
@@ -302,7 +287,6 @@ export function MonomerPairEditor({
   onMonomerAChange,
   onMonomerBChange,
   onTouched,
-  getSharedSmiles,
   onEditStructure
 }: MonomerPairEditorProps) {
   return (
@@ -327,7 +311,6 @@ export function MonomerPairEditor({
           recommendedExample={SMIPOLY_POLYIMIDE_FIXTURE.monomerA}
           onValueChange={onMonomerAChange}
           onTouched={() => onTouched("A")}
-          getSharedSmiles={getSharedSmiles}
         />
         <MonomerInputSlot
           slot="B"
@@ -338,7 +321,6 @@ export function MonomerPairEditor({
           recommendedExample={SMIPOLY_POLYIMIDE_FIXTURE.monomerB}
           onValueChange={onMonomerBChange}
           onTouched={() => onTouched("B")}
-          getSharedSmiles={getSharedSmiles}
         />
       </div>
     </div>

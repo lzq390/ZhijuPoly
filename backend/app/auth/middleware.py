@@ -86,15 +86,16 @@ class AuthenticationMiddleware:
                         return await reject(503, '用户隔离数据库尚未准备好。', 'isolation_not_ready')
         scope.setdefault('state', {})['auth_session'] = session
         scope['state']['auth_token'] = token
-        if path.startswith('/api/v1/auth/') and method not in {'GET','HEAD','OPTIONS'}:
+        if path.startswith(('/api/v1/auth/', '/api/v1/structure-library/')) and method not in {'GET','HEAD','OPTIONS'}:
             original_receive = receive
             received_bytes = 0
             async def bounded_auth_receive():
                 nonlocal received_bytes
                 message = await original_receive()
                 received_bytes += len(message.get('body',b''))
-                if received_bytes > 8192:
-                    raise HTTPException(413,'Authentication request is too large')
+                limit = 2 * 1024 * 1024 if path.startswith('/api/v1/structure-library/') else 8192
+                if received_bytes > limit:
+                    raise HTTPException(413,'Request body is too large')
                 return message
             receive = bounded_auth_receive
         started = False

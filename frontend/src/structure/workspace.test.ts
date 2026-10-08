@@ -564,3 +564,80 @@ describe("shared structure documents", () => {
     await expect(editor.getSmiles()).rejects.toThrow("未返回有效的 SMILES");
   });
 });
+
+describe('personal library snapshots', () => {
+  it('retires a timed-out restore and keeps the original invalid draft and geometry', async () => {
+    vi.useFakeTimers();
+    const { workspace, editor, lease } = await mounted('CC');
+    const original = await workspace.captureDocument();
+    workspace.setDraft('N(', 'invalid');
+    let release!: () => void;
+    vi.mocked(editor.setMolecule).mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const pending = workspace.restoreDocument({ ...original, smiles: 'NN', ket: ket('NN', 12) });
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' });
+    await vi.advanceTimersByTimeAsync(8001);
+    await rejected;
+    expect(workspace.getSnapshot()).toMatchObject({ smiles: 'CC', ket: original.ket, draft: 'N(', draftError: 'invalid', status: 'loading', documentBusy: false });
+    release(); await Promise.resolve();
+    expect(workspace.getSnapshot().smiles).toBe('CC');
+    lease.dispose();
+  });
+
+  it('captures immutable complete drawings, including layout-only edits', async () => {
+    const { workspace, edit, lease } = await mounted('CC');
+    const a = await workspace.captureDocument();
+    workspace.markRecorded(a);
+    expect(workspace.hasUnrecordedChanges()).toBe(false);
+    edit('CC', 9, 'candidate annotation');
+    expect(workspace.hasUnrecordedChanges()).toBe(true);
+    const b = await workspace.captureDocument();
+    expect(JSON.parse(b.ket).mol0.atoms[0].location[0]).toBe(9);
+    expect(JSON.parse(b.ket).mol0.atoms[0].selected).toBeUndefined();
+    expect(JSON.parse(a.ket).mol0.atoms[0].location[0]).toBe(1);
+    await workspace.restoreDocument(a);
+    expect(workspace.getSnapshot().ket).toBe(a.ket);
+    expect(workspace.hasUnrecordedChanges()).toBe(false);
+    lease.dispose();
+  });
+
+  it('rejects invalid drafts, export failures and wildcard/source conflicts without saving old values', async () => {
+    const { workspace, editor, edit, lease } = await mounted('*CC*');
+    workspace.setDraft('CC(', 'invalid');
+    await expect(workspace.captureDocument()).rejects.toThrow('修正');
+    workspace.setDraft('*CC*');
+    vi.mocked(editor.getKet).mockRejectedValueOnce(new Error('offline'));
+    await expect(workspace.captureDocument()).rejects.toThrow('offline');
+    edit('CO');
+    await expect(workspace.captureDocument()).rejects.toThrow('连接点');
+    expect(workspace.getSnapshot().smiles).toBe('*CC*');
+    lease.dispose();
+  });
+
+  it('rolls failed restoration back with the original invalid text draft', async () => {
+    const { workspace, editor, lease } = await mounted('CC');
+    const original = await workspace.captureDocument();
+    workspace.setDraft('N(', 'invalid');
+    vi.mocked(editor.setMolecule).mockRejectedValueOnce(new Error('bad KET'));
+    await expect(workspace.restoreDocument({ ...original, smiles: 'NN', ket: ket('NN', 7) })).rejects.toThrow('bad KET');
+    expect(workspace.getSnapshot()).toMatchObject({ smiles: 'CC', ket: original.ket, draft: 'N(', draftError: 'invalid', status: 'loading' });
+    lease.dispose();
+  });
+
+  it('rejects chemically inconsistent records and fences concurrent writes during restore', async () => {
+    const { workspace, editor, lease } = await mounted('CC');
+    const original = await workspace.captureDocument();
+    const oldHandle = workspace.getEditor()!;
+    let complete!: () => void;
+    const originalSet = editor.setMolecule;
+    vi.mocked(editor.setMolecule).mockImplementationOnce(async source => { await new Promise<void>(resolve => { complete = resolve; }); await originalSet(source); });
+    const restoring = workspace.restoreDocument({ ...original, smiles: 'NN', ket: ket('NN') });
+    await vi.waitFor(() => expect(complete).toBeTypeOf('function'));
+    await expect(oldHandle.setMolecule('CO')).rejects.toThrow('正在保存或恢复');
+    complete();
+    await restoring;
+    expect(workspace.getSnapshot().smiles).toBe('NN');
+    await expect(workspace.restoreDocument({ ...original, smiles: 'CO', ket: ket('CC') })).rejects.toThrow('不一致');
+    expect(workspace.getSnapshot().smiles).toBe('NN');
+    lease.dispose();
+  });
+});

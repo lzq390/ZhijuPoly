@@ -1,3 +1,4 @@
+import { LibraryTestProvider } from "../test/structureLibraryFixture";
 import { StructureWorkspace } from "../structure/workspace";
 /* @vitest-environment jsdom */
 
@@ -174,7 +175,7 @@ function completedJob(overrides: Partial<MonomerDftJobResponse> = {}): MonomerDf
   };
 }
 
-function renderPage(structure = makeStructure()) {
+function renderPage(structure = makeStructure(), draft = "CCO") {
   return {
     structure,
     view: render(
@@ -183,7 +184,7 @@ function renderPage(structure = makeStructure()) {
         initialJobId={null}
         onJobIdChange={vi.fn()}
         onEditStructure={vi.fn()}
-      />
+      />, { wrapper: ({ children }) => <LibraryTestProvider workspace={structure.workspace} initial={{ "dft.smiles": draft }}>{children}</LibraryTestProvider> }
     )
   };
 }
@@ -341,6 +342,7 @@ describe("MonomerDftPage workbench", () => {
       capabilities: { ...capabilities, models: [capabilities.models[0], alternateModel] }
     }));
     const view = render(<MonomerDftPage {...props} />);
+    fireEvent.change(screen.getByLabelText("SMILES / PSMILES"), { target: { value: "CCO" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "提交计算" }).hasAttribute("disabled")).toBe(false));
 
     mocks.useMonomerDftJob.mockReturnValue(controller({
@@ -544,12 +546,12 @@ describe("MonomerDftPage workbench", () => {
     expect(alert.textContent).toContain("删除任务失败，请稍后重试。");
   });
 
-  it.each(["CCN", "CC("])("restores the shared draft %s when entering DFT", (draft) => {
+  it.each(["CCN", "CC("])("does not copy shared draft %s when entering DFT", (draft) => {
     const structure = makeStructure("CCO");
     structure.workspace.setDraft(draft);
-    renderPage(structure);
+    renderPage(structure, "");
 
-    expect(screen.getByLabelText("SMILES / PSMILES")).toHaveProperty("value", draft);
+    expect(screen.getByLabelText("SMILES / PSMILES")).toHaveProperty("value", "");
     expect(structure.workspace.getSnapshot().smiles).toBe("CCO");
     expect(structure.getCurrentSmiles).not.toHaveBeenCalled();
   });
@@ -557,7 +559,7 @@ describe("MonomerDftPage workbench", () => {
   it("preserves an incomplete draft when the accepted structure changes", () => {
     const structure = makeStructure("CCO");
     structure.workspace.setDraft("CC(");
-    const { view } = renderPage(structure);
+    const { view } = renderPage(structure, "CC(");
 
     act(() => structure.workspace.commitSmiles("CCN"));
     view.rerender(
@@ -579,7 +581,7 @@ describe("MonomerDftPage workbench", () => {
     mocks.standardizeSmiles.mockRejectedValue(new Error("Invalid SMILES"));
     const structure = makeStructure("CCO");
     structure.workspace.setDraft("CC(");
-    renderPage(structure);
+    renderPage(structure, "CC(");
 
     const submitButton = screen.getByRole("button", { name: "提交计算" });
     await waitFor(() => expect(submitButton.hasAttribute("disabled")).toBe(false));
@@ -598,7 +600,7 @@ describe("MonomerDftPage workbench", () => {
     mocks.standardizeSmiles.mockResolvedValue({ standardized_smiles: "CCO" });
     const structure = makeStructure("CC");
     structure.workspace.setDraft("C(C)O");
-    renderPage(structure);
+    renderPage(structure, "C(C)O");
 
     const submitButton = screen.getByRole("button", { name: "提交计算" });
     await waitFor(() => expect(submitButton.hasAttribute("disabled")).toBe(false));
@@ -634,7 +636,7 @@ describe("MonomerDftPage workbench", () => {
       single_point: { properties: ["energy", "forces", "charges"] }
     }));
     expect(structure.getCurrentSmiles).not.toHaveBeenCalled();
-    expect(structure.setSmiles).toHaveBeenCalledWith("CCN");
+    expect(structure.setSmiles).not.toHaveBeenCalled();
     expect(screen.getByRole("tab", { name: /结果分析/ }).getAttribute("aria-selected")).toBe("true");
     expect(scrollRegion.scrollTop).toBe(0);
   });

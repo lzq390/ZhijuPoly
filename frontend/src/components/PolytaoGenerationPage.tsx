@@ -1,3 +1,6 @@
+import { useModuleDraftState, useStructureImport } from "../structure-library/StructureLibraryProvider";
+import { sourceLabel, type ImportedStructure } from "../structure-library/types";
+import { getSessionEpoch } from "../auth/session";
 import { BrowsingRecordingControls } from "./browsing-recording/BrowsingRecording";
 import { useFlipMotion } from "../hooks/useFlipMotion";
 import { useMotionPresence } from "../hooks/useMotionPresence";
@@ -259,7 +262,21 @@ export function PolytaoGenerationPage({
   const polytao = usePolytaoGeneration(!guest);
   const [descriptorError, setDescriptorError] = useState<string | null>(null);
   const [isDescriptorLoading, setIsDescriptorLoading] = useState(false);
-  const [descriptorSource, setDescriptorSource] = useState<DescriptorSource>("empty");
+  const [descriptorSource, setDescriptorSource] = useModuleDraftState<DescriptorSource>("polytao.descriptorSource", "empty");
+  const [reference, setReference] = useModuleDraftState<ImportedStructure | null>("polytao.reference", null);
+  const referenceSmiles = reference?.smiles ?? "";
+  const descriptorRevision = useRef(0);
+  useEffect(() => () => { descriptorRevision.current++; }, []);
+  const referenceSelection = useStructureImport(referenceSmiles, (_smiles, selection) => {
+    descriptorRevision.current++;
+    setIsDescriptorLoading(false);
+    setReference(selection);
+    if (descriptorSource === "structure") {
+      updateRequest({ descriptors: { ...EMPTY_POLYTAO_DESCRIPTORS }, input_smiles: null });
+      setDescriptorSource("empty");
+    }
+    setDescriptorError(null);
+  }, "PolyTAO 参考结构");
   const [parameterOpen, setParameterOpen] = useState(false);
   const [referenceOpen, setReferenceOpen] = useState(false);
   const [structureFlipped, setStructureFlipped] = useState(false);
@@ -293,7 +310,7 @@ export function PolytaoGenerationPage({
   useLayoutEffect(() => { if (drawerResize.resizing) drawerPresence.finish(); }, [drawerResize.resizing, drawerPresence.finish]);
   useLayoutEffect(() => { drawerPresence.finish(); }, [drawerMode, drawerPresence.finish]);
   const previousDrawerProfileRef = useRef<DrawerProfile>(drawerProfile);
-  const hasStructure = structure.smiles.trim().length > 0;
+  const hasStructure = referenceSmiles.trim().length > 0;
   const filledCount = useMemo(
     () => filledDescriptorCount(polytao.request.descriptors),
     [polytao.request.descriptors]
@@ -391,10 +408,10 @@ export function PolytaoGenerationPage({
     setReferenceSvg(null);
     setReferenceSvgError(null);
     setIsReferenceSvgLoading(false);
-  }, [structure.smiles]);
+  }, [referenceSmiles]);
 
   useEffect(() => {
-    const smiles = structure.smiles.trim();
+    const smiles = referenceSmiles.trim();
     if (guest || !referenceOpen || !smiles || referenceSvg) {
       return;
     }
@@ -419,7 +436,7 @@ export function PolytaoGenerationPage({
       });
 
     return () => controller.abort();
-  }, [guest, referenceOpen, referenceSvg, structure.smiles]);
+  }, [guest, referenceOpen, referenceSvg, referenceSmiles]);
 
   const closeParameterPanel = useCallback((restoreFocus = false) => {
     setParameterOpen(false);
@@ -489,6 +506,8 @@ export function PolytaoGenerationPage({
   }, [closeDrawer, closeParameterPanel, drawerMode, drawerOpen, parameterOpen]);
 
   function updateRequest(partial: Partial<PolytaoGenerationRequest>) {
+    descriptorRevision.current++;
+    setIsDescriptorLoading(false);
     polytao.setRequest({
       ...polytao.request,
       ...partial,
@@ -510,13 +529,16 @@ export function PolytaoGenerationPage({
     if (!requestServiceAccess()) return;
     setDescriptorError(null);
     setIsDescriptorLoading(true);
+    const revision = ++descriptorRevision.current;
+    const epoch = getSessionEpoch();
     try {
-      const currentSmiles = (await structure.getCurrentSmiles()).trim();
+      const currentSmiles = referenceSmiles.trim();
       if (!currentSmiles) {
-        setDescriptorError("请先在结构工作台设置参考结构。");
+        setDescriptorError("请先选择参考结构。");
         return;
       }
       const response = await calculatePolytaoDescriptors({ smiles: currentSmiles });
+      if (revision !== descriptorRevision.current || epoch !== getSessionEpoch()) return;
       polytao.setRequest({
         ...polytao.request,
         descriptors: polytaoDescriptorMapFromEntries(response.descriptors),
@@ -525,10 +547,11 @@ export function PolytaoGenerationPage({
       setDescriptorSource("structure");
       showToast("已从参考结构提取 15 项描述符");
     } catch (error) {
+      if (revision !== descriptorRevision.current || epoch !== getSessionEpoch()) return;
       setDescriptorError(error instanceof Error ? error.message : "PolyTAO 描述符计算失败。");
       setReferenceOpen(true);
     } finally {
-      setIsDescriptorLoading(false);
+      if (revision === descriptorRevision.current && epoch === getSessionEpoch()) setIsDescriptorLoading(false);
     }
   }
 
@@ -660,7 +683,7 @@ export function PolytaoGenerationPage({
                 <span className="polytao-section-number">01</span>
                 <div>
                   <h3 id="polytao-source-title">参考结构（可选）</h3>
-                  <p>从共享结构一键计算目标分子特征，也可以跳过并直接设定目标</p>
+                  <p>选择已保存结构或当前画板，计算目标分子特征，也可以直接设定目标</p>
                 </div>
               </div>
               <button
@@ -672,7 +695,7 @@ export function PolytaoGenerationPage({
               >
                 <span className={`polytao-reference-status${hasStructure ? " is-set" : ""}`}>
                   {hasStructure ? <Link2 /> : <CircleAlert />}
-                  {hasStructure ? "已设置 · 共享结构" : "未设置"}
+                  {hasStructure ? "已设置 · 参考结构" : "未设置"}
                 </span>
                 <span className="polytao-reference-toggle-action">
                   {referenceOpen ? "收起" : "展开"}
@@ -684,6 +707,8 @@ export function PolytaoGenerationPage({
             {referenceOpen ? (
               <div className="polytao-reference-content" id="polytao-reference-content">
                 <div className="polytao-reference-content-toolbar">
+                  <button type="button" className="polytao-small-button" onClick={() => void referenceSelection.choose()}>选择结构</button>
+                  {reference && <small>来自：{sourceLabel(reference)}</small>}
                   <button
                     className="polytao-small-button polytao-structure-view-toggle"
                     type="button"
@@ -722,10 +747,10 @@ export function PolytaoGenerationPage({
                       </div>
                       <div className="polytao-structure-face polytao-structure-face-back" aria-hidden={!structureFlipped} inert={!structureFlipped}>
                         <span className="polytao-structure-face-label">3D 构象</span>
-                        <div className="polytao-structure-3d-canvas" aria-label="共享结构三维构象">
+                        <div className="polytao-structure-3d-canvas" aria-label="参考结构三维构象">
                           {hasActivated3D && hasStructure ? (
                             <StructurePreview3D
-                              smiles={structure.smiles}
+                              smiles={referenceSmiles}
                               variant="bare"
                               visualStyle="polished-atoms"
                               backgroundColor="#f7fbff"
@@ -749,7 +774,7 @@ export function PolytaoGenerationPage({
                         disabled={!hasStructure}
                         onClick={() => setReferenceSmilesExpanded((expanded) => !expanded)}
                       >
-                        <span className="polytao-field-eyebrow">共享结构 SMILES</span>
+                        <span className="polytao-field-eyebrow">参考结构 SMILES</span>
                         <span className="polytao-smiles-toggle-action">
                           {hasStructure ? (referenceSmilesExpanded ? "收起" : "展开") : "未设置"}
                           <ChevronDown />
@@ -757,13 +782,13 @@ export function PolytaoGenerationPage({
                       </button>
                       {referenceSmilesExpanded && hasStructure ? (
                         <div className="polytao-smiles-content" id="polytao-reference-smiles-content">
-                          <span className="polytao-smiles-value">{structure.smiles}</span>
+                          <span className="polytao-smiles-value">{referenceSmiles}</span>
                           <button
                             className="polytao-copy-inline"
                             type="button"
-                            aria-label="复制共享结构 SMILES"
+                            aria-label="复制参考结构 SMILES"
                             onClick={() => {
-                              void copyText(structure.smiles, "共享结构 SMILES 已复制");
+                              void copyText(referenceSmiles, "参考结构 SMILES 已复制");
                             }}
                           >
                             <Copy />

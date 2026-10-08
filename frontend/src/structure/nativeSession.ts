@@ -104,6 +104,7 @@ export class NativeEditorSession {
       return value;
     };
     const handle: StructureEditorHandle = {
+      version: "3.8.0", // Pinned native runtime; the legacy iframe declares its own version.
       getSmiles: () => call(base.getSmiles),
       getKet: () => call(ket),
       getMolfile: () => call(async () => {

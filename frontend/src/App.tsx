@@ -1,3 +1,4 @@
+import { StructureLibraryProvider } from "./structure-library/StructureLibraryProvider";
 import { useAuth } from "./auth/AuthProvider";
 import { requestServiceAccess } from "./auth/guestAccess";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -27,7 +28,6 @@ import type { DatasetKey } from "./components/database-analysis/types";
 import type { LabDataView } from "./components/LabDataPage";
 import type { StructureCanvasOwnerHandle } from "./components/StructureWorkbenchPage";
 import type { StructureSyncResult } from "./structure/workspace";
-import type { MonomerRetrosynthesisInput } from "./components/monomer-retrosynthesis/session";
 import {
   ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
   ExperimentWorkflowDemoPage, HighThroughputWorkflowDemoPage, HomopolymerPropertyPredictionPage,
@@ -67,7 +67,6 @@ type AppNavigationRequest = ModuleNavigationRequest & {
   history: "push" | "none";
   knowledge?: { query: string; terms: string[] };
   jobId?: string | null;
-  importRetrosynthesisTarget?: boolean;
   onCommit?: () => void;
 };
 
@@ -148,7 +147,6 @@ function AppContent() {
   activeModuleRef.current = activeModule;
   const structureCanvasOwnerRef = useRef<StructureCanvasOwnerHandle | null>(null);
   const lastStructureSyncRef = useRef<StructureSyncResult | null>(null);
-  const [retrosynthesisInput, setRetrosynthesisInput] = useState<MonomerRetrosynthesisInput>();
   const moduleContentRef = useRef<HTMLDivElement | null>(null);
   const moduleMainRef = useRef<HTMLElement | null>(null);
   const structureWorkspace = useStructureWorkspace({ guest: isGuest, initialSmiles: isGuest ? auth?.guestDraft : undefined });
@@ -232,14 +230,6 @@ function AppContent() {
       }
       if (route.module === "monomerMdSimulation") setMonomerMdJobId(navigation.jobId ?? null);
       if (route.module === "monomerDft") setMonomerDftJobId(navigation.jobId ?? null);
-      if (route.module === "monomerRetrosynthesis") {
-        const document = structureWorkspace.workspace.getSnapshot();
-        const smiles = document.smiles.trim();
-        setRetrosynthesisInput(!navigation.importRetrosynthesisTarget ? undefined
-          : lastStructureSyncRef.current?.status !== "saved" || document.draftError || document.draft.trim() !== smiles
-            ? { notice: "共享结构同步未完成，已保留反推草稿。请在工作台检查结构后重试。" }
-            : smiles ? { smiles } : { notice: "当前共享结构为空，已保留反推草稿。" });
-      }
       applyRoute(route);
       activeModuleRef.current = route.module;
       if (navigation.source !== "state") window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -465,7 +455,7 @@ function AppContent() {
         navigate({ module: "monomerPolymerization", datasetKey: null }, { href: "/monomer-polymerization?mode=single" });
         break;
       case "monomerRetrosynthesis":
-        navigate({ module: "monomerRetrosynthesis", datasetKey: null }, { importRetrosynthesisTarget: true });
+        navigate({ module: "monomerRetrosynthesis", datasetKey: null });
         break;
       case "reverseDesign":
         openReverseDesign();
@@ -763,7 +753,7 @@ function AppContent() {
     activeModule !== "monomerDft" &&
     !isTgKetcherOwner;
 
-  return <BrowsingRecordingUIProvider activeModule={activeModule}
+  return <StructureLibraryProvider workspace={structureWorkspace.workspace}><BrowsingRecordingUIProvider activeModule={activeModule}
     canStart={activeModule === "databaseFilter" || (activeModule === "knowledge" && knowledgeLocalMode)}>
     <AppShell
       activeModule={activeModule}
@@ -924,7 +914,7 @@ function AppContent() {
 
       {activeModule === "monomerRetrosynthesis" ? (
         <MonomerRetrosynthesisPage structure={structureWorkspace}
-          initialInput={retrosynthesisInput} onEditStructure={openStructureWorkbench} />
+          onEditStructure={openStructureWorkbench} />
       ) : null}
 
       {activeModule === "reverseDesign" || preserveReverseDesignForKnowledge ? (
@@ -954,5 +944,5 @@ function AppContent() {
         />
       ) : null}
     </AppShell>
-  </BrowsingRecordingUIProvider>;
+  </BrowsingRecordingUIProvider></StructureLibraryProvider>;
 }

@@ -212,7 +212,7 @@ describe("ReverseDesignPage production workbench", () => {
     expect(view.container.firstElementChild?.classList.contains("np-structure-workbench")).toBe(true);
     expect(title.parentElement?.classList.contains("np-module-page-header")).toBe(true);
     expect(title.closest(".np-module-page-body")).toBeNull();
-    expect(screen.getByRole("button", { name: "加载结构" }).getAttribute("data-workbench-tool")).toBe("load");
+    expect(screen.getByRole("button", { name: "加载示例" }).getAttribute("data-workbench-tool")).toBe("load");
     expect(screen.getByRole("button", { name: "导入图片" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "清空画布" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "生成SMILES" })).toBeTruthy();
@@ -427,7 +427,7 @@ describe("ReverseDesignPage production workbench", () => {
   it("uses the shared mutation guard for load, clear, sync, and image import", async () => {
     render(<ReverseDesignPage structure={makeStructure()} onOpenKnowledge={vi.fn()} assistant={makeAssistant()} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "加载结构" }));
+    fireEvent.click(screen.getByRole("button", { name: "加载示例" }));
     await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole("button", { name: "清空画布" }));
     await waitFor(() => expect(mocks.clearCanvas).toHaveBeenCalledOnce());

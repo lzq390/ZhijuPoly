@@ -247,7 +247,8 @@ describe("identity boundary", () => {
     openGuestLogin();
     fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "a" } }); fireEvent.change(screen.getByLabelText("密码"), { target: { value: "password" } });
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
-    await screen.findByRole("heading", { name: "导入本次游客画板" }); expect(mounted).toHaveBeenCalledOnce(); expect(unmounted).toHaveBeenCalledOnce();
+    await screen.findByRole("heading", { name: "导入本次游客画板" });
+    await waitFor(() => { expect(mounted).toHaveBeenCalledOnce(); expect(unmounted).toHaveBeenCalledOnce(); });
     fireEvent.click(screen.getByRole("button", { name: "从空白开始" })); await screen.findByText("私人页面");
   });
 });

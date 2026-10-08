@@ -64,7 +64,7 @@ def test_current_readiness_needs_exact_0019_and_historical_is_not_current(auth_d
     assert current['current_readiness'] is True
     assert not report(auth_database, SCHEMA_TARGET_ISOLATION_HISTORICAL)['strict_ok']
     with historical_ledger(auth_database):
-        with pytest.raises(RuntimeError, match='exact 0019'):
+        with pytest.raises(RuntimeError, match='canonical 0019 or 0020'):
             auth_service(auth_database).assert_application_ready()
         assert not report(auth_database)['strict_ok']
         historical = report(auth_database, SCHEMA_TARGET_ISOLATION_HISTORICAL)
@@ -113,7 +113,7 @@ def test_actual_service_login_acl_drift_blocks_all_current_checks(auth_database,
                 validate_backup_schema(connection)
         with psycopg.connect(auth_database['audit'], row_factory=dict_row) as connection:
             with pytest.raises(ValueError):
-                capture(connection)
+                capture(connection, schema_version=2)
         with pytest.raises(ValueError):
             preflight({'nexpoly_' + kind: auth_database[kind] for kind in ('api','auth','service')})
         with pytest.raises(ValueError):
@@ -146,9 +146,9 @@ def test_current_audit_and_restore_validate_actual_service_members(auth_database
         assert proof['current_readiness']
         assert proof['migration_ledger'] == expected_isolation_ledger()
     with psycopg.connect(auth_database['audit'], row_factory=dict_row) as connection:
-        proof = capture(connection)
+        proof = capture(connection, schema_version=2)
         assert proof['schema_version'] == 2 and proof['current_readiness']
-    proof = preflight({'nexpoly_' + role:auth_database[role] for role in ('api','auth','service')})
+    proof = preflight({'nexpoly_' + role:auth_database[role] for role in ('api','auth','service')}, schema_version=2)
     assert proof['current_readiness']
 
 
@@ -157,3 +157,11 @@ def test_current_preflight_rejects_service_and_api_on_different_databases(auth_d
     result = report(different)
     assert not result['current_readiness']
     assert any('different databases' in reason for reason in result['strict_errors'])
+
+
+def test_current_runtime_target_resolves_canonical_0019(auth_database):
+    from app.postgres_preflight import SCHEMA_TARGET_CURRENT_ISOLATION
+    proof = report(auth_database, SCHEMA_TARGET_CURRENT_ISOLATION)
+    assert proof['current_readiness'], proof['strict_errors']
+    assert proof['requested_schema_target'] == SCHEMA_TARGET_CURRENT_ISOLATION
+    assert proof['schema_target'] == SCHEMA_TARGET_ISOLATION

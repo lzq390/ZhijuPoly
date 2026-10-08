@@ -63,7 +63,11 @@ def apply_service_auth_least_privilege(
         installed = connection.execute(
             "SELECT 1 FROM governance.schema_migrations WHERE version=%s", (VERSION,)
         ).fetchone() is not None
-        validate_service_migration_ledger(connection, through=VERSION if installed else PREDECESSOR)
+        boundary = connection.execute("SELECT max(version) AS version FROM governance.schema_migrations").fetchone()["version"] if installed else PREDECESSOR
+        from .isolation_ledger import LIBRARY_VERSION
+        if boundary not in {PREDECESSOR, VERSION, LIBRARY_VERSION}:
+            raise ValueError("Unknown service privilege migration boundary")
+        validate_service_migration_ledger(connection, through=boundary)
         before = {
             "nexpoly_service": validate_service_auth_privileges(
                 connection, "nexpoly_service", legacy=not installed,
@@ -84,7 +88,7 @@ def apply_service_auth_least_privilege(
                 "INSERT INTO governance.schema_migrations(version,checksum) VALUES(%s,%s)",
                 (VERSION, target.checksum),
             )
-        ledger = validate_service_migration_ledger(connection, through=VERSION)
+        ledger = validate_service_migration_ledger(connection, through=boundary if installed else VERSION)
         return {
             "schema_version": 1, "version": VERSION, "checksum": target.checksum,
             "database": identity, "already_applied": installed,

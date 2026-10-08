@@ -182,7 +182,7 @@ class AuthService:
             try:
                 validate_service_migration_ledger(connection)
             except ValueError as exc:
-                raise RuntimeError('User isolation cutover has not completed: exact 0019 ledger required') from exc
+                raise RuntimeError('User isolation cutover has not completed: canonical 0019 or 0020 ledger required') from exc
             validate_isolation_schema(connection)
             target_database = database_identity(connection)
         for dsn,group in ((self.settings.auth_dsn,'nexpoly_auth'),(self.settings.service_dsn,'nexpoly_service')):

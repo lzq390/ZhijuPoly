@@ -83,6 +83,22 @@
       ]
     },
     {
+      "method": "DELETE",
+      "path": "/api/v1/structure-library/records/{record_id}",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/v1/assistant/tg/guide",
       "feature": "F07",
@@ -756,6 +772,72 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/structure-library/records",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/structure-library/records/{record_id}",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/structure-library/status",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/task-events",
+      "feature": "I08",
+      "resource": "owner-scoped MD/DFT status event stream",
+      "permission": "member",
+      "frontend": [
+        "MD task center",
+        "DFT task center"
+      ],
+      "cases": [
+        "F10",
+        "F11",
+        "I01",
+        "I04",
+        "I08"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/docs",
       "feature": "F13",
       "resource": "operations",
@@ -894,6 +976,22 @@
         "F13",
         "I01",
         "I03"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/structure-library/records/{record_id}",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
       ]
     },
     {
@@ -1475,6 +1573,22 @@
     },
     {
       "method": "POST",
+      "path": "/api/v1/structure-library/records",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/v1/structure/2d",
       "feature": "F01",
       "resource": "request-result",
@@ -1578,24 +1692,6 @@
         "I04",
         "I05",
         "I07"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/task-events",
-      "feature": "I08",
-      "resource": "owner-scoped MD/DFT status event stream",
-      "permission": "member",
-      "frontend": [
-        "MD task center",
-        "DFT task center"
-      ],
-      "cases": [
-        "F10",
-        "F11",
-        "I01",
-        "I04",
-        "I08"
       ]
     }
   ]

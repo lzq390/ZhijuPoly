@@ -104,7 +104,7 @@ export function MonomerPolymerizationPage({
   };
 
   const [initialForm] = useState<MonomerPolymerizationDraft>(() =>
-    readMonomerPolymerizationDraft() ?? defaultForm(structure.smiles)
+    readMonomerPolymerizationDraft() ?? defaultForm("")
   );
   const [form, setForm] = useState(initialForm);
   const [touched, setTouched] = useState<FormTouchedState>({
@@ -257,20 +257,6 @@ export function MonomerPolymerizationPage({
   }), [form.maxResults, form.targetClass, monomerAValue, monomerBValue]);
   const stale = hasAttempt && !sameSnapshot(snapshot, currentRequest);
 
-  const getSharedSmiles = useCallback(async () => {
-    let sharedSmiles = structure.smiles.trim();
-    try {
-      const currentSmiles = (await structure.getCurrentSmiles()).trim();
-      if (currentSmiles) sharedSmiles = currentSmiles;
-    } catch (error) {
-      console.warn("Failed to read current structure from workbench", error);
-    }
-    if (!sharedSmiles) {
-      throw new Error("共享结构为空，请先在结构工作台绘制或输入单体。");
-    }
-    return sharedSmiles;
-  }, [structure]);
-
   function touchSlot(slot: MonomerSlot) {
     setTouched((current) => ({ ...current, [slot]: true }));
   }
@@ -317,7 +303,7 @@ export function MonomerPolymerizationPage({
     clearMonomerPolymerizationDraft();
     polymerization.clearResults();
     setForm({
-      monomerA: structure.smiles.trim(),
+      monomerA: "",
       monomerB: "",
       targetClass: resetTarget,
       maxResults: Math.min(DEFAULT_MAX_RESULTS, maxResultsLimit)
@@ -473,7 +459,7 @@ export function MonomerPolymerizationPage({
                     <span>02</span>
                     <div>
                       <h2 id="np-mp-monomers-title">单体输入</h2>
-                      <p>{isBatch ? "批量需上传单体表 A 和 B，预检后计算两表的全部组合。" : "填写单体 A 和 B，可导入共享结构并查看 2D 预览。"}</p>
+                      <p>{isBatch ? "批量需上传单体表 A 和 B，预检后计算两表的全部组合。" : "填写单体 A 和 B，可分别选择已保存结构并查看 2D 预览。"}</p>
                     </div>
                   </header>
                   {showModeSwitcher ? modeSwitcher : null}
@@ -494,7 +480,7 @@ export function MonomerPolymerizationPage({
                       onMonomerAChange={(monomerA) => updateForm({ monomerA })}
                       onMonomerBChange={(monomerB) => updateForm({ monomerB })}
                       onTouched={touchSlot}
-                      getSharedSmiles={getSharedSmiles}
+
                       onEditStructure={editSharedStructure}
                     />
                   </div>

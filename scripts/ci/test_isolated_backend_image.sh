@@ -100,7 +100,13 @@ for grant, revoke in (
         with psycopg.connect(dsn) as connection:
             connection.execute(revoke)
 auth.assert_application_ready()
-print('0017 rejects startup; explicit 0018 then 0019 and separate runtime roles verified')
+# Exercise the newest approved expand schema with the same least-privileged
+# runtime roles; historical 0017/0018/0019 checks above remain explicit.
+apply_postgres_migrations(dsn, allowed_kinds={'expand'})
+auth.assert_application_ready()
+with psycopg.connect(dsn) as connection:
+    assert connection.execute('SELECT max(version) FROM governance.schema_migrations').fetchone()[0] == '0020_structure_library'
+print('0017 rejects startup; explicit 0018/0019 then 0020 expand and runtime roles verified')
 print('Six system function/management privilege drifts reject readiness; valid ACL recovers')
 PY
 
@@ -112,11 +118,12 @@ runtime_env=(
   -e APP_SERVICE_POSTGRES_DSN=postgresql://ci_service:ci-only@postgres:5432/nexpoly_ci
   -e MODEL_ENABLED=false -e OCSR_ENABLED=false -e GEN_MODEL_ENABLED=false
   -e POLYTAO_ENABLED=false -e RETRO_MODEL_ENABLED=false
+  -e STRUCTURE_LIBRARY_ENABLED=true
   -e GPU_BROKER_ENABLED=false -e CUDA_VISIBLE_DEVICES= -e NVIDIA_VISIBLE_DEVICES=void
   -e MONOMER_MD_SUBMIT_ENABLED=false -e MONOMER_DFT_SUBMIT_ENABLED=false
 )
 docker run --rm --network "$network" "${runtime_env[@]}" "$backend_image" \
-  python -m app.postgres_preflight --mode schema --strict --schema-target user-isolation-0019 --service-context
+  python -m app.postgres_preflight --mode schema --strict --schema-target user-isolation-current --service-context
 docker run -d --name "$backend" --network "$network" "${runtime_env[@]}" "$backend_image" >/dev/null
 for _ in {1..60}; do
   if docker exec "$backend" python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=2)' >/dev/null 2>&1; then
@@ -139,5 +146,5 @@ except urllib.error.HTTPError as exc:
     assert exc.code == 401, exc.code
 else:
     raise AssertionError('Guest access to a private route must be rejected')
-print('Published backend starts on 0019 and rejects unauthenticated private requests')
+print('Published backend starts on 0020 and rejects unauthenticated private requests')
 PY

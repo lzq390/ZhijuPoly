@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MonomerMdProtocolCatalogResponse } from "../../types";
+import { LibraryTestProvider, chooseCurrentStructure, testDocument } from "../../test/structureLibraryFixture";
+import { StructureWorkspace } from "../../structure/workspace";
 import { MonomerMdFormalConfig } from "./MonomerMdFormalConfig";
 
 const config = {
@@ -27,7 +29,7 @@ const catalog: MonomerMdProtocolCatalogResponse = {
   }]
 };
 
-function renderEditor(onApplyConfig = vi.fn()) {
+function renderEditor(onApplyConfig = vi.fn(), workspace = new StructureWorkspace("CCC")) {
   render(
     <MonomerMdFormalConfig
       protocol="Density"
@@ -43,7 +45,7 @@ function renderEditor(onApplyConfig = vi.fn()) {
       onKeepChangedTemplates={vi.fn()}
       onRestoreChangedTemplates={vi.fn()}
       onSubmit={vi.fn()}
-    />
+    />, { wrapper: ({ children }) => <LibraryTestProvider workspace={workspace}>{children}</LibraryTestProvider> }
   );
   return onApplyConfig;
 }
@@ -54,6 +56,37 @@ afterEach(() => {
 });
 
 describe("MonomerMdFormalConfig", () => {
+  it("copies into one stable component row and requires explicit apply", async () => {
+    const workspace = new StructureWorkspace("CCC");
+    vi.spyOn(workspace, "captureForImport").mockResolvedValue(testDocument("CCN"));
+    const apply = renderEditor(vi.fn(), workspace);
+    fireEvent.click(screen.getByRole('button', { name: /添加组分/ }));
+    fireEvent.change(screen.getByLabelText('组分 2 名称'), { target: { value: 'B' } });
+    fireEvent.change(screen.getByLabelText('组分 2 摩尔配比'), { target: { value: '3' } });
+    await chooseCurrentStructure(screen.getByRole('button', { name: '选择结构 · 组分 2' }));
+    await waitFor(() => expect(screen.getByLabelText('组分 2 SMILES')).toHaveProperty('value', 'CCN'));
+    expect(screen.getByLabelText('组分 1 SMILES')).toHaveProperty('value', 'CCO');
+    expect(screen.getByLabelText('组分 2 名称')).toHaveProperty('value', 'B');
+    expect(screen.getByLabelText('组分 2 摩尔配比')).toHaveProperty('value', '3');
+    expect(apply).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /应用表单修改/ }));
+    expect(apply.mock.calls[0][1]).toMatchObject({ smiles: { A: 'CCO', B: 'CCN' }, components: { A: 1, B: 3 }, unknown: config.unknown });
+  });
+
+  it("does not apply a late result to a deleted row or its replacement", async () => {
+    const workspace = new StructureWorkspace('CCC');
+    let resolve!: (document: ReturnType<typeof testDocument>) => void;
+    vi.spyOn(workspace, 'captureForImport').mockImplementation(() => new Promise(done => { resolve = done; }));
+    renderEditor(vi.fn(), workspace);
+    fireEvent.click(screen.getByRole('button', { name: /添加组分/ }));
+    await chooseCurrentStructure(screen.getByRole('button', { name: '选择结构 · 组分 2' }));
+    fireEvent.click(screen.getByRole('button', { name: '删除组分 2' }));
+    fireEvent.click(screen.getByRole('button', { name: /添加组分/ }));
+    await act(async () => resolve(testDocument('NN')));
+    expect(screen.getByLabelText('组分 2 SMILES')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('组分 1 SMILES')).toHaveProperty('value', 'CCO');
+  });
+
   it("uses protocol names in English and hides implementation-only managed paths", () => {
     renderEditor();
     expect(screen.getByRole("button", { name: /Density/ })).toBeTruthy();
