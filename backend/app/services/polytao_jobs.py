@@ -11,6 +11,7 @@ from time import monotonic
 from typing import Callable
 
 from app.services.private_execution import submit_private_job
+from app.services.entitlement_memory import submit_memory_job
 from app.services.usage_background import finish_background_usage
 
 from app.models import PolytaoGenerationResponse, PolytaoJobStatusResponse
@@ -84,6 +85,7 @@ class PolytaoJobManager:
         self._store = store or BoundedInMemoryJobStore()
         self._monotonic = monotonic_fn
         self._futures: dict[str, Future[None]] = {}
+        self._entitlements = {}
         self._lock = Lock()
         self._shutdown_started = False
 
@@ -126,7 +128,12 @@ class PolytaoJobManager:
         requested_count: int,
         runner: JobRunner,
         timeout_seconds: float = 600.0,
+        entitlement=None,
     ) -> PolytaoJobStatusResponse:
+        if entitlement is not None:
+            replay = entitlement.replay()
+            if replay is not None:
+                return replay
         accepted_deadline = self._monotonic() + max(0.0, float(timeout_seconds))
         with self._lock:
             if self._shutdown_started:
@@ -150,13 +157,20 @@ class PolytaoJobManager:
             )
             self._mark_submitted(job.job_id)
             try:
-                future = submit_private_job(
+                if entitlement is not None:
+                    if not entitlement.bind(job.job_id):
+                        self._store.delete(NAMESPACE, job.job_id)
+                        return entitlement.replay()
+                    self._entitlements[job.job_id] = entitlement
+                future = submit_memory_job(
+                    entitlement, submit_private_job,
                     self._executor, self._run_job, job.job_id, runner,
                     channel="backend_gpu",
                     task_type="polytao", task_id=job.job_id, submitted_at=job.created_at,
                     on_disabled=lambda: self._mark_cancelled(job.job_id, "Account disabled before execution."),
                 )
             except Exception:
+                self._entitlements.pop(job.job_id, None)
                 self._store.delete(NAMESPACE, job.job_id)
                 raise
             self._futures[job.job_id] = future
@@ -167,10 +181,18 @@ class PolytaoJobManager:
                 completed_future,
             )
         )
-        return snapshot
+        return entitlement.replay() if entitlement is not None else snapshot
 
     def get_job(self, job_id: str) -> PolytaoJobStatusResponse:
-        return self._store.read(NAMESPACE, job_id, self._snapshot)
+        snapshot = self._store.read(NAMESPACE, job_id, self._snapshot)
+        entitlement = self._entitlements.get(job_id)
+        if entitlement is None:
+            return snapshot
+        visible = entitlement.visible(snapshot)
+        if entitlement.settled:
+            self._store.mark_reapable(NAMESPACE, job_id)
+            self._entitlements.pop(job_id, None)
+        return visible
 
     def cancel_job(self, job_id: str) -> PolytaoJobStatusResponse:
         self.get_job(job_id)
@@ -321,8 +343,13 @@ class PolytaoJobManager:
         self._store.mutate(NAMESPACE, job_id, update, terminal=True)
 
     def _on_future_done(self, job_id: str, future: Future[None]) -> None:
-        with service_context():
-            self._finish_future(job_id, future)
+        entitlement = self._entitlements.get(job_id)
+        if entitlement is not None:
+            with entitlement.owner_scope():
+                self._finish_future(job_id, future)
+        else:
+            with service_context():
+                self._finish_future(job_id, future)
 
     def _finish_future(self, job_id: str, future: Future[None]) -> None:
         try:
@@ -336,9 +363,14 @@ class PolytaoJobManager:
                         f"PolyTAO backend task terminated unexpectedly: {unexpected_error}",
                     )
         finally:
+            entitlement = self._entitlements.get(job_id)
+            persisted = entitlement is None or entitlement.finish(
+                self._store.read(NAMESPACE, job_id, self._snapshot), future)
             if getattr(future, "_nexpoly_usage", None) is not None:
                 finish_background_usage(future, self._store.read(NAMESPACE, job_id, self._snapshot))
-            self._store.mark_reapable(NAMESPACE, job_id)
+            if persisted:
+                self._store.mark_reapable(NAMESPACE, job_id)
+                self._entitlements.pop(job_id, None)
             with self._lock:
                 if self._futures.get(job_id) is future:
                     self._futures.pop(job_id, None)

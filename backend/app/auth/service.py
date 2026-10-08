@@ -169,7 +169,14 @@ class AuthService:
         # The commit on leaving this context is the logical start boundary.
         with self.connection(service=True) as connection:
             user = connection.execute('SELECT status,is_system FROM auth.users WHERE user_id=%s FOR UPDATE', (owner_user_id,)).fetchone()
-            return bool(user and (user['status'] == 'active' or (str(owner_user_id) == SYSTEM_USER_ID and user['is_system'])))
+            active = bool(user and (user['status'] == 'active' or (str(owner_user_id) == SYSTEM_USER_ID and user['is_system'])))
+            if not active:
+                return False
+            if str(owner_user_id) == SYSTEM_USER_ID and user['is_system']:
+                return True
+            from app.services.entitlement_repository import EntitlementRepository
+            return EntitlementRepository().resolve_access_tier(
+                owner_user_id=owner_user_id, connection=connection) == "member"
 
     def assert_application_ready(self):
         import psycopg

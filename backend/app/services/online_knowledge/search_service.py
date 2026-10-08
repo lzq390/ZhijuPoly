@@ -44,6 +44,7 @@ def run_online_knowledge_search(
     extraction_delay_seconds: float,
     proxy_url: str = "",
     progress_callback: Callable[[str, str, int, int], None] | None = None,
+    execution_facts: dict | None = None,
 ) -> dict[str, Any]:
     validate_model_access(api_key=api_key, base_url=base_url, model=model)
     searcher = SimpleLiteratureSearcher(max_workers=4)
@@ -118,6 +119,11 @@ def run_online_knowledge_search(
         rows = extractor.convert_to_rows(mode=mode)
     finally:
         extractor.close()
+    if execution_facts is not None:
+        execution_facts.update(
+            successful_extractions=sum(not bool(result.get("error")) for result in extraction_results),
+            failed_extractions=sum(bool(result.get("error")) for result in extraction_results),
+        )
     if extraction_results and all(result.get("error") for result in extraction_results):
         first_error = str(extraction_results[0].get("error") or "model call failed")
         raise OnlineKnowledgeModelError(first_error)

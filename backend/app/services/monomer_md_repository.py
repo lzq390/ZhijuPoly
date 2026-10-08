@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from task_usage.ledger import metering_enabled, record_event
+from task_usage import native_entitlements as ne
 
 
 MONOMER_MD_ACTIVE_STATUSES = frozenset(
@@ -117,13 +118,18 @@ def mark_expired_unclaimed_monomer_md_jobs_failed_postgres(connection: Any) -> i
           AND worker_instance_id IS NULL
           AND lease_expires_at IS NOT NULL
           AND lease_expires_at < now()
-        """ + (" RETURNING job_id, owner_user_id, status, created_at, started_at, finished_at, error_category" if metering_enabled() else ""),
+        """ + (" RETURNING job_id, owner_user_id, status, created_at, started_at, finished_at, error_category" if metering_enabled() or ne.enabled() else ""),
         (message, message),
     )
     count = int(cursor.rowcount or 0)
-    if metering_enabled():
+    if metering_enabled() or ne.enabled():
         for row in cursor.fetchall():
-            _record_monomer_md_usage_row(connection, row)
+            if metering_enabled():
+                _record_monomer_md_usage_row(connection, row)
+            if ne.enabled():
+                ne.release_native(connection, owner_user_id=str(row["owner_user_id"]), module="monomer_md",
+                    native_task_id=row["job_id"], status="failed", source="md_pending_lease_expired",
+                    never_dispatched=True, reason="submit_lease_expired")
     return count
 
 
@@ -281,6 +287,41 @@ def mark_monomer_md_job_failed_postgres(connection: Any, job_id: str, error_mess
         row = cursor.fetchone()
         if row is not None:
             _record_monomer_md_usage_row(connection, row)
+
+
+def mark_unclaimed_monomer_md_submit_failed_postgres(
+    connection: Any, job_id: str, error_message: str,
+) -> bool:
+    """Fence only an unclaimed submission; an ambiguous accepted call stays live.
+
+    Worker acceptance requires pending status. Winning this CAS prevents a late
+    acceptance/start, while a worker that already claimed the row is untouched.
+    """
+    cursor = connection.execute(
+        """UPDATE md.monomer_md_jobs
+        SET status='failed',progress_stage='failed',progress_message=%s,error_message=%s,
+            error_category='worker_submit_failed',updated_at=now(),finished_at=now()
+        WHERE job_id=%s AND status='pending' AND worker_instance_id IS NULL"""
+        + (" RETURNING job_id, owner_user_id, status, created_at, started_at, finished_at, error_category"
+           if metering_enabled() or ne.enabled() else ""),
+        (error_message, error_message, job_id),
+    )
+    changed = bool(cursor.rowcount)
+    if metering_enabled() or ne.enabled():
+        row = cursor.fetchone()
+        if row is not None:
+            if metering_enabled():
+                _record_monomer_md_usage_row(connection, row)
+            if ne.enabled():
+                ne.release_native(connection, owner_user_id=str(row["owner_user_id"]), module="monomer_md",
+                    native_task_id=row["job_id"], status="failed", source="md_submit_unclaimed_cas",
+                    never_dispatched=True, reason="worker_submit_failed")
+        elif ne.enabled():
+            current = connection.execute("SELECT owner_user_id,status FROM md.monomer_md_jobs WHERE job_id=%s", (job_id,)).fetchone()
+            if current is not None and current["status"] not in {"completed", "failed", "cancelled"}:
+                ne.mark_native_unknown(connection, owner_user_id=str(current["owner_user_id"]), module="monomer_md",
+                    native_task_id=job_id, reason="submission_acknowledgement_unknown")
+    return changed
 
 
 def mark_monomer_md_artifacts_deleted_postgres(connection: Any, *, job_id: str, message: str) -> None:

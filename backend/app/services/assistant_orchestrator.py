@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.services.private_execution import bounded_stream
 from app.usage_context import mark_current_usage_outcome
+from app.services.assistant_completion import mark_assistant_result
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -63,6 +64,7 @@ def stream_assistant_events(
         iupac_match_finder=iupac_match_finder,
     )
     if input_clarification:
+        mark_assistant_result("clarification", validated=True)
         yield from _emit_text(input_clarification)
         return
     messages = normalized_messages
@@ -87,6 +89,7 @@ def stream_assistant_events(
 
     decision_type = str(decision.get("type") or "chat").strip()
     if decision_type == "clarify":
+        mark_assistant_result("clarification", validated=True)
         yield from _emit_text(str(decision.get("message") or "请补充更多信息。"))
         return
 
@@ -148,9 +151,11 @@ def stream_assistant_events(
         )
         result = skill.execute(arguments, context)
     except SkillClarificationRequired as exc:
+        mark_assistant_result("clarification", validated=True)
         yield from _emit_text(str(exc))
         return
     except PropertyResolutionClarification as exc:
+        mark_assistant_result("clarification", validated=True)
         yield from _emit_text(str(exc))
         return
     except PropertyResolutionUnsupported as exc:
@@ -168,6 +173,7 @@ def stream_assistant_events(
     except ValidationError as exc:
         clarification = _clarification_for_validation(skill.name, exc)
         if clarification:
+            mark_assistant_result("clarification", validated=True)
             yield from _emit_text(clarification)
             return
         detail = _validation_detail(exc)
@@ -185,6 +191,7 @@ def stream_assistant_events(
         yield from _emit_text(detail)
         return
 
+    mark_assistant_result(validated=True, local_result=True)
     yield AssistantStreamEvent(
         "skill_result",
         {
@@ -221,6 +228,7 @@ def stream_assistant_events(
             summary_tokens = [fallback]
             yield AssistantStreamEvent("token", {"content": fallback})
 
+    mark_assistant_result(validated=bool("".join(summary_tokens).strip()), local_result=True)
     yield AssistantStreamEvent("done", {"message": "".join(summary_tokens)})
 
 
@@ -298,6 +306,7 @@ def _stream_skill_info(
 
     if skill.name == PREDICT_POLYMER_PROPERTIES_SKILL:
         result = build_predict_properties_capability_result(context)
+        mark_assistant_result(validated=True, local_result=True)
         yield from _emit_text(format_predict_properties_capability(result))
         return
 
@@ -422,6 +431,7 @@ def _stream_plain_chat(
     ):
         full_message.append(token)
         yield AssistantStreamEvent("token", {"content": token})
+    mark_assistant_result(validated=bool("".join(full_message).strip()))
     yield AssistantStreamEvent("done", {"message": "".join(full_message)})
 
 

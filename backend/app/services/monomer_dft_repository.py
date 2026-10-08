@@ -11,6 +11,8 @@ from typing import Any, Callable, Iterable
 from uuid import uuid4
 
 from task_usage.ledger import metering_enabled, record_event
+from task_usage import native_entitlements as ne
+from task_usage.entitlements import resolve_access_tier
 
 from app.postgres_database import postgres_connection
 from app.auth.context import service_context
@@ -356,6 +358,57 @@ def normalize_artifacts(value: Any) -> list[dict[str, Any]]:
     return artifacts
 
 
+def _dft_entitlement_spec(prepared: PreparedMonomerDftRequest) -> dict[str, Any]:
+    """Only validated, non-sensitive resource limits enter the quota record."""
+    request = prepared.public_request
+    if request["calculation_type"] == "single_point":
+        properties = set(request["single_point"]["properties"])
+        max_steps = 0
+    else:
+        properties = {"energy", "charges", "forces"}
+        properties.update(request["optimization"]["post_optimization_properties"])
+        max_steps = request["optimization"]["max_steps"]
+    if "frequencies" in properties:
+        properties.add("hessian")
+    return {
+        "calculation_type": request["calculation_type"],
+        "model": request["model"],
+        "total_atoms": prepared.total_atoms,
+        "requested_properties": sorted(properties),
+        "max_steps": max_steps,
+        "conformer_max_iterations": request["conformer"]["max_iterations"],
+    }
+
+
+def _dft_entitlement_facts(
+    spec: dict[str, Any], result: dict[str, Any], artifacts: list[dict[str, Any]],
+    *, validated: bool,
+) -> dict[str, Any]:
+    """Summarize a fenced native result without storing molecular data again.
+
+    ``validated`` comes from the existing Worker snapshot validation boundary;
+    this helper does not certify scientific quality or invent convergence.
+    """
+    properties = result.get("properties")
+    properties = properties if isinstance(properties, dict) else {}
+    scientific_status = result.get("scientific_status")
+    scientific_status = scientific_status if isinstance(scientific_status, dict) else {}
+    optimization = result.get("optimization")
+    converged = optimization.get("converged") if isinstance(optimization, dict) else None
+    if spec["calculation_type"] == "single_point" or not isinstance(converged, bool):
+        converged = None
+    return {
+        "validated": validated,
+        "completion_proven": scientific_status.get("calculation_completed") is True,
+        "report_present": any(item["artifact_id"] == "scientific_result" for item in artifacts),
+        "requested_properties_complete": all(
+            isinstance(properties.get(name), dict)
+            for name in spec["requested_properties"]
+        ),
+        "converged": converged,
+    }
+
+
 class MonomerDftRepository:
     def __init__(
         self,
@@ -494,6 +547,17 @@ class MonomerDftRepository:
                     raise MonomerDftJobNotFound("DFT job not found")
                 return CreateJobResult(job=job, created=False)
 
+            if ne.enabled():
+                retained = ne.lookup_native(
+                    connection, owner_user_id=owner_user_id, module="monomer_dft",
+                    idempotency_key=idempotency_key, request_fingerprint=prepared.request_sha256,
+                )
+                if retained is not None:
+                    # Deleting a native job must not recycle its durable quota identity.
+                    raise MonomerDftIdempotencyConflict(
+                        "Idempotency-Key belongs to a retained DFT operation"
+                    )
+
             own_count = connection.execute("SELECT count(*) AS count FROM monomer_dft.jobs WHERE owner_user_id = %s::uuid AND status = ANY(%s)", (owner_user_id, list(ACTIVE_STATUSES))).fetchone()
             if own_count and own_count["count"]:
                 raise MonomerDftCapacityError("user DFT task capacity is full")
@@ -509,6 +573,16 @@ class MonomerDftRepository:
             job_id = str(uuid4())
             attempt_token = secrets.token_hex(32)
             request = prepared.public_request
+            if ne.enabled():
+                reservation = ne.reserve_native(
+                    connection, owner_user_id=owner_user_id, module="monomer_dft",
+                    idempotency_key=idempotency_key, request_fingerprint=prepared.request_sha256,
+                    native_task_id=job_id, spec=_dft_entitlement_spec(prepared),
+                )
+                if reservation["created"] is not True:
+                    raise MonomerDftIdempotencyConflict(
+                        "DFT entitlement operation was already reserved"
+                    )
             connection.execute(
                 """
                 INSERT INTO monomer_dft.jobs (
@@ -575,6 +649,16 @@ class MonomerDftRepository:
             if attempt is None:
                 return False
             if attempt["start_authorized_at"] is not None:
+                if ne.enabled():
+                    permission = ne.claim_native_running(
+                        connection, owner_user_id=owner_id, module="monomer_dft",
+                        native_task_id=job_id,
+                        executor_id=f"monomer_dft:{job_id}:attempt:{job['current_attempt']}",
+                        allow_authorized_replay=True,
+                    )
+                    if not permission["allowed"]:
+                        reason = "entitlement_authorization_replay_denied"
+                        return False
                 reason = "already_authorized"
                 return True
             if account is None or (account["status"] != "active" and not account["is_system"]):
@@ -585,6 +669,25 @@ class MonomerDftRepository:
                 connection.execute("UPDATE monomer_dft.jobs SET status = 'cancel_requested', cancel_requested_at = COALESCE(cancel_requested_at, now()), error_code = 'account_disabled', error_message = 'Account disabled before execution', updated_at = now() WHERE job_id = %s::uuid", (job_id,))
                 connection.execute("UPDATE monomer_dft.job_attempts SET status = 'cancel_requested', error_code = 'account_disabled', error_message = 'Account disabled before execution' WHERE job_id = %s::uuid AND attempt = %s", (job_id, job["current_attempt"]))
                 return False
+            # Access remains enforced when quota collection is disabled. Read it
+            # only for a first authorization, inside the existing account -> job
+            # lock boundary; an already-authorized fenced replay never rechecks.
+            if not account["is_system"] and resolve_access_tier(connection, owner_user_id=owner_id) != "member":
+                reason = "access_tier_denied"
+                # The callback can already own a Worker lease: retain reservation
+                # until its validated terminal journal confirms cleanup.
+                connection.execute("UPDATE monomer_dft.jobs SET status = 'cancel_requested', cancel_requested_at = COALESCE(cancel_requested_at, now()), error_code = 'access_tier_denied', error_message = 'Account tier does not permit a new execution', updated_at = now() WHERE job_id = %s::uuid", (job_id,))
+                connection.execute("UPDATE monomer_dft.job_attempts SET status = 'cancel_requested', error_code = 'access_tier_denied', error_message = 'Account tier does not permit a new execution' WHERE job_id = %s::uuid AND attempt = %s", (job_id, job["current_attempt"]))
+                return False
+            if ne.enabled():
+                permission = ne.claim_native_running(
+                    connection, owner_user_id=owner_id, module="monomer_dft",
+                    native_task_id=job_id,
+                    executor_id=f"monomer_dft:{job_id}:attempt:{job['current_attempt']}",
+                )
+                if not permission["allowed"]:
+                    reason = "entitlement_authorization_denied"
+                    return False
             reason = "authorized"
             connection.execute("UPDATE monomer_dft.job_attempts SET start_authorized_at = now() WHERE job_id = %s::uuid AND attempt = %s AND attempt_token = %s", (job_id, job["current_attempt"], attempt_token))
             return True
@@ -810,9 +913,27 @@ class MonomerDftRepository:
                         connection.execute("UPDATE monomer_dft.job_attempts SET status='cancelled',finished_at=now() WHERE job_id=%s::uuid AND attempt_token=%s", (job_id,attempt_token))
                         if metering_enabled():
                             self._record_usage(connection, job_id)
+                        if ne.enabled():
+                            ne.release_native(
+                                connection, owner_user_id=str(owner["owner_user_id"]),
+                                module="monomer_dft", native_task_id=job_id, status="cancelled",
+                                source="dft_disabled_before_dispatch", never_dispatched=True,
+                                reason="account_disabled",
+                            )
                     else:
                         connection.execute("UPDATE monomer_dft.jobs SET status='cancel_requested',cancel_requested_at=COALESCE(cancel_requested_at,now()),error_code='account_disabled',error_message='Account disabled while dispatch outcome was unconfirmed',updated_at=now() WHERE job_id=%s::uuid", (job_id,))
                         connection.execute("UPDATE monomer_dft.job_attempts SET status='cancel_requested' WHERE job_id=%s::uuid AND attempt_token=%s", (job_id,attempt_token))
+                    return False
+            if ne.enabled():
+                identity = connection.execute(
+                    "SELECT current_attempt FROM monomer_dft.jobs WHERE job_id = %s::uuid", (job_id,),
+                ).fetchone()
+                permission = ne.begin_native_dispatch(
+                    connection, owner_user_id=str(owner["owner_user_id"]),
+                    module="monomer_dft", native_task_id=job_id,
+                    executor_id=f"monomer_dft:{job_id}:attempt:{identity['current_attempt']}",
+                )
+                if not permission["allowed"]:
                     return False
             connection.execute(
                 """
@@ -895,6 +1016,14 @@ class MonomerDftRepository:
                 )
                 if metering_enabled() and updated.rowcount:
                     self._record_usage(connection, job_id)
+            if retryable and updated.rowcount and ne.enabled():
+                owner = connection.execute(
+                    "SELECT owner_user_id FROM monomer_dft.jobs WHERE job_id = %s::uuid", (job_id,),
+                ).fetchone()
+                ne.mark_native_unknown(
+                    connection, owner_user_id=str(owner["owner_user_id"]),
+                    module="monomer_dft", native_task_id=job_id, reason=safe_code,
+                )
 
     def apply_worker_snapshot(
         self,
@@ -1084,6 +1213,31 @@ class MonomerDftRepository:
                 and current["artifacts_deleted_at"] is None
             ):
                 self._upsert_artifacts(connection, job_id, artifacts)
+            if status in TERMINAL_STATUSES and ne.enabled():
+                owner = connection.execute(
+                    "SELECT owner_user_id FROM monomer_dft.jobs WHERE job_id = %s::uuid", (job_id,),
+                ).fetchone()
+                owner_id = str(owner["owner_user_id"])
+                operation = ne.get_native(
+                    connection, owner_user_id=owner_id, module="monomer_dft", native_task_id=job_id,
+                )
+                if operation is not None:
+                    if status == "completed":
+                        # The Worker client validated the snapshot before this fenced
+                        # transaction; use the actual persisted report/property fields.
+                        facts = _dft_entitlement_facts(
+                            operation["spec"], result, artifacts, validated=True,
+                        )
+                        ne.settle_native(
+                            connection, owner_user_id=owner_id, module="monomer_dft",
+                            native_task_id=job_id, status=status, facts=facts,
+                        )
+                    else:
+                        ne.release_native(
+                            connection, owner_user_id=owner_id, module="monomer_dft",
+                            native_task_id=job_id, status=status,
+                            source="dft_validated_worker_terminal", reason=error_code or status,
+                        )
             job = self._get_job(connection, job_id)
             if job is None:  # pragma: no cover
                 raise MonomerDftJobNotFound("DFT job not found")
@@ -1130,6 +1284,12 @@ class MonomerDftRepository:
                 )
                 if metering_enabled():
                     self._record_usage(connection, job_id)
+                if ne.enabled():
+                    ne.release_native(
+                        connection, owner_user_id=owner_user_id, module="monomer_dft",
+                        native_task_id=job_id, status="cancelled",
+                        source="dft_unsubmitted_cancel", never_dispatched=True, reason="cancelled",
+                    )
             elif status not in TERMINAL_STATUSES:
                 connection.execute(
                     """

@@ -11,6 +11,7 @@ from time import monotonic
 from typing import Any
 
 from app.usage_context import current_usage_context, usage_span
+from app.services.assistant_completion import current_completion_evidence
 
 
 _TOKEN_FIELDS = (
@@ -57,7 +58,11 @@ def _failure_status(error: BaseException) -> str:
 class ProviderAttempt:
     """One external invocation, safe to retain across generator yields/threads."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, phase: str = "provider", request_options=None) -> None:
+        self._evidence = current_completion_evidence()
+        self._phase = phase
+        self._request_options = request_options
+        self._proof = None
         context = current_usage_context()
         self._span = usage_span(context.module if context else "provider", kind="provider")
         self._started = monotonic()
@@ -67,7 +72,15 @@ class ProviderAttempt:
 
     def start(self) -> "ProviderAttempt":
         # No ContextVar binding survives a yield or a cross-thread close.
-        self._span.start(bind=False)
+        if self._evidence is not None:
+            self._proof = self._evidence.begin_provider(self._phase, self._request_options)
+        try:
+            self._span.start(bind=False)
+        except BaseException:
+            # Durable accounting rejected the start before any request was sent.
+            if self._evidence is not None and self._proof is not None:
+                self._evidence.observe_provider(self._proof, terminal=True)
+            raise
         self._started = monotonic()
         return self
 
@@ -75,6 +88,20 @@ class ProviderAttempt:
         for key, value in provider_usage(response, api=api).items():
             if value is not None:
                 self._metrics[key] = value
+
+    def observe_completion(self, response: Any, *, api: str = "chat", completed=False, terminal=False) -> None:
+        if self._evidence is None or self._proof is None:
+            return
+        choices = _value(response, "choices", []) or []
+        if api == "responses":
+            refusal = any(_value(part, "type") == "refusal" for item in (_value(response, "output", []) or [])
+                          for part in (_value(item, "content", []) or []))
+            self._evidence.observe_provider(self._proof, completed=completed, refusal=refusal, terminal=terminal)
+        else:
+            done = any(_value(choice, "finish_reason") == "stop" for choice in choices)
+            refusal = any(bool(_value(_value(choice, "message"), "refusal") or
+                               _value(_value(choice, "delta"), "refusal")) for choice in choices)
+            self._evidence.observe_provider(self._proof, completed=done, refusal=refusal, terminal=terminal or any(_value(choice, "finish_reason") is not None for choice in choices))
 
     def terminal(self, status: str = "completed") -> None:
         self._outcome = status
@@ -121,12 +148,18 @@ class _ProviderStream:
             event_type = _value(event, "type", "")
             if event_type in {"response.completed", "response.failed", "response.incomplete"}:
                 self._attempt.observe(_value(event, "response"), api="responses")
+                self._attempt.observe_completion(_value(event, "response"), api="responses", completed=event_type == "response.completed", terminal=True)
                 self._attempt.terminal("completed" if event_type == "response.completed" else "failed")
+            elif event_type in {"response.refusal.delta", "response.refusal.done"}:
+                if self._attempt._evidence is not None:
+                    self._attempt._evidence.observe_provider(self._attempt._proof, refusal=True)
             elif event_type == "error":
+                self._attempt.observe_completion(None, api="responses", terminal=True)
                 self._attempt.terminal("failed")
         else:
             # Observe even the last usage-only chunk with choices=[].
             self._attempt.observe(event)
+            self._attempt.observe_completion(event)
             if any(_value(choice, "finish_reason") is not None for choice in (_value(event, "choices", []) or [])):
                 self._attempt.terminal()
         return event
@@ -146,22 +179,25 @@ class _ProviderStream:
             self._attempt.finish()
 
 
-def provider_call(create: Callable[..., Any], /, *, usage_api: str = "chat", **kwargs: Any) -> Any:
+def provider_call(create: Callable[..., Any], /, *, usage_api: str = "chat", usage_phase: str = "provider", **kwargs: Any) -> Any:
     """Call exactly once; never retry when usage or stream options are absent.
 
 Do not inject include_usage for arbitrary compatible endpoints: some reject it.
 Existing request options are preserved; absent provider counters remain null.
 """
-    attempt = ProviderAttempt().start()
+    attempt = ProviderAttempt(phase=usage_phase, request_options=kwargs).start()
     try:
         response = create(**kwargs)
         if kwargs.get("stream"):
             return _ProviderStream(response, attempt, api=usage_api)
         attempt.observe(response, api=usage_api)
+        attempt.observe_completion(response, api=usage_api, completed=_value(response, "status") == "completed", terminal=True)
         attempt.terminal()
         attempt.finish()
         return response
     except BaseException as error:
+        if type(getattr(error, "status_code", None)) is int:
+            attempt.observe_completion(None, api=usage_api, terminal=True)
         attempt.finish(_failure_status(error))
         raise
 

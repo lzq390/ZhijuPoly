@@ -28,6 +28,7 @@ from app.models import (
 )
 from app.services.ai_client import create_openai_client
 from app.usage_context import mark_current_usage_outcome
+from app.services.assistant_completion import mark_assistant_result, current_completion_evidence
 from app.services.usage_provider import close_provider_stream, provider_call
 from app.services.assistant_chat import parse_assistant_json
 from app.services.smiles_utils import standardize_smiles
@@ -587,6 +588,7 @@ def _call_intent(
     )
     try:
         response = provider_call(client.chat.completions.create,
+            usage_phase="intent",
             model=model,
             messages=_chat_provider_messages(
                 system_prompt=_intent_prompt(context_payload),
@@ -633,6 +635,7 @@ def _stream_answer(
     stream = None
     try:
         stream = provider_call(client.chat.completions.create,
+            usage_phase="answer",
             model=model,
             messages=_chat_provider_messages(
                 system_prompt=_answer_prompt(context_payload),
@@ -686,6 +689,7 @@ def _stream_responses_intent(
     stream = None
     try:
         stream = provider_call(client.responses.create, usage_api="responses",
+            usage_phase="intent",
             model=model,
             instructions=_intent_prompt(context_payload),
             input=_responses_input(messages=messages, image_inputs=image_inputs),
@@ -810,6 +814,7 @@ def _stream_responses_answer(
     stream = None
     try:
         stream = provider_call(client.responses.create, usage_api="responses",
+            usage_phase="answer",
             model=model,
             instructions=_answer_prompt(context_payload),
             input=_responses_input(messages=messages, image_inputs=image_inputs),
@@ -1220,12 +1225,14 @@ def stream_tg_assistant_events(
         return
 
     if decision_type == "clarify":
+        mark_assistant_result("clarification", validated=True)
         message = payload["message"]
         yield TgAssistantEvent("token", {"content": message})
         yield TgAssistantEvent("done", {"message": message})
         return
 
     if decision_type in {"navigation", "action_proposal"}:
+        mark_assistant_result(validated=True, local_result=True)
         message = str(payload.pop("message", "")).strip()
         if message:
             yield TgAssistantEvent("token", {"content": message})
@@ -1252,8 +1259,17 @@ def stream_tg_assistant_events(
         cancelled=cancelled,
     )
     if cancelled and cancelled():
+        evidence = current_completion_evidence()
+        if answer and evidence is not None:
+            mark_assistant_result(validated=bool(answer.strip()))
+            if evidence.facts(bool(answer.strip()))["completion_proven"]:
+                # The route settles in the producer before discarding delivery
+                # on a disconnected HTTP transport.
+                yield TgAssistantEvent("done", {"message": answer})
+                return
         mark_current_usage_outcome("interrupted")
         return
     if not answer:
         raise TgAssistantProviderError("answer stream was empty")
+    mark_assistant_result(validated=bool(answer.strip()))
     yield TgAssistantEvent("done", {"message": answer})

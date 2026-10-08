@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextvars import copy_context
 from contextlib import closing
 from app.services.private_execution import bounded_stream, PrivateStreamingResponse
+from app.services.assistant_entitlements import prepare_chat, wrap_chat
+from app.services.assistant_completion import mark_assistant_result
 from app.usage_context import mark_current_usage_outcome, retain_usage_execution, _status_for_exception
 
 import json
@@ -199,6 +201,12 @@ def _stream_tg_chat_response(
     canvas_image: tuple[bytes, str] | None = None,
     user_image: tuple[bytes, str] | None = None,
 ) -> StreamingResponse:
+    attached = [(image, source) for image, source in ((canvas_image, "canvas"), (user_image, "user")) if image is not None]
+    operation = prepare_chat(request, request_body, "tg_assistant",
+        images=[image for image, _ in attached], image_sources=[source for _, source in attached], lookup_only=True)
+    if operation is not None and operation.replay is not None:
+        return PrivateStreamingResponse(operation.replay_frames(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **operation.headers})
     settings = request.app.state.settings
     configured = tg_assistant_configured(
         api_key=settings.tg_assistant_api_key,
@@ -206,8 +214,12 @@ def _stream_tg_chat_response(
         model=settings.tg_assistant_model,
     )
     if not settings.tg_assistant_enabled:
+        if operation is not None:
+            operation.abort()
         raise HTTPException(status_code=503, detail="Tg assistant is disabled")
     if not configured:
+        if operation is not None:
+            operation.abort()
         raise HTTPException(status_code=503, detail="Tg assistant is not configured")
 
     request_id = uuid4().hex
@@ -233,6 +245,8 @@ def _stream_tg_chat_response(
         image_inputs=image_inputs,
     )
     phase = derive_tg_phase(request_body.page_context)
+    operation = prepare_chat(request, request_body, "tg_assistant",
+        images=[image for image, _ in attached], image_sources=[source for _, source in attached])
 
     def events() -> Iterable[str]:
         started_at = perf_counter()
@@ -246,6 +260,8 @@ def _stream_tg_chat_response(
         action_types: set[str] = set()
         event_queue: queue.Queue[TgAssistantEvent | BaseException | None] = queue.Queue()
         cancelled = threading.Event()
+        dispatch_gate = threading.Event() if operation is not None else None
+        dispatch_allowed = False
 
         def note_route_complete(elapsed_ms: float) -> None:
             nonlocal route_ms
@@ -253,7 +269,11 @@ def _stream_tg_chat_response(
 
         def worker() -> None:
             try:
-                with closing(stream_tg_assistant_events(
+                if dispatch_gate is not None:
+                    dispatch_gate.wait()
+                    if not dispatch_allowed:
+                        return
+                with closing(wrap_chat(stream_tg_assistant_events(
                     messages=request_body.messages,
                     page_context=request_body.page_context,
                     api_key=settings.tg_assistant_api_key,
@@ -269,7 +289,7 @@ def _stream_tg_chat_response(
                     transport=getattr(settings, "tg_assistant_transport", "auto"),
                     cancelled=cancelled.is_set,
                     on_route_complete=note_route_complete,
-                )) as stream:
+                ), operation)) as stream:
                     for event in stream:
                         if cancelled.is_set():
                             break
@@ -301,10 +321,24 @@ def _stream_tg_chat_response(
         worker_usage_retention = retain_usage_execution()
         thread = threading.Thread(target=lambda: context.run(worker), name=f"tg-assistant-{request_id[:8]}", daemon=True)
         try:
+            if operation is not None:
+                operation.dispatch()
             thread.start()
         except BaseException:
-            worker_usage_retention.release()
+            try:
+                if operation is not None and operation.operation["state"] == "dispatching":
+                    # Even an ambiguous Thread.start exception cannot execute:
+                    # our worker has not been allowed past the closed gate.
+                    operation.dispatch_rejected_before_execution()
+            finally:
+                if dispatch_gate is not None:
+                    dispatch_gate.set()
+                worker_usage_retention.release()
             raise
+        else:
+            dispatch_allowed = True
+            if dispatch_gate is not None:
+                dispatch_gate.set()
         try:
             while True:
                 try:
@@ -455,11 +489,12 @@ def _stream_tg_chat_response(
             )
 
     return PrivateStreamingResponse(
-        events(),
+        wrap_chat(events(), operation, producer=False),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
+            **(operation.headers if operation is not None else {}),
         },
     )
 
@@ -472,6 +507,8 @@ def stream_chat(
     settings = request.app.state.settings
     if settings.structured_data_backend != "postgres":
         raise HTTPException(status_code=503, detail=POSTGRES_ONLY_DETAIL)
+
+    operation = prepare_chat(request, request_body)
 
     def events() -> Iterable[str]:
         try:
@@ -508,11 +545,12 @@ def stream_chat(
             yield _sse("error", {"detail": "Assistant chat failed. Check backend logs for details."})
 
     return PrivateStreamingResponse(
-        events(),
+        wrap_chat(events(), operation),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
+            **(operation.headers if operation is not None else {}),
         },
     )
 
@@ -543,6 +581,8 @@ async def stream_image_chat(
     finally:
         await image.close()
 
+    operation = prepare_chat(request, request_body, images=[(image_bytes, detected_type)])
+
     @bounded_stream("ai")
     def events() -> Iterable[str]:
         full_message: list[str] = []
@@ -560,6 +600,7 @@ async def stream_image_chat(
             ):
                 full_message.append(token)
                 yield _sse("token", {"content": token})
+            mark_assistant_result(validated=bool("".join(full_message).strip()))
             yield _sse("done", {"message": "".join(full_message)})
         except AssistantChatConfigError as exc:
             mark_current_usage_outcome("failed")
@@ -576,11 +617,12 @@ async def stream_image_chat(
             yield _sse("error", {"detail": "Assistant image chat failed. Check backend logs for details."})
 
     return PrivateStreamingResponse(
-        events(),
+        wrap_chat(events, operation),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
+            **(operation.headers if operation is not None else {}),
         },
     )
 

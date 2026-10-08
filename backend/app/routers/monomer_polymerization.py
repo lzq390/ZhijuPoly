@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.entitlement_sync import entitled_sync
+
 import anyio
 from fastapi import APIRouter, HTTPException, Request
 
@@ -32,6 +34,7 @@ async def monomer_polymerization_status(request: Request) -> MonomerPolymerizati
 
 
 @router.post("/monomer-polymerization", response_model=MonomerPolymerizationResponse)
+@entitled_sync("polymerization")
 async def monomer_polymerization(
     request_body: MonomerPolymerizationRequest,
     request: Request,

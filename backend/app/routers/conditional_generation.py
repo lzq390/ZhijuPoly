@@ -25,6 +25,8 @@ from app.services.in_memory_jobs import JobGoneError, JobNotFoundError, JobStore
 from app.services.structure_2d import generate_2d_svg
 from app.utils.exceptions import ModelArtifactError
 
+from app.services.entitlement_memory import submission_for_request, get_memory_job, associate_request
+
 
 router = APIRouter(prefix="/api/v1/conditional-generation", tags=["conditional-generation"])
 GenerationRunner = Callable[[ConditionalGenerationTgRequest], ConditionalGenerationTgResponse]
@@ -154,6 +156,11 @@ async def create_tg_generation_job(
     request_body: ConditionalGenerationTgRequest,
     request: Request,
 ) -> ConditionalGenerationJobCreateResponse:
+    entitlement = submission_for_request(request, "conditional_generation", request_body)
+    if entitlement is not None:
+        replay = entitlement.replay()
+        if replay is not None:
+            return ConditionalGenerationJobCreateResponse(job_id=replay.job_id, status=replay.status)
     service_status = _generation_status_for_app(request.app)
     if not service_status.enabled:
         raise HTTPException(status_code=503, detail=service_status.message)
@@ -174,6 +181,7 @@ async def create_tg_generation_job(
                 timeout_seconds=remaining_seconds,
             ),
             timeout_seconds=request.app.state.settings.gpu_async_queue_timeout_seconds,
+            **({"entitlement": entitlement} if entitlement is not None else {}),
         )
     except (ConditionalGenerationJobCapacityError, JobStoreCapacityError) as exc:
         raise HTTPException(
@@ -186,6 +194,8 @@ async def create_tg_generation_job(
             status_code=503,
             detail="conditional generation job executor is unavailable",
         ) from exc
+    finally:
+        associate_request(request, entitlement)
     return ConditionalGenerationJobCreateResponse(job_id=job.job_id, status=job.status)
 
 
@@ -193,7 +203,7 @@ async def create_tg_generation_job(
 async def get_tg_generation_job(job_id: str, request: Request) -> ConditionalGenerationJobStatusResponse:
     manager = request.app.state.conditional_generation_job_manager
     try:
-        return manager.get_job(job_id)
+        return get_memory_job(request, "conditional_generation", job_id, manager.get_job)
     except JobGoneError as exc:
         raise HTTPException(status_code=410, detail="Job result is no longer available") from exc
     except (JobNotFoundError, KeyError) as exc:

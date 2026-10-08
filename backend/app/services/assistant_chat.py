@@ -68,6 +68,7 @@ def complete_assistant_intent(
 
     try:
         response = provider_call(client.chat.completions.create,
+            usage_phase="intent",
             model=model,
             messages=[
                 {
@@ -117,6 +118,7 @@ def stream_assistant_chat(
     stream = None
     try:
         stream = provider_call(client.chat.completions.create,
+            usage_phase="answer",
             model=model,
             messages=[
                 {"role": "system", "content": build_assistant_system_prompt(modules, active_module)},
@@ -170,6 +172,7 @@ def stream_assistant_image_chat(
     stream = None
     try:
         stream = provider_call(client.chat.completions.create,
+            usage_phase="answer",
             model=model,
             messages=[
                 {"role": "system", "content": build_assistant_image_system_prompt(modules, active_module)},
@@ -229,6 +232,7 @@ def stream_assistant_skill_summary(
     stream = None
     try:
         stream = provider_call(client.chat.completions.create,
+            usage_phase="answer",
             model=model,
             messages=[
                 {
@@ -284,6 +288,7 @@ def complete_prediction_property_resolution(
 
     try:
         response = provider_call(client.chat.completions.create,
+            usage_phase="resolution",
             model=model,
             messages=[
                 {

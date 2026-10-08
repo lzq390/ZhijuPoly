@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.entitlement_sync import entitled_sync
+
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
@@ -53,6 +55,7 @@ def _run_retrosynthesis_inference(app, request_body: MonomerRetrosynthesisReques
 
 
 @router.post("/monomer-retrosynthesis", response_model=MonomerRetrosynthesisResponse)
+@entitled_sync("retrosynthesis")
 async def monomer_retrosynthesis(
     request_body: MonomerRetrosynthesisRequest,
     request: Request,

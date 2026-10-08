@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any
 
 from task_usage.ledger import metering_enabled, record_event
+from task_usage import native_entitlements as ne
 
 from .config import WorkerSettings
 
@@ -52,6 +53,25 @@ def _record_monomer_md_usage_row(connection: Any, row: Any) -> None:
     )
 
 
+def _md_completion_facts(row: dict[str, Any]) -> dict[str, bool] | None:
+    # This hook runs only after the original worker's safe cleanup and its
+    # identity-fenced completed UPDATE. Do not infer actual steps or equilibration
+    # from completed_steps: the formal runner records an estimate there.
+    result = row.get("result_data")
+    report = isinstance(result, dict) and bool(result)
+    if not report:
+        return None  # Missing persisted evidence is unknown, not failed validation.
+    formal_report = bool(report and result.get("run_mode") == "formal"
+        and result.get("protocol") == row.get("protocol")
+        and result.get("job_id") == row.get("job_id")
+        and isinstance(result.get("metrics"), dict) and bool(result["metrics"])
+        and isinstance(result.get("summary"), dict)
+        and isinstance(result.get("result_file"), str) and bool(result["result_file"]))
+    return {"validated": formal_report, "completion_proven": row.get("status") == "completed",
+            "report_present": report, "protocol_completed": formal_report,
+            "cleanup_confirmed": row.get("status") == "completed"}
+
+
 class PostgresJobRepository:
     def __init__(self, settings: WorkerSettings) -> None:
         self._settings = settings
@@ -87,6 +107,28 @@ class PostgresJobRepository:
         if row is not None:
             _record_monomer_md_usage_row(connection, self._usage_row(row))
 
+    def _settle_entitlement(self, connection: Any, cursor: Any, job_id: str) -> None:
+        settings = self._settings
+        columns = (settings.job_id_column, "owner_user_id", settings.status_column,
+                   settings.result_column, settings.protocol_column, settings.run_mode_column,
+                   settings.error_category_column)
+        names = ("job_id", "owner_user_id", "status", "result_data", "protocol", "run_mode", "error_category")
+        cursor.execute(sql.SQL("SELECT {} FROM {} WHERE {} = %s").format(
+            sql.SQL(", ").join(sql.SQL("{} AS {}").format(sql.Identifier(column), sql.Identifier(name))
+                               for column, name in zip(columns, names)),
+            _qualified_identifier(settings.job_table), sql.Identifier(settings.job_id_column)), (job_id,))
+        selected = cursor.fetchone()
+        if selected is None:
+            return
+        row = selected if isinstance(selected, dict) else dict(zip(names, selected))
+        common = {"owner_user_id": str(row["owner_user_id"]), "module": "monomer_md", "native_task_id": str(job_id)}
+        if row["status"] == "completed":
+            ne.settle_native(connection, **common, status="completed", facts=_md_completion_facts(row))
+        elif row["error_category"] in {"resource_cleanup_unconfirmed", "cancel_cleanup_unconfirmed"}:
+            ne.mark_native_unknown(connection, **common, reason="resource_cleanup_unconfirmed")
+        else:
+            ne.release_native(connection, **common, status=row["status"], source="md_worker_terminal")
+
     def authorize_start(self, job_id: str, *, worker_instance_id: str) -> bool:
         """Account then job lock matches administrative disable ordering."""
         from backend.app.task_observability import TaskExecutionContext, log_task_event
@@ -112,11 +154,29 @@ class PostgresJobRepository:
             if values[0] not in {"submitted", "running"} or values[2] != worker_instance_id:
                 return False
             if values[1] is not None:
+                # Same native job and worker instance already hold the original
+                # authorization. This replays that grant, never a new execution.
+                if ne.enabled() and not ne.claim_native_running(connection,
+                        owner_user_id=owner_id, module="monomer_md", native_task_id=job_id,
+                        executor_id=f"monomer_md:{job_id}", allow_authorized_replay=True)["allowed"]:
+                    reason = "entitlement_not_authorized"
+                    return False
                 reason = "already_authorized"
                 return True
             account_values = list(account.values()) if isinstance(account, dict) else account
             if account_values is None or (account_values[0] != "active" and not account_values[1]):
                 reason = "account_disabled"
+                return False
+            # Preserve the original system-worker rule. Ordinary queued jobs
+            # require membership at this first authorization boundary even when
+            # count collection is disabled; existing native grants replay above.
+            if not account_values[1] and ne.core.resolve_access_tier(connection, owner_user_id=owner_id) != "member":
+                reason = "account_membership_required"
+                return False
+            if ne.enabled() and not ne.claim_native_running(connection,
+                    owner_user_id=owner_id, module="monomer_md", native_task_id=job_id,
+                    executor_id=f"monomer_md:{job_id}")["allowed"]:
+                reason = "entitlement_not_authorized"
                 return False
             reason = "authorized"
             cursor.execute("UPDATE md.monomer_md_jobs SET start_authorized_at = now() WHERE job_id = %s", (job_id,))
@@ -181,6 +241,8 @@ class PostgresJobRepository:
                 if cur.fetchone() is not None:
                     if metering_enabled():
                         self._record_usage(conn, cur, job_id)
+                    if ne.enabled() and status in {"completed", "failed", "cancelled"}:
+                        self._settle_entitlement(conn, cur, job_id)
                     return JobUpdateResult.UPDATED
                 cur.execute(
                     sql.SQL("SELECT {} FROM {} WHERE {} = %s").format(
@@ -512,7 +574,7 @@ class PostgresJobRepository:
             sql.Identifier(settings.heartbeat_at_column),
             sql.Identifier(settings.status_column),
         )
-        if metering_enabled():
+        if metering_enabled() or ne.enabled():
             query += sql.SQL(" RETURNING ") + self._usage_columns()
         with psycopg.connect(settings.app_postgres_dsn) as conn:
             with conn.cursor() as cur:
@@ -521,9 +583,17 @@ class PostgresJobRepository:
                     ("Cancellation completed while recovering the monomer MD worker.",),
                 )
                 count = cur.rowcount or 0
-                if metering_enabled():
-                    for row in cur.fetchall():
-                        _record_monomer_md_usage_row(conn, self._usage_row(row))
+                if metering_enabled() or ne.enabled():
+                    for selected in cur.fetchall():
+                        row = self._usage_row(selected)
+                        if metering_enabled():
+                            _record_monomer_md_usage_row(conn, row)
+                        if ne.enabled():
+                            # Caller already proved original native recovery safe;
+                            # this adds no process-death or lease-expiry inference.
+                            ne.release_native(conn, owner_user_id=str(row["owner_user_id"]),
+                                module="monomer_md", native_task_id=str(row["job_id"]),
+                                status=row["status"], source="md_native_recovery")
                 return count
 
     def fail_instance_jobs(
@@ -580,15 +650,23 @@ class PostgresJobRepository:
             settings.worker_id,
             worker_instance_id,
         )
-        if metering_enabled():
+        if metering_enabled() or ne.enabled():
             query += sql.SQL(" RETURNING ") + self._usage_columns()
         with psycopg.connect(settings.app_postgres_dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 count = cur.rowcount or 0
-                if metering_enabled():
-                    for row in cur.fetchall():
-                        _record_monomer_md_usage_row(conn, self._usage_row(row))
+                if metering_enabled() or ne.enabled():
+                    for selected in cur.fetchall():
+                        row = self._usage_row(selected)
+                        if metering_enabled():
+                            _record_monomer_md_usage_row(conn, row)
+                        if ne.enabled():
+                            # Caller already proved original native recovery safe;
+                            # this adds no process-death or lease-expiry inference.
+                            ne.release_native(conn, owner_user_id=str(row["owner_user_id"]),
+                                module="monomer_md", native_task_id=str(row["job_id"]),
+                                status=row["status"], source="md_native_recovery")
                 return count
 
 
