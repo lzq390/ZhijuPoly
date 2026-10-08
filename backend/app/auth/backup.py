@@ -16,27 +16,30 @@ from psycopg.rows import dict_row
 from .cutover import private_data_seal, auth_metadata_seal, backup_state_seal
 from .assets import archive_assets, file_sha256
 from .isolation_ledger import (PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION,
-                               USAGE_VERSION, validate_application_migration_ledger,
+                               USAGE_VERSION, ENTITLEMENT_VERSION, validate_application_migration_ledger,
                                validate_service_migration_ledger, validate_service_members)
 from .usage_backup import usage_backup_seal
+from .entitlement_backup import entitlement_backup_seal
 
 
 def validate_backup_schema(connection):
     row = connection.execute("SELECT max(version) AS version FROM governance.schema_migrations").fetchone()
     version = row["version"]
-    if version not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, USAGE_VERSION}:
-        raise ValueError("Identity backup requires exact 0017, historical 0018, current 0019, or known 0020")
-    ledger = (validate_application_migration_ledger(connection, require_usage=True)
-              if version == USAGE_VERSION else validate_service_migration_ledger(connection, version))
+    if version not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION}:
+        raise ValueError("Identity backup requires exact 0017, historical 0018, current 0019, or known usage/entitlement expansion")
+    ledger = (validate_application_migration_ledger(connection, require_usage=True, require_entitlements=version == ENTITLEMENT_VERSION)
+              if version in {USAGE_VERSION, ENTITLEMENT_VERSION} else validate_service_migration_ledger(connection, version))
     if version != PREPARE_VERSION:
         from .schema import validate_isolation_schema
         validate_isolation_schema(connection)
-    current = version in {CURRENT_VERSION, USAGE_VERSION}
+    current = version in {CURRENT_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION}
     privileges = validate_service_members(connection) if current else None
     result = {"migration_ledger": ledger, "current_readiness": current,
               "service_auth_privileges": privileges}
-    if version == USAGE_VERSION:
+    if version in {USAGE_VERSION, ENTITLEMENT_VERSION}:
         result["usage_schema"] = {"version": USAGE_VERSION, "validated": True}
+    if version == ENTITLEMENT_VERSION:
+        result["entitlement_schema"] = {"version": ENTITLEMENT_VERSION, "validated": True}
     return result
 
 
@@ -71,6 +74,7 @@ def backup_and_verify(source_dsn: str, restore_dsn: str, directory: Path, *, ass
         source_auth_seal = auth_metadata_seal(source)
         source_backup_seal = backup_state_seal(source)
         source_usage_seal = usage_backup_seal(source) if "usage_schema" in source_schema else None
+        source_entitlement_seal = entitlement_backup_seal(source) if "entitlement_schema" in source_schema else None
         major = source.info.server_version // 10000
     binary_dir = Path(os.environ.get('POSTGRES_BIN',f'/usr/lib/postgresql/{major}/bin'))
     dump_command = str(binary_dir/'pg_dump') if binary_dir.exists() else 'pg_dump'
@@ -91,12 +95,15 @@ def backup_and_verify(source_dsn: str, restore_dsn: str, directory: Path, *, ass
         restore_auth_seal = auth_metadata_seal(restored)
         restore_backup_seal = backup_state_seal(restored)
         restore_usage_seal = usage_backup_seal(restored) if "usage_schema" in restore_schema else None
+        restore_entitlement_seal = entitlement_backup_seal(restored) if "entitlement_schema" in restore_schema else None
     if source_schema != restore_schema:
         raise RuntimeError('Backup restored with a different isolation schema or service ACL')
     if source_seal != restore_seal or source_auth_seal != restore_auth_seal or source_backup_seal != restore_backup_seal:
         raise RuntimeError('Backup restored with a different private business-data seal')
     if source_usage_seal != restore_usage_seal:
         raise RuntimeError('Backup restored with a different usage observation or metadata seal')
+    if source_entitlement_seal != restore_entitlement_seal:
+        raise RuntimeError('Backup restored with a different entitlement observation/result seal')
     assets = archive_assets(asset_roots or {},directory,source_backup_seal)
     result = {'source':source_id,'restore_target':restore_id,'backup_path':str(dump.resolve()),
               'backup_sha256':file_sha256(dump),
@@ -104,6 +111,8 @@ def backup_and_verify(source_dsn: str, restore_dsn: str, directory: Path, *, ass
               'restore_verified':True,'business_data':source_seal,'auth_metadata':source_auth_seal,'backup_state':source_backup_seal,'assets':assets}
     if source_usage_seal is not None:
         result['usage_state'] = source_usage_seal
+    if source_entitlement_seal is not None:
+        result['entitlement_state'] = source_entitlement_seal
     receipt = directory/'receipt.json'
     receipt.write_text(json.dumps(result,indent=2)+'\n')
     receipt.chmod(0o600)

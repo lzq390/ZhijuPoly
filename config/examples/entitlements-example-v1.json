@@ -1,0 +1,701 @@
+{
+  "schema_version": 1,
+  "version": "entitlements-example-v1",
+  "example": true,
+  "enforcement_default": false,
+  "default_tier": "member",
+  "free_assignment": "explicit",
+  "period": "month",
+  "result_max_bytes": 1048576,
+  "operation_max_rows": 200,
+  "operation_max_bytes": 16777216,
+  "request_rate_per_minute": 120,
+  "active_operations_per_owner": 4,
+  "tiers": {
+    "free": {
+      "pools": {
+        "chemistry_small": 2,
+        "generation": 2,
+        "assistant": 2,
+        "summary": 2,
+        "md": 2,
+        "dft": 2,
+        "batch": 2,
+        "online": 2
+      }
+    },
+    "member": {
+      "pools": {
+        "chemistry_small": 10,
+        "generation": 10,
+        "assistant": 10,
+        "summary": 10,
+        "md": 10,
+        "dft": 10,
+        "batch": 10,
+        "online": 10
+      }
+    }
+  },
+  "rules": {
+    "generation_partial_counts": true,
+    "chemistry_no_match_counts": true,
+    "batch_partial_counts": false,
+    "online_partial_counts": false,
+    "dft_non_converged_counts": true,
+    "md_demo_counts": false
+  },
+  "modules": {
+    "predict": {
+      "pool_id": "chemistry_small",
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "count",
+          "pool_id": "chemistry_small",
+          "fields": {
+            "property_count": {
+              "type": "integer",
+              "min": 1,
+              "max": 9
+            }
+          }
+        }
+      }
+    },
+    "ocsr": {
+      "pool_id": "chemistry_small",
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "count",
+          "pool_id": "chemistry_small",
+          "fields": {
+            "image_bytes": {
+              "type": "integer",
+              "min": 1,
+              "max": 10485760
+            },
+            "image_pixels": {
+              "type": "integer",
+              "min": 1,
+              "max": 20000000
+            }
+          }
+        }
+      }
+    },
+    "retrosynthesis": {
+      "pool_id": "chemistry_small",
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "count",
+          "pool_id": "chemistry_small",
+          "fields": {
+            "num_beams": {
+              "type": "integer",
+              "min": 1,
+              "max": 20
+            },
+            "num_return_sequences": {
+              "type": "integer",
+              "min": 1,
+              "max": 10
+            },
+            "max_new_tokens": {
+              "type": "integer",
+              "min": 16,
+              "max": 256
+            }
+          }
+        }
+      }
+    },
+    "polymerization": {
+      "pool_id": "chemistry_small",
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "count",
+          "pool_id": "chemistry_small",
+          "fields": {
+            "max_results": {
+              "type": "integer",
+              "min": 1,
+              "max": 20
+            },
+            "monomer_count": {
+              "type": "integer",
+              "min": 1,
+              "max": 2
+            }
+          }
+        }
+      }
+    },
+    "structure": {
+      "pool_id": "chemistry_small",
+      "selector": "operation",
+      "variants": {
+        "3d": {
+          "mode": "count",
+          "pool_id": "chemistry_small",
+          "fields": {
+            "operation": {
+              "type": "enum",
+              "values": [
+                "3d"
+              ]
+            },
+            "atom_count": {
+              "type": "integer",
+              "min": 1,
+              "max": 500
+            }
+          }
+        },
+        "2d": {
+          "mode": "rate_only",
+          "pool_id": null,
+          "fields": {
+            "operation": {
+              "type": "enum",
+              "values": [
+                "2d"
+              ]
+            }
+          }
+        },
+        "standardize": {
+          "mode": "rate_only",
+          "pool_id": null,
+          "fields": {
+            "operation": {
+              "type": "enum",
+              "values": [
+                "standardize"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "conditional_generation": {
+      "pool_id": "generation",
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "count",
+          "pool_id": "generation",
+          "fields": {
+            "candidate_count": {
+              "type": "integer",
+              "min": 1,
+              "max": 50
+            },
+            "top_k": {
+              "type": "integer",
+              "min": 1,
+              "max": 20
+            },
+            "temperature": {
+              "type": "number",
+              "min": 0.1,
+              "max": 2.0,
+              "exclusive_min": false
+            },
+            "delta_tg": {
+              "type": "number",
+              "min": -1000000.0,
+              "max": 1000000.0,
+              "exclusive_min": false
+            }
+          }
+        }
+      }
+    },
+    "polytao": {
+      "pool_id": "generation",
+      "selector": "operation",
+      "variants": {
+        "generate": {
+          "mode": "count",
+          "pool_id": "generation",
+          "fields": {
+            "operation": {
+              "type": "enum",
+              "values": [
+                "generate"
+              ]
+            },
+            "candidate_count": {
+              "type": "integer",
+              "min": 1,
+              "max": 50
+            },
+            "temperature": {
+              "type": "number",
+              "min": 0.1,
+              "max": 2.0,
+              "exclusive_min": false
+            },
+            "top_k": {
+              "type": "integer",
+              "min": 1,
+              "max": 500
+            },
+            "top_p": {
+              "type": "number",
+              "min": 0.0,
+              "max": 1.0,
+              "exclusive_min": true
+            },
+            "max_length": {
+              "type": "integer",
+              "min": 16,
+              "max": 512
+            }
+          }
+        },
+        "descriptors": {
+          "mode": "rate_only",
+          "pool_id": null,
+          "fields": {
+            "operation": {
+              "type": "enum",
+              "values": [
+                "descriptors"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "assistant": {
+      "pool_id": "assistant",
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "count",
+          "pool_id": "assistant",
+          "fields": {
+            "message_count": {
+              "type": "integer",
+              "min": 1,
+              "max": 200
+            },
+            "input_characters": {
+              "type": "integer",
+              "min": 0,
+              "max": 200000
+            },
+            "image_count": {
+              "type": "integer",
+              "min": 0,
+              "max": 3
+            },
+            "image_bytes": {
+              "type": "integer",
+              "min": 0,
+              "max": 31457280
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "min": 1,
+              "max": 8192
+            },
+            "provider_attempt_limit": {
+              "type": "integer",
+              "min": 1,
+              "max": 8
+            }
+          }
+        }
+      }
+    },
+    "tg_assistant": {
+      "pool_id": "assistant",
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "count",
+          "pool_id": "assistant",
+          "fields": {
+            "message_count": {
+              "type": "integer",
+              "min": 1,
+              "max": 200
+            },
+            "input_characters": {
+              "type": "integer",
+              "min": 0,
+              "max": 200000
+            },
+            "image_count": {
+              "type": "integer",
+              "min": 0,
+              "max": 3
+            },
+            "image_bytes": {
+              "type": "integer",
+              "min": 0,
+              "max": 31457280
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "min": 1,
+              "max": 8192
+            },
+            "provider_attempt_limit": {
+              "type": "integer",
+              "min": 1,
+              "max": 8
+            }
+          }
+        }
+      }
+    },
+    "recording_summary": {
+      "pool_id": "summary",
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "count",
+          "pool_id": "summary",
+          "fields": {
+            "evidence_characters": {
+              "type": "integer",
+              "min": 0,
+              "max": 80000
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "min": 1,
+              "max": 8192
+            },
+            "provider_attempt_limit": {
+              "type": "integer",
+              "min": 1,
+              "max": 8
+            }
+          }
+        }
+      }
+    },
+    "monomer_md": {
+      "pool_id": "md",
+      "selector": "run_mode",
+      "variants": {
+        "formal": {
+          "mode": "count",
+          "pool_id": "md",
+          "fields": {
+            "run_mode": {
+              "type": "enum",
+              "values": [
+                "formal"
+              ]
+            },
+            "protocol": {
+              "type": "enum",
+              "values": [
+                "Density",
+                "Transport",
+                "HVap",
+                "Dielectric",
+                "Compressibility"
+              ]
+            },
+            "requested_steps": {
+              "type": "integer",
+              "min": 1,
+              "max": 1000000000
+            },
+            "requested_atom_count": {
+              "type": "integer",
+              "min": 1,
+              "max": 1000000
+            }
+          }
+        },
+        "demo": {
+          "mode": "count",
+          "pool_id": "md",
+          "fields": {
+            "run_mode": {
+              "type": "enum",
+              "values": [
+                "demo"
+              ]
+            },
+            "protocol": {
+              "type": "enum",
+              "values": [
+                "DensityDemo"
+              ]
+            },
+            "requested_steps": {
+              "type": "integer",
+              "min": 1,
+              "max": 1000000000
+            }
+          }
+        }
+      }
+    },
+    "monomer_dft": {
+      "pool_id": "dft",
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "count",
+          "pool_id": "dft",
+          "fields": {
+            "calculation_type": {
+              "type": "enum",
+              "values": [
+                "single_point",
+                "optimization"
+              ]
+            },
+            "model": {
+              "type": "enum",
+              "values": [
+                "aimnet2",
+                "aimnet2-2025",
+                "aimnet2-b973c",
+                "aimnet2-nse",
+                "aimnet2-pd",
+                "aimnet2-rxn"
+              ]
+            },
+            "total_atoms": {
+              "type": "integer",
+              "min": 1,
+              "max": 300
+            },
+            "requested_properties": {
+              "type": "enum_list",
+              "values": [
+                "energy",
+                "charges",
+                "forces",
+                "hessian",
+                "frequencies"
+              ],
+              "min_items": 1,
+              "max_items": 5
+            },
+            "max_steps": {
+              "type": "integer",
+              "min": 0,
+              "max": 50
+            },
+            "conformer_max_iterations": {
+              "type": "integer",
+              "min": 1,
+              "max": 5000
+            }
+          }
+        }
+      }
+    },
+    "polymerization_batch": {
+      "pool_id": "batch",
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "count",
+          "pool_id": "batch",
+          "fields": {
+            "raw_pairs": {
+              "type": "integer",
+              "min": 1,
+              "max": 50000
+            },
+            "valid_pairs": {
+              "type": "integer",
+              "min": 1,
+              "max": 50000
+            },
+            "rows_a": {
+              "type": "integer",
+              "min": 1,
+              "max": 5000
+            },
+            "rows_b": {
+              "type": "integer",
+              "min": 1,
+              "max": 5000
+            }
+          }
+        }
+      }
+    },
+    "online_knowledge": {
+      "pool_id": "online",
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "count",
+          "pool_id": "online",
+          "fields": {
+            "max_papers": {
+              "type": "integer",
+              "min": 1,
+              "max": 2000
+            },
+            "mode": {
+              "type": "enum",
+              "values": [
+                "synthesis",
+                "property"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "reverse_design": {
+      "pool_id": null,
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "rate_only",
+          "pool_id": null,
+          "fields": {
+            "candidate_size": {
+              "type": "integer",
+              "min": 1,
+              "max": 200
+            }
+          }
+        }
+      }
+    },
+    "query": {
+      "pool_id": "chemistry_small",
+      "selector": "match_mode",
+      "variants": {
+        "property": {
+          "mode": "count",
+          "pool_id": "chemistry_small",
+          "fields": {
+            "match_mode": {
+              "type": "enum",
+              "values": [
+                "property"
+              ]
+            },
+            "property_count": {
+              "type": "integer",
+              "min": 1,
+              "max": 1
+            },
+            "top_k": {
+              "type": "integer",
+              "min": 1,
+              "max": 100
+            },
+            "similarity_threshold": {
+              "type": "number",
+              "min": 0.0,
+              "max": 1.0,
+              "exclusive_min": false
+            }
+          }
+        },
+        "structure": {
+          "mode": "rate_only",
+          "pool_id": null,
+          "fields": {
+            "match_mode": {
+              "type": "enum",
+              "values": [
+                "structure"
+              ]
+            },
+            "top_k": {
+              "type": "integer",
+              "min": 1,
+              "max": 100
+            },
+            "similarity_threshold": {
+              "type": "number",
+              "min": 0.0,
+              "max": 1.0,
+              "exclusive_min": false
+            }
+          }
+        }
+      }
+    },
+    "database_browser": {
+      "pool_id": null,
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "rate_only",
+          "pool_id": null,
+          "fields": {}
+        }
+      }
+    },
+    "dft_history": {
+      "pool_id": null,
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "rate_only",
+          "pool_id": null,
+          "fields": {}
+        }
+      }
+    },
+    "knowledge": {
+      "pool_id": null,
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "rate_only",
+          "pool_id": null,
+          "fields": {}
+        }
+      }
+    },
+    "batch_preflight": {
+      "pool_id": null,
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "rate_only",
+          "pool_id": null,
+          "fields": {}
+        }
+      }
+    },
+    "md_demo": {
+      "pool_id": null,
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "rate_only",
+          "pool_id": null,
+          "fields": {}
+        }
+      }
+    },
+    "openscience": {
+      "pool_id": null,
+      "selector": null,
+      "variants": {
+        "default": {
+          "mode": "external",
+          "pool_id": null,
+          "fields": {}
+        }
+      }
+    }
+  }
+}

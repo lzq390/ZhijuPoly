@@ -25,6 +25,29 @@ from app.postgres_migrations import apply_postgres_migrations
 from app.services.monomer_dft_schema import probe_monomer_dft_schema
 
 
+
+def _apply_historical_prefix(dsn, through):
+    # Validate canonical current files, then give the real runner only the
+    # exact historical release prefix this fixture exercises.
+    import json
+    from pathlib import Path
+    import tempfile
+    from app.config import PROJECT_ROOT
+    from app.migration_policy import validate_migration_manifest_entries
+    source = PROJECT_ROOT / "backend/migrations/postgres"
+    entries = validate_migration_manifest_entries(source)
+    assert through in {entry.version for entry in entries}
+    document = json.loads((source / "manifest.json").read_text())
+    document["migrations"] = [entry for entry in document["migrations"] if entry["version"] <= through]
+    with tempfile.TemporaryDirectory(prefix="historical-migrations-") as temporary:
+        target = Path(temporary)
+        for entry in entries:
+            if entry.version <= through:
+                (target / (entry.version + ".sql")).write_bytes((source / (entry.version + ".sql")).read_bytes())
+        (target / "manifest.json").write_text(json.dumps(document))
+        return apply_postgres_migrations(dsn, migrations_dir=target,
+            allowed_kinds={"baseline", "expand"}, allow_contract_on_fresh_database=True)
+
 @pytest.fixture
 def maintenance_database():
     base = os.environ.get("ISOLATION_TEST_ADMIN_DSN")
@@ -37,8 +60,7 @@ def maintenance_database():
         assert connection.info.server_version // 10000 == 16
         connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     try:
-        apply_postgres_migrations(dsn, allowed_kinds={"baseline", "expand"},
-                                  allow_contract_on_fresh_database=True)
+        _apply_historical_prefix(dsn, "0017_user_isolation_prepare")
         with psycopg.connect(dsn, row_factory=dict_row) as connection:
             validate_service_migration_ledger(connection, "0017_user_isolation_prepare")
             owner = manage_user(connection, "create", username="scope-owner", password="synthetic-test-password")
@@ -76,8 +98,7 @@ def test_explicit_cutovers_exact_retry_and_unchanged_dft_catalog(maintenance_dat
         validate_service_migration_ledger(connection)
     # Expansion leaves the 0019 privilege contract intact. Its historical
     # maintenance command must not silently accept a newer database boundary.
-    apply_postgres_migrations(db["dsn"], allowed_kinds={"baseline", "expand"},
-                              allow_contract_on_fresh_database=True)
+    _apply_historical_prefix(db["dsn"], "0020_usage_metering")
     with pytest.raises(ValueError, match="exact canonical ledger"):
         apply(db)
     with psycopg.connect(db["dsn"], row_factory=dict_row) as connection:

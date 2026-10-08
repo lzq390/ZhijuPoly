@@ -1,6 +1,6 @@
 # 个人用量统计（第一阶段）
 
-本模块为将来的个人免费版／会员版提供可核验的用量观测，不是账单系统。现有游客、已登录用户的权限保持不变；不增加订阅、价格、扣费、配额、用户降级或管理员跨用户面板。匿名游客没有可验证的用户标识，不生成假用户账本。
+用量观测为个人免费版／会员版提供可核验记录，不是账单系统。观察层不增加订阅、价格、收费或管理员跨用户面板。另有默认关闭的“基础次数＋规格”开发路径，见文末；当前仅代码和隔离测试，没有正式商业额度，也未在运行环境部署／启用。现有权限不因统计或套餐名称自动变化。匿名游客没有可验证的用户标识，不生成假用户账本。
 
 ## 用户入口与接口
 
@@ -120,3 +120,68 @@
 * 没有在本轮运行库启用 0020 或计量；未做全部科学模型／真实 GPU 任务／付费接口的计量端到端验收，也未证明硬崩溃、ACK 丢失后的自动对账完整性。
 
 隔离测试采用 network none、合成数据和资源上限，并核验临时资源清理。本轮源码哈希、原始测试结果保留在工作树 `.runtime/usage-*` 等证据目录；交付应按各套件最终结果列示，不能用路由分类数量代替执行覆盖率。
+
+## 基础次数＋规格：默认关闭的开发策略
+
+`task_usage/entitlement_policy.py` 是纯策略层：不读环境／文件、不连接数据库、不派发任务、不修改身份或权限。它只校验版本化策略、服务端规格和终态事实，再给出资格结论。预占、同事务保存结果、原子结算、幂等重放、版本持久化与未知状态保留由独立 entitlement repository/runtime 负责，不能用观察账本的 `completed` 自动扣次。
+
+样例配置是 `config/examples/entitlements-example-v1.json`，声明 `example=true`、`enforcement_default=false`。其中 free 每池每月 2 次、member 10 次只是测试夹具，不是正式配额或价格。策略 `period` 可配置为 `day`、`week`、`month`，分别按 UTC 零点自然日、周一零点 ISO 周、每月 1 日零点日历月定义；样例仍为 month。操作固定受理时的 period_start／period_end，跨界完成按原受理窗口结算。同 owner／pool 的相同窗口跨策略版本共同占用额度，不能通过换 version 重置。若新窗口与尚未结束、非 released 的旧操作窗口重叠但边界不同，repository 拒绝 `period_policy_conflict`；旧窗口结束后可切换周期，旧 active／unknown 仍占账户活跃上限，并在汇总的 `held_outside_current_period` 单列。样例另设 `request_rate_per_minute=120` 和 `active_operations_per_owner=4` 两项运行保护，不是商业套餐次数。前者供 HTTP 每用户进程内频率保护；多实例不共享此内存计数，不能作为额度权威。后者供 repository 在同一 owner 锁下校验跨 pool 活跃操作总数；未确认的 unknown 预占不能因本机超时自动消失。`operation_max_rows`／`operation_max_bytes` 则是持久保留量保护，三类限制不能混用。运行加载器须默认关闭；显式测试启用也须单独允许 example 配置，不能把样例标志缺失当作正式配置。正式额度尚未决定，不提供默认商业套餐。
+
+已存在用户的额度层默认映射为 member；新 free 必须显式分配。额度层与 RBAC 分开：free 的业务权限沿既有 guest 边界，不因拥有次数获得额外接口权限；member 名称也不授予管理员能力。纯策略不创建账号、不更改 auth 表或角色成员关系，业务原权限检查仍在前。
+
+### 八个共享额度池
+
+每个通过资格判定的有界根操作最多结算 1 基础次；规格描述该次工作的上限，不按 provider 子调用、模型 microbatch 或 batch chunk 再扣一次。
+
+| 池 | 模块／路径 | 规格关键维度 |
+| --- | --- | --- |
+| `chemistry_small` | predict、性质相似 query、OCSR、retrosynthesis、单次 polymerization、structure 3D | 属性数；query 固定 1 属性、top_k／threshold；图片 bytes／pixels、beam／返回数量／输出长度、聚合返回上限／单体数、3D 原子数 |
+| `generation` | Tg 条件生成、PolyTAO 生成 | candidate_count、采样参数；PolyTAO 另含 max_length |
+| `assistant` | 普通助手、Tg 助手 | 消息数、服务端输入字符数、图片总量、最大输出上限、整轮 provider attempt 上限 |
+| `summary` | 浏览记录总结 | 服务端 evidence 字符数、最大输出上限、provider attempt 上限 |
+| `md` | 原生 MD formal／明确 demo 规格 | protocol、请求／估计 steps；formal 另含请求 natoms |
+| `dft` | 原生 DFT | model、calculation_type、原子数、明确请求属性、优化和构象准备上限 |
+| `batch` | 持久批量聚合 | 预检得到的行数、raw／valid pairs；整批一次 |
+| `online` | 同步／原生在线抽取 | max_papers、synthesis／property 模式 |
+
+这是示例分组，不证明同一池中任务资源成本相等。OCSR／逆合成与 CPU 小功能仍各自受原有执行器、限额和资源保护约束。总结单独成池是因为它使用累积 evidence 和独立输出边界；计次不是 token 定价。
+
+纯结构相似 query／精确 lookup、数据库浏览、历史 DFT、本地 knowledge、逆向设计、structure 2D／标准化、batch preflight、独立 md_demo、PolyTAO descriptors 为 `rate_only`，不使用基础次数池；该标签本身不实现限速，也不证明这些接口原先已有统一频率限制，仍须执行权限与实际部署的运行保护。OpenScience 为 `external`，不在本地假造额度操作。原生 MD demo 是独立、明确的 `md` 规格，不能与 md_demo 路由混淆；样例正常先预占，合格 demo 最终按规则 0 次释放，不代表它没有真实计算成本，也不承诺额度已满时跳过准入。
+
+性质相似 query 不能借查询接口绕过预测次数：`SmilesQueryRequest` 先把旧 exact／similarity 模式归一为 structure／property。性质分支实际调用一次单属性 predict，使用 `chemistry_small`；公开规格为 `{match_mode: property, property_count: 1, top_k: 1..100, similarity_threshold: 0..1}`。结构分支规格为 `{match_mode: structure, top_k, similarity_threshold}`，仍为 rate_only；精确详情／lookup 不执行模型，维持原权限与运行保护。私密 property_name／SMILES 由完整请求指纹绑定，不进入公开规格。
+
+性质 query 的 adapter 须验证 response.match_type、请求属性一致、预测值有限、total 与 results 数量一致及返回上限，再传 `{validated, completion_proven, predicted_properties, match_count, no_match}`。完整预测＋完整检索且有匹配结算 1 次；完整检索无匹配使用现有 `chemistry_no_match_counts` 规则（样例为 1），不把无匹配当模型失败。预测缺失为 partial 0；未证明结束仍 unknown 保留预占。客户端不能提交这些资格事实。
+
+### 纯接口与固定规格
+
+```python
+policy = load_policy(document)  # validate_policy 是同义入口；无文件读取
+selected = normalize_spec(policy, module, server_spec)
+decision = qualify(policy, module, selected["canonical_spec"], typed_facts, status)
+```
+
+`selected` 包含 module、mode、pool_id、canonical_spec、spec_id／spec_sha256、policy_version／policy_sha256。repository 必须从自己读取的冻结策略重新计算，不能信任调用方传入 pool、tier、period 或任意额度。策略版本对应完整 canonical JSON SHA；装库后同一版本内容不得变化，修改预算或资格规则应产生新版本。操作固定其预占时版本，不能事后套新规则重判已结算结果。
+
+规格只接受代码和版本配置声明的精确字段；缺失、多余、错误类型、非有限数和越界值都拒绝，不默默忽略。服务端 adapter 从已经验证的请求／预检构造规格；私密输入、SMILES、文本、descriptor 内容、供应商地址或 key 不放入公开规格。完整请求指纹由 operation 私有存储绑定，不是公开规格 hash 的替代品。`input_characters` 是服务端约定输入的字符数，不是 provider token；`requested_steps`／`requested_atom_count` 是请求目标，不是已完成科学工作量。Tg `top_k` 是采样参数，完整交付目标是 `candidate_count`，不是二者的最小值。
+
+`decision` 在上述身份字段外返回 qualified、outcome、units（只能 0／1）、terminal 和固定 reason。`terminal=false` 表示结论尚不可确认，repository 必须保留未知／预占，不能看到 units=0 就释放或另起计算。服务端 facts 的 `completion_proven` 表示已证明本轮终结，不等于科学正确或答案合格；`validated` 来自既有业务验证。它们不能来自客户端自报或单凭 HTTP 200。
+
+### 样例资格规则与诚实标签
+
+| 已确认的服务结果 | 样例结算 | 说明 |
+| --- | --- | --- |
+| 完整、有效、可交付的 `service_completed` | 1 | 仅服务完成，不承诺科学正确、候选有用或实验可重复 |
+| 化学服务合法完成但 `no_match` | 1，可配置为 0 | 必须有真实完成和明确 no-match 证据，不能把异常／无效输出伪装为空匹配 |
+| Tg／PolyTAO 有至少 1 个有效候选但不足 requested count | 1，标签 `partial`；可配置为 0 | `no_candidates` 为 0，不补造候选；采样参数不当作候选数量 |
+| batch `completed_with_errors`／不完整／有 pair errors | 0，标签 `partial`；可配置 | 仍保存实际结果与错误，chunk 不重复计次 |
+| DFT 完整交付所请求属性、诚实报告未收敛 | 1，标签 `non_converged`；可配置为 0 | 缺少已请求属性则 `partial`、0；single point 不伪造 convergence 值 |
+| 原生 MD 完整 formal 报告，原协议完成与安全清理已确认 | 1 | 不以估计 completed_steps 冒充实际积分步验证 |
+| 原生 MD 合格 demo | 0，标签 `demo`；可配置 | 清理未确认仍 unknown，不绕原 owner／lease fence |
+| online 使用示例数据／部分抽取失败 | demo／partial，默认 0 | 真实成功／失败抽取次数来自执行摘要，不用结果行数代替 |
+| 助手／总结 clarification、refusal、cache_hit、no_events、partial | 0，各自独立标签 | 已终结须有供应商或本地业务证据；clean EOF 本身不足 |
+| 已证明 failed／cancelled／timed_out／interrupted／rejected | 0 | 不把已有失败升级为成功凭证 |
+| 未确认终态、缺少结果事实、MD 清理未确认 | unknown，保留预占 | 不推断成功，不由超时／断线自动退款重跑 |
+
+这些规则是版本化测试政策，仍需正式商业裁决；没有金额字段、收费调用或真实用户额度写入。资格证据只描述本轮受限服务交付，不能替代模型科学验证。公共 policy 投影不含用户分配、私密请求／结果或凭据。
+
+策略单元测试以合成事实覆盖严格规格、共享池、结果分类、可配置例外、未知保留和无 IO；它不证明完整 runtime reserve／dispatch／settle 链路已经通过。集成及科学测试应分别列证据，不把纯函数测试写成已部署套餐功能。

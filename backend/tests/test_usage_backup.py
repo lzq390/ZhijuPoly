@@ -22,6 +22,8 @@ def ledgered_usage_db(usage_db):
     with psycopg.connect(usage_db) as connection:
         connection.execute('CREATE TABLE IF NOT EXISTS governance.schema_migrations(version text PRIMARY KEY,checksum text NOT NULL,applied_at timestamptz NOT NULL DEFAULT now())')
         for item in validate_migration_manifest_entries(ROOT/'backend/migrations/postgres'):
+            if item.version > "0020_usage_metering":
+                continue  # usage_db deliberately applies only this historical prefix.
             connection.execute('INSERT INTO governance.schema_migrations(version,checksum) VALUES(%s,%s)',(item.version,item.checksum))
     yield usage_db
 

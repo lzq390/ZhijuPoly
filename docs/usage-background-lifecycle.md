@@ -120,3 +120,72 @@ constitute all-feature live model/provider/GPU end-to-end verification or proof 
 hard-crash/ACK-loss recovery. The current runtime databases remain unmigrated for
 this feature. Permission, migration, backup, and rollout requirements remain as
 documented in [usage-metering.md](usage-metering.md).
+
+## Separate opt-in base-count eligibility
+
+The entitlement policy is separate from usage observation and remains disabled
+by default. `task_usage.entitlement_policy` performs pure version/spec/fact checks;
+it does not reserve, settle, authenticate, read configuration files, or start work.
+See the eight-pool example and exact decision contract in
+[usage-metering.md](usage-metering.md). The example budgets are synthetic fixtures,
+not approved commercial allowances. Existing account permissions remain authoritative.
+
+Native adapters must bind the server-derived specification and full private request
+fingerprint to the operation before dispatch. The repository pins immutable policy
+version/hash and derives its own pool. One bounded root can settle at most one base
+unit: generation microbatches, provider attempts and batch chunks are not additional
+base charges. Idempotent delivery uses the durable operation/result receipt, never
+just a last-observed usage status. A client retry with a new request identity is not
+proof that prior work is absent.
+
+Qualification consumes typed server evidence, not raw HTTP success. Generation
+uses `candidate_count` as the target (`top_k` controls sampling); at least one valid
+candidate can be qualified with an explicit partial label under the example rule.
+Batch partial output defaults to zero. DFT non-convergence may still be a delivered
+service when all requested properties/reports are present, but is never called
+scientific success. MD formal evidence is protocol/report completion plus original
+cleanup confirmation, not an estimated step count; native demo has its own spec and
+zero-unit example rule. Online counts use actual extraction success/failure facts,
+not table row counts, and example data is labeled demo.
+
+`terminal=False`/unknown means preserve reservation and evidence for exact-operation
+recovery. Zero units in an unknown decision is not permission to release or resubmit.
+An explicit completed refusal/clarification/cache/no-events result is different from
+an unproven EOF. No policy decision releases GPU resources, alters lifecycle fencing,
+changes existing cancellation semantics, or declares a crashed process dead.
+
+Pure policy tests establish these decisions on synthetic inputs. They do not replace
+repository concurrency/rollback tests, actual bounded science validation, or end-to-end
+runtime testing. No running database, main checkout, or deployed policy is changed by
+this development work.
+
+The example adds `request_rate_per_minute=120` for per-process HTTP protection and
+`active_operations_per_owner=4` for the repository's durable owner-wide admission
+check. These are operational bounds, not approved monthly allowances. The owner
+lock must cover all pools and uncertain reservations; per-pool locking alone is
+insufficient. Process-local rate state is not a cross-instance quota authority,
+and a rate_only policy label does not itself implement a limiter. Existing worker,
+GPU and queue guards continue to apply.
+
+
+The immutable policy selects UTC `day`, ISO `week` (Monday 00:00), or calendar
+`month`; the example remains monthly. Admission pins the exact start/end window,
+including completion after its end. Same owner/pool/window consumption is shared
+across policy versions. A different window boundary overlapping an unexpired,
+non-released admission is rejected as `period_policy_conflict`; switching versions
+or cadence cannot reset that consumption. Old-window active/unknown holds still
+count toward owner concurrency and are exposed as `held_outside_current_period`.
+These repository guarantees require the separate real-PG tests; pure policy tests
+only establish accepted period values and immutable policy hash changes.
+
+Property-similarity `query` runs one actual predictor call and uses
+`chemistry_small`. Its strict specification is `match_mode=property`,
+`property_count=1`, bounded `top_k`, and `similarity_threshold`. Structure queries
+use `match_mode=structure` plus the same search bounds and remain rate-only;
+legacy exact/similarity request modes are normalized before policy selection.
+A validated finite prediction and completed search are required. A legitimate
+empty match uses the configurable chemistry no-match outcome, while a missing
+prediction is partial/zero and an unproven completion retains its reservation.
+Neither the prediction child nor the query root is billed a second time for the
+same bounded operation. Private query/property inputs stay in the request
+fingerprint, not in public specifications or qualification facts.
