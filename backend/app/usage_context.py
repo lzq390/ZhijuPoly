@@ -265,7 +265,7 @@ class UsageSpan:
 
     def mark_outcome(self, status: str) -> None:
         if status not in TERMINAL_STATUSES or status == "completed":
-            raise ValueError("Only an explicitly known unsuccessful business outcome may override transport success")
+            raise ValueError("Only an explicitly known unsuccessful business outcome may refine the HTTP result")
         with self._lock:
             if not self._finished:
                 self._business_outcome = status
@@ -279,6 +279,11 @@ class UsageSpan:
         self._metrics.setdefault(metric, elapsed)
         terminal = (self._business_outcome if self._requested_status == "completed" and self._business_outcome
                     else self._requested_status)
+        # Some established APIs report a proven timeout as HTTP 422/503. Refine
+        # only that explicit business outcome; ordinary failures and successful
+        # fallbacks do not inherit a child span's timeout. Cancellation wins.
+        if self._business_outcome == "timed_out" and terminal in {"failed", "rejected"}:
+            terminal = "timed_out"
         stored = self.collector.record(self.context, defer_terminal=True,
             status=terminal, event_key=terminal,
             occurred_at=finished_at, submitted_at=self._started_at, started_at=self._started_at,
@@ -340,8 +345,9 @@ def retain_usage_execution() -> UsageRetention:
 
 
 def mark_current_usage_outcome(status: str) -> None:
-    """Mark a known business failure where code converts it into a normal stream.
+    """Mark a known failure at a final business-to-HTTP boundary.
 
+    Explicit timeouts can refine legacy 422/503 results without changing HTTP.
     Child failures alone are not sufficient: a successful fallback stays success.
     No request/response/SSE content is inspected or stored by this hook.
     """

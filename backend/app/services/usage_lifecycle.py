@@ -37,12 +37,19 @@ def record_persistent_task(connection, *, module, row, status=None):
         raise ValueError("Persistent usage requires a business timestamp")
     task_id = f"{module}:{native_id}"
     metrics = {}
-    # Historical consumed_seconds can include a heartbeat-bounded recovery estimate.
-    # Only complete per-attempt observations are metered below; do not label the
-    # cumulative domain estimate as a measured duration.
+    if terminal and created is not None:
+        # Root lifecycle wall time includes queueing and, on restart, the delay
+        # until recovery observes the interruption. It is not execution/CPU/GPU
+        # time, and is never a sum of child timings or consumed_seconds estimates.
+        metrics["observed_wall_ms"] = int((occurred - created).total_seconds() * 1000)
+    event_key = f"{task_id}:1:{state}:{occurred.isoformat()}"
+    if metrics:
+        # An older observation of this terminal row may have all-null metrics.
+        # Enrich it under a stable new key instead of conflicting with its digest.
+        event_key += ":root-wall-v1"
     record_event(connection, owner_user_id=str(row["owner_user_id"]), module=module,
                  task_id=task_id, attempt_id="1", root_task_id=task_id,
-                 event_key=f"{task_id}:1:{state}:{occurred.isoformat()}", status=state,
+                 event_key=event_key, status=state,
                  occurred_at=occurred, submitted_at=created, started_at=started,
                  finished_at=occurred if terminal else None, metrics=metrics or None)
 

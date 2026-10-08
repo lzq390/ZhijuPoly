@@ -32,7 +32,8 @@ from app.services.structure_similarity_index import (
     StructureSimilarityIndexUnavailableError,
 )
 from app.services.structure_2d import generate_2d_svg
-from app.services.structure_3d import generate_3d_molblock
+from app.services.structure_3d import Structure3DTimeoutError, generate_3d_molblock
+from app.usage_context import mark_current_usage_outcome
 from app.utils.exceptions import (
     InvalidImageError,
     InvalidSmilesError,
@@ -189,6 +190,8 @@ async def generate_structure_3d(request_body: Structure3DRequest, request: Reque
             timeout_seconds=settings.structure_3d_timeout_seconds,
         )
     except InvalidSmilesError as exc:
+        if isinstance(exc, Structure3DTimeoutError):
+            mark_current_usage_outcome("timed_out")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return Structure3DResponse(
@@ -253,6 +256,8 @@ async def recognize_structure_image(
             headers={"Retry-After": str(exc.retry_after_seconds)},
         ) from exc
     except (GpuQueueTimeoutError, GpuQueueStoppedError) as exc:
+        if isinstance(exc, GpuQueueTimeoutError):
+            mark_current_usage_outcome("timed_out")
         raise HTTPException(
             status_code=503,
             detail=str(exc),

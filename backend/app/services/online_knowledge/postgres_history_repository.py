@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from typing import Any
 
 from app.auth.context import is_service_context
-from task_usage.ledger import metering_enabled
+from task_usage.ledger import metering_enabled, record_event
 from app.services.usage_lifecycle import record_persistent_task
 from app.services.private_quotas import PrivateQuotaSettings
 from fastapi import HTTPException
@@ -330,6 +331,36 @@ def _history_row_to_dict(row: Any) -> dict[str, Any]:
     }
 
 
+def _interrupt_recovered_provider_attempts(connection: Any, recovered: dict[str, Any]) -> None:
+    """Only for roots returned by native startup recovery, in that transaction.
+
+    This records discovery of a lost local observer, not proof that a remote
+    inference stopped. Missing provider usage remains unknown.
+    """
+    owner = str(recovered["owner_user_id"])
+    root_id = f"online_knowledge:{recovered['job_id']}"
+    observed_at = recovered["updated_at"]
+    children = connection.execute("""SELECT module, task_id, attempt_id,
+        parent_task_id, root_task_id, submitted_at, started_at
+        FROM usage.attempts WHERE owner_user_id=%s::uuid
+        AND module='online_knowledge' AND root_task_id=%s
+        AND kind='provider' AND parent_task_id IS NOT NULL
+        AND status IN ('queued','running')""", (owner, root_id)).fetchall()
+    for child in children:
+        identity = [child["module"], child["task_id"], child["attempt_id"],
+                    root_id, observed_at.isoformat()]
+        event_key = "online-restart:" + hashlib.sha256(
+            json.dumps(identity, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        record_event(connection, owner_user_id=owner, module=child["module"],
+                     task_id=child["task_id"], attempt_id=child["attempt_id"],
+                     parent_task_id=child["parent_task_id"], root_task_id=child["root_task_id"],
+                     kind="provider", source="reconciliation", event_key=event_key,
+                     status="interrupted", occurred_at=observed_at,
+                     submitted_at=child["submitted_at"], started_at=child["started_at"],
+                     finished_at=observed_at, metrics=None)
+
+
 def fail_interrupted_online_jobs_postgres(connection: Any) -> int:
     """Call once at single-backend startup, before accepting submissions."""
     if not is_service_context():
@@ -346,4 +377,5 @@ def fail_interrupted_online_jobs_postgres(connection: Any) -> int:
     if enabled:
         for row in cursor.fetchall():
             record_persistent_task(connection, module="online_knowledge", row=row, status="interrupted")
+            _interrupt_recovered_provider_attempts(connection, row)
     return count

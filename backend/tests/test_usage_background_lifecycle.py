@@ -122,7 +122,9 @@ def test_batch_expiry_and_recovery_estimate_are_not_metered_as_duration(monkeypa
         updated_at=NOW+timedelta(seconds=1),finished_at=NOW+timedelta(seconds=1),
         start_authorized_at=NOW,consumed_seconds=234)
     lifecycle.record_persistent_task(object(),module="polymerization_batch",row=row)
-    assert events[0]["metrics"] is None
+    # Root lifecycle wall is measured; the 234-second recovery estimate is not.
+    assert events[0]["metrics"] == {"observed_wall_ms": 1000}
+    assert "execution_ms" not in events[0]["metrics"]
     row["status"]="expired"
     lifecycle.record_persistent_task(object(),module="polymerization_batch",row=row)
     assert len(events)==1
@@ -175,11 +177,23 @@ def test_online_recovery_maps_only_changed_rows_to_interrupted(monkeypatch):
     rows=[dict(job_id="online2",owner_user_id=OWNER,status="failed",created_at=NOW,
                updated_at=NOW+timedelta(seconds=1),start_authorized_at=NOW)]
     class Connection:
-        def execute(self,query):
-            assert "WHERE status IN ('pending', 'running') RETURNING" in query
-            return SimpleNamespace(rowcount=1,fetchall=lambda:rows)
+        def __init__(self):self.queries=[]
+        def execute(self,query,params=None):
+            self.queries.append((query,params))
+            if query.startswith("UPDATE online_knowledge.jobs"):
+                assert "WHERE status IN ('pending', 'running') RETURNING" in query
+                assert params is None
+                return SimpleNamespace(rowcount=1,fetchall=lambda:rows)
+            assert "FROM usage.attempts WHERE owner_user_id=%s::uuid" in query
+            assert "module='online_knowledge' AND root_task_id=%s" in query
+            assert "kind='provider' AND parent_task_id IS NOT NULL" in query
+            assert "status IN ('queued','running')" in query
+            assert params == (OWNER,"online_knowledge:online2")
+            return SimpleNamespace(fetchall=lambda:[])
+    connection=Connection()
     with service_context():
-        assert online.fail_interrupted_online_jobs_postgres(Connection())==1
+        assert online.fail_interrupted_online_jobs_postgres(connection)==1
+    assert len(connection.queries)==2
     assert len(events)==1 and events[0]["status"]=="interrupted"
 
 

@@ -1,0 +1,208 @@
+{
+  "enabled": true,
+  "mode": "statistics_only",
+  "retention_days": 365,
+  "modules": [
+    {
+      "id": "assistant",
+      "label": "通用助手",
+      "category": "ai",
+      "coverage": "partial",
+      "note": "记录任务生命周期与实际供应商调用；未返回的 token 保持未知，网络等待不冒充计算时间。"
+    },
+    {
+      "id": "tg_assistant",
+      "label": "Tg 助手",
+      "category": "ai",
+      "coverage": "partial",
+      "note": "记录任务生命周期与实际供应商调用；未返回的 token 保持未知，网络等待不冒充计算时间。"
+    },
+    {
+      "id": "recording_summary",
+      "label": "浏览记录摘要",
+      "category": "ai",
+      "coverage": "partial",
+      "note": "记录任务生命周期与实际供应商调用；未返回的 token 保持未知，网络等待不冒充计算时间。"
+    },
+    {
+      "id": "knowledge",
+      "label": "知识检索",
+      "category": "knowledge",
+      "coverage": "partial",
+      "note": "记录检索或抽取生命周期；外部服务未返回的用量保持未知。"
+    },
+    {
+      "id": "online_knowledge",
+      "label": "在线知识抽取",
+      "category": "knowledge",
+      "coverage": "partial",
+      "note": "记录检索或抽取生命周期；外部服务未返回的用量保持未知。"
+    },
+    {
+      "id": "conditional_generation",
+      "label": "Tg 条件生成",
+      "category": "models",
+      "coverage": "partial",
+      "note": "记录任务生命周期与本地模型调用时长；未测量硬件利用率或硬件计费单位。"
+    },
+    {
+      "id": "polytao",
+      "label": "PolyTAO 生成",
+      "category": "models",
+      "coverage": "partial",
+      "note": "记录任务生命周期与本地模型调用时长；未测量硬件利用率或硬件计费单位。"
+    },
+    {
+      "id": "predict",
+      "label": "性能预测",
+      "category": "models",
+      "coverage": "partial",
+      "note": "记录任务生命周期与本地模型调用时长；未测量硬件利用率或硬件计费单位。"
+    },
+    {
+      "id": "ocsr",
+      "label": "分子图像识别",
+      "category": "models",
+      "coverage": "partial",
+      "note": "记录任务生命周期与本地模型调用时长；未测量硬件利用率或硬件计费单位。"
+    },
+    {
+      "id": "retrosynthesis",
+      "label": "单体逆合成",
+      "category": "models",
+      "coverage": "partial",
+      "note": "记录任务生命周期与本地模型调用时长；未测量硬件利用率或硬件计费单位。"
+    },
+    {
+      "id": "reverse_design",
+      "label": "逆向设计",
+      "category": "search",
+      "coverage": "partial",
+      "note": "记录查询生命周期与请求墙钟时长；不据此估算数据库或模型资源用量。"
+    },
+    {
+      "id": "query",
+      "label": "结构相似性与查询",
+      "category": "search",
+      "coverage": "partial",
+      "note": "记录查询生命周期与请求墙钟时长；不据此估算数据库或模型资源用量。"
+    },
+    {
+      "id": "structure",
+      "label": "分子结构处理",
+      "category": "chemistry",
+      "coverage": "partial",
+      "note": "记录本仓库处理任务生命周期；缺少独立资源观测的指标保持未知。"
+    },
+    {
+      "id": "database_browser",
+      "label": "材料数据库浏览",
+      "category": "search",
+      "coverage": "partial",
+      "note": "记录查询生命周期与请求墙钟时长；不据此估算数据库或模型资源用量。"
+    },
+    {
+      "id": "dft_history",
+      "label": "DFT 历史查询",
+      "category": "search",
+      "coverage": "partial",
+      "note": "记录查询生命周期与请求墙钟时长；不据此估算数据库或模型资源用量。"
+    },
+    {
+      "id": "monomer_md",
+      "label": "分子动力学",
+      "category": "science",
+      "coverage": "partial",
+      "note": "记录原生任务生命周期；无法证明的执行时长与产物字节保持未知。"
+    },
+    {
+      "id": "monomer_dft",
+      "label": "DFT 计算",
+      "category": "science",
+      "coverage": "partial",
+      "note": "记录原生任务生命周期；无法证明的执行时长与产物字节保持未知。"
+    },
+    {
+      "id": "polymerization",
+      "label": "单体聚合",
+      "category": "chemistry",
+      "coverage": "partial",
+      "note": "记录本仓库处理任务生命周期；缺少独立资源观测的指标保持未知。"
+    },
+    {
+      "id": "polymerization_batch",
+      "label": "批量聚合",
+      "category": "chemistry",
+      "coverage": "partial",
+      "note": "记录本仓库处理任务生命周期；缺少独立资源观测的指标保持未知。"
+    },
+    {
+      "id": "batch_preflight",
+      "label": "批量导入校验",
+      "category": "chemistry",
+      "coverage": "partial",
+      "note": "记录本仓库处理任务生命周期；缺少独立资源观测的指标保持未知。"
+    },
+    {
+      "id": "md_demo",
+      "label": "分子动力学演示",
+      "category": "demo",
+      "coverage": "partial",
+      "note": "记录演示请求生命周期；演示结果不代表真实科学计算消耗。"
+    },
+    {
+      "id": "openscience",
+      "label": "OpenScience 独立服务",
+      "category": "external",
+      "coverage": "external",
+      "note": "9011 iframe 独立服务尚未接入可验证的 owner 与 usage，不能归属或计量其内部执行。"
+    }
+  ],
+  "metrics": [
+    {
+      "id": "queue_ms",
+      "label": "排队时间",
+      "unit": "ms"
+    },
+    {
+      "id": "execution_ms",
+      "label": "已观测执行时间",
+      "unit": "ms"
+    },
+    {
+      "id": "observed_wall_ms",
+      "label": "任务历时",
+      "unit": "ms"
+    },
+    {
+      "id": "provider_input_tokens",
+      "label": "供应商输入 Tokens",
+      "unit": "tokens"
+    },
+    {
+      "id": "provider_output_tokens",
+      "label": "供应商输出 Tokens",
+      "unit": "tokens"
+    },
+    {
+      "id": "provider_total_tokens",
+      "label": "供应商总 Tokens",
+      "unit": "tokens"
+    },
+    {
+      "id": "cached_input_tokens",
+      "label": "供应商缓存输入 Tokens",
+      "unit": "tokens"
+    },
+    {
+      "id": "reasoning_tokens",
+      "label": "供应商推理 Tokens",
+      "unit": "tokens"
+    },
+    {
+      "id": "artifact_bytes",
+      "label": "累计已观测产物体积",
+      "unit": "bytes"
+    }
+  ]
+}

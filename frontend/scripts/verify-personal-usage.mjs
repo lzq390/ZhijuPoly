@@ -1,7 +1,7 @@
 // Real browser, fixture API, private loopback preview. No live account/server/AI/GPU.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 const { chromium } = await import(process.env.PAGE_PLAYWRIGHT_MODULE || "playwright");
 const base = "http://127.0.0.1:5297";
@@ -11,18 +11,20 @@ const server = spawn("npm", ["run", "preview", "--", "--host", "127.0.0.1", "--p
   detached: true, stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, DEV_PROXY_TARGET: "http://127.0.0.1:9" }
 });
 let serverError = ""; server.stderr.on("data", data => { serverError = (serverError + data).slice(-2000); });
-const report = { scope: "isolated real UI with synthetic API fixtures; not server ownership acceptance", results: [], progress: [], blocked: [], unexpected: [], failures: [] };
+const report = { screenshots: "disabled; text evidence only", fixture_internal_modules: 21, fixture_external_modules: 1, fixture_metrics: 9, scope: "isolated real UI with synthetic API fixtures; not server ownership acceptance", results: [], progress: [], blocked: [], unexpected: [], failures: [] };
 let browser;
-const catalog = { enabled: true, mode: "statistics_only", retention_days: 365,
-  modules: [{ id: "md", label: "单体 MD", category: "compute", coverage: "measured" }, { id: "assistant", label: "AI 助手", category: "ai", coverage: "partial", note: "仅记录提供方返回的指标" }],
-  metrics: [{ id: "execution_ms", label: "执行耗时", unit: "ms" }, { id: "provider_total_tokens", label: "总令牌", unit: "tokens" }, { id: "artifact_bytes", label: "体积", unit: "bytes" }] };
+const catalog = JSON.parse(await readFile(new URL("./fixtures/usage-catalog.json", import.meta.url), "utf8"));
 function session(owner) { return { authenticated: !!owner, user: owner ? { id: `fixture-owner-${owner}`, username: `测试账号${owner}`, must_change_password: false } : null,
   session_id: owner ? `fixture-session-${owner}` : null, csrf_token: owner ? "fixture-only-csrf" : null, capabilities: {} }; }
-function summary(owner, empty = false) {
+function summary(owner, empty = false, period = {}) {
   const tasks = empty ? 0 : owner === "b" ? 7 : 26;
-  return { period: { start: "2026-09-01T00:00:00.000Z", end: "2026-10-01T00:00:00.000Z", timezone: "UTC", basis: "task_submitted_at" },
-    totals: { tasks, attempts: tasks, child_calls: 0, states: { completed: tasks }, metrics: { execution_ms: { value: 0, known_count: tasks, unknown_count: 0 }, provider_total_tokens: { value: null, known_count: 0, unknown_count: tasks } } },
-    modules: [], daily: empty ? [] : [{ date: "2026-09-30", tasks, states: { completed: tasks } }], coverage: { uncovered: ["assistant"], warnings: ["部分历史任务没有计量记录"] } };
+  const metrics = Object.fromEntries(catalog.metrics.map(metric => [metric.id, { value: null, known_count: 0, unknown_count: tasks }]));
+  metrics.execution_ms = { value: empty ? null : 0, known_count: empty ? 0 : tasks - 1, unknown_count: empty ? 0 : 1 };
+  metrics.observed_wall_ms = { value: empty ? null : 1200, known_count: empty ? 0 : 1, unknown_count: empty ? 0 : tasks - 1 };
+  return { period: { start: period.start, end: period.end, timezone: "UTC", basis: "task_submitted_at" },
+    totals: { tasks, attempts: tasks + (empty ? 0 : 1), child_calls: empty ? 0 : 1, states: { completed: tasks }, metrics },
+    modules: empty ? [] : [{ module: "monomer_md", label: "分子动力学", tasks, attempts: tasks + 1, child_calls: 1, states: { completed: tasks }, metrics }],
+    daily: empty ? [] : [{ date: period.start.slice(0, 10), tasks, states: { completed: tasks } }], coverage: { uncovered: ["openscience"], warnings: ["部分历史任务没有计量记录"] } };
 }
 try {
   let ready = false;
@@ -60,12 +62,12 @@ try {
       if (url.pathname.endsWith("/catalog")) return json(catalog);
       if (url.pathname.endsWith("/summary")) {
         if (state.mode === "disabled") return json({ code: "usage_metering_disabled", detail: "disabled" }, 503);
-        const body = summary(state.owner, state.mode === "empty");
+        const body = summary(state.owner, state.mode === "empty", Object.fromEntries(url.searchParams));
         if (state.hold) { state.hold = false; await new Promise(resolve => { state.release = resolve; }); }
         try { return await json(body); } catch { return; } // Retired request can be aborted by privateFetch.
       }
       const page = Number(url.searchParams.get("page"));
-      const all = state.mode === "empty" ? [] : Array.from({ length: state.owner === "b" ? 7 : 26 }, (_, i) => ({ module: "md", task_id: `fixture-${state.owner}-${i}`, attempt_id: `fixture-attempt-${i}`, kind: "task", status: i === 0 ? "failed" : "completed", submitted_at: "2026-09-30T01:02:03.000Z", started_at: null, finished_at: null, parent_task_id: null, root_task_id: `fixture-${state.owner}-${i}`, source: "fixture", metrics: { execution_ms: 0, provider_total_tokens: null, artifact_bytes: null } }));
+      const all = state.mode === "empty" ? [] : Array.from({ length: state.owner === "b" ? 7 : 26 }, (_, i) => ({ module: "monomer_md", task_id: `fixture-${state.owner}-${i}`, attempt_id: `fixture-attempt-${i}`, kind: "task", status: i === 0 ? "failed" : "completed", submitted_at: "2026-09-30T01:02:03.000Z", started_at: null, finished_at: null, parent_task_id: null, root_task_id: `fixture-${state.owner}-${i}`, source: "fixture", metrics: { execution_ms: 0, provider_total_tokens: null, artifact_bytes: null } }));
       const matching = url.searchParams.has("status") ? all.filter(item => item.status === url.searchParams.get("status")) : all;
       return json({ items: matching.slice((page - 1) * 25, page * 25), page, page_size: 25, total: matching.length });
     });
@@ -79,7 +81,21 @@ try {
     const firstSummary = state.requests.find(item => item.path.endsWith("/summary")).query;
     assert.equal((Date.parse(firstSummary.end) - Date.parse(firstSummary.start)) / 86400000, 30);
     checkpoint("initial_render");
-    await page.screenshot({ path: resolve(output, `usage-${viewport.width}.png`) });
+    const coverage = page.getByRole("region", { name: "统计范围", exact: true });
+    assert.equal(await coverage.getByRole("listitem").count(), 22);
+    assert.equal(await coverage.getByText("部分计量", { exact: true }).count(), 21);
+    assert.equal(await coverage.getByText("外部服务", { exact: true }).count(), 1);
+    for (const item of catalog.modules) assert.equal(await coverage.getByText(item.label, { exact: true }).count(), 1);
+    const metricCards = page.getByRole("region", { name: "已观测指标", exact: true });
+    for (const metric of catalog.metrics) assert.equal(await metricCards.getByText(metric.label, { exact: true }).count(), 1);
+    const moduleTable = page.getByRole("region", { name: "按功能用量表，可横向滚动", exact: true });
+    await moduleTable.getByText("1.2 秒", { exact: true }).waitFor();
+    assert.equal(await moduleTable.getByText("25 条已记录 · 1 条未记录", { exact: true }).count(), 1);
+    assert.equal(await moduleTable.getByText("1 条已记录 · 25 条未记录", { exact: true }).count(), 1);
+    assert.equal(await page.getByText("执行尝试", { exact: true }).count(), 0);
+    assert.equal(await page.getByText(/根任务行仅显示自身记录的指标，不聚合子调用/).count(), 1);
+    assert.equal(await metricCards.getByText(/不可与供应商总 Tokens 叠加/).count(), 1);
+    checkpoint("full_catalog_metrics_and_module_summary");
     if (viewport.width < 1024) await page.getByRole("button", { name: "打开导航", exact: true }).click();
     await page.getByRole("button", { name: "账号菜单：测试账号a", exact: true }).last().click();
     await page.getByRole("menuitem", { name: "我的用量", exact: true }).click();
@@ -88,12 +104,12 @@ try {
     await page.getByText("共 26 条 · 第 2 / 2 页", { exact: true }).waitFor();
     await page.getByLabel("开始日期（UTC）", { exact: true }).fill("2024-02-01");
     await page.getByLabel("结束日期（含当天）", { exact: true }).fill("2024-02-29");
-    await page.getByLabel("功能", { exact: true }).selectOption("md");
+    await page.getByLabel("功能", { exact: true }).selectOption("monomer_md");
     await page.getByRole("button", { name: "应用筛选", exact: true }).click();
     await page.getByText("共 26 条 · 第 1 / 2 页", { exact: true }).waitFor();
     checkpoint("navigation_pagination_dates");
     const filtered = state.requests.filter(item => item.path.endsWith("/summary")).at(-1).query;
-    assert.equal(filtered.start, "2024-02-01T00:00:00.000Z"); assert.equal(filtered.end, "2024-03-01T00:00:00.000Z"); assert.equal(filtered.module, "md");
+    assert.equal(filtered.start, "2024-02-01T00:00:00.000Z"); assert.equal(filtered.end, "2024-03-01T00:00:00.000Z"); assert.equal(filtered.module, "monomer_md");
     await page.getByLabel("明细状态", { exact: true }).selectOption("failed");
     await page.getByLabel("显示子调用明细", { exact: true }).check();
     await page.getByText("共 1 条 · 第 1 / 1 页", { exact: true }).waitFor();
@@ -119,7 +135,7 @@ try {
     await page.goto(base + "/account/usage"); await page.getByRole("heading", { name: "登录后查看我的用量", exact: true }).waitFor();
     assert.equal(state.requests.length, beforeGuest, "guest performs no usage fetch");
     assert.deepEqual(errors, [], "no uncaught browser errors");
-    report.results.push({ viewport, status: "PASS", checks: ["account_navigation", "default30utc", "unknown_metrics", "pagination", "inclusive_utc_dates", "module_filter", "status_child_filters", "narrow_layout", "disabled503", "empty", "late_account_response", "guest_no_fetch"], geometry });
+    report.results.push({ viewport, status: "PASS", checks: ["full21_catalog_plus_external", "all9_metrics", "module_partial_execution_root_wall", "attempt_and_token_semantics", "account_navigation", "default30utc", "unknown_metrics", "pagination", "inclusive_utc_dates", "module_filter", "status_child_filters", "narrow_layout", "disabled503", "empty", "late_account_response", "guest_no_fetch"], geometry });
     await context.close();
   }
   assert.deepEqual(report.unexpected, [], "all undeclared network is a failure");

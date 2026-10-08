@@ -3,7 +3,7 @@ import { BarChart3, RefreshCw } from "lucide-react";
 import { useAuth } from "../auth/AuthProvider";
 import { requestServiceAccess } from "../auth/guestAccess";
 import { fetchUsageCatalog, fetchUsageRecords, fetchUsageSummary, UsageRequestError } from "../services/usage";
-import { USAGE_STATUSES, type UsageCatalog, type UsagePeriod, type UsageRecord, type UsageRecords, type UsageStatus, type UsageSummary } from "../types/usage";
+import { USAGE_STATUSES, type UsageCatalog, type UsageMetric, type UsagePeriod, type UsageRecord, type UsageRecords, type UsageStatus, type UsageSummary } from "../types/usage";
 import { ModulePageHeader } from "./ModulePageHeader";
 import { formatMetric, metricLabel, recentUtcDates, statusLabels, utcPeriod, utcTimestamp } from "./usage/format";
 import "./PersonalUsagePage.css";
@@ -117,7 +117,7 @@ function SignedInUsage() {
               <label>明细状态<select aria-label="明细状态" value={status} onChange={event => { setStatus(event.target.value as UsageStatus | ""); setPage(1); }}><option value="">全部状态</option>{USAGE_STATUSES.map(value => <option key={value} value={value}>{statusLabels[value]}</option>)}</select></label>
               <label className="np-usage-checkbox"><input type="checkbox" checked={includeChildren} onChange={event => { setIncludeChildren(event.target.checked); setPage(1); }} />显示子调用明细</label>
             </div></div>
-            <p className="np-usage-note">状态与子调用筛选仅影响明细。汇总中的根任务不会重复累计子调用令牌。</p>
+            <p className="np-usage-note">状态与子调用筛选仅影响明细。明细逐条展示历史任务尝试或子调用；旧失败尝试可与汇总中最新尝试的成功状态并存。根任务行仅显示自身记录的指标，不聚合子调用；子调用指标见子调用明细，汇总按统计口径去重。</p>
             {records.state === "loading" ? <p role="status">正在读取用量明细…</p>
               : records.state === "error" ? <ErrorPanel message={records.message} retry={retry} />
               : <><RecordTable records={records.data.items} catalog={catalog.data} />
@@ -142,18 +142,22 @@ function Summary({ data, catalog }: { data: UsageSummary; catalog: UsageCatalog 
   const moduleLabel = (id: string) => catalog.modules.find(item => item.id === id)?.label ?? id;
   return <>
     <section className="np-usage-kpis" aria-label="用量概览">{[
-      ["任务", data.totals.tasks], ["执行尝试", data.totals.attempts], ["子调用", data.totals.child_calls]
+      ["任务", data.totals.tasks], ["任务尝试", data.totals.attempts], ["子调用", data.totals.child_calls]
     ].map(([label, value]) => <div className="np-usage-panel" key={String(label)}><span>{label}</span><strong>{number(Number(value))}</strong></div>)}</section>
     {data.totals.tasks === 0 && <p role="status" className="np-usage-panel">所选范围内暂无已记录的任务。</p>}
-    <section className="np-usage-panel" aria-label="任务状态"><h2>任务状态</h2><div className="np-usage-states">{USAGE_STATUSES.map(status => <span key={status} className={`np-usage-state np-usage-state-${status}`}>{statusLabels[status]} <strong>{number(data.totals.states[status] ?? 0)}</strong></span>)}</div></section>
-    <section className="np-usage-panel" aria-labelledby="usage-metrics-heading"><h2 id="usage-metrics-heading">已观测指标</h2><p className="np-usage-note">部分记录缺少指标时，显示已知部分的合计，并标明未记录数量。</p><dl className="np-usage-metrics">{catalog.metrics.map(metric => {
+    <section className="np-usage-panel" aria-label="任务状态"><h2>任务状态</h2><p className="np-usage-note">任务数按逻辑根任务去重；状态取其最新一次任务尝试的最近观测状态。任务尝试数包含重试。</p><div className="np-usage-states">{USAGE_STATUSES.map(status => <span key={status} className={`np-usage-state np-usage-state-${status}`}>{statusLabels[status]} <strong>{number(data.totals.states[status] ?? 0)}</strong></span>)}</div></section>
+    <section className="np-usage-panel" aria-labelledby="usage-metrics-heading"><h2 id="usage-metrics-heading">已观测指标</h2><p className="np-usage-note">部分记录缺少指标时，显示已知部分的合计，并标明未记录数量。令牌显示“未记录”时，可能未采集或不适用于该任务，不代表 0。缓存输入和推理 Tokens 属于子集，不可与供应商总 Tokens 叠加。</p><dl className="np-usage-metrics">{catalog.metrics.map(metric => {
       const amount = data.totals.metrics[metric.id];
       return <div key={metric.id}><dt>{metricLabel(metric)}</dt><dd>{formatMetric(metric.id, amount?.value, metric.unit)}</dd>{amount && <small>{number(amount.known_count)} 条已记录 · {number(amount.unknown_count)} 条未记录</small>}</div>;
     })}</dl></section>
-    <section className="np-usage-panel" aria-labelledby="usage-modules-heading"><h2 id="usage-modules-heading">按功能统计</h2>{data.modules.length ? <div className="np-usage-table-scroll" role="region" aria-label="按功能用量表，可横向滚动" tabIndex={0}><table><thead><tr><th>功能</th><th>任务</th><th>执行尝试</th><th>子调用</th><th>执行耗时</th></tr></thead><tbody>{data.modules.map(item => <tr key={item.module}><th scope="row">{item.label}</th><td>{number(item.tasks)}</td><td>{number(item.attempts)}</td><td>{number(item.child_calls)}</td><td>{formatMetric("execution_ms", item.metrics.execution_ms?.value)}</td></tr>)}</tbody></table></div> : <p className="np-usage-note">暂无功能统计。</p>}</section>
-    <section className="np-usage-panel" aria-labelledby="usage-daily-heading"><h2 id="usage-daily-heading">每日任务数{data.daily.length > 30 ? "（展示范围内最近 30 日）" : ""}</h2>{daily.length ? <div className="np-usage-trend-scroll" role="region" aria-label="每日任务趋势，可横向滚动" tabIndex={0}><ol className="np-usage-trend">{daily.map(day => <li key={day.date} aria-label={`${day.date}，${day.tasks} 个任务`} title={`${day.date}：${day.tasks} 个任务`}><span className="np-usage-bar-count">{number(day.tasks)}</span><span className="np-usage-bar-slot" aria-hidden="true"><span style={{ height: `${day.tasks / max * 100}%` }} /></span><small aria-hidden="true">{day.date.slice(5)}</small></li>)}</ol></div> : <p className="np-usage-note">暂无每日记录。</p>}</section>
+    <section className="np-usage-panel" aria-labelledby="usage-modules-heading"><h2 id="usage-modules-heading">按功能统计</h2><p className="np-usage-note">耗时仅合计已记录的部分。根任务历时包含等待等墙钟时间，不等于执行耗时。</p>{data.modules.length ? <div className="np-usage-table-scroll" role="region" aria-label="按功能用量表，可横向滚动" tabIndex={0}><table><thead><tr><th>功能</th><th>任务</th><th>任务尝试</th><th>子调用</th><th>已观测执行耗时（已知合计）</th><th>根任务历时（已知合计）</th></tr></thead><tbody>{data.modules.map(item => <tr key={item.module}><th scope="row">{item.label}</th><td>{number(item.tasks)}</td><td>{number(item.attempts)}</td><td>{number(item.child_calls)}</td><MetricTotalCell id="execution_ms" amount={item.metrics.execution_ms} /><MetricTotalCell id="observed_wall_ms" amount={item.metrics.observed_wall_ms} /></tr>)}</tbody></table></div> : <p className="np-usage-note">暂无功能统计。</p>}</section>
+    <section className="np-usage-panel" aria-labelledby="usage-daily-heading"><h2 id="usage-daily-heading">每日任务数{data.daily.length > 30 ? "（范围内最近 30 个有记录日期）" : ""}</h2>{daily.length ? <div className="np-usage-trend-scroll" role="region" aria-label="每日任务趋势，可横向滚动" tabIndex={0}><ol className="np-usage-trend">{daily.map(day => <li key={day.date} aria-label={`${day.date}，${day.tasks} 个任务`} title={`${day.date}：${day.tasks} 个任务`}><span className="np-usage-bar-count">{number(day.tasks)}</span><span className="np-usage-bar-slot" aria-hidden="true"><span style={{ height: `${day.tasks / max * 100}%` }} /></span><small aria-hidden="true">{day.date.slice(5)}</small></li>)}</ol></div> : <p className="np-usage-note">暂无每日记录。</p>}</section>
     {(data.coverage.uncovered.length > 0 || data.coverage.warnings.length > 0) && <aside className="np-usage-panel np-usage-coverage-warning" aria-label="统计覆盖提示">{data.coverage.uncovered.length > 0 && <p>尚未覆盖：{data.coverage.uncovered.map(moduleLabel).join("、")}</p>}{data.coverage.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</aside>}
   </>;
+}
+
+function MetricTotalCell({ id, amount }: { id: string; amount: UsageMetric | undefined }) {
+  return <td><div>{formatMetric(id, amount?.value)}</div>{amount && <small>{number(amount.known_count)} 条已记录 · {number(amount.unknown_count)} 条未记录</small>}</td>;
 }
 
 function RecordTable({ records, catalog }: { records: UsageRecord[]; catalog: UsageCatalog }) {

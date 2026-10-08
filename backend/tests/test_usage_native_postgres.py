@@ -188,7 +188,7 @@ def test_online_lifecycle_owner_and_delete_keeps_ledger(usage_db,owner):
     with transaction(usage_db) as conn:
         online.mark_online_job_completed_postgres(conn,job_id,{},owner_user_id=owner)
     row=assert_terminal(usage_db,'online_knowledge',job_id,'completed',owner=owner)
-    assert row['started_at'] is None and row['observed_wall_ms'] is None
+    assert row['started_at'] is None and row['observed_wall_ms'] is not None
     before=events(usage_db,'online_knowledge',job_id)
     with transaction(usage_db) as conn:
         online._record_usage(conn,job_id,owner_user_id=owner)
