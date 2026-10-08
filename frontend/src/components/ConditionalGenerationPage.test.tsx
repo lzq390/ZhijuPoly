@@ -143,7 +143,7 @@ describe("ConditionalGenerationPage Tg workbench reuse", () => {
     expect(view.container.firstElementChild?.classList.contains("np-structure-workbench")).toBe(true);
     expect(title.parentElement?.classList.contains("np-module-page-header")).toBe(true);
     expect(title.closest(".np-module-page-body")).toBeNull();
-    expect(screen.getByRole("button", { name: "加载结构" }).getAttribute("data-workbench-tool")).toBe("load");
+    expect(screen.getByRole("button", { name: "加载示例" }).getAttribute("data-workbench-tool")).toBe("load");
     expect(screen.getByRole("button", { name: "导入图片" }).getAttribute("data-workbench-tool")).toBe("import");
     expect(screen.getByRole("button", { name: "清空画布" }).getAttribute("data-workbench-tool")).toBe("clear");
     expect(screen.getByRole("button", { name: "生成SMILES" }).getAttribute("data-workbench-tool")).toBe("sync");
@@ -165,7 +165,7 @@ describe("ConditionalGenerationPage Tg workbench reuse", () => {
   it("wires the shared Tg canvas toolbar actions to the same controls", async () => {
     render(<ConditionalGenerationPage structure={makeStructure()} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "加载结构" }));
+    fireEvent.click(screen.getByRole("button", { name: "加载示例" }));
     await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledWith("*CC*"));
     fireEvent.click(screen.getByRole("button", { name: "清空画布" }));
     await waitFor(() => expect(mocks.clearCanvas).toHaveBeenCalledOnce());

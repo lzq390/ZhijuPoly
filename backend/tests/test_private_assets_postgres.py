@@ -38,11 +38,14 @@ def isolated_assets_db(monkeypatch, tmp_path):
     try:
         with psycopg.connect(dsn) as connection:
             migrations = Path(__file__).parents[1] / "migrations" / "postgres"
-            for path in sorted(migrations.glob("*.sql")):
+            from app.migration_policy import validate_migration_manifest_entries
+            for entry in validate_migration_manifest_entries(migrations):
+                path=migrations/(entry.version+".sql")
                 if path.name.startswith("0018"):
                     connection.execute("INSERT INTO auth.users(user_id,username,password_hash,must_change_password) VALUES(%s,'alice','!',false),(%s,'bob','!',false)", (A.user_id, B.user_id))
                     connection.execute("SELECT set_config('nexpoly.legacy_owner',%s,true)", (A.user_id,))
                 connection.execute(path.read_text())
+                connection.execute("INSERT INTO governance.schema_migrations(version,checksum) VALUES(%s,%s)", (entry.version,entry.checksum))
         with psycopg.connect(administrator, autocommit=True) as admin:
             for login, group in ((api_login, "nexpoly_api"), (service_login, "nexpoly_service")):
                 admin.execute(sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {}").format(sql.Identifier(login), sql.Literal(password)))

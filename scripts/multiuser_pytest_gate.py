@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 REQUIRED = {
-    "test_auth_isolation.py", "test_auth_settings.py", "test_auth_stream_revocation.py",
+    "test_structure_library.py", "test_auth_isolation.py", "test_auth_settings.py", "test_auth_stream_revocation.py",
     "test_task_events.py", "test_task_events_postgres.py",
     "test_private_asset_isolation.py", "test_private_assets_postgres.py",
     "test_monomer_user_isolation_postgres.py", "test_multiuser_contract.py",

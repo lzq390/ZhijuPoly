@@ -1,4 +1,4 @@
-"""Exact 0020 backups on disposable synthetic PG, with offline matching clients."""
+"""Exact 0021 backups on disposable synthetic PG, with offline matching clients."""
 import json
 import os
 from pathlib import Path
@@ -22,17 +22,17 @@ def ledgered_usage_db(usage_db):
     with psycopg.connect(usage_db) as connection:
         connection.execute('CREATE TABLE IF NOT EXISTS governance.schema_migrations(version text PRIMARY KEY,checksum text NOT NULL,applied_at timestamptz NOT NULL DEFAULT now())')
         for item in validate_migration_manifest_entries(ROOT/'backend/migrations/postgres'):
-            if item.version > "0020_usage_metering":
+            if item.version > "0021_usage_metering":
                 continue  # usage_db deliberately applies only this historical prefix.
             connection.execute('INSERT INTO governance.schema_migrations(version,checksum) VALUES(%s,%s)',(item.version,item.checksum))
     yield usage_db
 
 
-def test_backup_0020_is_explicit_and_rejects_unknown_ledger(ledgered_usage_db):
+def test_backup_0021_is_explicit_and_rejects_unknown_ledger(ledgered_usage_db):
     with psycopg.connect(ledgered_usage_db,row_factory=dict_row) as connection:
         result=validate_backup_schema(connection)
         assert result['current_readiness'] and result['usage_schema']['validated']
-        assert result['migration_ledger'][-1]['version']=='0020_usage_metering'
+        assert result['migration_ledger'][-1]['version']=='0021_usage_metering'
         connection.execute("INSERT INTO governance.schema_migrations(version,checksum) VALUES('9999_unknown',%s)",('0'*64,))
         with pytest.raises(ValueError):validate_backup_schema(connection)
         connection.rollback()
@@ -75,7 +75,7 @@ def test_usage_seal_detects_content_and_metadata_changes(ledgered_usage_db):
         connection.rollback()
 
 
-def test_0020_real_dump_restore_preserves_ledger_and_usage(ledgered_usage_db,tmp_path):
+def test_0021_real_dump_restore_preserves_ledger_and_usage(ledgered_usage_db,tmp_path):
     binary=Path(os.environ.get('POSTGRES_BIN','/usr/lib/postgresql/16/bin'))
     if not (binary/'pg_dump').exists() or not (binary/'pg_restore').exists():
         pytest.skip('Offline matching PostgreSQL clients are required')
@@ -90,7 +90,7 @@ def test_0020_real_dump_restore_preserves_ledger_and_usage(ledgered_usage_db,tmp
         receipt=backup_and_verify(ledgered_usage_db,restore_dsn,tmp_path/'verified')
         result=json.loads(receipt.read_text())
         assert result['restore_verified'] and result['usage_state']==expected
-        assert result['isolation_schema']['migration_ledger'][-1]['version']=='0020_usage_metering'
+        assert result['isolation_schema']['migration_ledger'][-1]['version']=='0021_usage_metering'
         with psycopg.connect(restore_dsn,row_factory=dict_row) as connection:
             assert usage_backup_seal(connection)==expected
             assert validate_backup_schema(connection)['migration_ledger']==result['isolation_schema']['migration_ledger']

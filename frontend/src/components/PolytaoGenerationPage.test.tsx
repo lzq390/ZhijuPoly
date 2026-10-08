@@ -1,3 +1,4 @@
+import { LibraryTestProvider, testSelection, testDocument, chooseCurrentStructure } from "../test/structureLibraryFixture";
 import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
@@ -147,7 +148,7 @@ function renderPage(structure = makeStructure()) {
       structure={structure}
       onEditStructure={vi.fn()}
       onBackHome={vi.fn()}
-    />
+    />, { wrapper: ({ children }) => <LibraryTestProvider workspace={structure.workspace} initial={{ "polytao.reference": structure.smiles ? testSelection(structure.smiles) : null }}>{children}</LibraryTestProvider> }
   );
 }
 
@@ -161,7 +162,7 @@ function referenceRegion() {
 
 function openReferenceSection() {
   const region = referenceRegion();
-  const toggle = within(region).getByRole("button", { name: /已设置 · 共享结构.*展开/ });
+  const toggle = within(region).getByRole("button", { name: /已设置 · 参考结构.*展开/ });
   fireEvent.click(toggle);
   return region;
 }
@@ -258,6 +259,51 @@ afterEach(() => {
 });
 
 describe("PolytaoGenerationPage", () => {
+  it("clears descriptors that finish while a different reference is being selected", async () => {
+    const structure = makeStructure();
+    vi.spyOn(structure.workspace, 'captureForImport').mockResolvedValue(testDocument('NN'));
+    let finish!: (value: unknown) => void;
+    api.calculatePolytaoDescriptors.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    renderPage(structure);
+    openReferenceSection();
+    fireEvent.click(screen.getByRole('button', { name: '提取描述符' }));
+    await waitFor(() => expect(api.calculatePolytaoDescriptors).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: '选择结构' }));
+    await screen.findByRole('dialog', { name: /选择结构/ });
+    await act(async () => finish({ input_smiles: 'CCO', canonical_smiles: 'canonical-prefill',
+      descriptors: POLYTAO_DESCRIPTOR_NAMES.map(name => ({ name, value: PREFILL_DESCRIPTORS[name] })),
+      prompt: PREFILL_PROMPT, query_time_ms: 3 }));
+    expect(screen.getByText('目标特征源自参考结构')).toBeTruthy();
+    await chooseCurrentStructure();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /选择结构/ })).toBeNull());
+    expect(screen.getByText('描述符待填写')).toBeTruthy();
+    expect(screen.getByLabelText('重原子数 HeavyAtomCount')).toHaveProperty('value', '');
+  });
+
+  it("clears derived descriptors on reference replacement but preserves manual values and ignores late calculations", async () => {
+    const structure = makeStructure();
+    vi.spyOn(structure.workspace, 'captureForImport').mockResolvedValue(testDocument('NN'));
+    renderPage(structure);
+    openReferenceSection();
+    fireEvent.click(screen.getByRole('button', { name: '提取描述符' }));
+    await screen.findByText('目标特征源自参考结构');
+    await chooseCurrentStructure(screen.getByRole('button', { name: '选择结构' }));
+    await screen.findByText('描述符待填写');
+    expect(screen.getByLabelText('重原子数 HeavyAtomCount')).toHaveProperty('value', '');
+    fireEvent.change(screen.getByLabelText('重原子数 HeavyAtomCount'), { target: { value: '119' } });
+    await chooseCurrentStructure(screen.getByRole('button', { name: '选择结构' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /选择结构/ })).toBeNull());
+    expect(screen.getByLabelText('重原子数 HeavyAtomCount')).toHaveProperty('value', '119');
+    let resolve!: (value: unknown) => void;
+    const response = await api.calculatePolytaoDescriptors.mock.results[0].value;
+    api.calculatePolytaoDescriptors.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    fireEvent.click(screen.getByRole('button', { name: '提取描述符' }));
+    fireEvent.change(screen.getByLabelText('重原子数 HeavyAtomCount'), { target: { value: '120' } });
+    await act(async () => resolve(response));
+    expect(screen.getByLabelText('重原子数 HeavyAtomCount')).toHaveProperty('value', '120');
+    expect(screen.queryByText('目标特征源自参考结构')).toBeNull();
+  });
+
   it("keeps the full guest form with no service initialization and prompts before extraction or generation", () => {
     api.useAuth.mockReturnValue({ status: "guest" });
     installSession(GUEST_SESSION);
@@ -283,7 +329,7 @@ describe("PolytaoGenerationPage", () => {
     const pageTitle = screen.getByRole("heading", { name: "聚合物生成" });
     expect(pageTitle.classList.contains("np-module-page-title")).toBe(true);
     expect(pageTitle.closest(".np-module-page")).not.toBeNull();
-    const referenceToggle = within(referenceRegion()).getByRole("button", { name: /已设置 · 共享结构.*展开/ });
+    const referenceToggle = within(referenceRegion()).getByRole("button", { name: /已设置 · 参考结构.*展开/ });
     expect(referenceToggle.getAttribute("aria-expanded")).toBe("false");
     expect(api.fetchStructure2D).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "聚合物生成结果" })).toBeNull();
@@ -350,14 +396,14 @@ describe("PolytaoGenerationPage", () => {
     expect(screen.getByLabelText("重原子数 HeavyAtomCount")).toHaveProperty("value", "119");
   });
 
-  it("prefills from the shared structure and submits the complete ordered payload", async () => {
+  it("prefills from the selected structure and submits the complete ordered payload", async () => {
     const structure = makeStructure();
     renderPage(structure);
 
     openReferenceSection();
     fireEvent.click(screen.getByRole("button", { name: "提取描述符" }));
     await waitFor(() => {
-      expect(api.calculatePolytaoDescriptors).toHaveBeenCalledWith({ smiles: "C(C)O" });
+      expect(api.calculatePolytaoDescriptors).toHaveBeenCalledWith({ smiles: "CCO" });
       expect(screen.getByText("15 / 15 完整")).toBeTruthy();
     });
 
@@ -423,16 +469,16 @@ describe("PolytaoGenerationPage", () => {
     const sourceRegion = openReferenceSection();
     expect(api.fetchStructure2D).toHaveBeenCalledWith("CCO", expect.any(AbortSignal));
     expect(await screen.findByAltText("共享聚合物重复单元二维结构")).toBeTruthy();
-    const smilesToggle = screen.getByRole("button", { name: /共享结构 SMILES/ });
+    const smilesToggle = screen.getByRole("button", { name: /参考结构 SMILES/ });
     expect(smilesToggle.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText("CCO")).toBeNull();
     fireEvent.click(smilesToggle);
     expect(smilesToggle.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("CCO")).toBeTruthy();
 
-    fireEvent.click(within(sourceRegion).getByRole("button", { name: /已设置 · 共享结构.*收起/ }));
+    fireEvent.click(within(sourceRegion).getByRole("button", { name: /已设置 · 参考结构.*收起/ }));
     expect(screen.queryByText("CCO")).toBeNull();
-    fireEvent.click(within(sourceRegion).getByRole("button", { name: /已设置 · 共享结构.*展开/ }));
+    fireEvent.click(within(sourceRegion).getByRole("button", { name: /已设置 · 参考结构.*展开/ }));
     expect(screen.getByText("CCO")).toBeTruthy();
     expect(api.fetchStructure2D).toHaveBeenCalledTimes(1);
 
@@ -457,31 +503,16 @@ describe("PolytaoGenerationPage", () => {
     expect(api.fetchStructure2D).toHaveBeenCalledTimes(1);
   });
 
-  it("invalidates the cached 2D preview when the shared structure changes", async () => {
-    const onEditStructure = vi.fn();
-    const view = render(
-      <PolytaoGenerationPage
-        structure={makeStructure()}
-        onEditStructure={onEditStructure}
-        onBackHome={vi.fn()}
-      />
-    );
+  it("keeps the selected reference when the shared canvas changes", async () => {
+    const structure = makeStructure();
+    const view = renderPage(structure);
     openReferenceSection();
     await screen.findByAltText("共享聚合物重复单元二维结构");
+    view.rerender(<PolytaoGenerationPage structure={makeStructure({ smiles: "CCC" })} onEditStructure={vi.fn()} onBackHome={vi.fn()} />);
     expect(api.fetchStructure2D).toHaveBeenCalledTimes(1);
-
-    view.rerender(
-      <PolytaoGenerationPage
-        structure={makeStructure({ smiles: "CCC" })}
-        onEditStructure={onEditStructure}
-        onBackHome={vi.fn()}
-      />
-    );
-    await waitFor(() => {
-      expect(api.fetchStructure2D).toHaveBeenCalledWith("CCC", expect.any(AbortSignal));
-    });
-    expect(api.fetchStructure2D).toHaveBeenCalledTimes(2);
-    expect(within(referenceRegion()).getByRole("button", { name: /已设置 · 共享结构.*收起/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "提取描述符" }));
+    await waitFor(() => expect(api.calculatePolytaoDescriptors).toHaveBeenCalledWith({ smiles: "CCO" }));
+    expect(structure.getCurrentSmiles).not.toHaveBeenCalled();
   });
 
   it("reopens the reference section when descriptor extraction fails", async () => {
@@ -497,7 +528,7 @@ describe("PolytaoGenerationPage", () => {
     expect(await within(sourceRegion).findByAltText("共享聚合物重复单元二维结构")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "提取描述符" }));
     await waitFor(() => expect(api.calculatePolytaoDescriptors).toHaveBeenCalledOnce());
-    fireEvent.click(within(sourceRegion).getByRole("button", { name: /已设置 · 共享结构.*收起/ }));
+    fireEvent.click(within(sourceRegion).getByRole("button", { name: /已设置 · 参考结构.*收起/ }));
 
     await act(async () => {
       rejectDescriptor(new Error("Descriptor prefill failed."));
@@ -505,7 +536,7 @@ describe("PolytaoGenerationPage", () => {
 
     expect(await screen.findByText("Descriptor prefill failed.")).toBeTruthy();
     expect(
-      within(sourceRegion).getByRole("button", { name: /已设置 · 共享结构.*收起/ }).getAttribute("aria-expanded")
+      within(sourceRegion).getByRole("button", { name: /已设置 · 参考结构.*收起/ }).getAttribute("aria-expanded")
     ).toBe("true");
   });
 

@@ -133,7 +133,7 @@ describe("DatabaseQueryPage", () => {
     expect(pageTitle.classList.contains("np-module-page-title")).toBe(true);
     expect(pageTitle.closest(".np-module-page")).not.toBeNull();
     expect(screen.getByTitle("数据库查询结构编辑器")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "加载结构" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "加载示例" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "AI 助手" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "数据库查询结果" })).toBeNull();
     expect(screen.queryByRole("button", { name: "展开数据库查询结果" })).toBeNull();

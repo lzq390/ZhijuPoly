@@ -1,3 +1,4 @@
+import { CanvasLibraryActions } from "../../structure-library/CanvasLibraryActions";
 import { requestServiceAccess } from "../../auth/guestAccess";
 import {
   Atom,
@@ -144,7 +145,7 @@ export function StructureCanvasSurface({
       <header className="np-sw-commandbar" aria-label="结构工作台工具栏">
         <div className="np-sw-toolbar">
           <ToolButton
-            label="加载结构"
+            label="加载示例"
             tool="load"
             busy={canvas.isLoadingStructure}
             icon={<Atom aria-hidden="true" />}
@@ -186,6 +187,7 @@ export function StructureCanvasSurface({
             active={canvas.isFlipped}
             onClick={() => { if (requestServiceAccess()) void onToggle3D(); }}
           />
+          <CanvasLibraryActions workspace={structure.workspace} canvas={canvas} disabled={operationBusy} />
           {utilityActions.length ? <span className="np-sw-toolbar-separator" aria-hidden="true" /> : null}
           {utilityActions.map((action) => (
             <ToolButton
@@ -213,7 +215,7 @@ export function StructureCanvasSurface({
             inert={canvas.isFlipped}
           >
             <StructureEditor workspace={structure.workspace} title={editorTitle}
-              disabled={canvas.isLoadingStructure || canvas.isClearing || canvas.isImportingImage || canvas.smilesDraftState === "syncing"} />
+              disabled={Boolean(structure.workspace.getSnapshot().documentBusy) || canvas.isLoadingStructure || canvas.isClearing || canvas.isImportingImage || canvas.smilesDraftState === "syncing"} />
           </div>
           {hasActivated3D ? (
             <div

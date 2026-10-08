@@ -37,7 +37,7 @@ from app.middleware import BrowserCrossSiteProtectionMiddleware
 from app.postgres_database import postgres_connection
 from app.postgres_preflight import (
     SCHEMA_TARGET_STARTUP,
-    SCHEMA_TARGET_ISOLATION,
+    SCHEMA_TARGET_CURRENT_ISOLATION,
     preflight_blockers,
     run_preflight,
 )
@@ -66,6 +66,7 @@ from app.routers.monomer_polymerization_batch import router as polymerization_ba
 from app.services.polymerization_batch.models import BatchError, BatchSettings
 from app.services.polymerization_batch.service import BatchService
 from app.routers.monomer_retrosynthesis import router as monomer_retrosynthesis_router
+from app.routers.structure_library import router as structure_library_router
 from app.routers.online_knowledge import router as online_knowledge_router
 from app.routers.predict import router as predict_router
 from app.routers.polytao import router as polytao_router
@@ -462,6 +463,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(polymerization_batch_router)
     app.include_router(monomer_retrosynthesis_router)
     app.include_router(online_knowledge_router)
+    app.include_router(structure_library_router)
     app.include_router(dft_router)
     app.include_router(database_browser_router)
     app.include_router(reverse_design_router)
@@ -671,7 +673,7 @@ def _run_database_startup_preflight(api_app: FastAPI, *, required: bool) -> None
             api_app.state.settings,
             mode="runtime",
             strict=True,
-            schema_target=SCHEMA_TARGET_ISOLATION,
+            schema_target=SCHEMA_TARGET_CURRENT_ISOLATION,
         )
         errors = preflight_blockers(report)
         api_app.state.auth.assert_application_ready()

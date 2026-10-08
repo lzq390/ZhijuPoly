@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-VERSION = '0020_usage_metering'
+VERSION = '0021_usage_metering'
 _ROLES = ('nexpoly_api', 'nexpoly_service', 'nexpoly_mutable_audit')
 _ACL = {
     'events': {'nexpoly_api': {'SELECT','INSERT'}, 'nexpoly_service': {'SELECT','INSERT'},

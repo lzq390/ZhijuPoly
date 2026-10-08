@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "entitlement_version": "0021_usage_entitlements",
-  "entitlement_sql_sha256": "d9692dc8eb49bf6502246084cd58fda6c1cb4266797b77b65715a06fa79a9bb3",
+  "entitlement_version": "0022_usage_entitlements",
+  "entitlement_sql_sha256": "fe536a6256493931f6d773197a3e1e742b17bacc3c675e4fcbc32864e0747bb5",
   "ledger": [
     {
       "version": "0001_app_data_governance",
@@ -80,12 +80,16 @@
       "checksum": "23f950f17126af7f73495938da41544585186e13dc44e060cfecf90bad207f23"
     },
     {
-      "version": "0020_usage_metering",
-      "checksum": "c3ad4249f1861e9831fd02ff0819c417575557113f6163db0cd2ac4306f08e43"
+      "version": "0020_structure_library",
+      "checksum": "4f8ff9a2d9c1f7cf41140d3517f70dcb52b045fadac84a09d292bdf8095aa0b7"
     },
     {
-      "version": "0021_usage_entitlements",
-      "checksum": "d9692dc8eb49bf6502246084cd58fda6c1cb4266797b77b65715a06fa79a9bb3"
+      "version": "0021_usage_metering",
+      "checksum": "3e79f0fcefe0bdfff5e6c00f184e22cf17621d5a1cc46a5ddb6fb8f296680f62"
+    },
+    {
+      "version": "0022_usage_entitlements",
+      "checksum": "fe536a6256493931f6d773197a3e1e742b17bacc3c675e4fcbc32864e0747bb5"
     }
   ]
 }

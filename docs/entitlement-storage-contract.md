@@ -2,11 +2,10 @@
 
 This implementation is development-only. No running database migration, policy installation, tier change, push, merge, or deployment is implied by the code or isolated test results.
 
-## Compatibility and provisional migration numbers
+## Compatibility and integrated migration numbers
 
-The current feature tree uses `0020_usage_metering` (epoch 5) and `0021_usage_entitlements` (epoch 6). Another feature owns the structure-library migration slot. These numbers are provisional until the parent integration task supplies its final committed SQL and checksum. Never copy an unapproved migration or silently accept a future ledger.
-
-After an approved renumber, update together:
+The integrated feature preserves stable `0020_structure_library` (epoch 5), then applies `0021_usage_metering` (epoch 6) and `0022_usage_entitlements` (epoch 7). The structure-library SQL is byte-identical to commit `7db29b02676b4e27c55ccaea5d5a473bf1b89d56`. Never silently accept a future ledger. This integration is local development only.
+Any future approved renumber must update together:
 
 - SQL filenames and the validated migration manifest, including exact contract dependencies.
 - `task_usage.entitlements.MIGRATION_VERSION`, application/readiness/backup constants, and intentional historical-prefix test targets.

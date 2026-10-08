@@ -98,12 +98,12 @@ def test_explicit_cutovers_exact_retry_and_unchanged_dft_catalog(maintenance_dat
         validate_service_migration_ledger(connection)
     # Expansion leaves the 0019 privilege contract intact. Its historical
     # maintenance command must not silently accept a newer database boundary.
-    _apply_historical_prefix(db["dsn"], "0020_usage_metering")
-    with pytest.raises(ValueError, match="exact canonical ledger"):
+    _apply_historical_prefix(db["dsn"], "0021_usage_metering")
+    with pytest.raises(ValueError, match="Unknown service privilege migration boundary"):
         apply(db)
     with psycopg.connect(db["dsn"], row_factory=dict_row) as connection:
         from app.auth.isolation_ledger import validate_application_migration_ledger
-        assert validate_application_migration_ledger(connection, require_usage=False)[-1]["version"] == "0020_usage_metering"
+        assert validate_application_migration_ledger(connection, require_usage=False)[-1]["version"] == "0021_usage_metering"
         assert not validate_service_auth_privileges(connection, db["role"])["password_select"]
         assert probe_monomer_dft_schema(connection).catalog_sha256 == before
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-MIGRATION_VERSION = "0021_usage_entitlements"
+MIGRATION_VERSION = "0022_usage_entitlements"
 STATES = frozenset({"reserved", "dispatching", "running", "unknown", "succeeded", "released"})
 TERMINAL_STATES = frozenset({"succeeded", "released"})
 
@@ -34,7 +34,7 @@ def _disabled(*, reserve=False):
     return {"disabled": True, "created" if reserve else "transitioned": False, "operation": None}
 
 def _implementation():
-    # Internal implementation is installed with migration 0021 before enabling.
+    # Internal implementation is installed with migration 0022 before enabling.
     from task_usage import _entitlement_store
     return _entitlement_store
 

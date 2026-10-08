@@ -93,7 +93,10 @@ def test_canary_rejects_worker_without_start_authorization_contract(version: obj
 
 
 @pytest.fixture
-def canary_state_directory(tmp_path: Path) -> Path:
+def canary_state_directory(tmp_path: Path, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> Path:
+    # The canary's trusted service_context intentionally selects the service DSN.
+    # Bind it to this migrated disposable database, never an ambient base DB.
+    monkeypatch.setenv("APP_SERVICE_POSTGRES_DSN", postgres_dsn)
     state_directory = tmp_path / "monomer-md-canaries"
     state_directory.mkdir(mode=0o700)
     return state_directory

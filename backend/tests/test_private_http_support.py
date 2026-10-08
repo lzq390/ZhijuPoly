@@ -26,6 +26,10 @@ def authenticated_client(app, database, *, user=None, **client_options):
         app.add_middleware(AuthenticationMiddleware, auth_service=app.state.auth)
     else:
         app.state.auth.settings = settings
+    if hasattr(app.state, 'entitlement_repository'):
+        # Middleware captures this instance before TestClient builds the stack.
+        # Keep both middleware and account-tier reads on the synthetic API database.
+        app.state.entitlement_repository.dsn = database['api']
     client = TestClient(app, **client_options)
     if user.get('_activated'):
         from test_auth_isolation import login

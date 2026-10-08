@@ -8,6 +8,7 @@ export type StructureImageOptions = {
 
 /** The only Ketcher capabilities used outside the editor implementation. */
 export interface StructureEditorHandle {
+  readonly version?: string;
   getSmiles(): Promise<string>;
   getKet(): Promise<string>;
   getMolfile(): Promise<string>;
@@ -21,6 +22,7 @@ export interface StructureEditorHandle {
 
 /** Structural typing keeps both SDK versions and iframe globals inside adapters. */
 export type KetcherInstance = {
+  version?: string;
   getSmiles(isExtended?: boolean): Promise<string>;
   getKet?(): Promise<string>;
   getMolfile?(format?: "v2000" | "v3000"): Promise<string>;
@@ -59,6 +61,7 @@ export function createKetcherAdapter(
     catch (error) { checkCurrent(); return ketcher.getMolfile("v3000"); }
   };
   return {
+    version: ketcher.version,
     getSmiles: async () => {
       checkCurrent();
       let value: string;

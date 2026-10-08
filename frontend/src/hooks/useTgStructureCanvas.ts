@@ -1,3 +1,4 @@
+import type { StructureDocument } from "../structure-library/types";
 import { useAuth } from "../auth/AuthProvider";
 import { createPrivateObjectURL, revokePrivateObjectURL } from "../auth/objectUrls";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -571,6 +572,7 @@ export function useTgStructureCanvas({
   }
 
   async function clearCanvas(options: CanvasMutationOptions = {}) {
+    if (workspace.getSnapshot().documentBusy) return false;
     const ketcher = getKetcher();
     if (!ketcher) {
       if (workspace.getSnapshot().status === "unmounted") {
@@ -610,6 +612,7 @@ export function useTgStructureCanvas({
   }
 
   async function loadStructure(sourceSmiles: string, options: CanvasMutationOptions = {}) {
+    if (workspace.getSnapshot().documentBusy) return false;
     const normalizedSource = sourceSmiles.trim();
     if (!normalizedSource) {
       setFeedback("没有可加载的结构。");
@@ -691,6 +694,7 @@ export function useTgStructureCanvas({
     const sourceRevision = workspace.getSnapshot().revision;
     const requestedCurrent = options.isCurrent;
     options = { isCurrent: () => mountedRef.current && identityEpoch === getSessionEpoch() && active() && (!requestedCurrent || requestedCurrent()) };
+    if (workspace.getSnapshot().documentBusy) throw new Error("画板正在恢复结构。");
     const normalizedSource = sourceSmiles.trim();
     if (!normalizedSource) {
       throw new Error("请输入要应用的 SMILES。");
@@ -877,6 +881,7 @@ export function useTgStructureCanvas({
   }
 
   async function importImageFile(file: File) {
+    if (workspace.getSnapshot().documentBusy) return false;
     if (!file.type.startsWith("image/")) {
       setFeedback("请选择图片文件。");
       return false;
@@ -1214,7 +1219,41 @@ export function useTgStructureCanvas({
     }
   }
 
+  async function captureDocument(signal?: AbortSignal) {
+    const active = workspace.guard();
+    const draftRevision = smilesDraftRevisionRef.current;
+    if (!mountedRef.current || signal?.aborted || identityEpoch !== getSessionEpoch()) throw new Error("画板操作已失效。");
+    if (!(await flushSmilesDraft())) throw new Error("请先修正当前 SMILES，再保存结构。");
+    if (!active() || !mountedRef.current || identityEpoch !== getSessionEpoch() || draftRevision !== smilesDraftRevisionRef.current) throw new Error("输入已变化，请重新保存。");
+    const result = await workspace.captureDocument(signal);
+    if (!active() || !mountedRef.current || identityEpoch !== getSessionEpoch() || signal?.aborted) throw new Error("画板操作已失效。");
+    return result;
+  }
+  const captureRef = useRef(captureDocument);
+  captureRef.current = captureDocument;
+  useEffect(() => workspace.registerDocumentCapture(signal => captureRef.current(signal)), [workspace]);
+
+  async function restoreDocument(saved: StructureDocument, signal?: AbortSignal, smilesOnly = false) {
+    const active = workspace.guard();
+    const backup = workspace.getSnapshot();
+    if (workspace.getSnapshot().documentBusy || isBusy) throw new Error("画板正在更新，请稍后重试。");
+    if (smilesDraftTimerRef.current !== null) window.clearTimeout(smilesDraftTimerRef.current);
+    smilesDraftTimerRef.current = null;
+    ++smilesDraftRevisionRef.current;
+    await smilesDraftQueueRef.current;
+    if (!active() || identityEpoch !== getSessionEpoch() || signal?.aborted) throw new Error("画板操作已失效。");
+    workspace.setDraft(backup.draft, backup.draftError);
+    await workspace.restoreDocument(saved, signal, smilesOnly);
+    if (identityEpoch !== getSessionEpoch() || !mountedRef.current) return;
+    setIsFlipped(false);
+    canvasImageCacheRef.current = null;
+    adoptCanvasSmiles();
+    onStructureChanged();
+    setFeedback(smilesOnly ? "结构已载入，已按 SMILES 重新布局。" : "已载入保存的结构与布局。");
+  }
+
   const isBusy =
+    Boolean(document.documentBusy) ||
     isImportingImage ||
     isLoadingStructure ||
     isClearing ||
@@ -1252,6 +1291,8 @@ export function useTgStructureCanvas({
     toggle3D,
     peekCanvasState,
     captureCanvasImage,
+    captureDocument,
+    restoreDocument,
     resolveSmilesForSearch,
     copySmiles
   };

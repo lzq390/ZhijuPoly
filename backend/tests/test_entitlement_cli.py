@@ -232,15 +232,15 @@ def test_postgres_tampered_schema_and_release_fail_readiness_without_write(entit
         with psycopg.connect(entitlement_db) as active:
             active.execute("ALTER TABLE usage_entitlements.operations ENABLE ROW LEVEL SECURITY")
     with psycopg.connect(entitlement_db) as active:
-        original = active.execute("SELECT checksum FROM governance.schema_migrations WHERE version='0021_usage_entitlements'").fetchone()[0]
-        active.execute("UPDATE governance.schema_migrations SET checksum=%s WHERE version='0021_usage_entitlements'", ("0" * 64,))
+        original = active.execute("SELECT checksum FROM governance.schema_migrations WHERE version='0022_usage_entitlements'").fetchone()[0]
+        active.execute("UPDATE governance.schema_migrations SET checksum=%s WHERE version='0022_usage_entitlements'", ("0" * 64,))
     try:
         assert cli.main(args_for("install-policy", policy_file, apply=True)) == 3
         assert json.loads(capsys.readouterr().err)["code"] == "database_readiness_failed"
         assert _policy_row(entitlement_db, policy_file[1]["version"]) is None
     finally:
         with psycopg.connect(entitlement_db) as active:
-            active.execute("UPDATE governance.schema_migrations SET checksum=%s WHERE version='0021_usage_entitlements'", (original,))
+            active.execute("UPDATE governance.schema_migrations SET checksum=%s WHERE version='0022_usage_entitlements'", (original,))
 
 
 def test_postgres_admin_configuration_supported_without_runtime_enable(entitlement_db, policy_file, monkeypatch, capsys):

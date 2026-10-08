@@ -77,8 +77,8 @@ export async function privateFetch(input: RequestInfo | URL, init: PrivateReques
   try {
     check();
     let body = init.body;
-    if (body === undefined && sourceRequest && isUsageSubmission(url, method)) body = sourceRequest.headers.get("content-type")?.includes("multipart/form-data") ? await sourceRequest.clone().formData() : await sourceRequest.clone().text();
-    const ticket = isUsageSubmission(url, method) ? await prepareUsageSubmission({ url, method, body, intent: init.usageIntent, headers, check, fetcher: target => privateFetch(target, { signal: controller.signal }) }) : undefined;
+    if (body === undefined && sourceRequest && (isUsageSubmission(url, method) || (method === "POST" && apiPath(url) === "/query/smiles"))) body = sourceRequest.headers.get("content-type")?.includes("multipart/form-data") ? await sourceRequest.clone().formData() : await sourceRequest.clone().text();
+    const ticket = isUsageSubmission(url, method, body) ? await prepareUsageSubmission({ url, method, body, intent: init.usageIntent, headers, check, fetcher: target => privateFetch(target, { signal: controller.signal }) }) : undefined;
     check();
     const { usageIntent: _usageIntent, ...transportInit } = init;
     const response = await fetch(input, { ...transportInit, headers, credentials: "same-origin", cache: "no-store", signal: controller.signal });

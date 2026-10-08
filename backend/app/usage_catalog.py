@@ -59,6 +59,13 @@ ROUTES = (
     *_entries("monomer_md", "native", "POST", ("/api/v1/monomer-md/jobs",)),
     *_entries("monomer_dft", "native", "POST", ("/api/v1/monomer-dft/jobs",)),
     *_entries("polymerization_batch", "native", "POST", ("/api/v1/monomer-polymerization/batch/jobs",)),
+    # Saving or retrieving a personal drawing is storage, not a new computation.
+    *_entries(None, "observe", "GET", (
+        "/api/v1/structure-library/status", "/api/v1/structure-library/records",
+        "/api/v1/structure-library/records/{record_id}")),
+    *_entries(None, "observe", "POST", ("/api/v1/structure-library/records",)),
+    *_entries(None, "observe", "PATCH", ("/api/v1/structure-library/records/{record_id}",)),
+    *_entries(None, "observe", "DELETE", ("/api/v1/structure-library/records/{record_id}",)),
     *_entries(None, "observe", "GET", (
         "/health", "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc",
         "/api/v1/assistant/tg/status", "/api/v1/assistant/tg/guide",

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSession, privateFetch, retireSession } from "./session";
 import { confirmUsageOperation, observeUsageEnabled } from "./usageAdmission";
 import { requestFingerprint, sha256 } from "./usageRequestIdentity";
@@ -13,6 +13,7 @@ const json = (value: unknown, status=200, state="succeeded") => new Response(JSO
 const send = (body='{"smiles":"fixture-private-structure"}', path="/predict", headers?: HeadersInit) => privateFetch(`/api/v1${path}`, {method:"POST",body,headers:{"Content-Type":"application/json",...headers}}).then(r=>r.json());
 const key = (index: number) => new Headers(mock.mock.calls[index][1]?.headers).get("Idempotency-Key");
 beforeEach(()=>{sessionStorage.clear();identity();observeUsageEnabled({enabled:true});mock.mockReset();vi.stubGlobal("fetch",mock);});
+afterEach(()=>vi.restoreAllMocks());
 describe("counted submission identity",()=>{
   it("supports SHA256 on insecure development origins without SubtleCrypto",()=>{
     expect(sha256(new TextEncoder().encode("abc"))).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
@@ -56,8 +57,32 @@ describe("counted submission identity",()=>{
   it.each(["/monomer-dft/jobs","/monomer-polymerization/batch/jobs"])("preserves native caller key for %s",async path=>{
     mock.mockImplementation(async()=>json({job_id:"native"},202,"running"));await send('{}',path,{"Idempotency-Key":"native-existing-key"});expect(key(0)).toBe("native-existing-key");
   });
-  it.each(["/query/smiles","/online-knowledge/search","/online-knowledge/jobs","/conditional-generation/tg/jobs","/conditional-generation/polytao/jobs","/structure/3d","/structure/recognize-image","/monomer-retrosynthesis","/monomer-polymerization","/knowledge/recordings/fixture/summary"])("adds a stable admission key to %s",async path=>{
+  it.each(["/online-knowledge/search","/online-knowledge/jobs","/conditional-generation/tg/jobs","/conditional-generation/polytao/jobs","/structure/3d","/structure/recognize-image","/monomer-retrosynthesis","/monomer-polymerization","/knowledge/recordings/fixture/summary"])("adds a stable admission key to %s",async path=>{
     mock.mockImplementation(async()=>json({ok:true}));await send('{}',path);expect(key(0)).toMatch(/^usage-/);
+  });
+  it.each(["property","similarity"])("counts the normalized %s query branch",async mode=>{
+    mock.mockImplementation(async()=>json({ok:true}));await send(JSON.stringify({smiles:"C",match_mode:mode}),"/query/smiles");expect(key(0)).toMatch(/^usage-/);
+  });
+  it.each(["/reverse-design/tg","/reverse-design/tg/jobs","/structure/2d","/structure/standardize-smiles","/conditional-generation/polytao/descriptors","/knowledge/search","/md-demo/run","/md-demo/atom-distance","/monomer-polymerization/batch/imports","/monomer-polymerization/batch/imports/fixture/preview","/database-browser/smiles-lookup","/database-browser/property-filter/search"])("keeps rate-only %s usable without admission storage or a feature probe",async path=>{
+    identity("rate-only");vi.spyOn(Storage.prototype,"setItem").mockImplementation(()=>{throw new Error("storage unavailable");});
+    mock.mockImplementation(async()=>json({ok:true}));await send('{}',path);expect(mock).toHaveBeenCalledOnce();expect(key(0)).toBeNull();
+  });
+  it.each(['{"match_mode":"structure"}','{"match_mode":"exact"}','{}','null','[]','{bad','{"match_mode":"invalid"}'])("leaves free or malformed query %s on the original path",async body=>{
+    identity("query-free");vi.spyOn(Storage.prototype,"setItem").mockImplementation(()=>{throw new Error("storage unavailable");});
+    mock.mockImplementation(async()=>json({ok:true}));await send(body,"/query/smiles");expect(mock).toHaveBeenCalledOnce();expect(key(0)).toBeNull();
+  });
+  it("classifies a property query passed as a Request without consuming its body",async()=>{
+    mock.mockImplementation(async()=>json({ok:true}));const body='{"smiles":"C","match_mode":"property"}';
+    await (await privateFetch(new Request(new URL("/api/v1/query/smiles",location.href),{method:"POST",headers:{"Content-Type":"application/json"},body}))).json();
+    expect(key(0)).toMatch(/^usage-/);expect(await (mock.mock.calls[0][0] as Request).text()).toBe(body);
+  });
+  it.each(["/monomer-dft/jobs","/monomer-polymerization/batch/jobs"])("retains the native short key contract and reload recovery for %s",async path=>{
+    mock.mockRejectedValueOnce(new TypeError("lost")).mockImplementation(async()=>json({job_id:"native"},202,"running"));
+    await expect(send('{}',path,{"Idempotency-Key":"x"})).rejects.toThrow("lost");identity();observeUsageEnabled({enabled:true});
+    await send('{}',path,{"Idempotency-Key":"x"});expect(key(0)).toBe("x");expect(key(1)).toBe("x");
+  });
+  it("retains the minimum length for new counted endpoints",async()=>{
+    await expect(send('{}',"/predict",{"Idempotency-Key":"x"})).rejects.toThrow("提交标识无效");expect(mock).not.toHaveBeenCalled();
   });
   it("leaves default-off submissions unchanged",async()=>{
     observeUsageEnabled({enabled:false});mock.mockImplementation(async()=>json({ok:true}));await send();expect(key(0)).toBeNull();expect(mock).toHaveBeenCalledTimes(1);

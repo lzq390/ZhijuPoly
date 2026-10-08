@@ -268,6 +268,9 @@ def test_catalog_classifies_every_registered_router_endpoint():
     missing = [(method,path) for method,path in declared if match_usage_route(method,path) is None]
     assert missing == []
     assert match_usage_route("POST","/api/v1/new-unclassified-computation") is None
+    library_routes = [route for route in ROUTES if route.path.startswith("/api/v1/structure-library/")]
+    assert len(library_routes) == 6
+    assert all(route.mode == "observe" and route.module is None for route in library_routes)
     assert len({(route.method,route.path) for route in ROUTES}) == len(ROUTES)
     assert all(item["coverage"] in {"measured","partial","external"} for item in catalog_modules())
 

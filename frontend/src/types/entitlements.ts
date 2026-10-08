@@ -14,7 +14,7 @@ export type Entitlements = {
   tier?: "free" | "member"; policy_version?: string; period_start?: string; period_end?: string;
   period?: "day" | "week" | "month"; active_across_periods?: number; unknown_across_periods?: number;
   held_outside_current_period?: number; held_periods?: HeldPeriod[]; admission_blocked_by_period?: boolean; conflicting_periods?: HeldPeriod[];
-  period_basis?: "admission_reservation"; diagnostics_only?: boolean; message?: string;
+  period_basis?: "admission_reservation"; diagnostics_only?: boolean; resource_measurements_are_diagnostic?: boolean; message?: string;
   pools: Array<{ pool_id: string; limit: number | null; success_used: number; reserved: number; unknown: number; remaining: number | null; states: Partial<Record<OperationState, number>>; held_outside_current_period?: number; admission_blocked_by_period?: boolean }>;
   operation_count?: number; execution_attempts?: number; request_observation_degraded?: boolean;
   request_observations?: { enabled: boolean; request_count: number; finished_count: number; by_status: Record<string, number>; start: string; end: string };

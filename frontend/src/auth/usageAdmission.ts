@@ -3,7 +3,7 @@ import { requestFingerprint } from "./usageRequestIdentity";
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 const STORAGE = "nexpoly.usage.pending.v1";
-type Pending = { fingerprint: string; key: string; operationId?: string };
+type Pending = { fingerprint: string; key: string; operationId?: string; nativeKey?: boolean };
 export type UsageTicket = Pending & { owner: string };
 let owner = "";
 let enabled: boolean | undefined;
@@ -11,14 +11,14 @@ let featureRequest: Promise<boolean> | undefined;
 let entries = new Map<string, Pending>();
 const responseTickets = new WeakMap<Response, UsageTicket>();
 const KEY = /^[A-Za-z0-9._:-]{8,128}$/;
+const nativeKey = (key: string) => key.length <= 128 && key.trim().length > 0 && !/[\r\n]/.test(key);
+const nativePaths = new Set(["/monomer-dft/jobs", "/monomer-polymerization/batch/jobs"]);
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const paths = new Set([
-  "/predict", "/query/smiles", "/structure/3d", "/structure/2d", "/structure/standardize-smiles", "/structure/recognize-image",
-  "/monomer-retrosynthesis", "/monomer-polymerization", "/monomer-polymerization/batch/imports", "/monomer-polymerization/batch/jobs",
-  "/conditional-generation/tg/jobs", "/conditional-generation/polytao/jobs", "/conditional-generation/polytao/descriptors",
-  "/reverse-design/tg", "/reverse-design/tg/jobs", "/online-knowledge/search", "/online-knowledge/jobs",
-  "/monomer-md/jobs", "/monomer-dft/jobs", "/knowledge/search", "/md-demo/run", "/md-demo/atom-distance",
-  "/database-browser/smiles-lookup", "/database-browser/property-filter/search",
+  "/predict", "/structure/3d", "/structure/recognize-image",
+  "/monomer-retrosynthesis", "/monomer-polymerization", "/monomer-polymerization/batch/jobs",
+  "/conditional-generation/tg/jobs", "/conditional-generation/polytao/jobs",
+  "/online-knowledge/search", "/online-knowledge/jobs", "/monomer-md/jobs", "/monomer-dft/jobs",
   "/assistant/chat/stream", "/assistant/chat/image-stream", "/assistant/tg/chat/stream", "/assistant/tg/chat/image-stream"
 ]);
 export function apiPath(input: string) {
@@ -26,9 +26,20 @@ export function apiPath(input: string) {
   const url = new URL(input, origin), base = new URL(BASE, origin);
   return url.origin === base.origin && url.pathname.startsWith(base.pathname + "/") ? url.pathname.slice(base.pathname.length) : null;
 }
-export function isUsageSubmission(input: string, method: string) {
+export function isUsageSubmission(input: string, method: string, body?: BodyInit | null) {
   const path = apiPath(input);
-  return method === "POST" && path !== null && (paths.has(path) || /^\/knowledge\/recordings\/[^/]+\/summary$/.test(path) || /^\/monomer-polymerization\/batch\/imports\/[^/]+\/preview$/.test(path));
+  if (method !== "POST" || path === null) return false;
+  if (path === "/query/smiles") {
+    // Match the server's property/similarity selector; structure/default and
+    // malformed bodies retain their existing free-query/validation path.
+    if (typeof body !== "string") return false;
+    try {
+      const value = JSON.parse(body);
+      return value !== null && typeof value === "object" && !Array.isArray(value)
+        && (value.match_mode === "property" || value.match_mode === "similarity");
+    } catch { return false; }
+  }
+  return paths.has(path) || /^\/knowledge\/recordings\/[^/]+\/summary$/.test(path);
 }
 export function installUsageIdentity(next: string) {
   if (owner === next) return;
@@ -37,7 +48,7 @@ export function installUsageIdentity(next: string) {
   try {
     const value = JSON.parse(sessionStorage.getItem(STORAGE) ?? "null");
     if (value?.owner === owner && Array.isArray(value.entries) && value.entries.length <= 128) {
-      for (const item of value.entries) if (typeof item?.fingerprint === "string" && /^[0-9a-f]{64}$/.test(item.fingerprint) && typeof item.key === "string" && KEY.test(item.key) && (!item.operationId || ID.test(item.operationId))) entries.set(item.fingerprint, item);
+      for (const item of value.entries) if (typeof item?.fingerprint === "string" && /^[0-9a-f]{64}$/.test(item.fingerprint) && typeof item.key === "string" && (item.nativeKey === true ? nativeKey(item.key) : KEY.test(item.key)) && (!item.operationId || ID.test(item.operationId))) entries.set(item.fingerprint, item);
     }
   } catch { /* Writes must succeed before a counted request can be dispatched. */ }
 }
@@ -71,11 +82,12 @@ export async function prepareUsageSubmission(options: {
   url: string; method: string; body?: BodyInit | null; intent?: string; headers: Headers;
   check: () => void; fetcher: (url: string) => Promise<Response>;
 }): Promise<UsageTicket | undefined> {
-  if (!isUsageSubmission(options.url, options.method) || !await feature(options.check, options.fetcher)) return;
+  if (!isUsageSubmission(options.url, options.method, options.body) || !await feature(options.check, options.fetcher)) return;
   options.check();
   const fingerprint = await requestFingerprint(options.url, options.body, options.intent); options.check();
   const explicit = options.headers.get("Idempotency-Key");
-  if (explicit && !KEY.test(explicit)) throw new Error("提交标识无效，未发送计算请求。");
+  const native = nativePaths.has(apiPath(options.url) ?? "");
+  if (explicit && !(native ? nativeKey(explicit) : KEY.test(explicit))) throw new Error("提交标识无效，未发送计算请求。");
   let item = entries.get(fingerprint);
   // Existing DFT/batch callers own their keys; never silently substitute another.
   if (explicit && item && item.key !== explicit) {
@@ -83,7 +95,7 @@ export async function prepareUsageSubmission(options: {
   }
   if (!item) {
     if (entries.size >= 128) throw new Error("未确认操作较多，请先在我的用量中读取已有结果。");
-    item = { fingerprint, key: explicit || `usage-${randomId()}` }; entries.set(fingerprint, item);
+    item = { fingerprint, key: explicit || `usage-${randomId()}`, ...(native && explicit ? { nativeKey: true } : {}) }; entries.set(fingerprint, item);
   }
   persist(); options.headers.set("Idempotency-Key", item.key);
   return { ...item, owner };

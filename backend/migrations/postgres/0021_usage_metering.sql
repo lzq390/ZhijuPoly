@@ -1,5 +1,5 @@
 -- Append-only usage observations; no business-job foreign keys or historical backfill.
--- This expand must follow the exact 0012/0018/0019 contracts (manifest epoch 5).
+-- This expand must follow the exact 0012/0018/0019 contracts (manifest epoch 6).
 -- Owner identity remains app.user_id; no existing auth/RLS/role membership changes.
 CREATE SCHEMA usage;
 REVOKE ALL ON SCHEMA usage FROM PUBLIC;

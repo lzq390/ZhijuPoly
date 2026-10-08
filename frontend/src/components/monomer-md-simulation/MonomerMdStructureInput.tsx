@@ -1,3 +1,4 @@
+import { useStructureImport } from "../../structure-library/StructureLibraryProvider";
 import {
   Atom,
   Check,
@@ -33,7 +34,6 @@ type MonomerMdStructureInputProps = {
   value: string;
   error: string | null;
   onChange: (value: string) => void;
-  getSharedSmiles: () => Promise<string>;
   onEditStructure: () => void;
 };
 
@@ -48,7 +48,6 @@ export function MonomerMdStructureInput({
   value,
   error,
   onChange,
-  getSharedSmiles,
   onEditStructure
 }: MonomerMdStructureInputProps) {
   const previewAbortRef = useRef<AbortController | null>(null);
@@ -100,22 +99,10 @@ export function MonomerMdStructureInput({
     if (copyTimerRef.current != null) window.clearTimeout(copyTimerRef.current);
   }, []);
 
-  async function importSharedStructure() {
-    setImporting(true);
-    setImportError(null);
-    try {
-      const shared = (await getSharedSmiles()).trim();
-      if (!shared) throw new Error("共享结构为空，请先在结构工作台绘制或输入结构。 ");
-      onChange(shared);
-    } catch (sharedError) {
-      setImportError(
-        sharedError instanceof Error && sharedError.message.trim()
-          ? sharedError.message.trim()
-          : "无法读取共享结构。"
-      );
-    } finally {
-      setImporting(false);
-    }
+  const selection = useStructureImport(value, (smiles) => { onChange(smiles); }, "单体 MD");
+  async function chooseStructure() {
+    setImporting(true); setImportError(null);
+    try { await selection.choose(); } finally { setImporting(false); }
   }
 
   async function copySmiles() {
@@ -154,9 +141,9 @@ export function MonomerMdStructureInput({
           <button type="button" onClick={() => onChange(DEMO_EXAMPLE_SMILES)}>
             <Sparkles />载入示例
           </button>
-          <button type="button" onClick={() => void importSharedStructure()} disabled={importing}>
+          <button type="button" onClick={() => void chooseStructure()} disabled={importing}>
             {importing ? <LoaderCircle className="np-mmd-spin" /> : <ClipboardPaste />}
-            {importing ? "导入中" : "导入共享结构"}
+            {importing ? "导入中" : "选择结构"}
           </button>
           <button
             type="button"
@@ -184,6 +171,7 @@ export function MonomerMdStructureInput({
           只接受不含 <code>*</code> 连接点的普通单分子结构；最终化学有效性由后端验证。
         </p>
         {error ? <p id="monomer-md-demo-error" className="np-mmd-field-error" role="alert">{error}</p> : null}
+        {selection.source && <small>来自：{selection.source}</small>}
         {importError ? <p className="np-mmd-field-error" role="status">{importError}</p> : null}
       </div>
 

@@ -15,7 +15,7 @@ from psycopg.rows import dict_row
 
 from .cutover import private_data_seal, auth_metadata_seal, backup_state_seal
 from .assets import archive_assets, file_sha256
-from .isolation_ledger import (PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION,
+from .isolation_ledger import (PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, LIBRARY_VERSION,
                                USAGE_VERSION, ENTITLEMENT_VERSION, validate_application_migration_ledger,
                                validate_service_migration_ledger, validate_service_members)
 from .usage_backup import usage_backup_seal
@@ -25,14 +25,14 @@ from .entitlement_backup import entitlement_backup_seal
 def validate_backup_schema(connection):
     row = connection.execute("SELECT max(version) AS version FROM governance.schema_migrations").fetchone()
     version = row["version"]
-    if version not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION}:
-        raise ValueError("Identity backup requires exact 0017, historical 0018, current 0019, or known usage/entitlement expansion")
+    if version not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION}:
+        raise ValueError("Identity backup requires exact release-known 0017/0018/0019/0020/0021/0022 boundary")
     ledger = (validate_application_migration_ledger(connection, require_usage=True, require_entitlements=version == ENTITLEMENT_VERSION)
               if version in {USAGE_VERSION, ENTITLEMENT_VERSION} else validate_service_migration_ledger(connection, version))
     if version != PREPARE_VERSION:
         from .schema import validate_isolation_schema
-        validate_isolation_schema(connection)
-    current = version in {CURRENT_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION}
+        validate_isolation_schema(connection, version)
+    current = version in {CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION}
     privileges = validate_service_members(connection) if current else None
     result = {"migration_ledger": ledger, "current_readiness": current,
               "service_auth_privileges": privileges}

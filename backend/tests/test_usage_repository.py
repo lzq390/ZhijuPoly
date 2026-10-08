@@ -53,7 +53,7 @@ def usage_db():
                 if migration.name.startswith('0018_'):
                     connection.execute("INSERT INTO auth.users(user_id,username,password_hash,must_change_password) VALUES (%s,'usage-owner-a','!',false),(%s,'usage-owner-b','!',false)", (A,B))
                     connection.execute("SELECT set_config('nexpoly.legacy_owner',%s,true)", (A,))
-                if migration.name <= '0020_usage_metering.sql':
+                if migration.name <= '0021_usage_metering.sql':
                     connection.execute(migration.read_text())
         yield dsn
     finally:
@@ -92,8 +92,8 @@ def test_invalid_event_rejected_before_db(changes):
 
 def test_manifest_exact_contract_chain_and_invoker_only(usage_db):
     entries = validate_migration_manifest_entries(ROOT/'backend/migrations/postgres')
-    new = next(item for item in entries if item.version=='0020_usage_metering')
-    assert new.kind=='expand' and new.epoch==5
+    new = next(item for item in entries if item.version=='0021_usage_metering')
+    assert new.kind=='expand' and new.epoch==6
     assert [x.version for x in new.requires_contracts]==['0012_drop_polytao_jobs','0018_user_isolation_cutover','0019_service_auth_least_privilege']
     with psycopg.connect(usage_db, row_factory=dict_row) as connection:
         functions = connection.execute("SELECT p.proname,p.prosecdef FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='usage'").fetchall()

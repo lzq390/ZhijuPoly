@@ -138,3 +138,7 @@ nexpoly-release-*.tar.gz
 /docs/plan/
 
 !/backend/tests/test_*entitlement*.py
+!/backend/tests/test_user_isolation_usage_audit.py
+
+# Personal structure-library integration coverage
+!/backend/tests/test_structure_library.py

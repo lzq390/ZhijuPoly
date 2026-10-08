@@ -3,10 +3,11 @@ import { verifyKetcherNativeMenu } from "./verify-ketcher-native-menu.mjs";
 // Real editor/browser verification. Business requests are fixtures; no jobs or records are submitted.
 import assert from "node:assert/strict";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 
 const { chromium } = await import(process.env.STRUCTURE_PLAYWRIGHT_MODULE || "playwright");
+const entitlementsFixture = JSON.parse(await readFile(new URL('./fixtures/entitlements.json', import.meta.url), 'utf8')).entitlements;
 const base = process.env.STRUCTURE_BASE_URL || "http://127.0.0.1:5187";
 assert.equal(new URL(base).hostname, "127.0.0.1");
 const output = resolve(process.env.STRUCTURE_ARTIFACT_DIR || "/tmp/nexpoly-structure-browser");
@@ -24,6 +25,8 @@ const resources = [];
 const missingResources = [];
 const renderWarnings = [];
 let molfile3D = "";
+const libraryRecords = [];
+const polymerizationRequests = [];
 page.on("pageerror", (error) => errors.push(error.message));
 page.on("console", message => { if (/Cannot update a component|Cannot update .*while rendering|unmounted root/.test(message.text())) renderWarnings.push(message.text()); });
 context.on("request", request => {
@@ -44,6 +47,34 @@ await context.route("**/*", (route) => {
     authenticated: true, user: { id: "structure-ci-user", username: "structure-ci", must_change_password: false },
     session_id: "structure-ci-session", csrf_token: "structure-ci-csrf", capabilities: {}
   } });
+  // Explicit synthetic admission policy; do not turn the default API fallback
+  // into an accidental outage for counted 3D/polymerization fixture requests.
+  if (url.pathname === '/api/v1/usage/entitlements' && request.method() === 'GET') return route.fulfill({ json: entitlementsFixture });
+  if (url.pathname === "/api/v1/structure-library/status") return route.fulfill({ json: { available: true, enabled: true, schema_ready: true } });
+  if (url.pathname === "/api/v1/structure-library/records") {
+    if (request.method() === 'POST') {
+      const data = request.postDataJSON();
+      let record = libraryRecords.find(r => r.client_request_id === data.client_request_id);
+      if (!record) {
+        record = { ...data, id: randomUUID(), canonical_smiles: data.smiles, metadata_revision: 1, preview_svg: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+        libraryRecords.unshift(record);
+      }
+      return route.fulfill({ status: 201, json: record });
+    }
+    return route.fulfill({ json: { items: libraryRecords.map(({ ket, ...summary }) => summary), next_cursor: null } });
+  }
+  if (url.pathname.startsWith('/api/v1/structure-library/records/')) {
+    const record = libraryRecords.find(r => r.id === url.pathname.split('/').at(-1));
+    return route.fulfill({ status: record ? 200 : 404, json: record || { detail: 'Deleted' } });
+  }
+  if (url.pathname === '/api/v1/monomer-polymerization/status') return route.fulfill({ json: {
+    enabled: true, available: true, default_target_class: 'polyimide', available_target_classes: ['polyimide'], max_results_limit: 20,
+    target_requirements: { polyimide: { min_monomers: 2, max_monomers: 2, monomer_b_required: true, note: '' } }, message: 'ready'
+  } });
+  if (url.pathname === '/api/v1/monomer-polymerization') {
+    polymerizationRequests.push(request.postDataJSON());
+    return route.fulfill({ json: { input_monomers: [], target_class: 'polyimide', query_time_ms: 1, total: 0, results: [], warnings: [] } });
+  }
   if (url.pathname.endsWith("/structure/standardize-smiles")) {
     const { smiles } = request.postDataJSON();
     return smiles.includes("(")
@@ -75,7 +106,7 @@ async function ready() {
   assert.equal(await page.locator("[data-structure-editor]").count(), 1);
 }
 async function navigate(path) {
-  const previous = await page.locator("[data-structure-editor]").elementHandle();
+  const previous = await page.locator("[data-structure-editor]").isVisible() ? await page.locator("[data-structure-editor]").elementHandle() : null;
   await page.evaluate((path) => { history.pushState({}, "", path); dispatchEvent(new PopStateEvent("popstate")); }, path);
   if (previous) await page.waitForFunction((node) => !node.isConnected, previous);
   await previous?.dispose();
@@ -159,6 +190,72 @@ try {
   result.layoutRoundTrip = true;
   result.annotationRoundTrip = true;
 
+  // Real Ketcher snapshots, mocked personal persistence and scientific API.
+  async function saveRecord(name) {
+    await page.getByRole('button', { name: '保存结构', exact: true }).click();
+    await page.getByRole('dialog', { name: '保存结构', exact: true }).waitFor();
+    await page.getByRole('textbox', { name: '结构名称', exact: true }).fill(name);
+    await page.getByRole('button', { name: '确认保存', exact: true }).click();
+    await page.getByRole('dialog', { name: '保存结构', exact: true }).waitFor({ state: 'hidden' });
+  }
+  async function chooseRecord(name, trigger) {
+    await trigger.click();
+    const dialog = page.getByRole('dialog', { name: /选择结构/ });
+    assert.equal(await dialog.getByRole('button', { name: '导入', exact: true }).isDisabled(), true);
+    await dialog.getByRole('radio', { name: new RegExp(name) }).check();
+    await dialog.getByRole('button', { name: '导入', exact: true }).click();
+    await dialog.waitFor({ state: 'hidden' });
+  }
+  await saveRecord('浏览器 A');
+  await input().fill('CCN');
+  await saveRecord('浏览器 B');
+  await input().fill('CCC');
+  await saveRecord('浏览器 C');
+  assert.deepEqual(libraryRecords.map(r => r.smiles), ['CCC', 'CCN', 'CCO']);
+  assert.ok(libraryRecords.every(record => record.editor_version === result.sdk));
+  assert.ok(JSON.stringify(libraryRecords.at(-1).ket).includes('NexPoly layout label'));
+  await page.evaluate(() => { history.pushState({}, '', '/monomer-polymerization'); dispatchEvent(new PopStateEvent('popstate')); });
+  await page.waitForFunction(() => document.querySelector('[data-module-content]')?.dataset.modulePhase === 'idle');
+  await chooseRecord('浏览器 A', page.getByRole('button', { name: '选择结构', exact: true }).nth(0));
+  await chooseRecord('浏览器 B', page.getByRole('button', { name: '选择结构', exact: true }).nth(1));
+  assert.equal(await page.locator('#monomer-a-smiles').inputValue(), 'CCO');
+  assert.equal(await page.locator('#monomer-b-smiles').inputValue(), 'CCN');
+  await Promise.all([page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/monomer-polymerization'), page.getByRole('button', { name: '聚合', exact: true }).click()]);
+  assert.equal(polymerizationRequests.at(-1).monomer_a_smiles, 'CCO');
+  assert.equal(polymerizationRequests.at(-1).monomer_b_smiles, 'CCN');
+  await navigate('/structure-workbench');
+  assert.equal((await read()).smiles, 'CCC');
+  // A reload loses the in-memory document, while server records remain selectable.
+  await page.reload({ waitUntil: 'domcontentloaded' }); await ready();
+  await chooseRecord('浏览器 A', page.getByRole('button', { name: '我的结构', exact: true }));
+  await page.getByText('已载入保存的结构与布局。', { exact: true }).waitFor();
+  assert.deepEqual((await read()).geometry, expected.geometry);
+  assert.ok(JSON.stringify((await read()).ket).includes('NexPoly layout label'));
+  result.personalLibrary = { records: libraryRecords.length, independentAB: true, reloadRestore: true };
+  await input().fill('C(');
+  await page.getByText('SMILES 无效或尚未完整，原画板未修改。', { exact: true }).waitFor();
+  await chooseRecord('浏览器 B', page.getByRole('button', { name: '我的结构', exact: true }));
+  await page.getByRole('dialog', { name: '载入已保存结构', exact: true }).waitFor();
+  await page.evaluate(() => {
+    const factory = window.__probeEditor().formatterFactory, originalCreate = factory.create.bind(factory);
+    factory.create = format => {
+      const formatter = originalCreate(format);
+      if (format === 'ket') formatter.getStructureFromStringAsync = async () => { throw new Error('KET restore fixture failure'); };
+      return formatter;
+    };
+  });
+  await page.getByRole('button', { name: '直接载入', exact: true }).click();
+  await page.getByRole('dialog', { name: '恢复结构布局失败', exact: true }).waitFor();
+  await ready();
+  assert.equal(await input().inputValue(), 'C(');
+  assert.equal((await read()).smiles, 'CCO');
+  assert.deepEqual((await read()).geometry, expected.geometry);
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await input().fill('CCO');
+  await page.waitForFunction(() => !document.querySelector('[data-workbench-tool="3d"]').disabled);
+  result.failedLibraryRollback = true;
+
+
   await page.getByRole("button", { name: "生成SMILES", exact: true }).click();
   await page.getByText("SMILES 与画板布局已同步。", { exact: true }).waitFor();
   result.explicitSync = true;
@@ -226,8 +323,7 @@ try {
   assert.deepEqual(png.signature, [137, 80, 78, 71, 13, 10, 26, 10]);
   result.png = png;
 
-  // DFT uses the shared document without owning a canvas. Return immediately
-  // while its text validation may still be pending in the App-owned store.
+  // DFT owns a separate session draft. Editing it must not change the canvas.
   await page.evaluate(() => { history.pushState({}, "", "/monomer-dft"); dispatchEvent(new PopStateEvent("popstate")); });
   // fill() does not reliably wait for an inert ancestor. A user can type only
   // after the DFT page's transition unlocks, even though its input exists sooner.
@@ -237,10 +333,13 @@ try {
   await page.evaluate(() => { history.pushState({}, "", "/structure-workbench"); dispatchEvent(new PopStateEvent("popstate")); });
   await ready();
   await page.waitForFunction(() => !document.querySelector('[data-workbench-tool="3d"]').disabled);
-  await pollBrowser(page, async () => (await window.__probeEditor()?.getSmiles()) === "CCN");
-  assert.equal(await input().inputValue(), "CCN");
+  assert.match((await read()).smiles, /^\*CC\*/);
+  assert.match(await input().inputValue(), /^\*CC\*/);
   assert.ok(!JSON.stringify((await read()).ket).includes("NexPoly layout label"));
-  result.externalDftWrite = true;
+  result.independentDftDraft = true;
+  // Seed an explicit nitrogen drawing for the viewport pointer-hit regression below.
+  await input().fill('CCN');
+  await pollBrowser(page, async () => (await window.__probeEditor()?.getSmiles()) === 'CCN');
 
   if (result.engine === 'react') {
     const cdp = await context.newCDPSession(page);
@@ -270,6 +369,17 @@ try {
   for (const viewport of [{ width: 390, height: 844 }, { width: 1024, height: 768 }, { width: 2560, height: 1440 }, { width: 1440, height: 900 }]) {
     await page.setViewportSize(viewport);
     await ready();
+    if (viewport.width === 390) {
+      await page.getByRole('button', { name: '我的结构', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: /选择结构/ });
+      await dialog.getByRole('radio').first().waitFor();
+      const bounds = await dialog.boundingBox();
+      assert.equal(Math.round(bounds.width), viewport.width);
+      assert.equal(await page.locator('[data-structure-editor]').count(), 1);
+      await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => document.activeElement?.getAttribute('data-workbench-tool') === 'structure-library');
+      result.libraryMobileAndFocus = true;
+    }
     // The SDK throttles its resize observer; measure the settled canvas.
     await page.waitForTimeout(600);
     await page.waitForFunction(() => {

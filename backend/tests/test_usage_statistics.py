@@ -253,11 +253,11 @@ def test_runtime_ledger_accepts_only_exact_known_usage_extension(usage_db):
     with psycopg.connect(usage_db,row_factory=dict_row) as connection:
         connection.execute('CREATE TABLE IF NOT EXISTS governance.schema_migrations(version text PRIMARY KEY,checksum text NOT NULL,applied_at timestamptz NOT NULL DEFAULT now())')
         for item in entries:
-            if item.version<'0020_usage_metering':
+            if item.version<'0021_usage_metering':
                 connection.execute('INSERT INTO governance.schema_migrations(version,checksum) VALUES(%s,%s)',(item.version,item.checksum))
         validate_application_migration_ledger(connection,require_usage=False)
         with pytest.raises(ValueError):validate_application_migration_ledger(connection,require_usage=True)
-        latest=next(e for e in entries if e.version=='0020_usage_metering')
+        latest=next(e for e in entries if e.version=='0021_usage_metering')
         connection.execute('INSERT INTO governance.schema_migrations(version,checksum) VALUES(%s,%s)',(latest.version,latest.checksum))
         validate_application_migration_ledger(connection,require_usage=True)
         with pytest.raises(ValueError):validate_service_migration_ledger(connection)

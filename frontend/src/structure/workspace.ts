@@ -1,3 +1,4 @@
+import type { StructureDocument } from "../structure-library/types";
 import {
   cleanKet, editorLoadCandidates, emptyKet, ketHasAtoms, shouldAdoptEditorSmiles,
   type StructureEditorHandle, type StructureEditorStatus
@@ -13,6 +14,7 @@ export type StructureWorkspaceState = StructureSnapshot & {
   dirty: boolean;
   notice: string | null;
   mountKey: number;
+  documentBusy?: boolean;
 };
 type Standardize = (smiles: string) => Promise<string>;
 const deferredDraftNotice = "文本草稿已保留，画板就绪后将继续同步。";
@@ -37,6 +39,8 @@ function bounded<T>(task: Promise<T>, ms: number, signal?: AbortSignal): Promise
 export class StructureWorkspace {
   private state: StructureWorkspaceState;
   private lastGood: StructureSnapshot | null;
+  private lastGoodFaithful = true;
+  private editorVersion = "unknown";
   private listeners = new Set<() => void>();
   private raw: StructureEditorHandle | null = null;
   private retireMount: (() => void) | null = null;
@@ -46,6 +50,15 @@ export class StructureWorkspace {
   private unsubscribeEditor: (() => void) | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private mutationDepth = 0;
+  private documentOperation: symbol | null = null;
+  private recordedFingerprint: string | null = null;
+  private documentCapture: ((signal?: AbortSignal) => Promise<StructureDocument>) | null = null;
+  registerDocumentCapture(capture: (signal?: AbortSignal) => Promise<StructureDocument>) {
+    this.documentCapture = capture;
+    return () => { if (this.documentCapture === capture) this.documentCapture = null; };
+  }
+  captureForImport = (signal?: AbortSignal) => this.documentCapture ? this.documentCapture(signal) : this.captureDocument(signal);
+
   private externalRevision = 0;
   private pendingSave: { current: () => boolean; revision: number; promise: Promise<StructureSyncResult> } | null = null;
 
@@ -101,19 +114,20 @@ export class StructureWorkspace {
     return () => owner === this.owner && epoch === this.epoch;
   };
 
-  getEditor = (): StructureEditorHandle | null => {
+  getEditor = (operation?: symbol): StructureEditorHandle | null => {
     if (!this.raw || this.state.status !== "ready") return null;
     const raw = this.raw;
     const current = this.guard();
     const signal = this.operations.signal;
     const call = async <T>(action: () => Promise<T>, writesDocument = false) => {
       if (!current()) throw stale();
+      if (writesDocument && this.documentOperation && operation !== this.documentOperation) throw new Error("正在保存或恢复结构，请稍后重试。");
       let result: T;
       try { result = await bounded(action(), 8000, signal); }
       catch (error) {
         // A timed-out SDK write cannot be cancelled. Retire its actual instance
         // before allowing queued input to proceed, including on the same page.
-        if (writesDocument && current() && error instanceof DOMException && error.name === "TimeoutError") {
+        if (writesDocument && !operation && current() && error instanceof DOMException && error.name === "TimeoutError") {
           this.recoverLastSnapshot("timeout");
         }
         throw error;
@@ -122,6 +136,7 @@ export class StructureWorkspace {
       return result;
     };
     return {
+      version: raw.version,
       getSmiles: () => call(() => raw.getSmiles()),
       getKet: () => call(() => raw.getKet()),
       getMolfile: () => call(() => raw.getMolfile()),
@@ -155,6 +170,7 @@ export class StructureWorkspace {
       initialize: async (editor: StructureEditorHandle, options: { adoptInitialDocument?: boolean } = {}) => {
         if (!current()) return;
         this.raw = editor;
+        this.editorVersion = editor.version || "unknown";
         let restoring = true;
         try {
           const restore = async () => {
@@ -304,8 +320,9 @@ export class StructureWorkspace {
   };
   dismissNotice = () => this.publish({ notice: null });
 
-  /** Legacy setSmiles callers (DFT) now write a draft, then an accepted document. */
+  /** External setSmiles callers write a draft, then an accepted document. */
   setSmiles = (value: string) => {
+    if (this.documentOperation) return;
     if (value.length > 8000) return;
     const request = ++this.externalRevision;
     const revision = this.state.revision;
@@ -399,6 +416,7 @@ export class StructureWorkspace {
           : "";
         const snapshot = { smiles, ket, revision };
         this.lastGood = snapshot;
+        this.lastGoodFaithful = smiles === exported;
         this.publish({
           ...snapshot, dirty: false,
           ...(this.state.notice === autosaveNotice ? { notice: null } : {}),
@@ -458,6 +476,114 @@ export class StructureWorkspace {
     this.mutationDepth = 0;
     this.publish({ status: this.state.status === "unmounted" ? "unmounted" : "loading" });
   }
+
+  private fingerprint(document: { smiles: string; ket: string | null }) {
+    const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable)
+      : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, stable(v)])) : value;
+    return JSON.stringify([document.smiles, document.ket ? stable(cleanKet(JSON.parse(document.ket))) : null]);
+  }
+
+  markRecorded(document: StructureDocument) { this.recordedFingerprint = this.fingerprint(document); }
+
+  hasUnrecordedChanges = () => {
+    const state = this.state;
+    if (state.draft !== state.smiles || state.draftError || state.dirty) return true;
+    if (!state.smiles && (!state.ket || !ketHasAtoms(JSON.parse(state.ket)))) return false;
+    return this.fingerprint(state) !== this.recordedFingerprint;
+  };
+
+  /** Unlike legacy business reads, this method never falls back to an old value. */
+  captureDocument = async (signal?: AbortSignal): Promise<StructureDocument> => {
+    const current = this.guard();
+    const check = () => { if (!current() || signal?.aborted) throw stale(); };
+    if (this.state.draftError || this.state.draft !== this.state.smiles) throw new Error("请先完成或修正 SMILES 同步，再保存结构。");
+    if (this.documentOperation || this.mutationDepth) throw new Error("画板正在更新，请稍后重试。");
+    const editor = this.getEditor();
+    if (!editor) {
+      if (!this.lastGoodFaithful || this.state.status !== "unmounted" || !this.lastGood?.ket || !this.savedDocumentIsCurrent()) throw new Error("结构编辑器尚未就绪。");
+      if (!this.lastGood.smiles) throw new Error("画板为空，请先绘制结构。");
+      return { ...this.lastGood, ket: this.lastGood.ket, snapshot_schema_version: 1, editor_version: this.editorVersion };
+    }
+    for (let attempt = 0; attempt < 8; attempt++) {
+      check();
+      const before = this.state;
+      if (before.dirty) await editor.settle();
+      const [ketSource, rawSmiles] = await Promise.all([editor.getKet(), editor.getSmiles()]);
+      check();
+      if (before.revision !== this.state.revision || before.draft !== this.state.draft || this.mutationDepth) { await pause(80); continue; }
+      const parsed = JSON.parse(ketSource);
+      const smiles = rawSmiles.trim();
+      if (!Array.isArray(parsed?.root?.nodes)) throw new Error("画板返回了无效的 KET 文档。");
+      if (!smiles || smiles === "{}" || !ketHasAtoms(parsed)) {
+        if (before.smiles || ketHasAtoms(parsed) || smiles && smiles !== "{}") { await pause(80); continue; }
+        throw new Error("画板为空，请先绘制结构。");
+      }
+      // A protected display fallback is not an exact editable snapshot.
+      if (!shouldAdoptEditorSmiles(before.smiles, smiles)) throw new Error("画板与聚合物连接点不一致，请重新同步完整结构后保存。");
+      const canonical = await bounded(this.standardize(smiles), 8000, signal ?? this.operations.signal);
+      check();
+      if (!canonical || !shouldAdoptEditorSmiles(smiles, canonical)) throw new Error("结构校验失败，未保存旧结构。");
+      if (before.revision !== this.state.revision || before.draft !== this.state.draft || this.mutationDepth) { await pause(80); continue; }
+      const document = { smiles, ket: JSON.stringify(cleanKet(parsed)), revision: before.revision };
+      this.lastGood = document;
+      this.lastGoodFaithful = true;
+      this.publish({ ...document, dirty: false, draft: smiles, draftError: null });
+      return { ...document, snapshot_schema_version: 1, editor_version: this.editorVersion };
+    }
+    throw new Error("画板仍在变化，未能获取完整快照，请稍后重试。");
+  };
+
+  restoreDocument = async (document: StructureDocument, signal?: AbortSignal, smilesOnly = false) => {
+    if (this.documentOperation || this.mutationDepth) throw new Error("画板正在更新，请稍后重试。");
+    const current = this.guard();
+    const check = () => { if (!current() || signal?.aborted) throw stale(); };
+    const saved = await this.saveSnapshot();
+    check();
+    if (saved.status !== "saved") throw new Error(saved.message || "无法备份当前画板，未替换结构。");
+    if (this.documentOperation || this.mutationDepth) throw new Error("画板正在更新，请稍后重试。");
+    const backup = { ...this.state };
+    const token = Symbol("restore-document");
+    const editor = this.getEditor(token);
+    if (!editor) throw new Error("请等待画板就绪后载入结构。");
+    this.documentOperation = token;
+    this.publish({ documentBusy: true });
+    const finish = this.beginMutation();
+    try {
+      await editor.setMolecule(smilesOnly ? document.smiles : document.ket);
+      check();
+      await editor.settle();
+      check();
+      const [rawSmiles, ketSource] = await Promise.all([editor.getSmiles(), editor.getKet()]);
+      check();
+      const ket = JSON.parse(ketSource);
+      if (!rawSmiles.trim() || !ketHasAtoms(ket)) throw new Error("记录未能完整载入画板。");
+      const [actual, expected] = await bounded(Promise.all([this.standardize(rawSmiles), this.standardize(document.smiles)]), 8000, signal ?? this.operations.signal);
+      check();
+      if (!actual || actual !== expected) throw new Error("画板与记录结构不一致，已保留原画板。");
+      const snapshot = { smiles: document.smiles, ket: JSON.stringify(cleanKet(ket)), revision: this.state.revision + 1 };
+      ++this.externalRevision;
+      this.lastGood = snapshot;
+      this.lastGoodFaithful = true;
+      this.publish({ ...snapshot, draft: snapshot.smiles, draftError: null, dirty: false, notice: null });
+      this.markRecorded({ ...document, ...snapshot });
+    } catch (error) {
+      // Retire uncancellable writes; never let them repaint after rollback.
+      if (current()) {
+        this.invalidateEditor();
+        const revision = this.state.revision + 1;
+        this.lastGood = { smiles: backup.smiles, ket: backup.ket, revision };
+        this.publish({ ...backup, revision, status: "loading", mountKey: this.state.mountKey + 1,
+          notice: "结构载入失败，已恢复原画板和文本草稿。" });
+      }
+      throw error;
+    } finally {
+      finish();
+      if (this.documentOperation === token) {
+        this.documentOperation = null;
+        this.publish({ documentBusy: false });
+      }
+    }
+  };
 
   getCurrentSmiles = async () => {
     const current = this.guard();

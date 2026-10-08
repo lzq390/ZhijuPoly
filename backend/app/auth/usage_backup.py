@@ -1,4 +1,4 @@
-"""A separate 0020 usage seal; historical identity/cutover seals stay unchanged."""
+"""A separate 0021 usage seal; historical identity/cutover seals stay unchanged."""
 from __future__ import annotations
 
 import hashlib

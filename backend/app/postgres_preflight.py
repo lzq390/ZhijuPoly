@@ -74,12 +74,14 @@ _MIGRATION_CHECKSUMS = {
 _EXPAND_MIGRATIONS = tuple(
     migration.version
     for migration in _MIGRATION_POLICY
-    if migration.kind in {"baseline", "expand"}
+    # Legacy startup/final profiles stop before the explicit identity cutover.
+    # New private data uses the versioned isolation targets below.
+    if migration.kind in {"baseline", "expand"} and migration.version <= "0017_user_isolation_prepare"
 )
 _REQUIRED_CONTRACT_DEPENDENCIES = frozenset(
     requirement.version
     for migration in _MIGRATION_POLICY
-    if migration.kind in {"baseline", "expand"}
+    if migration.version in _EXPAND_MIGRATIONS
     for requirement in migration.requires_contracts
 )
 STRICT_REQUIRED_MIGRATIONS = tuple(
@@ -112,15 +114,19 @@ STARTUP_RUNTIME_TABLES = tuple(
 SCHEMA_TARGET_STARTUP = "startup-through-0012"
 SCHEMA_TARGET_FINAL = "final-0013"
 SCHEMA_TARGET_ISOLATION = "user-isolation-0019"
+SCHEMA_TARGET_CURRENT_ISOLATION = "user-isolation-current"
+SCHEMA_TARGET_STRUCTURE_LIBRARY = "user-isolation-0020"
 SCHEMA_TARGET_ISOLATION_HISTORICAL = "user-isolation-0018"
-ISOLATION_TARGETS = frozenset({SCHEMA_TARGET_ISOLATION, SCHEMA_TARGET_ISOLATION_HISTORICAL})
+ISOLATION_TARGETS = frozenset({SCHEMA_TARGET_ISOLATION, SCHEMA_TARGET_ISOLATION_HISTORICAL, SCHEMA_TARGET_STRUCTURE_LIBRARY, SCHEMA_TARGET_CURRENT_ISOLATION})
 SCHEMA_TARGETS = frozenset({SCHEMA_TARGET_STARTUP, SCHEMA_TARGET_FINAL, *ISOLATION_TARGETS})
 
 
 def _required_migrations(schema_target: str) -> tuple[str, ...]:
     if schema_target in ISOLATION_TARGETS:
-        boundary = ("0019_service_auth_least_privilege" if schema_target == SCHEMA_TARGET_ISOLATION
-                    else "0018_user_isolation_cutover")
+        boundary = {SCHEMA_TARGET_ISOLATION: "0019_service_auth_least_privilege",
+                    SCHEMA_TARGET_CURRENT_ISOLATION: "0019_service_auth_least_privilege",
+                    SCHEMA_TARGET_ISOLATION_HISTORICAL: "0018_user_isolation_cutover",
+                    SCHEMA_TARGET_STRUCTURE_LIBRARY: "0020_structure_library"}[schema_target]
         return tuple(migration.version for migration in _MIGRATION_POLICY if migration.version <= boundary)
     if schema_target == SCHEMA_TARGET_STARTUP:
         return STARTUP_REQUIRED_MIGRATIONS
@@ -488,6 +494,19 @@ def run_preflight(
             applied_migrations, duplicate_migrations = _postgres_applied_migrations(
                 connection
             )
+            if schema_target == SCHEMA_TARGET_CURRENT_ISOLATION:
+                # Resolve only the supported current boundaries, then apply the
+                # same exact ledger, role, RLS and ACL checks as explicit targets.
+                # Unknown/historical ledgers still fail closed below.
+                from app.auth.isolation_ledger import LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION
+                schema_target = (SCHEMA_TARGET_STRUCTURE_LIBRARY
+                    if applied_migrations and max(applied_migrations) in {
+                        LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION,
+                    } else SCHEMA_TARGET_ISOLATION)
+                required_migrations = _required_migrations(schema_target)
+                report["requested_schema_target"] = SCHEMA_TARGET_CURRENT_ISOLATION
+                report["schema_target"] = schema_target
+                report["migrations"]["required"] = list(required_migrations)
             checksum_mismatches = [
                 {
                     "version": version,
@@ -517,15 +536,21 @@ def run_preflight(
             )
             if schema_target in ISOLATION_TARGETS:
                 from app.auth.schema import validate_runtime_role, validate_isolation_schema
-                from app.auth.isolation_ledger import (CURRENT_VERSION, CUTOVER_VERSION,
+                from app.auth.isolation_ledger import (CURRENT_VERSION, CUTOVER_VERSION, LIBRARY_VERSION,
                     validate_service_migration_ledger, validate_application_migration_ledger, database_identity)
-                if schema_target == SCHEMA_TARGET_ISOLATION:
-                    validate_application_migration_ledger(connection)
+                if schema_target == SCHEMA_TARGET_ISOLATION_HISTORICAL:
+                    boundary = CUTOVER_VERSION
+                    validate_service_migration_ledger(connection, boundary)
                 else:
-                    validate_service_migration_ledger(connection, CUTOVER_VERSION)
+                    ledger = validate_application_migration_ledger(connection)
+                    boundary = ledger[-1]["version"]
+                    if schema_target == SCHEMA_TARGET_STRUCTURE_LIBRARY and boundary < LIBRARY_VERSION:
+                        raise ValueError("Structure library requires its exact release-known migration prefix")
                 report["service_identity"] = validate_runtime_role(connection, "nexpoly_service")
-                report["user_isolation_schema"] = validate_isolation_schema(connection)
-                if schema_target == SCHEMA_TARGET_ISOLATION:
+                report["user_isolation_schema"] = validate_isolation_schema(connection, boundary)
+                if schema_target == SCHEMA_TARGET_STRUCTURE_LIBRARY:
+                    report["structure_library_schema_ready"] = True  # Metadata proof; service cannot read private records.
+                if schema_target != SCHEMA_TARGET_ISOLATION_HISTORICAL:
                     import psycopg
                     from psycopg.rows import dict_row
                     from app.auth.service_privilege_contract import validate_service_auth_privileges
@@ -536,7 +561,9 @@ def run_preflight(
                         report["api_identity"] = validate_runtime_role(api, "nexpoly_api")
                         if database_identity(api) != service_database:
                             raise ValueError("API and service identities connect to different databases")
-                        validate_application_migration_ledger(api)
+                        api_ledger = validate_application_migration_ledger(api)
+                        if api_ledger[-1]["version"] != boundary:
+                            raise ValueError("API and service migration boundaries differ")
                     report["runtime_database"] = service_database
             dft_schema = probe_monomer_dft_schema(connection)
             table_counts = {
@@ -624,7 +651,7 @@ def run_preflight(
     report["blockers"] = blockers
     report["strict_ok"] = not strict_errors
     report["strict_errors"] = strict_errors
-    report["current_readiness"] = schema_target == SCHEMA_TARGET_ISOLATION and not strict_errors
+    report["current_readiness"] = schema_target in {SCHEMA_TARGET_ISOLATION, SCHEMA_TARGET_STRUCTURE_LIBRARY} and not strict_errors
     return report
 
 
@@ -645,7 +672,7 @@ def main() -> None:
         default=SCHEMA_TARGET_FINAL,
         help=(
             "Validate startup compatibility through 0012 or strict readiness "
-            "through the historical manifest; user-isolation-0019 requires dedicated identity/ACL migrations. "
+            "through the historical manifest; user-isolation-current resolves canonical 0019/0020/0021/0022. "
             "user-isolation-0018 is historical-only and never current readiness. The "
             "final-0013 choice is retained as a compatibility identifier."
         ),

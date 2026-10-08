@@ -1,4 +1,4 @@
--- Success-count entitlements. New isolated schema only; 0020 remains immutable.
+-- Success-count entitlements. New isolated schema only; 0021 usage remains immutable.
 -- Example policy is not an activated plan. No policy/tier seed or auth mutation.
 CREATE SCHEMA usage_entitlements;
 REVOKE ALL ON SCHEMA usage_entitlements FROM PUBLIC;

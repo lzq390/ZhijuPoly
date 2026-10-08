@@ -1019,11 +1019,12 @@ def apply_postgres_migrations(
         deferred_versions: set[str] = {
             "0018_user_isolation_cutover", "0019_service_auth_least_privilege",
         }
-        # This expansion follows the separately approved identity contracts.
-        # Ordinary fresh bootstrap must stop at 0017, as it did before usage;
-        # the standard expand runner applies 0020 only after exact 0019 exists.
+        # All private expansions require the separately approved identity and
+        # service contracts. Fresh/legacy bootstrap remains bounded at 0017.
         if "0019_service_auth_least_privilege" not in applied:
-            deferred_versions.add("0020_usage_metering")
+            deferred_versions.update({
+                "0020_structure_library", "0021_usage_metering", "0022_usage_entitlements",
+            })
         if allowed_kinds is not None:
             effective_allowed_kinds = set(allowed_kinds)
             if fresh_bootstrap:

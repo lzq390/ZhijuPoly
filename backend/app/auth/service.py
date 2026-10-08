@@ -189,7 +189,7 @@ class AuthService:
             try:
                 validate_application_migration_ledger(connection)
             except ValueError as exc:
-                raise RuntimeError('User isolation cutover has not completed: exact 0019 ledger or release-known 0020 expansion required') from exc
+                raise RuntimeError('User isolation cutover has not completed: exact release-known isolation/library/usage/entitlement ledger required') from exc
             validate_isolation_schema(connection)
             target_database = database_identity(connection)
         for dsn,group in ((self.settings.auth_dsn,'nexpoly_auth'),(self.settings.service_dsn,'nexpoly_service')):

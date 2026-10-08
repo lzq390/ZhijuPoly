@@ -320,6 +320,11 @@ def test_backup_seal_detects_result_content_tamper(entitlement_db,owner):
 
 def test_real_pg16_backup_restore_preserves_all_entitlement_tables(entitlement_db,owner,tmp_path):
     from app.auth.backup import backup_and_verify
+    from app.services.structure_library import CreateStructureRecord, save_record
+    with connection(entitlement_db,owner) as c:
+        saved=save_record(c,owner,CreateStructureRecord(name="combined-backup",smiles="CC",
+            ket={"root":{"nodes":[{"$ref":"mol0"}]},"mol0":{"type":"molecule","atoms":[{"label":"C","location":[0,0,0]}],"bonds":[]}},
+            editor_version="3.8.0",client_request_id=uuid4()))
     p=policy(entitlement_db,owner)
     with connection(entitlement_db,owner) as c:
         op=advance(c,reserve(c,owner,p)["operation"]);settle(c,op,result_json={"value":"retained"})
@@ -331,9 +336,11 @@ def test_real_pg16_backup_restore_preserves_all_entitlement_tables(entitlement_d
         receipt=backup_and_verify(entitlement_db,restore,tmp_path/"backup")
         document=json.loads(receipt.read_text())
         assert document["restore_verified"] and len(document["entitlement_state"]["tables"])==5
+        assert document["backup_state"]["structure_library.records"]["rows"]>=1
         with connection(restore,owner) as c:
             got=ent.get(c,owner_user_id=owner,operation_id=op["operation_id"])
             assert got["state"]=="succeeded" and got["result_json"]=={"value":"retained"}
+            assert c.execute("SELECT name FROM structure_library.records WHERE id=%s",(saved["id"],)).fetchone()["name"]=="combined-backup"
     finally:
         with psycopg.connect(entitlement_db,autocommit=True) as c: c.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
 
@@ -341,7 +348,7 @@ def test_public_state_constants_contract():
     assert ent.STATES=={"reserved","dispatching","running","unknown","succeeded","released"}
     assert ent.TERMINAL_STATES=={"succeeded","released"}
     assert ent.TERMINAL_STATES < ent.STATES
-    assert ent.MIGRATION_VERSION=="0021_usage_entitlements"
+    assert ent.MIGRATION_VERSION=="0022_usage_entitlements"
     assert not hasattr(ent,"TERMINAL_MIGRATION_VERSION")
 
 @pytest.mark.parametrize("cadence,at,expected_start,expected_end",[
@@ -524,3 +531,65 @@ def test_downgrade_and_first_start_share_existing_account_lock(entitlement_db,ow
             first_connection.close()
     with connection(entitlement_db,owner,"nexpoly_service") as c:
         assert ent.resolve_access_tier(c,owner_user_id=owner)=="free"
+
+@pytest.mark.parametrize("tamper",["library_checksum","library_rls","library_owner_policy","library_worker_grant"])
+def test_entitlement_upgrade_keeps_structure_library_guards(entitlement_db,tamper):
+    from app.auth.backup import validate_backup_schema
+    from app.auth.schema import validate_isolation_schema
+    with psycopg.connect(entitlement_db,row_factory=dict_row) as c:
+        assert any(p["relation"]=="structure_library.records" for p in validate_isolation_schema(c)["rls_policies"])
+        assert validate_backup_schema(c)["migration_ledger"][-1]["version"]==ent.MIGRATION_VERSION
+        if tamper=="library_checksum":
+            c.execute("UPDATE governance.schema_migrations SET checksum=%s WHERE version='0020_structure_library'",("0"*64,))
+        elif tamper=="library_rls":
+            c.execute("ALTER TABLE structure_library.records DISABLE ROW LEVEL SECURITY")
+        elif tamper=="library_owner_policy":
+            c.execute("ALTER POLICY owner_access ON structure_library.records USING(true)")
+        else:
+            c.execute("GRANT USAGE ON SCHEMA structure_library TO nexpoly_service")
+        with pytest.raises(ValueError): validate_backup_schema(c)
+        c.rollback()
+
+def test_full_ledger_cannot_omit_structure_library_expansion(entitlement_db):
+    with psycopg.connect(entitlement_db,row_factory=dict_row) as c:
+        c.execute("DELETE FROM governance.schema_migrations WHERE version='0020_structure_library'")
+        with pytest.raises(ValueError):
+            validate_application_migration_ledger(c,require_usage=True,require_entitlements=True)
+        c.rollback()
+
+def test_current_preflight_full_entitlement_chain_keeps_library_target(entitlement_db,monkeypatch):
+    from app.config import Settings
+    from app.postgres_preflight import run_preflight,SCHEMA_TARGET_CURRENT_ISOLATION,SCHEMA_TARGET_STRUCTURE_LIBRARY
+    suffix=uuid4().hex
+    roles={"api":"ent_preflight_api_"+suffix,"service":"ent_preflight_service_"+suffix}
+    password="synthetic-"+uuid4().hex
+    dsns={kind:make_conninfo(entitlement_db,user=role,password=password) for kind,role in roles.items()}
+    future="9999_unapproved_"+suffix
+    try:
+        with psycopg.connect(entitlement_db) as c:
+            for kind,role in roles.items():
+                c.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD {} IN ROLE {}").format(
+                    sql.Identifier(role),sql.Literal(password),sql.Identifier("nexpoly_"+kind)))
+        settings=Settings(app_postgres_dsn=dsns["api"],pi_postgres_dsn=dsns["api"],
+            model_enabled=False,gen_model_enabled=False,retro_model_enabled=False,gpu_broker_enabled=False)
+        report=run_preflight(settings,dsn=dsns["service"],mode="schema",strict=True,
+            schema_target=SCHEMA_TARGET_CURRENT_ISOLATION)
+        assert report["strict_ok"] and report["current_readiness"],report["strict_errors"]
+        assert report["requested_schema_target"]==SCHEMA_TARGET_CURRENT_ISOLATION
+        assert report["schema_target"]==SCHEMA_TARGET_STRUCTURE_LIBRARY
+        assert report["structure_library_schema_ready"] is True
+        assert report["migrations"]["required"][-1]=="0020_structure_library"
+        assert report["migrations"]["applied"][-1]==ent.MIGRATION_VERSION
+        # An unknown suffix must not be treated as a supported newer boundary.
+        with psycopg.connect(entitlement_db) as c:
+            c.execute("INSERT INTO governance.schema_migrations(version,checksum) VALUES(%s,%s)",(future,"0"*64))
+        rejected=run_preflight(settings,dsn=dsns["service"],mode="schema",strict=True,
+            schema_target=SCHEMA_TARGET_CURRENT_ISOLATION)
+        assert not rejected["strict_ok"] and not rejected["current_readiness"]
+        assert "isolation_contract_error" in rejected
+        assert not rejected.get("structure_library_schema_ready",False)
+    finally:
+        with psycopg.connect(entitlement_db) as c:
+            c.execute("DELETE FROM governance.schema_migrations WHERE version=%s",(future,))
+            for role in roles.values():
+                c.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))

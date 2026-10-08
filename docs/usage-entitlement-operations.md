@@ -7,7 +7,7 @@
 - `validate-policy` 只读取明确指定的 JSON 文件，不连接数据库。
 - `install-policy` 和 `set-tier` 默认预览：连接已有服务或管理员身份，使用只读事务，返回计划和安全元数据。只有显式 `--apply` 才写入。
 - 默认读取已经配置的 `APP_SERVICE_POSTGRES_DSN`。可用 `--dsn-env` 指定另一个现有的环境变量**名称**；不支持在命令行传 DSN，不输出 DSN、密码、环境变量内容、原始异常或完整策略文本。
-- 预览和应用都校验当前发布的精确 0019→0020→0021 迁移台账，以及隔离、usage 和 entitlement 完整结构、RLS、ACL、触发器定义。结构缺失、台账不匹配或身份权限错误时不写入；CLI 不自动执行迁移或修复。
+- 预览和应用都校验当前发布的精确 `0019_service_auth_least_privilege` → `0020_structure_library` → `0021_usage_metering` → `0022_usage_entitlements` 迁移台账，以及隔离、usage 和 entitlement 完整结构、RLS、ACL、触发器定义。结构缺失、台账不匹配或身份权限错误时不写入；CLI 不自动执行迁移或修复。
 - 配置使用明确的服务／管理员函数，因此 `USAGE_ENTITLEMENTS_ENABLED=false` 时也可预装策略和配置等级。它不会改动关闭状态下的业务 hooks，也不会开启计量。
 - `set-tier` 只接受 `free` 或 `member`，目标必须是已有非系统账号。核心函数在 `auth.users` 行锁内再次核对账号，然后更新等级；它与任务真正起跑的授权检查按同一账号锁排序。已起跑任务保留原授权，尚未起跑任务会重新检查。
 

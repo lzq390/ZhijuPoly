@@ -47,8 +47,7 @@ def public_entitlement_error(exc: core.EntitlementError) -> HTTPException:
     return HTTPException(status, detail={"code":exc.code,
         "message": "Task allowance unavailable." if status == 429 else (
             "This task identity or state conflicts with an existing operation." if status == 409
-            else "Task entitlement configuration is unavailable.")},
-        headers={"Retry-After":"5"} if status == 429 else None)
+            else "Task entitlement configuration is unavailable.")})
 
 def operation_header(operation):
     return {"X-Usage-Operation-ID": str(operation["operation_id"])}

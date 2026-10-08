@@ -1,3 +1,4 @@
+import { useStructureImport } from "../structure-library/StructureLibraryProvider";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import { getSession, getSessionEpoch } from "../auth/session";
@@ -52,27 +53,10 @@ export function MonomerRetrosynthesisPage({ structure, onEditStructure, initialI
     setNotice(null);
   }
 
+  const selection = useStructureImport(form.smiles, (smiles) => updateForm({ smiles }), "逆合成目标");
   async function importSharedStructure() {
-    const revision = draftRevision.current;
     setImporting(true);
-    try {
-      const smiles = (await structure.getCurrentSmiles()).trim();
-      if (!current() || revision !== draftRevision.current) return null;
-      const state = structure.workspace.getSnapshot();
-      if (state.draftError || (state.status !== "unmounted" && state.dirty) || state.draft.trim() !== state.smiles.trim()) {
-        setNotice("共享结构尚未完成同步，已保留当前反推目标。请在工作台检查结构后重试。");
-        return null;
-      }
-      if (!smiles) {
-        setNotice("当前共享结构为空，已保留反推草稿。");
-        return null;
-      }
-      updateForm({ smiles });
-      return smiles;
-    } catch {
-      if (current() && revision === draftRevision.current) setNotice("读取共享结构失败，已保留反推草稿。请重试。");
-      return null;
-    } finally { if (current()) setImporting(false); }
+    try { return (await selection.choose())?.smiles ?? null; } finally { if (current()) setImporting(false); }
   }
 
   const count = Number(form.returnCount);
@@ -106,6 +90,7 @@ export function MonomerRetrosynthesisPage({ structure, onEditStructure, initialI
       <div className={`np-sw-layout${drawerOpen ? " has-open-drawer" : ""}`}>
         <main className="np-sw-workspace">
           <div className="np-mr-content">
+            {selection.source && <small>来自：{selection.source}</small>}
             <MonomerRetrosynthesisForm form={form} guest={auth ? auth.status === "guest" : !getSession().authenticated}
               loading={retro.loading} importing={importing} targetRef={targetRef}
               targetError={attempted ? targetError : null} countError={attempted ? countError : null} notice={notice}
