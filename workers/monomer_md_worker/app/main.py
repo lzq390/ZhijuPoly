@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -61,8 +62,19 @@ _DEV_LOCK_RECORD = ".nexpoly-worker-lock-digest.json"
 _DEV_BASE_RECORD = ".nexpoly-base-python-identity.json"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-_MD_JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_MD_JOB_ID_RE = re.compile(r"^(?:[0-9a-f]{32}|deploy-canary-[0-9a-f]{40})$")
 _STORAGE_TOMBSTONE_PREFIX = ".purge-"
+_GPU_DIAGNOSTIC_CODES = frozenset({
+    "gpu_runtime_unhealthy", "mps_control_unavailable", "gpu_broker_unavailable",
+    "gpu_lease_lost", "unknown_lease", "stale_fencing_token",
+    "lease_owner_mismatch", "invalid_lease_state", "invalid_response",
+})
+_GPU_RELEASE_DIAGNOSTIC_REASONS = {
+    "MPS client remains active": "mps_client_active",
+    "workload release evidence is unavailable; lease retained": "release_evidence_unavailable",
+    "isolated workload cgroup is not proven empty": "workload_not_proven_empty",
+    "isolated workload cgroup cleanup failed; lease retained": "workload_cleanup_failed",
+}
 
 
 @dataclass(frozen=True)
@@ -899,6 +911,21 @@ def _job_rejection_message(health_response: HealthResponse, request: JobRequest)
     return None
 
 
+def _log_job_failure(job_id: str, stage: str, stage_started: float, exc: Exception) -> None:
+    # Broker/DB exception text and chained tracebacks can contain credentials.
+    # Keep the original type and allowlisted diagnosis, never their raw payload.
+    code = "not_broker_error"
+    reason = "unclassified"
+    if isinstance(exc, GpuBrokerClientError):
+        code = exc.code if exc.code in _GPU_DIAGNOSTIC_CODES else "unknown"
+        reason = _GPU_RELEASE_DIAGNOSTIC_REASONS.get(str(exc), "unclassified")
+    logger.error(
+        "monomer MD job failed: %s stage=%s error_type=%s broker_code=%s broker_reason=%s elapsed_ms=%.1f",
+        job_id, stage, type(exc).__name__, code, reason,
+        (time.monotonic() - stage_started) * 1000,
+    )
+
+
 async def _run_job(request: JobRequest, steps: int) -> None:
     start_event = job_start_events[request.job_id]
     try:
@@ -920,10 +947,14 @@ async def _run_job(request: JobRequest, steps: int) -> None:
         raise
     async with semaphore:
         execution_lease: ManagedGpuLease | None = None
+        failure_stage = "acquire_execution_lease"
+        stage_started = time.monotonic()
         try:
             # Keep the durable job in submitted state while waiting for host
             # capacity.  No ByteFF2/OpenMM child exists before this succeeds.
             execution_lease = await runner.acquire_execution_lease(request.job_id)
+            failure_stage = "authorize_start"
+            stage_started = time.monotonic()
             authorized = await asyncio.to_thread(repository.authorize_start, request.job_id, worker_instance_id=worker_instance_id)
             if not authorized:
                 cleanup_safe = await _release_execution_lease_safely(execution_lease, request.job_id)
@@ -938,6 +969,8 @@ async def _run_job(request: JobRequest, steps: int) -> None:
                     progress_message="Execution authorization denied",
                 )
                 return
+            failure_stage = "persist_running"
+            stage_started = time.monotonic()
             running_update_result = await _safe_update_status(
                 request.job_id,
                 "running",
@@ -965,11 +998,15 @@ async def _run_job(request: JobRequest, steps: int) -> None:
                 elif running_update_result is JobUpdateResult.CANCEL_REQUESTED:
                     await _persist_terminal_status(request.job_id, "cancelled", progress_stage="cancelled")
                 return
+            failure_stage = "compute"
+            stage_started = time.monotonic()
             result = await runner.run(
                 request,
                 steps,
                 execution_lease=execution_lease,
             )
+            failure_stage = "release_execution_lease"
+            stage_started = time.monotonic()
             await runner.release_execution_lease(execution_lease)
             execution_lease = None
         except asyncio.CancelledError:
@@ -1016,6 +1053,8 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             )
             raise
         except Exception as exc:
+            # Cleanup can wait indefinitely. Preserve the initial failure now.
+            _log_job_failure(request.job_id, failure_stage, stage_started, exc)
             cleanup_safe = await _release_execution_lease_safely(
                 execution_lease,
                 request.job_id,
@@ -1023,7 +1062,6 @@ async def _run_job(request: JobRequest, steps: int) -> None:
             if not cleanup_safe and not await _wait_for_safe_resource_cleanup(request.job_id):
                 return
             user_cancelled = request.job_id in cancel_requested_jobs
-            logger.exception("monomer MD job failed: %s", request.job_id)
             await _persist_terminal_status(
                 request.job_id,
                 "failed",

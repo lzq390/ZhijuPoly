@@ -1042,11 +1042,13 @@ def test_formal_runner_cancellation_terminates_process_group(
             assert process_state.read_text(encoding="utf-8").split()[2] == "Z"
 
 
-def test_delete_job_artifacts_removes_output_directory(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("job_id", ["a" * 32, "deploy-canary-" + "a" * 40])
+def test_delete_job_artifacts_removes_output_directory(tmp_path: Path, monkeypatch, job_id):
     settings = _settings(tmp_path, app_postgres_dsn=None)
     monkeypatch.setattr(worker_main, "settings", settings)
     monkeypatch.setattr(worker_main, "runner", worker_main.MonomerMdRunner(settings))
     monkeypatch.setattr(worker_main, "active_jobs", {})
+    monkeypatch.setattr(worker_main, "cancel_requested_jobs", set())
     fsync_directories: list[Path] = []
     original_fsync_directory = worker_main._fsync_directory
 
@@ -1055,7 +1057,6 @@ def test_delete_job_artifacts_removes_output_directory(tmp_path: Path, monkeypat
         original_fsync_directory(path)
 
     monkeypatch.setattr(worker_main, "_fsync_directory", record_fsync)
-    job_id = "a" * 32
     output_dir = settings.job_root / job_id
     output_dir.mkdir(parents=True)
     (output_dir / "density_demo_results.json").write_text("{}", encoding="utf-8")
@@ -1090,9 +1091,13 @@ def test_delete_job_artifacts_removes_output_directory(tmp_path: Path, monkeypat
     assert fsync_directories == [settings.job_root] * 4
 
 
+@pytest.mark.parametrize("job_id", ["b" * 32, "deploy-canary-" + "b" * 40])
+@pytest.mark.parametrize("state", ["active", "cancel_requested"])
 def test_delete_job_artifacts_refuses_active_exact_job(
     tmp_path: Path,
     monkeypatch,
+    job_id,
+    state,
 ):
     settings = _settings(tmp_path, app_postgres_dsn=None)
     monkeypatch.setattr(worker_main, "settings", settings)
@@ -1102,8 +1107,8 @@ def test_delete_job_artifacts_refuses_active_exact_job(
         worker_main.MonomerMdRunner(settings),
     )
     active_task = object()
-    job_id = "b" * 32
-    monkeypatch.setattr(worker_main, "active_jobs", {job_id: active_task})
+    monkeypatch.setattr(worker_main, "active_jobs", {job_id: active_task} if state == "active" else {})
+    monkeypatch.setattr(worker_main, "cancel_requested_jobs", {job_id} if state == "cancel_requested" else set())
     output_dir = settings.job_root / job_id
     output_dir.mkdir(parents=True)
     (output_dir / "active.txt").write_text("active", encoding="utf-8")
@@ -1114,14 +1119,15 @@ def test_delete_job_artifacts_refuses_active_exact_job(
     assert (output_dir / "active.txt").read_text(encoding="utf-8") == "active"
 
 
+@pytest.mark.parametrize("job_id", ["c" * 32, "deploy-canary-" + "c" * 40])
 def test_storage_tombstone_recovery_is_strict_and_idempotent(
     tmp_path: Path,
     monkeypatch,
+    job_id,
 ):
     settings = _settings(tmp_path, app_postgres_dsn=None)
     monkeypatch.setattr(worker_main, "settings", settings)
     settings.job_root.mkdir(parents=True, exist_ok=True)
-    job_id = "c" * 32
     tombstone = settings.job_root / f".purge-{job_id}"
     tombstone.mkdir()
     (tombstone / "partial.txt").write_text("partial", encoding="utf-8")
@@ -1134,6 +1140,83 @@ def test_storage_tombstone_recovery_is_strict_and_idempotent(
     unsafe.mkdir()
     with pytest.raises(RuntimeError, match="unsafe monomer MD purge tombstone name"):
         worker_main._recover_storage_tombstones()
+
+
+@pytest.mark.parametrize("job_id", [
+    "a" * 40,
+    "deploy-canary-" + "a" * 32,
+    "deploy-canary-" + "a" * 39,
+    "deploy-canary-" + "a" * 41,
+    "deploy-canary-" + "A" * 40,
+    "deploy-canary-" + "g" * 40,
+    "DEPLOY-canary-" + "a" * 40,
+    "deploy-canary-other-" + "a" * 40,
+    "deploy-canary-" + "a" * 40 + "\n",
+    "deploy-canary-" + "a" * 40 + " ",
+    "../" + "a" * 32,
+    "/" + "a" * 32,
+    "deploy-canary-" + "a" * 40 + "/../other",
+    "deploy-canary-" + "a" * 40 + "\\other",
+    ".purge-deploy-canary-" + "a" * 40,
+])
+def test_delete_job_artifacts_rejects_noncanonical_ids_before_path_access(monkeypatch, job_id):
+    def forbidden_path_access(_job_id):
+        pytest.fail("invalid job ID reached artifact path resolution")
+
+    monkeypatch.setattr(worker_main, "runner", SimpleNamespace(output_dir_for_job=forbidden_path_access))
+    with pytest.raises(worker_main.HTTPException) as caught:
+        asyncio.run(worker_main.delete_job_artifacts(job_id))
+    assert caught.value.status_code == 404
+
+
+@pytest.mark.parametrize("job_id", ["d" * 32, "deploy-canary-" + "d" * 40])
+@pytest.mark.parametrize("unsafe_state", ["tombstone_symlink", "coexisting_directories"])
+def test_delete_job_artifacts_preserves_unsafe_tombstone_state(tmp_path, monkeypatch, job_id, unsafe_state):
+    settings = _settings(tmp_path, app_postgres_dsn=None)
+    monkeypatch.setattr(worker_main, "settings", settings)
+    monkeypatch.setattr(worker_main, "runner", worker_main.MonomerMdRunner(settings))
+    monkeypatch.setattr(worker_main, "active_jobs", {})
+    monkeypatch.setattr(worker_main, "cancel_requested_jobs", set())
+    output_dir = settings.job_root / job_id
+    output_dir.mkdir(parents=True)
+    (output_dir / "must-remain.txt").write_text("canonical", encoding="utf-8")
+    tombstone = settings.job_root / f".purge-{job_id}"
+    if unsafe_state == "tombstone_symlink":
+        preserved = tmp_path / "outside-artifacts"
+        preserved.mkdir()
+        tombstone.symlink_to(preserved, target_is_directory=True)
+    else:
+        preserved = tombstone
+        preserved.mkdir()
+    (preserved / "must-remain.txt").write_text("preserved", encoding="utf-8")
+
+    response = TestClient(worker_main.app, raise_server_exceptions=False).delete(f"/jobs/{job_id}/artifacts")
+
+    assert response.status_code == 503
+    assert (output_dir / "must-remain.txt").read_text(encoding="utf-8") == "canonical"
+    assert (preserved / "must-remain.txt").read_text(encoding="utf-8") == "preserved"
+    if unsafe_state == "tombstone_symlink":
+        assert tombstone.is_symlink()
+
+
+@pytest.mark.parametrize("name", [
+    ".purge-deploy-canary-" + "a" * 39,
+    ".purge-deploy-canary-" + "a" * 41,
+    ".purge-deploy-canary-" + "A" * 40,
+    ".purge-deploy-canary-" + "a" * 40 + "-extra",
+])
+def test_storage_tombstone_recovery_rejects_noncanonical_canary_names(tmp_path, monkeypatch, name):
+    settings = _settings(tmp_path, app_postgres_dsn=None)
+    monkeypatch.setattr(worker_main, "settings", settings)
+    tombstone = settings.job_root / name
+    tombstone.mkdir(parents=True)
+    sentinel = tombstone / "must-remain.txt"
+    sentinel.write_text("preserved", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="unsafe monomer MD purge tombstone name"):
+        worker_main._recover_storage_tombstones()
+
+    assert sentinel.read_text(encoding="utf-8") == "preserved"
 
 
 def test_repository_update_query_guards_terminal_statuses():
@@ -1380,6 +1463,113 @@ def test_restart_cannot_reconcile_jobs_without_resource_cleanup_proof(monkeypatc
     monkeypatch.setattr(worker_main, 'recovery_ready', True)
     assert asyncio.run(worker_main._attempt_recovery()) is False
     assert worker_main.recovery_ready is False
+
+
+@pytest.mark.parametrize("code,message,expected_code,expected_reason", [
+    ("gpu_runtime_unhealthy", "MPS client remains active", "gpu_runtime_unhealthy", "mps_client_active"),
+    ("gpu_runtime_unhealthy", "workload release evidence is unavailable; lease retained", "gpu_runtime_unhealthy", "release_evidence_unavailable"),
+    ("gpu_runtime_unhealthy", "isolated workload cgroup is not proven empty", "gpu_runtime_unhealthy", "workload_not_proven_empty"),
+    ("gpu_runtime_unhealthy", "isolated workload cgroup cleanup failed; lease retained", "gpu_runtime_unhealthy", "workload_cleanup_failed"),
+    ("gpu_runtime_unhealthy", "postgresql://synthetic:secret@db/app token=synthetic-token", "gpu_runtime_unhealthy", "unclassified"),
+    ("synthetic-secret-code", "postgresql://synthetic:secret@db/app token=synthetic-token", "unknown", "unclassified"),
+])
+def test_successful_compute_logs_release_failure_before_cleanup_wait(
+    tmp_path, monkeypatch, caplog, code, message, expected_code, expected_reason,
+):
+    """Observe the failure while cleanup is blocked, not only after recovery."""
+    observed = []
+    cleanup_confirmed = False
+    compute_completed = False
+    release_calls = 0
+    lease = SimpleNamespace(termination_unsafe=False, abandon=lambda: None)
+
+    class Repository:
+        def authorize_start(self, *_args, **_kwargs):
+            return True
+
+        def update_status(self, _job_id, state, **kwargs):
+            observed.append((state, kwargs))
+            return JobUpdateResult.UPDATED
+
+    class Runner:
+        gpu_admission_uncertain = False
+
+        async def acquire_execution_lease(self, _job_id):
+            return lease
+
+        async def run(self, *_args, **_kwargs):
+            nonlocal compute_completed
+            compute_completed = True
+            return SimpleNamespace(output_dir=tmp_path, result={}, completed_steps=300)
+
+        async def release_execution_lease(self, actual_lease):
+            nonlocal release_calls
+            assert actual_lease is lease
+            release_calls += 1
+            lease.termination_unsafe = True
+            raise worker_main.GpuBrokerClientError(code, message)
+
+        def recovery_resources_released(self):
+            return cleanup_confirmed
+
+    monkeypatch.setattr(worker_main, "repository", Repository())
+    monkeypatch.setattr(worker_main, "runner", Runner())
+    monkeypatch.setattr(worker_main, "settings", SimpleNamespace(db_configured=True, recovery_retry_seconds=0.001))
+    monkeypatch.setattr(worker_main, "shutting_down", False)
+    monkeypatch.setattr(worker_main, "cancel_requested_jobs", set())
+    monkeypatch.setattr(worker_main, "active_jobs", {})
+    monkeypatch.setattr(worker_main, "active_formal_jobs", set())
+    monkeypatch.setattr(worker_main, "formal_job_queue", deque())
+    monkeypatch.setattr(worker_main, "execution_job_id", "release-failure-job")
+
+    async def scenario():
+        nonlocal cleanup_confirmed
+        start = asyncio.Event()
+        start.set()
+        monkeypatch.setattr(worker_main, "job_start_events", {"release-failure-job": start})
+        monkeypatch.setattr(worker_main, "active_jobs_lock", asyncio.Lock())
+        monkeypatch.setattr(worker_main, "semaphore", asyncio.Semaphore(1))
+        task = asyncio.create_task(worker_main._run_job(
+            JobRequest(job_id="release-failure-job", smiles="CCO"), 300,
+        ))
+        worker_main.active_jobs["release-failure-job"] = task
+        task.add_done_callback(lambda _: asyncio.create_task(
+            worker_main._remove_active_job("release-failure-job"),
+        ))
+        try:
+            for _ in range(1000):
+                if any(data.get("progress_stage") == "cleanup_pending" for _, data in observed):
+                    break
+                await asyncio.sleep(0.001)
+            assert compute_completed
+            assert release_calls == 1
+            assert any(data.get("progress_stage") == "cleanup_pending" for _, data in observed)
+            records = [record for record in caplog.records if "monomer MD job failed:" in record.getMessage()]
+            assert len(records) == 1
+            assert "stage=release_execution_lease" in records[0].getMessage()
+            assert "error_type=GpuBrokerClientError" in records[0].getMessage()
+            assert f"broker_code={expected_code}" in records[0].getMessage()
+            assert f"broker_reason={expected_reason}" in records[0].getMessage()
+            assert records[0].exc_info is None
+            assert not task.done()
+            assert worker_main.active_jobs["release-failure-job"] is task
+            assert worker_main.execution_job_id == "release-failure-job"
+            assert worker_main.semaphore.locked()
+            assert not any(state in {"failed", "cancelled", "completed"} for state, _ in observed)
+        finally:
+            cleanup_confirmed = True
+            await asyncio.wait_for(task, timeout=2)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+        assert "release-failure-job" not in worker_main.active_jobs
+        assert not worker_main.semaphore.locked()
+        assert observed[-1][0] == "failed"
+        assert not any(state == "completed" for state, _ in observed)
+        assert "postgresql://" not in caplog.text
+        assert "synthetic-token" not in caplog.text
+        assert "synthetic-secret-code" not in caplog.text
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize('snapshot', [
