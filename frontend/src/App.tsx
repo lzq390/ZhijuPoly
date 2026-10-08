@@ -112,6 +112,7 @@ export default function App() {
 function AppContent() {
   const auth = useAuth();
   const isGuest = auth?.status === "guest";
+  const canUseSharedWorkspace = !auth || (auth.status === "authenticated" && auth.session.capabilities["openscience.use"] === true);
   const [knowledgeLocalMode, setKnowledgeLocalMode] = useState(true);
   const [activeModule, setActiveModule] = useState<ActiveModule>(() => getInitialRoute().module);
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<DatasetKey | null>(() => getInitialRoute().datasetKey);
@@ -262,14 +263,14 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (isGuest) return;
+    if (!canUseSharedWorkspace) return;
     const handleMessage = (event: MessageEvent) => {
       projectBridge.handleMessage(event);
       generalSessionBridge.handleMessage(event);
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [generalSessionBridge, projectBridge, isGuest]);
+  }, [generalSessionBridge, projectBridge, canUseSharedWorkspace]);
 
   function applyRoute(route: AppRoute) {
     setActiveModule(route.module);
@@ -777,7 +778,7 @@ function AppContent() {
       activeProjectDirectory={
         activeModule === "home" ? projectSnapshot?.activeDirectory ?? null : null
       }
-      isProjectBridgeReady={isGuest || projectSnapshot !== null}
+      isProjectBridgeReady={!canUseSharedWorkspace || projectSnapshot !== null}
       onOpenProject={openAgentProject}
       onBrowseProjects={browseAgentProjects}
       onNewProject={createAgentProject}
@@ -788,7 +789,7 @@ function AppContent() {
       }
       generalSessions={generalSessionSnapshot?.sessions ?? []}
       activeGeneralSessionID={generalSessionSnapshot?.activeSessionID ?? null}
-      isGeneralSessionBridgeReady={isGuest || generalSessionSnapshot !== null}
+      isGeneralSessionBridgeReady={!canUseSharedWorkspace || generalSessionSnapshot !== null}
       onOpenGeneralWorkspace={openGeneralWorkspace}
       onNewGeneralSession={createGeneralSession}
       onOpenGeneralSession={openGeneralSession}
@@ -797,9 +798,10 @@ function AppContent() {
       moduleTransition={moduleTransition}
     >
       {isGuest && <div className="np-guest-service-notice" role="note"><span>游客可浏览各模块和使用本地画板；执行服务任务前，请登录账号。</span><button type="button" onClick={() => requestServiceAccess()}>登录账号</button></div>}
+      {auth?.session.account_type === "free" && <div className="np-guest-service-notice" role="note"><span>当前为免费账号：可使用本地画板和公开示例；会员服务与共享工作空间尚未开放。</span></div>}
       <StructureWorkspaceNotice workspace={structureWorkspace.workspace} />
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
-        <AgentWorkspaceHomePage
+        {canUseSharedWorkspace || isGuest ? <AgentWorkspaceHomePage
           iframeRef={agentWorkspaceIframeRef}
           src={agentWorkspaceFrameUrl}
           reloadKey={agentWorkspaceReloadKey}
@@ -811,7 +813,7 @@ function AppContent() {
               generalSessionBridge.requestSessions();
             }
           }}
-        />
+        /> : <div className="np-auth-center"><h2>共享工作空间需要会员权限</h2><p>本地画板和公开示例仍可使用。次数余额不会自动开通此功能。</p></div>}
       </div>
 
       {activeModule === "personalUsage" ? <PersonalUsagePage /> : null}

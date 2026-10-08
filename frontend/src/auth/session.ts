@@ -1,3 +1,4 @@
+import { apiPath, attachUsageResponse, confirmUsageResponse, installUsageIdentity, isUsageSubmission, observeUsageEnabled, prepareUsageSubmission, usageFailure, UsageOperationError } from "./usageAdmission";
 /** Browser identity fence shared by JSON, downloads, SSE and local async writes. */
 export type AuthSession = {
   authenticated: boolean;
@@ -5,6 +6,7 @@ export type AuthSession = {
   session_id: string | null;
   csrf_token: string | null;
   capabilities: Record<string, boolean>;
+  account_type?: "free" | "member";
 };
 export const GUEST_SESSION: AuthSession = {
   authenticated: false, user: null, session_id: null, csrf_token: null, capabilities: {}
@@ -32,6 +34,7 @@ export function onSessionInvalidated(listener: () => void) {
 }
 export function retireSession() {
   ready = false;
+  installUsageIdentity("");
   ++epoch;
   for (const request of requests) request.abort();
   requests.clear();
@@ -39,16 +42,21 @@ export function retireSession() {
 }
 export function installSession(next: AuthSession) {
   session = next;
+  installUsageIdentity(next.authenticated && next.user && next.session_id ? `${next.user.id}:${next.session_id}` : "");
   ready = true;
 }
 
 /** Auth endpoints use the raw transport so a guest can establish a session. */
-export async function privateFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+export type PrivateRequestInit = RequestInit & { usageIntent?: string };
+export async function privateFetch(input: RequestInfo | URL, init: PrivateRequestInit = {}): Promise<Response> {
   if (!ready) throw staleSessionError();
   if (!session.authenticated || !session.session_id) throw new Error("请登录账号。");
   const expected = epoch;
   const controller = new AbortController();
   const sourceRequest = typeof Request !== "undefined" && input instanceof Request ? input : null;
+  const url = sourceRequest?.url ?? String(input);
+  const path = apiPath(url);
+  if (session.account_type === "free" && path && !path.startsWith("/usage/") && !path.startsWith("/auth/") && !/^\/monomer-polymerization\/batch\/templates\/[ab]\.(csv|xlsx)$/.test(path)) throw new UsageOperationError(403, "membership_required");
   const sourceSignal = init.signal ?? sourceRequest?.signal;
   const abort = () => controller.abort();
   sourceSignal?.addEventListener("abort", abort, { once: true });
@@ -68,13 +76,21 @@ export async function privateFetch(input: RequestInfo | URL, init: RequestInit =
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", session.csrf_token ?? "");
   try {
     check();
-    const response = await fetch(input, { ...init, headers, credentials: "same-origin", cache: "no-store", signal: controller.signal });
+    let body = init.body;
+    if (body === undefined && sourceRequest && isUsageSubmission(url, method)) body = sourceRequest.headers.get("content-type")?.includes("multipart/form-data") ? await sourceRequest.clone().formData() : await sourceRequest.clone().text();
+    const ticket = isUsageSubmission(url, method) ? await prepareUsageSubmission({ url, method, body, intent: init.usageIntent, headers, check, fetcher: target => privateFetch(target, { signal: controller.signal }) }) : undefined;
     check();
+    const { usageIntent: _usageIntent, ...transportInit } = init;
+    const response = await fetch(input, { ...transportInit, headers, credentials: "same-origin", cache: "no-store", signal: controller.signal });
+    check();
+    attachUsageResponse(response, ticket);
     let invalidIdentity = response.status === 401;
+    let operationFailure: Error | undefined;
     if (response.status === 409 || response.status === 403) {
       const failure = await response.clone().json().catch(() => null);
       check();
       invalidIdentity = ["session_context_mismatch", "password_change_required"].includes(failure?.code);
+      operationFailure = usageFailure(response, failure, ticket);
     }
     if (invalidIdentity) {
       // Check the originating epoch before dispatch: a late A/401 must not log B out.
@@ -82,8 +98,9 @@ export async function privateFetch(input: RequestInfo | URL, init: RequestInit =
       for (const listener of invalidationListeners) listener();
       throw staleSessionError();
     }
+    if (operationFailure) throw operationFailure;
     if ([204, 205, 304].includes(response.status) || method === "HEAD") cleanup();
-    return new Proxy(response, {
+    const wrapped = new Proxy(response, {
       get(target, key) {
         if (["json", "text", "blob", "arrayBuffer", "formData"].includes(String(key))) {
           return async () => {
@@ -91,6 +108,11 @@ export async function privateFetch(input: RequestInfo | URL, init: RequestInit =
               check();
               const result = await (target[key as keyof Response] as () => Promise<unknown>).call(target);
               check();
+              if (key === "json" && response.ok) {
+                if (path === "/usage/entitlements") observeUsageEnabled(result);
+                const acceptedJob = result && typeof result === "object" && "job_id" in result && typeof result.job_id === "string" && result.job_id.length > 0;
+                if (!response.headers.get("content-type")?.includes("text/event-stream") && (!path?.endsWith("/jobs") || acceptedJob || method !== "POST")) confirmUsageResponse(response);
+              }
               return result;
             } finally { cleanup(); }
           };
@@ -125,5 +147,7 @@ export async function privateFetch(input: RequestInfo | URL, init: RequestInit =
         return typeof value === "function" ? value.bind(target) : value;
       }
     });
+    attachUsageResponse(wrapped, ticket);
+    return wrapped;
   } catch (error) { cleanup(); assertSessionEpoch(expected); throw error; }
 }

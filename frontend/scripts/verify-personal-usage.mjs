@@ -14,8 +14,9 @@ let serverError = ""; server.stderr.on("data", data => { serverError = (serverEr
 const report = { screenshots: "disabled; text evidence only", fixture_internal_modules: 21, fixture_external_modules: 1, fixture_metrics: 9, scope: "isolated real UI with synthetic API fixtures; not server ownership acceptance", results: [], progress: [], blocked: [], unexpected: [], failures: [] };
 let browser;
 const catalog = JSON.parse(await readFile(new URL("./fixtures/usage-catalog.json", import.meta.url), "utf8"));
-function session(owner) { return { authenticated: !!owner, user: owner ? { id: `fixture-owner-${owner}`, username: `测试账号${owner}`, must_change_password: false } : null,
-  session_id: owner ? `fixture-session-${owner}` : null, csrf_token: owner ? "fixture-only-csrf" : null, capabilities: {} }; }
+const allowances = JSON.parse(await readFile(new URL("./fixtures/entitlements.json", import.meta.url), "utf8"));
+function session(owner, plan="member") { return { authenticated: !!owner, account_type:plan, user: owner ? { id: `fixture-owner-${owner}`, username: `测试账号${owner}`, must_change_password: false } : null,
+  session_id: owner ? `fixture-session-${owner}` : null, csrf_token: owner ? "fixture-only-csrf" : null, capabilities: {"openscience.use":plan==="member"} }; }
 function summary(owner, empty = false, period = {}) {
   const tasks = empty ? 0 : owner === "b" ? 7 : 26;
   const metrics = Object.fromEntries(catalog.metrics.map(metric => [metric.id, { value: null, known_count: 0, unknown_count: tasks }]));
@@ -37,7 +38,7 @@ try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.PAGE_CHROMIUM_PATH || undefined, args: ["--no-sandbox"] });
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     const context = await browser.newContext({ viewport, reducedMotion: "reduce" });
-    const state = { owner: "a", mode: "normal", requests: [], hold: false, release: null };
+    const state = { owner: "a", plan:"member", allowanceDisabled:false, mode: "normal", requests: [], hold: false, release: null };
     await context.route("**/*", async route => {
       const request = route.request(), url = new URL(request.url());
       if (url.origin !== base) {
@@ -51,14 +52,24 @@ try {
         return route.continue();
       }
       const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body), headers: { "Cache-Control": "no-store" } });
-      if (url.pathname === "/api/v1/auth/session" && request.method() === "GET") return json(session(state.owner));
-      if (request.method() !== "GET" || !["/api/v1/usage/catalog", "/api/v1/usage/summary", "/api/v1/usage/records"].includes(url.pathname)) {
+      if (url.pathname === "/api/v1/auth/session" && request.method() === "GET") return json(session(state.owner,state.plan));
+      const receipt = /^\/api\/v1\/usage\/operations\/([0-9a-f-]+)(\/result)?$/.exec(url.pathname);
+      if (request.method() !== "GET" || !receipt && !["/api/v1/usage/catalog", "/api/v1/usage/summary", "/api/v1/usage/records", "/api/v1/usage/entitlements", "/api/v1/usage/operations"].includes(url.pathname)) {
         report.unexpected.push(request.method() + " " + url.pathname); return json({ detail: "Blocked unexpected fixture API" }, 503);
       }
       assert.ok(state.owner, "guest must not query private usage");
       assert.equal(request.headers()["x-session-context"], `fixture-session-${state.owner}`);
       assert.equal(url.searchParams.has("owner_user_id"), false);
       state.requests.push({ path: url.pathname, query: Object.fromEntries(url.searchParams) });
+      if (url.pathname.endsWith("/entitlements")) return json(state.allowanceDisabled ? {enabled:false,mode:"not_enabled",pools:[],policy:null} : {...allowances.entitlements,tier:state.plan});
+      if (url.pathname.endsWith("/operations")) return json(state.owner === "a" ? allowances.operations : {...allowances.operations,items:[]});
+      if (receipt) {
+        const item = state.owner === "a" && allowances.operations.items.find(item=>item.operation_id===receipt[1]);
+        if (!item) return json({detail:{code:"usage_operation_not_found"}},404);
+        if (!receipt[2]) return json(item);
+        if (item.state==="unknown") return json({detail:{code:"usage_outcome_unknown",operation_id:item.operation_id}},409);
+        return json(allowances.result);
+      }
       if (url.pathname.endsWith("/catalog")) return json(catalog);
       if (url.pathname.endsWith("/summary")) {
         if (state.mode === "disabled") return json({ code: "usage_metering_disabled", detail: "disabled" }, 503);
@@ -96,6 +107,24 @@ try {
     assert.equal(await page.getByText(/根任务行仅显示自身记录的指标，不聚合子调用/).count(), 1);
     assert.equal(await metricCards.getByText(/不可与供应商总 Tokens 叠加/).count(), 1);
     checkpoint("full_catalog_metrics_and_module_summary");
+    const pools = page.getByRole("region",{name:"分类成功次数",exact:true});
+    await pools.getByText("当前为示例策略，不代表正式套餐承诺。",{exact:true}).waitFor();
+    assert.equal(await pools.getByRole("article").count(),8);
+    for (const label of Object.values(allowances.entitlements.policy.pool_labels)) assert.equal(await pools.getByRole("article",{name:label,exact:true}).count(),1);
+    assert.equal(await pools.getByText(/另有 1 次旧周期预留/).count(),1);
+    await page.getByRole("button",{name:"读取已有结果",exact:true}).first().click();
+    await page.getByText("已有结果已读取，未重新执行任务。",{exact:true}).waitFor();
+    await page.getByRole("button",{name:"读取已有结果",exact:true}).nth(1).click();
+    await page.getByRole("alert").filter({hasText:"操作结果待确认"}).waitFor();
+    const unknownReads = state.requests.filter(item=>item.path.endsWith(allowances.operations.items[1].operation_id+"/result")).length;
+    await page.waitForTimeout(100);
+    assert.equal(state.requests.filter(item=>item.path.endsWith(allowances.operations.items[1].operation_id+"/result")).length,unknownReads,"no automatic result or compute retry");
+    state.allowanceDisabled=true;await page.getByRole("button",{name:"刷新次数与回执",exact:true}).click();
+    await pools.getByText(/分类次数尚未启用/).waitFor();
+    assert.equal(await page.getByRole("button",{name:"读取已有结果",exact:true}).count(),2,"durable history remains readable with admission off");
+    state.allowanceDisabled=false;await page.getByRole("button",{name:"刷新次数与回执",exact:true}).click();
+    await pools.getByRole("article").first().waitFor();
+    checkpoint("eight_pools_durable_result_and_unknown_no_retry");
     if (viewport.width < 1024) await page.getByRole("button", { name: "打开导航", exact: true }).click();
     await page.getByRole("button", { name: "账号菜单：测试账号a", exact: true }).last().click();
     await page.getByRole("menuitem", { name: "我的用量", exact: true }).click();
@@ -131,11 +160,15 @@ try {
     state.release(); await page.waitForTimeout(100);
     assert.equal(await page.getByRole("region", { name: "用量概览", exact: true }).getByText("26", { exact: true }).count(), 0);
     checkpoint("account_late_response");
+    state.plan="free";await page.goto(base+"/account/usage");
+    await page.getByRole("region",{name:"分类成功次数",exact:true}).getByText(/免费账号：会员服务尚未开放/).waitFor();
+    assert.equal(await page.locator('iframe[src*="workspace.ci.invalid"]').count(),0,"free account must not mount shared workspace");
+    checkpoint("free_permissions_shared_bridge_blocked");
     const beforeGuest = state.requests.length; state.owner = null;
     await page.goto(base + "/account/usage"); await page.getByRole("heading", { name: "登录后查看我的用量", exact: true }).waitFor();
     assert.equal(state.requests.length, beforeGuest, "guest performs no usage fetch");
     assert.deepEqual(errors, [], "no uncaught browser errors");
-    report.results.push({ viewport, status: "PASS", checks: ["full21_catalog_plus_external", "all9_metrics", "module_partial_execution_root_wall", "attempt_and_token_semantics", "account_navigation", "default30utc", "unknown_metrics", "pagination", "inclusive_utc_dates", "module_filter", "status_child_filters", "narrow_layout", "disabled503", "empty", "late_account_response", "guest_no_fetch"], geometry });
+    report.results.push({ viewport, status: "PASS", checks: ["eight_pools", "example_policy", "old_period_hold", "GET_saved_result", "unknown_no_auto_retry", "off_keeps_durable_history", "free_permissions", "free_no_shared_iframe", "full21_catalog_plus_external", "all9_metrics", "module_partial_execution_root_wall", "attempt_and_token_semantics", "account_navigation", "default30utc", "unknown_metrics", "pagination", "inclusive_utc_dates", "module_filter", "status_child_filters", "narrow_layout", "disabled503", "empty", "late_account_response", "guest_no_fetch"], geometry });
     await context.close();
   }
   assert.deepEqual(report.unexpected, [], "all undeclared network is a failure");

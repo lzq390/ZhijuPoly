@@ -1,4 +1,5 @@
 import { privateFetch } from "../auth/session";
+import { confirmUsageResponse } from "../auth/usageAdmission";
 import { API_BASE_URL, ApiRequestError } from "./api";
 import type { TgAssistantStreamRequest } from "../types";
 import { parseSseBlock as parseTgAssistantSseBlock } from "./sse";
@@ -26,7 +27,8 @@ export async function streamTgAssistant(
   payload: TgAssistantStreamRequest,
   onEvent: (event: TgAssistantSseEvent) => void,
   signal: AbortSignal,
-  images?: TgAssistantImageAttachments
+  images?: TgAssistantImageAttachments,
+  usageIntent?: string
 ) {
   const hasImages = Boolean(images?.canvasImage || images?.userImage);
   const form = hasImages ? new FormData() : null;
@@ -39,6 +41,7 @@ export async function streamTgAssistant(
     `${API_BASE_URL}/assistant/tg/chat/${hasImages ? "image-stream" : "stream"}`,
     {
       method: "POST",
+      usageIntent,
       ...(form
         ? { body: form }
         : {
@@ -71,6 +74,7 @@ export async function streamTgAssistant(
         const event = parseTgAssistantSseBlock(block);
         if (event) {
           onEvent(event);
+          if (event.event === "done") confirmUsageResponse(response);
           if (event.event === "done" || event.event === "error") {
             terminal = true;
             break;
@@ -87,6 +91,7 @@ export async function streamTgAssistant(
     const finalEvent = parseTgAssistantSseBlock(buffer.trim());
     if (finalEvent) {
       onEvent(finalEvent);
+      if (finalEvent.event === "done") confirmUsageResponse(response);
       if (finalEvent.event === "done" || finalEvent.event === "error") terminal = true;
     }
     if (!terminal && !signal.aborted) {

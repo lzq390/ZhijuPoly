@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GUEST_SESSION, getSession, installSession, onSessionInvalidated, privateFetch, retireSession, type AuthSession } from "./session";
+import { observeUsageEnabled } from "./usageAdmission";
 function account(id: string): AuthSession {
   return { authenticated: true, user: { id, username: id, must_change_password: false }, session_id: `session-${id}`, csrf_token: `csrf-${id}`, capabilities: {} };
 }
-function switchTo(id: string) { retireSession(); installSession(account(id)); }
+function switchTo(id: string) { retireSession(); installSession(account(id)); observeUsageEnabled({enabled:false}); }
 afterEach(() => vi.unstubAllGlobals());
 describe("browser account fence", () => {
   it("rejects guest requests before the transport is invoked", async () => {

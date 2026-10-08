@@ -5,6 +5,7 @@ import { requestServiceAccess } from "../auth/guestAccess";
 import { fetchUsageCatalog, fetchUsageRecords, fetchUsageSummary, UsageRequestError } from "../services/usage";
 import { USAGE_STATUSES, type UsageCatalog, type UsageMetric, type UsagePeriod, type UsageRecord, type UsageRecords, type UsageStatus, type UsageSummary } from "../types/usage";
 import { ModulePageHeader } from "./ModulePageHeader";
+import { PersonalEntitlementsPanel } from "./usage/PersonalEntitlementsPanel";
 import { formatMetric, metricLabel, recentUtcDates, statusLabels, utcPeriod, utcTimestamp } from "./usage/format";
 import "./PersonalUsagePage.css";
 
@@ -92,7 +93,9 @@ function SignedInUsage() {
   return <section className="np-module-page np-usage-page">
     <ModulePageHeader actions={<button type="button" className="np-usage-refresh" onClick={retry} aria-label="刷新用量"><RefreshCw aria-hidden="true" /><span>刷新</span></button>}>我的用量</ModulePageHeader>
     <div className="np-module-page-body np-usage-body">
-      <p className="np-usage-intro">当前账号的活动统计。按任务提交时间归属，统一使用 UTC。仅作统计，不扣费、不限制额度。</p>
+      <PersonalEntitlementsPanel />
+      <h2>资源观测（诊断）</h2>
+      <p className="np-usage-intro">以下资源观测按任务提交时间归属，统一使用 UTC。用于诊断，不用于推算成功次数；分类次数以服务端交付判据和预留周期为准。</p>
       {unavailable ? <div className="np-usage-panel np-usage-empty" role="status"><BarChart3 aria-hidden="true" /><h2>用量统计尚未启用</h2><p>启用后可在此查看已记录的个人用量。</p><button type="button" onClick={retry}>重新检查</button></div>
         : catalog.state === "error" ? <ErrorPanel message={catalog.message} retry={retry} />
         : catalog.state === "loading" ? <p role="status" className="np-usage-panel">正在加载用量统计…</p>

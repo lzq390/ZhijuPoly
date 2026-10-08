@@ -5,6 +5,7 @@ import { GUEST_SESSION } from "../auth/session";
 import type { UsageCatalog, UsageRecords, UsageSummary } from "../types/usage";
 import { UsageRequestError } from "../services/usage";
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), catalog: vi.fn(), summary: vi.fn(), records: vi.fn() }));
+vi.mock("./usage/PersonalEntitlementsPanel", () => ({ PersonalEntitlementsPanel: () => null }));
 vi.mock("../auth/AuthProvider", () => ({ useAuth: mocks.auth }));
 vi.mock("../services/usage", async () => ({ ...await vi.importActual<typeof import("../services/usage")>("../services/usage"), fetchUsageCatalog: mocks.catalog, fetchUsageSummary: mocks.summary, fetchUsageRecords: mocks.records }));
 import { PersonalUsagePage } from "./PersonalUsagePage";

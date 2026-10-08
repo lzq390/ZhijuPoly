@@ -829,7 +829,8 @@ export function useTgAssistant() {
         {
           ...(canvasImage ? { canvasImage } : {}),
           ...(image ? { userImage: image } : {})
-        }
+        },
+        userItem.id
       );
     } catch (error) {
       if (controller.signal.aborted) {

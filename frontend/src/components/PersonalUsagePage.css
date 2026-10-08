@@ -60,6 +60,20 @@
 .np-usage-empty h2 { margin: 0; color: var(--np-theme-ink); }
 .np-usage-error { color: var(--np-theme-danger-text); }
 .np-usage-error button { margin-top: 12px; }
+.np-usage-pool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0; }
+.np-usage-pool { min-width: 0; padding: 14px; border: 1px solid var(--np-theme-border-soft); border-radius: 10px; }
+.np-usage-pool h3 { margin: 0 0 8px; font-size: 14px; }
+.np-usage-pool > strong { font-size: 21px; color: var(--np-theme-blue); }
+.np-usage-pool dl, .np-usage-spec dl { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; font-size: 12px; }
+.np-usage-pool dt, .np-usage-spec dt { color: var(--np-theme-muted); }
+.np-usage-pool dd, .np-usage-spec dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+.np-usage-spec { padding: 10px 0; }
+.np-usage-rule-list { padding-left: 20px; font-size: 13px; line-height: 1.8; }
+.np-usage-diagnostics { display: flex; flex-wrap: wrap; gap: 16px; margin: 14px 0 8px; font-size: 13px; }
+.np-usage-operation-id { display: block; max-width: 250px; overflow-wrap: anywhere; }
+.np-usage-operation-detail { margin-top: 16px; padding: 12px; border: 1px solid var(--np-theme-border-soft); border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.np-usage-operation-detail details { max-width: 100%; }
+.np-usage-operation-detail pre { max-height: 400px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 @media (max-width: 599px) {
   .np-usage-panel { padding: 14px; }
   .np-usage-kpis { gap: 8px; }
