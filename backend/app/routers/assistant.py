@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextvars import copy_context
 from contextlib import closing
 from app.services.private_execution import bounded_stream, PrivateStreamingResponse
+from app.usage_context import mark_current_usage_outcome, retain_usage_execution, _status_for_exception
 
 import json
 import logging
@@ -277,8 +278,11 @@ def _stream_tg_chat_response(
                 if not cancelled.is_set():
                     event_queue.put(exc)
             finally:
-                if not cancelled.is_set():
-                    event_queue.put(None)
+                try:
+                    if not cancelled.is_set():
+                        event_queue.put(None)
+                finally:
+                    worker_usage_retention.release()
 
         yield _sse(
             "meta",
@@ -294,8 +298,13 @@ def _stream_tg_chat_response(
             },
         )
         context = copy_context()
+        worker_usage_retention = retain_usage_execution()
         thread = threading.Thread(target=lambda: context.run(worker), name=f"tg-assistant-{request_id[:8]}", daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except BaseException:
+            worker_usage_retention.release()
+            raise
         try:
             while True:
                 try:
@@ -306,6 +315,7 @@ def _stream_tg_chat_response(
                 if item is None:
                     if not terminal_sent:
                         terminal = "incomplete_stream"
+                        mark_current_usage_outcome("interrupted")
                         terminal_sent = True
                         yield _sse(
                             "error",
@@ -344,10 +354,13 @@ def _stream_tg_chat_response(
                         continue
                     terminal_sent = True
                     terminal = item.event
+                    if item.event == "error":
+                        mark_current_usage_outcome("failed")
                 yield _sse(item.event, item.payload)
                 if terminal_sent:
                     break
         except HTTPException as exc:
+            mark_current_usage_outcome("rejected" if 400 <= exc.status_code < 500 else _status_for_exception(exc))
             detail = exc.detail if isinstance(exc.detail, dict) else {}
             capacity = detail.get("code") if exc.status_code == 429 else None
             if capacity in {"user_capacity", "channel_capacity"}:
@@ -361,6 +374,7 @@ def _stream_tg_chat_response(
             yield _sse("error", {"request_id": request_id, "code": terminal,
                                  "message": message, "retryable": True})
         except TgAssistantProviderError:
+            mark_current_usage_outcome("failed")
             terminal = "provider_error"
             terminal_sent = True
             logger.warning("Tg assistant provider failure request_id=%s code=provider_error", request_id)
@@ -374,6 +388,7 @@ def _stream_tg_chat_response(
                 },
             )
         except Exception:
+            mark_current_usage_outcome("failed")
             terminal = "internal_error"
             terminal_sent = True
             logger.exception("Tg assistant stream failed request_id=%s", request_id)
@@ -387,6 +402,8 @@ def _stream_tg_chat_response(
                 },
             )
         finally:
+            if terminal == "disconnect":
+                mark_current_usage_outcome("interrupted")
             cancelled.set()
             elapsed = perf_counter() - started_at
             first_token_ms = (
@@ -477,12 +494,16 @@ def stream_chat(
                 for event in stream:
                     yield _sse(event.event, event.payload)
         except AssistantChatConfigError as exc:
+            mark_current_usage_outcome("failed")
             yield _sse("error", {"detail": str(exc)})
         except PostgresUnavailableError as exc:
+            mark_current_usage_outcome("failed")
             yield _sse("error", {"detail": str(exc)})
         except AssistantChatModelError as exc:
+            mark_current_usage_outcome("failed")
             yield _sse("error", {"detail": f"Assistant model call failed: {_safe_error_detail(str(exc))}"})
         except Exception:
+            mark_current_usage_outcome("failed")
             logger.exception("Assistant chat stream failed")
             yield _sse("error", {"detail": "Assistant chat failed. Check backend logs for details."})
 
@@ -541,12 +562,16 @@ async def stream_image_chat(
                 yield _sse("token", {"content": token})
             yield _sse("done", {"message": "".join(full_message)})
         except AssistantChatConfigError as exc:
+            mark_current_usage_outcome("failed")
             yield _sse("error", {"detail": str(exc)})
         except PostgresUnavailableError as exc:
+            mark_current_usage_outcome("failed")
             yield _sse("error", {"detail": str(exc)})
         except AssistantChatModelError as exc:
+            mark_current_usage_outcome("failed")
             yield _sse("error", {"detail": f"Assistant model call failed: {_safe_error_detail(str(exc))}"})
         except Exception:
+            mark_current_usage_outcome("failed")
             logger.exception("Assistant image chat stream failed")
             yield _sse("error", {"detail": "Assistant image chat failed. Check backend logs for details."})
 

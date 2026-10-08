@@ -32,6 +32,7 @@ type AppShellProps = {
   standaloneModules: AppShellModuleItem[];
   moduleGroups: AppShellModuleGroup[];
   onOpenHome: () => void;
+  onOpenUsage?: () => void;
   projects: OpenScienceProjectSummary[];
   activeProjectDirectory: string | null;
   isProjectBridgeReady: boolean;
@@ -99,6 +100,7 @@ export function AppShell({
   standaloneModules,
   moduleGroups,
   onOpenHome,
+  onOpenUsage,
   projects,
   activeProjectDirectory,
   isProjectBridgeReady,
@@ -367,6 +369,7 @@ export function AppShell({
     moduleGroups,
     onOpenHome: () => handleNavigate(onOpenHome, { id: "home", label: "首页" }),
     onNavigate: handleNavigate,
+    onOpenUsage: onOpenUsage ? () => handleNavigate(onOpenUsage, { id: "personalUsage", label: "我的用量" }) : undefined,
     pendingTarget: navigation.pendingTarget,
     showPending: navigation.showPending,
     expandedGroupIds,

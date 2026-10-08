@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from app.config import Settings
 from app.services.private_quotas import PrivateQuotaSettings
+from app.services.usage_provider import ProviderAttempt
 
 EMPTY_SUMMARY = "本次没有记录到操作，暂无可总结的内容。"
 SUMMARY_PROMPT = """你为用户回顾刚刚浏览的内容。请用自然、简洁的中文写三个段落，让用户记住阅读的主题和收获。正文约250—350字，不加标题或列表。
@@ -107,34 +108,37 @@ async def generate_knowledge_summary(events: list[dict], settings: Settings, *, 
     if not events:
         return {"summary": EMPTY_SUMMARY, "generated": False}
     payload = _summary_payload(events, settings, stream=False)
-    try:
-        async with httpx.AsyncClient(trust_env=False, proxy=settings.ai_proxy_url or None, timeout=timeout_seconds,
-                                    follow_redirects=False) as client:
-            async with client.stream("POST", settings.assistant_base_url.rstrip("/") + "/chat/completions",
-                                     headers={"Authorization": "Bearer " + settings.assistant_api_key},
-                                     json=payload) as response:
-                if not response.is_success:
-                    raise _model_http_error(response.status_code)
-                content = bytearray()
-                async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-                    content.extend(chunk)
-                    if len(content) > 2 * PrivateQuotaSettings.from_environment().summary_output_bytes:
-                        raise HTTPException(413, "总结超过大小限制")
-    except httpx.TimeoutException:
-        raise HTTPException(504, "模型响应超时，记录已保留，可重试总结") from None
-    except httpx.HTTPError:
-        raise HTTPException(502, "无法连接模型服务，记录已保留，可重试总结") from None
-    try:
-        data = json.loads(content)
-        choice = data["choices"][0]
-        content = choice["message"]["content"]
-        if choice.get("finish_reason") not in (None, "stop") or not isinstance(content, str) or not content.strip():
-            raise ValueError("empty or incomplete output")
-    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
-        raise HTTPException(502, "模型未返回完整的总结文本，记录已保留，可重试") from None
-    if len(content.encode("utf-8")) > PrivateQuotaSettings.from_environment().summary_output_bytes:
-        raise HTTPException(413, "总结超过大小限制")
-    return {"summary": content.strip().replace(settings.assistant_api_key, "[已隐藏]"), "generated": True}
+    with ProviderAttempt() as attempt:
+        try:
+            async with httpx.AsyncClient(trust_env=False, proxy=settings.ai_proxy_url or None, timeout=timeout_seconds,
+                                        follow_redirects=False) as client:
+                async with client.stream("POST", settings.assistant_base_url.rstrip("/") + "/chat/completions",
+                                         headers={"Authorization": "Bearer " + settings.assistant_api_key},
+                                         json=payload) as response:
+                    if not response.is_success:
+                        raise _model_http_error(response.status_code)
+                    content = bytearray()
+                    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                        content.extend(chunk)
+                        if len(content) > 2 * PrivateQuotaSettings.from_environment().summary_output_bytes:
+                            raise HTTPException(413, "总结超过大小限制")
+        except httpx.TimeoutException:
+            raise HTTPException(504, "模型响应超时，记录已保留，可重试总结") from None
+        except httpx.HTTPError:
+            raise HTTPException(502, "无法连接模型服务，记录已保留，可重试总结") from None
+        try:
+            data = json.loads(content)
+            attempt.observe(data)
+            attempt.terminal()
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
+            if choice.get("finish_reason") not in (None, "stop") or not isinstance(content, str) or not content.strip():
+                raise ValueError("empty or incomplete output")
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            raise HTTPException(502, "模型未返回完整的总结文本，记录已保留，可重试") from None
+        if len(content.encode("utf-8")) > PrivateQuotaSettings.from_environment().summary_output_bytes:
+            raise HTTPException(413, "总结超过大小限制")
+        return {"summary": content.strip().replace(settings.assistant_api_key, "[已隐藏]"), "generated": True}
 
 
 class _StreamRedactor:
@@ -164,60 +168,64 @@ async def stream_knowledge_summary(
         yield EMPTY_SUMMARY
         return
     payload = _summary_payload(events, settings, stream=True)
-    redactor = _StreamRedactor(settings.assistant_api_key)
-    finished = False
-    has_text = False
-    try:
-        # Bound the whole generation, including streams that keep sending tiny chunks.
-        async with asyncio.timeout(timeout_seconds), httpx.AsyncClient(
-            trust_env=False, proxy=settings.ai_proxy_url or None, timeout=timeout_seconds, follow_redirects=False,
-        ) as client:
-            async with client.stream(
-                "POST", settings.assistant_base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": "Bearer " + settings.assistant_api_key}, json=payload,
-            ) as response:
-                if not response.is_success:
-                    raise _model_http_error(response.status_code)
-                data_lines: list[str] = []
-                received_bytes = 0
-                async for line in response.aiter_lines():
-                    received_bytes += len(line.encode("utf-8"))
-                    if received_bytes > 2 * PrivateQuotaSettings.from_environment().summary_output_bytes:
-                        raise HTTPException(413, "总结超过大小限制")
-                    if line.startswith("data:"):
-                        data_lines.append(line[5:].lstrip())
-                        continue
-                    if line or not data_lines:
-                        continue
-                    data = "\n".join(data_lines)
-                    data_lines.clear()
-                    if data == "[DONE]":
-                        if not finished or not has_text:
-                            raise ValueError("incomplete output")
-                        tail = redactor.feed("", final=True)
-                        if tail:
-                            yield tail
-                        return
-                    chunk = json.loads(data)
-                    if not isinstance(chunk, dict) or "error" in chunk:
-                        raise ValueError("invalid provider event")
-                    for choice in chunk.get("choices", []):
-                        reason = choice.get("finish_reason")
-                        if reason not in (None, "stop"):
-                            raise ValueError("incomplete output")
-                        content = choice.get("delta", {}).get("content")
-                        if content is not None:
-                            if not isinstance(content, str) or (finished and content):
-                                raise ValueError("invalid content delta")
-                            has_text = has_text or bool(content.strip())
-                            safe_content = redactor.feed(content)
-                            if safe_content:
-                                yield safe_content
-                        finished = finished or reason == "stop"
-                raise ValueError("stream ended before DONE")
-    except (httpx.TimeoutException, TimeoutError):
-        raise HTTPException(504, "模型响应超时，记录已保留，可重试总结") from None
-    except httpx.HTTPError:
-        raise HTTPException(502, "无法连接模型服务，记录已保留，可重试总结") from None
-    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
-        raise HTTPException(502, "模型未返回完整的总结文本，记录已保留，可重试") from None
+    with ProviderAttempt() as attempt:
+        redactor = _StreamRedactor(settings.assistant_api_key)
+        finished = False
+        has_text = False
+        try:
+            # Bound the whole generation, including streams that keep sending tiny chunks.
+            async with asyncio.timeout(timeout_seconds), httpx.AsyncClient(
+                trust_env=False, proxy=settings.ai_proxy_url or None, timeout=timeout_seconds, follow_redirects=False,
+            ) as client:
+                async with client.stream(
+                    "POST", settings.assistant_base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": "Bearer " + settings.assistant_api_key}, json=payload,
+                ) as response:
+                    if not response.is_success:
+                        raise _model_http_error(response.status_code)
+                    data_lines: list[str] = []
+                    received_bytes = 0
+                    async for line in response.aiter_lines():
+                        received_bytes += len(line.encode("utf-8"))
+                        if received_bytes > 2 * PrivateQuotaSettings.from_environment().summary_output_bytes:
+                            raise HTTPException(413, "总结超过大小限制")
+                        if line.startswith("data:"):
+                            data_lines.append(line[5:].lstrip())
+                            continue
+                        if line or not data_lines:
+                            continue
+                        data = "\n".join(data_lines)
+                        data_lines.clear()
+                        if data == "[DONE]":
+                            attempt.terminal()
+                            if not finished or not has_text:
+                                raise ValueError("incomplete output")
+                            tail = redactor.feed("", final=True)
+                            if tail:
+                                yield tail
+                            return
+                        chunk = json.loads(data)
+                        if not isinstance(chunk, dict) or "error" in chunk:
+                            raise ValueError("invalid provider event")
+                        attempt.observe(chunk)
+                        for choice in chunk.get("choices", []):
+                            reason = choice.get("finish_reason")
+                            if reason not in (None, "stop"):
+                                raise ValueError("incomplete output")
+                            content = choice.get("delta", {}).get("content")
+                            if content is not None:
+                                if not isinstance(content, str) or (finished and content):
+                                    raise ValueError("invalid content delta")
+                                has_text = has_text or bool(content.strip())
+                                safe_content = redactor.feed(content)
+                                if safe_content:
+                                    yield safe_content
+                            finished = finished or reason == "stop"
+                    attempt.terminal("interrupted")
+                    raise ValueError("stream ended before DONE")
+        except (httpx.TimeoutException, TimeoutError):
+            raise HTTPException(504, "模型响应超时，记录已保留，可重试总结") from None
+        except httpx.HTTPError:
+            raise HTTPException(502, "无法连接模型服务，记录已保留，可重试总结") from None
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            raise HTTPException(502, "模型未返回完整的总结文本，记录已保留，可重试") from None

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.services.monomer_dft_schema import probe_monomer_dft_schema
 
-PRIVATE_SCHEMAS = ("auth", "governance", "online_knowledge", "md", "monomer_dft", "polymerization_batch")
+PRIVATE_SCHEMAS = ("usage", "auth", "governance", "online_knowledge", "md", "monomer_dft", "polymerization_batch")
 OWNER_TABLES = {
     "online_knowledge.history": "history_id", "online_knowledge.jobs": "job_id",
     "md.monomer_md_jobs": "job_id", "monomer_dft.jobs": "job_id",

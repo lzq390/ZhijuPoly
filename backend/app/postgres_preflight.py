@@ -518,9 +518,11 @@ def run_preflight(
             if schema_target in ISOLATION_TARGETS:
                 from app.auth.schema import validate_runtime_role, validate_isolation_schema
                 from app.auth.isolation_ledger import (CURRENT_VERSION, CUTOVER_VERSION,
-                    validate_service_migration_ledger, database_identity)
-                validate_service_migration_ledger(connection, CURRENT_VERSION if
-                    schema_target == SCHEMA_TARGET_ISOLATION else CUTOVER_VERSION)
+                    validate_service_migration_ledger, validate_application_migration_ledger, database_identity)
+                if schema_target == SCHEMA_TARGET_ISOLATION:
+                    validate_application_migration_ledger(connection)
+                else:
+                    validate_service_migration_ledger(connection, CUTOVER_VERSION)
                 report["service_identity"] = validate_runtime_role(connection, "nexpoly_service")
                 report["user_isolation_schema"] = validate_isolation_schema(connection)
                 if schema_target == SCHEMA_TARGET_ISOLATION:
@@ -534,7 +536,7 @@ def run_preflight(
                         report["api_identity"] = validate_runtime_role(api, "nexpoly_api")
                         if database_identity(api) != service_database:
                             raise ValueError("API and service identities connect to different databases")
-                        validate_service_migration_ledger(api)
+                        validate_application_migration_ledger(api)
                     report["runtime_database"] = service_database
             dft_schema = probe_monomer_dft_schema(connection)
             table_counts = {

@@ -175,14 +175,14 @@ class AuthService:
         import psycopg
         from psycopg.rows import dict_row
         from .schema import validate_runtime_role, validate_isolation_schema
-        from .isolation_ledger import database_identity, validate_service_migration_ledger
+        from .isolation_ledger import database_identity, validate_application_migration_ledger
         from .service_privilege_contract import validate_service_auth_privileges
         with psycopg.connect(self.settings.application_dsn, row_factory=dict_row, connect_timeout=3) as connection:
             validate_runtime_role(connection, 'nexpoly_api')
             try:
-                validate_service_migration_ledger(connection)
+                validate_application_migration_ledger(connection)
             except ValueError as exc:
-                raise RuntimeError('User isolation cutover has not completed: exact 0019 ledger required') from exc
+                raise RuntimeError('User isolation cutover has not completed: exact 0019 ledger or release-known 0020 expansion required') from exc
             validate_isolation_schema(connection)
             target_database = database_identity(connection)
         for dsn,group in ((self.settings.auth_dsn,'nexpoly_auth'),(self.settings.service_dsn,'nexpoly_service')):
@@ -194,5 +194,5 @@ class AuthService:
                 if connection.execute("SELECT pg_has_role(current_user,%s,'MEMBER') AS mixed",(other,)).fetchone()['mixed']:
                     raise ValueError('Authentication and execution database roles must be separate')
                 if group == 'nexpoly_service':
-                    validate_service_migration_ledger(connection)
+                    validate_application_migration_ledger(connection)
                     validate_service_auth_privileges(connection, require_login=True)

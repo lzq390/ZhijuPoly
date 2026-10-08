@@ -74,10 +74,17 @@ def test_explicit_cutovers_exact_retry_and_unchanged_dft_catalog(maintenance_dat
         assert probe_monomer_dft_schema(connection).catalog_sha256 == before
         assert not validate_service_auth_privileges(connection, db["role"])["password_select"]
         validate_service_migration_ledger(connection)
-    # Generic bootstrap/expand must also leave an installed contraction intact.
+    # Expansion leaves the 0019 privilege contract intact. Its historical
+    # maintenance command must not silently accept a newer database boundary.
     apply_postgres_migrations(db["dsn"], allowed_kinds={"baseline", "expand"},
                               allow_contract_on_fresh_database=True)
-    assert apply(db)["already_applied"]
+    with pytest.raises(ValueError, match="exact canonical ledger"):
+        apply(db)
+    with psycopg.connect(db["dsn"], row_factory=dict_row) as connection:
+        from app.auth.isolation_ledger import validate_application_migration_ledger
+        assert validate_application_migration_ledger(connection, require_usage=False)[-1]["version"] == "0020_usage_metering"
+        assert not validate_service_auth_privileges(connection, db["role"])["password_select"]
+        assert probe_monomer_dft_schema(connection).catalog_sha256 == before
 
 
 @pytest.mark.parametrize("drift", ["direct", "public", "checksum", "unknown"])

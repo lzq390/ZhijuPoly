@@ -27,6 +27,8 @@ from app.models import (
     TgSetStructureOperation,
 )
 from app.services.ai_client import create_openai_client
+from app.usage_context import mark_current_usage_outcome
+from app.services.usage_provider import close_provider_stream, provider_call
 from app.services.assistant_chat import parse_assistant_json
 from app.services.smiles_utils import standardize_smiles
 
@@ -584,7 +586,7 @@ def _call_intent(
         timeout_seconds=90.0,
     )
     try:
-        response = client.chat.completions.create(
+        response = provider_call(client.chat.completions.create,
             model=model,
             messages=_chat_provider_messages(
                 system_prompt=_intent_prompt(context_payload),
@@ -628,8 +630,9 @@ def _stream_answer(
         proxy_url=proxy_url,
         timeout_seconds=90.0,
     )
+    stream = None
     try:
-        stream = client.chat.completions.create(
+        stream = provider_call(client.chat.completions.create,
             model=model,
             messages=_chat_provider_messages(
                 system_prompt=_answer_prompt(context_payload),
@@ -650,7 +653,10 @@ def _stream_answer(
     except Exception as exc:
         raise TgAssistantProviderError("answer request failed") from exc
     finally:
-        client.close()
+        try:
+            close_provider_stream(stream)
+        finally:
+            client.close()
 
 
 def _stream_responses_intent(
@@ -677,8 +683,9 @@ def _stream_responses_intent(
     summary_done_sent = False
     output_parts: list[str] = []
     completed_response: Any = None
+    stream = None
     try:
-        stream = client.responses.create(
+        stream = provider_call(client.responses.create, usage_api="responses",
             model=model,
             instructions=_intent_prompt(context_payload),
             input=_responses_input(messages=messages, image_inputs=image_inputs),
@@ -690,6 +697,7 @@ def _stream_responses_intent(
         )
         for event in stream:
             if cancelled and cancelled():
+                mark_current_usage_outcome("interrupted")
                 return {"type": "chat"}
             event_type = _event_value(event, "type", "")
             if event_type == "response.reasoning_summary_text.delta":
@@ -768,7 +776,10 @@ def _stream_responses_intent(
             raise _ResponsesUnsupportedError("Responses API is unsupported") from exc
         raise TgAssistantProviderError("intent Responses request failed") from exc
     finally:
-        client.close()
+        try:
+            close_provider_stream(stream)
+        finally:
+            client.close()
 
 
 def _stream_responses_answer(
@@ -796,8 +807,9 @@ def _stream_responses_answer(
     writing_started = False
     output_parts: list[str] = []
     completed_response: Any = None
+    stream = None
     try:
-        stream = client.responses.create(
+        stream = provider_call(client.responses.create, usage_api="responses",
             model=model,
             instructions=_answer_prompt(context_payload),
             input=_responses_input(messages=messages, image_inputs=image_inputs),
@@ -808,6 +820,7 @@ def _stream_responses_answer(
         )
         for event in stream:
             if cancelled and cancelled():
+                mark_current_usage_outcome("interrupted")
                 return ""
             event_type = _event_value(event, "type", "")
             if event_type == "response.reasoning_summary_text.delta":
@@ -900,7 +913,10 @@ def _stream_responses_answer(
             raise _ResponsesUnsupportedError("Responses API is unsupported") from exc
         raise TgAssistantProviderError("answer Responses request failed") from exc
     finally:
-        client.close()
+        try:
+            close_provider_stream(stream)
+        finally:
+            client.close()
 
 
 def _stream_intent(
@@ -1001,6 +1017,7 @@ def _stream_model_answer(
         reasoning_effort=reasoning_effort,
     ):
         if cancelled and cancelled():
+            mark_current_usage_outcome("interrupted")
             return ""
         if not writing_started:
             writing_started = True
@@ -1199,6 +1216,7 @@ def stream_tg_assistant_events(
         latest_user_message=messages[-1].content,
     )
     if cancelled and cancelled():
+        mark_current_usage_outcome("interrupted")
         return
 
     if decision_type == "clarify":
@@ -1234,6 +1252,7 @@ def stream_tg_assistant_events(
         cancelled=cancelled,
     )
     if cancelled and cancelled():
+        mark_current_usage_outcome("interrupted")
         return
     if not answer:
         raise TgAssistantProviderError("answer stream was empty")

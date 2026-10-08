@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.usage_context import usage_span
+
 import warnings
 from pathlib import Path
 
@@ -158,7 +160,8 @@ def _predict_unbounded(smiles: str, properties: list[str], model_dir: Path | Non
                 f"unsupported prediction property: {property_name}"
             )
         model = load_model(property_name, model_dir)
-        value = model.predict(features)[0]
+        with usage_span("predict"):
+            value = model.predict(features)[0]
         predictions[property_name] = float(value)
 
     return predictions

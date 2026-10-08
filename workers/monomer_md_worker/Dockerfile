@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir --only-binary=:all: --require-hashes \
 
 COPY workers/monomer_md_worker /app/workers/monomer_md_worker
 COPY gpu_resource /app/gpu_resource
+COPY task_usage /app/task_usage
 COPY backend/app/task_observability.py /app/backend/app/task_observability.py
 RUN mkdir -p /app/worker-runs \
     && (getent group 1001 >/dev/null || groupadd --gid 1001 nexpoly) \

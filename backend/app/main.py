@@ -23,6 +23,9 @@ from app.auth.router import router as auth_router
 from app.auth.service import AuthService
 from app.auth.settings import AuthSettings
 from app.task_control import configure_task_control
+from app.usage_context import UsageCollector
+from app.usage_middleware import UsageMeteringMiddleware
+from app.routers.usage import router as usage_router
 from app.deployment_drain_middleware import DeploymentDrainMiddleware
 from app.middleware import BrowserCrossSiteProtectionMiddleware
 from app.postgres_database import postgres_connection
@@ -261,6 +264,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(BatchUploadLimitMiddleware, max_bytes=batch_config.request_bytes)
     app.state.settings = app_settings
     app.state.auth = AuthService(AuthSettings.from_settings(app_settings))
+    app.state.usage_collector = UsageCollector(app_settings.app_postgres_dsn, settings=app.state.auth.settings)
     configure_task_control(app.state.auth.authorize_memory_start)
     app.state.browsing_recording = BrowsingRecordingStore(app_settings)
     app.state.dev_gpu_operator_client = None
@@ -409,6 +413,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.add_middleware(BrowserCrossSiteProtectionMiddleware)
+    app.add_middleware(UsageMeteringMiddleware, collector=app.state.usage_collector)
     app.add_middleware(DeploymentDrainMiddleware)
     # Last registered is outermost: reject before uploads and business parsing.
     app.add_middleware(AuthenticationMiddleware, auth_service=app.state.auth)
@@ -423,6 +428,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.add_api_route("/health", health, methods=["GET"])
     app.include_router(auth_router)
+    app.include_router(usage_router)
     app.include_router(monomer_dft_internal_router)
     app.include_router(deployment_status_router)
     if app_settings.dev_gpu_operator_enabled:

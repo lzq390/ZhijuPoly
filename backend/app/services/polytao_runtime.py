@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.usage_context import usage_span
+
 import importlib
 import time
 from dataclasses import dataclass
@@ -109,22 +111,23 @@ class BackendPolytaoRuntime:
             try:
                 encoded = tokenizer(prompt, return_tensors="pt")
                 encoded = {key: value.to(device) for key, value in encoded.items()}
-                with torch.inference_mode():
-                    outputs = model.generate(
-                        **encoded,
-                        do_sample=True,
-                        temperature=float(temperature),
-                        top_k=int(top_k),
-                        top_p=float(top_p),
-                        max_length=int(max_length),
-                        num_return_sequences=batch_count,
-                        pad_token_id=tokenizer.pad_token_id,
-                        eos_token_id=tokenizer.eos_token_id,
-                    )
-                decoded = [
-                    tokenizer.decode(output, skip_special_tokens=True)
-                    for output in outputs
-                ]
+                with usage_span("polytao"):
+                    with torch.inference_mode():
+                        outputs = model.generate(
+                            **encoded,
+                            do_sample=True,
+                            temperature=float(temperature),
+                            top_k=int(top_k),
+                            top_p=float(top_p),
+                            max_length=int(max_length),
+                            num_return_sequences=batch_count,
+                            pad_token_id=tokenizer.pad_token_id,
+                            eos_token_id=tokenizer.eos_token_id,
+                        )
+                    decoded = [
+                        tokenizer.decode(output, skip_special_tokens=True)
+                        for output in outputs
+                    ]
             finally:
                 del outputs
                 del encoded

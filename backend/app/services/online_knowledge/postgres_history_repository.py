@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import Any
 
 from app.auth.context import is_service_context
+from task_usage.ledger import metering_enabled
+from app.services.usage_lifecycle import record_persistent_task
 from app.services.private_quotas import PrivateQuotaSettings
 from fastapi import HTTPException
 
@@ -37,6 +39,16 @@ def _check_storage_quota(connection, resource: str, key, result_data=None, *, ow
         new_bytes = connection.execute("SELECT octet_length(%s::jsonb::text) AS bytes", (_jsonb(result_data),)).fetchone()["bytes"]
     if totals["rows"] + 1 > max_rows or totals["bytes"] + new_bytes > max_bytes or new_bytes > quotas.online_result_bytes:
         raise OnlineKnowledgeQuotaError(resource)
+
+def _record_usage(connection, job_id, *, owner_user_id, status=None):
+    if not metering_enabled():
+        return
+    row = connection.execute("""SELECT job_id, owner_user_id, status, created_at,
+        updated_at, start_authorized_at FROM online_knowledge.jobs
+        WHERE job_id=%s AND owner_user_id=%s::uuid""", (job_id, owner_user_id)).fetchone()
+    if row is not None:
+        record_persistent_task(connection, module="online_knowledge", row=row, status=status)
+
 
 def _jsonb(value: dict[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False)
@@ -156,6 +168,7 @@ def create_online_job_postgres(
         """,
         (job_id, owner_user_id, material, mode, max_papers),
     )
+    _record_usage(connection, job_id, owner_user_id=owner_user_id)
 
 
 def mark_online_job_running_postgres(connection: Any, job_id: str, *, owner_user_id: str) -> None:
@@ -219,6 +232,7 @@ def mark_online_job_completed_postgres(connection: Any, job_id: str, result_data
         """,
         (_jsonb(result_data), job_id, owner_user_id),
     )
+    _record_usage(connection, job_id, owner_user_id=owner_user_id)
 
 
 def mark_online_job_failed_postgres(connection: Any, job_id: str, error_message: str, *, owner_user_id: str) -> None:
@@ -235,6 +249,7 @@ def mark_online_job_failed_postgres(connection: Any, job_id: str, error_message:
         """,
         (error_message, error_message, job_id, owner_user_id),
     )
+    _record_usage(connection, job_id, owner_user_id=owner_user_id)
 
 
 def get_online_job_postgres(connection: Any, job_id: str, *, owner_user_id: str) -> dict[str, Any] | None:
@@ -299,6 +314,7 @@ def _update_online_job_postgres(
         """,
         (status, progress_stage, progress_message, job_id, owner_user_id),
     )
+    _record_usage(connection, job_id, owner_user_id=owner_user_id)
 
 
 def _history_row_to_dict(row: Any) -> dict[str, Any]:
@@ -318,8 +334,16 @@ def fail_interrupted_online_jobs_postgres(connection: Any) -> int:
     """Call once at single-backend startup, before accepting submissions."""
     if not is_service_context():
         raise RuntimeError("Global online recovery requires an explicit service context")
-    cursor = connection.execute("""UPDATE online_knowledge.jobs SET status='failed',
+    statement = """UPDATE online_knowledge.jobs SET status='failed',
         progress_stage='failed', progress_message='Search interrupted by backend restart.',
         error_message='worker_restarted', updated_at=now()
-        WHERE status IN ('pending', 'running')""")
-    return cursor.rowcount
+        WHERE status IN ('pending', 'running')"""
+    enabled = metering_enabled()
+    if enabled:
+        statement += " RETURNING job_id, owner_user_id, status, created_at, updated_at, start_authorized_at"
+    cursor = connection.execute(statement)
+    count = cursor.rowcount
+    if enabled:
+        for row in cursor.fetchall():
+            record_persistent_task(connection, module="online_knowledge", row=row, status="interrupted")
+    return count

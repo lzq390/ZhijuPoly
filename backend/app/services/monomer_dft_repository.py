@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 from uuid import uuid4
 
+from task_usage.ledger import metering_enabled, record_event
+
 from app.postgres_database import postgres_connection
 from app.auth.context import service_context
 
@@ -40,6 +42,7 @@ PUBLIC_TIMING_KEYS = (
     "artifact_ms",
     "total_ms",
 )
+_USAGE_STARTED_UNSET = object()
 MAX_PAGE = 10_000
 WORKER_STAGES = frozenset(
     {
@@ -425,6 +428,45 @@ class MonomerDftRepository:
                         (RETENTION_ADVISORY_LOCK_ID,),
                     )
 
+    def _record_usage(
+        self, connection: Any, job_id: str, *, started_at_before_snapshot: Any = _USAGE_STARTED_UNSET,
+    ) -> None:
+        # Read the current durable ordinal and owner, never the secret attempt token.
+        row = connection.execute(
+            """
+            SELECT j.job_id, j.owner_user_id, j.status, j.error_code,
+                   a.attempt, a.created_at, a.started_at, a.finished_at
+            FROM monomer_dft.jobs j
+            JOIN monomer_dft.job_attempts a ON a.job_id = j.job_id AND a.attempt = j.current_attempt
+            WHERE j.job_id = %s::uuid
+            """,
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            return
+        status = {"pending": "queued"}.get(row["status"], row["status"])
+        if status == "cancel_requested":
+            return
+        if status == "failed":
+            status = {"worker_restarted": "interrupted", "calculation_timeout": "timed_out"}.get(row["error_code"], status)
+        submitted_at = row["created_at"]
+        started_at = row["started_at"] if status != "queued" else None
+        if started_at_before_snapshot is not _USAGE_STARTED_UNSET:
+            started_at = started_at_before_snapshot
+        finished_at = row["finished_at"] if status not in {"queued", "running"} else None
+        occurred_at = submitted_at if status == "queued" else (started_at if status == "running" else finished_at)
+        metrics = {}
+        if finished_at is not None:
+            metrics["observed_wall_ms"] = int((finished_at - submitted_at).total_seconds() * 1000)
+        task_id = f"monomer_dft:{row['job_id']}"
+        attempt_id = str(row["attempt"])
+        record_event(
+            connection, owner_user_id=str(row["owner_user_id"]), module="monomer_dft",
+            task_id=task_id, attempt_id=attempt_id, event_key=f"{task_id}:{attempt_id}:{status}",
+            status=status, occurred_at=occurred_at, submitted_at=submitted_at,
+            started_at=started_at, finished_at=finished_at, metrics=metrics,
+        )
+
     def create_job(
         self,
         prepared: PreparedMonomerDftRequest,
@@ -505,6 +547,8 @@ class MonomerDftRepository:
             job = self._get_job(connection, job_id)
             if job is None:  # pragma: no cover - insert and select share one transaction
                 raise MonomerDftJobNotFound("DFT job not found")
+            if metering_enabled():
+                self._record_usage(connection, job_id)
             return CreateJobResult(job=job, created=True)
 
     def authorize_start(self, *, job_id: str, attempt_token: str, request_sha256: str, enqueue_sequence: int) -> bool:
@@ -764,6 +808,8 @@ class MonomerDftRepository:
                     if row["submitted_at"] is None:
                         connection.execute("UPDATE monomer_dft.jobs SET status='cancelled',error_code='account_disabled',error_message='Account disabled before dispatch',finished_at=now(),updated_at=now() WHERE job_id=%s::uuid", (job_id,))
                         connection.execute("UPDATE monomer_dft.job_attempts SET status='cancelled',finished_at=now() WHERE job_id=%s::uuid AND attempt_token=%s", (job_id,attempt_token))
+                        if metering_enabled():
+                            self._record_usage(connection, job_id)
                     else:
                         connection.execute("UPDATE monomer_dft.jobs SET status='cancel_requested',cancel_requested_at=COALESCE(cancel_requested_at,now()),error_code='account_disabled',error_message='Account disabled while dispatch outcome was unconfirmed',updated_at=now() WHERE job_id=%s::uuid", (job_id,))
                         connection.execute("UPDATE monomer_dft.job_attempts SET status='cancel_requested' WHERE job_id=%s::uuid AND attempt_token=%s", (job_id,attempt_token))
@@ -800,7 +846,7 @@ class MonomerDftRepository:
         safe_message = sanitize_public_text(message, fallback="DFT worker is unavailable")
         safe_details = sanitize_public_json(details)
         with self._service_connection() as connection:
-            connection.execute(
+            updated = connection.execute(
                 """
                 UPDATE monomer_dft.jobs
                 SET status = CASE WHEN %s THEN status ELSE 'failed' END,
@@ -847,6 +893,8 @@ class MonomerDftRepository:
                         list(ACTIVE_STATUSES),
                     ),
                 )
+                if metering_enabled() and updated.rowcount:
+                    self._record_usage(connection, job_id)
 
     def apply_worker_snapshot(
         self,
@@ -934,6 +982,15 @@ class MonomerDftRepository:
             worker_job_id = self._optional_identifier(snapshot.get("worker_job_id")) or job_id
             canonical_smiles, effective_charge = self._result_identity(result)
 
+            usage_started_at = _USAGE_STARTED_UNSET
+            if metering_enabled() and status in TERMINAL_STATUSES:
+                # Existing snapshot SQL fills started_at even for queued cancellation.
+                # Preserve only a start observed before this terminal transition.
+                prior_attempt = connection.execute(
+                    "SELECT started_at FROM monomer_dft.job_attempts WHERE job_id = %s::uuid AND attempt = %s",
+                    (job_id, int(current["current_attempt"])),
+                ).fetchone()
+                usage_started_at = prior_attempt["started_at"] if prior_attempt else None
             updated = connection.execute(
                 """
                 UPDATE monomer_dft.jobs
@@ -1020,6 +1077,8 @@ class MonomerDftRepository:
                     attempt_token,
                 ),
             )
+            if metering_enabled() and status != "cancel_requested":
+                self._record_usage(connection, job_id, started_at_before_snapshot=usage_started_at)
             if (
                 current["artifacts_delete_requested_at"] is None
                 and current["artifacts_deleted_at"] is None
@@ -1069,6 +1128,8 @@ class MonomerDftRepository:
                     """,
                     (job_id, job_id),
                 )
+                if metering_enabled():
+                    self._record_usage(connection, job_id)
             elif status not in TERMINAL_STATUSES:
                 connection.execute(
                     """

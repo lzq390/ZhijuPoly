@@ -11,6 +11,7 @@ from time import monotonic
 from typing import Callable
 
 from app.services.private_execution import submit_private_job
+from app.services.usage_background import finish_background_usage
 
 from app.models import PolytaoGenerationResponse, PolytaoJobStatusResponse
 from app.services.gpu_runtime_registry import (
@@ -152,7 +153,7 @@ class PolytaoJobManager:
                 future = submit_private_job(
                     self._executor, self._run_job, job.job_id, runner,
                     channel="backend_gpu",
-                    task_type="polytao", task_id=job.job_id,
+                    task_type="polytao", task_id=job.job_id, submitted_at=job.created_at,
                     on_disabled=lambda: self._mark_cancelled(job.job_id, "Account disabled before execution."),
                 )
             except Exception:
@@ -335,6 +336,8 @@ class PolytaoJobManager:
                         f"PolyTAO backend task terminated unexpectedly: {unexpected_error}",
                     )
         finally:
+            if getattr(future, "_nexpoly_usage", None) is not None:
+                finish_background_usage(future, self._store.read(NAMESPACE, job_id, self._snapshot))
             self._store.mark_reapable(NAMESPACE, job_id)
             with self._lock:
                 if self._futures.get(job_id) is future:

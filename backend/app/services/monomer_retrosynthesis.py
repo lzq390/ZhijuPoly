@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.usage_context import usage_span
+
 from dataclasses import dataclass
 from threading import Lock
 from time import perf_counter
@@ -55,24 +57,25 @@ def predict_monomer_precursors(
     inputs = runtime.tokenizer(canonical_smiles, return_tensors="pt")
     inputs = {key: value.to(runtime.device) for key, value in inputs.items()}
 
-    try:
-        with runtime.torch.inference_mode():
-            output = runtime.model.generate(
-                **inputs,
-                num_beams=num_beams,
-                num_return_sequences=num_return_sequences,
-                max_new_tokens=max_new_tokens,
-                return_dict_in_generate=True,
-            )
-    except Exception as exc:  # pragma: no cover - depends on accelerator/runtime state
-        raise ModelArtifactError(f"retrosynthesis inference failed: {exc}") from exc
+    with usage_span("retrosynthesis"):
+        try:
+            with runtime.torch.inference_mode():
+                output = runtime.model.generate(
+                    **inputs,
+                    num_beams=num_beams,
+                    num_return_sequences=num_return_sequences,
+                    max_new_tokens=max_new_tokens,
+                    return_dict_in_generate=True,
+                )
+        except Exception as exc:  # pragma: no cover - depends on accelerator/runtime state
+            raise ModelArtifactError(f"retrosynthesis inference failed: {exc}") from exc
 
-    candidates = _decode_candidates(
-        output=output,
-        runtime=runtime,
-        target_mol=target_mol,
-        inferred_role=_infer_target_role(target_mol),
-    )
+        candidates = _decode_candidates(
+            output=output,
+            runtime=runtime,
+            target_mol=target_mol,
+            inferred_role=_infer_target_role(target_mol),
+        )
 
     return MonomerRetrosynthesisResponse(
         input_smiles=smiles,

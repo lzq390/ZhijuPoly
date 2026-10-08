@@ -11,6 +11,7 @@ from time import monotonic
 from typing import Callable
 
 from app.services.private_execution import submit_private_job
+from app.services.usage_background import finish_background_usage
 
 from app.models import (
     ConditionalGenerationJobStatusResponse,
@@ -143,7 +144,7 @@ class ConditionalGenerationJobManager:
                 future = submit_private_job(
                     self._executor, self._run_job, job.job_id, runner,
                     channel="backend_gpu",
-                    task_type="conditional_generation", task_id=job.job_id,
+                    task_type="conditional_generation", task_id=job.job_id, submitted_at=job.created_at,
                     on_disabled=lambda: self._mark_cancelled(job.job_id, "Account disabled before execution."),
                 )
             except Exception:
@@ -317,6 +318,8 @@ class ConditionalGenerationJobManager:
                         f"{unexpected_error}",
                     )
         finally:
+            if getattr(future, "_nexpoly_usage", None) is not None:
+                finish_background_usage(future, self._store.read(NAMESPACE, job_id, self._snapshot))
             # Keep the execution slot occupied until its terminal record can
             # participate in retention eviction. Otherwise a concurrent
             # submit can observe a free lane but a spuriously full store.

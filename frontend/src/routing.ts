@@ -4,6 +4,7 @@ import { canvasRoutePaths } from "../shared/canvas-routes";
 
 export type ActiveModule =
   | "home"
+  | "personalUsage"
   | "structureWorkbench"
   | "homopolymerPrediction"
   | "explorer"
@@ -56,6 +57,10 @@ export function normalizePath(pathname: string) {
 
 export function routeFromPath(pathname: string): AppRoute {
   const path = normalizePath(pathname);
+
+  if (path === "/account/usage") {
+    return { module: "personalUsage", datasetKey: null };
+  }
 
   if (path === canvasRoutePaths.structureWorkbench) {
     return { module: "structureWorkbench", datasetKey: null };
@@ -142,6 +147,7 @@ export function routeFromPath(pathname: string): AppRoute {
 }
 
 export function pathFromRoute(route: AppRoute) {
+  if (route.module === "personalUsage") return "/account/usage";
   if (route.module === "structureWorkbench") {
     return canvasRoutePaths.structureWorkbench;
   }

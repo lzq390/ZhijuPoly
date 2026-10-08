@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ChevronUp, KeyRound, LogIn, LogOut, UserRound, X } from "lucide-react";
+import { BarChart3, ChevronUp, KeyRound, LogIn, LogOut, UserRound, X } from "lucide-react";
 import { authRequest } from "./api";
 import { GUEST_SESSION, getSessionEpoch, installSession, onSessionInvalidated, retireSession, type AuthSession } from "./session";
 import { AUTH_OWNER_KEY, AUTH_SHARED_OWNER_KEY, AUTH_SYNC_KEY, clearPrivateBrowserData, clearPrivateSessionStorage } from "./storage";
@@ -234,7 +234,7 @@ function CredentialsForm({ mode, submit, error: externalError }: {
     <button type="submit" disabled={busy}>{busy ? "处理中…" : login ? "登录" : "修改密码并重新登录"}</button>
   </form>;
 }
-export function AccountMenu() {
+export function AccountMenu({ onOpenUsage }: { onOpenUsage?: () => void } = {}) {
   const auth = useAuth();
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLDivElement>(null);
@@ -267,6 +267,7 @@ export function AccountMenu() {
     }}>
       <div className="np-account-menu__summary"><strong>{username}</strong><span>{signedIn ? "个人工作空间" : "登录后保存和管理科研任务"}</span></div>
       {signedIn ? <>
+        {onOpenUsage && <button type="button" role="menuitem" onClick={() => act(onOpenUsage)}><BarChart3 aria-hidden="true" />我的用量</button>}
         <button type="button" role="menuitem" onClick={() => act(auth.changePassword)}><KeyRound aria-hidden="true" />修改密码</button>
         <button type="button" role="menuitem" onClick={() => act(() => void auth.logout())}><LogOut aria-hidden="true" />退出登录</button>
       </> : <button type="button" role="menuitem" onClick={() => act(auth.login)}><LogIn aria-hidden="true" />登录</button>}

@@ -251,3 +251,21 @@ describe("identity boundary", () => {
     fireEvent.click(screen.getByRole("button", { name: "从空白开始" })); await screen.findByText("私人页面");
   });
 });
+
+
+describe("personal usage account entry", () => {
+  it("opens usage via the supplied guarded navigation callback and closes the menu", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(account("usage-owner"))));
+    const onOpenUsage = vi.fn();
+    render(<AuthProvider><AccountMenu onOpenUsage={onOpenUsage} /></AuthProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "账号菜单：usage-owner" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "我的用量" }));
+    expect(onOpenUsage).toHaveBeenCalledOnce(); expect(screen.queryByRole("menu")).toBeNull();
+  });
+  it("keeps the private usage menu hidden from guests", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(GUEST_SESSION)));
+    render(<AuthProvider><AccountMenu onOpenUsage={vi.fn()} /></AuthProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "游客账号菜单" }));
+    expect(screen.queryByRole("menuitem", { name: "我的用量" })).toBeNull();
+  });
+});

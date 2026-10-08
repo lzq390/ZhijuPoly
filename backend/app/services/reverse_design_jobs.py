@@ -15,6 +15,7 @@ from time import monotonic
 
 from app.auth.context import current_owner_id
 from app.services.private_execution import submit_private_job
+from app.services.usage_background import finish_background_usage
 from app.services.in_memory_jobs import JobStoreCapacityError
 
 from app.models import (
@@ -104,7 +105,7 @@ class ReverseDesignJobManager:
             try:
                 future = submit_private_job(
                     self._executor, self._run_job, job.job_id, runner, channel="reverse",
-                    task_type="tg_reverse", task_id=job.job_id,
+                    task_type="tg_reverse", task_id=job.job_id, submitted_at=job.created_at,
                     on_disabled=lambda: self._mark_cancelled(job.job_id, "账号已禁用，任务未执行。"),
                 )
             except Exception as exc:
@@ -290,13 +291,19 @@ class ReverseDesignJobManager:
     def _finish_future(self, job_id: str, future: Future[None]) -> None:
         if future.cancelled():
             self._mark_cancelled(job_id, "逆向设计搜索在执行前被取消。")
-            return
-        unexpected_error = future.exception()
-        if unexpected_error is not None:
-            self._mark_failed(
-                job_id,
-                f"Reverse-design task terminated unexpectedly: {unexpected_error}",
-            )
+        else:
+            unexpected_error = future.exception()
+            if unexpected_error is not None:
+                self._mark_failed(job_id,
+                    f"Reverse-design task terminated unexpectedly: {unexpected_error}")
+        if getattr(future, "_nexpoly_usage", None) is not None:
+            finish_background_usage(future, self._usage_snapshot(job_id))
+
+
+    def _usage_snapshot(self, job_id):
+        with self._lock:
+            return self._snapshot(self._jobs[job_id])
+
 
     def _update_progress(self, job_id: str, **progress: object) -> None:
         with self._lock:

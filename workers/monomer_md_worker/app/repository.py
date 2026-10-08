@@ -4,6 +4,8 @@ import logging
 from enum import Enum
 from typing import Any
 
+from task_usage.ledger import metering_enabled, record_event
+
 from .config import WorkerSettings
 
 try:
@@ -25,9 +27,65 @@ class JobUpdateResult(str, Enum):
     MISSING = "missing"
 
 
+def _record_monomer_md_usage_row(connection: Any, row: Any) -> None:
+    # Only immutable lifecycle fields enter the ledger; no request or worker secrets.
+    status = {"pending": "queued", "submitted": "queued"}.get(row["status"], row["status"])
+    if status == "cancel_requested":
+        return  # A cancellation request is not proof of released resources.
+    if status == "failed" and row["error_category"] == "worker_restarted":
+        status = "interrupted"
+    submitted_at = row["created_at"]
+    started_at = row["started_at"] if status != "queued" else None
+    finished_at = row["finished_at"] if status not in {"queued", "running"} else None
+    occurred_at = submitted_at if status == "queued" else (started_at if status == "running" else finished_at)
+    metrics = {}
+    if started_at is not None:
+        metrics["queue_ms"] = int((started_at - submitted_at).total_seconds() * 1000)
+    if finished_at is not None:
+        metrics["observed_wall_ms"] = int((finished_at - submitted_at).total_seconds() * 1000)
+    task_id = f"monomer_md:{row['job_id']}"
+    record_event(
+        connection, owner_user_id=str(row["owner_user_id"]), module="monomer_md",
+        task_id=task_id, attempt_id="1", event_key=f"{task_id}:1:{status}",
+        status=status, occurred_at=occurred_at, submitted_at=submitted_at,
+        started_at=started_at, finished_at=finished_at, metrics=metrics,
+    )
+
+
 class PostgresJobRepository:
     def __init__(self, settings: WorkerSettings) -> None:
         self._settings = settings
+
+    def _usage_columns(self) -> Any:
+        settings = self._settings
+        columns = (
+            settings.job_id_column, "owner_user_id", settings.status_column,
+            "created_at", settings.started_at_column, settings.finished_at_column,
+            settings.error_category_column,
+        )
+        names = ("job_id", "owner_user_id", "status", "created_at", "started_at", "finished_at", "error_category")
+        return sql.SQL(", ").join(
+            sql.SQL("{} AS {}").format(sql.Identifier(column), sql.Identifier(name))
+            for column, name in zip(columns, names)
+        )
+
+    @staticmethod
+    def _usage_row(row: Any) -> dict[str, Any]:
+        if isinstance(row, dict):
+            return row
+        return dict(zip(("job_id", "owner_user_id", "status", "created_at", "started_at", "finished_at", "error_category"), row))
+
+    def _record_usage(self, connection: Any, cursor: Any, job_id: str) -> None:
+        cursor.execute(
+            sql.SQL("SELECT {} FROM {} WHERE {} = %s").format(
+                self._usage_columns(), _qualified_identifier(self._settings.job_table),
+                sql.Identifier(self._settings.job_id_column),
+            ),
+            (job_id,),
+        )
+        row = cursor.fetchone()
+        if row is not None:
+            _record_monomer_md_usage_row(connection, self._usage_row(row))
 
     def authorize_start(self, job_id: str, *, worker_instance_id: str) -> bool:
         """Account then job lock matches administrative disable ordering."""
@@ -121,6 +179,8 @@ class PostgresJobRepository:
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 if cur.fetchone() is not None:
+                    if metering_enabled():
+                        self._record_usage(conn, cur, job_id)
                     return JobUpdateResult.UPDATED
                 cur.execute(
                     sql.SQL("SELECT {} FROM {} WHERE {} = %s").format(
@@ -338,6 +398,8 @@ class PostgresJobRepository:
                         ),
                         (message, job_id),
                     )
+                    if metering_enabled():
+                        self._record_usage(conn, cur, job_id)
                     return JobUpdateResult.UPDATED
         return self._current_update_result(job_id)
 
@@ -450,13 +512,19 @@ class PostgresJobRepository:
             sql.Identifier(settings.heartbeat_at_column),
             sql.Identifier(settings.status_column),
         )
+        if metering_enabled():
+            query += sql.SQL(" RETURNING ") + self._usage_columns()
         with psycopg.connect(settings.app_postgres_dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     query,
                     ("Cancellation completed while recovering the monomer MD worker.",),
                 )
-                return cur.rowcount or 0
+                count = cur.rowcount or 0
+                if metering_enabled():
+                    for row in cur.fetchall():
+                        _record_monomer_md_usage_row(conn, self._usage_row(row))
+                return count
 
     def fail_instance_jobs(
         self,
@@ -512,10 +580,16 @@ class PostgresJobRepository:
             settings.worker_id,
             worker_instance_id,
         )
+        if metering_enabled():
+            query += sql.SQL(" RETURNING ") + self._usage_columns()
         with psycopg.connect(settings.app_postgres_dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
-                return cur.rowcount or 0
+                count = cur.rowcount or 0
+                if metering_enabled():
+                    for row in cur.fetchall():
+                        _record_monomer_md_usage_row(conn, self._usage_row(row))
+                return count
 
 
 def _qualified_identifier(value: str) -> Any:

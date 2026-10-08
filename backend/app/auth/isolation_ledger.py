@@ -30,6 +30,35 @@ def validate_service_migration_ledger(connection, through: str = CURRENT_VERSION
     return observed
 
 
+
+USAGE_VERSION = "0020_usage_metering"
+
+
+def validate_application_migration_ledger(connection, *, require_usage: bool | None = None):
+    """Accept only the two exact release-known runtime ledgers.
+
+    Historical migration/backup commands keep the stricter version-bounded
+    validator above. No unknown suffix, skipped contract or changed checksum is
+    forward compatible. Enabling collection requires the actual expansion.
+    """
+    from task_usage.ledger import metering_enabled
+    require_usage = metering_enabled() if require_usage is None else require_usage
+    observed = [dict(row) for row in connection.execute(
+        "SELECT version,checksum FROM governance.schema_migrations ORDER BY version")]
+    legacy = expected_isolation_ledger(CURRENT_VERSION)
+    entries = validate_migration_manifest_entries(MIGRATIONS_DIR)
+    usage = next((entry for entry in entries if entry.version == USAGE_VERSION), None)
+    if usage is None or usage.kind != "expand" or usage.epoch != 5:
+        raise ValueError("Usage expansion is absent from the release manifest")
+    expanded = [*legacy, {"version": usage.version, "checksum": usage.checksum}]
+    if observed != expanded and (require_usage or observed != legacy):
+        raise ValueError("Application requires an exact canonical 0019 or 0020 ledger")
+    if require_usage:
+        from app.services.usage_schema import validate_usage_schema
+        validate_usage_schema(connection)
+    return observed
+
+
 def database_identity(connection):
     """Bind role checks to the same database and server without credential reads."""
     row = dict(connection.execute("""SELECT current_database() AS database,

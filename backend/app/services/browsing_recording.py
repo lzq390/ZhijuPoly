@@ -25,6 +25,7 @@ from app.recording_models import (
     RecordedFilterSearchRequest, RecordedFilterSearchResponse,
 )
 from app.services.knowledge_poc_summary import generate_knowledge_summary, stream_knowledge_summary
+from app.usage_context import mark_current_usage_outcome, _status_for_exception
 
 logger = logging.getLogger(__name__)
 
@@ -194,8 +195,10 @@ class BrowsingRecordingStore:
                         record.summary = {"summary": "".join(parts).strip(), "generated": bool(record.events)}
                     yield "done", {"recording_id": recording_id, **record.summary}
                 except HTTPException as exc:
+                    mark_current_usage_outcome("rejected" if 400 <= exc.status_code < 500 else _status_for_exception(exc))
                     yield "error", {"detail": exc.detail}
                 except Exception:
+                    mark_current_usage_outcome("failed")
                     logger.exception("Browsing summary stream failed")
                     yield "error", {"detail": "总结生成失败，记录已保留，可重试总结"}
         return events()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.private_execution import bounded_stream
+from app.usage_context import mark_current_usage_outcome
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -110,6 +111,7 @@ def stream_assistant_events(
     skill = registry.get(skill_name)
     if skill is None:
         detail = f"未注册的助手技能：{skill_name or 'unknown'}。"
+        mark_current_usage_outcome("failed")
         yield AssistantStreamEvent("skill_error", {"skill_name": skill_name or "unknown", "detail": detail})
         yield from _emit_text(detail)
         return
@@ -153,11 +155,13 @@ def stream_assistant_events(
         return
     except PropertyResolutionUnsupported as exc:
         detail = str(exc)
+        mark_current_usage_outcome("failed")
         yield AssistantStreamEvent("skill_error", {"skill_name": skill.name, "detail": detail})
         yield from _emit_text(detail)
         return
     except PropertyResolutionError as exc:
         detail = str(exc)
+        mark_current_usage_outcome("failed")
         yield AssistantStreamEvent("skill_error", {"skill_name": skill.name, "detail": detail})
         yield from _emit_text(detail)
         return
@@ -167,6 +171,7 @@ def stream_assistant_events(
             yield from _emit_text(clarification)
             return
         detail = _validation_detail(exc)
+        mark_current_usage_outcome("failed")
         yield AssistantStreamEvent("skill_error", {"skill_name": skill.name, "detail": detail})
         yield from _emit_text(detail)
         return
@@ -175,6 +180,7 @@ def stream_assistant_events(
         payload: dict[str, Any] = {"skill_name": skill.name, "detail": detail}
         if call_id:
             payload["skill_call_id"] = call_id
+        mark_current_usage_outcome("failed")
         yield AssistantStreamEvent("skill_error", payload)
         yield from _emit_text(detail)
         return

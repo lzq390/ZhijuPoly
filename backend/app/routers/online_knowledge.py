@@ -13,6 +13,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from app.config import Settings
 from app.auth.context import current_identity, current_owner_id, user_context, service_context, database_settings
 from app.task_control import admission, acquire_admission, authorize_memory_start, authorize_start
+from task_usage.ledger import metering_enabled
+from app.usage_context import UsageContext, current_usage_collector, usage_scope
 from app.task_observability import TaskExecutionContext, log_task_event
 from app.models import (
     MutationResponse,
@@ -162,6 +164,7 @@ def create_online_knowledge_job(
             identity,
             lease,
             database_settings(),
+            current_usage_collector() if metering_enabled() else None,
         )
     except PostgresUnavailableError as exc:
         lease.release()
@@ -296,9 +299,14 @@ def resolve_online_model_access(
     return access
 
 
-def _run_online_knowledge_job(job_id, postgres_dsn, request_body, model_access, identity, lease, auth_settings):
+def _run_online_knowledge_job(job_id, postgres_dsn, request_body, model_access, identity, lease, auth_settings,
+                              usage_collector=None):
     try:
-        with user_context(identity, auth_settings):
+        context = None
+        if metering_enabled():
+            task_id = f"online_knowledge:{job_id}"
+            context = UsageContext(identity.user_id, "online_knowledge", task_id, root_task_id=task_id)
+        with user_context(identity, auth_settings), usage_scope(context, collector=usage_collector):
             _execute_online_knowledge_job(job_id, postgres_dsn, request_body, model_access)
     finally:
         lease.release()

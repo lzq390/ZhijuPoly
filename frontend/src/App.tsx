@@ -29,7 +29,7 @@ import type { StructureCanvasOwnerHandle } from "./components/StructureWorkbench
 import type { StructureSyncResult } from "./structure/workspace";
 import type { MonomerRetrosynthesisInput } from "./components/monomer-retrosynthesis/session";
 import {
-  ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
+  PersonalUsagePage, ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
   ExperimentWorkflowDemoPage, HighThroughputWorkflowDemoPage, HomopolymerPropertyPredictionPage,
   KnowledgeSearch, LabDataPage, MdSimulationDemoPage, MonomerMdSimulationPage, MonomerDftPage,
   MonomerPolymerizationPage, MonomerRetrosynthesisPage, PolytaoGenerationPage, ReverseDesignPage,
@@ -289,7 +289,7 @@ function AppContent() {
     const item = [...standaloneModules, ...moduleGroups.flatMap((group) => group.items)].find((candidate) => candidate.id === route.module);
     moduleTransition.request({
       route, href: pathFromRoute(route), history: "push", source: "navigation", kind: "module",
-      ...extra, target: { id: route.module, label: item?.label ?? (route.module === "home" ? "通用会话" : "实验数据") }
+      ...extra, target: { id: route.module, label: item?.label ?? (route.module === "home" ? "通用会话" : route.module === "personalUsage" ? "我的用量" : "实验数据") }
     });
   }
 
@@ -734,6 +734,7 @@ function AppContent() {
     }
   ];
   const isFullBleedModule =
+    activeModule === "personalUsage" ||
     activeModule === "explorer" ||
     activeModule === "homopolymerPrediction" ||
     activeModule === "databaseQuery" ||
@@ -771,6 +772,7 @@ function AppContent() {
       standaloneModules={standaloneModules}
       moduleGroups={moduleGroups}
       onOpenHome={openGeneralWorkspace}
+      onOpenUsage={() => navigate({ module: "personalUsage", datasetKey: null })}
       projects={projectSnapshot?.projects ?? []}
       activeProjectDirectory={
         activeModule === "home" ? projectSnapshot?.activeDirectory ?? null : null
@@ -811,6 +813,8 @@ function AppContent() {
           }}
         />
       </div>
+
+      {activeModule === "personalUsage" ? <PersonalUsagePage /> : null}
 
       {activeModule === "databaseQuery" ? (
         <DatabaseQueryPage
