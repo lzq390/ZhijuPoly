@@ -1,13 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
+import { ArrowDownToLine, Atom, Check, Clock3, Info, Library, LoaderCircle, PencilLine, Save, Search, Trash2, X } from 'lucide-react';
 import { getSessionEpoch, onSessionRetired } from '../auth/session';
+import { randomId } from '../auth/randomId';
 import { requestServiceAccess } from '../auth/guestAccess';
 import { ModalFocusSuspendedContext, useModalFocus } from '../hooks/useModalFocus';
 import type { StructureWorkspace } from '../structure/workspace';
 import { StructureSvg } from '../components/StructureSvg';
 import { fetchStructure2D } from '../services/api';
 import { structureLibraryApi as api } from './api';
-import { recordDocument, sourceLabel, type ImportedStructure, type StructureDocument, type StructureRecordSummary } from './types';
+import { recordDocument, sourceLabel, type ImportedStructure, type StructureDocument, type StructureLibraryStatus, type StructureRecordSummary } from './types';
 import './structure-library.css';
 
 type PickRequest = { label: string; resolve: (result: ImportedStructure | null) => void };
@@ -37,7 +39,11 @@ function LibraryModalContent({ title, children, onClose }: { title: string; chil
   useEffect(() => () => { const target = origin.current; requestAnimationFrame(() => target?.isConnected && target.focus()); }, []);
   return createPortal(<div className="np-library-overlay" ref={root}>
     <section role="dialog" aria-modal="true" aria-label={title} className="np-library-dialog" ref={panel}>
-      <header><h2>{title}</h2><button type="button" onClick={onClose} aria-label="关闭结构窗口">关闭</button></header>
+      <header className="np-library-header">
+        <span className="np-library-heading-icon"><Atom aria-hidden="true" /></span>
+        <h2>{title}</h2>
+        <button type="button" className="np-library-close" onClick={onClose} aria-label="关闭结构窗口" title="关闭"><X aria-hidden="true" /></button>
+      </header>
       {children}
     </section>
   </div>, document.body);
@@ -85,6 +91,7 @@ export function StructurePicker({ label, workspace, onClose }: {
   const [tab, setTab] = useState<'saved' | 'canvas'>('saved');
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<StructureRecordSummary[]>([]);
+  const [limits, setLimits] = useState<StructureLibraryStatus | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +99,8 @@ export function StructurePicker({ label, workspace, onClose }: {
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
   const [edit, setEdit] = useState<{ record: StructureRecordSummary; name: string; action: 'rename' | 'delete' } | null>(null);
+  const editPanel = useRef<HTMLElement>(null);
+  const editTrigger = useRef<HTMLButtonElement>(null);
   const epoch = useRef(getSessionEpoch()).current;
   const controller = useRef(new AbortController());
   const pageRequest = useRef<AbortController | null>(null);
@@ -100,13 +109,15 @@ export function StructurePicker({ label, workspace, onClose }: {
     controller.current = new AbortController();
     return () => { controller.current.abort(); pageRequest.current?.abort(); };
   }, []);
+  useEffect(() => { editPanel.current?.scrollIntoView?.({ block: 'nearest' }); }, [edit?.record.id, edit?.action]);
   useEffect(() => {
     if (tab !== 'saved') return;
     const abort = new AbortController(); pageRequest.current?.abort(); pageRequest.current = abort;
-    setSelected(null); setItems([]); setCursor(null); setLoading(true); setError(null);
+    setSelected(null); setEdit(null); setItems([]); setCursor(null); setLoading(true); setError(null);
     const timer = setTimeout(() => {
       void api.status(abort.signal).then(status => {
         if (!status.available) throw new Error(status.message || '个人结构库尚未启用。');
+        if (!abort.signal.aborted && alive()) setLimits(status);
         return api.list(query, null, abort.signal);
       }).then(result => { if (!abort.signal.aborted && alive()) { setItems(result.items); setCursor(result.next_cursor); } })
         .catch(reason => { if (!abort.signal.aborted && alive()) setError(reason instanceof Error ? reason.message : '无法加载结构库。'); })
@@ -147,34 +158,72 @@ export function StructurePicker({ label, workspace, onClose }: {
     finally { if (alive()) setBusy(false); }
   }
   return <LibraryModal title={`选择结构 · ${label}`} onClose={() => onClose(null)}>
-    <nav className="np-library-tabs" aria-label="结构来源">
-      <button type="button" aria-pressed={tab === 'saved'} disabled={busy} onClick={() => { setTab('saved'); setSelected(null); setEdit(null); setError(null); }}>已保存结构</button>
-      <button type="button" aria-pressed={tab === 'canvas'} disabled={busy} onClick={() => { setTab('canvas'); setSelected(null); setEdit(null); setError(null); }}>当前画板</button>
-    </nav>
-    {tab === 'saved' ? <>
-      <label className="np-library-search">搜索结构<input aria-label="搜索结构" value={query} onChange={e => setQuery(e.target.value)} maxLength={8000} placeholder="名称或 SMILES" disabled={busy} /></label>
-      <div className="np-library-list" role="radiogroup" aria-label="已保存结构">
-        {items.map(record => <article key={record.id} className={selected === record.id ? 'is-selected' : ''}>
-          <label><input type="radio" name="saved-structure" checked={selected === record.id} onChange={() => setSelected(record.id)} disabled={busy} />
-            {record.preview_svg ? <StructureSvg svg={record.preview_svg} alt={`${record.name} 结构预览`} /> : <span>暂无预览</span>}
-            <span><strong>{record.name}</strong><code>{record.smiles}</code><small>{new Date(record.created_at).toLocaleString()}</small></span>
-          </label>
-          <div><button type="button" disabled={busy} onClick={() => setEdit({ record, name: record.name, action: 'rename' })}>重命名</button>
-            <button type="button" disabled={busy} onClick={() => setEdit({ record, name: record.name, action: 'delete' })}>删除</button></div>
-        </article>)}
-        {!loading && !error && !items.length && <p>{query ? '没有匹配的结构。' : '还没有保存的结构。请在画板点击“保存结构”。'}</p>}
-        {loading && <p role="status">正在加载结构…</p>}
+    <div className="np-library-body">
+      <div className="np-library-source-bar">
+        <nav className="np-library-tabs" aria-label="结构来源">
+          <button type="button" aria-pressed={tab === 'canvas'} disabled={busy} onClick={() => { setTab('canvas'); setSelected(null); setEdit(null); setError(null); }}><PencilLine aria-hidden="true" />当前画板</button>
+          <button type="button" aria-pressed={tab === 'saved'} disabled={busy} onClick={() => { setTab('saved'); setSelected(null); setEdit(null); setError(null); }}><Library aria-hidden="true" />已保存结构</button>
+        </nav>
+        {tab === 'saved' && limits && limits.max_records > 0 && <p className="np-library-quota">
+          每个账号最多保存 {limits.max_records.toLocaleString('zh-CN')} 个结构
+        </p>}
       </div>
-      {cursor && <button type="button" disabled={loading || busy} onClick={() => void more()}>加载更多</button>}
-    </> : <label className="np-library-current"><input type="radio" aria-label="使用当前画板" name="saved-structure" checked={selected === 'canvas'} disabled={busy} onChange={() => setSelected('canvas')} />使用当前画板<code>{workspace.getSnapshot().smiles || '画板为空或尚未同步'}</code><small>确认时读取完整结构；读取失败将保留目标输入。</small></label>}
-    {edit && <div className="np-library-edit">
-      {edit.action === 'rename' ? <label>新名称<input aria-label="结构新名称" maxLength={100} value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} disabled={busy} /></label>
-        : <p>删除“{edit.record.name}”？已导入模块的结构不受影响。</p>}
-      <button type="button" disabled={busy || !edit.name.trim()} onClick={() => void manage()}>{edit.action === 'delete' ? '确认删除' : '保存名称'}</button>
-      <button type="button" disabled={busy} onClick={() => setEdit(null)}>取消修改</button>
-    </div>}
-    {error && <p role="alert">{error} {tab === 'saved' && <button type="button" disabled={busy} onClick={() => setReload(value => value + 1)}>刷新重试</button>}</p>}
-    <footer><button type="button" onClick={() => onClose(null)}>取消</button><button type="button" disabled={!selected || busy || !!edit} onClick={() => void confirm()}>{busy ? '处理中…' : '导入'}</button></footer>
+      {tab === 'saved' ? <>
+        <label className="np-library-search">搜索结构
+          <span className="np-library-search-field"><Search aria-hidden="true" /><input aria-label="搜索结构" value={query} onChange={e => setQuery(e.target.value)} maxLength={8000} placeholder="输入名称或 SMILES 搜索" disabled={busy} /></span>
+        </label>
+        <div className="np-library-list" role="radiogroup" aria-label="已保存结构">
+          {items.map(record => <article key={record.id} className={`np-library-record${selected === record.id ? ' is-selected' : ''}`}>
+            <label className="np-library-record-choice">
+              <input type="radio" name="saved-structure" checked={selected === record.id} onChange={() => setSelected(record.id)} disabled={busy} />
+              <span className="np-library-thumbnail">
+                {record.preview_svg ? <StructureSvg svg={record.preview_svg} alt={`${record.name} 结构预览`} /> : <span className="np-library-no-preview"><Atom aria-hidden="true" />暂无预览</span>}
+              </span>
+              <span className="np-library-record-info">
+                <span className="np-library-record-heading"><strong>{record.name}</strong>{selected === record.id && <span className="np-library-selected-badge"><Check aria-hidden="true" />已选择</span>}</span>
+                <code title={record.smiles}>{record.smiles}</code>
+                <small><Clock3 aria-hidden="true" /><time dateTime={record.created_at}>{new Date(record.created_at).toLocaleString()}</time></small>
+              </span>
+            </label>
+            <div className="np-library-record-actions">
+              <button type="button" className="np-library-button np-library-button-quiet" disabled={busy} onClick={event => { editTrigger.current = event.currentTarget; setEdit({ record, name: record.name, action: 'rename' }); }}><PencilLine aria-hidden="true" />重命名</button>
+              <button type="button" className="np-library-button np-library-button-danger-quiet" disabled={busy} onClick={event => { editTrigger.current = event.currentTarget; setEdit({ record, name: record.name, action: 'delete' }); }}><Trash2 aria-hidden="true" />删除</button>
+            </div>
+            {edit?.record.id === record.id && <section ref={editPanel} className={`np-library-edit np-library-edit-${edit.action}`} aria-label={edit.action === 'rename' ? '重命名结构' : '删除结构'}>
+              <div className="np-library-edit-heading">{edit.action === 'delete' ? <Trash2 aria-hidden="true" /> : <PencilLine aria-hidden="true" />}<strong>{edit.action === 'delete' ? '确认删除这个结构？' : '重命名结构'}</strong></div>
+              {edit.action === 'rename' ? <label>新名称<input aria-label="结构新名称" autoFocus maxLength={100} value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} disabled={busy} /></label>
+                : <p>“{edit.record.name}”删除后无法恢复，已导入模块的结构不受影响。</p>}
+              <div className="np-library-edit-actions">
+                <button type="button" className="np-library-button np-library-button-secondary" disabled={busy} onClick={() => { setEdit(null); editTrigger.current?.focus({ preventScroll: true }); }}>{edit.action === 'delete' ? '取消删除' : '取消修改'}</button>
+                <button type="button" className={`np-library-button np-library-button-${edit.action === 'delete' ? 'danger' : 'primary'}`} disabled={busy || !edit.name.trim()} onClick={() => void manage()}>
+                  {busy ? <LoaderCircle className="np-library-spinner" aria-hidden="true" /> : edit.action === 'delete' ? <Trash2 aria-hidden="true" /> : <Check aria-hidden="true" />}
+                  {busy ? (edit.action === 'delete' ? '正在删除…' : '保存中…') : (edit.action === 'delete' ? '确认删除' : '保存名称')}
+                </button>
+              </div>
+            </section>}
+          </article>)}
+          {!loading && !error && !items.length && <div className="np-library-empty"><Library aria-hidden="true" /><p>{query ? '没有匹配的结构。' : '还没有保存的结构。'}</p><small>{query ? '试试其他名称或 SMILES。' : '在画板点击“保存结构”，即可在这里找到它。'}</small></div>}
+          {loading && <p className="np-library-loading" role="status"><LoaderCircle className="np-library-spinner" aria-hidden="true" />正在加载结构…</p>}
+        </div>
+        {cursor && <button type="button" className="np-library-button np-library-button-secondary np-library-more" disabled={loading || busy} onClick={() => void more()}>加载更多</button>}
+      </> : <>
+        <label className={`np-library-current${selected === 'canvas' ? ' is-selected' : ''}`}>
+          <input type="radio" aria-label="使用当前画板" name="saved-structure" checked={selected === 'canvas'} disabled={busy} onChange={() => setSelected('canvas')} />
+          <span className="np-library-current-icon"><PencilLine aria-hidden="true" /></span>
+          <span className="np-library-current-info"><strong>使用当前画板</strong><small>导入画板上正在编辑的结构</small></span>
+          <code>{workspace.getSnapshot().smiles || '画板为空或尚未同步'}</code>
+        </label>
+        <p className="np-library-hint"><Info aria-hidden="true" />确认时读取完整结构；读取失败将保留目标输入。</p>
+      </>}
+      {error && <div className="np-library-error" role="alert"><span>{error}</span>{tab === 'saved' && <button type="button" className="np-library-button np-library-button-secondary" disabled={busy} onClick={() => setReload(value => value + 1)}>刷新重试</button>}</div>}
+    </div>
+    <footer className="np-library-footer">
+      <p className={`np-library-selection${selected ? ' has-selection' : ''}`}>{selected && <Check aria-hidden="true" />}<span>{edit ? '完成当前操作后可导入' : selected === 'canvas' ? '已选择当前画板' : selected ? `已选择：${items.find(record => record.id === selected)?.name || '结构'}` : '请选择一个结构'}</span></p>
+      <div className="np-library-footer-actions">
+        <button type="button" className="np-library-button np-library-button-secondary" onClick={() => onClose(null)}>取消</button>
+        <button type="button" className="np-library-button np-library-button-primary" disabled={!selected || busy || !!edit} onClick={() => void confirm()}>{busy && !edit ? <LoaderCircle className="np-library-spinner" aria-hidden="true" /> : <ArrowDownToLine aria-hidden="true" />}{busy && !edit ? '处理中…' : '导入'}</button>
+      </div>
+    </footer>
   </LibraryModal>;
 }
 
@@ -194,22 +243,29 @@ export function SaveStructureDialog({ document, workspace, onClose }: { document
   async function save() {
     if (busy || !name.trim()) return;
     setBusy(true); setError(null);
-    if (request.current?.name !== name.trim()) request.current = { name: name.trim(), id: crypto.randomUUID() };
     try {
+      // HTTP deployments lack crypto.randomUUID; keep ID failures inside the
+      // recovery path so the name/snapshot stay available for another attempt.
+      if (request.current?.name !== name.trim()) request.current = { name: name.trim(), id: randomId() };
       const status = await api.status(controller.current.signal);
       if (!status.available) throw new Error(status.message || '个人结构库尚未启用。');
       await api.save(document, request.current.name, request.current.id, controller.current.signal);
       if (!controller.current.signal.aborted && epoch === getSessionEpoch()) { workspace.markRecorded(document); onClose(true); }
-    } catch (reason) { if (!controller.current.signal.aborted && epoch === getSessionEpoch()) setError((reason as Error).message); }
+    } catch (reason) { if (!controller.current.signal.aborted && epoch === getSessionEpoch()) setError(reason instanceof Error ? reason.message : '保存失败，请重试。'); }
     finally { if (!controller.current.signal.aborted && epoch === getSessionEpoch()) setBusy(false); }
   }
   return <LibraryModal title="保存结构" onClose={() => onClose(false)}>
-    {preview && <StructureSvg svg={preview} alt="待保存结构预览" className="np-library-save-preview" />}
-    <code className="np-library-smiles">{document.smiles}</code>
-    <label>结构名称<input aria-label="结构名称" value={name} maxLength={100} disabled={busy} onChange={e => setName(e.target.value)} /></label>
-    <p>保存此次完整画板。之后修改画板不会覆盖此记录。</p>
-    {error && <p role="alert">{error}</p>}
-    <footer><button type="button" onClick={() => onClose(false)}>取消</button><button type="button" disabled={busy || !name.trim()} onClick={() => void save()}>{busy ? '保存中…' : '确认保存'}</button></footer>
+    <div className="np-library-body">
+      {preview && <StructureSvg svg={preview} alt="待保存结构预览" className="np-library-save-preview" />}
+      <code className="np-library-smiles">{document.smiles}</code>
+      <label>结构名称<input aria-label="结构名称" value={name} maxLength={100} disabled={busy} onChange={e => setName(e.target.value)} /></label>
+      <p className="np-library-hint"><Info aria-hidden="true" />保存此次完整画板。之后修改画板不会覆盖此记录。</p>
+      {error && <p className="np-library-error" role="alert">{error}</p>}
+    </div>
+    <footer className="np-library-footer"><div className="np-library-footer-actions">
+      <button type="button" className="np-library-button np-library-button-secondary" onClick={() => onClose(false)}>取消</button>
+      <button type="button" className="np-library-button np-library-button-primary" disabled={busy || !name.trim()} onClick={() => void save()}>{busy ? <LoaderCircle className="np-library-spinner" aria-hidden="true" /> : <Save aria-hidden="true" />}{busy ? '保存中…' : '确认保存'}</button>
+    </div></footer>
   </LibraryModal>;
 }
 

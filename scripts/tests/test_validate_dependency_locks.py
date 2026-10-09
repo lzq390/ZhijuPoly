@@ -64,6 +64,77 @@ class DependencyLockPolicyTests(unittest.TestCase):
 
             self.assertIn("CUDA 11 packages must not be mixed", "\n".join(failures))
 
+    def test_ci_overlay_rejects_direct_and_transitive_runtime_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            backend = root / "backend"
+            backend.mkdir()
+            (backend / "requirements.lock").write_text(
+                "sentencepiece==0.2.1\ntzdata==2026.2\n", encoding="utf-8"
+            )
+            (backend / "requirements-ci.lock").write_text(
+                "sentencepiece==0.2.2\ntzdata==2026.3\n", encoding="utf-8"
+            )
+            failures = policy.validate_backend_ci_overlay(root)
+            self.assertEqual(len(failures), 2)
+            self.assertIn("changes runtime sentencepiece==0.2.1 to 0.2.2", failures[0])
+            self.assertIn("changes runtime tzdata==2026.2 to 2026.3", failures[1])
+
+    def test_ci_overlay_preserves_runtime_and_allows_test_only_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            backend = root / "backend"
+            backend.mkdir()
+            (backend / "requirements.lock").write_text(
+                "sentencepiece==0.2.1\ntzdata==2026.2\n", encoding="utf-8"
+            )
+            (backend / "requirements-ci.lock").write_text(
+                "sentencepiece==0.2.1\ntzdata==2026.2\npytest==8.3.4\n", encoding="utf-8"
+            )
+            self.assertEqual(policy.validate_backend_ci_overlay(root), [])
+
+    def test_ci_overlay_rejects_duplicate_marker_pins_in_either_order(self) -> None:
+        hash_line = "    --hash=sha256:" + "a" * 64 + "\n"
+        runtime_pin = "example==1.0 \\\n" + hash_line
+        marker_pins = (
+            'example==2.0 ; python_version < "3.12" \\\n' + hash_line,
+            'example==1.0 ; python_version >= "3.12" \\\n' + hash_line,
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            backend = root / "backend"
+            backend.mkdir()
+            runtime_lock = backend / "requirements.lock"
+            ci_lock = backend / "requirements-ci.lock"
+            runtime_lock.write_text(runtime_pin, encoding="utf-8")
+            for pins in (marker_pins, marker_pins[::-1]):
+                with self.subTest(pins=pins):
+                    ci_lock.write_text("".join(pins), encoding="utf-8")
+                    self.assertEqual(policy.validate_lock_hashes(runtime_lock), [])
+                    self.assertEqual(policy.validate_lock_hashes(ci_lock), [])
+                    failures = policy.validate_backend_ci_overlay(root)
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn("duplicate normalized requirement: example", failures[0])
+
+    def test_ci_overlay_rejects_normalized_duplicate_names_in_either_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            backend = root / "backend"
+            backend.mkdir()
+            runtime_lock = backend / "requirements.lock"
+            ci_lock = backend / "requirements-ci.lock"
+            for duplicate_lock in (runtime_lock, ci_lock):
+                with self.subTest(lock=duplicate_lock.name):
+                    runtime_lock.write_text("foo-bar-baz==1.0\n", encoding="utf-8")
+                    ci_lock.write_text("foo-bar-baz==1.0\n", encoding="utf-8")
+                    duplicate_lock.write_text(
+                        "Foo.BAR_baz[one]==1.0\nfoo-bar-baz[two]==1.0\n", encoding="utf-8"
+                    )
+                    failures = policy.validate_backend_ci_overlay(root)
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(str(duplicate_lock), failures[0])
+                    self.assertIn("duplicate normalized requirement: foo-bar-baz", failures[0])
+
     def test_cuda_12_base_runtime_includes_split_cuda_packages(self) -> None:
         self.assertIn("nvidia-cusparselt-cu12", policy.BASE_RUNTIME_PACKAGES)
         self.assertIn("nvidia-nvjitlink-cu12", policy.BASE_RUNTIME_PACKAGES)

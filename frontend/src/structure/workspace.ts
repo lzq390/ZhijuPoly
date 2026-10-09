@@ -95,7 +95,7 @@ export class StructureWorkspace {
   }
   private scheduleSave() {
     this.stopSave();
-    if (this.mutationDepth || this.state.status !== "ready") return;
+    if (this.mutationDepth || this.documentOperation || this.state.status !== "ready") return;
     const current = this.guard();
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
@@ -284,7 +284,8 @@ export class StructureWorkspace {
     }
   }
 
-  beginMutation() {
+  beginMutation(operation?: symbol) {
+    if (this.documentOperation && operation !== this.documentOperation) throw new Error("正在保存或恢复结构，请稍后重试。");
     const current = this.guard();
     ++this.mutationDepth;
     this.stopSave();
@@ -299,6 +300,7 @@ export class StructureWorkspace {
 
   /** Internal writes have already been accepted by the editor/standardizer. */
   commitSmiles(value: string, preserveKet = false) {
+    if (this.documentOperation) throw new Error("正在保存或恢复结构，请稍后重试。");
     const smiles = value.trim();
     const previous = this.state;
     if (smiles === previous.smiles) return;
@@ -313,6 +315,7 @@ export class StructureWorkspace {
   }
 
   setDraft = (draft: string, draftError: string | null = null) => {
+    if (this.documentOperation) throw new Error("正在保存或恢复结构，请稍后重试。");
     const clearNotice = draft === this.state.smiles && !draftError &&
       [deferredDraftNotice, unsyncedDraftNotice, unsyncedDraftWithoutSnapshotNotice].includes(this.state.notice || "");
     if (draft.length > 8000 || (draft === this.state.draft && draftError === this.state.draftError && !clearNotice)) return;
@@ -322,13 +325,13 @@ export class StructureWorkspace {
 
   /** External setSmiles callers write a draft, then an accepted document. */
   setSmiles = (value: string) => {
-    if (this.documentOperation) return;
+    if (this.documentOperation) throw new Error("正在保存或恢复结构，请稍后重试。");
     if (value.length > 8000) return;
     const request = ++this.externalRevision;
     const revision = this.state.revision;
     // This App-owned request can outlive the text-only page that started it.
     // A newer draft, rather than mounting its destination editor, supersedes it.
-    const current = () => request === this.externalRevision && this.state.draft === value && revision === this.state.revision;
+    const current = () => !this.documentOperation && request === this.externalRevision && this.state.draft === value && revision === this.state.revision;
     this.setDraft(value);
     void (value.trim() ? this.standardize(value.trim()) : Promise.resolve("")).then((result) => {
       if (!current()) return;
@@ -496,59 +499,74 @@ export class StructureWorkspace {
   captureDocument = async (signal?: AbortSignal): Promise<StructureDocument> => {
     const current = this.guard();
     const check = () => { if (!current() || signal?.aborted) throw stale(); };
+    check();
     if (this.state.draftError || this.state.draft !== this.state.smiles) throw new Error("请先完成或修正 SMILES 同步，再保存结构。");
     if (this.documentOperation || this.mutationDepth) throw new Error("画板正在更新，请稍后重试。");
-    const editor = this.getEditor();
+    const token = Symbol("capture-document");
+    const editor = this.getEditor(token);
     if (!editor) {
       if (!this.lastGoodFaithful || this.state.status !== "unmounted" || !this.lastGood?.ket || !this.savedDocumentIsCurrent()) throw new Error("结构编辑器尚未就绪。");
       if (!this.lastGood.smiles) throw new Error("画板为空，请先绘制结构。");
       return { ...this.lastGood, ket: this.lastGood.ket, snapshot_schema_version: 1, editor_version: this.editorVersion };
     }
-    for (let attempt = 0; attempt < 8; attempt++) {
-      check();
-      const before = this.state;
-      if (before.dirty) await editor.settle();
-      const [ketSource, rawSmiles] = await Promise.all([editor.getKet(), editor.getSmiles()]);
-      check();
-      if (before.revision !== this.state.revision || before.draft !== this.state.draft || this.mutationDepth) { await pause(80); continue; }
-      const parsed = JSON.parse(ketSource);
-      const smiles = rawSmiles.trim();
-      if (!Array.isArray(parsed?.root?.nodes)) throw new Error("画板返回了无效的 KET 文档。");
-      if (!smiles || smiles === "{}" || !ketHasAtoms(parsed)) {
-        if (before.smiles || ketHasAtoms(parsed) || smiles && smiles !== "{}") { await pause(80); continue; }
-        throw new Error("画板为空，请先绘制结构。");
+    this.documentOperation = token;
+    this.stopSave();
+    this.publish({ documentBusy: true });
+    try {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        check();
+        const before = this.state;
+        if (before.dirty) await editor.settle();
+        const [ketSource, rawSmiles] = await Promise.all([editor.getKet(), editor.getSmiles()]);
+        check();
+        if (before.revision !== this.state.revision || before.draft !== this.state.draft || this.mutationDepth) { await pause(80); continue; }
+        const parsed = JSON.parse(ketSource);
+        const smiles = rawSmiles.trim();
+        if (!Array.isArray(parsed?.root?.nodes)) throw new Error("画板返回了无效的 KET 文档。");
+        if (!smiles || smiles === "{}" || !ketHasAtoms(parsed)) {
+          if (before.smiles || ketHasAtoms(parsed) || smiles && smiles !== "{}") { await pause(80); continue; }
+          throw new Error("画板为空，请先绘制结构。");
+        }
+        // A protected display fallback is not an exact editable snapshot.
+        if (!shouldAdoptEditorSmiles(before.smiles, smiles)) throw new Error("画板与聚合物连接点不一致，请重新同步完整结构后保存。");
+        const canonical = await bounded(this.standardize(smiles), 8000, signal ?? this.operations.signal);
+        check();
+        if (!canonical || !shouldAdoptEditorSmiles(smiles, canonical)) throw new Error("结构校验失败，未保存旧结构。");
+        if (before.revision !== this.state.revision || before.draft !== this.state.draft || this.mutationDepth) { await pause(80); continue; }
+        const document = { smiles, ket: JSON.stringify(cleanKet(parsed)), revision: before.revision };
+        this.lastGood = document;
+        this.lastGoodFaithful = true;
+        this.publish({ ...document, dirty: false, draft: smiles, draftError: null });
+        return { ...document, snapshot_schema_version: 1, editor_version: this.editorVersion };
       }
-      // A protected display fallback is not an exact editable snapshot.
-      if (!shouldAdoptEditorSmiles(before.smiles, smiles)) throw new Error("画板与聚合物连接点不一致，请重新同步完整结构后保存。");
-      const canonical = await bounded(this.standardize(smiles), 8000, signal ?? this.operations.signal);
-      check();
-      if (!canonical || !shouldAdoptEditorSmiles(smiles, canonical)) throw new Error("结构校验失败，未保存旧结构。");
-      if (before.revision !== this.state.revision || before.draft !== this.state.draft || this.mutationDepth) { await pause(80); continue; }
-      const document = { smiles, ket: JSON.stringify(cleanKet(parsed)), revision: before.revision };
-      this.lastGood = document;
-      this.lastGoodFaithful = true;
-      this.publish({ ...document, dirty: false, draft: smiles, draftError: null });
-      return { ...document, snapshot_schema_version: 1, editor_version: this.editorVersion };
+      throw new Error("画板仍在变化，未能获取完整快照，请稍后重试。");
+    } finally {
+      if (this.documentOperation === token) {
+        this.documentOperation = null;
+        this.publish({ documentBusy: false });
+        this.scheduleSave();
+      }
     }
-    throw new Error("画板仍在变化，未能获取完整快照，请稍后重试。");
   };
 
   restoreDocument = async (document: StructureDocument, signal?: AbortSignal, smilesOnly = false) => {
     if (this.documentOperation || this.mutationDepth) throw new Error("画板正在更新，请稍后重试。");
     const current = this.guard();
     const check = () => { if (!current() || signal?.aborted) throw stale(); };
-    const saved = await this.saveSnapshot();
-    check();
-    if (saved.status !== "saved") throw new Error(saved.message || "无法备份当前画板，未替换结构。");
-    if (this.documentOperation || this.mutationDepth) throw new Error("画板正在更新，请稍后重试。");
-    const backup = { ...this.state };
     const token = Symbol("restore-document");
-    const editor = this.getEditor(token);
-    if (!editor) throw new Error("请等待画板就绪后载入结构。");
     this.documentOperation = token;
     this.publish({ documentBusy: true });
-    const finish = this.beginMutation();
+    let backup: StructureWorkspaceState | null = null;
+    let finish = () => {};
     try {
+      check();
+      const saved = await this.saveSnapshot();
+      check();
+      if (saved.status !== "saved") throw new Error(saved.message || "无法备份当前画板，未替换结构。");
+      const editor = this.getEditor(token);
+      if (!editor) throw new Error("请等待画板就绪后载入结构。");
+      backup = { ...this.state };
+      finish = this.beginMutation(token);
       await editor.setMolecule(smilesOnly ? document.smiles : document.ket);
       check();
       await editor.settle();
@@ -568,7 +586,7 @@ export class StructureWorkspace {
       this.markRecorded({ ...document, ...snapshot });
     } catch (error) {
       // Retire uncancellable writes; never let them repaint after rollback.
-      if (current()) {
+      if (current() && backup) {
         this.invalidateEditor();
         const revision = this.state.revision + 1;
         this.lastGood = { smiles: backup.smiles, ket: backup.ket, revision };
@@ -581,6 +599,7 @@ export class StructureWorkspace {
       if (this.documentOperation === token) {
         this.documentOperation = null;
         this.publish({ documentBusy: false });
+        this.scheduleSave();
       }
     }
   };

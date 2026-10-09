@@ -52,10 +52,12 @@ export function CanvasLibraryActions({ workspace, canvas, disabled }: { workspac
     <button type="button" className="np-sw-tool" data-workbench-tool="save-record" disabled={disabled || busy || !library} onClick={() => void save()}><Save aria-hidden="true" /><span>保存结构</span></button>
     <button type="button" className="np-sw-tool" data-workbench-tool="structure-library" disabled={busy || !library} onClick={() => void pick()}><Library aria-hidden="true" /><span>我的结构</span></button>
     {pending && <LibraryModal title={fallback ? '恢复结构布局失败' : '载入已保存结构'} onClose={() => { if (!busy) setPending(null); }}>
-      <p>{fallback ? '原画板已保留。可仅按 SMILES 载入此结构，绘图布局将重新生成。' : '当前画板或文本草稿还有尚未保存到结构库的变化。'}</p>
-      <footer><button type="button" disabled={busy} onClick={() => setPending(null)}>取消</button>
-        {!fallback && <button type="button" disabled={busy} onClick={async () => { const document = pending; setPending(null); if (await save()) await restore(document); else if (current()) setPending(document); }}>先保存再载入</button>}
-        <button type="button" disabled={busy || !canvas.isEditorReady} onClick={() => void restore(pending, fallback)}>{fallback ? '仅按 SMILES 载入' : '直接载入'}</button></footer>
+      <div className="np-library-body"><p>{fallback ? '原画板已保留。可仅按 SMILES 载入此结构，绘图布局将重新生成。' : '当前画板或文本草稿还有尚未保存到结构库的变化。'}</p></div>
+      <footer className="np-library-footer"><div className="np-library-footer-actions">
+        <button type="button" className="np-library-button np-library-button-secondary" disabled={busy} onClick={() => setPending(null)}>取消</button>
+        <button type="button" className={`np-library-button np-library-button-${fallback ? 'primary' : 'secondary'}`} disabled={busy || !canvas.isEditorReady} onClick={() => void restore(pending, fallback)}>{fallback ? '仅按 SMILES 载入' : '直接载入'}</button>
+        {!fallback && <button type="button" className="np-library-button np-library-button-primary" disabled={busy} onClick={async () => { const document = pending; setPending(null); if (await save()) await restore(document); else if (current()) setPending(document); }}>先保存再载入</button>}
+      </div></footer>
     </LibraryModal>}
   </>;
 }

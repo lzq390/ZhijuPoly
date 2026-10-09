@@ -241,6 +241,7 @@ export function StructureCanvasSurface({
           rows={2}
           value={canvas.smilesDraft}
           maxLength={8000}
+          disabled={Boolean(structure.workspace.getSnapshot().documentBusy)}
           spellCheck={false}
           aria-invalid={canvas.smilesDraftState === "error"}
           onChange={(event) => {

@@ -545,13 +545,18 @@
 .np-monomer-md-simulation .np-mmd-components-heading span { color: var(--np-sw-muted); font-size: 9.5px; }
 .np-monomer-md-simulation .np-mmd-components-table { overflow: hidden; border: 1px solid var(--np-mmd-soft-border); border-radius: 8px; }
 .np-monomer-md-simulation .np-mmd-components-table__head,
-.np-monomer-md-simulation .np-mmd-component-row { display: grid; grid-template-columns: 150px 120px minmax(0, 1fr) 46px; gap: 8px; align-items: center; }
+.np-monomer-md-simulation .np-mmd-component-row { display: grid; grid-template-columns: 150px 120px minmax(0, 1fr) 136px; gap: 8px; align-items: center; }
 .np-monomer-md-simulation .np-mmd-components-table__head { min-height: 31px; padding: 0 8px; color: var(--np-mmd-text-secondary); background: #f4f8fc; font-size: 9.5px; }
 .np-monomer-md-simulation .np-mmd-component-row { border-top: 1px solid var(--np-mmd-soft-border); padding: 7px 8px; }
 .np-monomer-md-simulation .np-mmd-component-row label { min-width: 0; }
 .np-monomer-md-simulation .np-mmd-component-row input { width: 100%; height: 34px; padding: 0 8px; font-size: 10.5px; }
 .np-monomer-md-simulation .np-mmd-mono-input { font-family: var(--font-mono); }
-.np-monomer-md-simulation .np-mmd-component-row > button { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid rgba(220,38,38,.16); border-radius: 6px; color: #b91c1c; background: #fff; cursor: pointer; }
+.np-monomer-md-simulation .np-mmd-component-actions { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
+.np-monomer-md-simulation .np-mmd-component-actions .np-library-import { min-width: 0; flex: 1; font-size: 10.5px; }
+.np-monomer-md-simulation .np-mmd-component-actions .np-library-import button { white-space: nowrap; }
+.np-monomer-md-simulation .np-mmd-component-actions .np-library-import small { max-width: 100%; overflow-wrap: anywhere; }
+.np-monomer-md-simulation .np-mmd-component-actions > button { display: grid; width: 32px; height: 32px; flex: none; place-items: center; border: 1px solid rgba(220,38,38,.16); border-radius: 6px; color: #b91c1c; background: #fff; cursor: pointer; }
+.np-monomer-md-simulation .np-mmd-component-actions > button svg { width: 16px; height: 16px; }
 .np-monomer-md-simulation .np-mmd-mobile-label { display: none; }
 .np-monomer-md-simulation .np-mmd-apply-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .np-monomer-md-simulation .np-mmd-apply-row > span { color: var(--np-sw-muted); font-size: 10px; }
@@ -999,9 +1004,9 @@
   .np-monomer-md-simulation .np-mmd-protocol-grid { grid-template-columns: repeat(2, 1fr); }
   .np-monomer-md-simulation .np-mmd-fields-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .np-monomer-md-simulation .np-mmd-components-table__head { display: none; }
-  .np-monomer-md-simulation .np-mmd-component-row { grid-template-columns: 1fr 1fr 40px; }
-  .np-monomer-md-simulation .np-mmd-component-row label:nth-child(3) { grid-column: 1 / 3; }
-  .np-monomer-md-simulation .np-mmd-component-row > button { grid-column: 3; grid-row: 1; }
+  .np-monomer-md-simulation .np-mmd-component-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .np-monomer-md-simulation .np-mmd-component-row label:nth-child(3),
+  .np-monomer-md-simulation .np-mmd-component-actions { grid-column: 1 / -1; }
   .np-monomer-md-simulation .np-mmd-mobile-label { display: block; margin-bottom: 3px; color: var(--np-sw-muted); font-size: 8.5px; }
   .np-monomer-md-simulation .np-mmd-submit-bar { align-items: stretch; flex-direction: column; }
   .np-monomer-md-simulation .np-mmd-submit-bar__action { align-items: stretch; }
@@ -1185,11 +1190,15 @@
   .np-monomer-md-simulation .np-mmd-components-table__head { font-size: 13px; }
   .np-monomer-md-simulation .np-mmd-components-table { border-radius: 11px; }
   .np-monomer-md-simulation .np-mmd-components-table__head,
-  .np-monomer-md-simulation .np-mmd-component-row { grid-template-columns: 210px 165px minmax(0,1fr) 60px; gap: 12px; }
+  .np-monomer-md-simulation .np-mmd-component-row { grid-template-columns: 210px 165px minmax(0,1fr) 184px; gap: 12px; }
   .np-monomer-md-simulation .np-mmd-components-table__head { min-height: 43px; padding: 0 12px; }
   .np-monomer-md-simulation .np-mmd-component-row { padding: 10px 12px; }
   .np-monomer-md-simulation .np-mmd-component-row input { height: 47px; padding: 0 12px; font-size: 15px; }
-  .np-monomer-md-simulation .np-mmd-component-row > button { width: 44px; height: 44px; }
+  .np-monomer-md-simulation .np-mmd-component-actions { gap: 12px; }
+  .np-monomer-md-simulation .np-mmd-component-actions .np-library-import { font-size: 15px; }
+  .np-monomer-md-simulation .np-mmd-component-actions .np-library-import button { min-height: 44px; }
+  .np-monomer-md-simulation .np-mmd-component-actions > button { width: 44px; height: 44px; }
+  .np-monomer-md-simulation .np-mmd-component-actions > button svg { width: 20px; height: 20px; }
   .np-monomer-md-simulation .np-mmd-apply-row { gap: 18px; margin-top: 18px; }
   .np-monomer-md-simulation .np-mmd-apply-row > span,
   .np-monomer-md-simulation .np-mmd-json-editor > p,

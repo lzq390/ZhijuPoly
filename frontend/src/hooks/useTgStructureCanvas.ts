@@ -810,6 +810,7 @@ export function useTgStructureCanvas({
   }
 
   function updateSmilesDraft(nextValue: string) {
+    if (workspace.getSnapshot().documentBusy) throw new Error("正在保存或恢复结构，请稍后重试。");
     if (nextValue.length > TG_SMILES_DRAFT_MAX_LENGTH) return;
     if (smilesDraftTimerRef.current !== null) {
       window.clearTimeout(smilesDraftTimerRef.current);
@@ -1239,9 +1240,10 @@ export function useTgStructureCanvas({
     if (workspace.getSnapshot().documentBusy || isBusy) throw new Error("画板正在更新，请稍后重试。");
     if (smilesDraftTimerRef.current !== null) window.clearTimeout(smilesDraftTimerRef.current);
     smilesDraftTimerRef.current = null;
-    ++smilesDraftRevisionRef.current;
+    const draftRevision = ++smilesDraftRevisionRef.current;
     await smilesDraftQueueRef.current;
     if (!active() || identityEpoch !== getSessionEpoch() || signal?.aborted) throw new Error("画板操作已失效。");
+    if (draftRevision !== smilesDraftRevisionRef.current || backup.draft !== workspace.getSnapshot().draft || backup.draftError !== workspace.getSnapshot().draftError) throw new Error("输入已变化，请重新载入结构。");
     workspace.setDraft(backup.draft, backup.draftError);
     await workspace.restoreDocument(saved, signal, smilesOnly);
     if (identityEpoch !== getSessionEpoch() || !mountedRef.current) return;

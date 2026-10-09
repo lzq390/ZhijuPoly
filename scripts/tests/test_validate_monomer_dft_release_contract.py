@@ -48,11 +48,10 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
         manifest_path = "backend/migrations/postgres/manifest.json"
         manifest = json.loads((REPOSITORY_ROOT / manifest_path).read_text())
         manifest["migrations"] = [entry for entry in manifest["migrations"]
-                                  if entry["version"] not in {
-                                      "0017_user_isolation_prepare", "0018_user_isolation_cutover", "0019_service_auth_least_privilege"}]
+                                  if entry["version"] < "0017_user_isolation_prepare"]
         main_path = "backend/app/main.py"
         main = (REPOSITORY_ROOT / main_path).read_text().replace(
-            "schema_target=SCHEMA_TARGET_ISOLATION", "schema_target=SCHEMA_TARGET_STARTUP"
+            "schema_target=SCHEMA_TARGET_CURRENT_ISOLATION", "schema_target=SCHEMA_TARGET_STARTUP"
         ).replace("        api_app.state.auth.assert_application_ready()\n", "")
         replacements = {manifest_path: json.dumps(manifest), main_path: main}
         self.assertEqual(self._schema_failures_with_sources(replacements), [])
@@ -66,17 +65,107 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
         main_path = "backend/app/main.py"
         main = (REPOSITORY_ROOT / main_path).read_text()
         mutations = {
-            "legacy-target": (main.replace("schema_target=SCHEMA_TARGET_ISOLATION",
-                                            "schema_target=SCHEMA_TARGET_STARTUP"),
-                              "backend startup must use SCHEMA_TARGET_ISOLATION"),
-            "comment-only-auth": (main.replace("        api_app.state.auth.assert_application_ready()",
-                                                "        # api_app.state.auth.assert_application_ready()"),
-                                  "user isolation startup must assert application authentication readiness"),
+            target: (main.replace("schema_target=SCHEMA_TARGET_CURRENT_ISOLATION",
+                                  "schema_target=" + target),
+                     "backend startup must use SCHEMA_TARGET_CURRENT_ISOLATION")
+            for target in ("SCHEMA_TARGET_STARTUP", "SCHEMA_TARGET_FINAL",
+                           "SCHEMA_TARGET_ISOLATION", "UNREVIEWED_TARGET")
         }
+        mutations["comment-only-auth"] = (
+            main.replace("        api_app.state.auth.assert_application_ready()",
+                         "        # api_app.state.auth.assert_application_ready()"),
+            "user isolation startup must assert application authentication readiness",
+        )
         for name, (source, expected) in mutations.items():
             with self.subTest(mutation=name):
                 self.assertNotEqual(source, main)
                 self.assertIn(expected, self._schema_failures_with_sources({main_path: source}))
+
+    def test_historical_0019_startup_keeps_explicit_isolation_contract(self) -> None:
+        manifest_path = "backend/migrations/postgres/manifest.json"
+        manifest = json.loads((REPOSITORY_ROOT / manifest_path).read_text())
+        manifest["migrations"] = [entry for entry in manifest["migrations"]
+                                  if entry["version"] <= "0019_service_auth_least_privilege"]
+        main_path = "backend/app/main.py"
+        main = (REPOSITORY_ROOT / main_path).read_text().replace(
+            "schema_target=SCHEMA_TARGET_CURRENT_ISOLATION", "schema_target=SCHEMA_TARGET_ISOLATION"
+        )
+        replacements = {manifest_path: json.dumps(manifest), main_path: main}
+        self.assertEqual(self._schema_failures_with_sources(replacements), [])
+        replacements[main_path] = main.replace(
+            "schema_target=SCHEMA_TARGET_ISOLATION", "schema_target=SCHEMA_TARGET_STARTUP"
+        )
+        self.assertIn("backend startup must use SCHEMA_TARGET_ISOLATION",
+                      self._schema_failures_with_sources(replacements))
+
+    def test_current_startup_rejects_unbounded_or_changed_resolver(self) -> None:
+        relative = "backend/app/postgres_preflight.py"
+        source = (REPOSITORY_ROOT / relative).read_text()
+        membership = ('max(applied_migrations) in {\n'
+                      '                        LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION,\n'
+                      '                    }')
+        self.assertIn(membership, source)
+        mutations = {
+            "unbounded": source.replace(membership, "max(applied_migrations) >= LIBRARY_VERSION"),
+            "unknown-suffix": source.replace(membership, membership.replace(
+                "ENTITLEMENT_VERSION,", "ENTITLEMENT_VERSION, UNREVIEWED_VERSION,")),
+            "missing-known-boundary": source.replace(membership, membership.replace("USAGE_VERSION, ", "")),
+            "legacy-fallback": source.replace("} else SCHEMA_TARGET_ISOLATION)", "} else SCHEMA_TARGET_STARTUP)"),
+            "disabled-resolver": source.replace("if schema_target == SCHEMA_TARGET_CURRENT_ISOLATION:", "if False:"),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, source)
+                self.assertIn("current isolation resolver must accept only exact release-known migration boundaries",
+                              self._schema_failures_with_sources({relative: mutated}))
+
+    def test_current_startup_retains_ledger_role_acl_and_database_checks(self) -> None:
+        relative = "backend/app/postgres_preflight.py"
+        source = (REPOSITORY_ROOT / relative).read_text()
+        for required in (
+            "validate_application_migration_ledger(connection)",
+            "validate_application_migration_ledger(api)",
+            'validate_runtime_role(connection, "nexpoly_service")',
+            'validate_runtime_role(api, "nexpoly_api")',
+            "validate_isolation_schema(connection, boundary)",
+            "validate_service_auth_privileges(connection, require_login=True)",
+            "database_identity(api) != service_database",
+            'api_ledger[-1]["version"] != boundary',
+        ):
+            with self.subTest(protection=required):
+                self.assertIn(required, source)
+                failures = self._schema_failures_with_sources({relative: source.replace(required, "None")})
+                self.assertIn("current isolation startup protection is missing: " + required, failures)
+
+    def test_current_startup_requires_isolation_membership_and_profiles(self) -> None:
+        relative = "backend/app/postgres_preflight.py"
+        source = (REPOSITORY_ROOT / relative).read_text()
+        removed = source.replace(
+            "SCHEMA_TARGET_STRUCTURE_LIBRARY, SCHEMA_TARGET_CURRENT_ISOLATION})",
+            "SCHEMA_TARGET_STRUCTURE_LIBRARY})",
+        )
+        self.assertNotEqual(removed, source)
+        self.assertIn("current startup targets must retain all isolation checks",
+                      self._schema_failures_with_sources({relative: removed}))
+        for name in ("SCHEMA_TARGET_CURRENT_ISOLATION", "SCHEMA_TARGET_STRUCTURE_LIBRARY"):
+            with self.subTest(profile=name):
+                mutated = re.sub(rf'^{name} = .*$', f'{name} = "unreviewed"', source, flags=re.MULTILINE)
+                self.assertNotEqual(mutated, source)
+                self.assertIn("Postgres current-isolation schema profile is missing: " + name,
+                              self._schema_failures_with_sources({relative: mutated}))
+
+    def test_current_startup_requires_every_private_expansion_once(self) -> None:
+        relative = "backend/migrations/postgres/manifest.json"
+        manifest = json.loads((REPOSITORY_ROOT / relative).read_text())
+        for version in ("0020_structure_library", "0021_usage_metering"):
+            for duplicate in (False, True):
+                with self.subTest(version=version, duplicate=duplicate):
+                    entries = [entry for entry in manifest["migrations"] if entry["version"] != version]
+                    if duplicate:
+                        entries.extend([entry for entry in manifest["migrations"] if entry["version"] == version] * 2)
+                    mutated = dict(manifest, migrations=entries)
+                    self.assertIn("current isolation startup requires each intervening private migration exactly once",
+                                  self._schema_failures_with_sources({relative: json.dumps(mutated)}))
 
     def test_isolated_startup_requires_complete_migration_chain(self) -> None:
         relative = "backend/migrations/postgres/manifest.json"

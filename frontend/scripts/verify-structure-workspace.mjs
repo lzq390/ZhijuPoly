@@ -90,6 +90,9 @@ await context.route("**/*", (route) => {
   return ["GET", "HEAD"].includes(request.method()) ? route.continue() : route.abort();
 });
 await context.addInitScript(() => {
+  // Public HTTP development origins expose getRandomValues, but not randomUUID.
+  // Exercise saving with that same API availability even on loopback CI URLs.
+  Object.defineProperty(globalThis.crypto, 'randomUUID', { configurable: true, value: undefined });
   // SDK access is isolated in this test helper; application consumers use the adapter.
   window.__probeEditor = () => {
     const root = document.querySelector("[data-structure-editor]");
@@ -231,7 +234,8 @@ try {
   await page.getByText('已载入保存的结构与布局。', { exact: true }).waitFor();
   assert.deepEqual((await read()).geometry, expected.geometry);
   assert.ok(JSON.stringify((await read()).ket).includes('NexPoly layout label'));
-  result.personalLibrary = { records: libraryRecords.length, independentAB: true, reloadRestore: true };
+  assert.ok(libraryRecords.every(record => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(record.client_request_id)));
+  result.personalLibrary = { records: libraryRecords.length, independentAB: true, reloadRestore: true, httpCompatibleSave: true };
   await input().fill('C(');
   await page.getByText('SMILES 无效或尚未完整，原画板未修改。', { exact: true }).waitFor();
   await chooseRecord('浏览器 B', page.getByRole('button', { name: '我的结构', exact: true }));

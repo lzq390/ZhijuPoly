@@ -43,7 +43,7 @@ beforeEach(() => {
   api.detail.mockImplementation(async id => records.find(record => record.id === id));
   api.save.mockResolvedValue(records[0]);
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('personal structure library', () => {
   it('imports A and B independently while the canvas remains C, with no implicit current read', async () => {
@@ -106,7 +106,8 @@ describe('personal structure library', () => {
     expect(screen.getByLabelText('SMILES', { selector: '#monomer-b-smiles' })).toHaveProperty('value', '');
   });
 
-  it('saves a fixed snapshot and retries with the same idempotency key', async () => {
+  it('saves on HTTP without randomUUID and retries a fixed snapshot with the same idempotency key', async () => {
+    vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) });
     const workspace = new StructureWorkspace('CCC');
     const document = testDocument('CCO');
     const close = vi.fn();
@@ -118,8 +119,32 @@ describe('personal structure library', () => {
     workspace.commitSmiles('NN');
     fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
     await waitFor(() => expect(close).toHaveBeenCalledWith(true));
+    expect(api.save.mock.calls[0][2]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(api.save.mock.calls[0][0].smiles).toBe('CCO');
     expect(api.save.mock.calls[1].slice(0, 3)).toEqual(api.save.mock.calls[0].slice(0, 3));
+    expect(workspace.hasUnrecordedChanges()).toBe(true);
+  });
+
+  it('shows request-ID failures and unlocks saving without losing the name or snapshot', async () => {
+    const getRandomValues = crypto.getRandomValues.bind(crypto);
+    vi.stubGlobal('crypto', { getRandomValues: () => { throw new Error('随机数不可用'); } });
+    const workspace = new StructureWorkspace('CCC');
+    const document = testDocument('CCO');
+    const close = vi.fn();
+    render(<SaveStructureDialog document={document} workspace={workspace} onClose={close} />);
+    fireEvent.change(screen.getByLabelText('结构名称'), { target: { value: '候选 A' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', '随机数不可用');
+    expect(screen.getByRole('button', { name: '确认保存' })).toHaveProperty('disabled', false);
+    expect(screen.getByLabelText('结构名称')).toHaveProperty('value', '候选 A');
+    expect(api.status).not.toHaveBeenCalled();
+    expect(api.save).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    vi.stubGlobal('crypto', { getRandomValues });
+    workspace.commitSmiles('NN');
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
+    await waitFor(() => expect(close).toHaveBeenCalledWith(true));
+    expect(api.save.mock.calls[0].slice(0, 2)).toEqual([document, '候选 A']);
     expect(workspace.hasUnrecordedChanges()).toBe(true);
   });
 

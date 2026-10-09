@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import base64
 import json
 from types import SimpleNamespace
 from uuid import uuid4
@@ -87,6 +88,42 @@ def test_retry_identity_quota_and_validation(library_app, monkeypatch):
     assert client.post(PREFIX+'/records', json=body).status_code == 201
     assert client.get(PREFIX+'/records?cursor=bad').status_code == 422
     assert client.post(PREFIX+'/records', content=b'x'*(2*1024*1024+1)).status_code == 413
+
+
+def test_default_twenty_record_limit_keeps_records_and_allows_retry(library_app, monkeypatch):
+    monkeypatch.delenv('PRIVATE_STRUCTURE_LIBRARY_MAX_ROWS', raising=False)
+    app, user, client = library_app
+    assert client.get(PREFIX+'/status').json()['max_records'] == 20
+    bodies = [payload(name=f'结构 {number}') for number in range(20)]
+    saved = []
+    for body in bodies:
+        response = client.post(PREFIX+'/records', json=body)
+        assert response.status_code == 201, response.text
+        saved.append(response.json())
+    assert client.post(PREFIX+'/records', json=payload(name='第 21 个')).status_code == 429
+    retry = client.post(PREFIX+'/records', json=bodies[-1])
+    assert retry.status_code == 201 and retry.json()['id'] == saved[-1]['id']
+    assert len(client.get(PREFIX+'/records').json()['items']) == 20
+    assert client.delete(PREFIX+'/records/'+saved[0]['id']).status_code == 204
+    assert client.post(PREFIX+'/records', json=payload(name='释放名额后保存')).status_code == 201
+    assert len(client.get(PREFIX+'/records').json()['items']) == 20
+
+
+
+@pytest.mark.parametrize('cursor_value', [
+    ['2026-01-01T00:00:00+00:00', 123],
+    ['2026-01-01T00:00:00+00:00', None],
+    ['2026-01-01T00:00:00+00:00', {'id': str(uuid4())}],
+    {'2026-01-01T00:00:00+00:00': str(uuid4()), str(uuid4()): 'value'},
+    ['2026-01-01T00:00:00', str(uuid4())],
+    ['2026-01-01T00:00:00+00:00', str(uuid4()), 'extra'],
+])
+def test_malformed_cursor_is_rejected_without_server_error(library_app, cursor_value):
+    _app, _user, client = library_app
+    cursor = base64.urlsafe_b64encode(json.dumps(cursor_value).encode()).decode()
+    response = client.get(PREFIX+'/records', params={'cursor': cursor})
+    assert response.status_code == 422, response.text
+    assert response.json()['detail']['code'] == 'invalid_cursor'
 
 
 def test_real_account_and_sql_isolation(library_app, auth_database):

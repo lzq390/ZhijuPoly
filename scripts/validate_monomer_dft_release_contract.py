@@ -782,6 +782,71 @@ def validate_production_activation(root: Path, failures: list[str]) -> None:
             failures.append(f"GPU2 guard is missing policy marker: {marker}")
 
 
+def _validate_current_isolation_resolver(
+    preflight: str, boundary_names: list[str], failures: list[str]
+) -> None:
+    """Permit current startup only with its bounded, fully checked isolation path."""
+    try:
+        tree = ast.parse(preflight)
+    except SyntaxError:
+        failures.append("Postgres current-isolation source is not valid Python")
+        return
+
+    def expression(source: str) -> str:
+        return ast.dump(ast.parse(source, mode="eval").body)
+
+    assignments = {
+        target.id: node.value
+        for node in tree.body if isinstance(node, ast.Assign)
+        for target in node.targets if isinstance(target, ast.Name)
+    }
+    for name, value in (
+        ("SCHEMA_TARGET_CURRENT_ISOLATION", "user-isolation-current"),
+        ("SCHEMA_TARGET_STRUCTURE_LIBRARY", "user-isolation-0020"),
+    ):
+        if ast.dump(assignments.get(name, ast.Constant(None))) != expression(repr(value)):
+            failures.append(f"Postgres current-isolation schema profile is missing: {name}")
+    targets = assignments.get("ISOLATION_TARGETS")
+    target_names = {node.id for node in ast.walk(targets) if isinstance(node, ast.Name)} if targets else set()
+    if not {"SCHEMA_TARGET_CURRENT_ISOLATION", "SCHEMA_TARGET_STRUCTURE_LIBRARY"} <= target_names:
+        failures.append("current startup targets must retain all isolation checks")
+
+    run = next((node for node in tree.body if isinstance(node, ast.FunctionDef)
+                and node.name == "run_preflight"), None)
+    nodes = list(ast.walk(run)) if run else []
+    resolvers = [node for node in nodes if isinstance(node, ast.If)
+                 and ast.dump(node.test) == expression("schema_target == SCHEMA_TARGET_CURRENT_ISOLATION")]
+    expected = expression(
+        "SCHEMA_TARGET_STRUCTURE_LIBRARY if applied_migrations and max(applied_migrations) in {"
+        + ", ".join(boundary_names) + "} else SCHEMA_TARGET_ISOLATION"
+    )
+    resolutions = [node.value for resolver in resolvers for node in ast.walk(resolver)
+                   if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == "schema_target"
+                           for target in node.targets)]
+    if len(resolvers) != 1 or len(resolutions) != 1 or ast.dump(resolutions[0]) != expected:
+        failures.append("current isolation resolver must accept only exact release-known migration boundaries")
+
+    # Merely selecting the new name must not bypass the existing identity,
+    # canonical ledger, RLS, ACL, or same-database checks.
+    isolation_nodes = [node for guard in nodes if isinstance(guard, ast.If)
+                       and ast.dump(guard.test) == expression("schema_target in ISOLATION_TARGETS")
+                       for node in ast.walk(guard)]
+    isolation_expressions = {ast.dump(node) for node in isolation_nodes}
+    for required in (
+        "validate_application_migration_ledger(connection)",
+        "validate_application_migration_ledger(api)",
+        'validate_runtime_role(connection, "nexpoly_service")',
+        'validate_runtime_role(api, "nexpoly_api")',
+        "validate_isolation_schema(connection, boundary)",
+        "validate_service_auth_privileges(connection, require_login=True)",
+        "database_identity(api) != service_database",
+        'api_ledger[-1]["version"] != boundary',
+    ):
+        if expression(required) not in isolation_expressions:
+            failures.append(f"current isolation startup protection is missing: {required}")
+
+
 def validate_database_schema_state_contract(
     root: Path,
     failures: list[str],
@@ -893,7 +958,22 @@ def validate_database_schema_state_contract(
     entries = manifest.get("migrations", [])
     versions = [entry.get("version") for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
     isolation_versions = ("0017_user_isolation_prepare", "0018_user_isolation_cutover", "0019_service_auth_least_privilege")
-    isolated = any(version in versions for version in isolation_versions)
+    private_boundaries = (
+        ("0020_structure_library", "LIBRARY_VERSION"),
+        ("0021_usage_metering", "USAGE_VERSION"),
+        ("0022_usage_entitlements", "ENTITLEMENT_VERSION"),
+    )
+    current_isolation = any(version in versions for version, _name in private_boundaries)
+    isolated = current_isolation or any(version in versions for version in isolation_versions)
+    if current_isolation:
+        last_boundary = max(index for index, (version, _name) in enumerate(private_boundaries)
+                            if version in versions)
+        required_boundaries = private_boundaries[:last_boundary + 1]
+        if any(versions.count(version) != 1 for version, _name in required_boundaries):
+            failures.append("current isolation startup requires each intervening private migration exactly once")
+        _validate_current_isolation_resolver(
+            preflight, [name for _version, name in required_boundaries], failures
+        )
     if isolated:
         if any(versions.count(version) != 1 for version in isolation_versions):
             failures.append("user isolation startup requires 0017, 0018 and 0019 exactly once")
@@ -907,7 +987,8 @@ def validate_database_schema_state_contract(
     # Historical releases retain their through-0012 startup contract. A release
     # carrying the isolation migrations must instead enforce the complete schema
     # and the application's authentication readiness check at startup.
-    expected_target = "SCHEMA_TARGET_ISOLATION" if isolated else "SCHEMA_TARGET_STARTUP"
+    expected_target = ("SCHEMA_TARGET_CURRENT_ISOLATION" if current_isolation else
+                       "SCHEMA_TARGET_ISOLATION" if isolated else "SCHEMA_TARGET_STARTUP")
     main_text = _read_text(root, "backend/app/main.py", failures)
     try:
         main_tree = ast.parse(main_text)

@@ -6477,6 +6477,28 @@ class RecordOnlyMediaV3Tests(unittest.TestCase):
                     path,
                     ns=(original.st_atime_ns, original.st_mtime_ns),
                 )
+                # Establish a real ctime change even within one timestamp tick.
+                deadline = time.monotonic() + 1.0
+                changed = path.stat()
+                while changed.st_ctime_ns == original.st_ctime_ns:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    time.sleep(min(0.01, remaining))
+                    if time.monotonic() >= deadline:
+                        break
+                    os.utime(
+                        path,
+                        ns=(original.st_atime_ns, original.st_mtime_ns),
+                    )
+                    changed = path.stat()
+                self.assertEqual(changed.st_size, original.st_size)
+                self.assertEqual(changed.st_mtime_ns, original.st_mtime_ns)
+                self.assertNotEqual(
+                    changed.st_ctime_ns,
+                    original.st_ctime_ns,
+                    "fixture could not establish a ctime change within one second",
+                )
             return real_read(descriptor, size)
 
         with (

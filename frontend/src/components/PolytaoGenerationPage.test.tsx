@@ -280,6 +280,22 @@ describe("PolytaoGenerationPage", () => {
     expect(screen.getByLabelText('重原子数 HeavyAtomCount')).toHaveProperty('value', '');
   });
 
+  it("preserves descriptors edited while a different reference is being selected", async () => {
+    const structure = makeStructure();
+    vi.spyOn(structure.workspace, 'captureForImport').mockResolvedValue(testDocument('NN'));
+    renderPage(structure);
+    openReferenceSection();
+    fireEvent.click(screen.getByRole('button', { name: '提取描述符' }));
+    await screen.findByText('目标特征源自参考结构');
+    fireEvent.click(screen.getByRole('button', { name: '选择结构' }));
+    await screen.findByRole('dialog', { name: /选择结构/ });
+    fireEvent.change(screen.getByLabelText('重原子数 HeavyAtomCount'), { target: { value: '119' } });
+    await chooseCurrentStructure();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /选择结构/ })).toBeNull());
+    expect(screen.getByLabelText('重原子数 HeavyAtomCount')).toHaveProperty('value', '119');
+    expect(screen.queryByText('目标特征源自参考结构')).toBeNull();
+  });
+
   it("clears derived descriptors on reference replacement but preserves manual values and ignores late calculations", async () => {
     const structure = makeStructure();
     vi.spyOn(structure.workspace, 'captureForImport').mockResolvedValue(testDocument('NN'));
