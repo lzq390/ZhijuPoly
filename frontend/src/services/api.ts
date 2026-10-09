@@ -903,8 +903,8 @@ export function fetchDatabaseDatasetSummary(signal?: AbortSignal): Promise<Datas
   return getJSON("/database-browser/datasets/summary", { signal });
 }
 
-export function fetchDatabaseAnalytics(options?: { refresh?: boolean; signal?: AbortSignal }): Promise<DatabaseAnalyticsResponse> {
-  return getJSON(`/database-browser/datasets/analytics${options?.refresh ? "?refresh=true" : ""}`, { signal: options?.signal });
+export function fetchDatabaseAnalytics(options?: { signal?: AbortSignal }): Promise<DatabaseAnalyticsResponse> {
+  return getJSON("/database-browser/datasets/analytics", { signal: options?.signal });
 }
 
 export function browseFormulationRecords(params: {

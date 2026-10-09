@@ -2,6 +2,9 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
+import * as authContext from "../auth/AuthProvider";
+import * as guestAccess from "../auth/guestAccess";
+import { GUEST_SESSION } from "../auth/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   browseDftEnergySteps,
@@ -229,6 +232,12 @@ function renderAnalysis(selectedKey: "process" | "property" | "structureEffect" 
   return { ...view, onOpenDataset, onBackDatabase };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => { resolve = complete; });
+  return { promise, resolve };
+}
+
 function DrawerSizingProbe() {
   const sizing = useDatabaseRecordDrawerSizing();
   return (
@@ -376,35 +385,185 @@ describe("数据库分析工作台", () => {
     const refreshButton = screen.getByRole("button", { name: "刷新中" });
     expect(refreshButton.getAttribute("aria-busy")).toBe("true");
     expect(refreshButton.classList.contains("is-refreshing")).toBe(true);
-    expect(await screen.findByText(/正在检查数据更新/)).not.toBeNull();
+    expect(await screen.findByText("正在读取", { selector: ".dba-surface-banner > span" })).not.toBeNull();
     expect(screen.getByText("过程关键词")).not.toBeNull();
 
-    resolveRefresh?.({ ...analyticsResponse, source: "live", generated_at: null });
-    expect(await screen.findByText(/数据已更新/)).not.toBeNull();
-    expect(screen.getByText("已更新")).not.toBeNull();
+    resolveRefresh?.(analyticsResponse);
+    expect(await screen.findByText("已读取最新统计结果")).not.toBeNull();
+    expect(screen.getByText("统计数据")).not.toBeNull();
     expect(mockSummary).toHaveBeenCalledTimes(2);
     expect(mockAnalytics.mock.invocationCallOrder[1]).toBeLessThan(mockSummary.mock.invocationCallOrder[1]);
   });
 
-  it("数据表未变化时跳过重算并保留快照", async () => {
+  it("手动刷新只读取已生成的统计，并保留当前视图", async () => {
     mockAnalytics
       .mockResolvedValueOnce(analyticsResponse)
-      .mockResolvedValueOnce({ ...analyticsResponse, refresh_status: "unchanged" });
+      .mockResolvedValueOnce(analyticsResponse);
     renderAnalysis("process");
     expect(await screen.findByText("过程关键词")).not.toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "刷新数据" }));
 
-    expect(await screen.findByText(/数据已是最新/)).not.toBeNull();
+    expect(await screen.findByText(/已读取最新统计结果/)).not.toBeNull();
+    expect(mockAnalytics.mock.calls.every(([options]) => !options || !("refresh" in options))).toBe(true);
     expect(screen.getByText("统计数据")).not.toBeNull();
     expect(screen.getByText("过程关键词")).not.toBeNull();
+  });
+
+  it("切回可见窗口自动读取，并合并可见性和焦点事件", async () => {
+    let visibility: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    renderAnalysis("property");
+    expect(await screen.findByText("性能类别")).not.toBeNull();
+
+    visibility = "hidden";
+    fireEvent(document, new Event("visibilitychange"));
+    fireEvent.focus(window);
+    expect(mockAnalytics).toHaveBeenCalledTimes(1);
+    expect(mockSummary).toHaveBeenCalledTimes(1);
+
+    visibility = "visible";
+    fireEvent(document, new Event("visibilitychange"));
+    fireEvent.focus(window);
+    await waitFor(() => expect(screen.getByRole("button", { name: "刷新数据" }).hasAttribute("disabled")).toBe(false));
+    expect(mockAnalytics).toHaveBeenCalledTimes(2);
+    expect(mockSummary).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/已读取最新统计结果/)).toBeNull();
+
+    fireEvent.blur(window);
+    fireEvent.focus(window);
+    await waitFor(() => expect(mockAnalytics).toHaveBeenCalledTimes(3));
+    expect(mockSummary).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["analytics", "summary"] as const)("自动读取和手动刷新并发时复用请求，%s 先完成仍等待另一请求", async (first) => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const analytics = deferred<DatabaseAnalyticsResponse>();
+    const summary = deferred<typeof summaryResponse>();
+    mockAnalytics.mockResolvedValueOnce(analyticsResponse).mockReturnValueOnce(analytics.promise);
+    mockSummary.mockResolvedValueOnce(summaryResponse).mockReturnValueOnce(summary.promise);
+    renderAnalysis("property");
+    expect(await screen.findByText("性能类别")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新数据" }));
+    fireEvent.focus(window);
+    fireEvent(document, new Event("visibilitychange"));
+    expect(mockAnalytics).toHaveBeenCalledTimes(2);
+    expect(mockSummary).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      if (first === "analytics") analytics.resolve(analyticsResponse);
+      else summary.resolve(summaryResponse);
+    });
+    expect(screen.getByRole("button", { name: "刷新中" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("性能类别")).not.toBeNull();
+    expect(screen.queryByText(/已读取最新统计结果/)).toBeNull();
+
+    await act(async () => {
+      if (first === "analytics") summary.resolve(summaryResponse);
+      else analytics.resolve(analyticsResponse);
+    });
+    expect(await screen.findByText(/已读取最新统计结果/)).not.toBeNull();
+    expect(screen.getByRole("button", { name: "刷新数据" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("访客切回窗口或切换数据集不读取统计，也不请求登录", async () => {
+    vi.spyOn(authContext, "useAuth").mockReturnValue({
+      status: "guest", session: GUEST_SESSION, error: null,
+      login: vi.fn(), logout: vi.fn(async () => {}), changePassword: vi.fn(),
+      guestDraft: "", registerGuestCapture: vi.fn()
+    });
+    const requestAccess = vi.spyOn(guestAccess, "requestServiceAccess");
+    let visibility: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const view = renderAnalysis("process");
+
+    visibility = "hidden";
+    fireEvent(document, new Event("visibilitychange"));
+    fireEvent.focus(window);
+    visibility = "visible";
+    fireEvent(document, new Event("visibilitychange"));
+    fireEvent.focus(window);
+    view.rerender(<DatabaseAnalysis selectedKey="property" onBackHome={vi.fn()} onBackDatabase={vi.fn()} onOpenDataset={vi.fn()} />);
+    fireEvent.blur(window);
+    fireEvent.focus(window);
+    await act(async () => {});
+
+    expect(view.container.querySelector(".np-database-analysis")?.getAttribute("data-view-key")).toBe("property");
+    expect(mockAnalytics).not.toHaveBeenCalled();
+    expect(mockSummary).not.toHaveBeenCalled();
+    expect(requestAccess).not.toHaveBeenCalled();
+  });
+
+  it("首次读取期间切回窗口不会重复发起或取消请求", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const analytics = deferred<DatabaseAnalyticsResponse>();
+    const summary = deferred<typeof summaryResponse>();
+    mockAnalytics.mockReturnValueOnce(analytics.promise);
+    mockSummary.mockReturnValueOnce(summary.promise);
+    renderAnalysis("property");
+    fireEvent.focus(window);
+
+    expect(mockAnalytics).toHaveBeenCalledTimes(1);
+    expect(mockSummary).toHaveBeenCalledTimes(1);
+    expect(mockAnalytics.mock.calls[0][0]?.signal?.aborted).toBe(false);
+    expect(mockSummary.mock.calls[0][0]?.aborted).toBe(false);
+    await act(async () => {
+      analytics.resolve(analyticsResponse);
+      summary.resolve(summaryResponse);
+    });
+    expect(await screen.findByText("性能类别")).not.toBeNull();
+  });
+
+  it("进入另一个数据集时重新读取最新统计", async () => {
+    const view = renderAnalysis("process");
+    expect(await screen.findByText("过程关键词")).not.toBeNull();
+    mockAnalytics.mockResolvedValueOnce({
+      ...analyticsResponse,
+      generated_at: "2026-08-10T12:00:00+08:00",
+      datasets: { ...analyticsDatasets, property: { ...analyticsDatasets.property, rows: 91 } }
+    });
+    mockSummary.mockResolvedValueOnce({
+      ...summaryResponse,
+      datasets: summaryResponse.datasets.map(dataset => dataset.key === "property" ? { ...dataset, total_records: 91 } : dataset)
+    });
+    view.rerender(<DatabaseAnalysis selectedKey="property" onBackHome={vi.fn()} onBackDatabase={vi.fn()} onOpenDataset={vi.fn()} />);
+
+    expect(await screen.findByText("91")).not.toBeNull();
+    expect(mockAnalytics).toHaveBeenCalledTimes(2);
+    expect(mockSummary).toHaveBeenCalledTimes(2);
+    expect(view.container.querySelector(".dba-toolbar-status time")?.getAttribute("datetime")).toBe("2026-08-10T12:00:00+08:00");
+  });
+
+  it("自动读取失败保留统计，卸载后取消请求并移除窗口监听", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const pending = deferred<DatabaseAnalyticsResponse>();
+    mockAnalytics.mockResolvedValueOnce(analyticsResponse)
+      .mockRejectedValueOnce(new Error("network failed"))
+      .mockReturnValueOnce(pending.promise);
+    const view = renderAnalysis("property");
+    expect(await screen.findByText("性能类别")).not.toBeNull();
+    fireEvent.focus(window);
+    expect(await screen.findByText(/统计更新失败，仍显示上次成功结果/)).not.toBeNull();
+    expect(screen.getByText("性能类别")).not.toBeNull();
+
+    fireEvent.blur(window);
+    fireEvent.focus(window);
+    expect(mockAnalytics).toHaveBeenCalledTimes(3);
+    const signal = mockAnalytics.mock.calls[2][0]?.signal;
+    view.unmount();
+    expect(signal?.aborted).toBe(true);
+    fireEvent.focus(window);
+    fireEvent(document, new Event("visibilitychange"));
+    await act(async () => { pending.resolve(analyticsResponse); });
+    expect(mockAnalytics).toHaveBeenCalledTimes(3);
+    expect(mockSummary).toHaveBeenCalledTimes(3);
   });
 
   it("刷新失败时保留旧内容、使用中文错误并支持重试", async () => {
     mockAnalytics
       .mockResolvedValueOnce(analyticsResponse)
       .mockRejectedValueOnce(new Error("network failed"))
-      .mockResolvedValueOnce({ ...analyticsResponse, source: "live" });
+      .mockResolvedValueOnce(analyticsResponse);
     renderAnalysis("property");
     expect(await screen.findByText("性能类别")).not.toBeNull();
 
@@ -414,7 +573,7 @@ describe("数据库分析工作台", () => {
     expect(screen.queryByText("network failed")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
-    expect(await screen.findByText(/数据已更新/)).not.toBeNull();
+    expect(await screen.findByText(/已读取最新统计结果/)).not.toBeNull();
   });
 
   it("摘要失败时仍展示有效统计，并允许单独重试数据源状态", async () => {
@@ -425,6 +584,40 @@ describe("数据库分析工作台", () => {
     expect(screen.getByText(/数据源状态暂不可用/)).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "重试状态" }));
     await waitFor(() => expect(mockSummary).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("过程关键词")).not.toBeNull();
+  });
+
+  it("仅摘要刷新失败不提示读取成功，并可单独重试而不重读统计", async () => {
+    const retry = deferred<typeof summaryResponse>();
+    mockSummary.mockResolvedValueOnce(summaryResponse)
+      .mockRejectedValueOnce(new Error("network failed"))
+      .mockReturnValueOnce(retry.promise);
+    renderAnalysis("process");
+    expect(await screen.findByText("过程关键词")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新数据" }));
+    expect(await screen.findByText(/数据源状态暂不可用/)).not.toBeNull();
+    expect(screen.getByRole("button", { name: "刷新数据" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByText(/已读取最新统计结果/)).toBeNull();
+    expect(screen.queryByText("network failed")).toBeNull();
+    expect(screen.getByText("过程关键词")).not.toBeNull();
+    expect(mockAnalytics).toHaveBeenCalledTimes(2);
+    expect(mockSummary).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "重试状态" }));
+    expect(mockSummary).toHaveBeenCalledTimes(3);
+    expect(document.querySelector(".dba-toolbar-status .dba-toolbar-detail")?.textContent).toBe("100 条");
+    await act(async () => {
+      retry.resolve({
+        ...summaryResponse,
+        datasets: summaryResponse.datasets.map(dataset => dataset.key === "process" ? { ...dataset, total_records: 101 } : dataset)
+      });
+    });
+    expect(document.querySelector(".dba-toolbar-status .dba-toolbar-detail")?.textContent).toBe("101 条");
+    expect(screen.queryByText(/数据源状态暂不可用/)).toBeNull();
+    expect(screen.queryByText(/已读取最新统计结果/)).toBeNull();
+    expect(mockSummary).toHaveBeenCalledTimes(3);
+    expect(mockAnalytics).toHaveBeenCalledTimes(2);
     expect(screen.getByText("过程关键词")).not.toBeNull();
   });
 
@@ -440,7 +633,7 @@ describe("数据库分析工作台", () => {
 
     expect(await screen.findByText("分析数据格式异常")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
-    await waitFor(() => expect(mockAnalytics).toHaveBeenLastCalledWith(expect.objectContaining({ refresh: false })));
+    await waitFor(() => expect(mockAnalytics).toHaveBeenLastCalledWith({ signal: expect.any(AbortSignal) }));
   });
 
   it("首次分析数据加载失败时隐藏内部消息并执行轻量重试", async () => {
@@ -452,7 +645,7 @@ describe("数据库分析工作台", () => {
     expect(screen.queryByText("后端统计快照暂不可用")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() => expect(screen.getByText("性能类别")).not.toBeNull());
-    expect(mockAnalytics).toHaveBeenLastCalledWith(expect.objectContaining({ refresh: false }));
+    expect(mockAnalytics).toHaveBeenLastCalledWith({ signal: expect.any(AbortSignal) });
   });
 
   it("通用 HTTP 英文错误使用中文本地兜底", async () => {

@@ -40,6 +40,19 @@ class PostgresImportStats:
         self.datasets.append(DatasetImportStats(dataset_key=dataset_key, row_count=row_count, details=details))
 
 
+class AnalyticsSnapshotRefreshError(RuntimeError):
+    """The import committed; only the subsequent analytics refresh failed."""
+
+    def __init__(self, stats: PostgresImportStats) -> None:
+        self.stats = stats
+        super().__init__(
+            "Data import already committed, but analytics snapshot refresh failed. "
+            "Imported data was not rolled back. Retry only "
+            "`python -m app.generate_database_analytics_snapshot` with the same "
+            "administrator connection; do not repeat the data import."
+        )
+
+
 def _sqlite_rows(db_path: Path, table: str) -> list[sqlite3.Row]:
     if not db_path.exists():
         return []
@@ -1134,7 +1147,7 @@ def import_all_to_postgres(
     rebuild: bool = False,
     batch_size: int = 5000,
     apply_migrations: bool = True,
-    refresh_analytics_snapshot: bool = False,
+    refresh_analytics_snapshot: bool = True,
 ) -> PostgresImportStats:
     target_dsn = dsn or settings.app_postgres_dsn
     requested = resolve_requested_datasets(datasets)
@@ -1232,7 +1245,12 @@ def import_all_to_postgres(
         )
 
     if refresh_analytics_snapshot:
-        write_database_analytics_snapshot(target_dsn)
+        try:
+            write_database_analytics_snapshot(target_dsn)
+        except Exception as exc:
+            # Import transactions have already committed. Preserve their stats
+            # and distinguish refresh failure so callers do not retry the import.
+            raise AnalyticsSnapshotRefreshError(stats) from exc
         stats.datasets.append(DatasetImportStats(dataset_key="database_analytics_snapshot", row_count=1))
     return stats
 
@@ -1264,7 +1282,12 @@ def main() -> None:
             "accepted solely to return an explicit fail-closed error."
         ),
     )
-    parser.add_argument("--refresh-analytics-snapshot", action="store_true", help="Store a refreshed database analytics snapshot in PostgreSQL after the import commits.")
+    parser.add_argument(
+        "--refresh-analytics-snapshot",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Refresh database analytics after the import commits (default: enabled). Use --no-refresh-analytics-snapshot only when a maintenance workflow will publish it separately.",
+    )
     parser.add_argument(
         "--rebuild",
         action="store_true",
@@ -1278,6 +1301,7 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = Settings()
+    refresh_error: AnalyticsSnapshotRefreshError | None = None
     try:
         stats = import_all_to_postgres(
             settings,
@@ -1288,12 +1312,19 @@ def main() -> None:
             apply_migrations=not args.skip_migrations,
             refresh_analytics_snapshot=args.refresh_analytics_snapshot,
         )
+    except AnalyticsSnapshotRefreshError as exc:
+        stats = exc.stats
+        refresh_error = exc
     except ValueError as exc:
         parser.error(str(exc))
     for dataset in stats.datasets:
         details = " ".join(f"{key}={value}" for key, value in sorted(dataset.details.items()))
         suffix = f" {details}" if details else ""
         print(f"{dataset.dataset_key}\trows={dataset.row_count}{suffix}")
+    if refresh_error is not None:
+        # The cause may contain connection details; the CLI emits only the
+        # fixed recovery message, while preserving a nonzero exit status.
+        parser.exit(1, f"{parser.prog}: error: {refresh_error}\n")
 
 
 if __name__ == "__main__":

@@ -19,9 +19,10 @@ from psycopg.errors import DependentObjectsStillExist
 import pytest
 from conftest import reset_postgres_fixture
 
-from app import postgres_migrations, postgres_preflight
+from app import generate_database_analytics_snapshot, import_postgres, postgres_migrations, postgres_preflight
 from app.config import Settings
 from app.import_postgres import (
+    AnalyticsSnapshotRefreshError,
     BUSINESS_MUTABLE_IMPORT_DATASETS,
     BUSINESS_MUTABLE_TABLES,
     IMPORT_BATCH_SOURCE_LOGICAL_NAMES,
@@ -47,6 +48,7 @@ from app.postgres_migrations import (
     migration_checksum,
 )
 from app.services.postgres_database_browser import get_database_analytics_postgres
+from app.services.analytics_snapshot_store import load_analytics_snapshot, save_analytics_snapshot
 from app.services.property_filter_catalog import load_property_filter_catalog
 
 
@@ -1195,6 +1197,12 @@ def test_property_filter_import_replaces_only_filter_table(tmp_path: Path, postg
         core_property_count = connection.execute("SELECT COUNT(*) AS count FROM core.polymer_properties").fetchone()["count"]
         catalog = load_property_filter_catalog(connection)
 
+    with postgres_connection(postgres_dsn) as connection:
+        snapshot = load_analytics_snapshot(connection)
+    assert snapshot is not None
+    assert snapshot.datasets["propertyFilter"]["rows"] == 2
+    assert snapshot.datasets["structureEffect"]["rows"] == 6
+    assert any(item.dataset_key == "database_analytics_snapshot" for item in stats.datasets)
     assert core_property_count == 6
     assert len(property_filter_rows) == 2
     assert property_filter_rows[0]["property_key"] == "tg"
@@ -1217,6 +1225,82 @@ def test_property_filter_import_replaces_only_filter_table(tmp_path: Path, postg
         option["histogram"]["total_count"] == option["rows"]
         for option in catalog.options
     )
+
+
+def test_property_filter_import_can_leave_snapshot_for_separate_maintenance(
+    tmp_path: Path, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _governance_settings(tmp_path, postgres_dsn)
+    with postgres_connection(postgres_dsn) as connection:
+        before = save_analytics_snapshot(
+            connection, get_database_analytics_postgres(connection), source_sha="a" * 40,
+        )
+
+    def unexpected_refresh(_dsn):
+        pytest.fail("Explicitly disabled refresh must not invoke the generator")
+
+    monkeypatch.setattr(import_postgres, "write_database_analytics_snapshot", unexpected_refresh)
+    stats = import_all_to_postgres(
+        settings, dsn=postgres_dsn, datasets={"property_filter"},
+        apply_migrations=False, refresh_analytics_snapshot=False,
+    )
+
+    with postgres_connection(postgres_dsn) as connection:
+        after = load_analytics_snapshot(connection)
+        rows = connection.execute("SELECT COUNT(*) AS count FROM core.polymer_property_filter_records").fetchone()["count"]
+    assert rows == 2
+    assert after == before
+    assert not any(item.dataset_key == "database_analytics_snapshot" for item in stats.datasets)
+
+
+@pytest.mark.parametrize("failure_stage", ["generate", "save"])
+def test_snapshot_refresh_failure_preserves_committed_import_and_previous_snapshot(
+    tmp_path: Path, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    settings = _governance_settings(tmp_path, postgres_dsn)
+    with postgres_connection(postgres_dsn) as connection:
+        before = save_analytics_snapshot(
+            connection, get_database_analytics_postgres(connection), source_sha="a" * 40,
+        )
+        batch_count_before = connection.execute("SELECT COUNT(*) AS count FROM governance.import_batches").fetchone()["count"]
+    refresh_calls = 0
+
+    def fail_generation(_connection):
+        nonlocal refresh_calls
+        refresh_calls += 1
+        raise RuntimeError("synthetic snapshot generation failure")
+
+    def fail_after_snapshot_write(connection, datasets, **options):
+        nonlocal refresh_calls
+        refresh_calls += 1
+        save_analytics_snapshot(connection, datasets, **options)
+        raise ValueError("synthetic snapshot save failure")
+
+    if failure_stage == "generate":
+        monkeypatch.setattr(generate_database_analytics_snapshot, "get_database_analytics_postgres", fail_generation)
+    else:
+        monkeypatch.setattr(generate_database_analytics_snapshot, "save_analytics_snapshot", fail_after_snapshot_write)
+
+    with pytest.raises(AnalyticsSnapshotRefreshError) as exc_info:
+        import_all_to_postgres(
+            settings, dsn=postgres_dsn, datasets={"property_filter"}, apply_migrations=False,
+        )
+
+    assert refresh_calls == 1
+    assert exc_info.value.__cause__ is not None
+    assert [(item.dataset_key, item.row_count) for item in exc_info.value.stats.datasets] == [("property_filter", 2)]
+    with postgres_connection(postgres_dsn) as connection:
+        after = load_analytics_snapshot(connection)
+        rows = connection.execute("SELECT COUNT(*) AS count FROM core.polymer_property_filter_records").fetchone()["count"]
+        batch_count_after = connection.execute("SELECT COUNT(*) AS count FROM governance.import_batches").fetchone()["count"]
+        batch = connection.execute("SELECT status, row_count FROM governance.import_batches WHERE dataset_key='property_filter' ORDER BY import_batch_id DESC LIMIT 1").fetchone()
+        catalog = load_property_filter_catalog(connection)
+    assert rows == 2
+    assert batch_count_after == batch_count_before + 1
+    assert batch["status"] == "completed" and batch["row_count"] == 2
+    assert catalog is not None and catalog.total_records == 2
+    assert after == before
 
 
 def test_property_filter_import_records_missing_source_without_truncating(tmp_path: Path, postgres_dsn: str) -> None:
@@ -1269,13 +1353,19 @@ def test_property_filter_import_records_missing_source_without_truncating(tmp_pa
 def test_property_filter_import_failure_rolls_back_live_rows_and_catalog(
     tmp_path: Path,
     postgres_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def unexpected_refresh(_dsn):
+        pytest.fail("A failed import must not start analytics refresh")
+
+    monkeypatch.setattr(import_postgres, "write_database_analytics_snapshot", unexpected_refresh)
     settings = _governance_settings(tmp_path, postgres_dsn)
     invalid_csv = tmp_path / "invalid_property_filter.csv"
     invalid_csv.write_text("polymer_name,smiles\ninvalid,CCO\n", encoding="utf-8")
     settings.property_filter_csv_path = str(invalid_csv)
 
     with postgres_connection(postgres_dsn) as connection:
+        snapshot_before = save_analytics_snapshot(connection, get_database_analytics_postgres(connection))
         rows_before = connection.execute(
             """
             SELECT filter_record_id, polymer_name, smiles, property_name,
@@ -1310,6 +1400,7 @@ def test_property_filter_import_failure_rolls_back_live_rows_and_catalog(
             """
         ).fetchall()
         catalog_after = load_property_filter_catalog(connection)
+        snapshot_after = load_analytics_snapshot(connection)
         batch_count_after = int(
             connection.execute(
                 "SELECT COUNT(*) AS count FROM governance.import_batches"
@@ -1318,6 +1409,7 @@ def test_property_filter_import_failure_rolls_back_live_rows_and_catalog(
 
     assert rows_after == rows_before
     assert catalog_after == catalog_before
+    assert snapshot_after == snapshot_before
     assert batch_count_after == batch_count_before
 
 

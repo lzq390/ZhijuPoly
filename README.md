@@ -96,6 +96,12 @@ Compose overlay、无密钥环境示例和启动脚本已纳入版本控制；`.
 
 首次构建统一 CUDA 镜像可能耗时较长。普通 `up` 只应用非破坏性增量迁移，不重复导入数据；检测到待执行 contract 时会失败并要求显式运行 `contract-migrate`。该命令会先生成全库和目标表归档、SHA-256 与行数证据，并在临时数据库真实恢复核对后才迁移。`refresh-data` 的首次或全量导入可能耗时较长。在 `postgres-init` 完成前，不要把尚未启动的后端或前端判断为代码故障。
 
+静态数据导入成功提交后，默认重新生成数据库分析统计；`refresh-data` 和发布流程也会发布更新后的统计结果。网页进入数据分析页面、切换数据集或切回浏览器窗口时自动读取最新结果，“刷新数据”按钮执行相同的读取操作。刷新失败保留原结果并允许重试。
+
+如通过其他维护 SQL 修改统计源表，应在提交后用管理连接运行 `python -m app.generate_database_analytics_snapshot`。导入命令的 `--no-refresh-analytics-snapshot` 仅供会另行生成统计的维护流程使用。
+
+导入数据和分析统计分别提交。若数据已提交但统计生成失败，命令会先输出已完成的数据集统计，再以非零状态提示刷新失败；已提交数据不会回滚。此时请使用相同的管理连接仅重试 `python -m app.generate_database_analytics_snapshot`，不要重复导入。发布流程仍通过 `--source-sha` 标明当前版本；普通维护刷新不会继承旧版本标记。
+
 开发后端使用 Docker Compose 的默认 builder 构建，不创建常驻的专用
 Buildx/BuildKit 容器。四类 GPU 模型共享严格 FIFO 的推理准入，默认同一
 时刻只执行一个模型加载或 GPU 推理；HTTP、数据库和轮询请求仍可并发。
