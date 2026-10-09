@@ -4,6 +4,23 @@ from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+def _account_response(request, session, token=None):
+    response = request.app.state.auth.response(session, token)
+    tier = "free"
+    if session is not None:
+        repository = getattr(request.app.state, "entitlement_repository", None)
+        if repository is None:
+            tier = "member"  # Legacy standalone auth apps do not define plans.
+        else:
+            from app.auth.context import Identity, user_context
+            with user_context(Identity(str(session["user_id"])), request.app.state.auth.settings):
+                tier = repository.resolve_access_tier(owner_user_id=str(session["user_id"]))
+        from app.auth.policy import capabilities
+        response["capabilities"] = capabilities(tier == "member" and not session["must_change_password"])
+    response["account_type"] = tier
+    return response
+
+
 router = APIRouter(prefix='/api/v1/auth', tags=['authentication'])
 
 
@@ -21,7 +38,7 @@ class PasswordBody(BaseModel):
 
 @router.get('/session')
 def session(request: Request):
-    return request.app.state.auth.response(request.state.auth_session, request.state.auth_token)
+    return _account_response(request, request.state.auth_session, request.state.auth_token)
 
 
 @router.post('/login')
@@ -30,7 +47,7 @@ async def login(body: LoginBody, request: Request, response: Response):
     session, token = await run_in_threadpool(auth.login,body.username,body.password,request.client.host if request.client else 'unknown')
     response.set_cookie(auth.settings.cookie_name,token,max_age=auth.settings.session_hours*3600,
                         secure=auth.settings.cookie_secure,httponly=True,samesite='lax',path='/')
-    return auth.response(session, token)
+    return await run_in_threadpool(_account_response, request, session, token)
 
 
 @router.post('/logout',status_code=204)

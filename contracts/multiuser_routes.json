@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Reviewed inventory, not evidence that every mapped scenario passed. templates permit only fixed a/b CSV/XLSX GET or HEAD.",
+  "note": "Reviewed inventory, not evidence that every mapped scenario passed. templates permit only fixed a/b CSV/XLSX GET or HEAD. The seven usage GET routes require an authenticated owner; free accounts retain their own usage/history access through the separate tier gate.",
   "routes": [
     {
       "method": "DELETE",
@@ -834,6 +834,111 @@
         "I01",
         "I04",
         "I08"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/catalog",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/entitlements",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/operations",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/operations/{operation_id}",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/operations/{operation_id}/result",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/records",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/summary",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
       ]
     },
     {

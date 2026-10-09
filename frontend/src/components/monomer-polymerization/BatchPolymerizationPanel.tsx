@@ -217,6 +217,7 @@ export function BatchPolymerizationPanel({ status, target, children }: {
     try {
       const job = await submitBatchJob(preview.import_id, preview.preview_revision, target, idempotency.current.key, controller.signal);
       if (controller.signal.aborted) return;
+      idempotency.current = null;
       tasks.selectJob(job.job_id);
       setTaskPanelOpen(true);
       setSubmittedRevision(signature);

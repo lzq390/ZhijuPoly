@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from typing import Any
 
 from app.auth.context import is_service_context
+from task_usage.ledger import metering_enabled, record_event
+from task_usage import native_entitlements as ne
+from app.services.usage_lifecycle import record_persistent_task
 from app.services.private_quotas import PrivateQuotaSettings
 from fastapi import HTTPException
 
@@ -37,6 +41,16 @@ def _check_storage_quota(connection, resource: str, key, result_data=None, *, ow
         new_bytes = connection.execute("SELECT octet_length(%s::jsonb::text) AS bytes", (_jsonb(result_data),)).fetchone()["bytes"]
     if totals["rows"] + 1 > max_rows or totals["bytes"] + new_bytes > max_bytes or new_bytes > quotas.online_result_bytes:
         raise OnlineKnowledgeQuotaError(resource)
+
+def _record_usage(connection, job_id, *, owner_user_id, status=None):
+    if not metering_enabled():
+        return
+    row = connection.execute("""SELECT job_id, owner_user_id, status, created_at,
+        updated_at, start_authorized_at FROM online_knowledge.jobs
+        WHERE job_id=%s AND owner_user_id=%s::uuid""", (job_id, owner_user_id)).fetchone()
+    if row is not None:
+        record_persistent_task(connection, module="online_knowledge", row=row, status=status)
+
 
 def _jsonb(value: dict[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False)
@@ -134,12 +148,31 @@ def create_online_job_postgres(
     material: str,
     mode: str,
     max_papers: int,
-) -> None:
+    idempotency_key: str | None = None,
+    request_fingerprint: str | None = None,
+) -> dict | None:
     connection.execute("SELECT pg_advisory_xact_lock(hashtextextended('online-submit',0))")
+    if ne.enabled():
+        prior = ne.lookup_native(connection, owner_user_id=owner_user_id, module="online_knowledge",
+                                 idempotency_key=idempotency_key, request_fingerprint=request_fingerprint)
+        if prior is not None:
+            existing = get_online_job_postgres(connection, prior["native_task_id"], owner_user_id=owner_user_id)
+            if existing is None:
+                raise ne.core.EntitlementConflict("Original native task is no longer available")
+            return {"created": False, "job": existing}
     user = connection.execute("SELECT status,is_system FROM auth.users WHERE user_id=%s FOR UPDATE", (owner_user_id,)).fetchone()
     if user is None or user["status"] != "active" or user["is_system"]:
         raise HTTPException(403, "Account disabled before submission")
     _check_storage_quota(connection, "jobs", job_id, owner_user_id=owner_user_id)
+    if ne.enabled():
+        reserved = ne.reserve_native(connection, owner_user_id=owner_user_id, module="online_knowledge",
+            idempotency_key=idempotency_key, request_fingerprint=request_fingerprint, native_task_id=job_id,
+            spec={"max_papers": max_papers, "mode": mode})
+        if not reserved["created"]:
+            existing = get_online_job_postgres(connection, reserved["operation"]["native_task_id"], owner_user_id=owner_user_id)
+            if existing is None:
+                raise ne.core.EntitlementConflict("Original native task is no longer available")
+            return {"created": False, "job": existing}
     connection.execute(
         """
         INSERT INTO online_knowledge.jobs (
@@ -156,6 +189,10 @@ def create_online_job_postgres(
         """,
         (job_id, owner_user_id, material, mode, max_papers),
     )
+    _record_usage(connection, job_id, owner_user_id=owner_user_id)
+    if ne.enabled():
+        return {"created": True, "job": get_online_job_postgres(connection, job_id, owner_user_id=owner_user_id)}
+    return None
 
 
 def mark_online_job_running_postgres(connection: Any, job_id: str, *, owner_user_id: str) -> None:
@@ -200,9 +237,9 @@ def update_online_job_progress_postgres(
     )
 
 
-def mark_online_job_completed_postgres(connection: Any, job_id: str, result_data: dict[str, Any], *, owner_user_id: str) -> None:
+def mark_online_job_completed_postgres(connection: Any, job_id: str, result_data: dict[str, Any], *, owner_user_id: str, entitlement_facts: dict | None = None) -> bool | None:
     _check_storage_quota(connection, "jobs", job_id, result_data, owner_user_id=owner_user_id)
-    connection.execute(
+    cursor = connection.execute(
         """
         UPDATE online_knowledge.jobs
         SET status = 'completed',
@@ -216,13 +253,32 @@ def mark_online_job_completed_postgres(connection: Any, job_id: str, result_data
             error_message = NULL,
             result_data = %s::jsonb
         WHERE job_id = %s AND owner_user_id = %s::uuid
-        """,
+        """ + (" AND status='running' RETURNING job_id" if ne.enabled() else ""),
         (_jsonb(result_data), job_id, owner_user_id),
     )
+    if ne.enabled() and cursor.fetchone() is None:
+        return False  # No result was persisted: no entitlement settlement/history.
+    _record_usage(connection, job_id, owner_user_id=owner_user_id)
+    if ne.enabled():
+        facts = None
+        if (isinstance(entitlement_facts, dict)
+                and all(type(entitlement_facts.get(name)) is int and entitlement_facts[name] >= 0
+                        for name in ("successful_extractions", "failed_extractions"))
+                and type(result_data.get("exampleUsed")) is bool):
+            facts = {name: entitlement_facts[name]
+                     for name in ("successful_extractions", "failed_extractions")}
+            facts.update(validated=True, completion_proven=True, report_present=bool(result_data),
+                         example_used=result_data["exampleUsed"])
+        # A legacy/incomplete summary provides no qualification evidence. Keep
+        # its reservation unknown; never invent zero extractions or free it.
+        ne.settle_native(connection, owner_user_id=owner_user_id, module="online_knowledge",
+                         native_task_id=job_id, status="completed", facts=facts)
+        return True
+    return None
 
 
 def mark_online_job_failed_postgres(connection: Any, job_id: str, error_message: str, *, owner_user_id: str) -> None:
-    connection.execute(
+    cursor = connection.execute(
         """
         UPDATE online_knowledge.jobs
         SET status = 'failed',
@@ -232,9 +288,15 @@ def mark_online_job_failed_postgres(connection: Any, job_id: str, error_message:
             error_message = %s,
             result_data = NULL
         WHERE job_id = %s AND owner_user_id = %s::uuid
-        """,
+        """ + (" AND status IN ('pending','running') RETURNING job_id" if ne.enabled() else ""),
         (error_message, error_message, job_id, owner_user_id),
     )
+    if ne.enabled() and cursor.fetchone() is None:
+        return  # Terminal winner is sticky; never erase a settled result.
+    _record_usage(connection, job_id, owner_user_id=owner_user_id)
+    if ne.enabled():
+        ne.release_native(connection, owner_user_id=owner_user_id, module="online_knowledge",
+                          native_task_id=job_id, status="failed", source="online_native_terminal")
 
 
 def get_online_job_postgres(connection: Any, job_id: str, *, owner_user_id: str) -> dict[str, Any] | None:
@@ -299,6 +361,7 @@ def _update_online_job_postgres(
         """,
         (status, progress_stage, progress_message, job_id, owner_user_id),
     )
+    _record_usage(connection, job_id, owner_user_id=owner_user_id)
 
 
 def _history_row_to_dict(row: Any) -> dict[str, Any]:
@@ -314,12 +377,56 @@ def _history_row_to_dict(row: Any) -> dict[str, Any]:
     }
 
 
+def _interrupt_recovered_provider_attempts(connection: Any, recovered: dict[str, Any]) -> None:
+    """Only for roots returned by native startup recovery, in that transaction.
+
+    This records discovery of a lost local observer, not proof that a remote
+    inference stopped. Missing provider usage remains unknown.
+    """
+    owner = str(recovered["owner_user_id"])
+    root_id = f"online_knowledge:{recovered['job_id']}"
+    observed_at = recovered["updated_at"]
+    children = connection.execute("""SELECT module, task_id, attempt_id,
+        parent_task_id, root_task_id, submitted_at, started_at
+        FROM usage.attempts WHERE owner_user_id=%s::uuid
+        AND module='online_knowledge' AND root_task_id=%s
+        AND kind='provider' AND parent_task_id IS NOT NULL
+        AND status IN ('queued','running')""", (owner, root_id)).fetchall()
+    for child in children:
+        identity = [child["module"], child["task_id"], child["attempt_id"],
+                    root_id, observed_at.isoformat()]
+        event_key = "online-restart:" + hashlib.sha256(
+            json.dumps(identity, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        record_event(connection, owner_user_id=owner, module=child["module"],
+                     task_id=child["task_id"], attempt_id=child["attempt_id"],
+                     parent_task_id=child["parent_task_id"], root_task_id=child["root_task_id"],
+                     kind="provider", source="reconciliation", event_key=event_key,
+                     status="interrupted", occurred_at=observed_at,
+                     submitted_at=child["submitted_at"], started_at=child["started_at"],
+                     finished_at=observed_at, metrics=None)
+
+
 def fail_interrupted_online_jobs_postgres(connection: Any) -> int:
     """Call once at single-backend startup, before accepting submissions."""
     if not is_service_context():
         raise RuntimeError("Global online recovery requires an explicit service context")
-    cursor = connection.execute("""UPDATE online_knowledge.jobs SET status='failed',
+    statement = """UPDATE online_knowledge.jobs SET status='failed',
         progress_stage='failed', progress_message='Search interrupted by backend restart.',
         error_message='worker_restarted', updated_at=now()
-        WHERE status IN ('pending', 'running')""")
-    return cursor.rowcount
+        WHERE status IN ('pending', 'running')"""
+    enabled = metering_enabled()
+    entitlements_enabled = ne.enabled()
+    if enabled or entitlements_enabled:
+        statement += " RETURNING job_id, owner_user_id, status, created_at, updated_at, start_authorized_at"
+    cursor = connection.execute(statement)
+    count = cursor.rowcount
+    if enabled or entitlements_enabled:
+        for row in cursor.fetchall():
+            if enabled:
+                record_persistent_task(connection, module="online_knowledge", row=row, status="interrupted")
+                _interrupt_recovered_provider_attempts(connection, row)
+            if entitlements_enabled:
+                ne.release_native(connection, owner_user_id=str(row["owner_user_id"]), module="online_knowledge",
+                    native_task_id=row["job_id"], status="interrupted", source="online_native_recovery")
+    return count

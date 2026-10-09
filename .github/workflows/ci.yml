@@ -155,6 +155,7 @@ jobs:
               ! -name 'test_dev_worker_process.py' \
               ! -name 'test_monomer_md_worker_launcher.py' \
               ! -name 'test_user_isolation_release_contract.py' \
+              ! -name 'test_monomer_usage_hooks.py' \
               ! -name 'test_worker_slot_runtime.py' -print | sort
           )
           python3 -m unittest -v "${unittest_files[@]}"
@@ -334,7 +335,7 @@ jobs:
           [[ "${#tests[@]}" -gt 0 ]]
           python -m pytest "${tests[@]}" --assert=plain --tb=short --junitxml=multiuser-backend.xml
           if [[ "$SHARD" == "0" ]]; then
-            python -m pytest scripts/tests/test_user_isolation_release_contract.py --assert=plain --tb=short
+            python -m pytest scripts/tests/test_user_isolation_release_contract.py scripts/tests/test_monomer_usage_hooks.py --assert=plain --tb=short
           fi
 
   frontend:

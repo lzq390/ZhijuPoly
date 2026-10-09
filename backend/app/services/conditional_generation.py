@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.usage_context import usage_span
+
 import os
 from collections import Counter
 from dataclasses import dataclass, field
@@ -200,13 +202,14 @@ def run_conditional_generation(
         # Exceptions from model execution are runtime failures (including OOM)
         # and must reach the Registry/job manager instead of being converted
         # into a misleading successful response with zero candidates.
-        generated = runtime.generate_once(
-            input_smiles=input_smiles_model,
-            delta_tg=condition_delta_tg,
-            top_k=top_k,
-            temperature=temperature,
-            max_length=max_length,
-        )
+        with usage_span("conditional_generation"):
+            generated = runtime.generate_once(
+                input_smiles=input_smiles_model,
+                delta_tg=condition_delta_tg,
+                top_k=top_k,
+                temperature=temperature,
+                max_length=max_length,
+            )
 
         raw_smiles = generated.raw_smiles.strip()
         rdkit_smiles = generated.rdkit_smiles or to_rdkit_smiles(raw_smiles)
@@ -233,7 +236,8 @@ def run_conditional_generation(
         seen.add(rdkit_smiles)
         # The evaluator and scaler are part of the same runtime contract.
         # Their failures are not candidate-level business errors.
-        predicted_tg = float(runtime.predict_tg(rdkit_smiles))
+        with usage_span("conditional_generation"):
+            predicted_tg = float(runtime.predict_tg(rdkit_smiles))
 
         candidates.append(
             ConditionalGenerationCandidate(

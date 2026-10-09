@@ -22,6 +22,7 @@ from app.models import (
     MonomerMdStatusResponse,
 )
 from app.postgres_database import postgres_connection
+from task_usage import native_entitlements as ne
 from app.auth.context import current_owner_id, service_context
 from app.services.monomer_md_repository import (
     create_monomer_md_job_postgres,
@@ -33,6 +34,7 @@ from app.services.monomer_md_repository import (
     list_monomer_md_jobs_postgres,
     mark_monomer_md_artifacts_deleted_postgres,
     mark_monomer_md_job_failed_postgres,
+    mark_unclaimed_monomer_md_submit_failed_postgres,
     mark_monomer_md_job_submitted_postgres,
     reconcile_and_get_active_monomer_md_capacity_postgres,
     request_monomer_md_job_cancel_postgres,
@@ -125,12 +127,22 @@ def _create_pending_job_with_capacity_guard(
     run_mode: str = "demo",
     config_json: dict[str, Any] | None = None,
     components: dict[str, Any] | None = None,
-) -> None:
+    idempotency_key: str | None = None,
+    request_fingerprint: str | None = None,
+) -> dict | None:
     owner_user_id = current_owner_id()
     with service_context(), postgres_connection(settings.app_postgres_dsn) as connection:
         account = connection.execute("SELECT status FROM auth.users WHERE user_id = %s::uuid FOR UPDATE", (owner_user_id,)).fetchone()
         if account is None or account["status"] != "active":
             raise HTTPException(status_code=403, detail="account disabled")
+        if ne.enabled():
+            previous = ne.lookup_native(connection, owner_user_id=owner_user_id, module="monomer_md",
+                idempotency_key=idempotency_key, request_fingerprint=request_fingerprint)
+            if previous is not None:
+                existing = get_monomer_md_job_postgres(connection, previous["native_task_id"], owner_user_id=owner_user_id)
+                if existing is None:
+                    raise ne.core.EntitlementConflict("Original native task is no longer available")
+                return {"created": False, "job": existing}
         active_jobs, _ = reconcile_and_get_active_monomer_md_capacity_postgres(
             connection,
             advisory_lock_id=_ACTIVE_CAPACITY_ADVISORY_LOCK_ID,
@@ -146,6 +158,18 @@ def _create_pending_job_with_capacity_guard(
                 _raise_formal_job_capacity_error()
         elif mode_capacity["demo_active"] > 0 or formal_active > 0:
             _raise_active_job_capacity_error()
+        if ne.enabled():
+            spec = {"run_mode": run_mode, "protocol": protocol, "requested_steps": requested_steps}
+            if run_mode == "formal":
+                spec["requested_atom_count"] = (config_json or {}).get("natoms")
+            reserved = ne.reserve_native(connection, owner_user_id=owner_user_id, module="monomer_md",
+                idempotency_key=idempotency_key, request_fingerprint=request_fingerprint,
+                native_task_id=job_id, spec=spec)
+            if not reserved["created"]:
+                existing = get_monomer_md_job_postgres(connection, reserved["operation"]["native_task_id"], owner_user_id=owner_user_id)
+                if existing is None:
+                    raise ne.core.EntitlementConflict("Original native task is no longer available")
+                return {"created": False, "job": existing}
         create_monomer_md_job_postgres(
             connection,
             job_id=job_id,
@@ -158,6 +182,13 @@ def _create_pending_job_with_capacity_guard(
             config_json=config_json,
             components=components,
         )
+        if ne.enabled():
+            permit = ne.begin_native_dispatch(connection, owner_user_id=owner_user_id, module="monomer_md",
+                native_task_id=job_id, executor_id=f"monomer_md:{job_id}")
+            if not permit["allowed"]:
+                raise ne.core.EntitlementConflict("Native execution was already dispatched")
+            return {"created": True, "job": {"job_id": job_id, "status": "pending"}}
+    return None
 
 
 def _optional_bool(value: object) -> bool | None:
@@ -508,11 +539,8 @@ def _mark_job_failed_after_submit_error(
     error_message: str,
 ) -> None:
     with postgres_connection(dsn) as connection:
-        mark_monomer_md_job_failed_postgres(
-            connection,
-            job_id,
-            error_message,
-            "worker_submit_failed",
+        mark_unclaimed_monomer_md_submit_failed_postgres(
+            connection, job_id, error_message,
         )
 
 
@@ -708,6 +736,26 @@ async def get_monomer_md_protocols(request: Request) -> MonomerMdProtocolCatalog
 @router.post("/jobs", response_model=MonomerMdJobCreateResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Request) -> MonomerMdJobCreateResponse:
     settings = request.app.state.settings
+    entitlement_args = {}
+    if ne.enabled():
+        key = ne.require_idempotency_key(request.headers.get("Idempotency-Key"))
+        fingerprint = ne.request_fingerprint(request_body.model_dump(mode="json"))
+        entitlement_args = {"idempotency_key": key, "request_fingerprint": fingerprint}
+        def replay():
+            with service_context(), postgres_connection(settings.app_postgres_dsn) as connection:
+                previous = ne.lookup_native(connection, owner_user_id=current_owner_id(), module="monomer_md",
+                                            idempotency_key=key, request_fingerprint=fingerprint)
+                if previous is None:
+                    return None
+                existing = get_monomer_md_job_postgres(connection, previous["native_task_id"], owner_user_id=current_owner_id())
+                if existing is None:
+                    raise ne.core.EntitlementConflict("Original native task is no longer available")
+                ne.attach_native_operation(request, owner_user_id=current_owner_id(), module="monomer_md",
+                    native_task_id=existing["job_id"], operation=previous)
+                return MonomerMdJobCreateResponse(job_id=existing["job_id"], status=existing["status"])
+        previous_response = await run_in_threadpool(replay)
+        if previous_response is not None:
+            return previous_response
     if not settings.monomer_md_submit_enabled:
         raise HTTPException(status_code=503, detail="monomer MD submissions are disabled")
     if not settings.monomer_md_worker_base_url and getattr(request.app.state, "monomer_md_worker_client", None) is None:
@@ -743,7 +791,7 @@ async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Requ
 
     job_id = uuid4().hex
     requested_steps = details["requested_steps"] or settings.monomer_md_default_steps
-    await run_in_threadpool(
+    created = await run_in_threadpool(
         _create_pending_job_with_capacity_guard,
         settings,
         job_id=job_id,
@@ -754,7 +802,14 @@ async def create_monomer_md_job(request_body: MonomerMdRunRequest, request: Requ
         run_mode=details["run_mode"],
         config_json=details["config_json"],
         components=details["components"],
+        **entitlement_args,
     )
+    if ne.enabled():
+        await run_in_threadpool(ne.attach_native_operation, request,
+            owner_user_id=current_owner_id(), module="monomer_md", native_task_id=created["job"]["job_id"])
+    if ne.enabled() and not created["created"]:
+        existing = created["job"]
+        return MonomerMdJobCreateResponse(job_id=existing["job_id"], status=existing["status"])
 
     try:
         submission = await run_in_threadpool(

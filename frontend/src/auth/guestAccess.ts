@@ -6,5 +6,9 @@ export function requestServiceAccess(): boolean {
     window.dispatchEvent(new Event("nexpoly:login-required"));
     return false;
   }
+  if (sessionIsReady() && getSession().account_type === "free") {
+    window.dispatchEvent(new Event("nexpoly:membership-required"));
+    return false;
+  }
   return true;
 }

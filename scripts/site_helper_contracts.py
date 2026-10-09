@@ -493,6 +493,30 @@ USER_ISOLATION_V3_MIGRATION_LEDGER = (*USER_ISOLATION_V2_MIGRATION_LEDGER,
 )
 
 
+# Explicit usage/entitlement receipts do not extend the historical v1-v3 or
+# production v7 evidence protocols. Hashes pin this reviewed release chain.
+USER_ISOLATION_V4_MIGRATION_LEDGER = (*USER_ISOLATION_V3_MIGRATION_LEDGER,
+    ("0021_usage_metering", "3e79f0fcefe0bdfff5e6c00f184e22cf17621d5a1cc46a5ddb6fb8f296680f62"),
+)
+USER_ISOLATION_V5_MIGRATION_LEDGER = (*USER_ISOLATION_V4_MIGRATION_LEDGER,
+    ("0022_usage_entitlements", "fe536a6256493931f6d773197a3e1e742b17bacc3c675e4fcbc32864e0747bb5"),
+)
+
+
+def validate_user_isolation_v4_ledger(records: object) -> list[dict[str, str]]:
+    expected = [{"version": version, "checksum": checksum} for version, checksum in USER_ISOLATION_V4_MIGRATION_LEDGER]
+    if records != expected:
+        raise SiteHelperContractError("user isolation v4 requires the exact canonical ledger through 0021")
+    return [dict(record) for record in expected]
+
+
+def validate_user_isolation_v5_ledger(records: object) -> list[dict[str, str]]:
+    expected = [{"version": version, "checksum": checksum} for version, checksum in USER_ISOLATION_V5_MIGRATION_LEDGER]
+    if records != expected:
+        raise SiteHelperContractError("user isolation v5 requires the exact canonical ledger through 0022")
+    return [dict(record) for record in expected]
+
+
 def validate_user_isolation_v3_ledger(records: object) -> list[dict[str, str]]:
     expected = [{"version": version, "checksum": checksum} for version, checksum in USER_ISOLATION_V3_MIGRATION_LEDGER]
     if records != expected:

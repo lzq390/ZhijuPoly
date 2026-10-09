@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from task_usage import native_entitlements as ne
+
 import asyncio
 from contextvars import copy_context
 import logging
@@ -89,8 +91,14 @@ class MonomerDftReconciler:
                 if not claimed:
                     # A concurrent cancel/state transition won the row lock;
                     # never send the stale pending snapshot to the Worker.
-                    return await asyncio.to_thread(self._repository.get_job_for_service, job_id)
-                snapshot = await self._worker.submit_job(job)
+                    current = await asyncio.to_thread(self._repository.get_job_for_service, job_id)
+                    if not ne.enabled() or current is None or current["status"] != "pending":
+                        return current
+                    # An entitlement dispatch already claimed (or of unknown
+                    # outcome) may only be observed, never resubmitted here.
+                    snapshot = await self._worker.get_job(job_id)
+                else:
+                    snapshot = await self._worker.submit_job(job)
             elif status in {"queued", "running"}:
                 snapshot = await self._worker.get_job(job_id)
             elif status == "cancel_requested":

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.entitlement_sync import entitled_sync
+
 import csv
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +15,9 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from app.config import Settings
 from app.auth.context import current_identity, current_owner_id, user_context, service_context, database_settings
 from app.task_control import admission, acquire_admission, authorize_memory_start, authorize_start
+from task_usage.ledger import metering_enabled
+from task_usage import native_entitlements as ne
+from app.usage_context import UsageContext, current_usage_collector, usage_scope
 from app.task_observability import TaskExecutionContext, log_task_event
 from app.models import (
     MutationResponse,
@@ -78,6 +83,7 @@ def get_online_knowledge_default_config(request: Request) -> OnlineKnowledgeDefa
 
 
 @router.post("/search", response_model=OnlineKnowledgeSearchResponse)
+@entitled_sync("online_knowledge")
 def search_online_knowledge(
     request_body: OnlineKnowledgeSearchRequest,
     request: Request,
@@ -98,7 +104,13 @@ def _search_online_knowledge_under_admission(
 
     try:
         model_access = resolve_online_model_access(request_body, settings)
-        result_data = _run_search_from_request(request_body, model_access)
+        if ne.enabled():
+            facts = {}
+            request.state.online_entitlement_facts = facts
+            result_data = _run_search_from_request(request_body, model_access, execution_facts=facts)
+            facts.update(validated=True, completion_proven=True)
+        else:
+            result_data = _run_search_from_request(request_body, model_access)
     except HTTPException:
         raise
     except OnlineKnowledgeConfigError as exc:
@@ -136,38 +148,67 @@ def create_online_knowledge_job(
 ) -> OnlineKnowledgeJobCreateResponse:
     settings = request.app.state.settings
     _require_postgres_runtime(settings)
+    identity = current_identity()
+    entitlement_args = {}
+    if ne.enabled():
+        key = ne.require_idempotency_key(request.headers.get("Idempotency-Key"))
+        fingerprint = ne.request_fingerprint(request_body.model_dump(mode="json"))
+        entitlement_args = {"idempotency_key": key, "request_fingerprint": fingerprint}
+        # Replays retrieve their bound result before current policy/provider checks.
+        with service_context(), request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
+            previous = ne.lookup_native(connection, owner_user_id=identity.user_id, module="online_knowledge",
+                                        idempotency_key=key, request_fingerprint=fingerprint)
+            if previous is not None:
+                existing = get_online_job_postgres(connection, previous["native_task_id"], owner_user_id=identity.user_id)
+                if existing is None:
+                    raise ne.core.EntitlementConflict("Original native task is no longer available")
+                ne.attach_native_operation(request, owner_user_id=identity.user_id, module="online_knowledge",
+                    native_task_id=existing["job_id"], operation=previous)
+                return OnlineKnowledgeJobCreateResponse(job_id=existing["job_id"], status=existing["status"])
     try:
         model_access = resolve_online_model_access(request_body, settings)
     except OnlineKnowledgeConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     job_id = uuid4().hex
-    identity = current_identity()
-    lease = acquire_admission("online", task_type="online_knowledge", task_id=job_id)
+    lease = None if ne.enabled() else acquire_admission("online", task_type="online_knowledge", task_id=job_id)
     try:
         with service_context(), request.app.state.postgres_connection_factory(settings.app_postgres_dsn) as connection:
-            create_online_job_postgres(
-                connection, owner_user_id=current_owner_id(),
-                job_id=job_id,
-                material=request_body.material,
-                mode=request_body.mode,
-                max_papers=request_body.max_papers,
+            created = create_online_job_postgres(
+                connection, owner_user_id=identity.user_id, job_id=job_id,
+                material=request_body.material, mode=request_body.mode, max_papers=request_body.max_papers,
+                **entitlement_args,
             )
+            if ne.enabled():
+                if not created["created"]:
+                    existing = created["job"]
+                    operation = ne.get_native(connection, owner_user_id=identity.user_id,
+                        module="online_knowledge", native_task_id=existing["job_id"])
+                    ne.attach_native_operation(request, owner_user_id=identity.user_id, module="online_knowledge",
+                        native_task_id=existing["job_id"], operation=operation)
+                    return OnlineKnowledgeJobCreateResponse(job_id=existing["job_id"], status=existing["status"])
+                # A duplicate never consumes a second in-memory channel lease.
+                # Admission failure rolls back both native row and reservation.
+                lease = acquire_admission("online", task_type="online_knowledge", task_id=job_id)
+                permit = ne.begin_native_dispatch(connection, owner_user_id=identity.user_id,
+                    module="online_knowledge", native_task_id=job_id, executor_id=f"online_knowledge:{job_id}")
+                if not permit["allowed"]:
+                    raise ne.core.EntitlementConflict("Native execution was already dispatched")
+                ne.attach_native_operation(request, owner_user_id=identity.user_id, module="online_knowledge",
+                    native_task_id=job_id, operation=permit["operation"])
         background_tasks.add_task(
-            _run_online_knowledge_job,
-            job_id,
-            settings.app_postgres_dsn,
-            request_body,
-            model_access,
-            identity,
-            lease,
-            database_settings(),
+            _run_online_knowledge_job, job_id, settings.app_postgres_dsn, request_body, model_access,
+            identity, lease, database_settings(), current_usage_collector() if metering_enabled() else None,
         )
     except PostgresUnavailableError as exc:
-        lease.release()
+        if lease is not None:
+            lease.release()
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
     except BaseException:
-        lease.release()
+        if lease is not None:
+            lease.release()
+        # Commit/network ambiguity is not proof of non-execution. Native startup
+        # recovery owns any durable pending task; never refund on this exception.
         raise
     return OnlineKnowledgeJobCreateResponse(job_id=job_id, status="pending")
 
@@ -253,6 +294,7 @@ def _run_search_from_request(
     request_body: OnlineKnowledgeSearchRequest,
     model_access: OnlineModelAccess,
     progress_callback=None,
+    execution_facts=None,
 ) -> dict:
     deadline = perf_counter() + PrivateQuotaSettings.from_environment().online_execution_seconds
     def progress(*args):
@@ -271,6 +313,7 @@ def _run_search_from_request(
             extraction_delay_seconds=request_body.extraction_delay_seconds,
             proxy_url=model_access.proxy_url,
             progress_callback=progress,
+            **({"execution_facts": execution_facts} if execution_facts is not None else {}),
         )
 
 
@@ -296,9 +339,14 @@ def resolve_online_model_access(
     return access
 
 
-def _run_online_knowledge_job(job_id, postgres_dsn, request_body, model_access, identity, lease, auth_settings):
+def _run_online_knowledge_job(job_id, postgres_dsn, request_body, model_access, identity, lease, auth_settings,
+                              usage_collector=None):
     try:
-        with user_context(identity, auth_settings):
+        context = None
+        if metering_enabled():
+            task_id = f"online_knowledge:{job_id}"
+            context = UsageContext(identity.user_id, "online_knowledge", task_id, root_task_id=task_id)
+        with user_context(identity, auth_settings), usage_scope(context, collector=usage_collector):
             _execute_online_knowledge_job(job_id, postgres_dsn, request_body, model_access)
     finally:
         lease.release()
@@ -319,6 +367,11 @@ def _execute_online_knowledge_job(
                                table="online_knowledge.jobs", key_column="job_id", key=job_id):
             mark_online_job_failed_postgres(connection, job_id, "account_disabled: task did not start", owner_user_id=current_owner_id())
             return False
+        if ne.enabled():
+            permit = ne.claim_native_running(connection, owner_user_id=current_owner_id(),
+                module="online_knowledge", native_task_id=job_id, executor_id=f"online_knowledge:{job_id}")
+            if not permit["allowed"]:
+                return False
         mark_online_job_running_postgres(connection, job_id, owner_user_id=current_owner_id())
         return True
 
@@ -345,7 +398,9 @@ def _execute_online_knowledge_job(
         )
 
     try:
-        result_data = _run_search_from_request(request_body, model_access, report_progress)
+        entitlement_facts = {} if ne.enabled() else None
+        result_data = _run_search_from_request(request_body, model_access, report_progress,
+            **({"execution_facts": entitlement_facts} if entitlement_facts is not None else {}))
         if len(json.dumps(result_data, ensure_ascii=False).encode("utf-8")) > PrivateQuotaSettings.from_environment().online_result_bytes:
             raise OnlineKnowledgeModelError("Search result exceeds retention budget")
         result_data["query_time_ms"] = (perf_counter() - started_at) * 1000
@@ -353,7 +408,10 @@ def _execute_online_knowledge_job(
         result_json = response.model_dump(mode="json")
 
         def complete(connection):
-            mark_online_job_completed_postgres(connection, job_id, result_json, owner_user_id=current_owner_id())
+            persisted = mark_online_job_completed_postgres(connection, job_id, result_json, owner_user_id=current_owner_id(),
+                **({"entitlement_facts": entitlement_facts} if entitlement_facts is not None else {}))
+            if ne.enabled() and not persisted:
+                return
             save_online_history_postgres(
                 connection, owner_user_id=current_owner_id(),
                 material=response.material,

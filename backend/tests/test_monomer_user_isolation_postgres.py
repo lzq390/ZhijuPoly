@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -47,13 +46,18 @@ def isolation_database():
         connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
     try:
         with psycopg.connect(admin_dsn, row_factory=dict_row) as connection:
-            for path in sorted((Path(__file__).parents[1] / "migrations/postgres").glob("*.sql")):
+            from app.migration_policy import validate_migration_manifest_entries
+            migrations=Path(__file__).parents[1] / "migrations/postgres"
+            for entry in validate_migration_manifest_entries(migrations):
+                if entry.version > "0019_service_auth_least_privilege":
+                    continue  # This suite proves the historical v2 isolation boundary.
+                path=migrations/(entry.version+".sql")
                 if path.name.startswith("0018"):
                     for owner, username in ((A, "owner-a"), (B, "owner-b")):
                         connection.execute("INSERT INTO auth.users(user_id,username,password_hash,must_change_password) VALUES (%s,%s,'!',false)", (owner, username))
                     connection.execute("SELECT set_config('nexpoly.legacy_owner',%s,true)", (A,))
                 connection.execute(path.read_text())
-                connection.execute("INSERT INTO governance.schema_migrations(version,checksum) VALUES (%s,%s)", (path.stem, hashlib.sha256(path.read_bytes()).hexdigest()))
+                connection.execute("INSERT INTO governance.schema_migrations(version,checksum) VALUES (%s,%s)", (entry.version, entry.checksum))
             for name, group in ((api, "nexpoly_api"), (service, "nexpoly_service"), (audit, "nexpoly_mutable_audit")):
                 connection.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD 'isolation-test-only' IN ROLE {}").format(sql.Identifier(name), sql.Identifier(group)))
         yield SimpleNamespace(admin=admin_dsn, api=make_conninfo(admin_dsn, user=api, password="isolation-test-only"), service=make_conninfo(admin_dsn, user=service, password="isolation-test-only"), audit=make_conninfo(admin_dsn, user=audit, password="isolation-test-only"))
@@ -291,7 +295,7 @@ def test_safe_cutover_audit_includes_auth_without_credentials(isolated):
     with psycopg.connect(isolated.admin) as connection:
         connection.execute("UPDATE auth.users SET password_hash='NEVER_EXPORT_CREDENTIAL' WHERE user_id=%s", (A,))
     with psycopg.connect(isolated.audit, row_factory=dict_row) as connection:
-        evidence = capture(connection)
+        evidence = capture(connection, schema_version=2)
     assert evidence["schema_version"] == 2
     assert evidence["current_readiness"] is True
     assert evidence["migration_ledger"][-1]["version"] == "0019_service_auth_least_privilege"

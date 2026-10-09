@@ -87,6 +87,27 @@ describe("MonomerMdFormalConfig", () => {
     expect(screen.getByLabelText('组分 1 SMILES')).toHaveProperty('value', 'CCO');
   });
 
+  it("retains current row metadata during import and its provenance after metadata edits", async () => {
+    const workspace = new StructureWorkspace('CCC');
+    let resolve!: (document: ReturnType<typeof testDocument>) => void;
+    vi.spyOn(workspace, 'captureForImport').mockImplementation(() => new Promise(done => { resolve = done; }));
+    const apply = renderEditor(vi.fn(), workspace);
+    await chooseCurrentStructure(screen.getByRole('button', { name: '选择结构 · 组分 1' }));
+    fireEvent.change(screen.getByLabelText('组分 1 名称'), { target: { value: '当前组分' } });
+    fireEvent.change(screen.getByLabelText('组分 1 摩尔配比'), { target: { value: '3' } });
+    await act(async () => resolve(testDocument('NN')));
+    expect(screen.getByLabelText('组分 1 SMILES')).toHaveProperty('value', 'NN');
+    expect(screen.getByLabelText('组分 1 名称')).toHaveProperty('value', '当前组分');
+    expect(screen.getByLabelText('组分 1 摩尔配比')).toHaveProperty('value', '3');
+    expect(screen.getByText('来自：当前画板')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('组分 1 名称'), { target: { value: '新名称' } });
+    fireEvent.change(screen.getByLabelText('组分 1 摩尔配比'), { target: { value: '4' } });
+    expect(screen.getByText('来自：当前画板')).toBeTruthy();
+    expect(apply).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('组分 1 SMILES'), { target: { value: 'CC' } });
+    expect(screen.queryByText('来自：当前画板')).toBeNull();
+  });
+
   it("uses protocol names in English and hides implementation-only managed paths", () => {
     renderEditor();
     expect(screen.getByRole("button", { name: /Density/ })).toBeTruthy();

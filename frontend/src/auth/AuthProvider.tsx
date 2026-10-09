@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ChevronUp, KeyRound, LogIn, LogOut, UserRound, X } from "lucide-react";
+import { BarChart3, ChevronUp, KeyRound, LogIn, LogOut, UserRound, X } from "lucide-react";
 import { authRequest } from "./api";
 import { GUEST_SESSION, getSessionEpoch, installSession, onSessionInvalidated, retireSession, type AuthSession } from "./session";
 import { AUTH_OWNER_KEY, AUTH_SHARED_OWNER_KEY, AUTH_SYNC_KEY, clearPrivateBrowserData, clearPrivateSessionStorage } from "./storage";
@@ -18,6 +18,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>(initial);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
+  const [membershipOpen, setMembershipOpen] = useState(false);
+  useEffect(() => {
+    const show = () => setMembershipOpen(true);
+    window.addEventListener("nexpoly:membership-required", show);
+    return () => window.removeEventListener("nexpoly:membership-required", show);
+  }, []);
   const [guestDraft, setGuestDraft] = useState("");
   const guestCapture = useRef<(() => Promise<string>) | null>(null);
   const setGuestCapture = useCallback((capture: (() => Promise<string>) | null) => { guestCapture.current = capture; }, []);
@@ -184,11 +190,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     : <div key={`${state.session.session_id ?? "guest"}:${getSessionEpoch()}`} className="np-auth-workspace">{children}</div>;
   return <AuthContext.Provider value={{ ...state, login: () => setLoginOpen(true), logout, changePassword: () => setPasswordOpen(true), guestDraft, registerGuestCapture: setGuestCapture }}>
     {content}
+    {state.status === "authenticated" && state.session.account_type === "free" && membershipOpen && <LoginDialog label="会员功能说明" onClose={() => setMembershipOpen(false)}><h2>当前为免费账号</h2><p>此服务需要会员权限。本地画板和公开示例仍可使用；次数余额不会自动开通会员功能。</p><button type="button" onClick={() => setMembershipOpen(false)}>知道了</button></LoginDialog>}
     {state.status === "guest" && loginOpen && <LoginDialog onClose={() => setLoginOpen(false)}><CredentialsForm mode="login" error={state.error} submit={login} /></LoginDialog>}
   </AuthContext.Provider>;
 }
 
-function LoginDialog({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+function LoginDialog({ children, onClose, label = "登录工作空间" }: { children: ReactNode; onClose: () => void; label?: string }) {
   const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -205,8 +212,8 @@ function LoginDialog({ children, onClose }: { children: ReactNode; onClose: () =
     return () => { document.removeEventListener("keydown", keyboard); if (previous?.isConnected) previous.focus(); };
   }, [onClose]);
   return <div className="np-auth-dialog-backdrop" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="np-auth-dialog" ref={dialog} role="dialog" aria-modal="true" aria-label="登录工作空间">
-      <button className="np-auth-dialog-close" type="button" aria-label="关闭登录" onClick={onClose}><X aria-hidden="true" /></button>
+    <div className="np-auth-dialog" ref={dialog} role="dialog" aria-modal="true" aria-label={label}>
+      <button className="np-auth-dialog-close" type="button" aria-label={label === "登录工作空间" ? "关闭登录" : "关闭说明"} onClick={onClose}><X aria-hidden="true" /></button>
       {children}
     </div>
   </div>;
@@ -234,7 +241,7 @@ function CredentialsForm({ mode, submit, error: externalError }: {
     <button type="submit" disabled={busy}>{busy ? "处理中…" : login ? "登录" : "修改密码并重新登录"}</button>
   </form>;
 }
-export function AccountMenu() {
+export function AccountMenu({ onOpenUsage }: { onOpenUsage?: () => void } = {}) {
   const auth = useAuth();
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLDivElement>(null);
@@ -265,8 +272,9 @@ export function AccountMenu() {
       const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
       items[next]?.focus();
     }}>
-      <div className="np-account-menu__summary"><strong>{username}</strong><span>{signedIn ? "个人工作空间" : "登录后保存和管理科研任务"}</span></div>
+      <div className="np-account-menu__summary"><strong>{username}</strong><span>{signedIn ? auth.session.account_type === "free" ? "免费账号 · 会员服务未开放" : "个人工作空间" : "登录后保存和管理科研任务"}</span></div>
       {signedIn ? <>
+        {onOpenUsage && <button type="button" role="menuitem" onClick={() => act(onOpenUsage)}><BarChart3 aria-hidden="true" />我的用量</button>}
         <button type="button" role="menuitem" onClick={() => act(auth.changePassword)}><KeyRound aria-hidden="true" />修改密码</button>
         <button type="button" role="menuitem" onClick={() => act(() => void auth.logout())}><LogOut aria-hidden="true" />退出登录</button>
       </> : <button type="button" role="menuitem" onClick={() => act(auth.login)}><LogIn aria-hidden="true" />登录</button>}
@@ -275,7 +283,7 @@ export function AccountMenu() {
       if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); setOpen(true); }
     }}>
       <span className="np-account-menu__avatar" aria-hidden="true">{signedIn ? username.slice(0, 2).toUpperCase() : <UserRound />}</span>
-      <span className="np-account-menu__identity"><span>{username}</span><small>{signedIn ? "个人账号" : "登录以使用完整功能"}</small></span>
+      <span className="np-account-menu__identity"><span>{username}</span><small>{signedIn ? auth.session.account_type === "free" ? "免费账号" : auth.session.account_type === "member" ? "会员账号" : "个人账号" : "登录以使用完整功能"}</small></span>
       <ChevronUp className="np-account-menu__chevron" aria-hidden="true" />
     </button>
   </div>;

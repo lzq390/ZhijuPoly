@@ -12,6 +12,9 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, 
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.routing import APIRoute
+from task_usage.entitlements import EntitlementConflict, EntitlementLimitExceeded, EntitlementError
+from task_usage import native_entitlements as ne
+from task_usage.entitlement_policy import InvalidSpecification, EntitlementPolicyError as PolicyValidationError
 
 from app.postgres_database import PostgresUnavailableError
 from app.auth.context import current_owner_id
@@ -58,6 +61,9 @@ logger = logging.getLogger(__name__)
 MONOMER_DFT_STABLE_ERROR_CODES = frozenset(
     {
         "submission_disabled",
+        "entitlement_limit_exceeded",
+        "entitlement_spec_rejected",
+        "entitlement_policy_invalid",
         "schema_not_ready",
         "worker_socket_not_configured",
         "worker_unavailable",
@@ -188,6 +194,26 @@ class MonomerDftRoute(APIRoute):
                 return await route_handler(request)
             except (MonomerDftPublicError, HTTPException, RequestValidationError):
                 raise
+            except EntitlementConflict as exc:
+                raise MonomerDftPublicError(
+                    409, code="idempotency_conflict",
+                    message="DFT entitlement identity conflicts with an existing operation",
+                ) from exc
+            except EntitlementLimitExceeded as exc:
+                raise MonomerDftPublicError(
+                    429, code="entitlement_limit_exceeded",
+                    message="DFT entitlement limit has been reached",
+                ) from exc
+            except InvalidSpecification as exc:
+                raise MonomerDftPublicError(
+                    422, code="entitlement_spec_rejected",
+                    message="DFT request exceeds the configured specification limits",
+                ) from exc
+            except (EntitlementError, PolicyValidationError) as exc:
+                raise MonomerDftPublicError(
+                    503, code="entitlement_policy_invalid",
+                    message="DFT entitlement configuration is unavailable", retryable=True,
+                ) from exc
             except PostgresUnavailableError as exc:
                 raise MonomerDftPublicError(
                     503,
@@ -592,6 +618,11 @@ async def create_job(
             idempotency_key=idempotency_key,
             request_sha256=request_sha256,
         )
+        if job is not None and ne.enabled():
+            await asyncio.to_thread(
+                ne.attach_native_operation, request, owner_user_id=current_owner_id(),
+                module="monomer_dft", native_task_id=job["job_id"],
+            )
         return _public_job(repository, job, replay=True) if job is not None else None
 
     replay = await replay_if_present()
@@ -705,6 +736,11 @@ async def create_job(
             retryable=True,
             headers={"Retry-After": "5"},
         ) from exc
+    if ne.enabled():
+        await asyncio.to_thread(
+            ne.attach_native_operation, request, owner_user_id=current_owner_id(),
+            module="monomer_dft", native_task_id=created.job["job_id"],
+        )
     if not created.created:
         return _public_job(repository, created.job, replay=True)
 

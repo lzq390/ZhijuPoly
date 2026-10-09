@@ -64,7 +64,7 @@ def test_current_readiness_needs_exact_0019_and_historical_is_not_current(auth_d
     assert current['current_readiness'] is True
     assert not report(auth_database, SCHEMA_TARGET_ISOLATION_HISTORICAL)['strict_ok']
     with historical_ledger(auth_database):
-        with pytest.raises(RuntimeError, match='canonical 0019 or 0020'):
+        with pytest.raises(RuntimeError, match='exact release-known isolation/library/usage/entitlement ledger required'):
             auth_service(auth_database).assert_application_ready()
         assert not report(auth_database)['strict_ok']
         historical = report(auth_database, SCHEMA_TARGET_ISOLATION_HISTORICAL)
@@ -115,7 +115,7 @@ def test_actual_service_login_acl_drift_blocks_all_current_checks(auth_database,
             with pytest.raises(ValueError):
                 capture(connection, schema_version=2)
         with pytest.raises(ValueError):
-            preflight({'nexpoly_' + kind: auth_database[kind] for kind in ('api','auth','service')})
+            preflight({'nexpoly_' + kind: auth_database[kind] for kind in ('api','auth','service')}, schema_version=2)
         with pytest.raises(ValueError):
             apply_service_auth_least_privilege(auth_database['admin'], service_roles=[role],
                 expected_database=conninfo_to_dict(auth_database['admin'])['dbname'])

@@ -535,7 +535,7 @@ class ProductionPostgresRehearsalTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT.parent / "backend/migrations/postgres/manifest.json").read_text()
         )["migrations"]
-        self.assertEqual(manifest[-1]["version"], "0019_service_auth_least_privilege")
+        self.assertEqual(manifest[-1]["version"], "0022_usage_entitlements")
         with mock.patch.object(self, "manifest", return_value=manifest):
             with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal target"):
                 self.build_mocked_plan(self.source_evidence())

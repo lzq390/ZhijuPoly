@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Frozen v7 evidence only. For 0020 use scripts/user_isolation_audit.py --schema-version 3
+# Frozen v7 evidence only. Use scripts/user_isolation_audit.py separately:
+# receipt 3 for historical 0020 library, 4 for 0021 usage, 5 for 0022 entitlements.
+# These isolation receipts never authorize the frozen v7 production protocol.
 # and the full private backup receipt; v3 includes structure_library.records.
 # Install as runtime/config/deployment-mutable-data-audit, owned by the deploy
 # user and mode 0700. Provision the referenced pg_service/pgpass files outside

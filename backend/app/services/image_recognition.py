@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.usage_context import usage_span
+
 import base64
 import importlib
 import inspect
@@ -429,6 +431,7 @@ def recognize_structure_image_from_bytes(
     with tempfile.NamedTemporaryFile(suffix=suffix) as handle:
         handle.write(image_bytes)
         handle.flush()
-        raw_result = _predict_with_recognizer(recognizer, Path(handle.name))
+        with usage_span("ocsr"):
+            raw_result = _predict_with_recognizer(recognizer, Path(handle.name))
 
     return _normalize_result(raw_result)

@@ -566,6 +566,70 @@ describe("shared structure documents", () => {
 });
 
 describe('personal library snapshots', () => {
+  it('fences draft and canvas writes while strict capture validates its fixed revision', async () => {
+    const releases: (() => void)[] = [];
+    const { workspace, edit, lease } = await mounted('CC', async value => {
+      await new Promise<void>(resolve => { releases.push(resolve); });
+      return value;
+    });
+    const oldHandle = workspace.getEditor()!;
+    workspace.setSmiles('CC');
+    const capturing = workspace.captureDocument();
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    // An older external validator resolving during capture is also fenced.
+    releases.shift()!();
+    await Promise.resolve();
+    expect(workspace.getSnapshot().documentBusy).toBe(true);
+    expect(() => workspace.setDraft('N(', 'invalid')).toThrow('正在保存或恢复');
+    expect(() => workspace.setSmiles('CO')).toThrow('正在保存或恢复');
+    expect(() => workspace.commitSmiles('CO')).toThrow('正在保存或恢复');
+    expect(() => workspace.beginMutation()).toThrow('正在保存或恢复');
+    await expect(oldHandle.setMolecule('CO')).rejects.toThrow('正在保存或恢复');
+    // Change notifications from an already-started SDK edit remain visible.
+    edit('NN', 8);
+    releases.shift()!();
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    releases.shift()!();
+    const document = await capturing;
+    expect(document.smiles).toBe('NN');
+    expect(JSON.parse(document.ket).mol0.atoms[0].location[0]).toBe(8);
+    expect(workspace.getSnapshot()).toMatchObject({ smiles: 'NN', draft: 'NN', documentBusy: false });
+    // Naming/uploading a captured snapshot does not lock further editing.
+    workspace.setDraft('CO(');
+    expect(workspace.getSnapshot().draft).toBe('CO(');
+    expect(document.smiles).toBe('NN');
+    lease.dispose();
+  });
+
+  it('releases the capture fence on validation failure and preserves subsequent drafts', async () => {
+    let fail!: (error: Error) => void;
+    const { workspace, lease } = await mounted('CC', () => new Promise((_resolve, reject) => { fail = reject; }));
+    const capturing = workspace.captureDocument();
+    const rejected = expect(capturing).rejects.toThrow('validation unavailable');
+    await vi.waitFor(() => expect(fail).toBeTypeOf('function'));
+    fail(new Error('validation unavailable'));
+    await rejected;
+    expect(workspace.getSnapshot()).toMatchObject({ smiles: 'CC', draft: 'CC', documentBusy: false });
+    workspace.setDraft('N(', 'invalid');
+    expect(workspace.getSnapshot()).toMatchObject({ draft: 'N(', draftError: 'invalid' });
+    lease.dispose();
+  });
+
+  it('fences draft changes from the start of a delayed restore backup', async () => {
+    const { workspace, editor, lease } = await mounted('CC');
+    const original = await workspace.captureDocument();
+    let release!: (document: string) => void;
+    vi.mocked(editor.getKet).mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const restoring = workspace.restoreDocument({ ...original, smiles: 'NN', ket: ket('NN') });
+    expect(workspace.getSnapshot().documentBusy).toBe(true);
+    expect(() => workspace.setDraft('CO(', 'new draft')).toThrow('正在保存或恢复');
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    release(original.ket);
+    await restoring;
+    expect(workspace.getSnapshot()).toMatchObject({ smiles: 'NN', draft: 'NN', documentBusy: false });
+    lease.dispose();
+  });
+
   it('retires a timed-out restore and keeps the original invalid draft and geometry', async () => {
     vi.useFakeTimers();
     const { workspace, editor, lease } = await mounted('CC');
@@ -632,6 +696,10 @@ describe('personal library snapshots', () => {
     vi.mocked(editor.setMolecule).mockImplementationOnce(async source => { await new Promise<void>(resolve => { complete = resolve; }); await originalSet(source); });
     const restoring = workspace.restoreDocument({ ...original, smiles: 'NN', ket: ket('NN') });
     await vi.waitFor(() => expect(complete).toBeTypeOf('function'));
+    expect(workspace.getSnapshot().documentBusy).toBe(true);
+    expect(() => workspace.setDraft('C(', 'invalid')).toThrow('正在保存或恢复');
+    expect(() => workspace.commitSmiles('CO')).toThrow('正在保存或恢复');
+    expect(() => workspace.beginMutation()).toThrow('正在保存或恢复');
     await expect(oldHandle.setMolecule('CO')).rejects.toThrow('正在保存或恢复');
     complete();
     await restoring;

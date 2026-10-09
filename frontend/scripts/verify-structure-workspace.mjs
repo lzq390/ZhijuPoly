@@ -7,6 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 
 const { chromium } = await import(process.env.STRUCTURE_PLAYWRIGHT_MODULE || "playwright");
+const entitlementsFixture = JSON.parse(await readFile(new URL('./fixtures/entitlements.json', import.meta.url), 'utf8')).entitlements;
 const base = process.env.STRUCTURE_BASE_URL || "http://127.0.0.1:5187";
 assert.equal(new URL(base).hostname, "127.0.0.1");
 const output = resolve(process.env.STRUCTURE_ARTIFACT_DIR || "/tmp/nexpoly-structure-browser");
@@ -46,6 +47,9 @@ await context.route("**/*", (route) => {
     authenticated: true, user: { id: "structure-ci-user", username: "structure-ci", must_change_password: false },
     session_id: "structure-ci-session", csrf_token: "structure-ci-csrf", capabilities: {}
   } });
+  // Explicit synthetic admission policy; do not turn the default API fallback
+  // into an accidental outage for counted 3D/polymerization fixture requests.
+  if (url.pathname === '/api/v1/usage/entitlements' && request.method() === 'GET') return route.fulfill({ json: entitlementsFixture });
   if (url.pathname === "/api/v1/structure-library/status") return route.fulfill({ json: { available: true, enabled: true, schema_ready: true } });
   if (url.pathname === "/api/v1/structure-library/records") {
     if (request.method() === 'POST') {

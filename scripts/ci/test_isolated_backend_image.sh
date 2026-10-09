@@ -31,10 +31,12 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from app.auth.cli import manage_user
 from app.auth.cutover import apply_identity_cutover
+from app.auth.isolation_ledger import validate_application_migration_ledger
 from app.auth.service import AuthService
 from app.auth.service_privileges import apply_service_auth_least_privilege
 from app.auth.settings import AuthSettings
 from app.postgres_migrations import apply_postgres_migrations
+from task_usage.entitlements import MIGRATION_VERSION
 
 dsn = 'postgresql://nexpoly_ci:ci-only@postgres:5432/nexpoly_ci'
 with psycopg.connect(dsn) as connection:
@@ -100,13 +102,19 @@ for grant, revoke in (
         with psycopg.connect(dsn) as connection:
             connection.execute(revoke)
 auth.assert_application_ready()
-# Exercise the newest approved expand schema with the same least-privileged
+# Exercise the full approved expand chain with the same least-privileged
 # runtime roles; historical 0017/0018/0019 checks above remain explicit.
+# Validate feature schemas directly without enabling usage/entitlements or
+# installing an example policy in the published-image startup smoke.
 apply_postgres_migrations(dsn, allowed_kinds={'expand'})
 auth.assert_application_ready()
 with psycopg.connect(dsn) as connection:
-    assert connection.execute('SELECT max(version) FROM governance.schema_migrations').fetchone()[0] == '0020_structure_library'
-print('0017 rejects startup; explicit 0018/0019 then 0020 expand and runtime roles verified')
+    assert connection.execute('SELECT max(version) FROM governance.schema_migrations').fetchone()[0] == MIGRATION_VERSION
+for runtime_dsn in (settings.application_dsn, settings.service_dsn):
+    with psycopg.connect(runtime_dsn, row_factory=dict_row) as connection:
+        validate_application_migration_ledger(connection, require_usage=True, require_entitlements=True)
+print(f'0017 rejects startup; explicit 0018/0019 then full expand through {MIGRATION_VERSION} verified')
+print('API/service roles pass strict usage and entitlement schema checks with feature flags off')
 print('Six system function/management privilege drifts reject readiness; valid ACL recovers')
 PY
 
@@ -146,5 +154,5 @@ except urllib.error.HTTPError as exc:
     assert exc.code == 401, exc.code
 else:
     raise AssertionError('Guest access to a private route must be rejected')
-print('Published backend starts on 0020 and rejects unauthenticated private requests')
+print('Published backend starts on the full release migration chain and rejects unauthenticated private requests')
 PY

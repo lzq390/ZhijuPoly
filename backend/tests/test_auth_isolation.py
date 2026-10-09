@@ -28,6 +28,29 @@ from app.postgres_migrations import apply_postgres_migrations
 from app.task_control import authorize_start
 
 
+
+def _apply_historical_prefix(dsn, through):
+    # Validate canonical current files, then give the real runner only the
+    # exact historical release prefix this fixture exercises.
+    import json
+    from pathlib import Path
+    import tempfile
+    from app.config import PROJECT_ROOT
+    from app.migration_policy import validate_migration_manifest_entries
+    source = PROJECT_ROOT / "backend/migrations/postgres"
+    entries = validate_migration_manifest_entries(source)
+    assert through in {entry.version for entry in entries}
+    document = json.loads((source / "manifest.json").read_text())
+    document["migrations"] = [entry for entry in document["migrations"] if entry["version"] <= through]
+    with tempfile.TemporaryDirectory(prefix="historical-migrations-") as temporary:
+        target = Path(temporary)
+        for entry in entries:
+            if entry.version <= through:
+                (target / (entry.version + ".sql")).write_bytes((source / (entry.version + ".sql")).read_bytes())
+        (target / "manifest.json").write_text(json.dumps(document))
+        return apply_postgres_migrations(dsn, migrations_dir=target,
+            allowed_kinds={"baseline", "expand"}, allow_contract_on_fresh_database=True)
+
 @pytest.fixture(scope='module')
 def auth_database():
     base = os.environ.get('ISOLATION_TEST_ADMIN_DSN')
@@ -40,7 +63,7 @@ def auth_database():
     with psycopg.connect(base,autocommit=True) as connection:
         connection.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
     try:
-        apply_postgres_migrations(dsn,allowed_kinds={'baseline','expand'},allow_contract_on_fresh_database=True)
+        _apply_historical_prefix(dsn, '0017_user_isolation_prepare')
         with psycopg.connect(dsn,row_factory=dict_row) as connection:
             legacy = manage_user(connection,'create',username='legacy-owner',password='initial-test-password')
             for kind,role in roles.items():
@@ -312,7 +335,7 @@ def test_cutover_refuses_changed_backup_and_backfills_only_explicit_owner():
     with psycopg.connect(base,autocommit=True) as connection:
         connection.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
     try:
-        apply_postgres_migrations(dsn,allowed_kinds={'baseline','expand'},allow_contract_on_fresh_database=True)
+        _apply_historical_prefix(dsn, '0017_user_isolation_prepare')
         with psycopg.connect(dsn,row_factory=dict_row) as connection:
             user = manage_user(connection,'create',username='cutover-owner',password='initial-test-password')
             before = private_data_seal(connection)

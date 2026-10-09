@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 from pathlib import Path
@@ -139,6 +140,69 @@ class ComposeDeliveryPolicyTests(unittest.TestCase):
         self.assertIn('"bootstrap-expand"', controller)
         self.assertIn('descriptor["previous_deployment"] is None', controller)
         self.assertIn('else "expand"', controller)
+
+    def test_isolated_backend_smoke_validates_full_release_schema_without_enabling_features(self) -> None:
+        smoke = (REPOSITORY_ROOT / "scripts/ci/test_isolated_backend_image.sh").read_text(
+            encoding="utf-8"
+        )
+        migration_script = smoke.split("python - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        tree = ast.parse(migration_script)
+        migration_calls = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "apply_postgres_migrations"
+        ]
+        self.assertEqual(len(migration_calls), 2)
+        # Keep the intentional fresh-database boundary, then run every approved
+        # expansion. A historical max_version here would hide new migrations.
+        bootstrap_options = {item.arg: item.value for item in migration_calls[0].keywords}
+        self.assertIs(ast.literal_eval(bootstrap_options["allow_contract_on_fresh_database"]), True)
+        expand_options = {item.arg: item.value for item in migration_calls[-1].keywords}
+        self.assertEqual(set(expand_options), {"allowed_kinds"})
+        self.assertEqual(ast.literal_eval(expand_options["allowed_kinds"]), {"expand"})
+        self.assertTrue(any(
+            isinstance(node, ast.ImportFrom)
+            and node.module == "task_usage.entitlements"
+            and any(name.name == "MIGRATION_VERSION" and name.asname is None for name in node.names)
+            for node in tree.body
+        ))
+        latest_assertions = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Assert)
+            and isinstance(node.test, ast.Compare)
+            and any(isinstance(value, ast.Name) and value.id == "MIGRATION_VERSION"
+                    for value in node.test.comparators)
+        ]
+        self.assertEqual(len(latest_assertions), 1)
+        self.assertIn("SELECT max(version) FROM governance.schema_migrations",
+                      ast.unparse(latest_assertions[0]))
+        strict_loops = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.For)
+            and any(isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                    and call.func.id == "validate_application_migration_ledger"
+                    for call in ast.walk(node))
+        ]
+        self.assertEqual(len(strict_loops), 1)
+        self.assertEqual(ast.unparse(strict_loops[0].iter),
+                         "(settings.application_dsn, settings.service_dsn)")
+        strict_calls = [node for node in ast.walk(strict_loops[0])
+                        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == "validate_application_migration_ledger"]
+        self.assertEqual(len(strict_calls), 1)
+        self.assertEqual({item.arg: ast.literal_eval(item.value)
+                          for item in strict_calls[0].keywords},
+                         {"require_usage": True, "require_entitlements": True})
+        for flag in ("USAGE_METERING_ENABLED", "USAGE_ENTITLEMENTS_ENABLED",
+                     "USAGE_ENTITLEMENTS_POLICY_FILE", "USAGE_ENTITLEMENTS_ALLOW_EXAMPLE"):
+            self.assertNotIn(flag, smoke)
+        self.assertFalse(any(
+            isinstance(node, ast.Call)
+            and ((isinstance(node.func, ast.Name) and node.func.id == "install_policy")
+                 or (isinstance(node.func, ast.Attribute) and node.func.attr == "install_policy"))
+            for node in ast.walk(tree)
+        ))
 
     def test_tracked_compose_contract_has_no_production_default_password(self) -> None:
         base = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")

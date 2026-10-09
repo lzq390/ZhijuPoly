@@ -5,7 +5,7 @@ import os
 
 @dataclass(frozen=True, slots=True)
 class PrivateQuotaSettings:
-    structure_library_max_rows: int = 1000
+    structure_library_max_rows: int = 20
     structure_library_max_bytes: int = 64 * 1024 * 1024
     structure_library_ket_bytes: int = 1024 * 1024
     memory_jobs_per_user: int = 100

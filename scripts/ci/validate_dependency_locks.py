@@ -222,6 +222,32 @@ def validate_backend_split(root: Path) -> list[str]:
     return failures
 
 
+def validate_backend_ci_overlay(root: Path) -> list[str]:
+    """The test layer must not replace any locked application dependency."""
+    runtime_lock = root / "backend" / "requirements.lock"
+    ci_lock = root / "backend" / "requirements-ci.lock"
+
+    def unique_versions(path: Path) -> dict[str, str]:
+        parsed: dict[str, str] = {}
+        for name, version, _lines in requirement_blocks(path.read_text(encoding="utf-8")):
+            if name in parsed:
+                raise ValueError(f"{path}: duplicate normalized requirement: {name}")
+            parsed[name] = version
+        return parsed
+
+    try:
+        runtime_versions = unique_versions(runtime_lock)
+        ci_versions = unique_versions(ci_lock)
+    except (OSError, ValueError) as exc:
+        return [str(exc)]
+    return [
+        f"{ci_lock}: test overlay changes runtime {name}=={runtime_versions[name]} "
+        f"to {ci_versions[name]}"
+        for name in sorted(runtime_versions.keys() & ci_versions.keys())
+        if runtime_versions[name] != ci_versions[name]
+    ]
+
+
 def validate_dft_worker_locks(root: Path) -> list[str]:
     failures: list[str] = []
     worker = root / "workers" / "monomer_dft_worker"
@@ -284,6 +310,7 @@ def validate_tooling(root: Path) -> list[str]:
         failures.append("scripts/compile_requirements.sh must not use uv")
     for required in (
         "--constraint=backend/requirements-system.in",
+        "--constraint=backend/requirements.lock",
         'PYTORCH_INDEX_URL="https://download.pytorch.org/whl/cu128"',
         "--unsafe-package=\"$package\"",
         "scripts/ci/validate_dependency_locks.py",
@@ -332,6 +359,7 @@ def validate(root: Path = REPOSITORY_ROOT) -> list[str]:
 
     failures.extend(validate_system_lock(root))
     failures.extend(validate_backend_split(root))
+    failures.extend(validate_backend_ci_overlay(root))
     failures.extend(validate_dft_worker_locks(root))
     failures.extend(validate_tooling(root))
     return failures

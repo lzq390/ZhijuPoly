@@ -166,7 +166,10 @@ def list_records(connection, owner: str, query: str, limit: int, cursor: str | N
         params.extend([query, query, query])
     if cursor:
         try:
-            timestamp, record_id = json.loads(base64.urlsafe_b64decode(cursor.encode()))
+            decoded = json.loads(base64.urlsafe_b64decode(cursor.encode()))
+            if not isinstance(decoded, list) or len(decoded) != 2 or any(not isinstance(value, str) for value in decoded):
+                raise ValueError()
+            timestamp, record_id = decoded
             time = datetime.fromisoformat(timestamp)
             if time.tzinfo is None:
                 raise ValueError()

@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import base64
 import json
 from types import SimpleNamespace
 from uuid import uuid4
@@ -10,7 +11,7 @@ from psycopg.rows import dict_row
 import pytest
 from fastapi.testclient import TestClient
 
-from test_auth_isolation import auth_database, auth_app, activate, login
+from test_auth_isolation import auth_database, auth_app, activate, login, _apply_historical_prefix
 from app.auth.cli import manage_user
 from app.auth.schema import validate_isolation_schema
 from app.postgres_database import postgres_connection
@@ -28,7 +29,7 @@ def payload(smiles='*CC*', name='候选 A'):
 
 @pytest.fixture
 def library_app(auth_app, auth_database):
-    apply_postgres_migrations(auth_database['admin'], allowed_kinds={'expand'})
+    _apply_historical_prefix(auth_database['admin'], '0020_structure_library')
     app, user, client = auth_app
     app.state.settings = SimpleNamespace(app_postgres_dsn=auth_database['api'], structure_library_enabled=True)
     app.state.postgres_connection_factory = postgres_connection
@@ -89,6 +90,42 @@ def test_retry_identity_quota_and_validation(library_app, monkeypatch):
     assert client.post(PREFIX+'/records', content=b'x'*(2*1024*1024+1)).status_code == 413
 
 
+def test_default_twenty_record_limit_keeps_records_and_allows_retry(library_app, monkeypatch):
+    monkeypatch.delenv('PRIVATE_STRUCTURE_LIBRARY_MAX_ROWS', raising=False)
+    app, user, client = library_app
+    assert client.get(PREFIX+'/status').json()['max_records'] == 20
+    bodies = [payload(name=f'结构 {number}') for number in range(20)]
+    saved = []
+    for body in bodies:
+        response = client.post(PREFIX+'/records', json=body)
+        assert response.status_code == 201, response.text
+        saved.append(response.json())
+    assert client.post(PREFIX+'/records', json=payload(name='第 21 个')).status_code == 429
+    retry = client.post(PREFIX+'/records', json=bodies[-1])
+    assert retry.status_code == 201 and retry.json()['id'] == saved[-1]['id']
+    assert len(client.get(PREFIX+'/records').json()['items']) == 20
+    assert client.delete(PREFIX+'/records/'+saved[0]['id']).status_code == 204
+    assert client.post(PREFIX+'/records', json=payload(name='释放名额后保存')).status_code == 201
+    assert len(client.get(PREFIX+'/records').json()['items']) == 20
+
+
+
+@pytest.mark.parametrize('cursor_value', [
+    ['2026-01-01T00:00:00+00:00', 123],
+    ['2026-01-01T00:00:00+00:00', None],
+    ['2026-01-01T00:00:00+00:00', {'id': str(uuid4())}],
+    {'2026-01-01T00:00:00+00:00': str(uuid4()), str(uuid4()): 'value'},
+    ['2026-01-01T00:00:00', str(uuid4())],
+    ['2026-01-01T00:00:00+00:00', str(uuid4()), 'extra'],
+])
+def test_malformed_cursor_is_rejected_without_server_error(library_app, cursor_value):
+    _app, _user, client = library_app
+    cursor = base64.urlsafe_b64encode(json.dumps(cursor_value).encode()).decode()
+    response = client.get(PREFIX+'/records', params={'cursor': cursor})
+    assert response.status_code == 422, response.text
+    assert response.json()['detail']['code'] == 'invalid_cursor'
+
+
 def test_real_account_and_sql_isolation(library_app, auth_database):
     app, a, client = library_app
     record = client.post(PREFIX+'/records',json=payload()).json()
@@ -120,7 +157,7 @@ def test_real_account_and_sql_isolation(library_app, auth_database):
         assert backup_state_seal(connection)['structure_library.records']['rows'] >= 1
         from scripts.user_isolation_audit import capture
     with psycopg.connect(auth_database['audit'], row_factory=dict_row) as connection:
-        evidence = capture(connection)
+        evidence = capture(connection, schema_version=3)
         assert evidence['schema_version'] == 3
         assert 'structure_library.records' in evidence['business_tables']
         assert 'structure_library' in evidence['backup_required_schemas']

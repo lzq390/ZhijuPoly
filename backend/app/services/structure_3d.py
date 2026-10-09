@@ -9,6 +9,10 @@ from rdkit.Chem import AllChem
 from app.utils.exceptions import InvalidSmilesError
 
 
+class Structure3DTimeoutError(InvalidSmilesError):
+    """The bounded child process exceeded its deadline; preserve the 422 contract."""
+
+
 def _cap_polymer_ends(smiles: str) -> Chem.Mol:
     mol = Chem.MolFromSmiles(smiles.strip())
     if mol is None:
@@ -74,7 +78,7 @@ def generate_3d_molblock(smiles: str, *, timeout_seconds: float = 8.0) -> tuple[
         if remaining <= 0:
             process.terminate()
             process.join()
-            raise InvalidSmilesError("3D generation timed out")
+            raise Structure3DTimeoutError("3D generation timed out")
 
         try:
             result = result_queue.get(timeout=min(0.1, remaining))

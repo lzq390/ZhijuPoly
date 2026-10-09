@@ -169,20 +169,27 @@ class AuthService:
         # The commit on leaving this context is the logical start boundary.
         with self.connection(service=True) as connection:
             user = connection.execute('SELECT status,is_system FROM auth.users WHERE user_id=%s FOR UPDATE', (owner_user_id,)).fetchone()
-            return bool(user and (user['status'] == 'active' or (str(owner_user_id) == SYSTEM_USER_ID and user['is_system'])))
+            active = bool(user and (user['status'] == 'active' or (str(owner_user_id) == SYSTEM_USER_ID and user['is_system'])))
+            if not active:
+                return False
+            if str(owner_user_id) == SYSTEM_USER_ID and user['is_system']:
+                return True
+            from app.services.entitlement_repository import EntitlementRepository
+            return EntitlementRepository().resolve_access_tier(
+                owner_user_id=owner_user_id, connection=connection) == "member"
 
     def assert_application_ready(self):
         import psycopg
         from psycopg.rows import dict_row
         from .schema import validate_runtime_role, validate_isolation_schema
-        from .isolation_ledger import database_identity, validate_service_migration_ledger
+        from .isolation_ledger import database_identity, validate_application_migration_ledger
         from .service_privilege_contract import validate_service_auth_privileges
         with psycopg.connect(self.settings.application_dsn, row_factory=dict_row, connect_timeout=3) as connection:
             validate_runtime_role(connection, 'nexpoly_api')
             try:
-                validate_service_migration_ledger(connection)
+                validate_application_migration_ledger(connection)
             except ValueError as exc:
-                raise RuntimeError('User isolation cutover has not completed: canonical 0019 or 0020 ledger required') from exc
+                raise RuntimeError('User isolation cutover has not completed: exact release-known isolation/library/usage/entitlement ledger required') from exc
             validate_isolation_schema(connection)
             target_database = database_identity(connection)
         for dsn,group in ((self.settings.auth_dsn,'nexpoly_auth'),(self.settings.service_dsn,'nexpoly_service')):
@@ -194,5 +201,5 @@ class AuthService:
                 if connection.execute("SELECT pg_has_role(current_user,%s,'MEMBER') AS mixed",(other,)).fetchone()['mixed']:
                     raise ValueError('Authentication and execution database roles must be separate')
                 if group == 'nexpoly_service':
-                    validate_service_migration_ledger(connection)
+                    validate_application_migration_ledger(connection)
                     validate_service_auth_privileges(connection, require_login=True)

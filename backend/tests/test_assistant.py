@@ -56,6 +56,16 @@ from app.services.image_recognition import RecognizedStructure
 PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00"
 
 
+@pytest.fixture
+def available_prediction_models(monkeypatch):
+    """The semantic resolver tests use fake inference, not mounted model assets."""
+    monkeypatch.setattr(
+        predict_properties,
+        "get_available_properties",
+        lambda model_dir=None: list(predict_properties.ALL_PREDICTABLE_PROPERTIES),
+    )
+
+
 def make_assistant_app(
     tmp_path: Path,
     *,
@@ -904,7 +914,7 @@ def test_assistant_prediction_skill_maps_thermal_property_group(tmp_path: Path, 
     assert "O2 Permeability Barrer" not in response.text
 
 
-def test_assistant_prediction_skill_resolves_heat_stability_with_llm_catalog(tmp_path: Path, monkeypatch) -> None:
+def test_assistant_prediction_skill_resolves_heat_stability_with_llm_catalog(tmp_path: Path, monkeypatch, available_prediction_models) -> None:
     monkeypatch.setattr(
         assistant_orchestrator.assistant_chat,
         "complete_assistant_intent",
@@ -945,7 +955,7 @@ def test_assistant_prediction_skill_resolves_heat_stability_with_llm_catalog(tmp
     assert "Glass transition temperature" not in response.text
 
 
-def test_assistant_prediction_skill_resolves_gas_barrier_with_llm_catalog(tmp_path: Path, monkeypatch) -> None:
+def test_assistant_prediction_skill_resolves_gas_barrier_with_llm_catalog(tmp_path: Path, monkeypatch, available_prediction_models) -> None:
     monkeypatch.setattr(
         assistant_orchestrator.assistant_chat,
         "complete_assistant_intent",
@@ -992,7 +1002,7 @@ def test_assistant_prediction_skill_resolves_gas_barrier_with_llm_catalog(tmp_pa
     assert "H2 Permeability Barrer" in response.text
 
 
-def test_assistant_prediction_property_resolver_rejects_catalog_outside_result(tmp_path: Path, monkeypatch) -> None:
+def test_assistant_prediction_property_resolver_rejects_catalog_outside_result(tmp_path: Path, monkeypatch, available_prediction_models) -> None:
     monkeypatch.setattr(
         assistant_orchestrator.assistant_chat,
         "complete_assistant_intent",
@@ -1023,7 +1033,7 @@ def test_assistant_prediction_property_resolver_rejects_catalog_outside_result(t
     assert "catalog 外" in response.text
 
 
-def test_assistant_prediction_property_resolver_failure_emits_skill_error(tmp_path: Path, monkeypatch) -> None:
+def test_assistant_prediction_property_resolver_failure_emits_skill_error(tmp_path: Path, monkeypatch, available_prediction_models) -> None:
     monkeypatch.setattr(
         assistant_orchestrator.assistant_chat,
         "complete_assistant_intent",
@@ -1050,7 +1060,7 @@ def test_assistant_prediction_property_resolver_failure_emits_skill_error(tmp_pa
     assert "预测性质语义解析失败" in response.text
 
 
-def test_assistant_prediction_skill_unknown_property_emits_skill_error(tmp_path: Path, monkeypatch) -> None:
+def test_assistant_prediction_skill_unknown_property_emits_skill_error(tmp_path: Path, monkeypatch, available_prediction_models) -> None:
     monkeypatch.setattr(
         assistant_orchestrator.assistant_chat,
         "complete_assistant_intent",

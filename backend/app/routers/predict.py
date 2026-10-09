@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.entitlement_sync import entitled_sync
+
 from time import perf_counter
 from starlette.concurrency import run_in_threadpool
 
@@ -14,6 +16,7 @@ router = APIRouter(prefix="/api/v1", tags=["predict"])
 
 
 @router.post("/predict", response_model=PredictResponse)
+@entitled_sync("predict")
 async def predict(request_body: PredictRequest, request: Request) -> PredictResponse:
     started_at = perf_counter()
     settings = request.app.state.settings

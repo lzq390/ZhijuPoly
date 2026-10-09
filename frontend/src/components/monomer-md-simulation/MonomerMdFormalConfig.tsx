@@ -354,7 +354,7 @@ export function MonomerMdFormalConfig({
                   <label><span className="np-mmd-mobile-label">名称</span><input aria-label={`组分 ${index + 1} 名称`} value={row.name} onChange={(event) => { setStructured((current) => updateRow(current, row.id, { name: event.target.value })); setFormDirty(true); setFormErrors([]); }} /></label>
                   <label><span className="np-mmd-mobile-label">摩尔配比</span><input aria-label={`组分 ${index + 1} 摩尔配比`} type="number" min="0" step="any" value={row.ratio} onChange={(event) => { setStructured((current) => updateRow(current, row.id, { ratio: event.target.value })); setFormDirty(true); setFormErrors([]); }} /></label>
                   <label><span className="np-mmd-mobile-label">SMILES</span><input aria-label={`组分 ${index + 1} SMILES`} className="np-mmd-mono-input" value={row.smiles} spellCheck={false} onChange={(event) => { setStructured((current) => updateRow(current, row.id, { smiles: event.target.value })); setFormDirty(true); setFormErrors([]); }} /></label>
-                  <div><StructureImportButton key={`${protocol}:${row.id}:${row.name}:${row.ratio}:${editorMode}`} value={row.smiles} label={`组分 ${index + 1}`} disabled={isSubmitting}
+                  <div className="np-mmd-component-actions"><StructureImportButton key={`${protocol}:${row.id}:${editorMode}`} value={row.smiles} label={`组分 ${index + 1}`} disabled={isSubmitting}
                     onChange={smiles => { setStructured(current => updateRow(current, row.id, { smiles })); setFormDirty(true); setFormErrors([]); }} />
                   <button
                     type="button"
