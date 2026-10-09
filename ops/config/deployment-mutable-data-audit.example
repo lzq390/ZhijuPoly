@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Frozen v7 evidence only. For 0020 use scripts/user_isolation_audit.py --schema-version 3
+# and the full private backup receipt; v3 includes structure_library.records.
 # Install as runtime/config/deployment-mutable-data-audit, owned by the deploy
 # user and mode 0700. Provision the referenced pg_service/pgpass files outside
 # Git as mode 0600; never place a password in this script or its argv.

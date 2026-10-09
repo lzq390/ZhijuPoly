@@ -288,7 +288,7 @@ describe("HomopolymerPropertyPredictionPage", () => {
   it("加载 *CC* 示例并暴露离页静默同步句柄", async () => {
     const ref = createRef<StructureCanvasOwnerHandle>();
     render(<HomopolymerPropertyPredictionPage ref={ref} structure={makeStructure()} />);
-    fireEvent.click(screen.getByRole("button", { name: "加载结构" }));
+    fireEvent.click(screen.getByRole("button", { name: "加载示例" }));
     await waitFor(() => expect(mocks.loadStructure).toHaveBeenCalledWith("*CC*"));
 
     await ref.current?.syncBeforeLeave();

@@ -370,7 +370,6 @@ export function MonomerMdSimulationPage({
                           value={demoSmiles}
                           error={demoValidationError}
                           onChange={(value) => { setDemoSmiles(value); if (demoTouched) setDemoTouched(true); }}
-                          getSharedSmiles={structure.getCurrentSmiles}
                           onEditStructure={onEditStructure}
                         />
                         <div className="np-mmd-demo-warning"><TriangleAlert /><div><strong>真实计算，但尚未平衡</strong><span>Worker 会实际运行 MD；演示步数不足以使体系达到平衡，不能作为物理密度结论。</span></div></div>

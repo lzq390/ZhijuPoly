@@ -1,3 +1,5 @@
+import { LibraryTestProvider, testDocument, chooseCurrentStructure } from "../../test/structureLibraryFixture";
+import { StructureWorkspace } from "../../structure/workspace";
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -15,14 +17,14 @@ import { MonomerMdStructureInput } from "./MonomerMdStructureInput";
 
 function Harness({ initial = "" }: { initial?: string }) {
   const [value, setValue] = useState(initial);
+  const [workspace] = useState(() => { const value = new StructureWorkspace("CCN"); vi.spyOn(value, "captureForImport").mockResolvedValue(testDocument("CCN")); return value; });
   return (
-    <MonomerMdStructureInput
+    <LibraryTestProvider workspace={workspace}><MonomerMdStructureInput
       value={value}
       error={null}
       onChange={setValue}
-      getSharedSmiles={vi.fn().mockResolvedValue("CCN")}
       onEditStructure={vi.fn()}
-    />
+    /></LibraryTestProvider>
   );
 }
 
@@ -54,7 +56,7 @@ describe("MonomerMdStructureInput", () => {
   it("imports the current shared structure explicitly", async () => {
     api.fetchStructure2D.mockResolvedValue({ structure_svg: "<svg viewBox='0 0 10 10'></svg>" });
     render(<Harness />);
-    fireEvent.click(screen.getByRole("button", { name: "导入共享结构" }));
+    await chooseCurrentStructure(screen.getByRole("button", { name: "选择结构" }));
     await waitFor(() =>
       expect((screen.getByLabelText("单体 SMILES") as HTMLTextAreaElement).value).toBe("CCN"),
     );

@@ -1,3 +1,4 @@
+import { LibraryTestProvider, testDocument, chooseCurrentStructure } from "../test/structureLibraryFixture";
 import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
@@ -99,12 +100,14 @@ function makeStructure(smiles: string = SMIPOLY_POLYIMIDE_FIXTURE.monomerA): Str
 }
 
 function renderPage(structure = makeStructure(), onEditStructure = vi.fn()) {
+  if (!sessionStorage.getItem(MONOMER_POLYMERIZATION_DRAFT_KEY)) sessionStorage.setItem(MONOMER_POLYMERIZATION_DRAFT_KEY, JSON.stringify({ version: 1, monomerA: structure.smiles, monomerB: "", targetClass: "polyimide", maxResults: 10 }));
+  vi.spyOn(structure.workspace, "captureForImport").mockResolvedValue(testDocument(structure.smiles));
   return {
     ...render(
       <MonomerPolymerizationPage
         structure={structure}
         onEditStructure={onEditStructure}
-      />
+      />, { wrapper: ({ children }) => <LibraryTestProvider workspace={structure.workspace}>{children}</LibraryTestProvider> }
     ),
     structure,
     onEditStructure
@@ -248,11 +251,11 @@ describe("MonomerPolymerizationPage", () => {
     const onEditStructure = vi.fn();
     renderPage(structure, onEditStructure);
     await screen.findByText("准备就绪");
-    const importButtons = screen.getAllByRole("button", { name: "导入共享结构" });
+    const importButtons = screen.getAllByRole("button", { name: "选择结构" });
 
-    fireEvent.click(importButtons[1]);
+    await chooseCurrentStructure(importButtons[1]);
     await waitFor(() => expect((screen.getByLabelText("SMILES", { selector: "#monomer-b-smiles" }) as HTMLTextAreaElement).value).toBe("CCO"));
-    expect(structure.getCurrentSmiles).toHaveBeenCalled();
+    expect(structure.workspace.captureForImport).toHaveBeenCalled();
     await waitFor(() => expect(apiMocks.fetchStructure2D).toHaveBeenCalledWith("CCO", expect.any(AbortSignal)));
 
     fireEvent.click(screen.getByRole("button", { name: "编辑共享结构" }));
@@ -279,7 +282,7 @@ describe("MonomerPolymerizationPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "重置" }));
     expect(window.sessionStorage.getItem(MONOMER_POLYMERIZATION_DRAFT_KEY)).toBeNull();
     expect((screen.getByLabelText("SMILES", { selector: "#monomer-a-smiles" }) as HTMLTextAreaElement).value)
-      .toBe(SMIPOLY_POLYIMIDE_FIXTURE.monomerA);
+      .toBe("");
     expect((screen.getByLabelText("SMILES", { selector: "#monomer-b-smiles" }) as HTMLTextAreaElement).value)
       .toBe("");
   });

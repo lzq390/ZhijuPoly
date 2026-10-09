@@ -73,7 +73,7 @@ export function MonomerRetrosynthesisForm({ form, guest, loading, importing, tar
               <button type="button" className="np-sw-secondary-button" disabled={importing} onClick={async () => {
                 const smiles = await onImport();
                 if (smiles) updatePreview(smiles);
-              }}>{importing ? <LoaderCircle className="np-sw-spin" aria-hidden="true" /> : <Atom aria-hidden="true" />}使用当前结构</button>
+              }}>{importing ? <LoaderCircle className="np-sw-spin" aria-hidden="true" /> : <Atom aria-hidden="true" />}选择结构</button>
               {form.smiles ? <button type="button" className="np-sw-icon-button" aria-label="清空目标 SMILES"
                 onClick={() => { onChange({ smiles: "" }); setPreview({ smiles: "" }); }}><Eraser aria-hidden="true" /></button> : null}
               <button type="button" className="np-sw-secondary-button np-mr-edit" onClick={onEdit}><PencilRuler aria-hidden="true" />编辑共享结构</button>

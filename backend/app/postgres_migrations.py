@@ -1019,6 +1019,10 @@ def apply_postgres_migrations(
         deferred_versions: set[str] = {
             "0018_user_isolation_cutover", "0019_service_auth_least_privilege",
         }
+        if "0019_service_auth_least_privilege" not in applied:
+            # Existing pre-auth databases also defer dependent private tables
+            # until the dedicated identity/privilege maintenance is complete.
+            deferred_versions.add("0020_structure_library")
         if allowed_kinds is not None:
             effective_allowed_kinds = set(allowed_kinds)
             if fresh_bootstrap:

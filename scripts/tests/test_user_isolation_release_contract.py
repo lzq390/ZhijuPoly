@@ -49,3 +49,19 @@ def test_generic_production_deployment_cannot_cross_auth_boundary():
         controller.canonical_ledger_history(legacy, isolated)
     with pytest.raises(controller.PullDeployError, match="dedicated app.auth.cutover"):
         controller.canonical_ledger_history(isolated, legacy)
+
+
+def test_structure_library_v3_preserves_frozen_historical_ledgers():
+    previous = [{"version": v, "checksum": c} for v, c in contracts.USER_ISOLATION_V2_MIGRATION_LEDGER]
+    current = [{"version": v, "checksum": c} for v, c in contracts.USER_ISOLATION_V3_MIGRATION_LEDGER]
+    assert current[:-1] == previous
+    assert current[-1]["version"] == "0020_structure_library"
+    assert current[-1]["checksum"] == hashlib.sha256((ROOT / "backend/migrations/postgres/0020_structure_library.sql").read_bytes()).hexdigest()
+    assert contracts.validate_user_isolation_v3_ledger(current) == current
+    for invalid in (previous, current + [current[-1]], current[:-1] + [{**current[-1], "checksum": "0"*64}]):
+        with pytest.raises(contracts.SiteHelperContractError):
+            contracts.validate_user_isolation_v3_ledger(invalid)
+    with pytest.raises(contracts.SiteHelperContractError):
+        contracts.validate_user_isolation_v2_ledger(current)
+    assert ("structure_library", "records") in contracts.POST_0020_BUSINESS_MUTABLE_TABLES
+    assert ("structure_library", "records") not in contracts.BUSINESS_MUTABLE_TABLES

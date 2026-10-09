@@ -1,3 +1,4 @@
+import { useStructureImport } from "../../structure-library/StructureLibraryProvider";
 import {
   Atom,
   Check,
@@ -38,7 +39,6 @@ type MdStructureInputProps = {
   error: string | null;
   onChange: (value: string) => void;
   onTouched: () => void;
-  getSharedSmiles: () => Promise<string>;
   onEditStructure: () => void;
 };
 
@@ -47,7 +47,6 @@ export function MdStructureInput({
   error,
   onChange,
   onTouched,
-  getSharedSmiles,
   onEditStructure
 }: MdStructureInputProps) {
   const previewAbortRef = useRef<AbortController | null>(null);
@@ -107,24 +106,10 @@ export function MdStructureInput({
     };
   }, []);
 
-  async function importSharedStructure() {
-    setImporting(true);
-    setImportError(null);
-    try {
-      const smiles = (await getSharedSmiles()).trim();
-      if (!smiles) throw new Error("共享结构为空，请先在结构工作台绘制或输入结构。");
-      onChange(smiles);
-      onTouched();
-      await loadPreview(smiles);
-    } catch (sharedError) {
-      setImportError(
-        sharedError instanceof Error && sharedError.message.trim()
-          ? sharedError.message
-          : "无法读取共享结构。"
-      );
-    } finally {
-      setImporting(false);
-    }
+  const selection = useStructureImport(value, (smiles) => { onChange(smiles); onTouched(); void loadPreview(smiles); }, "聚合物 MD");
+  async function chooseStructure() {
+    setImporting(true); setImportError(null);
+    try { await selection.choose(); } finally { setImporting(false); }
   }
 
   async function copySmiles() {
@@ -160,9 +145,9 @@ export function MdStructureInput({
           onBlur={onTouched}
         />
         <div className="np-md-input-actions">
-          <button type="button" onClick={() => void importSharedStructure()} disabled={importing}>
+          <button type="button" onClick={() => void chooseStructure()} disabled={importing}>
             {importing ? <LoaderCircle className="np-sw-spin" /> : <Clipboard />}
-            {importing ? "导入中" : "导入共享结构"}
+            {importing ? "导入中" : "选择结构"}
           </button>
           <button
             type="button"
@@ -200,6 +185,7 @@ export function MdStructureInput({
           可输入带 <code>*</code> 连接点的聚合物重复单元；开始模拟前会自动检查结构。
         </p>
         {error ? <p id="md-smiles-error" className="np-md-field-error" role="alert">{error}</p> : null}
+        {selection.source && <small>来自：{selection.source}</small>}
         {importError ? <p className="np-md-field-error" role="status">{importError}</p> : null}
       </div>
 

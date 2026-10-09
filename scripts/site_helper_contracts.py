@@ -486,6 +486,20 @@ USER_ISOLATION_V2_MIGRATION_LEDGER = (*USER_ISOLATION_MIGRATION_LEDGER,
 )
 
 
+# Current private-library evidence is separate from the frozen v7 inventory.
+POST_0020_BUSINESS_MUTABLE_TABLES = (("structure_library", "records"),)
+USER_ISOLATION_V3_MIGRATION_LEDGER = (*USER_ISOLATION_V2_MIGRATION_LEDGER,
+    ("0020_structure_library", "4f8ff9a2d9c1f7cf41140d3517f70dcb52b045fadac84a09d292bdf8095aa0b7"),
+)
+
+
+def validate_user_isolation_v3_ledger(records: object) -> list[dict[str, str]]:
+    expected = [{"version": version, "checksum": checksum} for version, checksum in USER_ISOLATION_V3_MIGRATION_LEDGER]
+    if records != expected:
+        raise SiteHelperContractError("user isolation v3 requires the exact canonical ledger through 0020")
+    return [dict(record) for record in expected]
+
+
 def validate_user_isolation_ledger(records: object) -> list[dict[str, str]]:
     expected = [{"version": version, "checksum": checksum} for version, checksum in USER_ISOLATION_MIGRATION_LEDGER]
     if records != expected:

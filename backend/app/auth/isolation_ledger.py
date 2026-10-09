@@ -8,11 +8,12 @@ from app.migration_policy import validate_migration_manifest_entries
 PREPARE_VERSION = "0017_user_isolation_prepare"
 CUTOVER_VERSION = "0018_user_isolation_cutover"
 CURRENT_VERSION = "0019_service_auth_least_privilege"
+LIBRARY_VERSION = "0020_structure_library"
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations" / "postgres"
 
 
 def expected_isolation_ledger(through: str = CURRENT_VERSION) -> list[dict[str, str]]:
-    if through not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION}:
+    if through not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, LIBRARY_VERSION}:
         raise ValueError("Unsupported user isolation ledger boundary")
     entries = validate_migration_manifest_entries(MIGRATIONS_DIR)
     if through not in {entry.version for entry in entries}:
@@ -21,9 +22,11 @@ def expected_isolation_ledger(through: str = CURRENT_VERSION) -> list[dict[str, 
             for entry in entries if entry.version <= through]
 
 
-def validate_service_migration_ledger(connection, through: str = CURRENT_VERSION):
+def validate_service_migration_ledger(connection, through: str | None = None):
     observed = [dict(row) for row in connection.execute(
         "SELECT version,checksum FROM governance.schema_migrations ORDER BY version")]
+    if through is None:
+        through = LIBRARY_VERSION if observed and observed[-1]["version"] == LIBRARY_VERSION else CURRENT_VERSION
     expected = expected_isolation_ledger(through)
     if observed != expected:
         raise ValueError("User isolation requires the exact canonical ledger through " + through)

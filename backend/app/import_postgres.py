@@ -299,6 +299,7 @@ IMPORT_BATCH_SOURCE_LOGICAL_NAMES = {
 BUSINESS_MUTABLE_IMPORT_DATASETS = frozenset({"online", "lab"})
 BUSINESS_MUTABLE_TABLES = frozenset(
     {
+        ("structure_library", "records"),
         ("online_knowledge", "history"),
         ("online_knowledge", "jobs"),
         ("lab", "test_projects"),
