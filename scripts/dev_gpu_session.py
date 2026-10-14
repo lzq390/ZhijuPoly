@@ -30,6 +30,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     # Derived only from this script's resolved location; never trust PYTHONPATH.
     sys.path.insert(0, str(REPO_ROOT))
+from scripts.dev_gpu_cohort import CohortError, DevGpuCohort, private_json as cohort_private_json
+
+COHORT: DevGpuCohort | None = None
+COHORT_ACTIVE_SESSION_ID: str | None = None
 RUNTIME_ROOT = REPO_ROOT / ".runtime"
 SESSION_ROOT = RUNTIME_ROOT / "gpu-session"
 RUNS_ROOT = SESSION_ROOT / "runs"
@@ -39,6 +43,34 @@ GPU_ROOT = RUNTIME_ROOT / "gpu-resource"
 RESERVATIONS_SOURCE = REPO_ROOT / "ops/config/gpu-external-reservations.json"
 POLICY_FILE = REPO_ROOT / "ops/config/gpu-broker-policy.json"
 MPS_CONTROL = REPO_ROOT / "scripts/gpu_mps_control.sh"
+def _select_cohort(path: Path | None, sha256: str | None, identity: tuple[int, int] | None = None) -> None:
+    global COHORT, RUNTIME_ROOT, SESSION_ROOT, RUNS_ROOT
+    global CONTROLLER_RECORD, CONTROLLER_START_LOCK, GPU_ROOT
+    if path is None and sha256 is None and identity is None:
+        return
+    if path is None or sha256 is None:
+        raise DevGpuSessionError("cohort selection requires both configuration and SHA256")
+    COHORT = DevGpuCohort.load(path, sha256, repo_root=REPO_ROOT, expected_identity=identity)
+    COHORT.require_prepared()
+    RUNTIME_ROOT = COHORT.runtime_root
+    SESSION_ROOT = RUNTIME_ROOT / "gpu-session"
+    RUNS_ROOT = SESSION_ROOT / "runs"
+    CONTROLLER_RECORD = SESSION_ROOT / "controller.json"
+    CONTROLLER_START_LOCK = SESSION_ROOT / "controller-start.lock"
+    GPU_ROOT = RUNTIME_ROOT / "gpu-resource"
+
+
+def _cohort_backend_options() -> dict[str, str]:
+    if COHORT is None:
+        return {}
+    options = {"compose_project": COHORT.compose_project}
+    if COHORT_ACTIVE_SESSION_ID is not None:
+        identifier = COHORT.backend_container_id(COHORT_ACTIVE_SESSION_ID)
+        if identifier is not None:
+            options["expected_container_id"] = identifier
+    return options
+
+
 GPU_INDEX = 1
 GPU_UUID = "GPU-0e19c809-f81d-a9ee-01b2-d226d00bb771"
 GPU3_UUID = "GPU-0818ca6b-d9b6-af6a-71bf-afe3777ee3a5"
@@ -556,6 +588,8 @@ def foreign_gpu1_reasons(
     *,
     authorized_mps_pids: frozenset[int],
     managed_workload_pids: frozenset[int] = frozenset(),
+    compose_project: str = "nexpoly_dev",
+    expected_container_id: str | None = None,
     managed_systemd_claims: frozenset[tuple[str, str, str]] = frozenset(),
 ) -> tuple[str, ...]:
     """Return contamination evidence; GPU3 never participates in this snapshot."""
@@ -570,7 +604,8 @@ def foreign_gpu1_reasons(
             claim.registration_id == "backend-dev"
             and claim.component == "backend"
             and claim.environment == "dev"
-            and claim.compose_project == "nexpoly_dev"
+            and claim.compose_project == compose_project
+            and (expected_container_id is None or claim.container_id == expected_container_id)
             and claim.compose_service == "backend"
             and claim.gpu_uuids == frozenset({GPU_UUID})
         ):
@@ -597,6 +632,7 @@ def drain_on_contamination(
         snapshot,
         authorized_mps_pids=authorized_mps_pids,
         managed_workload_pids=managed_workload_pids,
+        **_cohort_backend_options(),
     )
     if reasons:
         broker_client.set_draining(True)
@@ -1390,6 +1426,7 @@ def _exact_backend_docker_workload_pids(
     return exact_dev_gpu1_backend_docker_workload_pids(
         leases,
         snapshot.docker_claims,
+        **_cohort_backend_options(),
     )
 
 
@@ -2893,6 +2930,10 @@ def dry_run_plan(action: str) -> dict[str, Any]:
 
 
 class SessionController:
+    @property
+    def cohort(self) -> DevGpuCohort | None:
+        return getattr(self, "_cohort", None)
+
     def __init__(
         self,
         run_directory: Path,
@@ -2905,10 +2946,19 @@ class SessionController:
         self.source_sha = source_sha
         self.source_tree = source_tree
         self.direct_start = direct_start
+        self._cohort = COHORT
+        if self.cohort is not None:
+            if direct_start:
+                raise DevGpuSessionError("native cohort requires full audited startup")
+            self.cohort.require_source(source_sha, source_tree)
+            self.cohort.verify()
         self.status_file = run_directory / "status.json"
         self.session_id = run_directory.name.rsplit("-", 1)[-1]
         if re.fullmatch(r"[0-9a-f]{32}", self.session_id) is None:
             raise DevGpuSessionError("run directory lacks an exact session identity")
+        if self.cohort is not None:
+            global COHORT_ACTIVE_SESSION_ID
+            COHORT_ACTIVE_SESSION_ID = self.session_id
         self.broker_state = run_directory / "broker-state.json"
         self.broker_log_path = run_directory / "broker.log"
         self.session_policy_path = run_directory / "gpu-policy.json"
@@ -2985,6 +3035,9 @@ class SessionController:
             "dft_stabilized": self.dft_stabilized,
             "updated_at": datetime.now(timezone.utc).isoformat(),
             **({"direct_start": True} if self.direct_start else {}),
+            **({"cohort_config": str(self.cohort.path), "cohort_sha256": self.cohort.sha256,
+                "cohort_device": self.cohort.device, "cohort_inode": self.cohort.inode}
+               if self.cohort is not None else {}),
             **extra,
         }
         _atomic_json(self.status_file, payload)
@@ -3085,6 +3138,8 @@ class SessionController:
             )
         except FileNotFoundError:
             source = RESERVATIONS_SOURCE.read_bytes()
+            if self.cohort is not None:
+                source = self.cohort.reservations(source)
             descriptor = os.open(
                 "external-reservations.json",
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -3112,6 +3167,8 @@ class SessionController:
             raise DevGpuSessionError("external reservation descriptor is unsafe")
         if not self.direct_start:
             source = RESERVATIONS_SOURCE.read_bytes()
+            if self.cohort is not None:
+                source = self.cohort.reservations(source)
             if os.pread(self.reservations_fd, len(source) + 1, 0) != source:
                 raise DevGpuSessionError(
                     "external reservation descriptor differs from exact policy"
@@ -3135,6 +3192,11 @@ class SessionController:
             "XDG_RUNTIME_DIR": runtime_directory,
         }
         environment.update(extra)
+        if self.cohort is not None:
+            for key in ("NEXPOLY_DEV_GPU_COHORT_CONFIG", "NEXPOLY_DEV_GPU_COHORT_SHA256",
+                        "NEXPOLY_DEV_GPU_COHORT_DEVICE", "NEXPOLY_DEV_GPU_COHORT_INODE"):
+                environment[key] = self.cohort.environment()[key]
+            environment["NEXPOLY_DEV_GPU_SESSION_ID"] = self.session_id
         return environment
 
     def _start_broker(self) -> Any:
@@ -3215,6 +3277,8 @@ class SessionController:
         pipe = self._authority_path(self.pipe_fd)
         log = self._authority_path(self.log_fd)
         trusted_start = self.direct_start and action == "start"
+        if self.cohort is not None:
+            self.cohort.verify()
         environment = {
             "CUDA_MPS_LOG_DIRECTORY": str(log),
             "CUDA_MPS_PIPE_DIRECTORY": str(pipe),
@@ -3231,6 +3295,11 @@ class SessionController:
             "NEXPOLY_GPU_MPS_AUTHORITY_START_TICKS": str(
                 process_start_ticks(os.getpid())
             ),
+            **({"NEXPOLY_DEV_GPU_COHORT_CONFIG": str(self.cohort.path),
+                "NEXPOLY_DEV_GPU_COHORT_SHA256": self.cohort.sha256,
+                "NEXPOLY_DEV_GPU_COHORT_DEVICE": str(self.cohort.device),
+                "NEXPOLY_DEV_GPU_COHORT_INODE": str(self.cohort.inode)}
+               if self.cohort is not None else {}),
             "NEXPOLY_GPU_MPS_EXPECTED_ROOT": str(GPU_ROOT),
             "NEXPOLY_GPU_MPS_REQUIRE_DEFAULT_MODE": "1",
         }
@@ -3243,6 +3312,8 @@ class SessionController:
     def _mps_command(self, action: str) -> None:
         command = [str(MPS_CONTROL), action, str(GPU_INDEX)]
         trusted_start = self.direct_start and action == "start"
+        if self.cohort is not None:
+            self.cohort.verify()
         if trusted_start:
             command.append("--trusted-dev-start")
         completed = subprocess.run(
@@ -4370,6 +4441,7 @@ class SessionController:
                             authorized_mps_pids=authority.server_pids,
                             managed_workload_pids=classified_nvml,
                             managed_systemd_claims=classified_systemd_claims,
+                            **_cohort_backend_options(),
                         ),
                     )
                     if (
@@ -4821,6 +4893,7 @@ class SessionController:
                         managed_systemd_claims=(
                             classified_managed_systemd_claims
                         ),
+                        **_cohort_backend_options(),
                     )
                     if self.dft_warmup_open and trailing_docker:
                         classified_reasons = (
@@ -5166,6 +5239,15 @@ class SessionController:
             "NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY": "1",
             "NEXPOLY_DEV_GPU_SESSION_ID": self.session_id,
         }
+        if self.cohort is not None:
+            try:
+                self.cohort.verify()
+                environment.update(self.cohort.environment())
+            except (CohortError, OSError, ValueError) as exc:
+                self._state("isolation-waiting", contaminated=True,
+                            recovery_command=command, recovery_error=str(exc))
+                return False
+            environment["NEXPOLY_DEV_GPU_DIRECT_START"] = "0"
         if self.direct_start:
             environment["NEXPOLY_DEV_GPU_DIRECT_START"] = "1"
         completed = subprocess.run(
@@ -5263,7 +5345,7 @@ class SessionController:
                     self.cpu_restored = True
                 try:
                     cleaned = self.plane_cleaned or self._cleanup(client)
-                except (DevGpuSessionError, OSError, subprocess.SubprocessError) as exc:
+                except (CohortError, DevGpuSessionError, OSError, subprocess.SubprocessError) as exc:
                     self._state(
                         "isolation-waiting",
                         contaminated=self.automatic_recovery,
@@ -5422,7 +5504,7 @@ class SessionController:
                     self.cpu_restored = True
                 try:
                     cleaned = self.plane_cleaned or self._cleanup(client)
-                except (DevGpuSessionError, OSError, subprocess.SubprocessError) as exc:
+                except (CohortError, DevGpuSessionError, OSError, subprocess.SubprocessError) as exc:
                     # Never signal an unknown client.  Admission stays drained
                     # and the exact owned plane is retried after natural exit.
                     self._state(
@@ -5544,12 +5626,15 @@ class SessionController:
         _private_directory(self.run_directory, create=False)
         if os.geteuid() != 1001 or os.getegid() != 1001:
             raise DevGpuSessionError("development GPU session requires uid/gid 1001")
+        if self.cohort is not None:
+            self.cohort.verify()
+            self.cohort.require_source(self.source_sha, self.source_tree)
         if process_argv(os.getpid()) != expected_argv:
             raise DevGpuSessionError("controller command identity differs")
         _atomic_json(
             CONTROLLER_RECORD,
             {
-                "schema_version": 1,
+                "schema_version": 2 if self.cohort is not None else 1,
                 "pid": os.getpid(),
                 "start_ticks": process_start_ticks(os.getpid()),
                 "argv": list(expected_argv),
@@ -5558,6 +5643,9 @@ class SessionController:
                 "session_id": self.session_id,
                 "run_directory": str(self.run_directory),
                 "status_file": str(self.status_file),
+                **({"cohort_config": str(self.cohort.path), "cohort_sha256": self.cohort.sha256,
+                "cohort_device": self.cohort.device, "cohort_inode": self.cohort.inode}
+                   if self.cohort is not None else {}),
             },
             replace=False,
         )
@@ -5670,7 +5758,19 @@ def _controller_record() -> dict[str, Any]:
         "schema_version", "pid", "start_ticks", "argv", "source_sha",
         "source_tree", "session_id", "run_directory", "status_file",
     }
-    if set(record) != expected_keys or record.get("schema_version") != 1:
+    expected_version = 1
+    if COHORT is not None:
+        expected_keys |= {"cohort_config", "cohort_sha256", "cohort_device", "cohort_inode"}
+        expected_version = 2
+        COHORT.verify()
+        if (record.get("cohort_config") != str(COHORT.path)
+                or record.get("cohort_sha256") != COHORT.sha256
+                or record.get("cohort_device") != COHORT.device
+                or record.get("cohort_inode") != COHORT.inode
+                or record.get("source_sha") != COHORT.source_sha
+                or record.get("source_tree") != COHORT.source_tree):
+            raise DevGpuSessionError("controller cohort identity differs")
+    if set(record) != expected_keys or record.get("schema_version") != expected_version:
         raise DevGpuSessionError("controller record schema is invalid")
     pid = record.get("pid")
     if (
@@ -5736,6 +5836,11 @@ def _up_execute_locked(*, direct_start: bool = False) -> dict[str, Any]:
     if CONTROLLER_RECORD.exists() or CONTROLLER_RECORD.is_symlink():
         raise DevGpuSessionError("GPU session controller record already exists")
     source_sha, source_tree = _git_identity()
+    if COHORT is not None:
+        COHORT.verify()
+        COHORT.require_source(source_sha, source_tree)
+        if direct_start:
+            raise DevGpuSessionError("native cohort cannot inherit direct startup")
     run_directory = RUNS_ROOT / (
         datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid4().hex
     )
@@ -5756,6 +5861,9 @@ def _up_execute_locked(*, direct_start: bool = False) -> dict[str, Any]:
         "--source-tree",
         source_tree,
     )
+    if COHORT is not None:
+        command = (*command, "--cohort-config", str(COHORT.path), "--cohort-sha256", COHORT.sha256,
+                   "--cohort-device", str(COHORT.device), "--cohort-inode", str(COHORT.inode))
     if direct_start:
         command = (*command, "--direct-start")
     with os.fdopen(log_descriptor, "ab", buffering=0) as log:
@@ -5923,14 +6031,28 @@ def activate_execute(session_id: str) -> dict[str, Any]:
     baseline_activation = _state_generation(current, "activation_generation")
     manifest_path = Path(record["run_directory"]) / "activation-manifest.json"
     manifest = _load_private_json(manifest_path)
+    cohort_manifest_keys = {"cohort_config", "cohort_sha256", "cohort_device", "cohort_inode"} if COHORT is not None else set()
+    if COHORT is not None:
+        if (manifest.get("cohort_config") != str(COHORT.path)
+                or manifest.get("cohort_sha256") != COHORT.sha256
+                or manifest.get("cohort_device") != COHORT.device
+                or manifest.get("cohort_inode") != COHORT.inode
+                or manifest.get("md_process") != cohort_private_json(COHORT.path_for("md-runs/worker.pid"))
+                or manifest.get("dft_process") != cohort_private_json(COHORT.path_for("monomer-dft-worker.session.json"))):
+            raise DevGpuSessionError("activation cohort process records differ")
+        backend = cohort_private_json(COHORT.backend_record_path(session_id))
+        if any(manifest.get(key) != backend.get(other) for key, other in (
+                ("backend_container_id", "container_id"), ("backend_image_id", "image_id"),
+                ("backend_config_hash", "config_hash"))):
+            raise DevGpuSessionError("activation differs from the early Backend binding")
     if (
         set(manifest)
         != {
             "schema_version", "session_id", "source_sha", "source_tree",
             "backend_container_id", "backend_image_id", "backend_config_hash",
             "md_process", "dft_process",
-        }
-        or manifest.get("schema_version") != 1
+        } | cohort_manifest_keys
+        or manifest.get("schema_version") != (2 if COHORT is not None else 1)
         or manifest.get("session_id") != session_id
         or manifest.get("source_sha") != record["source_sha"]
         or manifest.get("source_tree") != record["source_tree"]
@@ -6044,6 +6166,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-sha")
     parser.add_argument("--source-tree")
     parser.add_argument("--session-id")
+    parser.add_argument("--cohort-config", type=Path)
+    parser.add_argument("--cohort-sha256")
+    parser.add_argument("--cohort-device", type=int)
+    parser.add_argument("--cohort-inode", type=int)
     parser.add_argument("--direct-start", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
@@ -6051,6 +6177,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        path = args.cohort_config or os.environ.get("NEXPOLY_DEV_GPU_COHORT_CONFIG")
+        digest = args.cohort_sha256 or os.environ.get("NEXPOLY_DEV_GPU_COHORT_SHA256")
+        device = args.cohort_device if args.cohort_device is not None else os.environ.get("NEXPOLY_DEV_GPU_COHORT_DEVICE")
+        inode = args.cohort_inode if args.cohort_inode is not None else os.environ.get("NEXPOLY_DEV_GPU_COHORT_INODE")
+        if (device is None) != (inode is None):
+            raise DevGpuSessionError("cohort file identity is incomplete")
+        identity = (int(device), int(inode)) if device is not None else None
+        _select_cohort(Path(path) if path else None, digest or None, identity)
         if args.command in {"up", "down"} and args.dry_run:
             result = dry_run_plan(args.command)
         elif args.command == "status":
@@ -6086,7 +6220,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             expected = (sys.executable, *sys.argv)
             return controller.run(expected)
-    except (DevGpuSessionError, OSError, subprocess.SubprocessError) as exc:
+    except (CohortError, DevGpuSessionError, OSError, ValueError, subprocess.SubprocessError) as exc:
         print(f"dev GPU session error: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2, sort_keys=True))

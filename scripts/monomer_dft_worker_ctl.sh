@@ -26,6 +26,47 @@ PRIVATE_TMPDIR="$RUNTIME_ROOT/tmp"
 PRIVATE_XDG_CACHE="$RUNTIME_ROOT/xdg-cache"
 GPU_SCOPE_XDG_RUNTIME_DIR=""
 GPU_SCOPE_DBUS_ADDRESS=""
+readonly NATIVE_COHORT_CONFIG_INPUT="${NEXPOLY_DEV_GPU_COHORT_CONFIG:-}"
+readonly NATIVE_COHORT_SHA256_INPUT="${NEXPOLY_DEV_GPU_COHORT_SHA256:-}"
+NATIVE_COHORT_DEVICE_INPUT="${NEXPOLY_DEV_GPU_COHORT_DEVICE:-}"
+NATIVE_COHORT_INODE_INPUT="${NEXPOLY_DEV_GPU_COHORT_INODE:-}"
+if [[ -n "$NATIVE_COHORT_DEVICE_INPUT" || -n "$NATIVE_COHORT_INODE_INPUT" ]]; then
+  readonly NATIVE_COHORT_DEVICE_INPUT NATIVE_COHORT_INODE_INPUT
+fi
+COHORT_HELPER="$REPO_ROOT/scripts/dev_gpu_cohort.py"
+
+apply_native_cohort_paths() {
+  if [[ -z "$NATIVE_COHORT_CONFIG_INPUT" && -z "$NATIVE_COHORT_SHA256_INPUT" ]]; then
+    [[ -z "$NATIVE_COHORT_DEVICE_INPUT" && -z "$NATIVE_COHORT_INODE_INPUT" ]] || fail "cohort metadata requires configuration and SHA256"
+    return 0
+  fi
+  [[ "$FORMAL_ACCEPTANCE" == "0" && -n "$NATIVE_COHORT_CONFIG_INPUT" && -n "$NATIVE_COHORT_SHA256_INPUT" ]] || fail "native cohort requires a complete non-formal configuration"
+  local payload assignment
+  local -a identity_options=()
+  if [[ -n "$NATIVE_COHORT_DEVICE_INPUT" || -n "$NATIVE_COHORT_INODE_INPUT" ]]; then
+    identity_options=(--device "$NATIVE_COHORT_DEVICE_INPUT" --inode "$NATIVE_COHORT_INODE_INPUT")
+  fi
+  payload="$(/usr/bin/python3 -I "$COHORT_HELPER" environment     --config "$NATIVE_COHORT_CONFIG_INPUT" --sha256 "$NATIVE_COHORT_SHA256_INPUT" "${identity_options[@]}")" || fail "cohort configuration validation failed"
+  while IFS= read -r assignment; do
+    [[ "$assignment" =~ ^[A-Z][A-Z0-9_]*= ]] || fail "invalid cohort environment field"
+    export "$assignment"
+  done <<< "$payload"
+  if [[ -z "$NATIVE_COHORT_DEVICE_INPUT" && -z "$NATIVE_COHORT_INODE_INPUT" ]]; then
+    declare -gr NATIVE_COHORT_DEVICE_INPUT="$NEXPOLY_DEV_GPU_COHORT_DEVICE"
+    declare -gr NATIVE_COHORT_INODE_INPUT="$NEXPOLY_DEV_GPU_COHORT_INODE"
+  fi
+  PID_FILE="$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/monomer-dft-worker.pid"
+  LOG_FILE="$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/monomer-dft-worker.log"
+  LOCK_FILE="$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/monomer-dft-worker.ctl.lock"
+  GPU_RUNTIME_ROOT="$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/gpu-resource"
+  PRIVATE_HOME="$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/home"
+  PRIVATE_TMPDIR="$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/tmp"
+  PRIVATE_XDG_CACHE="$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/xdg-cache"
+}
+
+cohort_control() {
+  /usr/bin/python3 -I "$COHORT_HELPER" "$@"     --config "$NATIVE_COHORT_CONFIG_INPUT" --sha256 "$NATIVE_COHORT_SHA256_INPUT" --device "$NATIVE_COHORT_DEVICE_INPUT" --inode "$NATIVE_COHORT_INODE_INPUT" --session-id "$NEXPOLY_DEV_GPU_SESSION_ID"
+}
 FORMAL_ENV_KEY_COUNT=46
 FORMAL_ENV_KEYSET_SHA256="b907c16be79050f75ff2a60ed13dad1452aa095bfd57833cd43a2735032e4389"
 
@@ -338,6 +379,14 @@ load_env() {
   local isolation_enabled="${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}"
   local start_authorization_url="${MONOMER_DFT_START_AUTHORIZATION_URL:-}"
   local start_authorization_token="${MONOMER_DFT_START_AUTHORIZATION_TOKEN:-}"
+  local -a inherited_scope_environment=()
+  local scope_key
+  for scope_key in CPU_QUOTA_PERCENT MEMORY_MAX_BYTES MEMORY_SWAP_MAX_BYTES TASKS_MAX; do
+    scope_key="MONOMER_DFT_GPU_SCOPE_$scope_key"
+    if [[ -v "$scope_key" ]]; then
+      inherited_scope_environment+=("$scope_key=${!scope_key}")
+    fi
+  done
   [[ ! -L "$ENV_FILE" ]] || fail "environment file must not be a symlink: $ENV_FILE"
   if [[ ! -f "$ENV_FILE" ]]; then
     [[ "$required" == "false" ]] && return 0
@@ -360,6 +409,13 @@ load_env() {
     # a legacy Worker dotenv must not silently replace either callback value.
     export MONOMER_DFT_START_AUTHORIZATION_URL="$start_authorization_url"
     export MONOMER_DFT_START_AUTHORIZATION_TOKEN="$start_authorization_token"
+  fi
+  if (( ${#inherited_scope_environment[@]} > 0 )); then
+    # A caller-supplied profile is one complete authority.  Do not fill a
+    # partial profile with unrelated legacy dotenv values.
+    unset MONOMER_DFT_GPU_SCOPE_CPU_QUOTA_PERCENT MONOMER_DFT_GPU_SCOPE_MEMORY_MAX_BYTES
+    unset MONOMER_DFT_GPU_SCOPE_MEMORY_SWAP_MAX_BYTES MONOMER_DFT_GPU_SCOPE_TASKS_MAX
+    export "${inherited_scope_environment[@]}"
   fi
   if [[ "$session_mode" == "1" ]]; then
     # The controller's exact GPU1-only authority is stricter than the general
@@ -414,6 +470,7 @@ validate_dev_selection() {
 }
 
 configure_paths() {
+  apply_native_cohort_paths
   validate_dev_selection
   configure_formal_gpu_authority
   MONOMER_DFT_PYTHON="$(absolute_runtime_path "${MONOMER_DFT_PYTHON:-.runtime/venvs/monomer-dft-worker/bin/python}")"
@@ -468,7 +525,9 @@ configure_paths() {
         "formal acceptance Worker job path is not owner-private: $private_directory"
     done
   else
-    [[ "$MONOMER_DFT_JOB_ROOT" == "$RUNTIME_ROOT/monomer-dft-worker-runs" ]] || fail \
+    local expected_job_root="$RUNTIME_ROOT/monomer-dft-worker-runs"
+    [[ -z "$NATIVE_COHORT_CONFIG_INPUT" ]] || expected_job_root="$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/dft-runs"
+    [[ "$MONOMER_DFT_JOB_ROOT" == "$expected_job_root" ]] || fail \
       "job root must use the fixed development runtime path"
   fi
   if [[ "${NEXPOLY_DFT_GPU_DESCRIPTOR_AUTHORITY:-}" != "1" ]]; then
@@ -598,6 +657,13 @@ process_has_worker_command() {
   # launcher, then observe an empty/transitional /proc/cmdline during exec and
   # falsely report that the worker exited.  Require an exact post-exec argv
   # shape so PID state is not recorded until the runner is actually running.
+  if [[ -n "$NATIVE_COHORT_CONFIG_INPUT" ]]; then
+    (( ${#command_args[@]} == 2 )) && [[ "${command_args[0]##*/}" == "bash" && "${command_args[1]}" == "$RUNNER" ]] || return 1
+    if [[ -e "$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/dft-process.json" || -L "$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/dft-process.json" ]]; then
+      cohort_control verify-dft --pid "$pid" --start-ticks "$(process_start_ticks "$pid")" >/dev/null || return 1
+    fi
+    return 0
+  fi
   if (( ${#command_args[@]} >= 2 )) && [[ "${command_args[1]}" == "$RUNNER" ]]; then
     return 0
   fi
@@ -833,8 +899,34 @@ start_worker() {
   # Start from an allowlisted environment so the GPU worker cannot inherit any
   # PostgreSQL DSN/password (or unrelated platform secrets) from the controller
   # shell or the shared development env file.
+  if [[ -n "$NATIVE_COHORT_CONFIG_INPUT" ]]; then
+    cohort_control collect-dft
+  fi
+  local -a scope_environment=()
+  if [[ -n "$NATIVE_COHORT_CONFIG_INPUT" ]]; then
+    scope_environment+=("NEXPOLY_DEV_GPU_COHORT_CONFIG=$NATIVE_COHORT_CONFIG_INPUT"
+      "NEXPOLY_DEV_GPU_COHORT_SHA256=$NATIVE_COHORT_SHA256_INPUT"
+      "NEXPOLY_DEV_GPU_COHORT_DEVICE=$NATIVE_COHORT_DEVICE_INPUT"
+      "NEXPOLY_DEV_GPU_COHORT_INODE=$NATIVE_COHORT_INODE_INPUT")
+  fi
+  local scope_key
+  for scope_key in CPU_QUOTA_PERCENT MEMORY_MAX_BYTES MEMORY_SWAP_MAX_BYTES TASKS_MAX; do
+    scope_key="MONOMER_DFT_GPU_SCOPE_$scope_key"
+    if [[ -v "$scope_key" ]]; then
+      scope_environment+=("$scope_key=${!scope_key}")
+    fi
+  done
+  if (( ${#scope_environment[@]} > 0 )); then
+    "$MONOMER_DFT_PYTHON" -I - "$REPO_ROOT" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from gpu_resource.transient_scope import scope_resource_limits_from_environment
+scope_resource_limits_from_environment("MONOMER_DFT_GPU_SCOPE_")
+PY
+  fi
   trap '' HUP
   env -i \
+    "${scope_environment[@]}" \
     HOME="$PRIVATE_HOME" \
     USER="${USER:-}" \
     LOGNAME="${LOGNAME:-}" \
@@ -917,6 +1009,9 @@ start_worker() {
     fail "worker exited or failed identity verification before PID state was recorded"
   fi
   atomic_write_pid_state "$SPAWN_PID" "$SPAWN_START_TICKS"
+  if [[ -n "$NATIVE_COHORT_CONFIG_INPUT" ]]; then
+    cohort_control bind-dft --pid "$SPAWN_PID" --start-ticks "$SPAWN_START_TICKS"
+  fi
 
   local deadline=$((SECONDS + START_TIMEOUT))
   local payload=""
@@ -1025,6 +1120,7 @@ main() {
     *) usage ;;
   esac
 
+  apply_native_cohort_paths
   initialize_runtime_root
   assert_safe_runtime_file "control lock file" "$LOCK_FILE"
   exec 9> "$LOCK_FILE"
@@ -1039,25 +1135,28 @@ main() {
       start_worker
       ;;
     stop)
-      load_env false
+      [[ -n "$NATIVE_COHORT_CONFIG_INPUT" ]] || load_env false
       configure_paths
       stop_worker
+      [[ -z "$NATIVE_COHORT_CONFIG_INPUT" ]] || cohort_control collect-dft
       ;;
     stop-if-drained-instance)
-      load_env false
+      [[ -n "$NATIVE_COHORT_CONFIG_INPUT" ]] || load_env false
       configure_paths
       stop_worker "$2"
+      [[ -z "$NATIVE_COHORT_CONFIG_INPUT" ]] || cohort_control collect-dft
       ;;
     restart)
       load_env true
       configure_paths
       validate_start_configuration
       stop_worker
+      [[ -z "$NATIVE_COHORT_CONFIG_INPUT" ]] || cohort_control collect-dft
       run_preflight
       start_worker
       ;;
     status)
-      load_env false
+      [[ -n "$NATIVE_COHORT_CONFIG_INPUT" ]] || load_env false
       configure_paths
       status_worker
       ;;

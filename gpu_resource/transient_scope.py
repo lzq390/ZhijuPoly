@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import time
@@ -18,6 +19,67 @@ SCOPE_TRANSITION_TIMEOUT_SECONDS = 5.0
 
 class TransientScopeError(ValueError):
     """A command cannot be represented by the fixed GPU scope contract."""
+
+
+@dataclass(frozen=True)
+class ScopeResourceLimits:
+    """Optional complete resource profile applied before the gated target starts."""
+
+    cpu_quota_percent: int | None = None
+    memory_max_bytes: int | None = None
+    memory_swap_max_bytes: int | None = None
+    tasks_max: int | None = None
+
+    def __post_init__(self) -> None:
+        values = (
+            self.cpu_quota_percent,
+            self.memory_max_bytes,
+            self.memory_swap_max_bytes,
+            self.tasks_max,
+        )
+        if all(value is None for value in values):
+            return
+        bounds = ((1, 100000), (1, 2**63 - 1), (0, 2**63 - 1), (1, 4194304))
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not low <= value <= high
+            for value, (low, high) in zip(values, bounds)
+        ):
+            raise TransientScopeError(
+                "GPU scope resource profile requires four bounded integer limits"
+            )
+
+    @property
+    def configured(self) -> bool:
+        return self.cpu_quota_percent is not None
+
+    def command_properties(self) -> tuple[str, ...]:
+        if not self.configured:
+            return ()
+        return (
+            f"--property=CPUQuota={self.cpu_quota_percent}%",
+            f"--property=MemoryMax={self.memory_max_bytes}",
+            f"--property=MemorySwapMax={self.memory_swap_max_bytes}",
+            f"--property=TasksMax={self.tasks_max}",
+        )
+
+
+def scope_resource_limits_from_environment(prefix: str) -> ScopeResourceLimits:
+    """Read only fixed resource keys; never accept arbitrary scope properties."""
+
+    if not isinstance(prefix, str) or re.fullmatch(r"[A-Z][A-Z0-9_]*_", prefix) is None:
+        raise TransientScopeError("GPU scope resource environment prefix is invalid")
+    values = []
+    for suffix in ("CPU_QUOTA_PERCENT", "MEMORY_MAX_BYTES", "MEMORY_SWAP_MAX_BYTES", "TASKS_MAX"):
+        raw = os.environ.get(prefix + suffix)
+        if raw is None:
+            values.append(None)
+        elif re.fullmatch(r"[0-9]+", raw) is None or len(raw) > 20:
+            raise TransientScopeError("GPU scope resource value must be a bounded integer")
+        else:
+            values.append(int(raw))
+    return ScopeResourceLimits(*values)
 
 
 def validate_lease_id(lease_id: object) -> str:
@@ -65,6 +127,7 @@ def transient_scope_command(
     command: Sequence[str | os.PathLike[str]],
     *,
     systemd_run: Path = SYSTEMD_RUN,
+    resources: ScopeResourceLimits | None = None,
 ) -> tuple[str, ...]:
     """Wrap an executor command in its exact transient user scope.
 
@@ -75,6 +138,8 @@ def transient_scope_command(
     """
 
     unit = scope_unit_name(lease_id)
+    if resources is not None and not isinstance(resources, ScopeResourceLimits):
+        raise TransientScopeError("GPU scope resource profile type is invalid")
     if (
         not systemd_run.is_absolute()
         or systemd_run.name != "systemd-run"
@@ -96,6 +161,7 @@ def transient_scope_command(
         f"--slice={SCOPE_SLICE}",
         "--property=KillMode=control-group",
         "--property=CollectMode=inactive-or-failed",
+        *(resources.command_properties() if resources is not None else ()),
         "--expand-environment=no",
         "--",
         *(os.fspath(argument) for argument in command),

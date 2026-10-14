@@ -295,9 +295,13 @@ class SubprocessExecutor:
             # stable while systemd moves that exact process into the
             # lease-named scope. CUDA remains behind the existing IPC gate
             # until Broker registration verifies the scope.
+            scope_options = {}
+            if self.settings.gpu_scope_resources.configured:
+                scope_options["resources"] = self.settings.gpu_scope_resources
             launch_command = self._scope_command_builder(
                 self.lease.lease_id,
                 command,
+                **scope_options,
             )
         try:
             self.process = self._popen(

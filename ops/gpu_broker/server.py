@@ -3281,6 +3281,9 @@ def claim_is_exact_dft_residency_scope(
 def exact_dev_gpu1_backend_docker_workload_pids(
     leases: tuple[Lease, ...],
     docker_claims: tuple[DockerGpuClaim, ...],
+    *,
+    compose_project: str = "nexpoly_dev",
+    expected_container_id: str | None = None,
 ) -> frozenset[int]:
     """Return the sole Backend root only after exact lease/container binding."""
 
@@ -3310,7 +3313,8 @@ def exact_dev_gpu1_backend_docker_workload_pids(
         and claim.registration_id == "backend-dev"
         and claim.component == "backend"
         and claim.environment == "dev"
-        and claim.compose_project == "nexpoly_dev"
+        and claim.compose_project == compose_project
+        and (expected_container_id is None or claim.container_id == expected_container_id)
         and claim.compose_service == "backend"
         and claim.gpu_uuids == frozenset({EXPECTED_GPU_UUIDS[1]})
     )
@@ -3444,6 +3448,26 @@ class ExternalGpuGuard:
         self._authorized_mps_server_pids = authorized_mps_server_pids
         self._mps_authority_query = mps_authority_query
         self._allow_descriptor_mps_authority = allow_descriptor_mps_authority
+        self._native_cohort = None
+        self._native_cohort_session = None
+        cohort_path = os.environ.get("NEXPOLY_DEV_GPU_COHORT_CONFIG")
+        cohort_digest = os.environ.get("NEXPOLY_DEV_GPU_COHORT_SHA256")
+        if cohort_path or cohort_digest:
+            if not allow_descriptor_mps_authority or not cohort_path or not cohort_digest:
+                raise ValueError("native cohort requires the existing descriptor MPS authority")
+            from scripts.dev_gpu_cohort import DevGpuCohort
+            root = Path(__file__).resolve().parents[2]
+            self._native_cohort = DevGpuCohort.load(
+                Path(cohort_path), cohort_digest, repo_root=root,
+                expected_identity=(int(os.environ["NEXPOLY_DEV_GPU_COHORT_DEVICE"]),
+                                   int(os.environ["NEXPOLY_DEV_GPU_COHORT_INODE"])),
+            )
+            self._native_cohort.require_prepared()
+            self._native_cohort_session = os.environ["NEXPOLY_DEV_GPU_SESSION_ID"]
+            self._native_cohort.binding(self._native_cohort_session)
+            registration = self.policy.managed_docker_claims.get("backend-dev")
+            if registration is None or registration.compose_project != self._native_cohort.compose_project:
+                raise ValueError("native cohort does not match its descriptor-bound registration")
         self._admission_timeout_seconds = float(
             admission_timeout_seconds
         )
@@ -3732,10 +3756,22 @@ class ExternalGpuGuard:
             and index == 1
             and uuid == EXPECTED_GPU_UUIDS[1]
         )
+        cohort_backend_id = None
+        if descriptor_gpu1_authority and getattr(self, "_native_cohort", None) is not None:
+            cohort_backend_id = self._native_cohort.backend_container_id(self._native_cohort_session)
+            if any(claim.registration_id == "backend-dev"
+                   and claim.container_id != cohort_backend_id
+                   and uuid in claim.gpu_uuids for claim in snapshot.docker_claims):
+                return True
         descriptor_backend_pids = (
             exact_dev_gpu1_backend_docker_workload_pids(
                 leases,
                 snapshot.docker_claims,
+                compose_project=(
+                    self.policy.managed_docker_claims["backend-dev"].compose_project
+                    if "backend-dev" in self.policy.managed_docker_claims else "nexpoly_dev"
+                ),
+                expected_container_id=cohort_backend_id,
             )
             if descriptor_gpu1_authority
             else frozenset()

@@ -622,6 +622,7 @@ class MonomerMdRunner:
             process = await create_fenced_subprocess_exec(
                 command,
                 execution_lease=execution_lease,
+                scope_resource_limits=self._settings.gpu_scope_resources,
                 cwd=self._settings.byteff2_root,
                 env=env,
                 stdout=stdout,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from gpu_resource.transient_scope import ScopeResourceLimits, scope_resource_limits_from_environment
+
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,6 +102,25 @@ class WorkerSettings:
     lease_seconds: int = 90
     recovery_retry_seconds: int = 15
 
+    gpu_scope_cpu_quota_percent: int | None = None
+    gpu_scope_memory_max_bytes: int | None = None
+    gpu_scope_memory_swap_max_bytes: int | None = None
+    gpu_scope_tasks_max: int | None = None
+
+    @property
+    def gpu_scope_resources(self) -> ScopeResourceLimits:
+        return ScopeResourceLimits(
+            self.gpu_scope_cpu_quota_percent,
+            self.gpu_scope_memory_max_bytes,
+            self.gpu_scope_memory_swap_max_bytes,
+            self.gpu_scope_tasks_max,
+        )
+
+    def __post_init__(self) -> None:
+        limits = self.gpu_scope_resources
+        if limits.configured and (not self.gpu_broker_enabled or self.gpu_broker_environment != "dev"):
+            raise ValueError("GPU scope resource limits require the native development Broker")
+
     @property
     def db_configured(self) -> bool:
         return bool(self.app_postgres_dsn)
@@ -164,7 +185,12 @@ def load_settings() -> WorkerSettings:
 
     byteff2_openmm_dir = os.getenv("BYTEFF2_OPENMM_DIR", "").strip()
 
+    scope_limits = scope_resource_limits_from_environment("MONOMER_MD_GPU_SCOPE_")
     return WorkerSettings(
+        gpu_scope_cpu_quota_percent=scope_limits.cpu_quota_percent,
+        gpu_scope_memory_max_bytes=scope_limits.memory_max_bytes,
+        gpu_scope_memory_swap_max_bytes=scope_limits.memory_swap_max_bytes,
+        gpu_scope_tasks_max=scope_limits.tasks_max,
         mode=_get_mode(),
         app_postgres_dsn=os.getenv("APP_SERVICE_POSTGRES_DSN") or os.getenv("APP_POSTGRES_DSN") or None,
         job_table=os.getenv("MONOMER_MD_JOB_TABLE", "md.monomer_md_jobs"),

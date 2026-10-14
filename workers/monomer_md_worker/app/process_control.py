@@ -58,6 +58,7 @@ async def create_fenced_subprocess_exec(
     execution_lease: ManagedGpuLease | None,
     scope_command_builder=transient_scope_command,
     scope_membership_waiter=wait_for_scope_membership,
+    scope_resource_limits=None,
     **kwargs: Any,
 ) -> asyncio.subprocess.Process:
     """Start a session child behind a pipe gate, then register its host identity."""
@@ -96,9 +97,13 @@ async def create_fenced_subprocess_exec(
                 "--",
                 *command,
             )
+            scope_options = {}
+            if scope_resource_limits is not None and scope_resource_limits.configured:
+                scope_options["resources"] = scope_resource_limits
             scoped_command = scope_command_builder(
                 execution_lease.lease.lease_id,
                 gated_command,
+                **scope_options,
             )
             spawn_task = asyncio.create_task(
                 asyncio.create_subprocess_exec(
