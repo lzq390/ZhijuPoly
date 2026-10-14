@@ -368,6 +368,9 @@ def collect_target_snapshot() -> TargetSnapshot:
     processes = query_compute_processes()
     target_processes = frozenset(processes.get(GPU_UUID, frozenset()))
     process_declarers = capture_compute_process_declarers(target_processes)
+    systemd_options = {}
+    if COHORT is not None:
+        systemd_options = COHORT.systemd_configuration_options()
     docker_claims = tuple(
         claim for claim in query_docker_gpu_claims() if GPU_UUID in claim.gpu_uuids
     )
@@ -382,6 +385,7 @@ def collect_target_snapshot() -> TargetSnapshot:
                 )
                 for pid, declarer in process_declarers.items()
             },
+            **systemd_options,
         )
         if GPU_UUID in claim.gpu_uuids
     )
@@ -4604,6 +4608,7 @@ class SessionController:
                                     unsealed_process_declarers.items()
                                 )
                             },
+                            **(self.cohort.systemd_configuration_options() if self.cohort is not None else {}),
                         )
                         if GPU_UUID in claim.gpu_uuids
                     )

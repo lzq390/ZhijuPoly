@@ -51,6 +51,19 @@ class CohortTests(unittest.TestCase):
         with self.assertRaises(cohort.CohortError):
             self.config.require_source("d" * 40, "b" * 40)
 
+    def test_systemd_provider_requires_explicit_v2_and_exact_source(self):
+        self.assertEqual(self.config.systemd_configuration_options(), {})
+        self.assertEqual(self.config.systemd_inventory_provider, "legacy")
+        config = self.load_value(dict(self.value, schema_version=2, systemd_inventory_provider="root-unix-v1"))
+        options = config.systemd_configuration_options()
+        factory = options["system_configuration_factory"]
+        self.assertEqual(factory.keywords, {"expected_source_sha": "a" * 40, "expected_source_tree": "b" * 40})
+        self.assertNotIn("NEXPOLY_GPU_SYSTEMD_INVENTORY_MODE", config.environment())
+        for mutation in ({"schema_version": 1, "systemd_inventory_provider": "root-unix-v1"},
+                         {"schema_version": 2}, {"schema_version": 2, "systemd_inventory_provider": "/caller/socket"}):
+            with self.subTest(mutation=mutation), self.assertRaises(cohort.CohortError):
+                self.load_value(dict(self.value, **mutation))
+
     def test_rejects_partial_profiles_main_project_and_unknown_schema(self):
         for mutation in (
             {"compose_project": "nexpoly_dev"}, {"compose_project": "nexpoly"},

@@ -1,0 +1,45 @@
+[Unit]
+Description=NexPoly redacted GPU1 systemd configuration inventory
+After=dbus.service
+
+[Service]
+Type=simple
+User=root
+Group=1001
+WorkingDirectory=/
+ExecStart=/usr/bin/python3 -I -S -B /usr/local/lib/nexpoly-gpu-systemd-inventory/ops/gpu_broker/systemd_provider.py serve
+RuntimeDirectory=nexpoly-gpu-systemd-inventory
+RuntimeDirectoryMode=0755
+UMask=0077
+Restart=no
+TimeoutStopSec=5
+CPUQuota=100%
+MemoryMax=256M
+MemorySwapMax=0
+TasksMax=32
+LimitNOFILE=64
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/nexpoly-gpu-systemd-inventory
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+StandardOutput=null
+StandardError=journal
+
+# Development/review deliverable only. No [Install] section: any later start
+# is explicit and temporary, never enabled at boot by this proposal.

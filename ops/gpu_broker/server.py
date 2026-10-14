@@ -1632,6 +1632,42 @@ def query_systemd_gpu_claims(
     read_process_start_ticks=read_process_start_ticks,
     deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    system_configuration_factory=None,
+) -> tuple[SystemdGpuClaim, ...]:
+    """Retain native live-process CAS around an optional Root projection.
+
+    The factory is explicitly supplied only by a verified development cohort.
+    No ambient environment variable or arbitrary socket/path selects it.
+    """
+    arguments = dict(compute_processes=compute_processes,
+                     compute_process_identities=compute_process_identities, run=run,
+                     read_process_environment=read_process_environment,
+                     read_control_group_processes=read_control_group_processes,
+                     compute_process_query=compute_process_query,
+                     read_process_cgroup=read_process_cgroup,
+                     read_process_uids=read_process_uids,
+                     read_process_start_ticks=read_process_start_ticks,
+                     deadline=deadline, monotonic=monotonic)
+    if system_configuration_factory is None:
+        return _query_systemd_gpu_claims(**arguments)
+    with system_configuration_factory(deadline=deadline, monotonic=monotonic) as configuration:
+        return _query_systemd_gpu_claims(**arguments, system_configuration=configuration)
+
+
+def _query_systemd_gpu_claims(
+    *,
+    compute_processes: dict[str, frozenset[int]] | None = None,
+    compute_process_identities: dict[int, tuple[int, str]] | None = None,
+    run=subprocess.run,
+    read_process_environment=_read_process_environment,
+    read_control_group_processes=_read_control_group_processes,
+    compute_process_query=None,
+    read_process_cgroup=_read_unified_process_cgroup,
+    read_process_uids=_read_process_uids,
+    read_process_start_ticks=read_process_start_ticks,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    system_configuration=None,
 ) -> tuple[SystemdGpuClaim, ...]:
     """Inventory GPU-visible services without reading unrelated root envs.
 
@@ -1727,10 +1763,17 @@ def query_systemd_gpu_claims(
     observed_memberships: dict[
         tuple[str, str, str], dict[int, tuple[int, str]]
     ] = {}
+    projected_units = {item.unit: item for item in system_configuration.units} if system_configuration is not None else {}
     for scope in ("user", "system"):
         _ensure_admission_open(deadline, monotonic=monotonic)
         prefix = ["systemctl", "--user"] if scope == "user" else ["systemctl"]
-        authorities = _query_systemd_unit_authorities(scope, run=run)
+        if scope == "system" and system_configuration is not None:
+            authorities = tuple(_SystemdUnitAuthority(
+                item.unit, item.active_state, item.sub_state, item.invocation_id,
+                item.main_pid, item.control_group, item.user, "", (), "", "")
+                for item in system_configuration.units)
+        else:
+            authorities = _query_systemd_unit_authorities(scope, run=run)
         authority_snapshots[scope] = authorities
         if not authorities:
             continue
@@ -2008,6 +2051,8 @@ def query_systemd_gpu_claims(
                 set(configured).intersection(relevant_names)
                 or pass_names.intersection(relevant_names)
             )
+            if scope == "system" and system_configuration is not None:
+                statically_relevant = projected_units[unit].statically_relevant
             if scope == "system" and not statically_relevant and not active_uuids:
                 # Root/systemd is the trusted host configuration boundary.
                 # An unrelated root process is not ptrace-readable by UID1001;
@@ -2139,6 +2184,8 @@ def query_systemd_gpu_claims(
                 return frozenset(declared)
 
             static_gpu_uuids = declared_gpu_uuids(configured)
+            if scope == "system" and system_configuration is not None:
+                static_gpu_uuids = frozenset({EXPECTED_GPU_UUIDS[1]}) if projected_units[unit].static_gpu1 else frozenset()
             live_gpu_declarers = tuple(
                 SystemdGpuDeclarer(
                     pid=pid,
@@ -2191,6 +2238,10 @@ def query_systemd_gpu_claims(
     # and SubState keep activating/reloading services inside the audit.
     for scope in ("user", "system"):
         _ensure_admission_open(deadline, monotonic=monotonic)
+        if scope == "system" and system_configuration is not None:
+            # Root validates full raw unit/manager/file authorities only after
+            # ALL local membership, live-environment and PID CAS below finish.
+            continue
         current_authorities = _query_systemd_unit_authorities(scope, run=run)
         if current_authorities != authority_snapshots[scope]:
             raise BrokerError(
@@ -2329,6 +2380,9 @@ def query_systemd_gpu_claims(
                 "gpu_claim_inventory_unavailable",
                 "systemd EnvironmentFile identity changed during audit",
             )
+    _ensure_admission_open(deadline, monotonic=monotonic)
+    if system_configuration is not None:
+        system_configuration.validate()
     _ensure_admission_open(deadline, monotonic=monotonic)
     return tuple(sorted(claims, key=lambda claim: (claim.scope, claim.unit)))
 
@@ -3531,6 +3585,10 @@ class ExternalGpuGuard:
             admission.environment != "dev" or index == 2
         ):
             return True
+        if (self._native_cohort is not None
+                and self._native_cohort.systemd_inventory_provider == "root-unix-v1"
+                and (index != 1 or uuid != EXPECTED_GPU_UUIDS[1])):
+            return True
         if uuid in self.policy.blocked_gpu_uuids:
             return True
         try:
@@ -3978,6 +4036,11 @@ class ExternalGpuGuard:
                 self._monotonic() + self._admission_timeout_seconds
             )
         processes = self._query_compute_processes(deadline=deadline)
+        systemd_options = {}
+        if self._native_cohort is not None:
+            systemd_options = self._native_cohort.systemd_configuration_options()
+            if systemd_options and self._systemd_claim_query is not query_systemd_gpu_claims:
+                raise BrokerError("gpu_claim_inventory_unavailable", "native systemd provider requires the native query")
         if (
             self._docker_claim_query is query_docker_gpu_claims
             and self._systemd_claim_query is query_systemd_gpu_claims
@@ -4003,6 +4066,7 @@ class ExternalGpuGuard:
                     compute_processes=processes,
                     deadline=deadline,
                     monotonic=self._monotonic,
+                    **systemd_options,
                 )
                 authority_futures.append(systemd_future)
                 pending = {docker_future, systemd_future}
@@ -4040,6 +4104,7 @@ class ExternalGpuGuard:
                     compute_processes=processes,
                     deadline=deadline,
                     monotonic=self._monotonic,
+                    **systemd_options,
                 )
             else:
                 systemd_claims = _call_with_optional_deadline(

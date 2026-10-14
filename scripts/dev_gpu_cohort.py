@@ -127,6 +127,7 @@ class DevGpuCohort:
     dft_resources: ScopeResourceLimits
     backend_resources: ScopeResourceLimits
     prior_backend: dict[str, str] | None
+    systemd_inventory_provider: str = "legacy"
 
     @classmethod
     def load(cls, path: Path, sha256: str, *, repo_root: Path = REPO_ROOT,
@@ -158,7 +159,15 @@ class DevGpuCohort:
         keys = {"schema_version", "cohort_id", "repo_root", "source_sha", "source_tree",
                 "compose_project", "frontend_port", "backend_port", "auth_env_file",
                 "md_resources", "dft_resources", "backend_resources", "prior_backend"}
-        if not isinstance(value, dict) or set(value) != keys or type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value["schema_version"] not in {1, 2}:
+            raise CohortError("cohort configuration schema differs")
+        provider = "legacy"
+        if value["schema_version"] == 2:
+            keys.add("systemd_inventory_provider")
+            provider = value.get("systemd_inventory_provider")
+            if provider != "root-unix-v1":
+                raise CohortError("cohort systemd inventory provider differs")
+        if set(value) != keys:
             raise CohortError("cohort configuration schema differs")
         cohort_id = value["cohort_id"]
         if not isinstance(cohort_id, str) or re.fullmatch(r"[a-z][a-z0-9-]{0,63}", cohort_id) is None:
@@ -216,7 +225,7 @@ class DevGpuCohort:
         return cls(path, sha256, *identity, repo_root, runtime_root, cohort_id,
                    value["source_sha"], value["source_tree"], project,
                    value["frontend_port"], value["backend_port"], auth_path,
-                   resources[0], resources[1], resources[2], prior)
+                   resources[0], resources[1], resources[2], prior, provider)
 
     @property
     def backend_image(self) -> str:
@@ -273,6 +282,17 @@ class DevGpuCohort:
                                    ("TASKS_MAX", profile.tasks_max)):
                 result[f"MONOMER_{component}_GPU_SCOPE_{suffix}"] = str(number)
         return result
+
+    def systemd_configuration_options(self) -> dict:
+        self.verify()
+        if self.systemd_inventory_provider == "legacy":
+            return {}
+        if self.systemd_inventory_provider != "root-unix-v1":
+            raise CohortError("cohort systemd inventory provider differs")
+        from functools import partial
+        from gpu_resource.systemd_inventory import configuration_client
+        return {"system_configuration_factory": partial(configuration_client,
+                    expected_source_sha=self.source_sha, expected_source_tree=self.source_tree)}
 
     def compose_bytes(self) -> bytes:
         # Only these fixed, secret-free native selections are added. The
