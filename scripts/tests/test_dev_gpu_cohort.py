@@ -227,7 +227,7 @@ class CohortTests(unittest.TestCase):
             cohort.recreate_backend(self.config, kind="cpu", config_hash="a" * 64, session_id="b" * 32)
         command.assert_not_called()
 
-    def seed_cpu_snapshot(self):
+    def seed_cpu_snapshot(self, service_mutator=None):
         service = dict(image=self.config.backend_image,
                        container_name=self.config.compose_project + "-backend",
                        command=["uvicorn", "app.main:app"],
@@ -238,6 +238,8 @@ class CohortTests(unittest.TestCase):
                        labels={"com.nexpoly.dev.cohort-sha256": self.config.sha256,
                                "com.nexpoly.dev.config-hash": "uncomputed",
                                "com.nexpoly.dev.cohort-operation-id": "unprepared"})
+        if service_mutator is not None:
+            service_mutator(service)
         normalized = copy.deepcopy(service)
         normalized["labels"].pop("com.nexpoly.dev.config-hash")
         normalized["labels"].pop("com.nexpoly.dev.cohort-operation-id")
@@ -252,6 +254,65 @@ class CohortTests(unittest.TestCase):
                       compose={"services": {"backend": service}})
         cohort.write_once(self.config.path_for("backend-cpu-snapshot.json"), record)
         return record
+
+
+    def test_cpu_snapshot_accepts_compose_omitted_writable_flags(self):
+        def normalize(service):
+            for mount in service["volumes"]:
+                if mount["read_only"] is False:
+                    del mount["read_only"]
+        frozen = self.seed_cpu_snapshot(normalize)
+        with patch.object(cohort.subprocess, "run") as command:
+            self.assertEqual(cohort.cpu_snapshot(self.config), frozen)
+            self.assertEqual(cohort.cpu_environment(self.config)["CURRENT_SOURCE_REVISION"], "a" * 40)
+            command.assert_not_called()
+
+    def test_cpu_snapshot_accepts_explicit_mount_modes(self):
+        frozen = self.seed_cpu_snapshot()
+        self.assertEqual(cohort.cpu_snapshot(self.config), frozen)
+
+    def assert_cpu_mount_rejected(self, mutate):
+        self.seed_cpu_snapshot(mutate)
+        try:
+            with patch.object(cohort.subprocess, "run") as command:
+                with self.assertRaises(cohort.CohortError):
+                    cohort.cpu_snapshot(self.config)
+                command.assert_not_called()
+        finally:
+            self.config.path_for("backend-cpu-snapshot.json").unlink()
+
+    def test_cpu_snapshot_requires_explicit_true_for_readonly_mount(self):
+        missing = object()
+        for invalid in (missing, False, None, 0, 1, "true", "false", [], {}):
+            with self.subTest(mode=invalid):
+                def mutate(service):
+                    mount = next(m for m in service["volumes"] if m["target"] == "/app/monomer-dft-worker")
+                    if invalid is missing:
+                        mount.pop("read_only")
+                    else:
+                        mount["read_only"] = invalid
+                self.assert_cpu_mount_rejected(mutate)
+
+    def test_cpu_snapshot_rejects_invalid_writable_mount_modes(self):
+        for invalid in (True, None, 0, 1, "false", "true", [], {}):
+            with self.subTest(mode=invalid):
+                def mutate(service):
+                    service["volumes"][0]["read_only"] = invalid
+                self.assert_cpu_mount_rejected(mutate)
+
+    def test_cpu_snapshot_rejects_wrong_bind_source_target_type_and_creation(self):
+        mutations = (
+            ("source", lambda m: m.update(source=str(self.root / "foreign"))),
+            ("target", lambda m: m.update(target="/foreign/runtime")),
+            ("type", lambda m: m.update(type="volume")),
+            ("host-create-true", lambda m: m["bind"].update(create_host_path=True)),
+            ("host-create-missing", lambda m: m["bind"].pop("create_host_path")),
+            ("host-create-null", lambda m: m["bind"].update(create_host_path=None)),
+            ("host-create-zero", lambda m: m["bind"].update(create_host_path=0)),
+        )
+        for name, change in mutations:
+            with self.subTest(change=name):
+                self.assert_cpu_mount_rejected(lambda service: change(service["volumes"][0]))
 
     def native_mock(self, *, fail_start=False):
         live, events = {}, []

@@ -567,7 +567,7 @@ def cpu_snapshot(cohort: DevGpuCohort) -> dict[str, Any]:
     for name, target, read_only in cohort.runtime_mounts():
         mount = mounts.get(target)
         if (not mount or mount.get("type") != "bind" or mount.get("source") != str(cohort.path_for(name))
-                or mount.get("read_only") is not read_only
+                or mount.get("read_only", False) is not read_only
                 or mount.get("bind", {}).get("create_host_path") is not False):
             raise CohortError("frozen CPU mount differs from its owned native path")
     normalized = json.loads(json.dumps(service))
