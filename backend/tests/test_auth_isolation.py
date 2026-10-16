@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import os
 from threading import Event
 from uuid import uuid4
@@ -15,6 +16,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo, conninfo_to_dict
 from psycopg.rows import dict_row
 import pytest
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.auth.cli import manage_user
 from app.auth.context import Identity, current_owner_id, service_context, user_context
@@ -22,7 +24,7 @@ from app.auth.cutover import apply_identity_cutover, private_data_seal, auth_met
 from app.auth.middleware import AuthenticationMiddleware
 from app.auth.router import router
 from app.auth.service import AuthService, csrf_token
-from app.auth.settings import AuthSettings
+from app.auth.settings import AuthSettings, ISOLATED_AB_COOKIE_NAME, IsolatedABSessionPolicy
 from app.postgres_database import postgres_connection
 from app.postgres_migrations import apply_postgres_migrations
 from app.task_control import authorize_start
@@ -143,6 +145,74 @@ def test_password_change_and_logout_revoke_sessions(auth_app):
     assert client.get('/api/v1/private').json()['owner'] == str(user['user_id'])
     assert client.post('/api/v1/auth/logout').status_code == 204
     assert client.get('/api/v1/auth/session').json()['authenticated'] is False
+
+
+def test_isolated_ab_new_sessions_keep_bounded_native_expiry_and_local_logout(auth_database):
+    """Requires the existing explicitly disposable PG fixture; never run on live accounts."""
+    origin = 'http://127.0.0.2:38965'
+    with psycopg.connect(auth_database['admin'], row_factory=dict_row) as connection:
+        users = [manage_user(connection, 'create', username='ab36' + uuid4().hex,
+                             password='synthetic-36h-fixture-password') for _ in range(3)]
+        unchanged = connection.execute('SELECT user_id,password_hash,must_change_password,status,is_system '
+            'FROM auth.users WHERE user_id=ANY(%s) ORDER BY user_id',
+            ([user['user_id'] for user in users],)).fetchall()
+    normal_settings = AuthSettings(application_dsn=auth_database['api'], auth_dsn=auth_database['auth'],
+        service_dsn=auth_database['service'], cookie_secure=False, allowed_origins=('http://testserver',))
+    normal = AuthService(normal_settings)
+    old_session, old_token = normal.login(users[0]['username'], 'synthetic-36h-fixture-password', '127.0.0.1')
+    assert old_session['session_max_age'] == 43200
+    policy = IsolatedABSessionPolicy(enabled=True, origin=origin,
+        user_ids=tuple(str(user['user_id']) for user in users[:2]), proxy_peer='172.28.0.1')
+    isolated = AuthService(replace(normal_settings, runtime_environment='dev',
+        allowed_origins=(origin,), cookie_name=ISOLATED_AB_COOKIE_NAME, isolated_ab_session_policy=policy))
+    app = FastAPI()
+    app.state.auth = isolated
+    app.include_router(router)
+    app.add_middleware(AuthenticationMiddleware, auth_service=isolated)
+    native_proxy = ProxyHeadersMiddleware(app, trusted_hosts='')
+
+    async def direct_loopback_fixture(scope, receive, send):
+        if scope['type'] == 'http':
+            scope = {**scope, 'client': ('172.28.0.1', 12345), 'server': ('0.0.0.0', 8000)}
+        return await native_proxy(scope, receive, send)
+
+    tokens, sessions, clients = [], [], []
+    for number, user in enumerate(users):
+        client = TestClient(direct_loopback_fixture, base_url=origin)
+        before = datetime.now(timezone.utc)
+        response = client.post('/api/v1/auth/login', headers={'Origin': origin},
+            json={'username': user['username'], 'password': 'synthetic-36h-fixture-password'})
+        after = datetime.now(timezone.utc)
+        assert response.status_code == 200
+        seconds = 129600 if number < 2 else 43200
+        assert f'Max-Age={seconds}' in response.headers['set-cookie']
+        session_id = response.json()['session_id']
+        with psycopg.connect(auth_database['admin'], row_factory=dict_row) as connection:
+            saved = connection.execute('SELECT expires_at,revoked_at FROM auth.sessions WHERE session_id=%s',
+                                       (session_id,)).fetchone()
+        assert before + timedelta(seconds=seconds) <= saved['expires_at'] <= after + timedelta(seconds=seconds)
+        assert saved['revoked_at'] is None
+        sessions.append(session_id)
+        tokens.append(client.cookies.get(ISOLATED_AB_COOKIE_NAME))
+        clients.append(client)
+    current = clients[0].get('/api/v1/auth/session').json()
+    assert clients[0].post('/api/v1/auth/logout', headers={'Origin': origin,
+        'X-Session-Context': current['session_id'], 'X-CSRF-Token': current['csrf_token']}).status_code == 204
+    assert isolated.resolve(tokens[0]) is None
+    assert isolated.resolve(tokens[1]) is not None and isolated.resolve(tokens[2]) is not None
+    assert normal.resolve(old_token) is not None
+    with psycopg.connect(auth_database['admin'], row_factory=dict_row) as connection:
+        assert connection.execute('SELECT expires_at FROM auth.sessions WHERE session_id=%s',
+                                  (old_session['session_id'],)).fetchone()['expires_at'] == old_session['expires_at']
+        assert connection.execute('SELECT user_id,password_hash,must_change_password,status,is_system '
+            'FROM auth.users WHERE user_id=ANY(%s) ORDER BY user_id',
+            ([user['user_id'] for user in users],)).fetchall() == unchanged
+        # Move only this newly created synthetic fixture session past expiry;
+        # resolve must enforce its stored deadline without extending it.
+        connection.execute("UPDATE auth.sessions SET expires_at=now()-interval '1 second' WHERE session_id=%s",
+                           (sessions[1],))
+    assert isolated.resolve(tokens[1]) is None
+    assert isolated.resolve(tokens[2]) is not None and normal.resolve(old_token) is not None
 
 
 def test_origin_csrf_and_old_tab_context(auth_app):

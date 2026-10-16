@@ -117,7 +117,7 @@ class AuthService:
             'capabilities': capabilities(bool(session) and not session['must_change_password']),
         }
 
-    def login(self, username: str, password: str, peer: str):
+    def login(self, username: str, password: str, peer: str, *, isolated_origin: str | None = None):
         try:
             username = normalize_username(username)
         except ValueError:
@@ -134,11 +134,14 @@ class AuthService:
             locked = connection.execute('SELECT * FROM auth.users WHERE user_id=%s FOR UPDATE', (user['user_id'],)).fetchone()
             if locked['status'] != 'active' or locked['password_hash'] != user['password_hash']:
                 raise HTTPException(401, '用户名或密码错误，或账号不可用。')
+            max_age = self.settings.new_session_max_age(str(user['user_id']), peer=peer,
+                                                        isolated_origin=isolated_origin)
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=max_age)
             connection.execute('''INSERT INTO auth.sessions(session_id,user_id,token_hash,expires_at)
                 VALUES(%s,%s,%s,%s)''', (session_id,user['user_id'],hashlib.sha256(token.encode()).digest(),
-                                      datetime.now(timezone.utc)+timedelta(hours=self.settings.session_hours)))
+                                      expires_at))
         self.limiter.succeeded(attempt)
-        return {**user, 'session_id': session_id}, token
+        return {**user, 'session_id': session_id, 'session_max_age': max_age, 'expires_at': expires_at}, token
 
     def logout(self, session_id):
         with self.connection() as connection:

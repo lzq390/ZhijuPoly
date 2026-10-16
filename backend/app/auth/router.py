@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, Response
+from urllib.parse import urlsplit
+
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -24,6 +26,25 @@ def _account_response(request, session, token=None):
 router = APIRouter(prefix='/api/v1/auth', tags=['authentication'])
 
 
+def _isolated_login_origin(request: Request, auth):
+    policy = auth.settings.isolated_ab_session_policy
+    if policy is None:
+        return None
+    peer = request.client.host if request.client else ''
+    headers = request.headers
+    # Docker sees its bridge peer and internal listener, not the host's
+    # loopback publishing address. Pin that actual peer; forwarded headers
+    # never establish or override the trusted entry identity.
+    raw_headers = request.scope.get('headers', ())
+    unique_entry = all(sum(name.lower() == expected for name, _ in raw_headers) == 1
+                       for expected in (b'host', b'origin'))
+    if (peer != policy.proxy_peer or not unique_entry or request.url.scheme != 'http'
+            or headers.get('origin') != policy.origin
+            or headers.get('host') != urlsplit(policy.origin).netloc):
+        raise HTTPException(403, '隔离验收会话仅允许专属 loopback 代理入口。')
+    return policy.origin
+
+
 class LoginBody(BaseModel):
     model_config = ConfigDict(extra='forbid')
     username: str = Field(min_length=1,max_length=256)
@@ -44,8 +65,10 @@ def session(request: Request):
 @router.post('/login')
 async def login(body: LoginBody, request: Request, response: Response):
     auth = request.app.state.auth
-    session, token = await run_in_threadpool(auth.login,body.username,body.password,request.client.host if request.client else 'unknown')
-    response.set_cookie(auth.settings.cookie_name,token,max_age=auth.settings.session_hours*3600,
+    isolated_origin = _isolated_login_origin(request, auth)
+    session, token = await run_in_threadpool(auth.login,body.username,body.password,
+        request.client.host if request.client else 'unknown', isolated_origin=isolated_origin)
+    response.set_cookie(auth.settings.cookie_name,token,max_age=session['session_max_age'],
                         secure=auth.settings.cookie_secure,httponly=True,samesite='lax',path='/')
     return await run_in_threadpool(_account_response, request, session, token)
 
