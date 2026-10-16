@@ -314,13 +314,15 @@ class CohortTests(unittest.TestCase):
             with self.subTest(change=name):
                 self.assert_cpu_mount_rejected(lambda service: change(service["volumes"][0]))
 
-    def native_mock(self, *, fail_start=False):
+    def native_mock(self, *, fail_start=False, candidate_status="created", candidate_running=False):
         live, events = {}, []
         gpu_hash = "e" * 64
         def run(command, **kwargs):
             command = tuple(command)
             events.append(command)
             if command[:2] == ("docker", "compose"):
+                self.assertEqual(command[-8:], ("up", "--no-start", "--no-deps", "--no-recreate",
+                                                "--no-build", "--pull", "never", "backend"))
                 self.assertIn("--no-recreate", command)
                 self.assertIn("--pull", command)
                 self.assertNotIn("--force-recreate", command)
@@ -352,7 +354,9 @@ class CohortTests(unittest.TestCase):
                                    "com.nexpoly.gpu.session-id": self.session})
                 live[identifier] = dict(id=identifier, image="sha256:" + "f" * 64,
                                         name="/" + self.config.compose_project + "-backend",
-                                        devices=["gpu1"] if gpu else [], running=False, labels=labels)
+                                        devices=["gpu1"] if gpu else [], running=candidate_running, labels=labels)
+                if candidate_status is not None:
+                    live[identifier]["status"] = candidate_status
             elif command[:2] == ("docker", "start"):
                 identity = live[command[2]]
                 if identity["devices"]:
@@ -362,8 +366,10 @@ class CohortTests(unittest.TestCase):
                 if fail_start:
                     raise subprocess.CalledProcessError(1, command)
                 identity["running"] = True
+                identity["status"] = "running"
             elif command[:2] == ("docker", "stop"):
                 live[command[2]]["running"] = False
+                live[command[2]]["status"] = "exited"
             elif command[:3] == ("docker", "rm", "--force"):
                 del live[command[3]]
             else:
@@ -373,6 +379,29 @@ class CohortTests(unittest.TestCase):
         self.enterContext(patch.object(cohort, "docker_identity", side_effect=lambda i: copy.deepcopy(live.get(i))))
         self.enterContext(patch.object(cohort.subprocess, "run", side_effect=run))
         return live, events, gpu_hash
+
+    def assert_candidate_rejected_before_binding_or_start(self, status, running=False):
+        self.seed_cpu_snapshot()
+        live, events, gpu_hash = self.native_mock(candidate_status=status, candidate_running=running)
+        with self.assertRaisesRegex(cohort.CohortError, "must remain created"):
+            cohort.recreate_backend(self.config, kind="gpu", config_hash=gpu_hash, session_id=self.session)
+        self.assertEqual(len(live), 1)
+        self.assertFalse(any(command[:2] == ("docker", "start") for command in events))
+        self.assertFalse(self.config.backend_record_path(self.session).exists())
+        self.assertFalse(self.config.path_for("backend-service.json").exists())
+        self.assertTrue(self.config.path_for("backend-pending.json").exists())
+
+    def test_recreation_rejects_running_candidate_before_binding(self):
+        self.assert_candidate_rejected_before_binding_or_start("running", True)
+
+    def test_recreation_rejects_exited_candidate_before_binding(self):
+        self.assert_candidate_rejected_before_binding_or_start("exited")
+
+    def test_recreation_rejects_missing_candidate_status_before_binding(self):
+        self.assert_candidate_rejected_before_binding_or_start(None)
+
+    def test_recreation_rejects_created_candidate_reported_running(self):
+        self.assert_candidate_rejected_before_binding_or_start("created", True)
 
     def test_exact_bind_precedes_start_and_old_sha_cpu_restore_uses_only_frozen_config(self):
         frozen = self.seed_cpu_snapshot()

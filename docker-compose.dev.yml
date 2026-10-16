@@ -43,7 +43,7 @@ x-dev-backend-env: &dev-backend-env
   PI_REVERSE_BACKEND: "postgres"
   APP_POSTGRES_DSN: postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev
   PI_POSTGRES_DSN: postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev
-  LAB_DATA_POSTGRES_DSN: postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev
+  LAB_DATA_POSTGRES_DSN: "${LAB_DATA_POSTGRES_DSN:-postgresql://nexpoly_dev:nexpoly_dev@lab-postgres:5432/nexpoly_dev}"
   ALLOWED_ORIGINS: "${NEXPOLY_DEV_ALLOWED_ORIGINS:-http://localhost:9001,http://127.0.0.1:9001}"
   MONOMER_MD_SUBMIT_ENABLED: "false"
   MONOMER_MD_WORKER_BASE_URL: "http+unix://%2Fapp%2Fmonomer-md-worker%2Fworker.sock"

@@ -421,7 +421,7 @@ def dft_binding(cohort: DevGpuCohort, session_id: str, pid: int, start_ticks: in
 def docker_identity(container_id: str) -> dict[str, Any] | None:
     if re.fullmatch(r"[0-9a-f]{64}", container_id) is None:
         raise CohortError("Backend requires a full Docker container ID")
-    template = '{"id":{{json .Id}},"image":{{json .Image}},"name":{{json .Name}},"running":{{json .State.Running}},"devices":{{json .HostConfig.DeviceRequests}},"labels":{{json .Config.Labels}}}'
+    template = '{"id":{{json .Id}},"image":{{json .Image}},"name":{{json .Name}},"status":{{json .State.Status}},"running":{{json .State.Running}},"devices":{{json .HostConfig.DeviceRequests}},"labels":{{json .Config.Labels}}}'
     completed = subprocess.run(("docker", "inspect", "--format", template, container_id),
                                capture_output=True, text=True, timeout=15)
     if completed.returncode:
@@ -760,7 +760,7 @@ def recreate_backend(cohort: DevGpuCohort, *, kind: str, config_hash: str,
             command = ["docker", "compose", "-p", cohort.compose_project, "-f", str(frozen_path)]
         else:
             command = compose_command(cohort, kind)
-        command.extend(("create", "--no-deps", "--no-recreate", "--no-build", "--pull", "never", "backend"))
+        command.extend(("up", "--no-start", "--no-deps", "--no-recreate", "--no-build", "--pull", "never", "backend"))
         subprocess.run(command, cwd=cohort.repo_root, env=environment, check=True,
                        capture_output=True, timeout=120)
         current = backend_service_ids(cohort)
@@ -780,6 +780,8 @@ def recreate_backend(cohort: DevGpuCohort, *, kind: str, config_hash: str,
             raise CohortError("CPU restore cannot declare any GPU")
         if identity["image"] != frozen_snapshot["image_id"]:
             raise CohortError("Backend creation changed its frozen image identity")
+        if identity.get("status") != "created" or identity.get("running") is not False:
+            raise CohortError("Backend candidate must remain created until its binding is published")
         if kind == "gpu":
             record = backend_binding(cohort, session_id, identifier, config_hash, identity)
             write_once(cohort.backend_record_path(session_id), record)
