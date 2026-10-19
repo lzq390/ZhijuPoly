@@ -43,6 +43,39 @@ def test_unarmed_restore_sends_no_native_control(monkeypatch,tmp_path):
     assert w.restore()['Main_control_sent'] is False
 
 
+def test_missing_native_worker_receipt_blocks_before_Main_inspection(monkeypatch):
+    order=[]
+    monkeypatch.setattr(w,'load',lambda pin:None)
+    monkeypatch.setattr(w,'require_short_budget',lambda at:None)
+    monkeypatch.setattr(w,'owner_gate',lambda:None)
+    def missing():raise w.n.Blocked('native_worker_runtime_preflight_missing')
+    monkeypatch.setattr(w,'worker_runtime_gate',missing)
+    monkeypatch.setattr(w.n,'primary_snapshot',lambda:order.append('Main inspected'))
+    with pytest.raises(w.n.Blocked,match='worker_runtime_preflight_missing'):w.preflight('a'*64)
+    assert not order
+
+
+def test_native_worker_receipt_requires_both_cpu_preflights_and_current_locks(monkeypatch,tmp_path):
+    raw=b'public native worker CPU preflight receipt'
+    monkeypatch.setattr(w,'ROOT',tmp_path)
+    monkeypatch.setattr(w,'CURRENT',{'source_sha':'a'*40,'source_tree':'b'*40,'worker_runtime_receipt_sha256':w.a.sha(raw)})
+    workers={}
+    for name in ['md','dft']:
+        lock=tmp_path/f'workers/monomer_{name}_worker/requirements.lock'
+        lock.parent.mkdir(parents=True)
+        lock.write_bytes(name.encode())
+        workers[name]=dict(native_preflight_passed=True,requirements_lock_sha256=w.a.sha(lock.read_bytes()),runtime_identity_sha256='c'*64)
+    value=dict(scope_id=w.a.SCOPE,source_sha='a'*40,source_tree='b'*40,status='PASS_NATIVE_WORKER_CPU_PREFLIGHT',
+        GPU_context_created=False,at_utc=w.c.now().isoformat(),workers=workers)
+    monkeypatch.setattr(w.c,'read_public',lambda path:(raw,value))
+    w.worker_runtime_gate()
+    value['workers']['dft']['native_preflight_passed']=False
+    with pytest.raises(w.n.Blocked,match='not_bound'):w.worker_runtime_gate()
+    value['workers']['dft']['native_preflight_passed']=True
+    value['at_utc']=(w.c.now()-timedelta(seconds=901)).isoformat()
+    with pytest.raises(w.n.Blocked,match='stale'):w.worker_runtime_gate()
+
+
 def test_scientific_fault_choices_do_not_include_automatic_broker_or_backend_exit():
     for case in ['broker-exit','backend-exit','foreign-worker']:
         with pytest.raises(w.n.Blocked,match='not_in_prepared'):

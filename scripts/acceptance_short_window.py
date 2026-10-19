@@ -94,13 +94,32 @@ def resource_gate():
     return value['owned_storage_bytes']
 
 
+def worker_runtime_gate():
+    raw,value=c.read_public(BASE/'worker-runtime-preflight.public.json')
+    need(a.sha(raw)==CURRENT['worker_runtime_receipt_sha256']
+         and value.get('scope_id')==a.SCOPE and value.get('source_sha')==CURRENT['source_sha']
+         and value.get('source_tree')==CURRENT['source_tree']
+         and value.get('status')=='PASS_NATIVE_WORKER_CPU_PREFLIGHT'
+         and value.get('GPU_context_created') is False,'native_worker_runtime_preflight_missing')
+    workers=value.get('workers')
+    need(type(workers) is dict and set(workers)=={'md','dft'}
+         and all(type(row) is dict and row.get('native_preflight_passed') is True
+                 and row.get('requirements_lock_sha256')==a.sha((ROOT/('workers/monomer_'+name+'_worker/requirements.lock')).read_bytes())
+                 and type(row.get('runtime_identity_sha256')) is str
+                 and re.fullmatch('[0-9a-f]{64}',row['runtime_identity_sha256'])
+                 for name,row in workers.items()),'native_worker_cpu_preflight_not_bound')
+    stamp=datetime.fromisoformat(value['at_utc'].replace('Z','+00:00'))
+    need(stamp.tzinfo is not None and 0<=(c.now()-stamp).total_seconds()<=900,
+         'native_worker_runtime_preflight_stale')
+
+
 def load(expected_hash):
     global CURRENT
     c.owner_only()
     raw,value=c.read_public(BINDING)
     fields={'schema_version','scope_id','source_sha','source_tree','image_id','dependency_lock','build_config',
         'cohort_sha256','cohort_device','cohort_inode','public_runtime_sha256','cpu_gate_sha256',
-        'original_mode_proof_sha256','resource_receipt_sha256','owner_sessions_receipt_sha256','candidate_manifest_sha256',
+        'original_mode_proof_sha256','resource_receipt_sha256','owner_sessions_receipt_sha256','worker_runtime_receipt_sha256','candidate_manifest_sha256',
         'root_guard_binding','root_provider_binding','retain_root_for_independent_md'}
     need(a.sha(raw)==expected_hash and set(value)==fields and value['schema_version']==1
          and value['scope_id']==a.SCOPE,'short_binding_not_exact_reviewed_document')
@@ -108,7 +127,7 @@ def load(expected_hash):
          'short_source_changed')
     c.git('diff','--quiet','--ignore-submodules','--');c.git('diff','--cached','--quiet','--ignore-submodules','--')
     for name in ['public_runtime_sha256','cpu_gate_sha256','original_mode_proof_sha256',
-                 'resource_receipt_sha256','owner_sessions_receipt_sha256','candidate_manifest_sha256','cohort_sha256']:
+                 'resource_receipt_sha256','owner_sessions_receipt_sha256','worker_runtime_receipt_sha256','candidate_manifest_sha256','cohort_sha256']:
         need(type(value[name]) is str and re.fullmatch('[0-9a-f]{64}',value[name]),'invalid_short_public_pin')
     need(value['retain_root_for_independent_md'] in {True,False},'invalid_root_retention_selection')
     cohort=DevGpuCohort.load(CONFIG,value['cohort_sha256'],repo_root=ROOT,
@@ -156,7 +175,8 @@ def require_short_budget(observed):
 
 
 def preflight(expected_hash):
-    load(expected_hash);require_short_budget(c.now());owner_gate();cpu=cpu_gate(n.COHORT);resource_gate();c.require_root(CURRENT)
+    load(expected_hash);require_short_budget(c.now());owner_gate();worker_runtime_gate()
+    cpu=cpu_gate(n.COHORT);resource_gate();c.require_root(CURRENT)
     a.require_transport_budget(now=c.now()) if CURRENT['retain_root_for_independent_md'] else None
     need(not (n.COHORT.runtime_root/'gpu-session/controller.json').exists(),'preexisting_private_gpu_session')
     before=n.primary_snapshot();configure_main_binding(before,live=True)
