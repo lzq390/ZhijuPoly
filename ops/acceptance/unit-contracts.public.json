@@ -69,7 +69,7 @@
         "CPUQuota": "25%",
         "MemoryMax": "268435456",
         "TasksMax": "64",
-        "EnvironmentFile": "/data/lzq/gith/nexpoly-acceptance-a-20261019/.runtime/acceptance-a-20261019/md-independent/worker.environment.private.env",
+        "EnvironmentFile": "/data/lzq/gith/nexpoly-gpu-interface-r2-20261014/.runtime/cohorts/r2-science-20261016-ab36-fix1/backend.auth.env",
         "ExecStopPost": "/usr/bin/python3 -I -B /data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_md_control.py cleanup"
       },
       "ExecStart": [
@@ -79,7 +79,9 @@
         "/data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_md_control.py",
         "watch"
       ],
-      "opaque_environment_exists_or_ready": false
+      "native_private_reference_metadata_pin_required": true,
+      "opaque_environment_exists": true,
+      "opaque_environment_runtime_validated": false
     },
     "nexpoly-r2-a-20261019-md.service": {
       "manager": "user",
@@ -98,7 +100,7 @@
         "CPUQuota": "100%",
         "MemoryMax": "1610612736",
         "TasksMax": "256",
-        "EnvironmentFile": "/data/lzq/gith/nexpoly-acceptance-a-20261019/.runtime/acceptance-a-20261019/md-independent/worker.environment.private.env",
+        "EnvironmentFile": "/data/lzq/gith/nexpoly-gpu-interface-r2-20261014/.runtime/cohorts/r2-science-20261016-ab36-fix1/backend.auth.env",
         "ExecStopPost": "/usr/bin/python3 -I -B /data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_md_control.py cleanup"
       },
       "ExecStart": [
@@ -108,7 +110,9 @@
         "/data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_md_control.py",
         "supervise"
       ],
-      "opaque_environment_exists_or_ready": false
+      "native_private_reference_metadata_pin_required": true,
+      "opaque_environment_exists": true,
+      "opaque_environment_runtime_validated": false
     },
     "nexpoly-r2-a-20261019-short-window.service": {
       "manager": "user",
@@ -205,6 +209,7 @@
     "The short controller creates only its fixed restore user unit, using the actual reviewed public binding hash and exact parent PID/start arguments.",
     "Angle-bracket fields are deliberately non-runnable until real action-time receipts exist; do not replace them with invented values.",
     "The private environment file is an owner/native-runtime dependency; this preparation neither creates nor reads it.",
-    "Root file install, finite guard and mode-0660 stop-only socket require the concrete action-time security approval."
+    "Root file install, finite guard and mode-0660 stop-only socket require the concrete action-time security approval.",
+    "The exact existing native acceptance auth file is referenced by path and metadata only. No credential byte is copied or read by preparation; native systemd/application consumers load it, and the runtime validates the fixed metadata pin and exact database before work."
   ]
 }

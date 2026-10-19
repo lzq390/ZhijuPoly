@@ -31,6 +31,17 @@ a later sudo cache. It has not been installed or enabled. The unprivileged
 owned old-manifest receipt. This is an explicit new stop permission boundary,
 not a feature of the old authorization by itself.
 
+The previous inventory API gave UID 1001 read-only inventory access. This new
+socket grants that UID a stop-only action against the guard's exact acceptance
+provider epoch. Other processes of the same UID can request that bounded stop;
+it is not authenticated by a secret token. The socket is not required by the
+scientific protocol, GPU inventory or ownership audit. Its purpose is early
+retirement without a second sudo interaction. The current short-window
+non-retention path and `root-stop` helper use it. A timer-only variant could
+omit this additional permission and rely on automatic deadline cleanup, but
+would need corresponding controller changes, a new source seal and review;
+simply skipping the socket in this candidate is not a valid activation.
+
 Use a transient guard unit with `Restart=no`, `RuntimeMaxSec=93600`,
 `TimeoutStopSec=300`, and a fixed `ExecStopPost` invoking the installed guard
 `cleanup`. Run as root with an empty capability set, `NoNewPrivileges=yes`,

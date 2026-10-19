@@ -1,5 +1,17 @@
 # Independent MD: prepared source, not a live admission
 
+The runtime may reference the one already provisioned native acceptance
+`backend.auth.env` in the old `r2-science-20261016-ab36-fix1` cohort. Preparation
+uses `O_PATH` metadata only and pins the exact path, owner, mode, single link,
+device/inode, size, mtime and ctime. No credential byte is copied, hashed,
+displayed or exported. The finite cohort schema permits this exception only
+for the exact new worktree and `r2-a-20261019` cohort; all other paths keep the
+previous confinement rule. Native Compose/systemd/application consumers load
+values at runtime. The independent controller verifies the metadata receipt
+before admission and still requires the exact acceptance database. File
+rotation or replacement fails closed. Metadata readiness does not prove DSN,
+role, ledger, schema or owner-session readiness, which remain native gates.
+
 `scripts/acceptance_md_control.py` defaults to the public dry-run plan. Its
 `seal`, `watch`, `supervise` and `cleanup` modes have not been executed. There is
 no new scientific PASS. Actual launch remains blocked until the action-time

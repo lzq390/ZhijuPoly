@@ -128,6 +128,7 @@ class DevGpuCohort:
     backend_resources: ScopeResourceLimits
     prior_backend: dict[str, str] | None
     systemd_inventory_provider: str = "legacy"
+    auth_env_reference: tuple[int, ...] | None = None
 
     @classmethod
     def load(cls, path: Path, sha256: str, *, repo_root: Path = REPO_ROOT,
@@ -159,14 +160,26 @@ class DevGpuCohort:
         keys = {"schema_version", "cohort_id", "repo_root", "source_sha", "source_tree",
                 "compose_project", "frontend_port", "backend_port", "auth_env_file",
                 "md_resources", "dft_resources", "backend_resources", "prior_backend"}
-        if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value["schema_version"] not in {1, 2}:
+        if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value["schema_version"] not in {1, 2, 3}:
             raise CohortError("cohort configuration schema differs")
         provider = "legacy"
-        if value["schema_version"] == 2:
+        if value["schema_version"] in {2, 3}:
             keys.add("systemd_inventory_provider")
             provider = value.get("systemd_inventory_provider")
             if provider != "root-unix-v1":
                 raise CohortError("cohort systemd inventory provider differs")
+        external_reference = None
+        if value["schema_version"] == 3:
+            from ops.acceptance import native_private_reference as reference
+            keys.add("auth_env_reference")
+            if (repo_root != reference.WORKTREE or value.get("cohort_id") != reference.COHORT_ID
+                    or value.get("auth_env_file") != str(reference.PRIVATE_PATH)):
+                raise CohortError("external native auth reference is outside the finite acceptance cohort")
+            try:
+                reference.verify(value.get("auth_env_reference"))
+            except (reference.ReferenceError, OSError, ValueError):
+                raise CohortError("native auth reference metadata changed") from None
+            external_reference = tuple(value["auth_env_reference"][key] for key in reference.FIELDS)
         if set(value) != keys:
             raise CohortError("cohort configuration schema differs")
         cohort_id = value["cohort_id"]
@@ -206,7 +219,8 @@ class DevGpuCohort:
                 raise CohortError("cohort auth environment path is invalid")
             auth_path = Path(auth)
             if (not auth_path.is_absolute() or str(auth_path) != os.path.normpath(str(auth_path))
-                    or not (auth_path == repo_root / ".env.dev.auth" or auth_path.is_relative_to(runtime_root))):
+                    or (external_reference is None
+                        and not (auth_path == repo_root / ".env.dev.auth" or auth_path.is_relative_to(runtime_root)))):
                 raise CohortError("cohort auth environment is outside its private configuration")
             if auth_path.name not in {".env.dev.auth", "backend.auth.env"}:
                 raise CohortError("cohort auth environment must use its native role filename")
@@ -225,7 +239,7 @@ class DevGpuCohort:
         return cls(path, sha256, *identity, repo_root, runtime_root, cohort_id,
                    value["source_sha"], value["source_tree"], project,
                    value["frontend_port"], value["backend_port"], auth_path,
-                   resources[0], resources[1], resources[2], prior, provider)
+                   resources[0], resources[1], resources[2], prior, provider, external_reference)
 
     @property
     def backend_image(self) -> str:

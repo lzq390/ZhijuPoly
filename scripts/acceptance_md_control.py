@@ -141,10 +141,11 @@ def load_activation(expected_hash,*,fresh=False):
     a.need(a.sha(raw)==expected_hash,'activation_review_pin_changed')
     fields={'schema_version','scope_id','at_utc','global_deadline_utc','source_sha','source_tree',
             'worker_inputs','main_restore','broker_binding','root_guard_binding','root_provider_binding',
-            'candidate_manifest_sha256','resource_receipt_sha256','owner_sessions_receipt_sha256','scientific_assets_receipt_sha256'}
+            'candidate_manifest_sha256','resource_receipt_sha256','owner_sessions_receipt_sha256','scientific_assets_receipt_sha256',
+            'native_private_reference_sha256'}
     a.need(set(value)==fields and value['schema_version']==1 and value['scope_id']==a.SCOPE
            and value['global_deadline_utc']=='2026-10-20T18:53:34Z','invalid_fixed_activation')
-    for key in ['candidate_manifest_sha256','resource_receipt_sha256','owner_sessions_receipt_sha256','scientific_assets_receipt_sha256']:
+    for key in ['candidate_manifest_sha256','resource_receipt_sha256','owner_sessions_receipt_sha256','scientific_assets_receipt_sha256','native_private_reference_sha256']:
         a.need(type(value[key]) is str and re.fullmatch('[0-9a-f]{64}',value[key]),'missing_review_receipt_pin')
     a.need(value['source_sha']==git('rev-parse','HEAD') and value['source_tree']==git('rev-parse','HEAD^{tree}'),
            'attachment_source_changed')
@@ -153,6 +154,13 @@ def load_activation(expected_hash,*,fresh=False):
            and value['worker_inputs']['source_tree']==value['source_tree'],'worker_source_differs')
     lock='sha256:'+a.sha((a.ROOT/'workers/monomer_md_worker/requirements.lock').read_bytes())
     a.need(value['worker_inputs']['worker_lock_sha256']==lock,'worker_lock_changed')
+    private_raw,private_reference=read_public(a.ROOT/'.runtime/acceptance-a-20261019/native-private-reference.public.json')
+    from ops.acceptance import native_private_reference as reference
+    a.need(a.sha(private_raw)==value['native_private_reference_sha256']
+           and private_reference.get('source_sha')==value['source_sha']
+           and private_reference.get('source_tree')==value['source_tree'],
+           'native_private_reference_receipt_changed')
+    reference.verify(private_reference.get('reference'))
     for name,key in [('resources.public.json','resource_receipt_sha256'),('owner-sessions.public.json','owner_sessions_receipt_sha256'),('scientific-assets.public.json','scientific_assets_receipt_sha256')]:
         r,d=read_public(a.RUNTIME/name)
         a.need(a.sha(r)==value[key] and d.get('scope_id')==a.SCOPE and d.get('admitted') is True,
