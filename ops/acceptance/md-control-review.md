@@ -12,6 +12,14 @@ before admission and still requires the exact acceptance database. File
 rotation or replacement fails closed. Metadata readiness does not prove DSN,
 role, ledger, schema or owner-session readiness, which remain native gates.
 
+The short private cohort already uses the native session-specific
+`monomer-md-dev-<session>` worker ID. Its cancellation reconciliation is also
+restricted to that worker, using the exact new cohort job root, real/development
+Broker identity and exact acceptance database. Other worker roots keep their
+previous behavior. The original native orphan-failure query already filters
+worker ID; neither path may update another worker's rows. This source fix has
+not been exercised against a real task database or running worker.
+
 `scripts/acceptance_md_control.py` defaults to the public dry-run plan. Its
 `seal`, `watch`, `supervise` and `cleanup` modes have not been executed. There is
 no new scientific PASS. Actual launch remains blocked until the action-time

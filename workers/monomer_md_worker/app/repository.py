@@ -593,7 +593,7 @@ class PostgresJobRepository:
             sql.Identifier(settings.status_column),
         )
         parameters = ("Cancellation completed while recovering the monomer MD worker.",)
-        if settings.acceptance_attachment_id:
+        if settings.acceptance_cancel_recovery_scoped:
             query += sql.SQL(' AND {} = %s').format(sql.Identifier(settings.worker_id_column))
             parameters += (settings.worker_id,)
         if metering_enabled() or ne.enabled():

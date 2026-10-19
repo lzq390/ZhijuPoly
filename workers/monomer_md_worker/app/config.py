@@ -3,6 +3,7 @@ from __future__ import annotations
 from gpu_resource.transient_scope import ScopeResourceLimits, scope_resource_limits_from_environment
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -133,6 +134,22 @@ class WorkerSettings:
                     raise ValueError
             except Exception:
                 raise ValueError('Independent acceptance MD requires the exact acceptance database') from None
+        if self.job_root == Path('/data/lzq/gith/nexpoly-acceptance-a-20261019/.runtime/cohorts/r2-a-20261019/md-runs'):
+            if (not re.fullmatch(r'monomer-md-dev-[0-9a-f]{32}', self.worker_id)
+                    or self.mode != 'real' or not self.gpu_broker_enabled
+                    or self.gpu_broker_environment != 'dev' or not self.app_postgres_dsn):
+                raise ValueError('Short acceptance MD requires its native session worker identity')
+            from psycopg.conninfo import conninfo_to_dict
+            try:
+                if conninfo_to_dict(self.app_postgres_dsn).get('dbname') != 'nexpoly_accept_r2_1c55866ff0e4':
+                    raise ValueError
+            except Exception:
+                raise ValueError('Short acceptance MD requires the exact acceptance database') from None
+
+    @property
+    def acceptance_cancel_recovery_scoped(self) -> bool:
+        return bool(self.acceptance_attachment_id) or self.job_root == Path(
+            '/data/lzq/gith/nexpoly-acceptance-a-20261019/.runtime/cohorts/r2-a-20261019/md-runs')
 
     @property
     def db_configured(self) -> bool:

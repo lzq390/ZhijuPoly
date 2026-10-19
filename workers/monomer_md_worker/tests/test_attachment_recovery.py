@@ -2,6 +2,7 @@
 from dataclasses import replace
 import hashlib
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -124,3 +125,26 @@ def test_overflowing_history_is_not_truncated_into_release_proof(monkeypatch, tm
     repository, _ = repository_fixture(monkeypatch, tmp_path, [(str(index),) for index in range(65)])
     with pytest.raises(RuntimeError, match='finite scope'):
         repository.recovery_job_ids()
+
+
+def test_short_cohort_cancel_recovery_is_also_exact_worker(monkeypatch,tmp_path):
+    repository,calls=repository_fixture(monkeypatch,tmp_path)
+    worker='monomer-md-dev-'+'a'*32
+    short_root=Path('/data/lzq/gith/nexpoly-acceptance-a-20261019/.runtime/cohorts/r2-a-20261019/md-runs')
+    repository._settings=replace(repository._settings,worker_id=worker,acceptance_attachment_id=None,job_root=short_root)
+    assert repository._settings.acceptance_cancel_recovery_scoped
+    repository.reconcile_cancel_requested_jobs()
+    statement,parameters=calls[0]
+    assert 'AND "worker_id" = %s' in statement and parameters[-1]==worker
+
+
+def test_short_cohort_recovery_requires_native_identity_and_exact_database(tmp_path):
+    base=_settings(tmp_path)
+    valid=dict(mode='real',gpu_broker_enabled=True,gpu_broker_environment='dev',
+        worker_id='monomer-md-dev-'+'a'*32,job_root=Path('/data/lzq/gith/nexpoly-acceptance-a-20261019/.runtime/cohorts/r2-a-20261019/md-runs'),
+        app_postgres_dsn='postgresql://unit@invalid/nexpoly_accept_r2_1c55866ff0e4')
+    assert replace(base,**valid).acceptance_cancel_recovery_scoped
+    for changes in [{'worker_id':'main-worker'},{'mode':'dry-run'},{'gpu_broker_environment':'prod'},
+                    {'app_postgres_dsn':'postgresql://unit@invalid/production'}]:
+        with pytest.raises(ValueError):replace(base,**(valid|changes))
+    assert not base.acceptance_cancel_recovery_scoped
