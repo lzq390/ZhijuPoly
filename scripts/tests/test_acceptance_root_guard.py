@@ -24,7 +24,7 @@ def materials():
     return before, candidate, request
 
 
-@pytest.mark.parametrize('enabled',[None,False,True])
+@pytest.mark.parametrize('enabled',[None,False])
 def test_serve_creates_owner_stop_mailbox_only_after_explicit_opt_in(monkeypatch,enabled):
     before,candidate,request=materials()
     if enabled is not None:request['owner_stop_enabled']=enabled
@@ -42,7 +42,7 @@ def test_serve_creates_owner_stop_mailbox_only_after_explicit_opt_in(monkeypatch
         def __enter__(self):return self
         def __exit__(self,*args):pass
     monkeypatch.setattr(g,'root_only',lambda:None)
-    monkeypatch.setattr(g,'os',SimpleNamespace(getegid=lambda:1001))
+    monkeypatch.setattr(g,'os',SimpleNamespace(getegid=lambda:0))
     monkeypatch.setattr(g,'read_root',lambda path:roots[path])
     monkeypatch.setattr(g,'RootIO',lambda received:io)
     monkeypatch.setattr(g,'write_new',lambda *args,**kwargs:None)
@@ -56,7 +56,7 @@ def test_serve_creates_owner_stop_mailbox_only_after_explicit_opt_in(monkeypatch
     assert calls.count('start')==1 and calls.count('monitored')==1
 
 
-@pytest.mark.parametrize('value',[1,'false',None])
+@pytest.mark.parametrize('value',[True,1,'false',None])
 def test_owner_stop_permission_requires_an_explicit_boolean(value):
     request=materials()[2]
     with pytest.raises(g.GuardError):g.validate_request(dict(request,owner_stop_enabled=value))

@@ -18,7 +18,7 @@
         "StandardOutput": "null",
         "StandardError": "journal",
         "User": "root",
-        "Group": "1001",
+        "Group": "0",
         "RuntimeMaxSec": "93600",
         "CPUQuota": "10%",
         "MemoryMax": "134217728",
@@ -51,7 +51,8 @@
         "serve"
       ],
       "security_review_required": true,
-      "owner_stop_enabled_by_default": false
+      "owner_stop_enabled_by_default": false,
+      "owner_stop_interface_supported": false
     },
     "nexpoly-r2-a-20261019-md-audit.service": {
       "manager": "user",
@@ -212,6 +213,7 @@
     "The private environment file is an owner/native-runtime dependency; this preparation neither creates nor reads it.",
     "Root file install, finite guard and mode-0660 stop-only socket require the concrete action-time security approval.",
     "The exact existing native acceptance auth file is referenced by path and metadata only. No credential byte is copied or read by preparation; native systemd/application consumers load it, and the runtime validates the fixed metadata pin and exact database before work.",
-    "Default Root request is timer-only and grants no UID-1001 stop socket. An optional owner_stop_enabled=true request has its own review hash and is an additional, unnecessary-for-science permission. Timer-only Root remains charged until its fixed deadline."
+    "Default Root request is timer-only and grants no UID-1001 stop socket. An optional owner_stop_enabled=true request has its own review hash and is an additional, unnecessary-for-science permission. Timer-only Root remains charged until its fixed deadline.",
+    "The current candidate rejects owner_stop_enabled=true and never creates the owner-stop socket. Guard actions require UID/GID 0:0, preserving the original root:root 0644 manifest on CAS restore. An early-stop interface would require a separate new source review."
   ]
 }

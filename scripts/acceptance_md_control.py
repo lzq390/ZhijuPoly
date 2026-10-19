@@ -499,36 +499,8 @@ def watch():
 
 
 def root_stop_only():
-    """Request only this already approved finite guard's stop/restore action."""
-    owner_only()
-    _,plan=read_public(ROOT_PLAN,root_owned=True)
-    a.need(plan.get('owner_stop_enabled') is True,'owner_root_stop_permission_not_granted_timer_only')
-    a.need(plan.get('scope_id')==a.SCOPE and plan.get('source_sha')==git('rev-parse','HEAD')
-           and plan.get('source_tree')==git('rev-parse','HEAD^{tree}')
-           and plan.get('guard_sha256')==a.sha((a.ROOT/'ops/acceptance/root_guard.py').read_bytes()),
-           'root_stop_campaign_pin_changed')
-    path=ROOT_PLAN.parent/'stop.sock';st=path.lstat()
-    a.need(stat.S_ISSOCK(st.st_mode) and st.st_uid==0 and st.st_gid==1001
-           and stat.S_IMODE(st.st_mode)==0o660,'unsafe_root_stop_socket')
-    body=json.dumps({'operation':'stop_restore','scope_id':a.SCOPE,
-                     'candidate_manifest_sha256':plan['candidate_manifest_sha256']}).encode()
-    with socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM) as connection:
-        connection.settimeout(3);connection.sendto(body,str(path))
-    deadline=time.monotonic()+40
-    while time.monotonic()<deadline:
-        root=unit_state(ROOT_PROVIDER_UNIT,system=True)
-        if root['MainPID']=='0' and root['ActiveState'] in {'inactive','failed'}:
-            try:
-                _,result=read_public(ROOT_PLAN.parent/'result.public.json',root_owned=True)
-                raw,_=read_public(ROOT_MANIFEST,root_owned=True)
-                a.need(result.get('status')=='ROOT_STOPPED_OLD_MANIFEST_RESTORED'
-                       and result.get('candidate_manifest_sha256')==plan['candidate_manifest_sha256']
-                       and a.sha(raw)=='fb31f3f4d958a0227fb7081bade119bb5a7922de434fec0f4b0578a7788a1f5f',
-                       'root_restore_receipt_unconfirmed')
-                return
-            except FileNotFoundError:pass
-        time.sleep(.5)
-    raise a.AttachmentError('finite_root_stop_or_rollback_unconfirmed')
+    """The selected timer-only candidate grants no owner-stop interface."""
+    raise a.AttachmentError('owner_root_stop_interface_disabled_timer_only')
 
 
 def main():

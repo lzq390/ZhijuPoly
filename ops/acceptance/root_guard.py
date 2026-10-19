@@ -93,6 +93,7 @@ def validate_request(request):
               'candidate_manifest_sha256', 'guard_sha256', 'global_deadline_utc'}
     need(set(request) in (fields, fields | {'owner_stop_enabled'})
          and type(request.get('owner_stop_enabled', False)) is bool
+         and request.get('owner_stop_enabled', False) is False
          and request['schema_version'] == 1 and request['scope_id'] == SCOPE,
          'invalid_fixed_guard_request')
     for key, count in [('source_sha', 40), ('source_tree', 40),
@@ -223,7 +224,7 @@ def exclusive_lock():
 
 
 def root_only():
-    need(os.geteuid() == 0 and Path(__file__).absolute() == INSTALL/'guard.py',
+    need(os.geteuid() == os.getegid() == 0 and Path(__file__).absolute() == INSTALL/'guard.py',
          'only_the_reviewed_root_owned_installation_may_execute')
     raw = read_root(INSTALL/'guard.py')
     request = document(read_root(INSTALL/'request.json'))
@@ -418,7 +419,7 @@ def seal():
 
 def serve():
     root_only()
-    need(os.getegid() == 1001, 'reviewed_guard_group_required')
+    need(os.getegid() == 0, 'reviewed_guard_group_required')
     plan = document(read_root(RUNTIME/'plan.json'))
     request = document(read_root(INSTALL/'request.json'))
     validate_plan(plan, request)
@@ -441,11 +442,7 @@ def serve():
     need(state['MainPID'] != '0' and re.fullmatch('[0-9a-f]{32}', state['InvocationID']),
          'provider_start_unconfirmed')
     write_new(RUNTIME/'provider-owned.json', json.dumps(state, sort_keys=True).encode())
-    if plan.get('owner_stop_enabled', False):
-        with StopMailbox(plan) as mailbox:
-            monitor_until_deadline(plan, io, state, boot, mailbox)
-    else:
-        monitor_until_deadline(plan, io, state, boot)
+    monitor_until_deadline(plan, io, state, boot)
 
 
 def monitor_until_deadline(plan, io, state, boot, mailbox=None):
@@ -485,6 +482,7 @@ def describe():
         'owner_stop_socket':str(RUNTIME/'stop.sock'),'owner_stop_socket_uid':1001,
         'owner_stop_operation':'stop_restore_only_no_arbitrary_command',
         'owner_stop_enabled_by_default':False,
+        'owner_stop_interface_supported_by_this_candidate':False,
         'timer_only_requires_retention_until_fixed_deadline':True,
         'execution_limit_seconds': EXECUTION_SECONDS, 'stop_reserve_seconds': STOP_RESERVE_SECONDS,
         'global_deadline_utc': '2026-10-20T18:53:34Z', 'sudoers_changes': False,

@@ -38,16 +38,14 @@ The short window must explicitly retain Root for the approved independent MD
 phase; a non-retaining short binding is rejected before touching Main unless
 the separate owner-stop permission was explicitly selected.
 
-An optional request can set `owner_stop_enabled=true`. Only that additional
-approval creates `/run/nexpoly-r2-acceptance-20261019/stop.sock`, root:1001 0660,
-Unix datagram with kernel SCM_CREDENTIALS. It accepts UID/GID 1001:1001, positive
-PID, fixed scope/candidate and stop_restore only. There is no secret token;
-other processes of that UID can request the bounded early stop. This is a new
-permission relative to the previous read-only inventory API. It is not needed
-for scientific correctness or inventory, and is not part of the default
-request. The supplied optional request has a separate exact hash; no arbitrary
-unit/start/exec action is accepted. The CLI root-stop helper refuses timer-only
-plans before looking for a socket.
+The earlier stop-only socket proposal is withdrawn from this candidate.
+`owner_stop_enabled=true` is rejected and serve never creates a mailbox.
+UID 1001 receives no new root-stop permission. Guard actions require UID/GID
+0:0, including ExecStopPost, so the original manifest's root:root 0644 metadata
+is preserved along with the exact byte hash. The root-stop CLI refuses the
+operation. Earlier optional request files are obsolete and are not part of the
+current packet. Early retirement without another owner-root action would need
+a separately reviewed source variant; it is not scientifically necessary.
 
 Cleanup retains inert installation files and public receipts. No recursive
 uninstall or reboot enablement occurs. Reboot recovery requires owner action
