@@ -176,7 +176,9 @@ def require_short_budget(observed):
 
 def preflight(expected_hash):
     load(expected_hash);require_short_budget(c.now());owner_gate();worker_runtime_gate()
-    cpu=cpu_gate(n.COHORT);resource_gate();c.require_root(CURRENT)
+    cpu=cpu_gate(n.COHORT);resource_gate();root_plan=c.require_root(CURRENT)
+    need(CURRENT['retain_root_for_independent_md'] or root_plan.get('owner_stop_enabled') is True,
+         'timer_only_Root_requires_explicit_retention_until_deadline')
     a.require_transport_budget(now=c.now()) if CURRENT['retain_root_for_independent_md'] else None
     need(not (n.COHORT.runtime_root/'gpu-session/controller.json').exists(),'preexisting_private_gpu_session')
     before=n.primary_snapshot();configure_main_binding(before,live=True)

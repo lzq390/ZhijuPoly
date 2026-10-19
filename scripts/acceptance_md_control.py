@@ -502,6 +502,7 @@ def root_stop_only():
     """Request only this already approved finite guard's stop/restore action."""
     owner_only()
     _,plan=read_public(ROOT_PLAN,root_owned=True)
+    a.need(plan.get('owner_stop_enabled') is True,'owner_root_stop_permission_not_granted_timer_only')
     a.need(plan.get('scope_id')==a.SCOPE and plan.get('source_sha')==git('rev-parse','HEAD')
            and plan.get('source_tree')==git('rev-parse','HEAD^{tree}')
            and plan.get('guard_sha256')==a.sha((a.ROOT/'ops/acceptance/root_guard.py').read_bytes()),

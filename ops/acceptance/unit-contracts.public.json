@@ -50,7 +50,8 @@
         "/usr/local/lib/nexpoly-r2-acceptance-guard/guard.py",
         "serve"
       ],
-      "security_review_required": true
+      "security_review_required": true,
+      "owner_stop_enabled_by_default": false
     },
     "nexpoly-r2-a-20261019-md-audit.service": {
       "manager": "user",
@@ -210,6 +211,7 @@
     "Angle-bracket fields are deliberately non-runnable until real action-time receipts exist; do not replace them with invented values.",
     "The private environment file is an owner/native-runtime dependency; this preparation neither creates nor reads it.",
     "Root file install, finite guard and mode-0660 stop-only socket require the concrete action-time security approval.",
-    "The exact existing native acceptance auth file is referenced by path and metadata only. No credential byte is copied or read by preparation; native systemd/application consumers load it, and the runtime validates the fixed metadata pin and exact database before work."
+    "The exact existing native acceptance auth file is referenced by path and metadata only. No credential byte is copied or read by preparation; native systemd/application consumers load it, and the runtime validates the fixed metadata pin and exact database before work.",
+    "Default Root request is timer-only and grants no UID-1001 stop socket. An optional owner_stop_enabled=true request has its own review hash and is an additional, unnecessary-for-science permission. Timer-only Root remains charged until its fixed deadline."
   ]
 }

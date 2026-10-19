@@ -91,7 +91,9 @@ def validate_manifests(before, candidate, request):
 def validate_request(request):
     fields = {'schema_version', 'scope_id', 'source_sha', 'source_tree',
               'candidate_manifest_sha256', 'guard_sha256', 'global_deadline_utc'}
-    need(set(request) == fields and request['schema_version'] == 1 and request['scope_id'] == SCOPE,
+    need(set(request) in (fields, fields | {'owner_stop_enabled'})
+         and type(request.get('owner_stop_enabled', False)) is bool
+         and request['schema_version'] == 1 and request['scope_id'] == SCOPE,
          'invalid_fixed_guard_request')
     for key, count in [('source_sha', 40), ('source_tree', 40),
                        ('candidate_manifest_sha256', 64), ('guard_sha256', 64)]:
@@ -439,12 +441,21 @@ def serve():
     need(state['MainPID'] != '0' and re.fullmatch('[0-9a-f]{32}', state['InvocationID']),
          'provider_start_unconfirmed')
     write_new(RUNTIME/'provider-owned.json', json.dumps(state, sort_keys=True).encode())
-    with StopMailbox(plan) as mailbox:
-        while remaining(plan, now=datetime.now(timezone.utc), monotonic=time.monotonic(), boot_id=boot) > STOP_RESERVE_SECONDS:
-            need(io.state() == state, 'provider_epoch_changed')
-            need(digest(io.manifest()) == plan['candidate_manifest_sha256'], 'running_manifest_changed')
-            if mailbox.requested():
-                return
+    if plan.get('owner_stop_enabled', False):
+        with StopMailbox(plan) as mailbox:
+            monitor_until_deadline(plan, io, state, boot, mailbox)
+    else:
+        monitor_until_deadline(plan, io, state, boot)
+
+
+def monitor_until_deadline(plan, io, state, boot, mailbox=None):
+    while remaining(plan, now=datetime.now(timezone.utc), monotonic=time.monotonic(), boot_id=boot) > STOP_RESERVE_SECONDS:
+        need(io.state() == state, 'provider_epoch_changed')
+        need(digest(io.manifest()) == plan['candidate_manifest_sha256'], 'running_manifest_changed')
+        if mailbox is not None:
+            if mailbox.requested():return
+        else:
+            time.sleep(.5)
 
 
 def cleanup():
@@ -473,6 +484,8 @@ def describe():
         'manifest_target': str(MANIFEST), 'original_modules': sorted(MODULES),
         'owner_stop_socket':str(RUNTIME/'stop.sock'),'owner_stop_socket_uid':1001,
         'owner_stop_operation':'stop_restore_only_no_arbitrary_command',
+        'owner_stop_enabled_by_default':False,
+        'timer_only_requires_retention_until_fixed_deadline':True,
         'execution_limit_seconds': EXECUTION_SECONDS, 'stop_reserve_seconds': STOP_RESERVE_SECONDS,
         'global_deadline_utc': '2026-10-20T18:53:34Z', 'sudoers_changes': False,
         'user_code_executed_as_root': False, 'default_mode': 'describe'}

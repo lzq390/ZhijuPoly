@@ -1,78 +1,57 @@
-# Finite inventory guard: action-time review required
+# Finite inventory guard: exact action-time review required
 
-This source is preparation only. The default command prints the boundary. No
-root installation, unit creation, provider start, or manifest change has run.
+Preparation only. No root installation, unit creation, manifest change or
+provider start has executed. The default request is timer-only and creates no
+owner-stop socket or new UID-1001 stop permission.
 
-The sole controlled unit is `nexpoly-gpu-systemd-inventory.service`; this is the
-root inventory provider, not a GPU Main service. The original unit and nine
-installed Python modules must retain their recorded hashes. Only its manifest
-source commit/tree pointer may change, using a stopped-service double-check and
-atomic compare-and-swap. No user source is imported by the root guard.
+Only `nexpoly-gpu-systemd-inventory.service` is controlled. Its original unit
+and nine root-installed modules retain their exact recorded hashes. Only the
+manifest source commit/tree pointer changes, with a stopped-service double
+check and atomic CAS. No user-writable source is imported as root.
 
-At action time the reviewer must approve the exact guard hash, request hash,
-candidate and old manifest hashes, source commit/tree, and an exclusive start
-window for the fixed inventory provider. A root-owned start intent admits only
-the candidate manifest and a native activation within 20 seconds if the guard
-dies before recording the InvocationID. After binding, any changed PID,
-InvocationID or start timestamp is unowned and cleanup refuses to stop it.
-An independent administrator starting this same fixed provider within that
-20-second window cannot be distinguished; exclusive ownership of that window
-is therefore a necessary action-time condition, not an offline test claim.
+The review packet pins guard, request, candidate/old manifest, source commit,
+source tree and the complete transient unit properties. Copy the three reviewed
+public files to the fixed new root-owned installation, verify the copied
+hashes, then execute only those installed bytes. No sudoers, firewall, Main
+unit or boot-enable change is included. Existing campaign seals cannot reset.
 
-The security review must also explicitly approve the new stop-only Unix
-datagram socket `/run/nexpoly-r2-acceptance-20261019/stop.sock`, owned root:1001
-with mode 0660. Kernel `SCM_CREDENTIALS` must report UID/GID 1001:1001 and a
-positive PID. The only accepted document is the fixed scope, candidate manifest
-hash and `operation=stop_restore`; arbitrary units, start/exec, other peers,
-duplicate fields and oversized messages are rejected. There is no caller code
-or command argument to execute as root. This permits early retirement without
-a later sudo cache. It has not been installed or enabled. The unprivileged
-`acceptance_md_control.py root-stop` requests this action and checks the root-
-owned old-manifest receipt. This is an explicit new stop permission boundary,
-not a feature of the old authorization by itself.
+A root-owned 20-second start intent covers a crash before InvocationID binding.
+The provider activation window must be exclusive: another administrator
+starting the same fixed provider within that window cannot be distinguished.
+After binding, PID/InvocationID/start timestamp changes are unowned; cleanup
+refuses to stop that epoch.
 
-The previous inventory API gave UID 1001 read-only inventory access. This new
-socket grants that UID a stop-only action against the guard's exact acceptance
-provider epoch. Other processes of the same UID can request that bounded stop;
-it is not authenticated by a secret token. The socket is not required by the
-scientific protocol, GPU inventory or ownership audit. Its purpose is early
-retirement without a second sudo interaction. The current short-window
-non-retention path and `root-stop` helper use it. A timer-only variant could
-omit this additional permission and rely on automatic deadline cleanup, but
-would need corresponding controller changes, a new source seal and review;
-simply skipping the socket in this candidate is not a valid activation.
+The reviewed unit is finite: RuntimeMaxSec=93600, TimeoutStopSec=300, Restart=no,
+fixed ExecStopPost cleanup, CPUQuota=10%, MemoryMax=128MiB, swap=0, TasksMax=32,
+empty capability sets, NoNewPrivileges, PrivateNetwork/Devices/Tmp,
+ProtectSystem=strict, ProtectHome and AF_UNIX only. The only writable paths are
+the fixed provider directory, new guard installation and new runtime directory.
+Directory writes support manifest CAS; module hashes are checked before/after.
 
-Use a transient guard unit with `Restart=no`, `RuntimeMaxSec=93600`,
-`TimeoutStopSec=300`, and a fixed `ExecStopPost` invoking the installed guard
-`cleanup`. Run as root with an empty capability set, `NoNewPrivileges=yes`,
-`PrivateNetwork=yes`, `RestrictAddressFamilies=AF_UNIX`, `ProtectSystem=strict`,
-`ProtectHome=yes`, `PrivateTmp=yes`, `MemoryMax=128M`, `CPUQuota=10%`,
-`TasksMax=32`. The only writable paths are the fixed provider directory, the
-new guard installation directory and its new `/run` directory. Directory write
-permission is needed for manifest rename; the guard validates all nine module
-hashes before and after and never writes a module. The original unit, sudoers,
-firewall and Main services are not modified. There is no boot enablement.
+The one-shot plan permits 93900 seconds including the stop reserve and cannot
+pass 2026-10-20T18:53:34Z. Normal exit, interruption, startup failure and timeout
+invoke root-owned cleanup without another sudo interaction. It stops only the
+owned provider epoch and restores the exact old manifest. Conflicts fail
+closed. In the default timer-only plan, successful tests do not trigger early
+retirement: this auxiliary provider remains charged until the fixed deadline.
+The short window must explicitly retain Root for the approved independent MD
+phase; a non-retaining short binding is rejected before touching Main unless
+the separate owner-stop permission was explicitly selected.
 
-Install the three public reviewed files (`guard.py`, `request.json`,
-`manifest.candidate.json`) into the fixed new root-owned directory with native
-`install`, then verify the copied bytes against the review packet before
-executing them. Never execute the user-writable copy through sudo. `seal` refuses
-an existing campaign seal or active provider. `serve` is one-shot and the lock
-prevents overlapping actions. The execution limit is 93,900 seconds, including
-300 seconds reserved for shutdown, and cannot exceed the approval's fixed UTC
-deadline. Re-sealing or resetting a campaign is forbidden.
+An optional request can set `owner_stop_enabled=true`. Only that additional
+approval creates `/run/nexpoly-r2-acceptance-20261019/stop.sock`, root:1001 0660,
+Unix datagram with kernel SCM_CREDENTIALS. It accepts UID/GID 1001:1001, positive
+PID, fixed scope/candidate and stop_restore only. There is no secret token;
+other processes of that UID can request the bounded early stop. This is a new
+permission relative to the previous read-only inventory API. It is not needed
+for scientific correctness or inventory, and is not part of the default
+request. The supplied optional request has a separate exact hash; no arbitrary
+unit/start/exec action is accepted. The CLI root-stop helper refuses timer-only
+plans before looking for a socket.
 
-On normal exit, interruption, startup failure or RuntimeMaxSec, systemd invokes
-the fixed cleanup command without needing a sudo cache. Cleanup stops only the
-owned provider epoch and restores the exact old manifest. A conflicting hash,
-unowned epoch or changed fixed module produces a precise fail-closed blocker
-instead of overwriting another actor's work. This is not a guarantee against
-an administrator changing root files or a machine power failure.
-
-After reboot the non-enabled provider and transient guard must remain stopped;
-the persistent root-owned backup and recovery request allow the same reviewed
-cleanup command to restore the manifest. Reboot recovery has not been exercised
-and requires an owner action. The fixed inactive installation and public
-receipts remain for review after cleanup; no recursive deletion or automatic
-uninstall is performed. This retained inert installation must be disclosed in
-the final resource inventory. Do not claim automatic uninstall or reboot PASS.
+Cleanup retains inert installation files and public receipts. No recursive
+uninstall or reboot enablement occurs. Reboot recovery requires owner action
+with the reviewed root-owned cleanup command and is not tested. No guarantee
+is claimed against root-file modification or power failure. Root inactive,
+old-manifest rollback and unchanged modules/unit must be observed before final
+resource retirement is declared.

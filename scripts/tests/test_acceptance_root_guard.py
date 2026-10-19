@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,55 @@ def materials():
         candidate_manifest_sha256=g.digest(candidate), guard_sha256='c'*64,
         global_deadline_utc='2026-10-20T18:53:34Z')
     return before, candidate, request
+
+
+@pytest.mark.parametrize('enabled',[None,False,True])
+def test_serve_creates_owner_stop_mailbox_only_after_explicit_opt_in(monkeypatch,enabled):
+    before,candidate,request=materials()
+    if enabled is not None:request['owner_stop_enabled']=enabled
+    guard_bytes=b'public fake reviewed guard'
+    request['guard_sha256']=g.digest(guard_bytes)
+    plan=g.deadline_plan(request,now=NOW,monotonic=100,boot_id=BOOT)
+    roots={g.RUNTIME/'plan.json':json.dumps(plan).encode(),g.INSTALL/'request.json':json.dumps(request).encode(),
+        g.INSTALL/'guard.py':guard_bytes,g.INSTALL/'manifest.candidate.json':candidate}
+    calls=[]
+    state={'MainPID':'1','InvocationID':'a'*32}
+    io=SimpleNamespace(verify_fixed_files=lambda:None,backup=lambda:before,
+        replace=lambda *args,**kwargs:None,state=lambda:state)
+    class Mailbox:
+        def __init__(self,received):calls.append('mailbox-created')
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+    monkeypatch.setattr(g,'root_only',lambda:None)
+    monkeypatch.setattr(g,'os',SimpleNamespace(getegid=lambda:1001))
+    monkeypatch.setattr(g,'read_root',lambda path:roots[path])
+    monkeypatch.setattr(g,'RootIO',lambda received:io)
+    monkeypatch.setattr(g,'write_new',lambda *args,**kwargs:None)
+    monkeypatch.setattr(g,'boot_identity',lambda:BOOT)
+    monkeypatch.setattr(g,'time',SimpleNamespace(monotonic=lambda:100))
+    monkeypatch.setattr(g,'systemctl',lambda action:calls.append(action))
+    monkeypatch.setattr(g,'StopMailbox',Mailbox)
+    monkeypatch.setattr(g,'monitor_until_deadline',lambda *args:calls.append('monitored'))
+    g.serve()
+    assert ('mailbox-created' in calls) is (enabled is True)
+    assert calls.count('start')==1 and calls.count('monitored')==1
+
+
+@pytest.mark.parametrize('value',[1,'false',None])
+def test_owner_stop_permission_requires_an_explicit_boolean(value):
+    request=materials()[2]
+    with pytest.raises(g.GuardError):g.validate_request(dict(request,owner_stop_enabled=value))
+
+
+def test_timer_only_monitor_expires_without_a_socket_or_owner_message(monkeypatch):
+    ticks=iter([301,0])
+    sleeps=[]
+    raw=b'public candidate'
+    io=SimpleNamespace(state=lambda:{'epoch':'owned'},manifest=lambda:raw)
+    monkeypatch.setattr(g,'remaining',lambda *args,**kwargs:next(ticks))
+    monkeypatch.setattr(g.time,'sleep',lambda seconds:sleeps.append(seconds))
+    g.monitor_until_deadline({'candidate_manifest_sha256':g.digest(raw)},io,{'epoch':'owned'},BOOT)
+    assert sleeps==[.5]
 
 
 def test_exact_manifest_change_preserves_all_nine_root_modules():
