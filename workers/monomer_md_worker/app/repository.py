@@ -542,6 +542,24 @@ class PostgresJobRepository:
                 cur.execute(query, (settings.lease_seconds, job_ids, worker_instance_id))
                 return cur.rowcount or 0
 
+    def recovery_job_ids(self) -> tuple[str, ...]:
+        """Bounded exact-worker history, including terminal jobs with stale leases."""
+        if not self._settings.acceptance_attachment_id:
+            raise RuntimeError('Exact recovery inventory is acceptance-only')
+        if psycopg is None or sql is None or not self._settings.db_configured:
+            raise RuntimeError('Exact recovery inventory requires its application database')
+        settings = self._settings
+        query = sql.SQL('SELECT {} FROM {} WHERE {} = %s ORDER BY {} LIMIT 65').format(
+            sql.Identifier(settings.job_id_column), _qualified_identifier(settings.job_table),
+            sql.Identifier(settings.worker_id_column), sql.Identifier(settings.job_id_column))
+        with psycopg.connect(settings.app_postgres_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (settings.worker_id,))
+                rows = cur.fetchall()
+        if len(rows) > 64:
+            raise RuntimeError('Exact recovery inventory exceeds the approved finite scope')
+        return tuple(str(row[0]) for row in rows)
+
     def reconcile_orphaned_jobs(self, worker_instance_id: str) -> int:
         if not self._settings.db_configured:
             return 0
@@ -574,13 +592,17 @@ class PostgresJobRepository:
             sql.Identifier(settings.heartbeat_at_column),
             sql.Identifier(settings.status_column),
         )
+        parameters = ("Cancellation completed while recovering the monomer MD worker.",)
+        if settings.acceptance_attachment_id:
+            query += sql.SQL(' AND {} = %s').format(sql.Identifier(settings.worker_id_column))
+            parameters += (settings.worker_id,)
         if metering_enabled() or ne.enabled():
             query += sql.SQL(" RETURNING ") + self._usage_columns()
         with psycopg.connect(settings.app_postgres_dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     query,
-                    ("Cancellation completed while recovering the monomer MD worker.",),
+                    parameters,
                 )
                 count = cur.rowcount or 0
                 if metering_enabled() or ne.enabled():

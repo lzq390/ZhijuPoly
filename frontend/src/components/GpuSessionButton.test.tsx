@@ -44,6 +44,15 @@ function Harness() {
   return <GpuSessionButton control={control} statusId="gpu-test-status" />;
 }
 
+function ReadOnlyHarness() {
+  const control = useDevGpuSessionControl(true, false);
+  return <>
+    <GpuSessionButton control={control} statusId="gpu-read-status" />
+    <button onClick={() => void control.recover()}>probe forbidden recovery</button>
+    <span data-testid="native-recover-value">{String(control.status?.can_recover)}</span>
+  </>;
+}
+
 async function flush() {
   await act(async () => {
     await Promise.resolve();
@@ -65,6 +74,27 @@ describe("GpuSessionButton", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.resetAllMocks();
+  });
+
+  it("reads native status without granting or sending a recovery action", async () => {
+    api.fetchDevGpuSessionStatus.mockResolvedValue(status("stopped", { can_recover: true }));
+    render(<ReadOnlyHarness />);
+    const button = await screen.findByRole("button", { name: "GPU 服务已停止" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("native-recover-value").textContent).toBe("true");
+    fireEvent.click(button);
+    fireEvent.click(screen.getByRole("button", { name: "probe forbidden recovery" }));
+    await flush();
+    expect(api.fetchDevGpuSessionStatus).toHaveBeenCalled();
+    expect(api.recoverDevGpuSession).not.toHaveBeenCalled();
+  });
+
+  it("does not advertise retry to a status-only session", async () => {
+    api.fetchDevGpuSessionStatus.mockResolvedValue(status("failed"));
+    render(<ReadOnlyHarness />);
+    const button = await screen.findByRole("button", { name: "GPU 服务状态异常" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(api.recoverDevGpuSession).not.toHaveBeenCalled();
   });
 
   it("shows ready as an always-visible disabled control", async () => {

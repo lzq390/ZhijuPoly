@@ -18,7 +18,11 @@ def _account_response(request, session, token=None):
             with user_context(Identity(str(session["user_id"])), request.app.state.auth.settings):
                 tier = repository.resolve_access_tier(owner_user_id=str(session["user_id"]))
         from app.auth.policy import capabilities
-        response["capabilities"] = capabilities(tier == "member" and not session["must_change_password"])
+        from app.auth.acceptance import entry_matches
+        settings = request.app.state.auth.settings
+        acceptance = getattr(settings, "isolated_acceptance_policy", None) if entry_matches(request.scope, settings) else None
+        response["capabilities"] = capabilities(tier == "member" and not session["must_change_password"],
+                                                acceptance=acceptance, owner_id=str(session["user_id"]))
     response["account_type"] = tier
     return response
 

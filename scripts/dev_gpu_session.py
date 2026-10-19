@@ -31,6 +31,7 @@ if str(REPO_ROOT) not in sys.path:
     # Derived only from this script's resolved location; never trust PYTHONPATH.
     sys.path.insert(0, str(REPO_ROOT))
 from scripts.dev_gpu_cohort import CohortError, DevGpuCohort, private_json as cohort_private_json
+from scripts.gpu1_audit import query_gpu1_inventory, query_gpu1_compute_processes
 
 COHORT: DevGpuCohort | None = None
 COHORT_ACTIVE_SESSION_ID: str | None = None
@@ -348,28 +349,31 @@ def _private_directory(path: Path, *, create: bool) -> None:
         raise DevGpuSessionError(f"session directory is not owner-private: {path}")
 
 
-def collect_target_snapshot() -> TargetSnapshot:
-    """Collect one fail-closed inventory while intentionally ignoring GPU3."""
+def collect_target_snapshot(*, system_configuration_factory=None) -> TargetSnapshot:
+    """Collect the native GPU1 inventory with an explicit verified factory."""
+
+    if system_configuration_factory is not None and COHORT is not None:
+        raise DevGpuSessionError('An independent factory cannot override an active cohort')
 
     from ops.gpu_broker.server import (
         EXPECTED_GPU_UUIDS,
-        query_compute_processes,
         query_docker_gpu_claims,
-        query_gpu_inventory,
         query_systemd_gpu_claims,
     )
 
     if EXPECTED_GPU_UUIDS.get(GPU_INDEX) != GPU_UUID:
         raise DevGpuSessionError("compiled GPU1 identity changed")
-    inventory = query_gpu_inventory()
+    inventory = query_gpu1_inventory()
     if inventory.get(GPU_INDEX) != GPU_UUID:
         raise DevGpuSessionError("physical GPU1 identity differs from policy")
     require_gpu1_default_compute_mode()
-    processes = query_compute_processes()
+    processes = query_gpu1_compute_processes()
     target_processes = frozenset(processes.get(GPU_UUID, frozenset()))
     process_declarers = capture_compute_process_declarers(target_processes)
     systemd_options = {}
-    if COHORT is not None:
+    if system_configuration_factory is not None:
+        systemd_options = {'system_configuration_factory': system_configuration_factory}
+    elif COHORT is not None:
         systemd_options = COHORT.systemd_configuration_options()
     docker_claims = tuple(
         claim for claim in query_docker_gpu_claims() if GPU_UUID in claim.gpu_uuids
@@ -378,6 +382,7 @@ def collect_target_snapshot() -> TargetSnapshot:
         claim
         for claim in query_systemd_gpu_claims(
             compute_processes=processes,
+            compute_process_query=query_gpu1_compute_processes,
             compute_process_identities={
                 pid: (
                     declarer.process_start_ticks,
@@ -3998,9 +4003,7 @@ class SessionController:
         from ops.gpu_broker.server import (
             EXPECTED_GPU_UUIDS,
             process_is_exact_dft_residency_descendant,
-            query_compute_processes,
             query_docker_gpu_claims,
-            query_gpu_inventory,
         )
 
         if (
@@ -4030,7 +4033,7 @@ class SessionController:
             )
         if (
             EXPECTED_GPU_UUIDS.get(GPU_INDEX) != GPU_UUID
-            or query_gpu_inventory().get(GPU_INDEX) != GPU_UUID
+            or query_gpu1_inventory().get(GPU_INDEX) != GPU_UUID
         ):
             raise DevGpuSessionError("physical GPU1 identity changed")
         require_gpu1_default_compute_mode()
@@ -4038,7 +4041,7 @@ class SessionController:
         mps_before = self._mps_authority_for_audit(client)
         authorized_before = mps_before.server_pids
         compute_before = frozenset(
-            query_compute_processes().get(GPU_UUID, frozenset())
+            query_gpu1_compute_processes().get(GPU_UUID, frozenset())
         )
         compute_before_declarers = capture_compute_process_declarers(
             compute_before
@@ -4062,7 +4065,7 @@ class SessionController:
             )
 
         compute_after = frozenset(
-            query_compute_processes().get(GPU_UUID, frozenset())
+            query_gpu1_compute_processes().get(GPU_UUID, frozenset())
         )
         compute_after_declarers = capture_compute_process_declarers(
             compute_after
@@ -4155,7 +4158,7 @@ class SessionController:
             uuid=GPU_UUID,
         ):
             raise DevGpuSessionError("DFT residency root identity changed")
-        if query_gpu_inventory().get(GPU_INDEX) != GPU_UUID:
+        if query_gpu1_inventory().get(GPU_INDEX) != GPU_UUID:
             raise DevGpuSessionError("physical GPU1 identity changed")
         require_gpu1_default_compute_mode()
         final = client.status()
@@ -4567,12 +4570,11 @@ class SessionController:
                 from ops.gpu_broker.server import (
                     SystemdMembershipChanged,
                     SystemdProcessDisappeared,
-                    query_compute_processes,
                     query_docker_gpu_claims,
                     query_systemd_gpu_claims,
                 )
 
-                trailing_process_map = query_compute_processes()
+                trailing_process_map = query_gpu1_compute_processes()
                 unsealed_compute = frozenset(
                     trailing_process_map.get(GPU_UUID, frozenset())
                 )
@@ -4599,6 +4601,7 @@ class SessionController:
                         claim
                         for claim in query_systemd_gpu_claims(
                             compute_processes=trailing_process_map,
+                            compute_process_query=query_gpu1_compute_processes,
                             compute_process_identities={
                                 pid: (
                                     declarer.process_start_ticks,
@@ -4686,7 +4689,7 @@ class SessionController:
                             "systemd audit"
                         ) from exc
                     raise
-                sealed_process_map = query_compute_processes()
+                sealed_process_map = query_gpu1_compute_processes()
                 sealed_compute = frozenset(
                     sealed_process_map.get(GPU_UUID, frozenset())
                 )

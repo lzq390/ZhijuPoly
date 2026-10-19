@@ -106,6 +106,7 @@ class WorkerSettings:
     gpu_scope_memory_max_bytes: int | None = None
     gpu_scope_memory_swap_max_bytes: int | None = None
     gpu_scope_tasks_max: int | None = None
+    acceptance_attachment_id: str | None = None
 
     @property
     def gpu_scope_resources(self) -> ScopeResourceLimits:
@@ -120,6 +121,18 @@ class WorkerSettings:
         limits = self.gpu_scope_resources
         if limits.configured and (not self.gpu_broker_enabled or self.gpu_broker_environment != "dev"):
             raise ValueError("GPU scope resource limits require the native development Broker")
+        if self.acceptance_attachment_id is not None:
+            if (self.acceptance_attachment_id != 'r2-a-20261019-md'
+                    or self.worker_id != self.acceptance_attachment_id
+                    or self.mode != 'real' or not self.gpu_broker_enabled
+                    or self.gpu_broker_environment != 'dev' or not self.app_postgres_dsn):
+                raise ValueError('Independent acceptance MD requires its exact development identity')
+            from psycopg.conninfo import conninfo_to_dict
+            try:
+                if conninfo_to_dict(self.app_postgres_dsn).get('dbname') != 'nexpoly_accept_r2_1c55866ff0e4':
+                    raise ValueError
+            except Exception:
+                raise ValueError('Independent acceptance MD requires the exact acceptance database') from None
 
     @property
     def db_configured(self) -> bool:
@@ -240,6 +253,7 @@ def load_settings() -> WorkerSettings:
         ),
         worker_id=os.getenv("MONOMER_MD_WORKER_ID", "monomer-md-worker"),
         worker_version=os.getenv("MONOMER_MD_WORKER_VERSION", "0.1.0"),
+        acceptance_attachment_id=os.getenv('MONOMER_MD_ACCEPTANCE_ATTACHMENT_ID') or None,
         byteff2_openmm_dir=(
             Path(byteff2_openmm_dir) if byteff2_openmm_dir else None
         ),

@@ -21,6 +21,9 @@ class LabDataService:
     def ensure_schema(self) -> None:
         self.repository.ensure_schema()
 
+    def require_schema(self) -> None:
+        self.repository.require_schema()
+
     def list_test_projects(self) -> list[LabDataTestProjectRead]:
         return [LabDataTestProjectRead.model_validate(row) for row in self.repository.list_test_projects()]
 

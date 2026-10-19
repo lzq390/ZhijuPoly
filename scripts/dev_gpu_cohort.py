@@ -314,14 +314,20 @@ class DevGpuCohort:
                           + "\n        target: " + json.dumps(target)
                           + "\n        read_only: " + str(read_only).lower()
                           + "\n        bind:\n          create_host_path: false\n"
-                          for name, target, read_only in self.runtime_mounts())
+                          for name, target, read_only in self.selected_runtime_mounts())
                 + "\nnetworks:\n  default: !override\n    external: true\n    name: nexpoly_dev_default\n").encode()
 
     def require_prepared(self) -> None:
         if private_bytes(self.path_for("cohort-compose.yml")) != self.compose_bytes():
             raise CohortError("cohort Compose selection differs from its frozen configuration")
-        for name, _target, _read_only in self.runtime_mounts():
-            private_directory(self.path_for(name))
+        for name, _target, _read_only in self.selected_runtime_mounts():
+            if name == 'acceptance-status':
+                value = self.path_for(name).lstat()
+                if (not stat.S_ISDIR(value.st_mode) or value.st_uid != os.geteuid()
+                        or value.st_gid != os.getegid() or stat.S_IMODE(value.st_mode) != 0o755):
+                    raise CohortError('public acceptance status directory differs')
+            else:
+                private_directory(self.path_for(name))
 
     @staticmethod
     def runtime_mounts() -> tuple[tuple[str, str, bool], ...]:
@@ -331,10 +337,28 @@ class DevGpuCohort:
                 ("dft-socket", "/app/monomer-dft-worker", True),
                 ("dft-spool", "/app/.runtime/monomer-dft-download-spool", False))
 
+    def selected_runtime_mounts(self) -> tuple[tuple[str, str, bool], ...]:
+        mounts = self.runtime_mounts()
+        if (self.cohort_id == 'r2-a-20261019'
+                and self.repo_root == Path('/data/lzq/gith/nexpoly-acceptance-a-20261019')):
+            return (*mounts, ('acceptance-status', '/app/.runtime/acceptance-status', True))
+        return mounts
+
     def prepare(self) -> None:
         for name in ("md-socket", "md-runs", "md-canaries", "dft-socket", "dft-runs",
                       "dft-spool", "home", "tmp", "xdg-cache", "gpu-session", "batch-state"):
             private_directory(self.path_for(name), create=True)
+        if len(self.selected_runtime_mounts()) != len(self.runtime_mounts()):
+            path = self.path_for('acceptance-status')
+            try:
+                path.mkdir(mode=0o755)
+                os.chmod(path, 0o755, follow_symlinks=False)
+            except FileExistsError:
+                pass
+            value=path.lstat()
+            if (not stat.S_ISDIR(value.st_mode) or value.st_uid != os.geteuid()
+                    or value.st_gid != os.getegid() or stat.S_IMODE(value.st_mode) != 0o755):
+                raise CohortError('unsafe public acceptance status directory')
         path = self.path_for("cohort-compose.yml")
         if path.exists() or path.is_symlink():
             self.require_prepared()
@@ -564,7 +588,7 @@ def cpu_snapshot(cohort: DevGpuCohort) -> dict[str, Any]:
         raise CohortError("frozen runtime paths contain unsupported fields")
     service = record["compose"].get("services", {}).get("backend", {})
     mounts = {mount.get("target"): mount for mount in service.get("volumes", [])}
-    for name, target, read_only in cohort.runtime_mounts():
+    for name, target, read_only in cohort.selected_runtime_mounts():
         mount = mounts.get(target)
         if (not mount or mount.get("type") != "bind" or mount.get("source") != str(cohort.path_for(name))
                 or mount.get("read_only", False) is not read_only

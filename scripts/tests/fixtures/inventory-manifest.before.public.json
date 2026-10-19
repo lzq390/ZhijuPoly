@@ -1,0 +1,16 @@
+{
+  "files": {
+    "gpu_resource/__init__.py": "4a61629731a55f3fecd33448f899aa0cd99cf51c3db885cb7e733ee945ba5241",
+    "gpu_resource/client.py": "ba9140a473a2de9c6070a58b6d2455040d93219e98f04c72f5439fd7b8707a74",
+    "gpu_resource/systemd_inventory.py": "8f0f787bf222a6e5a3f3ddc6c9060feab470c6381bffac500fc2c8706939983d",
+    "gpu_resource/transient_scope.py": "362b67efe429574552a0ef2d88e4a648ac86d2e1f286da7d5ba4ed07a7d2fb3f",
+    "ops/__init__.py": "88656e60be66753f9016d3e76db45728f5c194aeec3e93bfd1c113515aa0ad77",
+    "ops/gpu_broker/__init__.py": "79fc9f27969c0384416fea690458d21359430823c6875d751711f4b2c161ad27",
+    "ops/gpu_broker/broker.py": "5559ed09077d0688fe53296208cea76671b3bc8ddcc8c3e2a5ec59f222d927fa",
+    "ops/gpu_broker/server.py": "48a171a3964c50adca5fff1bf9b02f55e0e1427d8278f1a413f5ba9e82ef1966",
+    "ops/gpu_broker/systemd_provider.py": "1d3e1d6ee75573d3b123c32d5d9877f2162678166c8822d01c60ad84e3139c25"
+  },
+  "schema_version": 1,
+  "source_sha": "58abde65816f149f9c56386b944231dc502de14f",
+  "source_tree": "b0aabd6a7495c70a06ce23dd81fa01d5ed4c5b18"
+}

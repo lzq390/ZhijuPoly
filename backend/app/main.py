@@ -279,7 +279,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_task_control(app.state.auth.authorize_memory_start)
     app.state.browsing_recording = BrowsingRecordingStore(app_settings)
     app.state.dev_gpu_operator_client = None
-    if app_settings.dev_gpu_operator_enabled:
+    acceptance = app.state.auth.settings.isolated_acceptance_policy
+    gpu_status_only = acceptance is not None and 'gpu_status' in acceptance.features
+    if gpu_status_only:
+        from app.services.acceptance_gpu_status import AcceptanceGpuStatusClient
+        app.state.dev_gpu_operator_client = AcceptanceGpuStatusClient(
+            expected_source_sha=os.getenv('BUILD_REVISION',''),
+            expected_source_tree=os.getenv('BUILD_SOURCE_TREE',''))
+    elif app_settings.dev_gpu_operator_enabled:
         app.state.dev_gpu_operator_client = DevGpuOperatorClient(
             socket_path=app_settings.dev_gpu_operator_socket_path,
             timeout_seconds=app_settings.dev_gpu_operator_timeout_seconds,
@@ -444,7 +451,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(entitlements_router)
     app.include_router(monomer_dft_internal_router)
     app.include_router(deployment_status_router)
-    if app_settings.dev_gpu_operator_enabled:
+    if app_settings.dev_gpu_operator_enabled or gpu_status_only:
         app.include_router(dev_gpu_session_router)
     app.include_router(gpu_status_router)
     app.include_router(assistant_router)

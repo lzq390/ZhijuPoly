@@ -161,7 +161,9 @@ export function AppShell({
   const auth = useAuth();
   const canControlGpuSession = DEV_GPU_SESSION_CONTROL_ENABLED &&
     auth?.status === "authenticated" && auth.session.capabilities["operations.use"] === true;
-  const gpuSessionControl = useDevGpuSessionControl(canControlGpuSession);
+  const canReadGpuSession = canControlGpuSession || (auth?.status === "authenticated" &&
+    auth.session.capabilities["dev_gpu.status.read"] === true);
+  const gpuSessionControl = useDevGpuSessionControl(canReadGpuSession, canControlGpuSession);
 
   const isHome = activeModule === "home";
   const isReverseDesignWorkbench = activeModule === "reverseDesign";
@@ -396,7 +398,7 @@ export function AppShell({
     onDeleteGeneralSession,
     generalSessionQuery,
     onGeneralSessionQueryChange: setGeneralSessionQuery,
-    gpuSessionControl: canControlGpuSession ? gpuSessionControl : null
+    gpuSessionControl: canReadGpuSession ? gpuSessionControl : null
   };
 
   return (

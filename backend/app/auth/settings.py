@@ -3,9 +3,11 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from uuid import UUID
+
+from .acceptance import IsolatedAcceptancePolicy, OWNERS, ORIGIN, LAB_DATABASES
 
 
 ISOLATED_AB_COOKIE_NAME = "nexpoly_dev_isolated_ab_session"
@@ -86,6 +88,8 @@ class AuthSettings:
     allowed_origins: tuple[str, ...] = ()
     runtime_environment: str = ""
     isolated_ab_session_policy: IsolatedABSessionPolicy | None = None
+    isolated_acceptance_policy: IsolatedAcceptancePolicy | None = None
+    acceptance_lab_dsns: tuple[str, str] | None = field(default=None, repr=False)
 
     def __post_init__(self):
         policy = self.isolated_ab_session_policy
@@ -96,6 +100,30 @@ class AuthSettings:
             or self.allowed_origins != (policy.origin,)
         ):
             raise ValueError("Isolated A/B sessions require a separate development entry and cookie")
+        acceptance = self.isolated_acceptance_policy
+        if acceptance is not None:
+            if (type(acceptance) is not IsolatedAcceptancePolicy or policy is None
+                    or policy.origin != ORIGIN or policy.user_ids != OWNERS):
+                raise ValueError("Acceptance capabilities require the exact isolated A/B policy")
+            if "lab_data" in acceptance.features:
+                from psycopg.conninfo import conninfo_to_dict
+                try:
+                    if type(self.acceptance_lab_dsns) is not tuple or len(self.acceptance_lab_dsns) != 2:
+                        raise ValueError
+                    for dsn, expected in zip(self.acceptance_lab_dsns, LAB_DATABASES):
+                        if not isinstance(dsn, str) or conninfo_to_dict(dsn).get("dbname") != expected:
+                            raise ValueError
+                except Exception:
+                    raise ValueError("Acceptance Lab requires two exact isolated databases") from None
+        elif self.acceptance_lab_dsns is not None:
+            raise ValueError("Acceptance Lab connections require the finite acceptance policy")
+
+    def acceptance_lab_dsn(self, owner_id: str) -> str:
+        policy = self.isolated_acceptance_policy
+        if (policy is None or self.acceptance_lab_dsns is None
+                or not policy.allows(owner_id, "lab.data.read")):
+            raise ValueError("Isolated Lab access is unavailable")
+        return self.acceptance_lab_dsns[OWNERS.index(owner_id)]
 
     def new_session_max_age(self, user_id: str, *, peer: str, isolated_origin: str | None = None) -> int:
         policy = self.isolated_ab_session_policy
@@ -113,6 +141,12 @@ class AuthSettings:
         cookie_name = os.getenv("AUTH_COOKIE_NAME", "nexpoly_session" if secure else "nexpoly_dev_session")
         raw_policy = os.getenv("AUTH_ISOLATED_AB_SESSION_POLICY", "")
         policy = IsolatedABSessionPolicy.from_json(raw_policy) if raw_policy else None
+        raw_acceptance = os.getenv("AUTH_ISOLATED_ACCEPTANCE_POLICY", "")
+        acceptance = IsolatedAcceptancePolicy.from_json(raw_acceptance) if raw_acceptance else None
+        lab_dsns = None
+        if acceptance is not None and "lab_data" in acceptance.features:
+            lab_dsns = (os.getenv("AUTH_ACCEPTANCE_LAB_DSN_A", ""),
+                        os.getenv("AUTH_ACCEPTANCE_LAB_DSN_B", ""))
         if policy is not None and os.getenv("FORWARDED_ALLOW_IPS") != "":
             raise ValueError("Isolated A/B sessions require explicitly disabled proxy-header trust")
         dev_http_origins = frozenset(value.strip() for value in os.getenv("AUTH_DEV_HTTP_ORIGINS", "").split(",") if value.strip())
@@ -143,4 +177,6 @@ class AuthSettings:
             allowed_origins=origins,
             runtime_environment=getattr(settings, "gpu_broker_environment", ""),
             isolated_ab_session_policy=policy,
+            isolated_acceptance_policy=acceptance,
+            acceptance_lab_dsns=lab_dsns,
         )

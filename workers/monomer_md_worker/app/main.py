@@ -1124,9 +1124,12 @@ async def _run_job(request: JobRequest, steps: int) -> None:
 
 async def _execution_resources_released() -> bool:
     try:
+        if settings.acceptance_attachment_id:
+            jobs = await asyncio.to_thread(repository.recovery_job_ids)
+            return bool(await asyncio.to_thread(runner.recovery_resources_released, owned_job_ids=jobs))
         return bool(await asyncio.to_thread(runner.recovery_resources_released))
     except Exception:
-        logger.warning("MD resource cleanup remains unconfirmed", exc_info=True)
+        logger.warning("MD resource cleanup remains unconfirmed", exc_info=not bool(settings.acceptance_attachment_id))
         return False
 
 
