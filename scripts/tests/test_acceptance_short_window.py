@@ -116,3 +116,20 @@ def test_cpu_gate_executes_only_native_readonly_schema_preflight():
     assert 'AuthService.assert_application_ready' in text
     assert not any(word in text for word in ['initial-login','save-existing-passwords','auth.login(','change_password(','hash_password('])
     assert 'nexpoly_accept_r2_1c55866ff0e4' in text
+
+
+@pytest.mark.parametrize('dsn,kwargs',[
+    ('postgresql://unit@invalid/production',{}),
+    ('service=outside_scope',{}),
+    ('dbname=nexpoly_accept_r2_1c55866ff0e4 service=outside_scope',{}),
+    ('postgresql://unit@invalid/nexpoly_accept_r2_1c55866ff0e4',{'dbname':'production'}),
+])
+def test_cpu_gate_rejects_wrong_database_before_connecting(dsn,kwargs):
+    from psycopg.conninfo import conninfo_to_dict
+    tree=ast.parse(g.NATIVE_READONLY)
+    function=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='readonly')
+    module=ast.fix_missing_locations(ast.Module(body=[function],type_ignores=[]))
+    def forbidden(*args,**kwargs):pytest.fail('out-of-scope connection must never be attempted')
+    namespace={'original':forbidden,'conninfo_to_dict':conninfo_to_dict}
+    exec(compile(module,'native-readonly-public-test','exec'),namespace)
+    with pytest.raises(RuntimeError,match='before any connection'):namespace['readonly'](dsn,**kwargs)

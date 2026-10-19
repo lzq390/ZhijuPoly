@@ -28,8 +28,15 @@ import sys,json
 sys.path[:0]=['/app/backend','/app']
 try:
  import psycopg
+ from psycopg.conninfo import conninfo_to_dict
  original=psycopg.connect
  def readonly(*args,**kwargs):
+  dsn=args[0] if args else kwargs.get('conninfo','')
+  options=conninfo_to_dict(dsn)
+  if (options.get('dbname')!='nexpoly_accept_r2_1c55866ff0e4'
+      or kwargs.get('dbname','nexpoly_accept_r2_1c55866ff0e4')!='nexpoly_accept_r2_1c55866ff0e4'
+      or options.get('service') or kwargs.get('service')):
+   raise RuntimeError('fixed database required before any connection')
   kwargs['options']='-c default_transaction_read_only=on'
   connection=original(*args,**kwargs)
   try:
