@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from app.runner import MonomerMdRunner
-from app.repository import PostgresJobRepository
-from test_runner import _settings
+from workers.monomer_md_worker.app.runner import MonomerMdRunner
+from workers.monomer_md_worker.app.repository import PostgresJobRepository
+from workers.monomer_md_worker.tests.test_runner import _settings
 
 
 def request(job):
@@ -80,7 +80,7 @@ def test_attachment_configuration_cannot_select_production_or_another_worker(tmp
 
 
 def repository_fixture(monkeypatch, tmp_path, rows=()):
-    import app.repository as module
+    from workers.monomer_md_worker.app import repository as module
     settings = replace(_settings(tmp_path), mode='real', gpu_broker_enabled=True,
         worker_id='r2-a-20261019-md', acceptance_attachment_id='r2-a-20261019-md',
         app_postgres_dsn='postgresql://unit@invalid/nexpoly_accept_r2_1c55866ff0e4')
