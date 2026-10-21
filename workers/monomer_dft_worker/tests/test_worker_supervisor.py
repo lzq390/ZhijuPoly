@@ -25,6 +25,24 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(0o755)
 
 
+def _assert_socket_preserved(path: Path, identity: os.stat_result) -> None:
+    observed = path.lstat()
+    # Connecting to a socket may update atime. Its identity and security
+    # metadata must still be unchanged, including rejecting a symlink replacement.
+    for field in (
+        "st_dev",
+        "st_ino",
+        "st_mode",
+        "st_nlink",
+        "st_uid",
+        "st_gid",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+    ):
+        assert getattr(observed, field) == getattr(identity, field), field
+
+
 def _process_is_running(pid: int) -> bool:
     try:
         state = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()[2]
@@ -389,13 +407,16 @@ def test_fresh_supervisor_preserves_a_bound_socket_before_listen(
     sandbox.behavior_file.write_text("healthy\n", encoding="utf-8")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
         server.bind(str(sandbox.socket_path))
-        identity = sandbox.socket_path.stat()
+        # Socket probes may legitimately update atime; make that access visible.
+        metadata = sandbox.socket_path.lstat()
+        os.utime(sandbox.socket_path, ns=(1, metadata.st_mtime_ns))
+        identity = sandbox.socket_path.lstat()
 
         rejected = sandbox.run_runner()
 
         assert rejected.returncode == 2, rejected.stdout + rejected.stderr
         assert "registered worker socket" in rejected.stderr
-        assert sandbox.socket_path.stat() == identity
+        _assert_socket_preserved(sandbox.socket_path, identity)
         assert sandbox.attempts() == []
         # The original owner can still finish starting its bound socket.
         server.listen(1)
@@ -413,7 +434,9 @@ def test_fresh_supervisor_preserves_socket_when_registry_is_uncertain(
     sandbox.behavior_file.write_text("healthy\n", encoding="utf-8")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
         stale.bind(str(sandbox.socket_path))
-    identity = sandbox.socket_path.stat()
+    metadata = sandbox.socket_path.lstat()
+    os.utime(sandbox.socket_path, ns=(1, metadata.st_mtime_ns))
+    identity = sandbox.socket_path.lstat()
     # Inject only the procfs read fault inside the runner's Python probe;
     # keep the runner, filesystem checks and fake Worker launch unchanged.
     injection = textwrap.dedent(f"""
@@ -448,7 +471,7 @@ def test_fresh_supervisor_preserves_socket_when_registry_is_uncertain(
 
     assert rejected.returncode == 2, rejected.stdout + rejected.stderr
     assert "could not be verified as stale" in rejected.stderr
-    assert sandbox.socket_path.stat() == identity
+    _assert_socket_preserved(sandbox.socket_path, identity)
     assert sandbox.attempts() == []
 
 
