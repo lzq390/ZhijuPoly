@@ -25,6 +25,8 @@ await page.route('**/*', async route => {
     authenticated: true, user: { id: 'structure-ci-user', username: 'structure-ci', must_change_password: false },
     session_id: 'structure-ci-session', csrf_token: 'structure-ci-csrf', capabilities: {}
   } });
+  // This canvas transport fixture uses the quota-disabled backend mode.
+  if (url.pathname === '/api/v1/usage/entitlements') return route.fulfill({ json: { enabled: false } });
   if (url.pathname.endsWith('/structure/standardize-smiles')) return route.fulfill({ json: { standardized_smiles: request.postDataJSON().smiles } });
   if (url.pathname.endsWith('/assistant/tg/status')) return route.fulfill({ json: { enabled: true, configured: true, image: { supported: true, max_files: 2, max_canvas_snapshots: 1, max_user_upload_files: 1, max_bytes: 5242880, max_total_bytes: 10485760, accepted_mime_types: ['image/png'] } } });
   if (url.pathname.endsWith('/assistant/tg/guide')) return route.fulfill({ json: { module: 'reverseDesign', version: 3, language: 'zh-CN', defaults: {}, sections: [] } });
