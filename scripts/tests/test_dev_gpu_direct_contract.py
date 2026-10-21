@@ -50,7 +50,7 @@ def _python_member(relative: str, *qualified_name: str) -> str:
 
 
 class DevGpuDirectContractTests(unittest.TestCase):
-    def test_control_is_registered_only_by_the_9001_development_overlay(
+    def test_control_overlay_and_finite_status_registration_are_explicit(
         self,
     ) -> None:
         example = _read(".env.dev.example")
@@ -66,7 +66,7 @@ class DevGpuDirectContractTests(unittest.TestCase):
         self.assertIn('VITE_DEV_GPU_SESSION_CONTROL: "true"', overlay)
         self.assertIn("self.dev_gpu_operator_frontend_port != 9001", settings)
         self.assertIn(
-            "if app_settings.dev_gpu_operator_enabled:\n"
+            "if app_settings.dev_gpu_operator_enabled or gpu_status_only:\n"
             "        app.include_router(dev_gpu_session_router)",
             backend,
         )
