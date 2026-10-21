@@ -1428,7 +1428,7 @@ def test_cleanup_uncertainty_holds_active_task_until_broker_proof(monkeypatch, f
 
     monkeypatch.setattr(worker_main, 'repository', Repository())
     monkeypatch.setattr(worker_main, 'runner', Runner())
-    monkeypatch.setattr(worker_main, 'settings', SimpleNamespace(db_configured=True, recovery_retry_seconds=0.001))
+    monkeypatch.setattr(worker_main, 'settings', SimpleNamespace(db_configured=True, recovery_retry_seconds=0.001, acceptance_attachment_id=None))
     monkeypatch.setattr(worker_main, 'shutting_down', False)
     monkeypatch.setattr(worker_main, 'cancel_requested_jobs', set())
 
@@ -1454,7 +1454,7 @@ def test_cleanup_uncertainty_holds_active_task_until_broker_proof(monkeypatch, f
 
 
 def test_restart_cannot_reconcile_jobs_without_resource_cleanup_proof(monkeypatch):
-    monkeypatch.setattr(worker_main, 'settings', SimpleNamespace(db_configured=True))
+    monkeypatch.setattr(worker_main, 'settings', SimpleNamespace(db_configured=True, acceptance_attachment_id=None))
     monkeypatch.setattr(worker_main, 'runner', SimpleNamespace(recovery_resources_released=lambda: False))
     monkeypatch.setattr(worker_main, 'repository', SimpleNamespace(
         reconcile_cancel_requested_jobs=lambda: pytest.fail('unsafe cancellation release'),
@@ -1514,7 +1514,7 @@ def test_successful_compute_logs_release_failure_before_cleanup_wait(
 
     monkeypatch.setattr(worker_main, "repository", Repository())
     monkeypatch.setattr(worker_main, "runner", Runner())
-    monkeypatch.setattr(worker_main, "settings", SimpleNamespace(db_configured=True, recovery_retry_seconds=0.001))
+    monkeypatch.setattr(worker_main, "settings", SimpleNamespace(db_configured=True, recovery_retry_seconds=0.001, acceptance_attachment_id=None))
     monkeypatch.setattr(worker_main, "shutting_down", False)
     monkeypatch.setattr(worker_main, "cancel_requested_jobs", set())
     monkeypatch.setattr(worker_main, "active_jobs", {})
@@ -1580,7 +1580,7 @@ def test_successful_compute_logs_release_failure_before_cleanup_wait(
 def test_md_recovery_requires_complete_broker_absence(snapshot):
     from workers.monomer_md_worker.app.runner import MonomerMdRunner
     runner = object.__new__(MonomerMdRunner)
-    runner._settings = SimpleNamespace(mode='real',gpu_broker_environment='dev')
+    runner._settings = SimpleNamespace(mode='real',gpu_broker_environment='dev',acceptance_attachment_id=None)
     runner._gpu_admission_uncertain = False
     runner._gpu_broker_client = SimpleNamespace(status=lambda: {'schema_version':1,'broker_instance_id':'test-broker','quarantined_gpus':{},**snapshot})
     assert not runner.recovery_resources_released()
