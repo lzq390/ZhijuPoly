@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Reviewed inventory, not evidence that every mapped scenario passed. templates permit only fixed a/b CSV/XLSX GET or HEAD. The seven usage GET routes require an authenticated owner; free accounts retain their own usage/history access through the separate tier gate.",
+  "note": "Reviewed inventory, not evidence that every mapped scenario passed. templates permit only fixed a/b CSV/XLSX GET or HEAD. The seven usage GET routes require an authenticated owner; free accounts retain their own usage/history access through the separate tier gate. Capability-prefixed routes remain operations-denied by default; only the exact finite development acceptance policy can admit them.",
   "routes": [
     {
       "method": "DELETE",
@@ -330,7 +330,7 @@
       "path": "/api/v1/dev-gpu-session/status",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:dev_gpu.status.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -369,7 +369,7 @@
       "path": "/api/v1/lab-data/sample-measurements",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -382,7 +382,7 @@
       "path": "/api/v1/lab-data/sample-measurements/count",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -395,7 +395,7 @@
       "path": "/api/v1/lab-data/sample-measurements/stats/by-project",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -408,7 +408,7 @@
       "path": "/api/v1/lab-data/sample-measurements/stats/summary",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -421,7 +421,7 @@
       "path": "/api/v1/lab-data/test-projects",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -1374,7 +1374,7 @@
       "path": "/api/v1/lab-data/sample-measurements",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.write",
       "frontend": "not-exposed",
       "cases": [
         "F13",
