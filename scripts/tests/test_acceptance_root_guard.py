@@ -26,6 +26,13 @@ def materials():
 
 @pytest.mark.parametrize('enabled',[None,False])
 def test_serve_creates_owner_stop_mailbox_only_after_explicit_opt_in(monkeypatch,enabled):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz is not None else NOW.replace(tzinfo=None)
+
+    # Match the wall clock to the sealed plan's synthetic time.
+    monkeypatch.setattr(g, 'datetime', FixedDatetime)
     before,candidate,request=materials()
     if enabled is not None:request['owner_stop_enabled']=enabled
     guard_bytes=b'public fake reviewed guard'
