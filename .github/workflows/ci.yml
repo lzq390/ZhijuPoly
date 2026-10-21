@@ -151,6 +151,8 @@ jobs:
             find scripts/tests -maxdepth 1 -type f -name 'test_*.py' \
               ! -name 'test_*_poc_*.py' \
               ! -name 'test_lightweight_*.py' \
+              ! -name 'test_acceptance_*.py' \
+              ! -name 'test_gpu1_acceptance_audit.py' \
               ! -name 'test_dev_gpu_session.py' \
               ! -name 'test_dev_worker_process.py' \
               ! -name 'test_monomer_md_worker_launcher.py' \
@@ -187,7 +189,8 @@ jobs:
         run: |
           mapfile -t tests < <(
             find scripts/tests -maxdepth 1 -type f \
-              \( -name 'test_*_poc_*.py' -o -name 'test_lightweight_*.py' \) -print | sort
+              \( -name 'test_*_poc_*.py' -o -name 'test_lightweight_*.py' \
+              -o -name 'test_acceptance_*.py' -o -name 'test_gpu1_acceptance_audit.py' \) -print | sort
           )
           if (( ${#tests[@]} == 0 )); then
             echo "No lightweight backend tests found" >&2
