@@ -29,7 +29,8 @@
     "test:structure-loading": "node scripts/verify-ketcher-loading.mjs",
     "test:structure-ai": "node scripts/verify-structure-ai.mjs",
     "test:structure-engines": "node scripts/verify-structure-engines.mjs",
-    "test:structure-refresh": "node scripts/verify-structure-refresh-performance.mjs"
+    "test:structure-refresh": "node scripts/verify-structure-refresh-performance.mjs",
+    "test:usage-browser": "node scripts/verify-personal-usage.mjs"
   },
   "dependencies": {
     "3dmol": "^2.5.4",

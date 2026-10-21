@@ -77,10 +77,23 @@ class SiteHelperContractTests(unittest.TestCase):
                 )
             )
 
+        # Versioned usage/entitlement seals stay separate from the frozen v7
+        # business inventory (app.auth.usage_backup / entitlement_backup).
+        usage_seal_tables = (("usage", "events"), ("usage", "attempts"))
+        entitlement_seal_tables = (
+            ("usage_entitlements", "policy_versions"),
+            ("usage_entitlements", "owner_entitlements"),
+            ("usage_entitlements", "operations"),
+            ("usage_entitlements", "operation_events"),
+            ("usage_entitlements", "request_observations"),
+        )
         categories = (
             set(CONTRACTS.BUSINESS_MUTABLE_TABLES)
             | set(CONTRACTS.POST_0013_BUSINESS_MUTABLE_TABLES)
             | set(CONTRACTS.POST_0016_BUSINESS_MUTABLE_TABLES)
+            | set(CONTRACTS.POST_0020_BUSINESS_MUTABLE_TABLES)
+            | set(usage_seal_tables)
+            | set(entitlement_seal_tables)
             | set(CONTRACTS.USER_IDENTITY_AUDIT_TABLES)
             | set(CONTRACTS.GOVERNED_CONTROL_TABLES)
             | set(CONTRACTS.STATIC_IMPORT_TABLES)
@@ -95,6 +108,9 @@ class SiteHelperContractTests(unittest.TestCase):
                 CONTRACTS.BUSINESS_MUTABLE_TABLES,
                 CONTRACTS.POST_0013_BUSINESS_MUTABLE_TABLES,
                 CONTRACTS.POST_0016_BUSINESS_MUTABLE_TABLES,
+                CONTRACTS.POST_0020_BUSINESS_MUTABLE_TABLES,
+                usage_seal_tables,
+                entitlement_seal_tables,
                 CONTRACTS.USER_IDENTITY_AUDIT_TABLES,
                 CONTRACTS.GOVERNED_CONTROL_TABLES,
                 CONTRACTS.STATIC_IMPORT_TABLES,

@@ -1,3 +1,4 @@
+import { StructureLibraryProvider } from "./structure-library/StructureLibraryProvider";
 import { useAuth } from "./auth/AuthProvider";
 import { requestServiceAccess } from "./auth/guestAccess";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -27,9 +28,8 @@ import type { DatasetKey } from "./components/database-analysis/types";
 import type { LabDataView } from "./components/LabDataPage";
 import type { StructureCanvasOwnerHandle } from "./components/StructureWorkbenchPage";
 import type { StructureSyncResult } from "./structure/workspace";
-import type { MonomerRetrosynthesisInput } from "./components/monomer-retrosynthesis/session";
 import {
-  ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
+  PersonalUsagePage, ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
   ExperimentWorkflowDemoPage, HighThroughputWorkflowDemoPage, HomopolymerPropertyPredictionPage,
   KnowledgeSearch, LabDataPage, MdSimulationDemoPage, MonomerMdSimulationPage, MonomerDftPage,
   MonomerPolymerizationPage, MonomerRetrosynthesisPage, PolytaoGenerationPage, ReverseDesignPage,
@@ -67,7 +67,6 @@ type AppNavigationRequest = ModuleNavigationRequest & {
   history: "push" | "none";
   knowledge?: { query: string; terms: string[] };
   jobId?: string | null;
-  importRetrosynthesisTarget?: boolean;
   onCommit?: () => void;
 };
 
@@ -112,6 +111,7 @@ export default function App() {
 function AppContent() {
   const auth = useAuth();
   const isGuest = auth?.status === "guest";
+  const canUseSharedWorkspace = !auth || (auth.status === "authenticated" && auth.session.capabilities["openscience.use"] === true);
   const [knowledgeLocalMode, setKnowledgeLocalMode] = useState(true);
   const [activeModule, setActiveModule] = useState<ActiveModule>(() => getInitialRoute().module);
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<DatasetKey | null>(() => getInitialRoute().datasetKey);
@@ -148,7 +148,6 @@ function AppContent() {
   activeModuleRef.current = activeModule;
   const structureCanvasOwnerRef = useRef<StructureCanvasOwnerHandle | null>(null);
   const lastStructureSyncRef = useRef<StructureSyncResult | null>(null);
-  const [retrosynthesisInput, setRetrosynthesisInput] = useState<MonomerRetrosynthesisInput>();
   const moduleContentRef = useRef<HTMLDivElement | null>(null);
   const moduleMainRef = useRef<HTMLElement | null>(null);
   const structureWorkspace = useStructureWorkspace({ guest: isGuest, initialSmiles: isGuest ? auth?.guestDraft : undefined });
@@ -232,14 +231,6 @@ function AppContent() {
       }
       if (route.module === "monomerMdSimulation") setMonomerMdJobId(navigation.jobId ?? null);
       if (route.module === "monomerDft") setMonomerDftJobId(navigation.jobId ?? null);
-      if (route.module === "monomerRetrosynthesis") {
-        const document = structureWorkspace.workspace.getSnapshot();
-        const smiles = document.smiles.trim();
-        setRetrosynthesisInput(!navigation.importRetrosynthesisTarget ? undefined
-          : lastStructureSyncRef.current?.status !== "saved" || document.draftError || document.draft.trim() !== smiles
-            ? { notice: "共享结构同步未完成，已保留反推草稿。请在工作台检查结构后重试。" }
-            : smiles ? { smiles } : { notice: "当前共享结构为空，已保留反推草稿。" });
-      }
       applyRoute(route);
       activeModuleRef.current = route.module;
       if (navigation.source !== "state") window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -262,14 +253,14 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (isGuest) return;
+    if (!canUseSharedWorkspace) return;
     const handleMessage = (event: MessageEvent) => {
       projectBridge.handleMessage(event);
       generalSessionBridge.handleMessage(event);
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [generalSessionBridge, projectBridge, isGuest]);
+  }, [generalSessionBridge, projectBridge, canUseSharedWorkspace]);
 
   function applyRoute(route: AppRoute) {
     setActiveModule(route.module);
@@ -289,7 +280,7 @@ function AppContent() {
     const item = [...standaloneModules, ...moduleGroups.flatMap((group) => group.items)].find((candidate) => candidate.id === route.module);
     moduleTransition.request({
       route, href: pathFromRoute(route), history: "push", source: "navigation", kind: "module",
-      ...extra, target: { id: route.module, label: item?.label ?? (route.module === "home" ? "通用会话" : "实验数据") }
+      ...extra, target: { id: route.module, label: item?.label ?? (route.module === "home" ? "通用会话" : route.module === "personalUsage" ? "我的用量" : "实验数据") }
     });
   }
 
@@ -465,7 +456,7 @@ function AppContent() {
         navigate({ module: "monomerPolymerization", datasetKey: null }, { href: "/monomer-polymerization?mode=single" });
         break;
       case "monomerRetrosynthesis":
-        navigate({ module: "monomerRetrosynthesis", datasetKey: null }, { importRetrosynthesisTarget: true });
+        navigate({ module: "monomerRetrosynthesis", datasetKey: null });
         break;
       case "reverseDesign":
         openReverseDesign();
@@ -734,6 +725,7 @@ function AppContent() {
     }
   ];
   const isFullBleedModule =
+    activeModule === "personalUsage" ||
     activeModule === "explorer" ||
     activeModule === "homopolymerPrediction" ||
     activeModule === "databaseQuery" ||
@@ -763,7 +755,7 @@ function AppContent() {
     activeModule !== "monomerDft" &&
     !isTgKetcherOwner;
 
-  return <BrowsingRecordingUIProvider activeModule={activeModule}
+  return <StructureLibraryProvider workspace={structureWorkspace.workspace}><BrowsingRecordingUIProvider activeModule={activeModule}
     canStart={activeModule === "databaseFilter" || (activeModule === "knowledge" && knowledgeLocalMode)}>
     <AppShell
       activeModule={activeModule}
@@ -771,11 +763,12 @@ function AppContent() {
       standaloneModules={standaloneModules}
       moduleGroups={moduleGroups}
       onOpenHome={openGeneralWorkspace}
+      onOpenUsage={() => navigate({ module: "personalUsage", datasetKey: null })}
       projects={projectSnapshot?.projects ?? []}
       activeProjectDirectory={
         activeModule === "home" ? projectSnapshot?.activeDirectory ?? null : null
       }
-      isProjectBridgeReady={isGuest || projectSnapshot !== null}
+      isProjectBridgeReady={!canUseSharedWorkspace || projectSnapshot !== null}
       onOpenProject={openAgentProject}
       onBrowseProjects={browseAgentProjects}
       onNewProject={createAgentProject}
@@ -786,7 +779,7 @@ function AppContent() {
       }
       generalSessions={generalSessionSnapshot?.sessions ?? []}
       activeGeneralSessionID={generalSessionSnapshot?.activeSessionID ?? null}
-      isGeneralSessionBridgeReady={isGuest || generalSessionSnapshot !== null}
+      isGeneralSessionBridgeReady={!canUseSharedWorkspace || generalSessionSnapshot !== null}
       onOpenGeneralWorkspace={openGeneralWorkspace}
       onNewGeneralSession={createGeneralSession}
       onOpenGeneralSession={openGeneralSession}
@@ -795,9 +788,10 @@ function AppContent() {
       moduleTransition={moduleTransition}
     >
       {isGuest && <div className="np-guest-service-notice" role="note"><span>游客可浏览各模块和使用本地画板；执行服务任务前，请登录账号。</span><button type="button" onClick={() => requestServiceAccess()}>登录账号</button></div>}
+      {auth?.session.account_type === "free" && <div className="np-guest-service-notice" role="note"><span>当前为免费账号：可使用本地画板和公开示例；会员服务与共享工作空间尚未开放。</span></div>}
       <StructureWorkspaceNotice workspace={structureWorkspace.workspace} />
       <div className={activeModule === "home" ? "h-full" : "hidden"}>
-        <AgentWorkspaceHomePage
+        {canUseSharedWorkspace || isGuest ? <AgentWorkspaceHomePage
           iframeRef={agentWorkspaceIframeRef}
           src={agentWorkspaceFrameUrl}
           reloadKey={agentWorkspaceReloadKey}
@@ -809,8 +803,10 @@ function AppContent() {
               generalSessionBridge.requestSessions();
             }
           }}
-        />
+        /> : <div className="np-auth-center"><h2>共享工作空间需要会员权限</h2><p>本地画板和公开示例仍可使用。次数余额不会自动开通此功能。</p></div>}
       </div>
+
+      {activeModule === "personalUsage" ? <PersonalUsagePage /> : null}
 
       {activeModule === "databaseQuery" ? (
         <DatabaseQueryPage
@@ -924,7 +920,7 @@ function AppContent() {
 
       {activeModule === "monomerRetrosynthesis" ? (
         <MonomerRetrosynthesisPage structure={structureWorkspace}
-          initialInput={retrosynthesisInput} onEditStructure={openStructureWorkbench} />
+          onEditStructure={openStructureWorkbench} />
       ) : null}
 
       {activeModule === "reverseDesign" || preserveReverseDesignForKnowledge ? (
@@ -954,5 +950,5 @@ function AppContent() {
         />
       ) : null}
     </AppShell>
-  </BrowsingRecordingUIProvider>;
+  </BrowsingRecordingUIProvider></StructureLibraryProvider>;
 }

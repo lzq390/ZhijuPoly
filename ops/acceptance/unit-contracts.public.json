@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "scope_id": "acceptance-a-20261019",
+  "prepared_only": true,
+  "units_installed_or_started": false,
+  "units": {
+    "nexpoly-r2-a-20261019-inventory-guard.service": {
+      "manager": "system",
+      "transient": true,
+      "enable_at_boot": false,
+      "properties": {
+        "Restart": "no",
+        "NoNewPrivileges": "yes",
+        "MemorySwapMax": "0",
+        "UMask": "0077",
+        "TimeoutStopSec": "300",
+        "KillMode": "mixed",
+        "StandardOutput": "null",
+        "StandardError": "journal",
+        "User": "root",
+        "Group": "0",
+        "RuntimeMaxSec": "93600",
+        "CPUQuota": "10%",
+        "MemoryMax": "134217728",
+        "TasksMax": "32",
+        "CapabilityBoundingSet": "",
+        "AmbientCapabilities": "",
+        "PrivateNetwork": "yes",
+        "PrivateDevices": "yes",
+        "PrivateTmp": "yes",
+        "ProtectSystem": "strict",
+        "ProtectHome": "yes",
+        "RestrictAddressFamilies": "AF_UNIX",
+        "RestrictNamespaces": "yes",
+        "ProtectKernelTunables": "yes",
+        "ProtectKernelModules": "yes",
+        "ProtectKernelLogs": "yes",
+        "ProtectControlGroups": "yes",
+        "ProtectClock": "yes",
+        "LockPersonality": "yes",
+        "RestrictSUIDSGID": "yes",
+        "ReadWritePaths": "/usr/local/lib/nexpoly-gpu-systemd-inventory /usr/local/lib/nexpoly-r2-acceptance-guard /run/nexpoly-r2-acceptance-20261019",
+        "ExecStopPost": "/usr/bin/python3 -I -S -B /usr/local/lib/nexpoly-r2-acceptance-guard/guard.py cleanup"
+      },
+      "ExecStart": [
+        "/usr/bin/python3",
+        "-I",
+        "-S",
+        "-B",
+        "/usr/local/lib/nexpoly-r2-acceptance-guard/guard.py",
+        "serve"
+      ],
+      "security_review_required": true,
+      "owner_stop_enabled_by_default": false,
+      "owner_stop_interface_supported": false
+    },
+    "nexpoly-r2-a-20261019-md-audit.service": {
+      "manager": "user",
+      "transient": true,
+      "enable_at_boot": false,
+      "properties": {
+        "Restart": "no",
+        "NoNewPrivileges": "yes",
+        "MemorySwapMax": "0",
+        "UMask": "0077",
+        "TimeoutStopSec": "300",
+        "KillMode": "mixed",
+        "StandardOutput": "null",
+        "StandardError": "journal",
+        "RuntimeMaxSec": "93600",
+        "CPUQuota": "25%",
+        "MemoryMax": "268435456",
+        "TasksMax": "64",
+        "EnvironmentFile": "/data/lzq/gith/nexpoly-gpu-interface-r2-20261014/.runtime/cohorts/r2-science-20261016-ab36-fix1/backend.auth.env",
+        "ExecStopPost": "/usr/bin/python3 -I -B /data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_md_control.py cleanup"
+      },
+      "ExecStart": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_md_control.py",
+        "watch"
+      ],
+      "native_private_reference_metadata_pin_required": true,
+      "opaque_environment_exists": true,
+      "opaque_environment_runtime_validated": false
+    },
+    "nexpoly-r2-a-20261019-md.service": {
+      "manager": "user",
+      "transient": true,
+      "enable_at_boot": false,
+      "properties": {
+        "Restart": "no",
+        "NoNewPrivileges": "yes",
+        "MemorySwapMax": "0",
+        "UMask": "0077",
+        "TimeoutStopSec": "300",
+        "KillMode": "mixed",
+        "StandardOutput": "null",
+        "StandardError": "journal",
+        "RuntimeMaxSec": "93600",
+        "CPUQuota": "100%",
+        "MemoryMax": "1610612736",
+        "TasksMax": "256",
+        "EnvironmentFile": "/data/lzq/gith/nexpoly-gpu-interface-r2-20261014/.runtime/cohorts/r2-science-20261016-ab36-fix1/backend.auth.env",
+        "ExecStopPost": "/usr/bin/python3 -I -B /data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_md_control.py cleanup"
+      },
+      "ExecStart": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_md_control.py",
+        "supervise"
+      ],
+      "native_private_reference_metadata_pin_required": true,
+      "opaque_environment_exists": true,
+      "opaque_environment_runtime_validated": false
+    },
+    "nexpoly-r2-a-20261019-short-window.service": {
+      "manager": "user",
+      "transient": true,
+      "enable_at_boot": false,
+      "properties": {
+        "Restart": "no",
+        "NoNewPrivileges": "yes",
+        "MemorySwapMax": "0",
+        "UMask": "0077",
+        "TimeoutStopSec": "300",
+        "KillMode": "mixed",
+        "StandardOutput": "null",
+        "StandardError": "journal",
+        "RuntimeMaxSec": "3600",
+        "CPUQuota": "50%",
+        "MemoryMax": "536870912",
+        "TasksMax": "128",
+        "ExecStopPost": "/usr/bin/python3 -I -B /data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_short_window.py restore --binding-sha256 <FINAL_PUBLIC_BINDING_SHA256>"
+      },
+      "ExecStart": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_short_window.py",
+        "run",
+        "--binding-sha256",
+        "<FINAL_PUBLIC_BINDING_SHA256>"
+      ],
+      "runtime_materialization_required": true
+    },
+    "nexpoly-r2-a-20261019-Main-restore.service": {
+      "manager": "user",
+      "transient": true,
+      "enable_at_boot": false,
+      "properties": {
+        "Restart": "no",
+        "NoNewPrivileges": "yes",
+        "MemorySwapMax": "0",
+        "UMask": "0077",
+        "TimeoutStopSec": "300",
+        "KillMode": "mixed",
+        "StandardOutput": "null",
+        "StandardError": "journal",
+        "RuntimeMaxSec": "3600",
+        "CPUQuota": "50%",
+        "MemoryMax": "536870912",
+        "TasksMax": "128",
+        "ExecStopPost": "/usr/bin/python3 -I -B /data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_short_window.py restore --binding-sha256 <FINAL_PUBLIC_BINDING_SHA256>"
+      },
+      "ExecStart": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_short_window.py",
+        "guard",
+        "--binding-sha256",
+        "<FINAL_PUBLIC_BINDING_SHA256>"
+      ],
+      "runtime_materialization_required": true
+    },
+    "nexpoly-r2-a-20261019-status.service": {
+      "manager": "user",
+      "transient": true,
+      "enable_at_boot": false,
+      "properties": {
+        "Restart": "no",
+        "NoNewPrivileges": "yes",
+        "CPUQuota": "5%",
+        "MemoryMax": "100663296",
+        "MemorySwapMax": "0",
+        "TasksMax": "32",
+        "RuntimeMaxSec": "140400",
+        "TimeoutStopSec": "10",
+        "UMask": "0077",
+        "StandardOutput": "null",
+        "StandardError": "journal"
+      },
+      "ExecStart": [
+        "/usr/bin/python3",
+        "-I",
+        "-B",
+        "/data/lzq/gith/nexpoly-acceptance-a-20261019/scripts/acceptance_gpu_status.py",
+        "--serve",
+        "--cohort-sha256",
+        "<FINAL_PUBLIC_COHORT_SHA256>"
+      ],
+      "runtime_materialization_required": true
+    }
+  },
+  "original_inventory_unit_modified": false,
+  "original_Main_units_modified": false,
+  "notes": [
+    "The short controller creates only its fixed restore user unit, using the actual reviewed public binding hash and exact parent PID/start arguments.",
+    "Angle-bracket fields are deliberately non-runnable until real action-time receipts exist; do not replace them with invented values.",
+    "The private environment file is an owner/native-runtime dependency; this preparation neither creates nor reads it.",
+    "Root file install, finite guard and mode-0660 stop-only socket require the concrete action-time security approval.",
+    "The exact existing native acceptance auth file is referenced by path and metadata only. No credential byte is copied or read by preparation; native systemd/application consumers load it, and the runtime validates the fixed metadata pin and exact database before work.",
+    "Default Root request is timer-only and grants no UID-1001 stop socket. An optional owner_stop_enabled=true request has its own review hash and is an additional, unnecessary-for-science permission. Timer-only Root remains charged until its fixed deadline.",
+    "The current candidate rejects owner_stop_enabled=true and never creates the owner-stop socket. Guard actions require UID/GID 0:0, preserving the original root:root 0644 manifest on CAS restore. An early-stop interface would require a separate new source review."
+  ]
+}

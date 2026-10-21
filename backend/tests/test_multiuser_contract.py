@@ -116,6 +116,7 @@ def test_multiuser_all_runtime_routes_reject_guest_initial_password_and_operatio
                     # Expected policy comes from the independently reviewed
                     # manifest, never from the implementation under test.
                     assert route_policy(path, method) == policy, (method, path, policy)
+                    default_operations_denied = policy == "operations" or policy.startswith("capability:")
                     if policy == "public" or path.startswith("/api/v1/auth/"):
                         continue
                     options = {"content": b"invalid-json", "headers": {"Origin": "http://testserver", "Content-Type": "application/json"}}
@@ -134,12 +135,13 @@ def test_multiuser_all_runtime_routes_reject_guest_initial_password_and_operatio
                     response = initial.request(method, path, **options)
                     assert response.status_code == 403, (method, path, response.text)
                     if method != "HEAD":
-                        assert response.json()["code"] == ("operation_forbidden" if policy == "operations" else "password_change_required")
-                    if policy == "operations":
+                        assert response.json()["code"] == ("operation_forbidden" if default_operations_denied else "password_change_required")
+                    if default_operations_denied:
                         assert ordinary.request(method, path, **options).status_code == 403
                         operations.add((method, route.path))
                     checked.add((method, route.path))
-        expected_private = {key for key, permission in reviewed.items() if permission in {"member", "operations", "mixed-template"}
+        expected_private = {key for key, permission in reviewed.items()
+                            if (permission in {"member", "operations", "mixed-template"} or permission.startswith("capability:"))
                             and not key[1].startswith("/api/v1/auth/") and key[0] != "OPTIONS"}
         assert checked == expected_private
         assert ("GET", "/api/v1/lab-data/test-projects") in operations

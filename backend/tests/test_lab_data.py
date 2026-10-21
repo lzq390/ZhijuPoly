@@ -44,6 +44,9 @@ class FakeLabDataConnection:
         normalized = " ".join(sql.lower().split())
         self.executed_sql.append(normalized)
 
+        if normalized.startswith("select to_regclass("):
+            return FakeCursor([{"projects": "lab.test_projects", "measurements": "lab.sample_measurements"}])
+
         if (
             normalized.startswith("create schema")
             or normalized.startswith("create table")
@@ -152,6 +155,8 @@ class SchemaCreateRaceConnection(FakeLabDataConnection):
 
 
 def make_client_with_fake_lab_data(fake_connection: FakeLabDataConnection) -> TestClient:
+    # Maintenance setup is explicit; request dependencies no longer run DDL.
+    LabDataRepository(fake_connection).ensure_schema()
     settings = Settings(
         sqlite_db_path="backend/data/test-missing.db",
         pi_reverse_backend="postgres",
@@ -169,7 +174,7 @@ def make_client_with_fake_lab_data(fake_connection: FakeLabDataConnection) -> Te
     app.include_router(lab_data_router)
 
     @contextmanager
-    def fake_connection_factory(dsn: str):
+    def fake_connection_factory(dsn: str, *, readonly_snapshot: bool = False):
         assert dsn == "postgresql://pi-user:pi-pass@example.invalid/nexpoly"
         yield fake_connection
 
@@ -323,7 +328,7 @@ def test_lab_data_router_database_unavailable_returns_domain_error() -> None:
     app.include_router(lab_data_router)
 
     @contextmanager
-    def unavailable_connection_factory(dsn: str):
+    def unavailable_connection_factory(dsn: str, *, readonly_snapshot=False):
         raise PostgresUnavailableError("PI Postgres database is not reachable")
         yield
 

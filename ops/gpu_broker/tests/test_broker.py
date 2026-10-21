@@ -340,6 +340,27 @@ def _bind_test_workload(lease) -> None:
     ).strip()
 
 
+def _bind_scoped_mps_test_workload(
+    lease: Lease,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bind only this test's client to its lease-named cgroup fixture."""
+
+    _bind_test_workload(lease)
+    lease.workload_cgroup = (
+        f"0::{scope_control_group(lease.lease_id, uid=os.geteuid())}"
+    )
+    process_cgroups = {lease.workload_pid: lease.workload_cgroup}
+
+    def read_test_cgroup(pid: int) -> str:
+        try:
+            return process_cgroups[pid]
+        except KeyError:
+            raise OSError(f"PID {pid} is outside this test's cgroup fixture") from None
+
+    monkeypatch.setattr(broker_server, "_read_cgroup", read_test_cgroup)
+
+
 def test_process_stable_descriptor_path_survives_child_close_fds(
     tmp_path: Path,
 ) -> None:
@@ -440,6 +461,47 @@ def test_broker_main_loads_an_inherited_reservation_descriptor(
         encoding="utf-8",
     )
     nvidia_smi.chmod(0o700)
+    # This case exercises inherited descriptors through the real main().
+    # Only its systemd/cgroup environment is synthetic; the controller stays real.
+    cgroup_root = tmp_path / "cgroup"
+    cgroup_root.mkdir(mode=0o700)
+    manager = cgroup_root.joinpath(
+        *user_manager_control_group(os.geteuid()).split("/")[1:]
+    )
+    manager.mkdir(parents=True, mode=0o755)
+    child_bootstrap = """
+from functools import partial
+from pathlib import Path
+import os
+import subprocess
+import sys
+
+from gpu_resource import user_manager_control_group
+from ops.gpu_broker import server
+
+
+def query_user_manager(command, **kwargs):
+    assert tuple(command) == (
+        "/usr/bin/systemctl", "--user", "show",
+        "--property=ControlGroup", "--no-pager",
+    ), command
+    assert kwargs == {
+        "check": False, "capture_output": True, "text": True, "timeout": 5.0,
+    }, kwargs
+    return subprocess.CompletedProcess(
+        command, 0,
+        stdout=f"ControlGroup={user_manager_control_group(os.geteuid())}\\n",
+        stderr="",
+    )
+
+
+server.JobCgroupController = partial(
+    server.JobCgroupController,
+    cgroup_root=Path(sys.argv.pop(1)),
+    run=query_user_manager,
+)
+raise SystemExit(server.main())
+"""
     root_descriptor = os.open(
         root,
         os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
@@ -458,8 +520,9 @@ def test_broker_main_loads_an_inherited_reservation_descriptor(
         process = subprocess.Popen(
             [
                 sys.executable,
-                "-m",
-                "ops.gpu_broker.server",
+                "-c",
+                child_bootstrap,
+                str(cgroup_root),
                 "--socket",
                 f"/proc/self/fd/{root_descriptor}/broker.sock",
                 "--state",
@@ -1953,7 +2016,10 @@ def test_process_termination_failure_logs_only_controlled_stage_and_code(
     assert lease.gpu_uuid in status["quarantined_gpus"]
 
 
-def test_mps_guard_uses_host_ps_pid_and_waits_for_cuda_success(tmp_path: Path) -> None:
+def test_mps_guard_uses_host_ps_pid_and_waits_for_cuda_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pipe_directory = tmp_path / "mps-1" / "pipe"
     pipe_directory.mkdir(parents=True)
     pipe_directory.chmod(0o700)
@@ -1975,7 +2041,7 @@ def test_mps_guard_uses_host_ps_pid_and_waits_for_cuda_success(tmp_path: Path) -
     guard = MpsRuntimeGuard(tmp_path, run=run)
     broker = HostGpuBroker(tmp_path / "state.json")
     lease = _acquire(broker, component="md", environment="dev", kind="execution")
-    _bind_test_workload(lease)
+    _bind_scoped_mps_test_workload(lease, monkeypatch)
 
     assert guard.terminate_lease_clients(lease) == (os.getpid(),)
     assert commands == ["ps", f"terminate_client 6472 {os.getpid()}"]
@@ -1984,6 +2050,7 @@ def test_mps_guard_uses_host_ps_pid_and_waits_for_cuda_success(tmp_path: Path) -
 @pytest.mark.parametrize("transition_tail", ("", " 4026531836"))
 def test_mps_guard_retries_exact_termination_transition_until_absent(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     transition_tail: str,
 ) -> None:
     pipe_directory = tmp_path / "mps-1" / "pipe"
@@ -2010,7 +2077,7 @@ def test_mps_guard_retries_exact_termination_transition_until_absent(
     guard = MpsRuntimeGuard(tmp_path, run=run)
     broker = HostGpuBroker(tmp_path / "state.json")
     lease = _acquire(broker, component="md", environment="dev", kind="execution")
-    _bind_test_workload(lease)
+    _bind_scoped_mps_test_workload(lease, monkeypatch)
 
     assert guard.terminate_lease_clients(lease) == (client_pid,)
     assert guard.lease_client_alive_after_grace(lease, timeout_seconds=0.5) is False
@@ -2018,6 +2085,7 @@ def test_mps_guard_retries_exact_termination_transition_until_absent(
 
 def test_mps_guard_persistent_exact_termination_transition_remains_alive(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pipe_directory = tmp_path / "mps-1" / "pipe"
     pipe_directory.mkdir(parents=True)
@@ -2048,7 +2116,7 @@ def test_mps_guard_persistent_exact_termination_transition_remains_alive(
     guard = MpsRuntimeGuard(tmp_path, run=run)
     broker = HostGpuBroker(tmp_path / "state.json")
     lease = _acquire(broker, component="md", environment="dev", kind="execution")
-    _bind_test_workload(lease)
+    _bind_scoped_mps_test_workload(lease, monkeypatch)
 
     assert guard.terminate_lease_clients(lease) == (client_pid,)
     assert guard.lease_client_alive_after_grace(lease, timeout_seconds=0) is True
@@ -2097,7 +2165,10 @@ def test_mps_guard_never_terminates_client_outside_exact_owned_scope(
     assert commands == ["ps", f"terminate_client 6472 {owned_pid}"]
 
 
-def test_mps_guard_rejects_non_successful_termination(tmp_path: Path) -> None:
+def test_mps_guard_rejects_non_successful_termination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pipe_directory = tmp_path / "mps-1" / "pipe"
     pipe_directory.mkdir(parents=True)
     pipe_directory.chmod(0o700)
@@ -2116,7 +2187,7 @@ def test_mps_guard_rejects_non_successful_termination(tmp_path: Path) -> None:
     guard = MpsRuntimeGuard(tmp_path, run=run)
     broker = HostGpuBroker(tmp_path / "state.json")
     lease = _acquire(broker, component="md", environment="dev", kind="execution")
-    _bind_test_workload(lease)
+    _bind_scoped_mps_test_workload(lease, monkeypatch)
 
     with pytest.raises(BrokerError) as error:
         guard.terminate_lease_clients(lease)

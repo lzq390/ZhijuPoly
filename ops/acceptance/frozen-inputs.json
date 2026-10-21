@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "scope_id": "acceptance-a-20261019",
+  "database_page_size": 10,
+  "conditional_generation": {
+    "availability_path": "/api/v1/conditional-generation/tg/status",
+    "reference_smiles": "*CC*",
+    "delta_tg": 0,
+    "num_candidates": 1,
+    "temperature": 1,
+    "top_k": 5,
+    "maximum_submissions": 1,
+    "local_deadline_seconds": 180
+  },
+  "retrosynthesis": {
+    "smiles": "CC(=O)Oc1ccccc1C(=O)O",
+    "beam_size": 5,
+    "max_length": 128,
+    "maximum_submissions": 1
+  },
+  "polytao": {
+    "smiles": "*CC*",
+    "maximum_submissions": 1
+  },
+  "lab": {
+    "owner": "A",
+    "sample_id": "r2-a-20261019-tg-001",
+    "experiment_project": "Tg",
+    "result_value": 300,
+    "result_unit": "K",
+    "temperature": null,
+    "concentration": null,
+    "maximum_creates": 1,
+    "database_a": "nexpoly_accept_r2_lab_a_20261019",
+    "database_b": "nexpoly_accept_r2_lab_b_20261019"
+  },
+  "events": {
+    "module": "md",
+    "reuse_case_job": "isolated_md_interrupt",
+    "additional_scientific_submissions": 0,
+    "acceptance": "owner-scoped current snapshot convergence and one REST resynchronization",
+    "history_replay": "NOT_SUPPORTED",
+    "periodic_REST_fallback": "NOT_SUPPORTED"
+  },
+  "dft_cancel": {
+    "fresh_same_job_progress_lower_exclusive": 15,
+    "fresh_same_job_progress_upper_inclusive": 70,
+    "maximum_cancel_requests": 1,
+    "finished_before_cancel": "INCONCLUSIVE_RACE_NO_RETRY"
+  },
+  "transport": {
+    "protocol": "Transport",
+    "components_native_order": [
+      "DMC",
+      "EC",
+      "LI",
+      "PF6"
+    ],
+    "target_atom_count_min": 10000,
+    "target_atom_count_max": 11000,
+    "timeout_seconds": 79200,
+    "minimum_remaining_budget_seconds": 83100,
+    "maximum_submissions": 1,
+    "required_result": "formal completed with physical_result=true and positive-byte outputs/results.json",
+    "estimated_steps_are_independent_integration_proof": false,
+    "nonequilibrium_steps": 1000000,
+    "npt_steps": 4000000,
+    "nvt_steps": 10000000,
+    "total_steps": 15000000
+  },
+  "md_recovery": {
+    "new_job_required": true,
+    "protocol": "Density",
+    "steps": 300,
+    "three_finite_series_end_at": 300,
+    "not_equilibrated": true,
+    "physical_density": false,
+    "same_job_checkpoint_resume": "NOT_SUPPORTED",
+    "scenario": "DensityDemo",
+    "run_mode": "demo"
+  },
+  "dft_recovery": {
+    "new_job_required": true,
+    "engine": "aimnet2",
+    "molecule": "water",
+    "atom_count": 3,
+    "mode": "singlepoint",
+    "finite_energy_and_native_charge_force_dimensions": true
+  },
+  "strict_midnight": {
+    "obligation": "separate later-user-requested check",
+    "prerequisite_for_remaining_21_cases": false,
+    "synthetic_ledger_or_clock_change_allowed": false,
+    "exact_instant_record_proven": false
+  },
+  "safety": {
+    "paid_API": false,
+    "Gmail": false,
+    "GPU2": false,
+    "production_changes": false,
+    "Main_pause_soft_seconds": 3300,
+    "Main_pause_hard_seconds": 3600,
+    "ambiguous_submit_retry": false
+  }
+}

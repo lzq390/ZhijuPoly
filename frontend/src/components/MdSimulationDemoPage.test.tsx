@@ -1,3 +1,4 @@
+import { LibraryTestProvider, testDocument, chooseCurrentStructure } from "../test/structureLibraryFixture";
 import { StructureWorkspace } from "../structure/workspace";
 // @vitest-environment jsdom
 
@@ -164,13 +165,14 @@ function makeStructure(smiles = "*CO*"): StructureWorkspaceContext {
 }
 
 function renderPage(structure = makeStructure(), onEditStructure = vi.fn()) {
+  vi.spyOn(structure.workspace, "captureForImport").mockResolvedValue(testDocument(structure.smiles));
   return {
     ...render(
       <MdSimulationDemoPage
         structure={structure}
         onEditStructure={onEditStructure}
         resultRevealDelayMs={0}
-      />,
+      />, { wrapper: ({ children }) => <LibraryTestProvider workspace={structure.workspace}>{children}</LibraryTestProvider> },
     ),
     structure,
     onEditStructure,
@@ -395,14 +397,15 @@ describe("MdSimulationDemoPage", () => {
   it("imports shared structure, validates fields locally, and persists a draft", async () => {
     const view = renderPage(makeStructure("*CO*"));
     await settleDefaultsAndPreview();
-    fireEvent.click(screen.getByRole("button", { name: "导入共享结构" }));
+    await chooseCurrentStructure(screen.getByRole("button", { name: "选择结构" }));
     await act(async () => {
       await Promise.resolve();
     });
     expect((screen.getByLabelText("SMILES") as HTMLTextAreaElement).value).toBe(
       "*CO*",
     );
-    expect(view.structure.getCurrentSmiles).toHaveBeenCalled();
+    expect(view.structure.workspace.captureForImport).toHaveBeenCalled();
+    expect(view.structure.getCurrentSmiles).not.toHaveBeenCalled();
 
     const parameters = openParameters();
     const pressure = within(parameters).getByRole("spinbutton", {

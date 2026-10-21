@@ -198,6 +198,7 @@ class Settings:
         smipoly_enabled: bool | None = None,
     ) -> None:
         env_values = dotenv_values(DEFAULT_ENV_FILE) if DEFAULT_ENV_FILE.exists() else {}
+        self.structure_library_enabled = os.getenv("STRUCTURE_LIBRARY_ENABLED", str(env_values.get("STRUCTURE_LIBRARY_ENABLED", "false"))).lower() in {"1", "true", "yes"}
 
         raw_sqlite_db_path = sqlite_db_path or os.getenv(
             "SQLITE_DB_PATH",

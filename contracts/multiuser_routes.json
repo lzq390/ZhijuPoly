@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Reviewed inventory, not evidence that every mapped scenario passed. templates permit only fixed a/b CSV/XLSX GET or HEAD.",
+  "note": "Reviewed inventory, not evidence that every mapped scenario passed. templates permit only fixed a/b CSV/XLSX GET or HEAD. The seven usage GET routes require an authenticated owner; free accounts retain their own usage/history access through the separate tier gate. Capability-prefixed routes remain operations-denied by default; only the exact finite development acceptance policy can admit them.",
   "routes": [
     {
       "method": "DELETE",
@@ -75,6 +75,22 @@
       "frontend": "/knowledge",
       "cases": [
         "F05",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/structure-library/records/{record_id}",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
         "I01",
         "I03",
         "I04",
@@ -314,7 +330,7 @@
       "path": "/api/v1/dev-gpu-session/status",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:dev_gpu.status.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -353,7 +369,7 @@
       "path": "/api/v1/lab-data/sample-measurements",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -366,7 +382,7 @@
       "path": "/api/v1/lab-data/sample-measurements/count",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -379,7 +395,7 @@
       "path": "/api/v1/lab-data/sample-measurements/stats/by-project",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -392,7 +408,7 @@
       "path": "/api/v1/lab-data/sample-measurements/stats/summary",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -405,7 +421,7 @@
       "path": "/api/v1/lab-data/test-projects",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.read",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -756,6 +772,177 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/structure-library/records",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/structure-library/records/{record_id}",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/structure-library/status",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/task-events",
+      "feature": "I08",
+      "resource": "owner-scoped MD/DFT status event stream",
+      "permission": "member",
+      "frontend": [
+        "MD task center",
+        "DFT task center"
+      ],
+      "cases": [
+        "F10",
+        "F11",
+        "I01",
+        "I04",
+        "I08"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/catalog",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/entitlements",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/operations",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/operations/{operation_id}",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/operations/{operation_id}/result",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/records",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/usage/summary",
+      "feature": "personal-usage",
+      "resource": "owner-usage",
+      "permission": "member",
+      "frontend": "/account/usage",
+      "cases": [
+        "personal-usage",
+        "I01",
+        "I03",
+        "I04",
+        "I05"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/docs",
       "feature": "F13",
       "resource": "operations",
@@ -894,6 +1081,22 @@
         "F13",
         "I01",
         "I03"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/structure-library/records/{record_id}",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
       ]
     },
     {
@@ -1171,7 +1374,7 @@
       "path": "/api/v1/lab-data/sample-measurements",
       "feature": "F13",
       "resource": "operations",
-      "permission": "operations",
+      "permission": "capability:lab.data.write",
       "frontend": "not-exposed",
       "cases": [
         "F13",
@@ -1475,6 +1678,22 @@
     },
     {
       "method": "POST",
+      "path": "/api/v1/structure-library/records",
+      "feature": "structure-library",
+      "resource": "structure-library",
+      "permission": "member",
+      "frontend": "/structure-workbench",
+      "cases": [
+        "structure-library",
+        "I01",
+        "I03",
+        "I04",
+        "I05",
+        "I07"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/v1/structure/2d",
       "feature": "F01",
       "resource": "request-result",
@@ -1578,24 +1797,6 @@
         "I04",
         "I05",
         "I07"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/task-events",
-      "feature": "I08",
-      "resource": "owner-scoped MD/DFT status event stream",
-      "permission": "member",
-      "frontend": [
-        "MD task center",
-        "DFT task center"
-      ],
-      "cases": [
-        "F10",
-        "F11",
-        "I01",
-        "I04",
-        "I08"
       ]
     }
   ]

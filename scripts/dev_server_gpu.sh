@@ -4,11 +4,85 @@ umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+readonly NATIVE_COHORT_CONFIG_INPUT="${NEXPOLY_DEV_GPU_COHORT_CONFIG:-}"
+readonly NATIVE_COHORT_SHA256_INPUT="${NEXPOLY_DEV_GPU_COHORT_SHA256:-}"
+readonly NATIVE_RECOVERY_SESSION_INPUT="${NEXPOLY_DEV_GPU_SESSION_ID:-}"
+readonly NATIVE_RECOVERY_FLAG_INPUT="${NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY:-0}"
+NATIVE_COHORT_DEVICE_INPUT="${NEXPOLY_DEV_GPU_COHORT_DEVICE:-}"
+NATIVE_COHORT_INODE_INPUT="${NEXPOLY_DEV_GPU_COHORT_INODE:-}"
+if [[ -n "$NATIVE_COHORT_DEVICE_INPUT" || -n "$NATIVE_COHORT_INODE_INPUT" ]]; then
+  readonly NATIVE_COHORT_DEVICE_INPUT NATIVE_COHORT_INODE_INPUT
+fi
+COHORT_HELPER="$ROOT_DIR/scripts/dev_gpu_cohort.py"
 
-set -a
-# shellcheck disable=SC1091
-source .env.dev
-set +a
+apply_native_cohort_environment() {
+  if [[ -z "${NATIVE_COHORT_CONFIG_INPUT:-}" && -z "$NATIVE_COHORT_SHA256_INPUT" ]]; then
+    [[ -z "$NATIVE_COHORT_DEVICE_INPUT" && -z "$NATIVE_COHORT_INODE_INPUT" ]] || return 2
+    unset NEXPOLY_DEV_GPU_COHORT_CONFIG NEXPOLY_DEV_GPU_COHORT_SHA256
+    unset NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT NEXPOLY_DEV_GPU_COHORT_COMPOSE_FILE
+    unset NEXPOLY_DEV_GPU_COHORT_DEVICE NEXPOLY_DEV_GPU_COHORT_INODE
+    unset NEXPOLY_DEV_GPU_COHORT_SOURCE_SHA NEXPOLY_DEV_GPU_COHORT_SOURCE_TREE
+    unset NEXPOLY_DEV_FROZEN_CPU_IMAGE_ID NEXPOLY_DEV_FROZEN_CPU_CONFIG_HASH
+    unset NEXPOLY_DEV_COMPOSE_PROJECT NEXPOLY_DEV_BACKEND_IMAGE NEXPOLY_DEV_AUTH_ENV_FILE
+    return 0
+  fi
+  [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" && -n "$NATIVE_COHORT_SHA256_INPUT" ]] || return 2
+  local payload assignment
+  local -a identity_options=()
+  if [[ -n "$NATIVE_COHORT_DEVICE_INPUT" || -n "$NATIVE_COHORT_INODE_INPUT" ]]; then
+    identity_options=(--device "$NATIVE_COHORT_DEVICE_INPUT" --inode "$NATIVE_COHORT_INODE_INPUT")
+  fi
+  payload="$(/usr/bin/python3 -I "$COHORT_HELPER" environment     --config "${NATIVE_COHORT_CONFIG_INPUT:-}" --sha256 "$NATIVE_COHORT_SHA256_INPUT" "${identity_options[@]}")" || return 2
+  while IFS= read -r assignment; do
+    [[ "$assignment" =~ ^[A-Z][A-Z0-9_]*= ]] || return 2
+    export "$assignment"
+  done <<< "$payload"
+  export NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY="$NATIVE_RECOVERY_FLAG_INPUT"
+  if [[ "$NATIVE_RECOVERY_FLAG_INPUT" == "1" ]]; then
+    [[ "$NATIVE_RECOVERY_SESSION_INPUT" =~ ^[0-9a-f]{32}$ ]] || return 2
+    export NEXPOLY_DEV_GPU_SESSION_INTERNAL_RECOVERY=1
+    export NEXPOLY_DEV_GPU_SESSION_ID="$NATIVE_RECOVERY_SESSION_INPUT"
+  fi
+  if [[ -z "$NATIVE_COHORT_DEVICE_INPUT" && -z "$NATIVE_COHORT_INODE_INPUT" ]]; then
+    declare -gr NATIVE_COHORT_DEVICE_INPUT="$NEXPOLY_DEV_GPU_COHORT_DEVICE"
+    declare -gr NATIVE_COHORT_INODE_INPUT="$NEXPOLY_DEV_GPU_COHORT_INODE"
+  fi
+}
+
+cohort_control() {
+  "$GPU_SESSION_PYTHON" -I "$COHORT_HELPER" "$@"     --config "${NATIVE_COHORT_CONFIG_INPUT:-}" --sha256 "$NATIVE_COHORT_SHA256_INPUT"     --device "$NATIVE_COHORT_DEVICE_INPUT" --inode "$NATIVE_COHORT_INODE_INPUT"
+}
+
+apply_frozen_cpu_environment() {
+  local payload assignment
+  payload="$(/usr/bin/python3 -I "$COHORT_HELPER" cpu-environment \
+    --config "$NATIVE_COHORT_CONFIG_INPUT" --sha256 "$NATIVE_COHORT_SHA256_INPUT" \
+    --device "$NATIVE_COHORT_DEVICE_INPUT" --inode "$NATIVE_COHORT_INODE_INPUT")" || return 2
+  while IFS= read -r assignment; do
+    [[ "$assignment" =~ ^[A-Z][A-Z0-9_]*= ]] || return 2
+    export "$assignment"
+  done <<< "$payload"
+}
+
+COHORT_FROZEN_SOURCE_MODE=false
+if [[ -n "$NATIVE_COHORT_CONFIG_INPUT" ]]; then
+  case "${1:-status}" in
+    gpu-session-status|gpu-session-down|gpu-session-maintenance-stop|gpu-session-stop-owned-internal|gpu-session-restore-cpu-internal)
+      COHORT_FROZEN_SOURCE_MODE=true ;;
+  esac
+fi
+readonly COHORT_FROZEN_SOURCE_MODE
+
+if [[ "$COHORT_FROZEN_SOURCE_MODE" == "true" ]]; then
+  apply_native_cohort_environment
+  apply_frozen_cpu_environment
+else
+  set -a
+  # shellcheck disable=SC1091
+  source .env.dev
+  set +a
+  apply_native_cohort_environment
+fi
 
 load_user_isolation_environment() {
   case "${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" in
@@ -16,7 +90,7 @@ load_user_isolation_environment() {
     true) ;;
     *) echo "NEXPOLY_DEV_USER_ISOLATION_ENABLED must be exactly true or false." >&2; return 2 ;;
   esac
-  local auth_environment="$ROOT_DIR/.env.dev.auth"
+  local auth_environment="${NEXPOLY_DEV_AUTH_ENV_FILE:-$ROOT_DIR/.env.dev.auth}"
   [[ -f "$auth_environment" && ! -L "$auth_environment" &&
     "$(stat -c '%u' "$auth_environment")" == "$(id -u)" &&
     "$(stat -c '%a' "$auth_environment")" == "600" ]] || {
@@ -30,7 +104,10 @@ load_user_isolation_environment() {
   # The explicit opt-in cannot be downgraded by an imported configuration.
   export NEXPOLY_DEV_USER_ISOLATION_ENABLED=true
 }
-load_user_isolation_environment
+if [[ "$COHORT_FROZEN_SOURCE_MODE" != "true" ]]; then
+  load_user_isolation_environment
+  apply_native_cohort_environment
+fi
 export NEXPOLY_DEV_USER_ISOLATION_ENABLED="${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}"
 
 case "${NEXPOLY_DEV_GPU_LAUNCHER_ENABLED:-false}" in
@@ -57,8 +134,18 @@ export NEXPOLY_DEV_GPU_LAUNCHER_ENABLED="${NEXPOLY_DEV_GPU_LAUNCHER_ENABLED:-fal
 export NEXPOLY_DEV_GPU_DEVICE=1
 
 : "${NEXPOLY_ASSET_ROOT:?Set NEXPOLY_ASSET_ROOT to a pinned immutable asset release}"
+if [[ "$COHORT_FROZEN_SOURCE_MODE" == "true" ]]; then
+  apply_frozen_cpu_environment
+else
 CURRENT_SOURCE_REVISION="$(git rev-parse --verify HEAD)"
 CURRENT_SOURCE_TREE="$(git rev-parse --verify 'HEAD^{tree}')"
+if [[ -n "$NATIVE_COHORT_CONFIG_INPUT" && "$COHORT_FROZEN_SOURCE_MODE" != "true" ]]; then
+  [[ "$CURRENT_SOURCE_REVISION" == "$NEXPOLY_DEV_GPU_COHORT_SOURCE_SHA" &&
+    "$CURRENT_SOURCE_TREE" == "$NEXPOLY_DEV_GPU_COHORT_SOURCE_TREE" ]] || {
+    echo "Cohort startup requires its frozen source to match the checked-out HEAD." >&2
+    exit 2
+  }
+fi
 BACKEND_DEPENDENCY_LOCK_SHA256="sha256:$(
   sha256sum \
     backend/requirements.lock \
@@ -75,10 +162,14 @@ BACKEND_BUILD_CONFIG_FILES=(
 if [[ "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == "true" ]]; then
   BACKEND_BUILD_CONFIG_FILES+=(docker-compose.user-isolation-dev.yml)
 fi
+if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+  BACKEND_BUILD_CONFIG_FILES+=("$NEXPOLY_DEV_GPU_COHORT_COMPOSE_FILE")
+fi
 BACKEND_BUILD_CONFIG_SHA256="sha256:$(
   sha256sum "${BACKEND_BUILD_CONFIG_FILES[@]}" |
     sha256sum | awk '{print $1}'
 )"
+fi
 NEXPOLY_BUILD_REVISION="${NEXPOLY_BUILD_REVISION:-$CURRENT_SOURCE_REVISION}"
 [[ "$NEXPOLY_BUILD_REVISION" =~ ^[0-9a-f]{40}$ ]] || {
   echo "NEXPOLY_BUILD_REVISION must be a full lowercase Git SHA." >&2
@@ -100,18 +191,23 @@ if [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]]; then
 fi
 if [[ "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == "true" ]]; then
   DEV_COMPOSE_FILES+=(-f docker-compose.user-isolation-dev.yml)
-  DEV_COMPOSE_ENV_FILES+=(--env-file .env.dev.auth)
+  DEV_COMPOSE_ENV_FILES+=(--env-file "${NEXPOLY_DEV_AUTH_ENV_FILE:-.env.dev.auth}")
 fi
-COMPOSE=(docker compose -p nexpoly_dev "${DEV_COMPOSE_FILES[@]}" "${DEV_COMPOSE_ENV_FILES[@]}")
+DEV_COMPOSE_PROJECT="nexpoly_dev"
+if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+  DEV_COMPOSE_PROJECT="$NEXPOLY_DEV_COMPOSE_PROJECT"
+  DEV_COMPOSE_FILES+=(-f "$NEXPOLY_DEV_GPU_COHORT_COMPOSE_FILE")
+fi
+COMPOSE=(docker compose -p "$DEV_COMPOSE_PROJECT" "${DEV_COMPOSE_FILES[@]}" "${DEV_COMPOSE_ENV_FILES[@]}")
 GPU_COMPOSE=(
-  docker compose -p nexpoly_dev
+  docker compose -p "$DEV_COMPOSE_PROJECT"
   "${DEV_COMPOSE_FILES[@]}"
   -f docker-compose.dev-gpu-session.yml
   "${DEV_COMPOSE_ENV_FILES[@]}"
 )
 GPU_SESSION_CONTROLLER="$ROOT_DIR/scripts/dev_gpu_session.py"
 GPU_SESSION_PYTHON="/usr/bin/python3"
-GPU_SESSION_UP_LOCK="$ROOT_DIR/.runtime/gpu-session-up.lock"
+GPU_SESSION_UP_LOCK="${NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT:-$ROOT_DIR/.runtime}/gpu-session-up.lock"
 GPU_OPERATOR_SCRIPT="$ROOT_DIR/scripts/dev_gpu_operator.py"
 GPU_OPERATOR_PRIVATE_DIR="$ROOT_DIR/.runtime/gpu-operator"
 GPU_OPERATOR_CLIENT_DIR="$ROOT_DIR/.runtime/gpu-operator-client"
@@ -126,8 +222,17 @@ export NEXPOLY_DEV_GPU_OPERATOR_CLIENT_DIR="$GPU_OPERATOR_CLIENT_DIR"
     echo "The fixed GPU session controller Python lacks required pidfd APIs: $GPU_SESSION_PYTHON" >&2
     exit 2
   }
-export NEXPOLY_GPU_STATE_ROOT="$ROOT_DIR/.runtime/gpu-resource"
+GPU_SESSION_STATE_ROOT="${NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT:-$ROOT_DIR/.runtime}/gpu-resource"
+export NEXPOLY_GPU_STATE_ROOT="$GPU_SESSION_STATE_ROOT"
 DEV_BACKEND_IMAGE="nexpoly-dev-backend:latest"
+if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+  DEV_BACKEND_IMAGE="$NEXPOLY_DEV_BACKEND_IMAGE"
+  if [[ "$COHORT_FROZEN_SOURCE_MODE" == "true" ]]; then
+    DEV_BACKEND_IMAGE="$NEXPOLY_DEV_FROZEN_CPU_IMAGE_ID"
+  fi
+else
+  unset NEXPOLY_DEV_BACKEND_IMAGE NEXPOLY_DEV_AUTH_ENV_FILE
+fi
 DEV_PYPI_INDEX_URL="${NEXPOLY_DEV_PYPI_INDEX_URL:-https://pypi.org/simple}"
 DEV_PYPI_MIRROR_URL="${NEXPOLY_DEV_PYPI_MIRROR_URL:-https://mirrors.ustc.edu.cn/pypi/simple}"
 FRONTEND_URL="http://127.0.0.1:${NEXPOLY_DEV_FRONTEND_PORT:-9001}"
@@ -146,8 +251,13 @@ WORKER_OPENMM_DIR="${MONOMER_MD_DEV_BYTEFF2_OPENMM_DIR:-${BYTEFF2_OPENMM_DIR:-}}
 WORKER_PROCESS_HELPER="$ROOT_DIR/scripts/dev_worker_process.py"
 DFT_WORKER_SOCKET_DIR="${MONOMER_DFT_DEV_WORKER_SOCKET_DIR:-$ROOT_DIR/.runtime/monomer-dft-worker-socket}"
 DFT_DOWNLOAD_SPOOL_DIR="${MONOMER_DFT_DEV_DOWNLOAD_SPOOL_DIR:-$ROOT_DIR/.runtime/monomer-dft-download-spool}"
-DFT_WORKER_SESSION_RECORD="$ROOT_DIR/.runtime/monomer-dft-worker.session.json"
-DFT_WORKER_LOCK_SHA256="sha256:$(sha256sum workers/monomer_dft_worker/requirements.lock | awk '{print $1}')"
+DFT_WORKER_PID_FILE="${NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT:-$ROOT_DIR/.runtime}/monomer-dft-worker.pid"
+DFT_WORKER_SESSION_RECORD="${NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT:-$ROOT_DIR/.runtime}/monomer-dft-worker.session.json"
+if [[ "$COHORT_FROZEN_SOURCE_MODE" == "true" ]]; then
+  DFT_WORKER_LOCK_SHA256="$NEXPOLY_DEV_FROZEN_DFT_LOCK"
+else
+  DFT_WORKER_LOCK_SHA256="sha256:$(sha256sum workers/monomer_dft_worker/requirements.lock | awk '{print $1}')"
+fi
 DFT_WORKER_VERSION="dev:${CURRENT_SOURCE_REVISION}:${CURRENT_SOURCE_TREE}:${DFT_WORKER_LOCK_SHA256}"
 [[ "$WORKER_SOCKET_DIR" == /* ]] || WORKER_SOCKET_DIR="$ROOT_DIR/${WORKER_SOCKET_DIR#./}"
 [[ "$WORKER_JOB_ROOT" == /* ]] || WORKER_JOB_ROOT="$ROOT_DIR/${WORKER_JOB_ROOT#./}"
@@ -158,7 +268,12 @@ DFT_WORKER_VERSION="dev:${CURRENT_SOURCE_REVISION}:${CURRENT_SOURCE_TREE}:${DFT_
 WORKER_SOCKET="$WORKER_SOCKET_DIR/worker.sock"
 WORKER_PID_FILE="$WORKER_JOB_ROOT/worker.pid"
 WORKER_LOG_FILE="$WORKER_JOB_ROOT/worker.log"
-WORKER_LOCK_SHA256="sha256:$(sha256sum "$WORKER_LOCK" | awk '{print $1}')"
+if [[ "$COHORT_FROZEN_SOURCE_MODE" == "true" ]]; then
+  WORKER_LOCK_SHA256="$NEXPOLY_DEV_FROZEN_MD_LOCK"
+  WORKER_PYTHON="$ROOT_DIR/.venv-monomer-md-worker/bin/python"
+else
+  WORKER_LOCK_SHA256="sha256:$(sha256sum "$WORKER_LOCK" | awk '{print $1}')"
+fi
 : "${BYTEFF2_ROOT:?Set BYTEFF2_ROOT to the byteff2 tree in the pinned asset release}"
 
 assert_dev_runtime_path() {
@@ -201,11 +316,17 @@ prepare_worker_runtime_directories() {
 prepare_dft_runtime_directories() {
   assert_dev_runtime_path MONOMER_DFT_DEV_WORKER_SOCKET_DIR "$DFT_WORKER_SOCKET_DIR"
   assert_dev_runtime_path MONOMER_DFT_DEV_DOWNLOAD_SPOOL_DIR "$DFT_DOWNLOAD_SPOOL_DIR"
-  [[ "$DFT_WORKER_SOCKET_DIR" == "$ROOT_DIR/.runtime/monomer-dft-worker-socket" ]] || {
+  local expected_socket="$ROOT_DIR/.runtime/monomer-dft-worker-socket"
+  local expected_spool="$ROOT_DIR/.runtime/monomer-dft-download-spool"
+  if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    expected_socket="$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/dft-socket"
+    expected_spool="$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/dft-spool"
+  fi
+  [[ "$DFT_WORKER_SOCKET_DIR" == "$expected_socket" ]] || {
     echo "Main dev DFT Worker socket must use the fixed worktree-private path." >&2
     return 1
   }
-  [[ "$DFT_DOWNLOAD_SPOOL_DIR" == "$ROOT_DIR/.runtime/monomer-dft-download-spool" ]] || {
+  [[ "$DFT_DOWNLOAD_SPOOL_DIR" == "$expected_spool" ]] || {
     echo "Main dev DFT download spool must use the fixed worktree-private path." >&2
     return 1
   }
@@ -408,7 +529,7 @@ validate_dft_session_prerequisites() {
   local path
   for path in \
     "$DFT_WORKER_SESSION_RECORD" \
-    "$ROOT_DIR/.runtime/monomer-dft-worker.pid" \
+    "${DFT_WORKER_PID_FILE:-$ROOT_DIR/.runtime/monomer-dft-worker.pid}" \
     "$DFT_WORKER_SOCKET_DIR/worker.sock"; do
     [[ ! -e "$path" && ! -L "$path" ]] || {
       echo "Preexisting DFT Worker state is not owned by the new session: $path" >&2
@@ -671,6 +792,9 @@ assert_clean_candidate() {
 }
 
 assert_clean_candidate_unless_direct_start() {
+  if [[ "${COHORT_FROZEN_SOURCE_MODE:-false}" == "true" && -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    return 0
+  fi
   if [[ "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" ]]; then
     return 0
   fi
@@ -838,6 +962,10 @@ PY
 }
 
 compute_backend_config_hash() {
+  if [[ "${COHORT_FROZEN_SOURCE_MODE:-false}" == "true" && -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    printf '%s\n' "$NEXPOLY_DEV_FROZEN_CPU_CONFIG_HASH"
+    return 0
+  fi
   "${COMPOSE[@]}" config --format json | python3 -c '
 import hashlib
 import json
@@ -847,6 +975,7 @@ config = json.load(sys.stdin)
 service = config["services"]["backend"]
 labels = service.get("labels") or {}
 labels.pop("com.nexpoly.dev.config-hash", None)
+labels.pop("com.nexpoly.dev.cohort-operation-id", None)
 payload = json.dumps(service, sort_keys=True, separators=(",", ":")).encode()
 print(hashlib.sha256(payload).hexdigest())
 '
@@ -862,6 +991,7 @@ config = json.load(sys.stdin)
 service = config["services"]["backend"]
 labels = service.get("labels") or {}
 labels.pop("com.nexpoly.dev.config-hash", None)
+labels.pop("com.nexpoly.dev.cohort-operation-id", None)
 payload = json.dumps(service, sort_keys=True, separators=(",", ":")).encode()
 print(hashlib.sha256(payload).hexdigest())
 '
@@ -893,7 +1023,11 @@ verify_backend_drift() {
   local image_tree image_lock image_build_config runtime_identity
   assert_clean_candidate_unless_direct_start
   assert_default_builder
-  container_id="$("${COMPOSE[@]}" ps -q backend)"
+  if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" && "${COHORT_FROZEN_SOURCE_MODE:-false}" == "true" ]]; then
+    container_id="$(cohort_control verify-cpu)" || return 1
+  else
+    container_id="$("${COMPOSE[@]}" ps -q backend)"
+  fi
   [[ -n "$container_id" ]] || { echo "Development backend container is missing." >&2; return 1; }
   expected_image="$(docker image inspect -f '{{.Id}}' "$DEV_BACKEND_IMAGE")"
   actual_image="$(docker inspect -f '{{.Image}}' "$container_id")"
@@ -1219,6 +1353,8 @@ worker_up() {
       export APP_SERVICE_POSTGRES_DSN="${MONOMER_MD_DEV_SERVICE_POSTGRES_DSN:-${APP_SERVICE_POSTGRES_DSN:?APP_SERVICE_POSTGRES_DSN is required for the isolated MD Worker}}"
       export APP_POSTGRES_DSN="$APP_SERVICE_POSTGRES_DSN"
     fi
+    export USAGE_METERING_ENABLED="${USAGE_METERING_ENABLED:-false}"
+    export USAGE_ENTITLEMENTS_ENABLED="${USAGE_ENTITLEMENTS_ENABLED:-false}"
     export BYTEFF2_PYTHON="$WORKER_PYTHON"
     export BYTEFF2_OPENMM_DIR="$WORKER_OPENMM_DIR"
     export BYTEFF2_ROOT
@@ -1238,8 +1374,8 @@ worker_up() {
     if [[ "${NEXPOLY_DEV_GPU_SESSION_ACTIVE:-false}" == "true" ]]; then
       export MONOMER_MD_GPU_BROKER_ENABLED=true
       export MONOMER_MD_GPU_BROKER_ENVIRONMENT=dev
-      export MONOMER_MD_GPU_BROKER_SOCKET_PATH="$ROOT_DIR/.runtime/gpu-resource/broker.sock"
-      export MONOMER_MD_GPU_MPS_PIPE_ROOT="$ROOT_DIR/.runtime/gpu-resource"
+      export MONOMER_MD_GPU_BROKER_SOCKET_PATH="${GPU_SESSION_STATE_ROOT:-$ROOT_DIR/.runtime/gpu-resource}/broker.sock"
+      export MONOMER_MD_GPU_MPS_PIPE_ROOT="$GPU_SESSION_STATE_ROOT"
       export MONOMER_MD_GPU_BROKER_WAIT_TIMEOUT_SECONDS=45
       export MONOMER_MD_GPU_SCOPE_LAUNCHER=systemd-user-scope
     else
@@ -1397,7 +1533,7 @@ dft_worker_session_record() {
     return 1
   }
   "$GPU_SESSION_PYTHON" -I - "$action" \
-    "$DFT_WORKER_SESSION_RECORD" "$ROOT_DIR/.runtime/monomer-dft-worker.pid" \
+    "$DFT_WORKER_SESSION_RECORD" "${DFT_WORKER_PID_FILE:-$ROOT_DIR/.runtime/monomer-dft-worker.pid}" \
     "$NEXPOLY_DEV_GPU_SESSION_ID" "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE" \
     "$DFT_WORKER_LOCK_SHA256" "$DFT_WORKER_VERSION" "$health" <<'PY'
 import json
@@ -1554,7 +1690,7 @@ dft_worker_ctl() {
 dft_worker_assert_stopped_runtime() {
   local path
   for path in \
-    "$ROOT_DIR/.runtime/monomer-dft-worker.pid" \
+    "${DFT_WORKER_PID_FILE:-$ROOT_DIR/.runtime/monomer-dft-worker.pid}" \
     "$DFT_WORKER_SOCKET_DIR/worker.sock" \
     "$DFT_WORKER_SESSION_RECORD"; do
     if [[ -e "$path" || -L "$path" ]]; then
@@ -1566,7 +1702,7 @@ dft_worker_assert_stopped_runtime() {
 
 dft_worker_drain_stop() {
   local socket="$DFT_WORKER_SOCKET_DIR/worker.sock"
-  local pid_file="$ROOT_DIR/.runtime/monomer-dft-worker.pid"
+  local pid_file="${DFT_WORKER_PID_FILE:-$ROOT_DIR/.runtime/monomer-dft-worker.pid}"
   local health response instance
   [[ ! -L "$socket" && ! -L "$pid_file" ]] || {
     echo "DFT Worker runtime identity path is unsafe." >&2
@@ -1767,6 +1903,11 @@ wait_gpu_backend_configured() {
 verify_gpu_backend_drift() {
   local expected_controller_status="${1:-ready}"
   local expected_container_id="${2:-}" expected_config_hash="${3:-}"
+  if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" && -z "$expected_container_id" ]]; then
+    expected_container_id="$(cohort_control verify-backend --session-id "$NEXPOLY_DEV_GPU_SESSION_ID")" || return 1
+    expected_config_hash="$(cohort_control verify-backend --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" --print-config-hash)" || return 1
+    [[ "$expected_container_id" =~ ^[0-9a-f]{64}$ ]] || return 1
+  fi
   local container_id expected_image actual_image desired_hash actual_hash session_label
   local image_revision image_tree image_lock image_build_config runtime_identity
   assert_clean_candidate_unless_direct_start
@@ -1836,7 +1977,7 @@ verify_gpu_backend_drift() {
   trap 'rm -f "$inspect_file"' RETURN
   docker inspect "$container_id" >"$inspect_file"
   python3 - "$ROOT_DIR" "$inspect_file" "$NEXPOLY_DEV_GPU_SESSION_ID" \
-    "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" <<'PY'
+    "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" "$DFT_WORKER_SOCKET_DIR"     "$DFT_DOWNLOAD_SPOOL_DIR" "$GPU_SESSION_STATE_ROOT" <<'PY'
 import json
 import sys
 
@@ -1862,9 +2003,9 @@ if any(labels.get(key) != value for key, value in expected_labels.items()):
 root = sys.argv[1]
 mounts = {item["Destination"]: item for item in container.get("Mounts", [])}
 expected = {
-    "/app/monomer-dft-worker": (root + "/.runtime/monomer-dft-worker-socket", False),
-    "/app/.runtime/monomer-dft-download-spool": (root + "/.runtime/monomer-dft-download-spool", True),
-    "/app/.runtime/gpu-resource": (root + "/.runtime/gpu-resource", False),
+    "/app/monomer-dft-worker": (sys.argv[5], False),
+    "/app/.runtime/monomer-dft-download-spool": (sys.argv[6], True),
+    "/app/.runtime/gpu-resource": (sys.argv[7], False),
 }
 launcher_enabled = sys.argv[4] == "true"
 if launcher_enabled:
@@ -1964,6 +2105,14 @@ value = {
     "md_process": private_json(md_path),
     "dft_process": private_json(dft_path),
 }
+cohort_path = os.environ.get("NEXPOLY_DEV_GPU_COHORT_CONFIG")
+cohort_sha = os.environ.get("NEXPOLY_DEV_GPU_COHORT_SHA256")
+if cohort_path or cohort_sha:
+    if not cohort_path or not cohort_sha:
+        raise SystemExit("activation requires the complete frozen cohort binding")
+    value.update(schema_version=2, cohort_config=cohort_path, cohort_sha256=cohort_sha,
+                 cohort_device=int(os.environ["NEXPOLY_DEV_GPU_COHORT_DEVICE"]),
+                 cohort_inode=int(os.environ["NEXPOLY_DEV_GPU_COHORT_INODE"]))
 if manifest.exists() or manifest.is_symlink():
     raise SystemExit("activation manifest already exists")
 fd, temporary = tempfile.mkstemp(prefix=".activation-manifest.", dir=manifest.parent)
@@ -2139,6 +2288,10 @@ gpu_session_controller_finish_recovery() {
 }
 
 gpu_backend_stop_exact_session() {
+  if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    cohort_control stop-backend --session-id "$NEXPOLY_DEV_GPU_SESSION_ID"
+    return $?
+  fi
   local container_id label
   [[ "${NEXPOLY_DEV_GPU_SESSION_ID:-}" =~ ^[0-9a-f]{32}$ ]] || {
     echo "GPU backend stop requires an exact controller session identity." >&2
@@ -2287,7 +2440,11 @@ gpu_session_up() {
     # CPU backend before the controller performs its first host audit.
     NEXPOLY_DEV_CONFIG_HASH="$(compute_backend_config_hash)"
     export NEXPOLY_DEV_CONFIG_HASH
-    "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
+    if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+      cohort_control recreate-backend --kind cpu --config-hash "$NEXPOLY_DEV_CONFIG_HASH" >/dev/null
+    else
+      "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
+    fi
     wait_backend_configured
     verify_backend_drift
   fi
@@ -2321,11 +2478,15 @@ gpu_session_up() {
   }
   NEXPOLY_DEV_CONFIG_HASH="$gpu_backend_candidate_hash"
   export NEXPOLY_DEV_CONFIG_HASH
-  "${GPU_COMPOSE[@]}" up -d --no-deps --force-recreate backend
-  if ! gpu_backend_candidate_id="$("${GPU_COMPOSE[@]}" ps -q backend)" ||
-    [[ ! "$gpu_backend_candidate_id" =~ ^[0-9a-f]{64}$ ]]; then
-    gpu_backend_candidate_identity_lost missing "${gpu_backend_candidate_id:-missing}"
-    return 1
+  if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    gpu_backend_candidate_id="$(cohort_control recreate-backend --kind gpu --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" --config-hash "$gpu_backend_candidate_hash")"
+  else
+    "${GPU_COMPOSE[@]}" up -d --no-deps --force-recreate backend
+    if ! gpu_backend_candidate_id="$("${GPU_COMPOSE[@]}" ps -q backend)" ||
+      [[ ! "$gpu_backend_candidate_id" =~ ^[0-9a-f]{64}$ ]]; then
+      gpu_backend_candidate_identity_lost missing "${gpu_backend_candidate_id:-missing}"
+      return 1
+    fi
   fi
   wait_gpu_backend_configured "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"
   verify_gpu_backend_drift plane-ready "$gpu_backend_candidate_id" "$gpu_backend_candidate_hash"
@@ -2371,14 +2532,22 @@ verify_gpu_session_stopped_runtime() {
 
 verify_gpu_session_runtime_paths_removed() {
   local path
+  local controller_record="$ROOT_DIR/.runtime/gpu-session/controller.json"
+  local broker_socket="$ROOT_DIR/.runtime/gpu-resource/broker.sock"
+  local mps_slot="$ROOT_DIR/.runtime/gpu-resource/mps-1"
+  if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    controller_record="$NEXPOLY_DEV_GPU_COHORT_RUNTIME_ROOT/gpu-session/controller.json"
+    broker_socket="$GPU_SESSION_STATE_ROOT/broker.sock"
+    mps_slot="$GPU_SESSION_STATE_ROOT/mps-1"
+  fi
   for path in \
-    "$ROOT_DIR/.runtime/gpu-session/controller.json" \
-    "$ROOT_DIR/.runtime/gpu-resource/broker.sock" \
-    "$ROOT_DIR/.runtime/gpu-resource/mps-1" \
+    "$controller_record" \
+    "$broker_socket" \
+    "$mps_slot" \
     "$WORKER_PID_FILE" \
     "$WORKER_SOCKET" \
     "$DFT_WORKER_SESSION_RECORD" \
-    "$ROOT_DIR/.runtime/monomer-dft-worker.pid" \
+    "${DFT_WORKER_PID_FILE:-$ROOT_DIR/.runtime/monomer-dft-worker.pid}" \
     "$DFT_WORKER_SOCKET_DIR/worker.sock"; do
     if [[ -e "$path" || -L "$path" ]]; then
       echo "Stopped GPU session retains an owned runtime path: $path" >&2
@@ -2399,7 +2568,7 @@ gpu_session_stop_workers() {
   (
     # Workers belong to the activated session, which may predate the current
     # checkout. Use that verified source identity for teardown only; startup
-    # and the replacement backend must still use the current checkout.
+    # still checks the current checkout. Cohort recovery uses its frozen image.
     local payload="${1:-}" identity failed=0
     if [[ -z "$payload" ]]; then
       payload="$("$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" status)" || exit 1
@@ -2480,7 +2649,11 @@ gpu_session_down() {
   gpu_session_stop_workers "$payload"
   NEXPOLY_DEV_CONFIG_HASH="$(compute_backend_config_hash)"
   export NEXPOLY_DEV_CONFIG_HASH
-  "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
+  if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    cohort_control recreate-backend --kind cpu --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" --config-hash "$NEXPOLY_DEV_CONFIG_HASH" >/dev/null
+  else
+    "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
+  fi
   wait_backend_configured
   "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" down --execute
   # An operator unit can own the controller's cgroup. Replace it only after
@@ -2501,6 +2674,9 @@ gpu_session_maintenance_stop() {
   state="$(printf '%s' "$payload" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status", "invalid"))')"
   if [[ "$state" == "stopped" ]]; then
     verify_gpu_session_runtime_paths_removed
+    if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+      cohort_control retire-backend
+    fi
     echo "Development GPU session is already stopped."
     return 0
   fi
@@ -2514,6 +2690,9 @@ gpu_session_maintenance_stop() {
   gpu_session_stop_workers "$payload"
   "$GPU_SESSION_PYTHON" -I "$GPU_SESSION_CONTROLLER" down --execute
   verify_gpu_session_runtime_paths_removed
+  if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    cohort_control retire-backend --session-id "$NEXPOLY_DEV_GPU_SESSION_ID"
+  fi
   echo "Development GPU session stopped; Backend remains stopped for maintenance."
 }
 
@@ -2536,7 +2715,11 @@ gpu_session_restore_cpu_internal() {
   prepare_dft_runtime_directories
   NEXPOLY_DEV_CONFIG_HASH="$(compute_backend_config_hash)"
   export NEXPOLY_DEV_CONFIG_HASH
-  "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
+  if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
+    cohort_control recreate-backend --kind cpu --session-id "$NEXPOLY_DEV_GPU_SESSION_ID" --config-hash "$NEXPOLY_DEV_CONFIG_HASH" >/dev/null
+  else
+    "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
+  fi
   wait_backend_configured
   verify_backend_drift
 }
@@ -2559,7 +2742,7 @@ up_prebuilt() {
   gpu_operator_up
   # This read-only gate deliberately never bootstraps or applies migrations.
   "${COMPOSE[@]}" run --rm --no-deps backend python -m app.postgres_preflight \
-    --strict --schema-target user-isolation-0019 --service-context
+    --strict --schema-target user-isolation-current --service-context
   "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
   wait_backend_configured
   verify_backend_drift
@@ -2890,7 +3073,7 @@ case "${1:-up}" in
   preflight)
     postgres_preflight_args=(--mode runtime --strict)
     if [[ "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == "true" ]]; then
-      postgres_preflight_args+=(--schema-target user-isolation-0019 --service-context)
+      postgres_preflight_args+=(--schema-target user-isolation-current --service-context)
     fi
     "${COMPOSE[@]}" exec -T backend python -m app.postgres_preflight "${postgres_preflight_args[@]}"
     preflight_session_payload="$($GPU_SESSION_PYTHON -I "$GPU_SESSION_CONTROLLER" status)"

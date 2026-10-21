@@ -19,6 +19,10 @@ class LabDataDuplicateSampleIdError(Exception):
     pass
 
 
+class LabDataSchemaNotReadyError(RuntimeError):
+    pass
+
+
 def _is_unique_violation(exc: Exception) -> bool:
     return exc.__class__.__name__ == "UniqueViolation"
 
@@ -40,6 +44,15 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 class LabDataRepository:
     def __init__(self, connection: Any):
         self.connection = connection
+
+    def require_schema(self) -> None:
+        """A request may validate readiness, never create or reseed schema."""
+        row = self.connection.execute(
+            "SELECT to_regclass('lab.test_projects') AS projects, "
+            "to_regclass('lab.sample_measurements') AS measurements"
+        ).fetchone()
+        if not row or not row['projects'] or not row['measurements']:
+            raise LabDataSchemaNotReadyError('Lab schema requires maintenance initialization')
 
     def ensure_schema(self) -> None:
         try:

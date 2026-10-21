@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.entitlement_sync import entitled_sync
+
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
@@ -11,6 +13,7 @@ from app.services.gpu_runtime_registry import (
 )
 from app.services.monomer_retrosynthesis import predict_monomer_precursors, validate_retrosynthesis_input
 from app.utils.exceptions import InvalidSmilesError, ModelArtifactError
+from app.usage_context import mark_current_usage_outcome
 
 
 router = APIRouter(prefix="/api/v1", tags=["monomer-retrosynthesis"])
@@ -52,6 +55,7 @@ def _run_retrosynthesis_inference(app, request_body: MonomerRetrosynthesisReques
 
 
 @router.post("/monomer-retrosynthesis", response_model=MonomerRetrosynthesisResponse)
+@entitled_sync("retrosynthesis")
 async def monomer_retrosynthesis(
     request_body: MonomerRetrosynthesisRequest,
     request: Request,
@@ -77,6 +81,8 @@ async def monomer_retrosynthesis(
             headers={"Retry-After": str(exc.retry_after_seconds)},
         ) from exc
     except (GpuQueueTimeoutError, GpuQueueStoppedError) as exc:
+        if isinstance(exc, GpuQueueTimeoutError):
+            mark_current_usage_outcome("timed_out")
         raise HTTPException(
             status_code=503,
             detail=str(exc),

@@ -70,6 +70,24 @@ class AuthenticationMiddleware:
                 return await reject(403, '请求来源未获授权。', 'untrusted_origin')
             if policy == 'operations':
                 return await reject(403, '此操作仅供运维使用。', 'operation_forbidden')
+            if policy.startswith('capability:'):
+                from .acceptance import entry_matches
+                acceptance = getattr(self.auth.settings, 'isolated_acceptance_policy', None)
+                if (acceptance is None or not entry_matches(scope, self.auth.settings)
+                        or not acceptance.allows(str(session['user_id']), policy.split(':', 1)[1])):
+                    return await reject(403, '此操作仅供运维使用。', 'operation_forbidden')
+                repository = getattr(scope['app'].state, 'entitlement_repository', None)
+                if repository is not None:
+                    def member_capability():
+                        with user_context(self.auth.identity(session), self.auth.settings):
+                            return repository.resolve_access_tier(owner_user_id=str(session['user_id'])) == 'member'
+                    try:
+                        member = await anyio.to_thread.run_sync(member_capability)
+                    except Exception:
+                        return await reject(503, 'Acceptance capability readiness unavailable', 'capability_unavailable')
+                    if not member:
+                        return await reject(403, 'Acceptance capability requires the native member tier', 'capability_forbidden')
+
             if headers.get('x-session-context') != str(session['session_id']):
                 return await reject(409, '页面身份已变化，请重新确认登录状态。', 'session_context_mismatch')
             if method not in {'GET','HEAD','OPTIONS'} and not hmac.compare_digest(headers.get('x-csrf-token', '').encode('utf-8'), csrf_token(token).encode('ascii')):
@@ -86,15 +104,16 @@ class AuthenticationMiddleware:
                         return await reject(503, '用户隔离数据库尚未准备好。', 'isolation_not_ready')
         scope.setdefault('state', {})['auth_session'] = session
         scope['state']['auth_token'] = token
-        if path.startswith('/api/v1/auth/') and method not in {'GET','HEAD','OPTIONS'}:
+        if path.startswith(('/api/v1/auth/', '/api/v1/structure-library/')) and method not in {'GET','HEAD','OPTIONS'}:
             original_receive = receive
             received_bytes = 0
             async def bounded_auth_receive():
                 nonlocal received_bytes
                 message = await original_receive()
                 received_bytes += len(message.get('body',b''))
-                if received_bytes > 8192:
-                    raise HTTPException(413,'Authentication request is too large')
+                limit = 2 * 1024 * 1024 if path.startswith('/api/v1/structure-library/') else 8192
+                if received_bytes > limit:
+                    raise HTTPException(413,'Request body is too large')
                 return message
             receive = bounded_auth_receive
         started = False

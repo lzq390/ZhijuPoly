@@ -23,12 +23,21 @@ from app.auth.router import router as auth_router
 from app.auth.service import AuthService
 from app.auth.settings import AuthSettings
 from app.task_control import configure_task_control
+from app.usage_context import UsageCollector
+from app.usage_middleware import UsageMeteringMiddleware
+from app.routers.usage import router as usage_router
+from app.routers.entitlements import router as entitlements_router
+from app.services.entitlement_repository import EntitlementRepository
+from app.entitlement_middleware import EntitlementAccessMiddleware
+from task_usage.entitlement_config import configured_policy
+from task_usage.entitlements import EntitlementError
+from app.services.entitlement_service import entitlement_exception_handler
 from app.deployment_drain_middleware import DeploymentDrainMiddleware
 from app.middleware import BrowserCrossSiteProtectionMiddleware
 from app.postgres_database import postgres_connection
 from app.postgres_preflight import (
     SCHEMA_TARGET_STARTUP,
-    SCHEMA_TARGET_ISOLATION,
+    SCHEMA_TARGET_CURRENT_ISOLATION,
     preflight_blockers,
     run_preflight,
 )
@@ -57,6 +66,7 @@ from app.routers.monomer_polymerization_batch import router as polymerization_ba
 from app.services.polymerization_batch.models import BatchError, BatchSettings
 from app.services.polymerization_batch.service import BatchService
 from app.routers.monomer_retrosynthesis import router as monomer_retrosynthesis_router
+from app.routers.structure_library import router as structure_library_router
 from app.routers.online_knowledge import router as online_knowledge_router
 from app.routers.predict import router as predict_router
 from app.routers.polytao import router as polytao_router
@@ -137,6 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         residency_lease: ManagedGpuLease | None = None
         try:
             required_startup = api_app.state.settings.gpu_preload_mode == "required"
+            await run_in_threadpool(_validate_entitlement_startup, api_app)
             with service_context(api_app.state.auth.settings):
                 _run_database_startup_preflight(api_app, required=required_startup)
                 _mark_expired_monomer_md_jobs_failed(api_app)
@@ -258,13 +269,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.polymerization_batch_validation_limiter = anyio.CapacityLimiter(2)
     app.state.polymerization_batch = BatchService(app_settings.app_postgres_dsn, batch_config)
     app.add_exception_handler(BatchError, batch_error_handler)
+    app.add_exception_handler(EntitlementError, entitlement_exception_handler)
     app.add_middleware(BatchUploadLimitMiddleware, max_bytes=batch_config.request_bytes)
     app.state.settings = app_settings
     app.state.auth = AuthService(AuthSettings.from_settings(app_settings))
+    app.state.usage_collector = UsageCollector(app_settings.app_postgres_dsn, settings=app.state.auth.settings)
+    app.state.entitlement_repository = EntitlementRepository(app_settings.app_postgres_dsn)
+    app.state.entitlement_policy = configured_policy()
     configure_task_control(app.state.auth.authorize_memory_start)
     app.state.browsing_recording = BrowsingRecordingStore(app_settings)
     app.state.dev_gpu_operator_client = None
-    if app_settings.dev_gpu_operator_enabled:
+    acceptance = app.state.auth.settings.isolated_acceptance_policy
+    gpu_status_only = acceptance is not None and 'gpu_status' in acceptance.features
+    if gpu_status_only:
+        from app.services.acceptance_gpu_status import AcceptanceGpuStatusClient
+        app.state.dev_gpu_operator_client = AcceptanceGpuStatusClient(
+            expected_source_sha=os.getenv('BUILD_REVISION',''),
+            expected_source_tree=os.getenv('BUILD_SOURCE_TREE',''))
+    elif app_settings.dev_gpu_operator_enabled:
         app.state.dev_gpu_operator_client = DevGpuOperatorClient(
             socket_path=app_settings.dev_gpu_operator_socket_path,
             timeout_seconds=app_settings.dev_gpu_operator_timeout_seconds,
@@ -409,6 +431,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     app.add_middleware(BrowserCrossSiteProtectionMiddleware)
+    app.add_middleware(UsageMeteringMiddleware, collector=app.state.usage_collector)
+    app.add_middleware(EntitlementAccessMiddleware, repository=app.state.entitlement_repository, policy=app.state.entitlement_policy)
     app.add_middleware(DeploymentDrainMiddleware)
     # Last registered is outermost: reject before uploads and business parsing.
     app.add_middleware(AuthenticationMiddleware, auth_service=app.state.auth)
@@ -418,14 +442,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["ETag", "Server-Timing"],
+        expose_headers=["ETag", "Server-Timing", "X-Usage-Operation-ID", "X-Usage-Replayed", "X-Usage-Request-ID", "X-Usage-State"],
     )
 
     app.add_api_route("/health", health, methods=["GET"])
     app.include_router(auth_router)
+    app.include_router(usage_router)
+    app.include_router(entitlements_router)
     app.include_router(monomer_dft_internal_router)
     app.include_router(deployment_status_router)
-    if app_settings.dev_gpu_operator_enabled:
+    if app_settings.dev_gpu_operator_enabled or gpu_status_only:
         app.include_router(dev_gpu_session_router)
     app.include_router(gpu_status_router)
     app.include_router(assistant_router)
@@ -444,6 +470,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(polymerization_batch_router)
     app.include_router(monomer_retrosynthesis_router)
     app.include_router(online_knowledge_router)
+    app.include_router(structure_library_router)
     app.include_router(dft_router)
     app.include_router(database_browser_router)
     app.include_router(reverse_design_router)
@@ -653,7 +680,7 @@ def _run_database_startup_preflight(api_app: FastAPI, *, required: bool) -> None
             api_app.state.settings,
             mode="runtime",
             strict=True,
-            schema_target=SCHEMA_TARGET_ISOLATION,
+            schema_target=SCHEMA_TARGET_CURRENT_ISOLATION,
         )
         errors = preflight_blockers(report)
         api_app.state.auth.assert_application_ready()
@@ -686,3 +713,17 @@ def _fail_interrupted_online_jobs(api_app: FastAPI) -> None:
 
 
 app = create_app()
+
+
+def _validate_entitlement_startup(app):
+    """Readiness only: never migrates, installs a policy or assigns a tier."""
+    from task_usage.entitlements import enabled
+    if not enabled():
+        return
+    from task_usage.entitlement_policy import policy_sha256
+    policy = app.state.entitlement_policy
+    app.state.auth.assert_application_ready()
+    with service_context(app.state.auth.settings):
+        installed = app.state.entitlement_repository.get_policy(policy_version=policy["version"])
+    if policy_sha256(installed) != policy_sha256(policy):
+        raise RuntimeError("Configured entitlement policy differs from its immutable installed version")

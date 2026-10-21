@@ -46,7 +46,7 @@ export default function IframeStructureEditor({ workspace, title }: { workspace:
             frameWindow!.dispatchEvent(new Event("resize"));
             frameWindow!.scrollTo(0, 0);
           }, () => !cancelled && current());
-          void lease.initialize(adapter).then(() => { if (current()) fitViewport(); });
+          void lease.initialize({ ...adapter, version: "3.7.0" }).then(() => { if (current()) fitViewport(); });
         } else if (++attempts >= 150) {
           clearInterval(timer);
           lease.fail("结构编辑器加载超时，请重试。");

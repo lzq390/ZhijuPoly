@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from gpu_resource.transient_scope import ScopeResourceLimits, scope_resource_limits_from_environment
+
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -100,6 +103,54 @@ class WorkerSettings:
     lease_seconds: int = 90
     recovery_retry_seconds: int = 15
 
+    gpu_scope_cpu_quota_percent: int | None = None
+    gpu_scope_memory_max_bytes: int | None = None
+    gpu_scope_memory_swap_max_bytes: int | None = None
+    gpu_scope_tasks_max: int | None = None
+    acceptance_attachment_id: str | None = None
+
+    @property
+    def gpu_scope_resources(self) -> ScopeResourceLimits:
+        return ScopeResourceLimits(
+            self.gpu_scope_cpu_quota_percent,
+            self.gpu_scope_memory_max_bytes,
+            self.gpu_scope_memory_swap_max_bytes,
+            self.gpu_scope_tasks_max,
+        )
+
+    def __post_init__(self) -> None:
+        limits = self.gpu_scope_resources
+        if limits.configured and (not self.gpu_broker_enabled or self.gpu_broker_environment != "dev"):
+            raise ValueError("GPU scope resource limits require the native development Broker")
+        if self.acceptance_attachment_id is not None:
+            if (self.acceptance_attachment_id != 'r2-a-20261019-md'
+                    or self.worker_id != self.acceptance_attachment_id
+                    or self.mode != 'real' or not self.gpu_broker_enabled
+                    or self.gpu_broker_environment != 'dev' or not self.app_postgres_dsn):
+                raise ValueError('Independent acceptance MD requires its exact development identity')
+            from psycopg.conninfo import conninfo_to_dict
+            try:
+                if conninfo_to_dict(self.app_postgres_dsn).get('dbname') != 'nexpoly_accept_r2_1c55866ff0e4':
+                    raise ValueError
+            except Exception:
+                raise ValueError('Independent acceptance MD requires the exact acceptance database') from None
+        if self.job_root == Path('/data/lzq/gith/nexpoly-acceptance-a-20261019/.runtime/cohorts/r2-a-20261019/md-runs'):
+            if (not re.fullmatch(r'monomer-md-dev-[0-9a-f]{32}', self.worker_id)
+                    or self.mode != 'real' or not self.gpu_broker_enabled
+                    or self.gpu_broker_environment != 'dev' or not self.app_postgres_dsn):
+                raise ValueError('Short acceptance MD requires its native session worker identity')
+            from psycopg.conninfo import conninfo_to_dict
+            try:
+                if conninfo_to_dict(self.app_postgres_dsn).get('dbname') != 'nexpoly_accept_r2_1c55866ff0e4':
+                    raise ValueError
+            except Exception:
+                raise ValueError('Short acceptance MD requires the exact acceptance database') from None
+
+    @property
+    def acceptance_cancel_recovery_scoped(self) -> bool:
+        return bool(self.acceptance_attachment_id) or self.job_root == Path(
+            '/data/lzq/gith/nexpoly-acceptance-a-20261019/.runtime/cohorts/r2-a-20261019/md-runs')
+
     @property
     def db_configured(self) -> bool:
         return bool(self.app_postgres_dsn)
@@ -164,7 +215,12 @@ def load_settings() -> WorkerSettings:
 
     byteff2_openmm_dir = os.getenv("BYTEFF2_OPENMM_DIR", "").strip()
 
+    scope_limits = scope_resource_limits_from_environment("MONOMER_MD_GPU_SCOPE_")
     return WorkerSettings(
+        gpu_scope_cpu_quota_percent=scope_limits.cpu_quota_percent,
+        gpu_scope_memory_max_bytes=scope_limits.memory_max_bytes,
+        gpu_scope_memory_swap_max_bytes=scope_limits.memory_swap_max_bytes,
+        gpu_scope_tasks_max=scope_limits.tasks_max,
         mode=_get_mode(),
         app_postgres_dsn=os.getenv("APP_SERVICE_POSTGRES_DSN") or os.getenv("APP_POSTGRES_DSN") or None,
         job_table=os.getenv("MONOMER_MD_JOB_TABLE", "md.monomer_md_jobs"),
@@ -214,6 +270,7 @@ def load_settings() -> WorkerSettings:
         ),
         worker_id=os.getenv("MONOMER_MD_WORKER_ID", "monomer-md-worker"),
         worker_version=os.getenv("MONOMER_MD_WORKER_VERSION", "0.1.0"),
+        acceptance_attachment_id=os.getenv('MONOMER_MD_ACCEPTANCE_ATTACHMENT_ID') or None,
         byteff2_openmm_dir=(
             Path(byteff2_openmm_dir) if byteff2_openmm_dir else None
         ),

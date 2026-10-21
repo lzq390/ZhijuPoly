@@ -15,7 +15,7 @@ from app.models import (
 )
 from app.postgres_database import PostgresUnavailableError
 from app.services.lab_data import LabDataService
-from app.services.lab_data_repository import LabDataDuplicateSampleIdError
+from app.services.lab_data_repository import LabDataDuplicateSampleIdError, LabDataSchemaNotReadyError
 
 
 router = APIRouter(prefix="/api/v1/lab-data", tags=["lab-data"])
@@ -23,11 +23,34 @@ router = APIRouter(prefix="/api/v1/lab-data", tags=["lab-data"])
 
 def get_lab_data_service(request: Request) -> Generator[LabDataService, None, None]:
     settings = request.app.state.settings
+    auth = getattr(request.app.state, 'auth', None)
+    auth_settings = getattr(auth, 'settings', None)
+    acceptance = getattr(auth_settings, 'isolated_acceptance_policy', None)
+    dsn = settings.lab_data_postgres_dsn
+    if acceptance is not None:
+        session = getattr(request.state, 'auth_session', None)
+        if session is None:
+            raise HTTPException(status_code=401, detail='Authentication required')
+        try:
+            dsn = auth_settings.acceptance_lab_dsn(str(session['user_id']))
+        except ValueError:
+            raise HTTPException(status_code=403, detail='Isolated Lab access is unavailable') from None
     try:
-        with request.app.state.postgres_connection_factory(settings.lab_data_postgres_dsn) as connection:
+        with request.app.state.postgres_connection_factory(
+            dsn, readonly_snapshot=request.method in {'GET', 'HEAD'}
+        ) as connection:
+            if acceptance is not None:
+                from app.auth.schema import validate_runtime_role
+                try:
+                    validate_runtime_role(connection, 'nexpoly_api')
+                except ValueError:
+                    raise HTTPException(status_code=503, detail='Isolated Lab requires an existing unprivileged API identity') from None
             service = LabDataService(connection)
-            service.ensure_schema()
+            service.require_schema()
             yield service
+    except LabDataSchemaNotReadyError:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail='Lab schema requires maintenance initialization') from None
     except PostgresUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

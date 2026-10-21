@@ -312,19 +312,6 @@ export function MdSimulationDemoPage({
           ? "请检查标红的参数"
           : "参数已就绪";
 
-  const getSharedSmiles = useCallback(async () => {
-    let sharedSmiles = structure.smiles.trim();
-    try {
-      const current = (await structure.getCurrentSmiles()).trim();
-      if (current) sharedSmiles = current;
-    } catch (error) {
-      console.warn("Failed to read current structure from workbench", error);
-    }
-    if (!sharedSmiles)
-      throw new Error("共享结构为空，请先在结构工作台绘制或输入结构。");
-    return sharedSmiles;
-  }, [structure]);
-
   function openStructureEditor() {
     saveMdSimulationDraft(requestRef.current);
     persistDraftRef.current = true;
@@ -440,7 +427,7 @@ export function MdSimulationDemoPage({
                             </span>
                             <div>
                               <h2>聚合物结构输入</h2>
-                              <p>已填入真实示例结构，也可以导入全局共享结构。</p>
+                              <p>已填入真实示例结构，也可以选择已保存结构或当前画板。</p>
                             </div>
                           </div>
                           <span className="np-md-view-badge">
@@ -487,7 +474,7 @@ export function MdSimulationDemoPage({
                                 smiles: true,
                               }))
                             }
-                            getSharedSmiles={getSharedSmiles}
+
                             onEditStructure={openStructureEditor}
                           />
                         </section>

@@ -11,6 +11,7 @@ from time import monotonic
 from typing import Any, Protocol
 
 from gpu_resource import ManagedGpuLease, mps_client_environment
+from gpu_resource.transient_scope import ScopeResourceLimits
 
 from .byteff2_env import build_byteff2_environment
 from .byteff2_runtime_assets import validate_byteff2_runtime_assets
@@ -228,6 +229,7 @@ async def probe_runtime_snapshot(
                         env=runtime_env,
                         deadline=deadline,
                         execution_lease=lease,
+                        scope_resource_limits=settings.gpu_scope_resources,
                     )
                 except FileNotFoundError:
                     runtime_failure = (
@@ -359,11 +361,15 @@ async def _run_probe_command(
     env: dict[str, str],
     deadline: float,
     execution_lease: ManagedGpuLease | None,
+    scope_resource_limits: ScopeResourceLimits | None = None,
 ) -> _ProbeCompleted:
     with tempfile.TemporaryFile(mode="w+b") as stdout:
         spawn_budget = _remaining_probe_budget(deadline)
         if spawn_budget is None:
             raise asyncio.TimeoutError
+        scope_options: dict[str, Any] = {}
+        if scope_resource_limits is not None and scope_resource_limits.configured:
+            scope_options["scope_resource_limits"] = scope_resource_limits
         process = await asyncio.wait_for(
             create_fenced_subprocess_exec(
                 command,
@@ -372,6 +378,7 @@ async def _run_probe_command(
                 env=env,
                 stdout=stdout,
                 stderr=asyncio.subprocess.DEVNULL,
+                **scope_options,
             ),
             timeout=spawn_budget,
         )

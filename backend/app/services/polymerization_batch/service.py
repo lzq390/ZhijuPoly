@@ -8,6 +8,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.auth.context import current_owner_id, service_context
+from task_usage import native_entitlements as ne
+from task_usage.entitlements import EntitlementConflict, EntitlementLimitExceeded, EntitlementError
+from task_usage.entitlement_policy import InvalidSpecification, EntitlementPolicyError as PolicyValidationError
 
 from .execution import run_isolated
 from .models import BatchError, BatchJobCreate, BatchPreviewRequest, BatchSettings, TableMapping
@@ -16,6 +19,15 @@ from .storage import check_id, digest, file_manifest, json_hash, read_json, reso
 
 
 BASE_PATH = "/api/v1/monomer-polymerization/batch"
+
+
+def _batch_entitlement_spec(snapshot: dict) -> dict:
+    # The checksum-verified preview is the authority, never client-supplied counts.
+    return {
+        "raw_pairs": snapshot["raw_pairs"], "valid_pairs": snapshot["valid_pairs"],
+        "rows_a": snapshot["tables"]["a"]["row_count"],
+        "rows_b": snapshot["tables"]["b"]["row_count"],
+    }
 
 
 class BatchService:
@@ -95,6 +107,13 @@ class BatchService:
                 previous = self.repository.admit(conn, key, request_hash, owner_user_id=current_owner_id())
                 if previous:
                     return self.public_job(previous)
+                if ne.enabled():
+                    retained = ne.lookup_native(
+                        conn, owner_user_id=current_owner_id(), module="polymerization_batch",
+                        idempotency_key=key, request_fingerprint=request_hash,
+                    )
+                    if retained is not None:
+                        raise BatchError("提交标识属于已保留的批量任务，请使用新标识。", "idempotency_conflict", 409)
                 worker = self.repository.worker_status()
                 if not worker or not worker["fresh"] or not worker["available"]:
                     raise BatchError("批量计算 worker 尚未就绪。", "worker_unavailable", 503)
@@ -112,6 +131,14 @@ class BatchService:
                 snapshot = read_json(source)
                 if snapshot.get("engine", {}).get("fingerprint") != worker["engine"].get("fingerprint"):
                     raise BatchError("预检与 worker 计算版本不一致，请等待服务就绪后重新预检。", "stale_engine", 409)
+                if ne.enabled():
+                    reservation = ne.reserve_native(
+                        conn, owner_user_id=current_owner_id(), module="polymerization_batch",
+                        idempotency_key=key, request_fingerprint=request_hash,
+                        native_task_id=job_id, spec=_batch_entitlement_spec(snapshot),
+                    )
+                    if reservation["created"] is not True:
+                        raise BatchError("此批量任务已预占额度，请勿重复创建。", "idempotency_conflict", 409)
                 directory.mkdir(parents=True)
                 shutil.copyfile(source, directory / "inputs.json")
                 for role, meta in imported["files"].items():
@@ -138,9 +165,17 @@ class BatchService:
                 # idempotent retries recover the job, and cleanup reaps orphans.
                 commit_pending = True
             return self.public_job(row)
-        except BaseException:
+        except BaseException as exc:
             if not commit_pending:
                 shutil.rmtree(directory, ignore_errors=True)
+            if isinstance(exc, EntitlementConflict):
+                raise BatchError("提交标识与既有额度操作冲突。", "idempotency_conflict", 409) from exc
+            if isinstance(exc, EntitlementLimitExceeded):
+                raise BatchError("批量聚合可用次数已达限额。", "entitlement_limit_exceeded", 429) from exc
+            if isinstance(exc, InvalidSpecification):
+                raise BatchError("批量规格超过已配置限额。", "entitlement_spec_rejected", 422) from exc
+            if isinstance(exc, (EntitlementError, PolicyValidationError)):
+                raise BatchError("批量额度配置暂不可用。", "entitlement_policy_invalid", 503) from exc
             raise
 
     def public_job(self, job: dict) -> dict:

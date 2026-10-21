@@ -14,13 +14,19 @@ from psycopg.rows import dict_row
 
 from app.migration_policy import validate_migration_manifest_entries
 from app.postgres_migrations import MIGRATIONS_DIR
-from .isolation_ledger import CURRENT_VERSION, expected_isolation_ledger, validate_service_members
+from .isolation_ledger import CURRENT_VERSION, LIBRARY_VERSION, expected_isolation_ledger, validate_service_members
 
 VERSION = '0018_user_isolation_cutover'
 TABLES = ('online_knowledge.history','online_knowledge.jobs','md.monomer_md_jobs',
           'monomer_dft.jobs','polymerization_batch.imports','polymerization_batch.jobs')
 BACKUP_TABLES = (*TABLES,'monomer_dft.job_attempts','monomer_dft.artifacts','polymerization_batch.chunks',
                 'polymerization_batch.worker_status','auth.users','auth.sessions')
+
+
+def backup_tables(connection):
+    # Preserve old receipts while including every new private record after 0020.
+    present = connection.execute("SELECT to_regclass('structure_library.records') IS NOT NULL AS present").fetchone()["present"]
+    return (*BACKUP_TABLES, *(("structure_library.records",) if present else ()))
 
 
 def backup_state_seal(connection):
@@ -30,7 +36,7 @@ def backup_state_seal(connection):
     Output contains aggregate SHA256/counts, never row values or secret hashes.
     """
     seal = {}
-    for relation in BACKUP_TABLES:
+    for relation in backup_tables(connection):
         digest,count = hashlib.sha256(),0
         query = sql.SQL('SELECT to_jsonb(t)::text AS value FROM {} t ORDER BY 1').format(sql.Identifier(*relation.split('.')))
         with connection.cursor(name='complete_backup_seal') as cursor:
@@ -88,12 +94,12 @@ def apply_identity_cutover(dsn: str, owner_user_id: str, *, expected_business_da
         connection.execute("SET LOCAL statement_timeout='10min'")
         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended('nexpoly-identity-cutover',0))")
         rows = [dict(row) for row in connection.execute('SELECT version,checksum FROM governance.schema_migrations ORDER BY version')]
-        if rows == expected_isolation_ledger(CURRENT_VERSION):
+        if rows in (expected_isolation_ledger(CURRENT_VERSION), expected_isolation_ledger(LIBRARY_VERSION)):
             # Do not run historical 0018 grants or read any data seal on 0019.
             from .schema import validate_isolation_schema
             validate_isolation_schema(connection)
             validate_service_members(connection)
-            return {'version':VERSION,'already_applied':True,'current_version':CURRENT_VERSION,
+            return {'version':VERSION,'already_applied':True,'current_version':rows[-1]['version'],
                     'current_readiness':False}
         ledger = {row['version']:row['checksum'] for row in rows}
         if len(ledger) != len(rows):
@@ -108,7 +114,7 @@ def apply_identity_cutover(dsn: str, owner_user_id: str, *, expected_business_da
         connection.execute('LOCK TABLE auth.sessions IN SHARE ROW EXCLUSIVE MODE')
         for relation in TABLES:
             connection.execute(sql.SQL('LOCK TABLE {} IN ACCESS EXCLUSIVE MODE').format(sql.Identifier(*relation.split('.'))))
-        for relation in BACKUP_TABLES:
+        for relation in backup_tables(connection):
             if relation not in TABLES and not relation.startswith('auth.'):
                 connection.execute(sql.SQL('LOCK TABLE {} IN ACCESS EXCLUSIVE MODE').format(sql.Identifier(*relation.split('.'))))
         if expected_backup_state is not None and backup_state_seal(connection) != expected_backup_state:

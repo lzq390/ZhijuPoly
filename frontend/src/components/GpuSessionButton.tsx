@@ -57,9 +57,10 @@ export type DevGpuSessionControl = {
   actionPending: boolean;
   feedbackVisible: boolean;
   recover: () => Promise<void>;
+  recoveryAllowed?: boolean;
 };
 
-export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl {
+export function useDevGpuSessionControl(enabled: boolean, allowRecover = true): DevGpuSessionControl {
   const [serviceStatus, setServiceStatus] = useState<DevGpuSessionStatusResponse | null>(null);
   const [isActionPending, setIsActionPending] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -187,7 +188,7 @@ export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl 
   );
 
   const recover = useCallback(async () => {
-    if (!enabled || actionInFlight.current) {
+    if (!enabled || !allowRecover || actionInFlight.current) {
       return;
     }
     actionInFlight.current = true;
@@ -259,7 +260,7 @@ export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl 
       setIsActionPending(false);
       requestPoll.current?.();
     }
-  }, [enabled, updateServiceStatus]);
+  }, [enabled, allowRecover, updateServiceStatus]);
 
   return {
     status: serviceStatus,
@@ -269,7 +270,8 @@ export function useDevGpuSessionControl(enabled: boolean): DevGpuSessionControl 
       serviceStatus?.phase === "recovering" ||
       serviceStatus?.phase === "queued" ||
       serviceStatus?.phase === "starting",
-    recover
+    recover,
+    recoveryAllowed: allowRecover
   };
 }
 
@@ -342,6 +344,7 @@ export function GpuSessionButton({ control, statusId }: GpuSessionButtonProps) {
   const phase = control.status?.phase ?? "loading";
   const presentation = phasePresentation(phase);
   const disabled =
+    control.recoveryAllowed === false ||
     control.actionPending ||
     phase === "loading" ||
     phase === "ready" ||
@@ -351,7 +354,10 @@ export function GpuSessionButton({ control, statusId }: GpuSessionButtonProps) {
     control.status?.can_recover === false;
   const Icon = control.actionPending ? LoaderCircle : presentation.Icon;
   const message = control.status?.message ?? "正在检测 GPU 服务状态";
-  const label = control.actionPending ? "正在提交 GPU 恢复请求" : presentation.label;
+  const readOnlyLabel = control.recoveryAllowed === false && phase === "stopped"
+    ? "GPU 服务已停止"
+    : control.recoveryAllowed === false && phase === "failed" ? "GPU 服务状态异常" : presentation.label;
+  const label = control.actionPending ? "正在提交 GPU 恢复请求" : readOnlyLabel;
 
   return (
     <div className="group relative flex shrink-0 items-center">

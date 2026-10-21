@@ -1,4 +1,5 @@
 import { privateFetch } from "../auth/session";
+import { confirmUsageResponse } from "../auth/usageAdmission";
 import { API_BASE_URL, ApiRequestError } from "./api";
 import { parseSseBlock } from "./sse";
 import type { KnowledgeRecordingSummary } from "../types";
@@ -37,6 +38,7 @@ export async function streamRecordingSummary(recordingId: string, onPartial: (te
       onPartial(partial);
     } else if (event?.event === "done") {
       result = completedSummary(event.data, recordingId);
+      confirmUsageResponse(response);
     } else if (event?.event === "error") {
       throw new Error(typeof event.data.detail === "string" ? event.data.detail : "总结生成失败，请重试总结");
     }

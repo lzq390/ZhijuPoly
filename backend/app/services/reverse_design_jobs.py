@@ -15,6 +15,8 @@ from time import monotonic
 
 from app.auth.context import current_owner_id
 from app.services.private_execution import submit_private_job
+from app.services.entitlement_memory import submit_memory_job
+from app.services.usage_background import finish_background_usage
 from app.services.in_memory_jobs import JobStoreCapacityError
 
 from app.models import (
@@ -67,6 +69,7 @@ class ReverseDesignJobManager:
         self.quotas = PrivateQuotaSettings.from_environment()
         self._executor = ThreadPoolExecutor(max_workers=max(1, max_workers), thread_name_prefix="reverse-design")
         self._jobs: dict[str, _ReverseDesignJob] = {}
+        self._entitlements = {}
         self._lock = Lock()
         self._shutdown_started = False
 
@@ -89,7 +92,11 @@ class ReverseDesignJobManager:
         with self._lock:
             return not self._shutdown_started
 
-    def create_job(self, request: ReverseDesignTgRequest, runner: JobRunner) -> ReverseDesignTgJobStatusResponse:
+    def create_job(self, request: ReverseDesignTgRequest, runner: JobRunner, *, entitlement=None) -> ReverseDesignTgJobStatusResponse:
+        if entitlement is not None:
+            replay = entitlement.replay()
+            if replay is not None:
+                return replay
         job = _ReverseDesignJob(job_id=uuid4().hex, request=request, owner_user_id=current_owner_id())
         with self._lock:
             self._prune_locked()
@@ -102,12 +109,18 @@ class ReverseDesignJobManager:
                 )
             self._jobs[job.job_id] = job
             try:
-                future = submit_private_job(
+                if entitlement is not None:
+                    if not entitlement.bind(job.job_id):
+                        self._jobs.pop(job.job_id, None)
+                        return entitlement.replay()
+                    self._entitlements[job.job_id] = entitlement
+                future = submit_memory_job(entitlement, submit_private_job,
                     self._executor, self._run_job, job.job_id, runner, channel="reverse",
-                    task_type="tg_reverse", task_id=job.job_id,
+                    task_type="tg_reverse", task_id=job.job_id, submitted_at=job.created_at,
                     on_disabled=lambda: self._mark_cancelled(job.job_id, "账号已禁用，任务未执行。"),
                 )
             except Exception as exc:
+                self._entitlements.pop(job.job_id, None)
                 if self._jobs.get(job.job_id) is job:
                     self._jobs.pop(job.job_id, None)
                 if isinstance(exc, HTTPException):
@@ -124,7 +137,7 @@ class ReverseDesignJobManager:
                 completed_future,
             )
         )
-        return snapshot
+        return entitlement.replay() if entitlement is not None else snapshot
 
     def get_job(self, job_id: str) -> ReverseDesignTgJobStatusResponse:
         with self._lock:
@@ -132,7 +145,14 @@ class ReverseDesignJobManager:
             job = self._jobs.get(job_id)
             if job is None or job.owner_user_id != current_owner_id():
                 raise KeyError(job_id)
-            return self._snapshot(job)
+            snapshot = self._snapshot(job)
+        entitlement = self._entitlements.get(job_id)
+        if entitlement is None:
+            return snapshot
+        visible = entitlement.visible(snapshot)
+        if entitlement.settled:
+            self._entitlements.pop(job_id, None)
+        return visible
 
     def cancel_job(self, job_id: str) -> ReverseDesignTgJobStatusResponse:
         with self._lock:
@@ -284,19 +304,33 @@ class ReverseDesignJobManager:
         job.finished_at = job.updated_at
 
     def _on_future_done(self, job_id: str, future: Future[None]) -> None:
-        with service_context():
-            self._finish_future(job_id, future)
+        entitlement = self._entitlements.get(job_id)
+        if entitlement is not None:
+            with entitlement.owner_scope():
+                self._finish_future(job_id, future)
+        else:
+            with service_context():
+                self._finish_future(job_id, future)
 
     def _finish_future(self, job_id: str, future: Future[None]) -> None:
         if future.cancelled():
             self._mark_cancelled(job_id, "逆向设计搜索在执行前被取消。")
-            return
-        unexpected_error = future.exception()
-        if unexpected_error is not None:
-            self._mark_failed(
-                job_id,
-                f"Reverse-design task terminated unexpectedly: {unexpected_error}",
-            )
+        else:
+            unexpected_error = future.exception()
+            if unexpected_error is not None:
+                self._mark_failed(job_id,
+                    f"Reverse-design task terminated unexpectedly: {unexpected_error}")
+        entitlement = self._entitlements.get(job_id)
+        if entitlement is not None and entitlement.finish(self._usage_snapshot(job_id), future):
+            self._entitlements.pop(job_id, None)
+        if getattr(future, "_nexpoly_usage", None) is not None:
+            finish_background_usage(future, self._usage_snapshot(job_id))
+
+
+    def _usage_snapshot(self, job_id):
+        with self._lock:
+            return self._snapshot(self._jobs[job_id])
+
 
     def _update_progress(self, job_id: str, **progress: object) -> None:
         with self._lock:
@@ -316,7 +350,7 @@ class ReverseDesignJobManager:
 
     def _prune_locked(self) -> None:
         for key, job in list(self._jobs.items()):
-            if job.status in TerminalStatus and (job.future is None or job.future.done()) and monotonic() - job.accepted_at >= self.quotas.memory_retention_seconds:
+            if key not in self._entitlements and job.status in TerminalStatus and (job.future is None or job.future.done()) and monotonic() - job.accepted_at >= self.quotas.memory_retention_seconds:
                 del self._jobs[key]
 
     def _snapshot(self, job: _ReverseDesignJob) -> ReverseDesignTgJobStatusResponse:

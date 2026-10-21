@@ -285,7 +285,7 @@ describe("Tg assistant metadata API", () => {
 describe("database analysis API", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("forwards AbortSignal to summary and refresh requests", async () => {
+  it("reads published analytics without a maintenance refresh and forwards AbortSignal", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ query_time_ms: 1, backend: "postgres", datasets: [] }), {
         status: 200,
@@ -299,10 +299,10 @@ describe("database analysis API", () => {
     const controller = new AbortController();
 
     await fetchDatabaseDatasetSummary(controller.signal);
-    await fetchDatabaseAnalytics({ refresh: true, signal: controller.signal });
+    await fetchDatabaseAnalytics({ signal: controller.signal });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/database-browser/datasets/summary", authenticatedRequest({ signal: controller.signal }));
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/database-browser/datasets/analytics?refresh=true", authenticatedRequest({ signal: controller.signal }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/database-browser/datasets/analytics", authenticatedRequest({ signal: controller.signal }));
   });
 
   it("keeps record query contracts and forwards AbortSignal", async () => {

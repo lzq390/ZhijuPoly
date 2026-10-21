@@ -3045,7 +3045,7 @@ def test_backend_startup_uses_user_isolation_schema_profile(monkeypatch) -> None
         "settings": settings,
         "mode": "runtime",
         "strict": True,
-        "schema_target": main_module.SCHEMA_TARGET_ISOLATION,
+        "schema_target": main_module.SCHEMA_TARGET_CURRENT_ISOLATION,
     }
     assert app.state.database_preflight_errors == ()
 

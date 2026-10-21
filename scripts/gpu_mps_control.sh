@@ -4,6 +4,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -P "$SCRIPT_DIR/.." && pwd -P)"
 expected_development_gpu_root="$REPO_ROOT/.runtime/gpu-resource"
+if [[ -n "${NEXPOLY_DEV_GPU_COHORT_CONFIG:-}" || -n "${NEXPOLY_DEV_GPU_COHORT_SHA256:-}" ]]; then
+  [[ -n "${NEXPOLY_DEV_GPU_COHORT_CONFIG:-}" && -n "${NEXPOLY_DEV_GPU_COHORT_SHA256:-}" ]] || exit 1
+  expected_development_gpu_root="$(/usr/bin/python3 -I - "$REPO_ROOT"     "$NEXPOLY_DEV_GPU_COHORT_CONFIG" "$NEXPOLY_DEV_GPU_COHORT_SHA256" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from scripts.dev_gpu_cohort import DevGpuCohort
+import os
+cohort = DevGpuCohort.load(Path(sys.argv[2]), sys.argv[3], repo_root=Path(sys.argv[1]),
+                         expected_identity=(int(os.environ["NEXPOLY_DEV_GPU_COHORT_DEVICE"]),
+                                            int(os.environ["NEXPOLY_DEV_GPU_COHORT_INODE"])))
+cohort.require_prepared()
+print(cohort.path_for("gpu-resource"))
+PY
+  )" || exit 1
+fi
 
 action="${1:-}"
 index="${2:-}"

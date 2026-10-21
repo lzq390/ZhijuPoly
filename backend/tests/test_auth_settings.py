@@ -14,7 +14,8 @@ def settings(origins=(PUBLIC,), environment='dev'):
 
 @pytest.fixture(autouse=True)
 def clean_auth_environment(monkeypatch):
-    for key in ('AUTH_COOKIE_SECURE', 'AUTH_COOKIE_NAME', 'AUTH_DEV_HTTP_ORIGINS'):
+    for key in ('AUTH_COOKIE_SECURE', 'AUTH_COOKIE_NAME', 'AUTH_DEV_HTTP_ORIGINS',
+                'AUTH_ISOLATED_AB_SESSION_POLICY', 'FORWARDED_ALLOW_IPS'):
         monkeypatch.delenv(key, raising=False)
 
 

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "scope_id": "acceptance-a-20261019",
+  "status": "BLOCKED_NATIVE_AB_AUTHENTICATION_AND_BRIDGE_CONTRACT_UNPROVEN",
+  "native_backend_image_id": "sha256:41a2b6929bc74a1bf3c0bac54df09f8e5f835954b3ba58dfba81f703b3ffe17a",
+  "native_ui_baseline_image_id": "sha256:e7d25a1b6d515daec641c8de9c98265f275991eee2396dc578ce9c2fcfdeb197",
+  "image_id_is_registry_manifest_digest": false,
+  "native_backend_entry": "bun --conditions=browser /app/backend/cli/src/index.ts serve --hostname 0.0.0.0 --port 4096",
+  "native_environment_contract": ["OPENSCIENCE_FILES_ROOT", "OPENSCIENCE_RECORDS_ROOT", "OPENSCIENCE_UMASK"],
+  "native_project_routes_present": true,
+  "native_session_routes_present": true,
+  "provider_auth_route_proves_workspace_owner_authentication": false,
+  "current_overlay_parent_origins": ["http://114.214.255.154:9000", "http://114.214.255.154:9001"],
+  "required_isolated_parent_origin": "http://127.0.0.2:38965",
+  "proposed_objects_uncreated": {
+    "workspace_A": "r2-a-20261019-home-a",
+    "workspace_B": "r2-a-20261019-home-b",
+    "separate_empty_records_and_files": true,
+    "independent_lifecycle_and_no_host_home_mount": true,
+    "provider": "disabled"
+  },
+  "remaining_proof": [
+    "A native authenticated entry must bind each workspace to the exact NexPoly owner without exporting a session",
+    "Existing binary-overlay trusted-parent patch must be rebuilt from its exact pinned baseline for only the isolated parent",
+    "A/B route, record and stream isolation must be proved before any positive Home case"
+  ],
+  "shared_9011_accessed": false,
+  "native_process_internal_nonce_used": false,
+  "Home_service_started": false,
+  "paid_inference_called": false,
+  "home_projects_added_PASS": false,
+  "home_chat_added_PASS": false,
+  "do_not_block_other_supported_cases": true
+}

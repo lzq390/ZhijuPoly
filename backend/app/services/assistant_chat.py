@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from app.models import AssistantChatMessage, AssistantModuleContext
 from app.services.ai_client import clean_ai_provider_error, create_openai_client
+from app.services.usage_provider import close_provider_stream, provider_call
 
 
 class AssistantChatConfigError(RuntimeError):
@@ -66,7 +67,8 @@ def complete_assistant_intent(
     )
 
     try:
-        response = client.chat.completions.create(
+        response = provider_call(client.chat.completions.create,
+            usage_phase="intent",
             model=model,
             messages=[
                 {
@@ -113,8 +115,10 @@ def stream_assistant_chat(
         api_key=api_key, base_url=base_url, proxy_url=proxy_url, timeout_seconds=90.0
     )
 
+    stream = None
     try:
-        stream = client.chat.completions.create(
+        stream = provider_call(client.chat.completions.create,
+            usage_phase="answer",
             model=model,
             messages=[
                 {"role": "system", "content": build_assistant_system_prompt(modules, active_module)},
@@ -136,7 +140,10 @@ def stream_assistant_chat(
     except Exception as exc:
         raise AssistantChatModelError(clean_ai_provider_error(exc)) from exc
     finally:
-        client.close()
+        try:
+            close_provider_stream(stream)
+        finally:
+            client.close()
 
 
 def stream_assistant_image_chat(
@@ -162,8 +169,10 @@ def stream_assistant_image_chat(
     prior_messages = [{"role": message.role, "content": message.content} for message in messages[:-1]]
     latest_message = messages[-1]
 
+    stream = None
     try:
-        stream = client.chat.completions.create(
+        stream = provider_call(client.chat.completions.create,
+            usage_phase="answer",
             model=model,
             messages=[
                 {"role": "system", "content": build_assistant_image_system_prompt(modules, active_module)},
@@ -197,7 +206,10 @@ def stream_assistant_image_chat(
     except Exception as exc:
         raise AssistantChatModelError(clean_ai_provider_error(exc)) from exc
     finally:
-        client.close()
+        try:
+            close_provider_stream(stream)
+        finally:
+            client.close()
 
 
 def stream_assistant_skill_summary(
@@ -217,8 +229,10 @@ def stream_assistant_skill_summary(
         api_key=api_key, base_url=base_url, proxy_url=proxy_url, timeout_seconds=90.0
     )
 
+    stream = None
     try:
-        stream = client.chat.completions.create(
+        stream = provider_call(client.chat.completions.create,
+            usage_phase="answer",
             model=model,
             messages=[
                 {
@@ -251,7 +265,10 @@ def stream_assistant_skill_summary(
     except Exception as exc:
         raise AssistantChatModelError(clean_ai_provider_error(exc)) from exc
     finally:
-        client.close()
+        try:
+            close_provider_stream(stream)
+        finally:
+            client.close()
 
 
 def complete_prediction_property_resolution(
@@ -270,7 +287,8 @@ def complete_prediction_property_resolution(
     )
 
     try:
-        response = client.chat.completions.create(
+        response = provider_call(client.chat.completions.create,
+            usage_phase="resolution",
             model=model,
             messages=[
                 {

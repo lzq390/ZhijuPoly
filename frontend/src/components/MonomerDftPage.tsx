@@ -1,3 +1,4 @@
+import { StructureImportButton, useModuleDraftState } from "../structure-library/StructureLibraryProvider";
 import { createPrivateObjectURL, revokePrivateObjectURL } from "../auth/objectUrls";
 import { useAuth } from "../auth/AuthProvider";
 import { requestServiceAccess } from "../auth/guestAccess";
@@ -666,22 +667,22 @@ export function MonomerDftPage({
   const [activeTab, setActiveTab] = useState<PrimaryTab>(initialJobId ? "results" : "config");
   const tabContentRef = useRef<HTMLDivElement | null>(null);
   useContentMotion(tabContentRef, activeTab, "tab");
-  const [smilesDraft, setSmilesDraft] = useState(structure.workspace.getSnapshot().draft);
-  const [calculationType, setCalculationType] = useState<MonomerDftCalculationType>("single_point");
-  const [modelId, setModelId] = useState<MonomerDftModelName | "">("");
-  const [netChargeText, setNetChargeText] = useState("");
-  const [multiplicity, setMultiplicity] = useState(1);
-  const [psmilesMode, setPsmilesMode] = useState<"close" | "cap" | null>(null);
-  const [seed, setSeed] = useState(1);
-  const [maxIterations, setMaxIterations] = useState(500);
-  const [properties, setProperties] = useState<MonomerDftProperty[]>(["energy", "forces", "charges"]);
-  const [postOptimizationProperties, setPostOptimizationProperties] = useState<MonomerDftPostOptimizationProperty[]>([]);
-  const [fmax, setFmax] = useState(0.01);
-  const [maxSteps, setMaxSteps] = useState(50);
+  const [smilesDraft, setSmilesDraft] = useModuleDraftState("dft.smiles", "");
+  const [calculationType, setCalculationType] = useModuleDraftState<MonomerDftCalculationType>("dft.calculationType", "single_point");
+  const [modelId, setModelId] = useModuleDraftState<MonomerDftModelName | "">("dft.modelId", "");
+  const [netChargeText, setNetChargeText] = useModuleDraftState("dft.netChargeText", "");
+  const [multiplicity, setMultiplicity] = useModuleDraftState("dft.multiplicity", 1);
+  const [psmilesMode, setPsmilesMode] = useModuleDraftState<"close" | "cap" | null>("dft.psmilesMode", null);
+  const [seed, setSeed] = useModuleDraftState("dft.seed", 1);
+  const [maxIterations, setMaxIterations] = useModuleDraftState("dft.maxIterations", 500);
+  const [properties, setProperties] = useModuleDraftState<MonomerDftProperty[]>("dft.properties", ["energy", "forces", "charges"]);
+  const [postOptimizationProperties, setPostOptimizationProperties] = useModuleDraftState<MonomerDftPostOptimizationProperty[]>("dft.postOptimizationProperties", []);
+  const [fmax, setFmax] = useModuleDraftState("dft.fmax", 0.01);
+  const [maxSteps, setMaxSteps] = useModuleDraftState("dft.maxSteps", 50);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [isPreparingSubmission, setIsPreparingSubmission] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const defaultsInitializedRef = useRef(false);
+  const [defaultsInitialized, setDefaultsInitialized] = useModuleDraftState("dft.defaultsInitialized", false);
   const submissionPreparingRef = useRef(false);
   const submissionPreparationAbortRef = useRef<AbortController | null>(null);
   const scrollRegionRef = useRef<HTMLDivElement | null>(null);
@@ -691,9 +692,6 @@ export function MonomerDftPage({
     [dft.capabilities]
   );
 
-  useEffect(() => {
-    setSmilesDraft(structure.workspace.getSnapshot().draft);
-  }, [structure.smiles]);
 
   useEffect(() => {
     if (initialJobId) {
@@ -708,24 +706,13 @@ export function MonomerDftPage({
   }, []);
 
   useEffect(() => {
-    if (!dft.capabilities || dft.capabilities.schema_ready !== true) {
-      defaultsInitializedRef.current = false;
-      setModelId("");
-      setSeed(1);
-      setMaxIterations(500);
-      setProperties(["energy", "forces", "charges"]);
-      setFmax(0.01);
-      setMaxSteps(50);
-      setPostOptimizationProperties([]);
-      setFormError(null);
-      return;
-    }
+    if (!dft.capabilities || dft.capabilities.schema_ready !== true) return;
     setModelId((current) => current && selectableModels.some((model) => model.id === current && model.available)
       ? current
       : selectableModels.find((model) => model.id === dft.capabilities?.default_model && model.available)?.id
         ?? selectableModels.find((model) => model.available)?.id
         ?? "");
-    if (!defaultsInitializedRef.current) {
+    if (!defaultsInitialized) {
       const defaults = dft.capabilities.defaults;
       setSeed(defaults.conformer.seed);
       setMaxIterations(defaults.conformer.max_iterations);
@@ -733,9 +720,9 @@ export function MonomerDftPage({
       setFmax(defaults.optimization.fmax_eV_per_A);
       setMaxSteps(defaults.optimization.max_steps);
       setPostOptimizationProperties(defaults.optimization.post_optimization_properties);
-      defaultsInitializedRef.current = true;
+      setDefaultsInitialized(true);
     }
-  }, [dft.capabilities, selectableModels]);
+  }, [dft.capabilities, selectableModels, defaultsInitialized]);
 
   useEffect(() => {
     if (!smilesDraft.includes("*")) setPsmilesMode(null);
@@ -884,7 +871,6 @@ export function MonomerDftPage({
 
   function changeSmilesDraft(value: string) {
     setSmilesDraft(value);
-    structure.setSmiles(value);
     setFormError(null);
   }
 
@@ -907,7 +893,6 @@ export function MonomerDftPage({
         standardizedSmiles = standardized.standardized_smiles.trim();
         if (standardizedSmiles && standardizedSmiles !== rawSmiles) {
           setSmilesDraft(standardizedSmiles);
-          structure.setSmiles(standardizedSmiles);
         }
       }
       const issues = validateMonomerDftRequest({
@@ -1123,6 +1108,7 @@ export function MonomerDftPage({
                           <p>编辑提交结构并核对 2D 预览。</p>
                         </div>
                       </header>
+                      <StructureImportButton value={smilesDraft} onChange={changeSmilesDraft} label="单体 DFT" disabled={configLocked} />
                       <MonomerDftStructureInput
                         value={smilesDraft}
                         disabled={configLocked}

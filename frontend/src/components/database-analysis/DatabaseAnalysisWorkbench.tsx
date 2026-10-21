@@ -123,6 +123,8 @@ type AnalyticsState = {
   validationErrors: AnalyticsValidationErrors;
 };
 
+type PendingRead = { controller: AbortController; promise: Promise<boolean> };
+
 function datasetIcon(key: AnalysisViewKey, className?: string) {
   const props = { className, "aria-hidden": true };
   if (key === "overview") return <Grid2X2 {...props} />;
@@ -138,25 +140,33 @@ function useDatasetSummary(enabled = true) {
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
+  const pendingRef = useRef<PendingRead | null>(null);
 
   const load = useCallback(async () => {
     if (!requestServiceAccess()) return false;
+    if (pendingRef.current && !pendingRef.current.controller.signal.aborted) return pendingRef.current.promise;
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     setLoading(true);
     setError(null);
-    try {
-      const response = await fetchDatabaseDatasetSummary(controller.signal);
-      if (controller.signal.aborted) return false;
-      setSummary(response);
-      return true;
-    } catch (nextError) {
-      if (!controller.signal.aborted) setError(databaseAnalysisErrorMessage(nextError, "数据源状态加载失败"));
-      return false;
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
+    const promise = (async () => {
+      try {
+        const response = await fetchDatabaseDatasetSummary(controller.signal);
+        if (controller.signal.aborted) return false;
+        setSummary(response);
+        return true;
+      } catch (nextError) {
+        if (!controller.signal.aborted) setError(databaseAnalysisErrorMessage(nextError, "数据源状态加载失败"));
+        return false;
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    })();
+    const pending = { controller, promise };
+    pendingRef.current = pending;
+    void promise.then(() => { if (pendingRef.current === pending) pendingRef.current = null; });
+    return promise;
   }, []);
 
   useEffect(() => {
@@ -179,44 +189,51 @@ function useDatabaseAnalytics(enabled = true) {
     validationErrors: {}
   });
   const controllerRef = useRef<AbortController | null>(null);
+  const pendingRef = useRef<PendingRead | null>(null);
 
-  const load = useCallback(async (refresh: boolean) => {
+  const load = useCallback(async (background: boolean) => {
     if (!requestServiceAccess()) return false;
+    if (pendingRef.current && !pendingRef.current.controller.signal.aborted) return pendingRef.current.promise;
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     setState((current) => ({
       ...current,
-      loading: refresh ? current.loading : true,
-      refreshing: refresh,
+      loading: background ? current.loading : true,
+      refreshing: background,
       error: null
     }));
 
-    try {
-      const response = await fetchDatabaseAnalytics({ refresh, signal: controller.signal });
-      if (controller.signal.aborted) return false;
-      const validated = validateDatabaseAnalyticsPayload(response.datasets);
-      setState({
-        analytics: validated.analytics,
-        loading: false,
-        refreshing: false,
-        error: null,
-        source: response.source,
-        generatedAt: response.generated_at ?? new Date().toISOString(),
-        validationErrors: validated.errors
-      });
-      if (!refresh) return "loaded";
-      return response.refresh_status ?? (response.source === "snapshot" ? "unchanged" : "recomputed");
-    } catch (nextError) {
-      if (controller.signal.aborted) return false;
-      setState((current) => ({
-        ...current,
-        loading: false,
-        refreshing: false,
-        error: databaseAnalysisErrorMessage(nextError, "分析数据加载失败")
-      }));
-      return false;
-    }
+    const promise = (async () => {
+      try {
+        const response = await fetchDatabaseAnalytics({ signal: controller.signal });
+        if (controller.signal.aborted) return false;
+        const validated = validateDatabaseAnalyticsPayload(response.datasets);
+        setState({
+          analytics: validated.analytics,
+          loading: false,
+          refreshing: false,
+          error: null,
+          source: response.source,
+          generatedAt: response.generated_at ?? new Date().toISOString(),
+          validationErrors: validated.errors
+        });
+        return true;
+      } catch (nextError) {
+        if (controller.signal.aborted) return false;
+        setState((current) => ({
+          ...current,
+          loading: false,
+          refreshing: false,
+          error: databaseAnalysisErrorMessage(nextError, "分析数据加载失败")
+        }));
+        return false;
+      }
+    })();
+    const pending = { controller, promise };
+    pendingRef.current = pending;
+    void promise.then(() => { if (pendingRef.current === pending) pendingRef.current = null; });
+    return promise;
   }, []);
 
   useEffect(() => {
@@ -225,7 +242,9 @@ function useDatabaseAnalytics(enabled = true) {
     return () => controllerRef.current?.abort();
   }, [enabled, load]);
 
-  return { ...state, reload: () => load(false), refresh: () => load(true) };
+  const reload = useCallback(() => load(false), [load]);
+  const refresh = useCallback(() => load(true), [load]);
+  return { ...state, reload, refresh };
 }
 
 function analyticsRecordCount(analytics: DatabaseAnalyticsPayload | null, key: DatasetKey) {
@@ -246,6 +265,7 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
   const analyticsState = useDatabaseAnalytics(!guest);
   const [datasetPopoverOpen, setDatasetPopoverOpen] = useState(false);
   const [transientMessage, setTransientMessage] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [drawerRequest, setDrawerRequest] = useState<DrawerRequest | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerRestoreTarget, setDrawerRestoreTarget] = useState<HTMLElement | null>(null);
@@ -257,6 +277,10 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
   const datasetPopoverOpenRef = useRef(datasetPopoverOpen);
   const restoreDatasetFocusRef = useRef(false);
   const messageTimerRef = useRef<number | null>(null);
+  const refreshReadRef = useRef<Promise<boolean> | null>(null);
+  const pageAliveRef = useRef(true);
+  const previousDatasetRef = useRef(props.selectedKey);
+  const lastResumeRef = useRef(-Infinity);
   datasetPopoverOpenRef.current = datasetPopoverOpen;
 
   const displayDatasets = useMemo(() => {
@@ -366,21 +390,69 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
     };
   }, [datasetPopoverOpen, datasetPopoverOverlay]);
 
-  useEffect(() => () => {
-    if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current);
+  useEffect(() => {
+    pageAliveRef.current = true;
+    return () => {
+      pageAliveRef.current = false;
+      if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current);
+    };
   }, []);
 
-  async function handleRefresh() {
-    setTransientMessage(null);
-    const outcome = await analyticsState.refresh();
-    if (!outcome) return;
-    await summaryState.reload();
-    setTransientMessage(outcome === "unchanged"
-      ? "数据已是最新，当前统计结果保持不变。"
-      : "数据已更新，当前数据集和浏览位置保持不变。");
-    if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current);
-    messageTimerRef.current = window.setTimeout(() => setTransientMessage(null), 2600);
-  }
+  const handleRefresh = useCallback((manual = true) => {
+    let read = refreshReadRef.current;
+    if (!read) {
+      setTransientMessage(null);
+      setRefreshing(true);
+      read = Promise.all([analyticsState.refresh(), summaryState.reload()])
+        .then(([analyticsReady, summaryReady]) => analyticsReady && summaryReady);
+      refreshReadRef.current = read;
+      const currentRead = read;
+      void read.then(() => {
+        if (refreshReadRef.current === currentRead) {
+          refreshReadRef.current = null;
+          if (pageAliveRef.current) setRefreshing(false);
+        }
+      });
+    }
+    if (manual) void read.then((ready) => {
+      if (!ready || !pageAliveRef.current) return;
+      setTransientMessage("已读取最新统计结果");
+      if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current);
+      messageTimerRef.current = window.setTimeout(() => setTransientMessage(null), 2600);
+    });
+    return read;
+  }, [analyticsState.refresh, summaryState.reload]);
+
+  useEffect(() => {
+    if (previousDatasetRef.current !== props.selectedKey && !guest) void handleRefresh(false);
+    previousDatasetRef.current = props.selectedKey;
+  }, [guest, props.selectedKey, handleRefresh]);
+
+  useEffect(() => {
+    if (guest) return;
+    const resetResume = () => { lastResumeRef.current = -Infinity; };
+    const resume = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastResumeRef.current < 500) return;
+      lastResumeRef.current = now;
+      void handleRefresh(false);
+    };
+    const visibilityChange = () => {
+      if (document.visibilityState === "hidden") resetResume();
+      else resume();
+    };
+    window.addEventListener("focus", resume);
+    window.addEventListener("blur", resetResume);
+    document.addEventListener("visibilitychange", visibilityChange);
+    return () => {
+      window.removeEventListener("focus", resume);
+      window.removeEventListener("blur", resetResume);
+      document.removeEventListener("visibilitychange", visibilityChange);
+    };
+  }, [guest, handleRefresh]);
+
+  const isRefreshing = refreshing || analyticsState.refreshing;
 
   function selectDataset(key: AnalysisViewKey) {
     restoreDatasetFocusRef.current = true;
@@ -396,10 +468,10 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
     setDrawerOpen(true);
   }
 
-  const banner = guest ? { tone: "info", message: "请登录账号。" } : analyticsState.refreshing
+  const banner = guest ? { tone: "info", message: "请登录账号。" } : isRefreshing
     ? {
         tone: "info",
-        message: "正在检查数据更新，期间保留当前结果。"
+        message: "正在读取"
       }
     : analyticsState.error
       ? { tone: "error", message: analyticsState.analytics ? `统计更新失败，仍显示上次成功结果：${analyticsState.error}` : analyticsState.error }
@@ -449,13 +521,13 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
                   <div className="dba-toolbar" aria-label="数据操作">
                     <button
                       type="button"
-                      className={`dba-tool-button dba-refresh-button ${analyticsState.refreshing ? "is-refreshing" : ""}`}
+                      className={`dba-tool-button dba-refresh-button ${isRefreshing ? "is-refreshing" : ""}`}
                       data-workbench-tool="refresh"
-                      aria-busy={analyticsState.refreshing}
-                      disabled={analyticsState.refreshing}
+                      aria-busy={isRefreshing}
+                      disabled={isRefreshing}
                       onClick={() => void handleRefresh()}
                     >
-                      <RefreshCw aria-hidden="true" /><span>{analyticsState.refreshing ? "刷新中" : "刷新数据"}</span>
+                      <RefreshCw aria-hidden="true" /><span>{isRefreshing ? "刷新中" : "刷新数据"}</span>
                     </button>
                     <button
                       ref={datasetButtonRef}
@@ -515,7 +587,7 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
                   </div>
                 ) : null}
 
-                <div className={`dba-surface-body ${currentView === "overview" ? "is-overview" : ""}`} aria-busy={analyticsState.loading || analyticsState.refreshing}>
+                <div className={`dba-surface-body ${currentView === "overview" ? "is-overview" : ""}`} aria-busy={analyticsState.loading || isRefreshing}>
                   {analyticsState.loading && !analyticsState.analytics ? (
                     <AnalysisSkeleton />
                   ) : (
@@ -531,7 +603,7 @@ export function DatabaseAnalysis(props: DatabaseAnalysisProps) {
                       onOpenRecords={openRecords}
                     />
                   )}
-                  {analyticsState.refreshing ? <RefreshOverlay /> : null}
+                  {isRefreshing ? <RefreshOverlay /> : null}
                 </div>
               </section>
             </div>
@@ -847,5 +919,5 @@ function AnalysisSkeleton() {
 }
 
 function RefreshOverlay() {
-  return <div className="dba-refresh-overlay" role="status"><span className="dba-sr-only">正在更新分析数据，旧数据仍保留在背景中</span><div className="dba-skeleton-strip">{[0, 1, 2, 3].map((item) => <span key={item}><i /><b /></span>)}</div><div className="dba-skeleton-grid">{[0, 1, 2, 3].map((item) => <span key={item} />)}</div></div>;
+  return <div className="dba-refresh-overlay" role="status"><span className="dba-sr-only">正在读取</span><div className="dba-skeleton-strip">{[0, 1, 2, 3].map((item) => <span key={item}><i /><b /></span>)}</div><div className="dba-skeleton-grid">{[0, 1, 2, 3].map((item) => <span key={item} />)}</div></div>;
 }

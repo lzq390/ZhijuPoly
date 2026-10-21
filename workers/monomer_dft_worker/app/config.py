@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from gpu_resource.transient_scope import ScopeResourceLimits, scope_resource_limits_from_environment
+
 import math
 import os
 import stat
@@ -363,7 +365,24 @@ class WorkerSettings:
     start_authorization_url: str = ""
     start_authorization_token: str = ""
 
+    gpu_scope_cpu_quota_percent: int | None = None
+    gpu_scope_memory_max_bytes: int | None = None
+    gpu_scope_memory_swap_max_bytes: int | None = None
+    gpu_scope_tasks_max: int | None = None
+
+    @property
+    def gpu_scope_resources(self) -> ScopeResourceLimits:
+        return ScopeResourceLimits(
+            self.gpu_scope_cpu_quota_percent,
+            self.gpu_scope_memory_max_bytes,
+            self.gpu_scope_memory_swap_max_bytes,
+            self.gpu_scope_tasks_max,
+        )
+
     def __post_init__(self) -> None:
+        limits = self.gpu_scope_resources
+        if limits.configured and (self.deployment != "dev" or not self.broker_enabled):
+            raise ValueError("GPU scope resource limits require the native development Broker")
         code_root = REPO_ROOT.resolve(strict=False)
         if self.deployment == "prod":
             if code_root != PRODUCTION_REPO_ROOT:
@@ -704,7 +723,12 @@ def load_settings() -> WorkerSettings:
             "NEXPOLY_DFT_GPU_GUARD_MODE must be enforce or observe"
         )
 
+    scope_limits = scope_resource_limits_from_environment("MONOMER_DFT_GPU_SCOPE_")
     return WorkerSettings(
+        gpu_scope_cpu_quota_percent=scope_limits.cpu_quota_percent,
+        gpu_scope_memory_max_bytes=scope_limits.memory_max_bytes,
+        gpu_scope_memory_swap_max_bytes=scope_limits.memory_swap_max_bytes,
+        gpu_scope_tasks_max=scope_limits.tasks_max,
         python=_runtime_path(
             "MONOMER_DFT_PYTHON",
             str(runtime_root / "venvs/monomer-dft-worker/bin/python"),

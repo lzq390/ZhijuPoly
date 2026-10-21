@@ -66,7 +66,7 @@ class MonomerMdRunner:
     def gpu_admission_uncertain(self) -> bool:
         return self._gpu_admission_uncertain
 
-    def recovery_resources_released(self) -> bool:
+    def recovery_resources_released(self, *, owned_job_ids: tuple[str, ...] | None = None) -> bool:
         """Prove the old MD executions absent using the existing Broker authority."""
         if self._settings.mode != "real":
             return True
@@ -84,13 +84,29 @@ class MonomerMdRunner:
         waiters = snapshot.get("waiters")
         if not isinstance(leases, list) or isinstance(waiters, bool) or waiters != 0:
             return False
+        attachment = self._settings.acceptance_attachment_id
+        owned_requests = None
+        if attachment:
+            if (type(owned_job_ids) is not tuple or len(owned_job_ids) > 64
+                    or any(type(job) is not str or not job or len(job) > 128 for job in owned_job_ids)):
+                return False
+            owned_requests = {
+                f'md:{self._settings.gpu_broker_environment}:' + hashlib.sha256(job.encode('utf-8')).hexdigest()[:16]
+                for job in owned_job_ids
+            }
         # A live, suspect or terminating lease still owns resources. Broker
         # removal requires its existing workload/process-group safety checks.
         for lease in leases:
             if not isinstance(lease, dict) or not all(key in lease for key in ("component", "environment")):
                 return False
             if lease["component"] == "md" and lease["environment"] == self._settings.gpu_broker_environment:
-                return False
+                if owned_requests is None:
+                    return False
+                request = lease.get('request_id')
+                if (not isinstance(request, str) or not request
+                        or request in owned_requests
+                        or request.startswith(f'md:{self._settings.gpu_broker_environment}:probe:')):
+                    return False
         return True
 
     @property
@@ -622,6 +638,7 @@ class MonomerMdRunner:
             process = await create_fenced_subprocess_exec(
                 command,
                 execution_lease=execution_lease,
+                scope_resource_limits=self._settings.gpu_scope_resources,
                 cwd=self._settings.byteff2_root,
                 env=env,
                 stdout=stdout,

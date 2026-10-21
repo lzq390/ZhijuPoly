@@ -108,6 +108,7 @@ class ByteFF2FormalRunner:
                     str(config_path),
                 ),
                 execution_lease=execution_lease,
+                scope_resource_limits=self._settings.gpu_scope_resources,
                 cwd=output_dir,
                 env=env,
                 stdout=stdout,

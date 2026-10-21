@@ -81,6 +81,8 @@ nexpoly-release-*.tar.gz
 /scripts/prepare_pi_reverse_design_demo_data.py
 /scripts/prepare_pi_reverse_design_test_data.py
 /backend/tests/*
+!/backend/tests/test_usage*.py
+!/backend/tests/test_entitlement*.py
 !/backend/tests/test_multiuser_contract.py
 !/backend/tests/test_multiuser_support.py
 !/backend/tests/test_multiuser_restore.py
@@ -134,3 +136,9 @@ nexpoly-release-*.tar.gz
 /.venv-monomer-md-worker.staging-*/
 /.venv-monomer-md-worker.previous-*/
 /docs/plan/
+
+!/backend/tests/test_*entitlement*.py
+!/backend/tests/test_user_isolation_usage_audit.py
+
+# Personal structure-library integration coverage
+!/backend/tests/test_structure_library.py

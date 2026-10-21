@@ -471,6 +471,7 @@ def validate_environment(
     repo_root: pathlib.Path,
     values: dict[str, str],
     formal_gpu_authority: Any | None = None,
+    native_cohort: Any | None = None,
 ) -> dict[str, str]:
     repo_root = require_development_repo_root(repo_root)
     deployment = values["MONOMER_DFT_DEPLOYMENT"]
@@ -508,6 +509,10 @@ def validate_environment(
         "AIMNET_SOURCE_DIR": runtime / "aimnet-source-archive",
         "AIMNET_SOURCE_LOCK": repo_root / "workers/monomer_dft_worker/aimnet-source.lock.json",
     }
+    if native_cohort is not None:
+        require(not formal_acceptance and formal_gpu_authority is None, "native cohort cannot use formal descriptor authority")
+        expected_paths["MONOMER_DFT_WORKER_UDS"] = native_cohort.path_for("dft-socket/worker.sock")
+        expected_paths["MONOMER_DFT_JOB_ROOT"] = native_cohort.path_for("dft-runs")
     resolved: dict[str, str] = {}
     for key, expected in expected_paths.items():
         actual_lexical = lexical_path(repo_root, values[key])
@@ -534,7 +539,7 @@ def validate_environment(
         actual = lexical_path(repo_root, values[key]) if key == "MONOMER_DFT_PYTHON" else resolve_path(repo_root, values[key])
         require(actual.is_relative_to(runtime), f"{key} escapes .runtime")
     require(resolve_path(repo_root, values["MONOMER_DFT_WORKER_UDS"]).parent.is_relative_to(runtime), "UDS escapes .runtime")
-    dev_gpu_root = runtime / "gpu-resource"
+    dev_gpu_root = native_cohort.path_for("gpu-resource") if native_cohort is not None else runtime / "gpu-resource"
     expected_broker_socket = dev_gpu_root / "broker.sock"
     expected_mps_pipe_root = dev_gpu_root
     expected_external_reservations = dev_gpu_root / "external-reservations.json"
@@ -975,10 +980,29 @@ def main() -> int:
         repo_root,
         load_env_file(env_file),
     )
+    cohort_path = os.environ.get("NEXPOLY_DEV_GPU_COHORT_CONFIG")
+    cohort_digest = os.environ.get("NEXPOLY_DEV_GPU_COHORT_SHA256")
+    native_cohort = None
+    if cohort_path or cohort_digest:
+        require(bool(cohort_path and cohort_digest), "native cohort requires exact config and digest")
+        require(os.environ.get("NEXPOLY_DFT_FORMAL_ACCEPTANCE", "0") == "0", "native cohort cannot use formal acceptance")
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from scripts.dev_gpu_cohort import DevGpuCohort
+        native_cohort = DevGpuCohort.load(pathlib.Path(cohort_path), cohort_digest, repo_root=repo_root,
+                    expected_identity=(int(os.environ["NEXPOLY_DEV_GPU_COHORT_DEVICE"]),
+                                       int(os.environ["NEXPOLY_DEV_GPU_COHORT_INODE"])))
+        native_cohort.require_prepared()
+        values.update({key: value for key, value in native_cohort.environment().items()
+                       if key in {"MONOMER_DFT_WORKER_UDS", "MONOMER_DFT_JOB_ROOT", "MONOMER_DFT_GPU_BROKER_UDS",
+                                  "MONOMER_DFT_GPU_MPS_PIPE_ROOT", "MONOMER_DFT_GPU_EXTERNAL_RESERVATIONS",
+                                  "MONOMER_DFT_GPU_BROKER_ENABLED", "MONOMER_DFT_STANDALONE_GPU_SMOKE",
+                                  "MONOMER_DFT_DEPLOYMENT"}})
     resolved = validate_environment(
         repo_root,
         values,
         formal_gpu_authority,
+        native_cohort,
     )
     git_result = validate_git(repo_root)
 

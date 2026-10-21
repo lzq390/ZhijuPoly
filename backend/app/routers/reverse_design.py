@@ -24,6 +24,8 @@ from app.services.structure_2d import generate_2d_svg
 from app.services.reverse_design_jobs import ReverseDesignJobUnavailableError
 from app.utils.exceptions import InvalidSmilesError
 
+from app.services.entitlement_memory import submission_for_request, get_memory_job, associate_request
+
 
 router = APIRouter(prefix="/api/v1/reverse-design", tags=["reverse-design"])
 POSTGRES_ONLY_DETAIL = "Postgres runtime is required; set PI_REVERSE_BACKEND=postgres."
@@ -172,6 +174,11 @@ async def create_tg_search_job(
     request_body: ReverseDesignTgRequest,
     request: Request,
 ) -> ReverseDesignTgJobCreateResponse:
+    entitlement = submission_for_request(request, "reverse_design", request_body)
+    if entitlement is not None:
+        replay = entitlement.replay()
+        if replay is not None:
+            return ReverseDesignTgJobCreateResponse(job_id=replay.job_id, status=replay.status)
     _validate_query_smiles(request_body.smiles)
     manager = request.app.state.reverse_design_job_manager
 
@@ -188,13 +195,16 @@ async def create_tg_search_job(
         )
 
     try:
-        job = manager.create_job(request_body, run_search)
+        job = manager.create_job(request_body, run_search,
+            **({"entitlement": entitlement} if entitlement is not None else {}))
     except ReverseDesignJobUnavailableError as exc:
         raise HTTPException(
             status_code=503,
             detail="Reverse-design job service is temporarily unavailable.",
             headers={"Retry-After": "1"},
         ) from exc
+    finally:
+        associate_request(request, entitlement)
     return ReverseDesignTgJobCreateResponse(job_id=job.job_id, status=job.status)
 
 
@@ -202,6 +212,6 @@ async def create_tg_search_job(
 async def get_tg_search_job(job_id: str, request: Request) -> ReverseDesignTgJobStatusResponse:
     manager = request.app.state.reverse_design_job_manager
     try:
-        return manager.get_job(job_id)
+        return get_memory_job(request, "reverse_design", job_id, manager.get_job)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Job not found") from exc

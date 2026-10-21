@@ -41,6 +41,15 @@ def bounded_stream(channel: str):
         def call(*args, **kwargs):
             identity, settings = current_identity(), database_settings()
             lease = acquire_admission(channel, task_type=function.__name__)
+            from app.usage_context import (
+                current_usage_context, current_usage_collector, usage_scope, retain_usage_execution,
+            )
+            usage_context, usage_collector = current_usage_context(), current_usage_collector()
+            try:
+                usage_retention = retain_usage_execution()
+            except BaseException:
+                lease.release()
+                raise
 
             class PrivateStream:
                 def __init__(self):
@@ -61,7 +70,7 @@ def bounded_stream(channel: str):
                         try:
                             # Each pull has its own context; Starlette may advance
                             # a synchronous iterator on different worker threads.
-                            with user_context(identity, settings):
+                            with user_context(identity, settings), usage_scope(usage_context, collector=usage_collector):
                                 if self.iterator is None:
                                     if not authorize_memory_start(identity.user_id):
                                         log_task_event(lease.context, "start_rejected", reason="account_disabled")
@@ -88,11 +97,14 @@ def bounded_stream(channel: str):
                         self.closed = True
                         try:
                             if self.iterator is not None and hasattr(self.iterator, "close"):
-                                with user_context(identity, settings):
+                                with user_context(identity, settings), usage_scope(usage_context, collector=usage_collector):
                                     self.iterator.close()
                         finally:
                             # Closing an unstarted stream also returns its permit.
-                            lease.release()
+                            try:
+                                lease.release()
+                            finally:
+                                usage_retention.release()
 
                 def __del__(self):
                     # Match generators' defensive cleanup; HTTP consumers still
@@ -109,7 +121,9 @@ def bounded_stream(channel: str):
 
 def submit_private_job(executor: Executor, run: Callable[..., Any], *args: Any,
                        channel: str, on_disabled: Callable[[], None],
-                       task_type: str | None = None, task_id: str | None = None) -> Future:
+                       task_type: str | None = None, task_id: str | None = None,
+                       submitted_at: str | None = None) -> Future:
+    from app.services.usage_background import begin_background_usage, background_usage_scope
     identity, settings = current_identity(), database_settings()
     owner = current_owner_id()
     lease = acquire_admission(channel, owner_user_id=owner, task_type=task_type, task_id=task_id)
@@ -122,8 +136,15 @@ def submit_private_job(executor: Executor, run: Callable[..., Any], *args: Any,
         lease.release()
         raise
 
+    try:
+        usage = begin_background_usage(owner_user_id=owner, task_type=task_type,
+            task_id=task_id, channel=channel, submitted_at=submitted_at)
+    except BaseException:
+        lease.release()
+        raise
+
     def execute():
-        with user_context(identity, settings):
+        with user_context(identity, settings), background_usage_scope(usage):
             # GPU runners can wait in the registry after entering this thread.
             # Their sole start decision belongs after registry slot acquisition.
             if channel != "backend_gpu" and not authorize_memory_start(owner):
@@ -132,6 +153,8 @@ def submit_private_job(executor: Executor, run: Callable[..., Any], *args: Any,
                 return
             if channel != "backend_gpu":
                 log_task_event(lease.context, "start_authorized")
+            if usage is not None:
+                usage.running()
             token = held_channel.set(channel)
             context_token = held_task_context.set(lease.context)
             try:
@@ -143,8 +166,14 @@ def submit_private_job(executor: Executor, run: Callable[..., Any], *args: Any,
     try:
         future = executor.submit(execute)
     except BaseException:
-        lease.release()
+        try:
+            if usage is not None:
+                usage.rejected()
+        finally:
+            lease.release()
         raise
+    if usage is not None:
+        future._nexpoly_usage = usage
     future.add_done_callback(lambda _: lease.release())
     return future
 

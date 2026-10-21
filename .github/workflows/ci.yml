@@ -151,10 +151,13 @@ jobs:
             find scripts/tests -maxdepth 1 -type f -name 'test_*.py' \
               ! -name 'test_*_poc_*.py' \
               ! -name 'test_lightweight_*.py' \
+              ! -name 'test_acceptance_*.py' \
+              ! -name 'test_gpu1_acceptance_audit.py' \
               ! -name 'test_dev_gpu_session.py' \
               ! -name 'test_dev_worker_process.py' \
               ! -name 'test_monomer_md_worker_launcher.py' \
               ! -name 'test_user_isolation_release_contract.py' \
+              ! -name 'test_monomer_usage_hooks.py' \
               ! -name 'test_worker_slot_runtime.py' -print | sort
           )
           python3 -m unittest -v "${unittest_files[@]}"
@@ -186,7 +189,8 @@ jobs:
         run: |
           mapfile -t tests < <(
             find scripts/tests -maxdepth 1 -type f \
-              \( -name 'test_*_poc_*.py' -o -name 'test_lightweight_*.py' \) -print | sort
+              \( -name 'test_*_poc_*.py' -o -name 'test_lightweight_*.py' \
+              -o -name 'test_acceptance_*.py' -o -name 'test_gpu1_acceptance_audit.py' \) -print | sort
           )
           if (( ${#tests[@]} == 0 )); then
             echo "No lightweight backend tests found" >&2
@@ -334,7 +338,7 @@ jobs:
           [[ "${#tests[@]}" -gt 0 ]]
           python -m pytest "${tests[@]}" --assert=plain --tb=short --junitxml=multiuser-backend.xml
           if [[ "$SHARD" == "0" ]]; then
-            python -m pytest scripts/tests/test_user_isolation_release_contract.py --assert=plain --tb=short
+            python -m pytest scripts/tests/test_user_isolation_release_contract.py scripts/tests/test_monomer_usage_hooks.py --assert=plain --tb=short
           fi
 
   frontend:

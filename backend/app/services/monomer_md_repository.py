@@ -4,6 +4,9 @@ import json
 from datetime import datetime
 from typing import Any
 
+from task_usage.ledger import metering_enabled, record_event
+from task_usage import native_entitlements as ne
+
 
 MONOMER_MD_ACTIVE_STATUSES = frozenset(
     {"pending", "submitted", "running", "cancel_requested"}
@@ -33,6 +36,31 @@ def _timestamp(value: Any) -> str | None:
     return str(value)
 
 
+def _record_monomer_md_usage_row(connection: Any, row: Any) -> None:
+    # Only immutable lifecycle fields enter the ledger; no request or worker secrets.
+    status = {"pending": "queued", "submitted": "queued"}.get(row["status"], row["status"])
+    if status == "cancel_requested":
+        return  # A cancellation request is not proof of released resources.
+    if status == "failed" and row["error_category"] == "worker_restarted":
+        status = "interrupted"
+    submitted_at = row["created_at"]
+    started_at = row["started_at"] if status != "queued" else None
+    finished_at = row["finished_at"] if status not in {"queued", "running"} else None
+    occurred_at = submitted_at if status == "queued" else (started_at if status == "running" else finished_at)
+    metrics = {}
+    if started_at is not None:
+        metrics["queue_ms"] = int((started_at - submitted_at).total_seconds() * 1000)
+    if finished_at is not None:
+        metrics["observed_wall_ms"] = int((finished_at - submitted_at).total_seconds() * 1000)
+    task_id = f"monomer_md:{row['job_id']}"
+    record_event(
+        connection, owner_user_id=str(row["owner_user_id"]), module="monomer_md",
+        task_id=task_id, attempt_id="1", event_key=f"{task_id}:1:{status}",
+        status=status, occurred_at=occurred_at, submitted_at=submitted_at,
+        started_at=started_at, finished_at=finished_at, metrics=metrics,
+    )
+
+
 def create_monomer_md_job_postgres(
     connection: Any,
     *,
@@ -47,7 +75,7 @@ def create_monomer_md_job_postgres(
     components: dict[str, Any] | None = None,
     pending_lease_seconds: int = 120,
 ) -> None:
-    connection.execute(
+    cursor = connection.execute(
         """
         INSERT INTO md.monomer_md_jobs (
           job_id, owner_user_id, status, input_smiles, canonical_smiles, requested_steps, progress_stage, progress_message,
@@ -57,7 +85,7 @@ def create_monomer_md_job_postgres(
                 %s, %s, %s::jsonb, %s::jsonb,
                 CASE WHEN %s = 'formal' THEN 'byteff2-formal-worker' ELSE 'byteff2-density-demo-worker' END,
                 now() + make_interval(secs => %s))
-        """,
+        """ + (" RETURNING job_id, owner_user_id, status, created_at, started_at, finished_at, error_category" if metering_enabled() else ""),
         (
             job_id,
             owner_user_id,
@@ -72,6 +100,10 @@ def create_monomer_md_job_postgres(
             pending_lease_seconds,
         ),
     )
+    if metering_enabled():
+        row = cursor.fetchone()
+        if row is not None:
+            _record_monomer_md_usage_row(connection, row)
 
 
 def mark_expired_unclaimed_monomer_md_jobs_failed_postgres(connection: Any) -> int:
@@ -86,10 +118,19 @@ def mark_expired_unclaimed_monomer_md_jobs_failed_postgres(connection: Any) -> i
           AND worker_instance_id IS NULL
           AND lease_expires_at IS NOT NULL
           AND lease_expires_at < now()
-        """,
+        """ + (" RETURNING job_id, owner_user_id, status, created_at, started_at, finished_at, error_category" if metering_enabled() or ne.enabled() else ""),
         (message, message),
     )
-    return int(cursor.rowcount or 0)
+    count = int(cursor.rowcount or 0)
+    if metering_enabled() or ne.enabled():
+        for row in cursor.fetchall():
+            if metering_enabled():
+                _record_monomer_md_usage_row(connection, row)
+            if ne.enabled():
+                ne.release_native(connection, owner_user_id=str(row["owner_user_id"]), module="monomer_md",
+                    native_task_id=row["job_id"], status="failed", source="md_pending_lease_expired",
+                    never_dispatched=True, reason="submit_lease_expired")
+    return count
 
 
 def count_active_monomer_md_jobs_postgres(connection: Any) -> int:
@@ -200,7 +241,7 @@ def mark_monomer_md_job_completed_postgres(
     byteff2_git_sha: str | None = None,
     gpu_device: str | None = None,
 ) -> None:
-    connection.execute(
+    cursor = connection.execute(
         """
         UPDATE md.monomer_md_jobs
         SET status = 'completed', completed_steps = COALESCE(%s, requested_steps), progress_percent = 100,
@@ -212,7 +253,7 @@ def mark_monomer_md_job_completed_postgres(
             error_message = NULL, error_category = NULL, updated_at = now(), finished_at = now()
         WHERE job_id = %s
           AND status NOT IN ('completed', 'failed', 'cancelled', 'cancel_requested')
-        """,
+        """ + (" RETURNING job_id, owner_user_id, status, created_at, started_at, finished_at, error_category" if metering_enabled() else ""),
         (
             completed_steps,
             artifact_root,
@@ -225,19 +266,62 @@ def mark_monomer_md_job_completed_postgres(
             job_id,
         ),
     )
+    if metering_enabled():
+        row = cursor.fetchone()
+        if row is not None:
+            _record_monomer_md_usage_row(connection, row)
 
 
 def mark_monomer_md_job_failed_postgres(connection: Any, job_id: str, error_message: str, error_category: str | None = None) -> None:
-    connection.execute(
+    cursor = connection.execute(
         """
         UPDATE md.monomer_md_jobs
         SET status = 'failed', progress_stage = 'failed', progress_message = %s, error_message = %s,
             error_category = %s, updated_at = now(), finished_at = now()
         WHERE job_id = %s
           AND status NOT IN ('completed', 'failed', 'cancelled', 'cancel_requested')
-        """,
+        """ + (" RETURNING job_id, owner_user_id, status, created_at, started_at, finished_at, error_category" if metering_enabled() else ""),
         (error_message, error_message, error_category, job_id),
     )
+    if metering_enabled():
+        row = cursor.fetchone()
+        if row is not None:
+            _record_monomer_md_usage_row(connection, row)
+
+
+def mark_unclaimed_monomer_md_submit_failed_postgres(
+    connection: Any, job_id: str, error_message: str,
+) -> bool:
+    """Fence only an unclaimed submission; an ambiguous accepted call stays live.
+
+    Worker acceptance requires pending status. Winning this CAS prevents a late
+    acceptance/start, while a worker that already claimed the row is untouched.
+    """
+    cursor = connection.execute(
+        """UPDATE md.monomer_md_jobs
+        SET status='failed',progress_stage='failed',progress_message=%s,error_message=%s,
+            error_category='worker_submit_failed',updated_at=now(),finished_at=now()
+        WHERE job_id=%s AND status='pending' AND worker_instance_id IS NULL"""
+        + (" RETURNING job_id, owner_user_id, status, created_at, started_at, finished_at, error_category"
+           if metering_enabled() or ne.enabled() else ""),
+        (error_message, error_message, job_id),
+    )
+    changed = bool(cursor.rowcount)
+    if metering_enabled() or ne.enabled():
+        row = cursor.fetchone()
+        if row is not None:
+            if metering_enabled():
+                _record_monomer_md_usage_row(connection, row)
+            if ne.enabled():
+                ne.release_native(connection, owner_user_id=str(row["owner_user_id"]), module="monomer_md",
+                    native_task_id=row["job_id"], status="failed", source="md_submit_unclaimed_cas",
+                    never_dispatched=True, reason="worker_submit_failed")
+        elif ne.enabled():
+            current = connection.execute("SELECT owner_user_id,status FROM md.monomer_md_jobs WHERE job_id=%s", (job_id,)).fetchone()
+            if current is not None and current["status"] not in {"completed", "failed", "cancelled"}:
+                ne.mark_native_unknown(connection, owner_user_id=str(current["owner_user_id"]), module="monomer_md",
+                    native_task_id=job_id, reason="submission_acknowledgement_unknown")
+    return changed
 
 
 def mark_monomer_md_artifacts_deleted_postgres(connection: Any, *, job_id: str, message: str) -> None:

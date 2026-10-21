@@ -4,9 +4,12 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from typing import Any
 
 import requests
+
+from app.services.usage_provider import provider_http_request
 
 
 Paper = dict[str, Any]
@@ -24,7 +27,7 @@ class SimpleLiteratureSearcher:
 
     def get_doi_from_crossref(self, title: str) -> str | None:
         try:
-            response = requests.get(
+            response = provider_http_request(requests.get,
                 "https://api.crossref.org/works",
                 params={"query.title": title, "rows": 1},
                 headers=self.headers,
@@ -48,7 +51,7 @@ class SimpleLiteratureSearcher:
 
         paper["doi"] = doi
         try:
-            response = requests.get(
+            response = provider_http_request(requests.get,
                 f"https://api.crossref.org/works/{doi}",
                 headers=self.headers,
                 timeout=15,
@@ -75,7 +78,7 @@ class SimpleLiteratureSearcher:
                 "fields": "title,abstract,venue,externalIds,year,authors",
             }
             try:
-                response = requests.get(
+                response = provider_http_request(requests.get,
                     "https://api.semanticscholar.org/graph/v1/paper/search",
                     params=params,
                     headers=self.headers,
@@ -123,7 +126,7 @@ class SimpleLiteratureSearcher:
                 "sortBy": "relevance",
             }
             try:
-                response = requests.get(
+                response = provider_http_request(requests.get,
                     "http://export.arxiv.org/api/query",
                     params=params,
                     headers=self.headers,
@@ -188,7 +191,7 @@ class SimpleLiteratureSearcher:
                 "page": page,
             }
             try:
-                response = requests.get(
+                response = provider_http_request(requests.get,
                     "https://api.openalex.org/works",
                     params=params,
                     headers=self.headers,
@@ -233,7 +236,7 @@ class SimpleLiteratureSearcher:
             "retmode": "json",
         }
         try:
-            search_response = requests.get(
+            search_response = provider_http_request(requests.get,
                 "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
                 params=search_params,
                 headers=self.headers,
@@ -248,7 +251,7 @@ class SimpleLiteratureSearcher:
             all_papers: list[Paper] = []
             for index in range(0, len(id_list), 200):
                 batch_ids = id_list[index : index + 200]
-                fetch_response = requests.get(
+                fetch_response = provider_http_request(requests.get,
                     "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
                     params={"db": "pubmed", "id": ",".join(batch_ids), "retmode": "xml"},
                     headers=self.headers,
@@ -312,13 +315,13 @@ class SimpleLiteratureSearcher:
             futures = {}
             for source in selected_sources:
                 if source == "semantic_scholar":
-                    futures[executor.submit(self.search_semantic_scholar, query, max_papers)] = source
+                    futures[executor.submit(copy_context().run, self.search_semantic_scholar, query, max_papers)] = source
                 elif source == "arxiv":
-                    futures[executor.submit(self.search_arxiv, query, max_papers)] = source
+                    futures[executor.submit(copy_context().run, self.search_arxiv, query, max_papers)] = source
                 elif source == "openalex":
-                    futures[executor.submit(self.search_openalex, query, max_papers)] = source
+                    futures[executor.submit(copy_context().run, self.search_openalex, query, max_papers)] = source
                 elif source == "pubmed":
-                    futures[executor.submit(self.search_pubmed, query, max_papers)] = source
+                    futures[executor.submit(copy_context().run, self.search_pubmed, query, max_papers)] = source
 
             for future in as_completed(futures):
                 try:
@@ -347,7 +350,7 @@ class SimpleLiteratureSearcher:
         enriched: list[Paper] = []
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(self.enrich_with_crossref, paper): paper for paper in papers_to_enrich}
+            futures = {executor.submit(copy_context().run, self.enrich_with_crossref, paper): paper for paper in papers_to_enrich}
             for future in as_completed(futures):
                 try:
                     enriched.append(future.result(timeout=20))

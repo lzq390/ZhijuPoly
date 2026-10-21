@@ -31,6 +31,8 @@ from app.services.polytao_jobs import PolytaoJobCapacityError, PolytaoJobManager
 from app.services.polytao_runtime import BackendPolytaoRuntime
 from app.services.structure_2d import generate_2d_svg
 
+from app.services.entitlement_memory import submission_for_request, get_memory_job, associate_request
+
 
 router = APIRouter(prefix="/api/v1/conditional-generation/polytao", tags=["polytao"])
 
@@ -244,6 +246,11 @@ async def create_polytao_job(
     request_body: PolytaoGenerationRequest,
     request: Request,
 ) -> PolytaoJobCreateResponse:
+    entitlement = submission_for_request(request, "polytao", request_body)
+    if entitlement is not None:
+        replay = entitlement.replay()
+        if replay is not None:
+            return PolytaoJobCreateResponse(job_id=replay.job_id, status=replay.status)
     settings = request.app.state.settings
     if not settings.polytao_enabled:
         raise HTTPException(status_code=503, detail="PolyTAO backend runtime is disabled")
@@ -298,6 +305,7 @@ async def create_polytao_job(
             requested_count=request_body.candidate_count,
             runner=run_generation,
             timeout_seconds=settings.gpu_async_queue_timeout_seconds,
+            **({"entitlement": entitlement} if entitlement is not None else {}),
         )
     except (PolytaoJobCapacityError, JobStoreCapacityError) as exc:
         raise HTTPException(
@@ -308,13 +316,15 @@ async def create_polytao_job(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    finally:
+        associate_request(request, entitlement)
     return PolytaoJobCreateResponse(job_id=job.job_id, status=job.status)
 
 
 @router.get("/jobs/{job_id}", response_model=PolytaoJobStatusResponse)
 async def get_polytao_job(job_id: str, request: Request) -> PolytaoJobStatusResponse:
     try:
-        return _job_manager_for_app(request.app).get_job(job_id)
+        return get_memory_job(request, "polytao", job_id, _job_manager_for_app(request.app).get_job)
     except JobGoneError as exc:
         raise HTTPException(status_code=410, detail="Job result is no longer available") from exc
     except (JobNotFoundError, KeyError) as exc:

@@ -1,3 +1,4 @@
+import { LibraryTestProvider, testDocument, chooseCurrentStructure } from "../test/structureLibraryFixture";
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +14,7 @@ vi.mock("../services/api", async importOriginal => ({ ...await importOriginal<ob
 
 function structure(smiles = "CCO"): StructureWorkspaceContext {
   const workspace = new StructureWorkspace(smiles);
+  vi.spyOn(workspace, "captureForImport").mockImplementation(async () => { if (!smiles) throw new Error("画板为空，请先绘制结构。"); return testDocument(smiles); });
   return { workspace, smiles, setSmiles: workspace.setSmiles, getCurrentSmiles: vi.fn().mockResolvedValue(smiles) };
 }
 function result(total = 2): MonomerRetrosynthesisResponse {
@@ -30,7 +32,7 @@ const target = () => screen.getByRole("textbox", { name: "目标单体 SMILES" }
 const run = () => fireEvent.click(screen.getByRole("button", { name: "运行反推" }));
 function mount(shared = structure(), initialInput?: { smiles?: string; notice?: string }) {
   const onEditStructure = vi.fn();
-  return { shared, onEditStructure, ...render(<MonomerRetrosynthesisPage structure={shared} onEditStructure={onEditStructure} initialInput={initialInput} />) };
+  return { shared, onEditStructure, ...render(<MonomerRetrosynthesisPage structure={shared} onEditStructure={onEditStructure} initialInput={initialInput} />, { wrapper: ({ children }) => <LibraryTestProvider workspace={shared.workspace}>{children}</LibraryTestProvider> }) };
 }
 
 beforeEach(() => {
@@ -73,23 +75,25 @@ describe("独立单体逆合成模块", () => {
     const shared = structure(""); mount(shared);
     expect(target().value).toBe("");
     fireEvent.change(target(), { target: { value: "CC" } });
-    fireEvent.click(screen.getByRole("button", { name: "使用当前结构" }));
-    await screen.findByText("当前共享结构为空，已保留反推草稿。");
+    await chooseCurrentStructure(screen.getByRole("button", { name: "选择结构" }));
+    await screen.findByText(/画板为空/);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(target().value).toBe("CC");
-    vi.mocked(shared.getCurrentSmiles).mockRejectedValueOnce(new Error("offline"));
-    fireEvent.click(screen.getByRole("button", { name: "使用当前结构" }));
-    await screen.findByText("读取共享结构失败，已保留反推草稿。请重试。");
+    vi.mocked(shared.workspace.captureForImport).mockRejectedValueOnce(new Error("读取失败"));
+    await chooseCurrentStructure(screen.getByRole("button", { name: "选择结构" }));
+    await screen.findByText(/读取失败/);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(target().value).toBe("CC");
   });
 
   it("主动导入会生成预览，异步导入不覆盖期间的新输入", async () => {
     const shared = structure(); mount(shared);
-    fireEvent.click(screen.getByRole("button", { name: "使用当前结构" }));
+    await chooseCurrentStructure(screen.getByRole("button", { name: "选择结构" }));
     await waitFor(() => expect(target().value).toBe("CCO"));
     await screen.findByAltText("目标单体结构");
     const pending = deferred<string>();
-    vi.mocked(shared.getCurrentSmiles).mockReturnValueOnce(pending.promise);
-    fireEvent.click(screen.getByRole("button", { name: "使用当前结构" }));
+    vi.mocked(shared.workspace.captureForImport).mockImplementationOnce(async () => testDocument(await pending.promise));
+    await chooseCurrentStructure(screen.getByRole("button", { name: "选择结构" }));
     fireEvent.change(target(), { target: { value: "CCN" } });
     await act(async () => pending.resolve("CCCC"));
     expect(target().value).toBe("CCN");
@@ -98,9 +102,9 @@ describe("独立单体逆合成模块", () => {
   it("未挂载画板时也可导入已经接受的共享文档", async () => {
     const shared = structure("");
     shared.workspace.commitSmiles("CCO");
-    vi.mocked(shared.getCurrentSmiles).mockResolvedValue("CCO");
+    vi.mocked(shared.workspace.captureForImport).mockResolvedValue(testDocument("CCO"));
     mount(shared);
-    fireEvent.click(screen.getByRole("button", { name: "使用当前结构" }));
+    await chooseCurrentStructure(screen.getByRole("button", { name: "选择结构" }));
     await waitFor(() => expect(target().value).toBe("CCO"));
     await screen.findByAltText("目标单体结构");
   });
@@ -185,7 +189,7 @@ describe("独立单体逆合成模块", () => {
     installSession(GUEST_SESSION);
     const login = vi.fn(); window.addEventListener("nexpoly:login-required", login);
     const view = mount();
-    fireEvent.click(screen.getByRole("button", { name: "使用当前结构" }));
+    await chooseCurrentStructure(screen.getByRole("button", { name: "选择结构" }));
     await waitFor(() => expect(target().value).toBe("CCO")); fireEvent.blur(target());
     expect(api.fetchStructure2D).not.toHaveBeenCalled();
     expect(login).not.toHaveBeenCalled(); run();
@@ -196,9 +200,9 @@ describe("独立单体逆合成模块", () => {
   it("换号清理草稿，并阻止旧身份的导入、结果及缓存写回", async () => {
     const pending = deferred<MonomerRetrosynthesisResponse>(), imported = deferred<string>();
     api.predictMonomerPrecursors.mockReturnValueOnce(pending.promise);
-    const shared = structure(); vi.mocked(shared.getCurrentSmiles).mockReturnValueOnce(imported.promise);
+    const shared = structure(); vi.mocked(shared.workspace.captureForImport).mockImplementationOnce(async () => testDocument(await imported.promise));
     mount(shared, { smiles: "CCO" }); run();
-    fireEvent.click(screen.getByRole("button", { name: "使用当前结构" }));
+    await chooseCurrentStructure(screen.getByRole("button", { name: "选择结构" }));
     const oldEpoch = getSessionEpoch();
     act(() => { retireSession(); clearPrivateWebStorage(); installSession(GUEST_SESSION); });
     await act(async () => { pending.resolve(result()); imported.resolve("CCN"); });

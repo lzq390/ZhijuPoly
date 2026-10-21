@@ -9,7 +9,7 @@ class PostgresUnavailableError(RuntimeError):
 
 
 @contextmanager
-def postgres_connection(dsn: str) -> Iterator[object]:
+def postgres_connection(dsn: str, *, readonly_snapshot: bool = False) -> Iterator[object]:
     from app.auth.context import database_settings, is_service_context, current_owner_id
     import os
     settings = database_settings()
@@ -27,6 +27,8 @@ def postgres_connection(dsn: str) -> Iterator[object]:
 
     try:
         with psycopg.connect(dsn, row_factory=dict_row, connect_timeout=3) as connection:
+            if readonly_snapshot:
+                connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             owner = current_owner_id(required=False)
             if owner is not None and not is_service_context():
                 connection.execute("SELECT set_config('app.user_id', %s, true)", (owner,))

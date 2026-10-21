@@ -115,5 +115,12 @@ def authorize_start(connection, *, owner_user_id: str, table: str, key_column: s
         return True
     if user["status"] != "active" and not (user["is_system"] and str(owner_user_id) == SYSTEM_USER_ID):
         return False
+    # Membership authorization is independent of quota collection. Recheck only
+    # before the first grant, under the existing account -> native-row locks;
+    # an already-authorized native execution keeps its original grant above.
+    from task_usage.entitlements import resolve_access_tier
+    if not (user["is_system"] and str(owner_user_id) == SYSTEM_USER_ID):
+        if resolve_access_tier(connection, owner_user_id=owner_user_id) != "member":
+            return False
     connection.execute(sql.SQL("UPDATE {} SET start_authorized_at=now() WHERE {}=%s").format(target, column), (key,))
     return True

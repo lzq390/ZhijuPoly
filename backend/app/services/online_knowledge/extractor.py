@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.services.ai_client import clean_ai_provider_error, create_openai_client
+from app.services.usage_provider import provider_call
 from app.services.private_quotas import PrivateQuotaSettings
 
 
@@ -133,7 +134,7 @@ Return only valid JSON. No markdown."""
 
     def extract_from_abstract(self, title: str, abstract: str, paper_id: str, mode: str) -> ExtractionResult:
         try:
-            response = self.client.chat.completions.create(
+            response = provider_call(self.client.chat.completions.create,
                 model=self.model_name,
                 messages=[
                     {"role": "system", "content": "You are a polymer chemistry expert. Respond only with valid JSON."},

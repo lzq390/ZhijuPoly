@@ -8,6 +8,9 @@ from psycopg.types.json import Jsonb
 from app.postgres_database import postgres_connection
 from app.auth.context import is_service_context
 from app.task_control import authorize_start
+from task_usage.ledger import metering_enabled
+from task_usage import native_entitlements as ne
+from app.services.usage_lifecycle import record_persistent_task, record_batch_attempt
 from app.services.deployment_control import get_drain_state
 from .models import BatchError, BatchSettings, TERMINAL_STATUSES
 from .storage import check_id
@@ -17,12 +20,79 @@ WORKER_LOCK = 785391204617
 CAPACITY_LOCK = 785391204618
 
 
+def _batch_entitlement_facts(export: dict) -> dict:
+    summary, artifacts = export["summary"], export["artifacts"]
+    return {
+        "validated": True,
+        "completion_proven": export["status"] in {"completed", "completed_with_errors"},
+        "report_present": all(name in artifacts for name in ("summary.json", "results.xlsx", "results.zip")),
+        "complete": summary["complete"],
+        "pair_errors": summary["pair_errors"],
+    }
+
+
 class BatchRepository:
     def __init__(self, dsn: str, config: BatchSettings):
         self.dsn, self.config = dsn, config
 
     def connection(self):
         return postgres_connection(self.dsn)
+
+    def _usage_row(self, conn, job_id):
+        if not metering_enabled():
+            return None
+        row = conn.execute("""SELECT id, owner_user_id, status, created_at, updated_at,
+            finished_at, start_authorized_at, consumed_seconds, error_code,
+            execution_started_at, heartbeat_at FROM polymerization_batch.jobs WHERE id=%s""",
+            (job_id,)).fetchone()
+        if row is not None:
+            record_persistent_task(conn, module="polymerization_batch", row=row)
+        return row
+
+    def _usage_attempt_end(self, conn, job, *, status, elapsed):
+        if not metering_enabled():
+            return
+        chunks = conn.execute("""SELECT chunk_id, attempt FROM polymerization_batch.chunks
+            WHERE job_id=%s AND attempt_token=%s AND status='pending'""",
+            (job["id"], job["execution_token"])).fetchall()
+        for chunk in chunks:
+            record_batch_attempt(conn, job, chunk, status=status,
+                                 finished_at=datetime.now(timezone.utc), elapsed=elapsed)
+
+    def _entitlement_release_terminal(self, conn, job: dict, status: str, reason: str):
+        if ne.enabled():
+            ne.release_native(
+                conn, owner_user_id=str(job["owner_user_id"]), module="polymerization_batch",
+                native_task_id=job["id"], status=status, source="batch_native_terminal", reason=reason,
+            )
+
+    def _entitlement_claim_root(self, conn, job: dict) -> bool:
+        if not ne.enabled():
+            return True
+        identity = {"owner_user_id": str(job["owner_user_id"]),
+                    "module": "polymerization_batch", "native_task_id": job["id"]}
+        operation = ne.get_native(conn, **identity)
+        if operation is None:
+            return True  # Older native jobs are never charged retroactively.
+        executor_id = f"polymerization_batch:{job['id']}"
+        if operation["state"] == "running":
+            # Called only inside the original native claim path: the Worker
+            # holds OS/DB locks, recovery has proved cleanup, and this job has
+            # no live token. Later chunks/retries continue this same root.
+            return (
+                operation["executor_id"] == executor_id
+                and job["status"] in {"running", "cancelling"}
+                and job["start_authorized_at"] is not None
+                and job["execution_token"] is None
+            )
+        if operation["state"] != "reserved":
+            return False  # Unknown ownership is not new execution permission.
+        if not ne.begin_native_dispatch(conn, **identity, executor_id=executor_id)["allowed"]:
+            return False
+        if not ne.claim_native_running(conn, **identity, executor_id=executor_id)["allowed"]:
+            # Do not commit a half-claimed root if the second fence fails.
+            raise BatchError("批量额度执行围栏冲突。", "entitlement_conflict", 409)
+        return True
 
     def ready(self) -> bool:
         with self.connection() as conn:
@@ -168,6 +238,8 @@ class BatchRepository:
             cursor.executemany("""INSERT INTO polymerization_batch.chunks
                 (job_id,chunk_id,phase,ordinal,kind,payload) VALUES (%s,%s,%s,%s,%s,%s)""",
                 [(job_id, chunk["chunk_id"], chunk["phase"], index, chunk["kind"], Jsonb(chunk["payload"])) for index, chunk in enumerate(chunks)])
+        if metering_enabled():
+            record_persistent_task(conn, module="polymerization_batch", row=row)
         return row
 
     def chunks(self, job_id: str, *, owner_user_id: str, completed_only=False) -> list[dict]:
@@ -198,6 +270,13 @@ class BatchRepository:
         # Attempt fencing makes files from a previous execution unpublishable.
         with self.connection() as conn:
             draining = get_drain_state(conn, lock=True).enabled
+            usage_attempts = []
+            if metering_enabled():
+                usage_attempts = conn.execute("""SELECT j.id, j.owner_user_id,
+                    j.execution_started_at, c.chunk_id, c.attempt
+                    FROM polymerization_batch.jobs j JOIN polymerization_batch.chunks c
+                    ON c.job_id=j.id AND c.attempt_token=j.execution_token
+                    WHERE j.execution_token IS NOT NULL AND c.status='pending'""").fetchall()
             # During drain, only stale executions (which still block drain)
             # may be fenced. Do not mutate idle attempts after active_total=0.
             conn.execute("""UPDATE polymerization_batch.chunks SET attempt_token=NULL,lease_expires_at=NULL
@@ -209,6 +288,11 @@ class BatchRepository:
                     COALESCE(heartbeat_at,execution_started_at)-execution_started_at)),
                 execution_token=NULL, execution_started_at=NULL, worker_id=NULL,
                 heartbeat_at=NULL,updated_at=now() WHERE execution_token IS NOT NULL""")
+            for previous in usage_attempts:
+                current = self._usage_row(conn, previous["id"])
+                record_batch_attempt(conn, previous, previous, status="interrupted",
+                                     finished_at=current["updated_at"])
+
 
     def claim(self, worker_id: str, fingerprint: str) -> tuple[dict, dict] | None:
         with self.connection() as conn:
@@ -227,6 +311,8 @@ class BatchRepository:
                         finished_at=now(),expires_at=now()+%s,updated_at=now() WHERE id=%s AND start_authorized_at IS NULL""",
                         (timedelta(days=self.config.retention_days), job["id"]))
                     conn.execute("UPDATE polymerization_batch.chunks SET status='skipped' WHERE job_id=%s AND status='pending'", (job["id"],))
+                    self._usage_row(conn, job["id"])
+                    self._entitlement_release_terminal(conn, job, "cancelled", "account_disabled")
                     return None
             job = conn.execute("SELECT * FROM polymerization_batch.jobs WHERE id=%s FOR UPDATE", (job["id"],)).fetchone()
             if job["execution_token"] is not None or job["status"] in TERMINAL_STATUSES:
@@ -236,6 +322,8 @@ class BatchRepository:
                     error_code='engine_version_mismatch',message='计算版本已变化，请重新提交任务。',
                     finished_at=now(),expires_at=now()+%s,updated_at=now() WHERE id=%s""",
                     (timedelta(days=self.config.retention_days), job["id"]))
+                self._usage_row(conn, job["id"])
+                self._entitlement_release_terminal(conn, job, "failed", "engine_version_mismatch")
                 return None
             if job["consumed_seconds"] >= self.config.job_seconds and not job["terminal_intent"]:
                 conn.execute("""UPDATE polymerization_batch.jobs SET terminal_intent='failed',
@@ -246,6 +334,8 @@ class BatchRepository:
             chunk = conn.execute("SELECT * FROM polymerization_batch.chunks WHERE job_id=%s AND status='pending' ORDER BY phase,ordinal LIMIT 1", (job["id"],)).fetchone()
             if chunk is None:
                 raise RuntimeError("active batch job has no pending execution unit")
+            if not self._entitlement_claim_root(conn, job):
+                return None
             token = uuid4().hex
             chunk = conn.execute("""UPDATE polymerization_batch.chunks SET attempt=attempt+1,
                 attempt_token=%s,lease_expires_at=now()+%s WHERE job_id=%s AND chunk_id=%s RETURNING *""",
@@ -254,6 +344,9 @@ class BatchRepository:
                 execution_started_at=now(),heartbeat_at=now(),status=CASE WHEN terminal_intent='cancelled' THEN 'cancelling' ELSE 'running' END,
                 stage=%s,updated_at=now() WHERE id=%s RETURNING *""",
                 (token, worker_id, chunk["kind"], job["id"])).fetchone()
+            if metering_enabled():
+                record_persistent_task(conn, module="polymerization_batch", row=job)
+                record_batch_attempt(conn, job, chunk, status="running")
             return job, chunk
 
     def heartbeat_execution(self, job_id: str, token: str) -> dict:
@@ -275,6 +368,10 @@ class BatchRepository:
             # workbook; run finalization again with the new terminal intent.
             if export is not None and current["terminal_intent"] != job["terminal_intent"]:
                 conn.execute("UPDATE polymerization_batch.jobs SET execution_token=NULL,worker_id=NULL,consumed_seconds=consumed_seconds+%s WHERE id=%s", (elapsed, job["id"]))
+                current_usage = self._usage_row(conn, job["id"])
+                if current_usage is not None:
+                    record_batch_attempt(conn, job, chunk, status="interrupted",
+                                         finished_at=datetime.now(timezone.utc), elapsed=elapsed)
                 return False
             conn.execute("""UPDATE polymerization_batch.chunks SET status='completed',artifact=%s,
                 counts=%s,lease_expires_at=NULL,completed_at=now() WHERE job_id=%s AND chunk_id=%s""",
@@ -292,13 +389,35 @@ class BatchRepository:
                     finished_at=now(),expires_at=now()+%s,updated_at=now() WHERE id=%s""",
                     (elapsed, export["status"], Jsonb(export["summary"]), Jsonb(export["artifacts"]),
                      timedelta(days=self.config.retention_days), job["id"]))
+            if export is not None and ne.enabled():
+                if export["status"] in {"completed", "completed_with_errors"}:
+                    operation = ne.get_native(
+                        conn, owner_user_id=str(current["owner_user_id"]),
+                        module="polymerization_batch", native_task_id=job["id"],
+                    )
+                    if operation is not None:
+                        ne.settle_native(
+                            conn, owner_user_id=str(current["owner_user_id"]),
+                            module="polymerization_batch", native_task_id=job["id"],
+                            status=export["status"], facts=_batch_entitlement_facts(export),
+                        )
+                else:
+                    self._entitlement_release_terminal(conn, current, export["status"], export["status"])
+            current_usage = self._usage_row(conn, job["id"])
+            if current_usage is not None:
+                record_batch_attempt(conn, job, chunk, status="completed",
+                                     finished_at=current_usage["updated_at"], elapsed=elapsed)
             return True
 
     def stop_execution(self, job: dict, *, elapsed: float, code: str, message: str, finalize: bool) -> None:
         with self.connection() as conn:
+            if metering_enabled():
+                current = self.get_job_for_service(job["id"], conn, lock=True)
+                if current["execution_token"] == job["execution_token"]:
+                    self._usage_attempt_end(conn, job, status="timed_out" if code == "job_timeout" else "failed", elapsed=elapsed)
             conn.execute("""UPDATE polymerization_batch.chunks SET attempt_token=NULL,lease_expires_at=NULL
                 WHERE job_id=%s AND attempt_token=%s AND status='pending'""", (job["id"], job["execution_token"]))
-            conn.execute("""UPDATE polymerization_batch.jobs SET execution_token=NULL,worker_id=NULL,
+            updated = conn.execute("""UPDATE polymerization_batch.jobs SET execution_token=NULL,worker_id=NULL,
                 terminal_intent=COALESCE(terminal_intent,'failed'),error_code=%s,message=%s,
                 consumed_seconds=consumed_seconds+%s,status=CASE WHEN %s THEN status ELSE 'failed' END,
                 stage=CASE WHEN %s THEN stage ELSE 'finished' END,
@@ -307,11 +426,20 @@ class BatchRepository:
                 WHERE id=%s AND execution_token=%s""",
                 (code, message[:500], elapsed, finalize, finalize, finalize, finalize,
                  timedelta(days=self.config.retention_days), job["id"], job["execution_token"]))
+            self._usage_row(conn, job["id"])
+            if not finalize and ne.enabled() and updated.rowcount:
+                self._entitlement_release_terminal(conn, job, "failed", code)
+
 
     def release_execution(self, job: dict, elapsed: float) -> None:
         with self.connection() as conn:
+            if metering_enabled():
+                current = self.get_job_for_service(job["id"], conn, lock=True)
+                if current["execution_token"] == job["execution_token"]:
+                    self._usage_attempt_end(conn, job, status="cancelled" if current["terminal_intent"] == "cancelled" else "interrupted", elapsed=elapsed)
             conn.execute("""UPDATE polymerization_batch.chunks SET attempt_token=NULL,lease_expires_at=NULL
                 WHERE job_id=%s AND attempt_token=%s AND status='pending'""", (job["id"], job["execution_token"]))
             conn.execute("""UPDATE polymerization_batch.jobs SET execution_token=NULL,execution_started_at=NULL,worker_id=NULL,
                 consumed_seconds=consumed_seconds+%s,updated_at=now() WHERE id=%s AND execution_token=%s""",
                 (elapsed, job["id"], job["execution_token"]))
+            self._usage_row(conn, job["id"])

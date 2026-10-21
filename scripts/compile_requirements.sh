@@ -84,6 +84,7 @@ done
   backend/requirements-runtime.in
 
 "$PYTHON_BIN" "${common[@]}" --allow-unsafe \
+  --constraint=backend/requirements.lock \
   --output-file=backend/requirements-ci.lock \
   backend/requirements-monomer-md-ci.txt
 "$PYTHON_BIN" "${common[@]}" --allow-unsafe \

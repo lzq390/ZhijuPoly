@@ -40,6 +40,58 @@ afterEach(() => {
 });
 
 describe("Tg structure canvas wildcard protection", () => {
+  it("captures the freshly typed draft before its debounce and rejects invalid replacements", async () => {
+    let smiles = 'CC';
+    const workspace = new StructureWorkspace('CC');
+    const lease = workspace.mountEditor();
+    await lease.initialize({
+      getSmiles: async () => smiles,
+      getKet: async () => JSON.stringify({ root: { nodes: [{ $ref: 'mol0' }] }, mol0: { atoms: [{ label: 'C' }] } }),
+      getMolfile: async () => '', setMolecule: async value => { smiles = value; }, clear: async () => { smiles = ''; },
+      subscribeChange: () => () => {}, settle: async () => {}, generateImage: async () => new Blob()
+    });
+    const structure = { workspace, smiles: 'CC', setSmiles: workspace.setSmiles, getCurrentSmiles: workspace.getCurrentSmiles };
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+    act(() => result.current.updateSmilesDraft('CCN'));
+    await act(async () => { expect((await result.current.captureDocument()).smiles).toBe('CCN'); });
+    apiMocks.standardizeSmiles.mockRejectedValueOnce(new Error('invalid smiles'));
+    act(() => result.current.updateSmilesDraft('C('));
+    await act(async () => { await expect(result.current.captureDocument()).rejects.toThrow('修正'); });
+    expect(workspace.getSnapshot()).toMatchObject({ smiles: 'CCN', draft: 'C(' });
+    unmount(); lease.dispose();
+  });
+
+  it("rejects draft edits during strict capture before changing local input or its sync queue", async () => {
+    let release!: () => void;
+    const workspace = new StructureWorkspace('CC', async value => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return value;
+    });
+    const setMolecule = vi.fn(async () => {});
+    const lease = workspace.mountEditor();
+    await lease.initialize({
+      getSmiles: async () => 'CC',
+      getKet: async () => JSON.stringify({ root: { nodes: [{ $ref: 'mol0' }] }, mol0: { atoms: [{ label: 'C' }] } }),
+      getMolfile: async () => '', setMolecule, clear: async () => {},
+      subscribeChange: () => () => {}, settle: async () => {}, generateImage: async () => new Blob()
+    });
+    const structure = { workspace, smiles: 'CC', setSmiles: workspace.setSmiles, getCurrentSmiles: workspace.getCurrentSmiles };
+    const { result, unmount } = renderHook(() => useTgStructureCanvas({ structure, onStructureChanged: vi.fn() }));
+    let capturing!: Promise<unknown>;
+    await act(async () => { capturing = result.current.captureDocument(); });
+    expect(workspace.getSnapshot().documentBusy).toBe(true);
+    act(() => { expect(() => result.current.updateSmilesDraft('N(')).toThrow('正在保存或恢复'); });
+    expect(result.current.smilesDraft).toBe('CC');
+    expect(workspace.getSnapshot().draft).toBe('CC');
+    await act(async () => { release(); await capturing; });
+    expect(workspace.getSnapshot().documentBusy).toBe(false);
+    expect(apiMocks.standardizeSmiles).not.toHaveBeenCalled();
+    expect(setMolecule).toHaveBeenCalledTimes(1);
+    act(() => result.current.updateSmilesDraft('N('));
+    expect(result.current.smilesDraft).toBe('N(');
+    unmount(); lease.dispose();
+  });
+
   function textStructure(smiles: string) {
     return structureFixture(smiles);
   }

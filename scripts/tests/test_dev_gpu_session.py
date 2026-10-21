@@ -20,6 +20,16 @@ if str(SCRIPTS_ROOT) not in sys.path:
 import dev_gpu_session as session  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def bind_existing_state_machine_fakes_to_the_gpu1_readers(monkeypatch):
+    # These existing tests exercise lifecycle CAS with native inventory fakes.
+    # Fixed hardware-query vectors are independently tested in
+    # test_gpu1_acceptance_audit.py, without this module-local fixture.
+    from ops.gpu_broker import server
+    monkeypatch.setattr(session, 'query_gpu1_inventory', lambda: server.query_gpu_inventory())
+    monkeypatch.setattr(session, 'query_gpu1_compute_processes', lambda: server.query_compute_processes())
+
+
 def test_atomic_json_no_clobber_preserves_the_first_complete_record(
     tmp_path: Path,
 ) -> None:
@@ -1169,6 +1179,7 @@ def test_target_inventory_binds_nvml_pid_to_adjacent_process_identity(
         events.append("systemd")
         assert kwargs == {
             "compute_processes": {session.GPU_UUID: frozenset({7001})},
+            "compute_process_query": session.query_gpu1_compute_processes,
             "compute_process_identities": {
                 7001: (
                     declarer.process_start_ticks,
@@ -1629,6 +1640,7 @@ def test_controller_backend_authority_requires_mps_client_for_nvml(
     ) == ()
 
 
+@pytest.mark.skipif(not Path('/usr/bin/python3').is_file(), reason='Fixed host interpreter contract is tested separately on the real host')
 def test_fixed_controller_python_has_required_pidfd_contract() -> None:
     completed = subprocess.run(
         [
@@ -1643,6 +1655,7 @@ def test_fixed_controller_python_has_required_pidfd_contract() -> None:
     assert completed.returncode == 0
 
 
+@pytest.mark.skipif(not Path('/usr/bin/python3').is_file(), reason='Fixed host interpreter contract is tested separately on the real host')
 def test_gpu1_only_broker_policy_is_process_local() -> None:
     program = (
         "import sys; sys.path.insert(0, sys.argv[1]); "

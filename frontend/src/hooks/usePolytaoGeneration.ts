@@ -1,3 +1,4 @@
+import { useModuleDraftState } from "../structure-library/StructureLibraryProvider";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createPolytaoJob,
@@ -146,7 +147,7 @@ export function polytaoDescriptorMapFromEntries(entries: { name: string; value: 
 }
 
 export function usePolytaoGeneration(enabled = true) {
-  const [request, setRequest] = useState<PolytaoGenerationRequest>(cloneRequest(DEFAULT_POLYTAO_REQUEST));
+  const [request, setRequest] = useModuleDraftState<PolytaoGenerationRequest>("polytao.request", () => cloneRequest(DEFAULT_POLYTAO_REQUEST));
   const [state, setState] = useState<PolytaoGenerationState>({
     isLoading: false,
     error: null,

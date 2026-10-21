@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.entitlement_sync import entitled_sync
+
 from time import perf_counter
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -32,7 +34,8 @@ from app.services.structure_similarity_index import (
     StructureSimilarityIndexUnavailableError,
 )
 from app.services.structure_2d import generate_2d_svg
-from app.services.structure_3d import generate_3d_molblock
+from app.services.structure_3d import Structure3DTimeoutError, generate_3d_molblock
+from app.usage_context import mark_current_usage_outcome
 from app.utils.exceptions import (
     InvalidImageError,
     InvalidSmilesError,
@@ -86,6 +89,7 @@ def _run_ocsr_inference(app, image_bytes: bytes, content_type: str | None):
 
 
 @router.post("/query/smiles", response_model=SmilesQueryResponse)
+@entitled_sync("query")
 async def query_smiles(request_body: SmilesQueryRequest, request: Request) -> SmilesQueryResponse:
     return await run_in_threadpool(_query_smiles_sync, request_body, request.app)
 
@@ -180,6 +184,7 @@ async def get_polymer_detail(polymer_id: int, request: Request) -> PolymerResult
         raise HTTPException(status_code=503, detail="PostgreSQL database is not reachable") from exc
 
 @router.post("/structure/3d", response_model=Structure3DResponse)
+@entitled_sync("structure")
 async def generate_structure_3d(request_body: Structure3DRequest, request: Request) -> Structure3DResponse:
     try:
         settings = request.app.state.settings
@@ -189,6 +194,8 @@ async def generate_structure_3d(request_body: Structure3DRequest, request: Reque
             timeout_seconds=settings.structure_3d_timeout_seconds,
         )
     except InvalidSmilesError as exc:
+        if isinstance(exc, Structure3DTimeoutError):
+            mark_current_usage_outcome("timed_out")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return Structure3DResponse(
@@ -224,6 +231,7 @@ async def standardize_structure_smiles(request_body: SmilesStandardizeRequest) -
 
 
 @router.post("/structure/recognize-image", response_model=StructureImageRecognitionResponse)
+@entitled_sync("ocsr")
 async def recognize_structure_image(
     request: Request,
     image: UploadFile = File(...),
@@ -253,6 +261,8 @@ async def recognize_structure_image(
             headers={"Retry-After": str(exc.retry_after_seconds)},
         ) from exc
     except (GpuQueueTimeoutError, GpuQueueStoppedError) as exc:
+        if isinstance(exc, GpuQueueTimeoutError):
+            mark_current_usage_outcome("timed_out")
         raise HTTPException(
             status_code=503,
             detail=str(exc),

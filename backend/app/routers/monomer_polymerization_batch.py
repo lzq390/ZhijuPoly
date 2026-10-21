@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import anyio
 from app.auth.context import current_owner_id
+from task_usage import native_entitlements as ne
 from app.task_control import admission, authorize_memory_start
 from fastapi import APIRouter, Header, Query, Request, HTTPException
 from fastapi.responses import JSONResponse, Response
@@ -118,7 +119,13 @@ async def preview_import(import_id: str, body: BatchPreviewRequest, request: Req
 
 @router.post("/jobs", status_code=202, response_model=BatchJob)
 async def create_job(body: BatchJobCreate, request: Request, idempotency_key: str = Header(..., min_length=1, max_length=128)):
-    return await anyio.to_thread.run_sync(service(request).create_job, body, idempotency_key)
+    job = await anyio.to_thread.run_sync(service(request).create_job, body, idempotency_key)
+    if ne.enabled():
+        await anyio.to_thread.run_sync(partial(
+            ne.attach_native_operation, request, owner_user_id=current_owner_id(),
+            module="polymerization_batch", native_task_id=job["job_id"],
+        ))
+    return job
 
 
 @router.get("/jobs", response_model=BatchJobPage)
