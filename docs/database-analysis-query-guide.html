@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="NexPoly 数据库分析操作说明：在获准的 PostgreSQL 只读连接中定位五类数据表，查看字段、查询记录和导出 CSV。">
+  <title>NexPoly 数据库分析 · 从连接到查询</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #192d3b;
+      --muted: #566b78;
+      --paper: #ffffff;
+      --canvas: #f3f6f8;
+      --line: #dce5ea;
+      --brand: #126760;
+      --soft: #eaf5f2;
+      --code: #142b38;
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+    body {
+      margin: 0; background: var(--canvas); color: var(--ink);
+      font: 15px/1.8 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    a { color: var(--brand); text-underline-offset: 4px; }
+    button { font: inherit; cursor: pointer; }
+    button:focus-visible, a:focus-visible, summary:focus-visible {
+      outline: 3px solid #168d82; outline-offset: 4px;
+    }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    code { font-size: .88em; overflow-wrap: anywhere; }
+    :not(pre) > code { padding: 2px 5px; border-radius: 4px; background: #edf2f5; color: #174d65; }
+    .wrap { width: min(1220px, calc(100% - 48px)); margin: 0 auto; }
+    .hero { background: #173a43; color: #fff; padding: 52px 0 38px; }
+    .hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+    .eyebrow { margin: 0 0 12px; color: #a9d4ce; font-size: 12px; font-weight: 700; letter-spacing: .14em; }
+    h1 { margin: 0; font-size: clamp(28px, 4vw, 42px); line-height: 1.35; letter-spacing: -.03em; }
+    .hero-description { max-width: 760px; margin: 16px 0 0; color: #d9e9eb; font-size: 16px; }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+    .tag { border: 1px solid #6b939b; border-radius: 99px; padding: 3px 12px; color: #e3f1f0; font-size: 12px; }
+    .print-button { flex-shrink: 0; padding: 8px 15px; border: 1px solid #85aaa9; border-radius: 8px; background: transparent; color: #fff; }
+    .route { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; margin-top: 30px; color: #d5e6e7; font-size: 13px; }
+    .route span { padding: 5px 12px; border-radius: 6px; background: #254d55; }
+    .route b { color: #a3c8c5; font-weight: 400; }
+    .layout { display: grid; grid-template-columns: 206px minmax(0, 1fr); gap: 32px; align-items: start; padding-top: 32px; padding-bottom: 64px; }
+    .toc { position: sticky; top: 24px; font-size: 13px; }
+    .toc-label { color: var(--muted); font-weight: 700; letter-spacing: .06em; margin: 0 0 12px; }
+    .toc a { display: block; padding: 9px 12px; margin: 3px 0; text-decoration: none; border-radius: 7px; color: #3d5665; }
+    .toc a:hover { color: var(--brand); background: #e5efed; }
+    .toc small { display: block; padding: 16px 12px; color: var(--muted); line-height: 1.7; border-top: 1px solid var(--line); margin-top: 18px; }
+    main { min-width: 0; }
+    section { margin-bottom: 24px; padding: 30px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); }
+    .section-heading { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+    .step { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border-radius: 9px; background: var(--soft); color: var(--brand); font-size: 14px; font-weight: 800; }
+    h2 { margin: 0; font-size: 23px; line-height: 1.4; }
+    h3 { margin: 26px 0 10px; font-size: 18px; line-height: 1.5; }
+    h4 { margin: 18px 0 8px; font-size: 15px; }
+    p { margin: 10px 0; }
+    .lead { color: var(--muted); }
+    .note { margin: 18px 0; padding: 14px 17px; background: var(--soft); border-left: 3px solid #358b7f; border-radius: 0 9px 9px 0; }
+    .note p { margin: 0; }
+    .note p + p { margin-top: 8px; }
+    .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+    .card { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: #fafcfd; }
+    .card span { display: block; color: var(--muted); font-size: 12px; }
+    .card strong { display: block; font-size: 17px; margin-top: 4px; }
+    .table-scroll { overflow-x: auto; margin: 16px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    caption { text-align: left; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    th, td { padding: 12px 13px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { background: #f0f5f7; color: #405e6a; font-size: 12px; font-weight: 700; }
+    td:first-child { font-weight: 600; }
+    td .sub { display: block; margin-top: 4px; color: var(--muted); font-weight: 400; font-size: 12px; }
+    .codebox { margin: 14px 0 18px; overflow: hidden; border-radius: 10px; background: var(--code); }
+    .codebar { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 8px 15px; background: #203d4a; color: #c4dade; font-size: 11px; font-weight: 600; }
+    .copy-button { display: none; border: 1px solid #7c9aa5; border-radius: 5px; padding: 2px 10px; color: #e0edef; background: transparent; font-size: 11px; }
+    .js-ready .copy-button { display: block; }
+    pre { margin: 0; padding: 18px; overflow-x: auto; color: #e6eff2; font-size: 12px; line-height: 1.8; tab-size: 2; }
+    pre code { font-size: inherit; overflow-wrap: normal; }
+    ol, ul { padding-left: 24px; }
+    li { padding-left: 3px; margin: 6px 0; }
+    .query { padding-top: 10px; margin-top: 18px; border-top: 1px solid var(--line); }
+    .query h3 { margin-top: 14px; }
+    .inline-label { display: inline-block; margin-left: 7px; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 400; color: var(--brand); background: var(--soft); vertical-align: middle; }
+    details { margin: 20px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 9px; }
+    summary { cursor: pointer; font-weight: 600; }
+    details[open] summary { margin-bottom: 12px; }
+    .footer { color: var(--muted); font-size: 12px; padding: 2px 6px; }
+    .footer p { margin: 6px 0; }
+    .status { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 5; max-width: calc(100% - 32px); padding: 10px 18px; border-radius: 8px; color: #fff; background: #173a43; box-shadow: 0 5px 24px #122c4026; font-size: 13px; }
+    .status:empty { display: none; }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; gap: 18px; }
+      .toc { position: static; display: flex; flex-wrap: wrap; gap: 2px 6px; }
+      .toc-label { width: 100%; margin-bottom: 2px; }
+      .toc a { padding: 5px 9px; margin: 0; }
+      .toc small { display: none; }
+    }
+    @media (max-width: 600px) {
+      .wrap { width: calc(100% - 28px); }
+      .hero { padding: 32px 0 26px; }
+      .hero-top { display: block; }
+      .print-button { margin-top: 18px; }
+      .hero-description { font-size: 14px; }
+      .layout { padding-top: 20px; }
+      section { padding: 21px 17px; }
+      .cards { grid-template-columns: 1fr; }
+      h2 { font-size: 20px; }
+      .route { font-size: 11px; gap: 6px; }
+      .route span { padding: 4px 7px; }
+      th, td { padding: 10px; }
+      pre { padding: 14px; font-size: 11px; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print {
+      @page { size: A4; margin: 16mm; }
+      body { background: #fff; font-size: 10pt; line-height: 1.6; }
+      .wrap { width: 100%; }
+      .hero { padding: 0 0 18px; background: #fff; color: #162b37; border-bottom: 2px solid #173a43; }
+      .eyebrow, .hero-description { color: #455c66; }
+      h1 { font-size: 25pt; }
+      h2 { font-size: 16pt; }
+      h3 { font-size: 12pt; }
+      .hero-meta { margin-top: 12px; }
+      .tag { color: #455c66; border-color: #b9c8cf; }
+      .route { margin-top: 16px; color: #455c66; }
+      .route span { color: #455c66; background: #fff; border: 1px solid #c8d3d9; }
+      .layout { display: block; padding-top: 18px; padding-bottom: 0; }
+      .toc, .print-button, .copy-button, .status { display: none !important; }
+      section { padding: 0; border: none; border-radius: 0; margin: 0 0 24px; }
+      .codebox { border: 1px solid #c5d0d7; background: #fff; break-inside: avoid; }
+      .codebar { color: #344f5c; background: #f1f4f6; padding: 5px 10px; }
+      pre { color: #172c39; padding: 10px; font-size: 8pt; white-space: pre-wrap; overflow: visible; }
+      pre code { overflow-wrap: anywhere; }
+      .table-scroll { overflow: visible; }
+      table { font-size: 8pt; table-layout: fixed; }
+      th, td { padding: 8px 6px; overflow-wrap: anywhere; }
+      thead { display: table-header-group; }
+      tr, .note, .card { break-inside: avoid; }
+      h2, h3, h4, .section-heading { break-after: avoid; }
+      a { color: #174d65; text-decoration: none; }
+      details { border: 0; padding: 0; }
+      details > :not(summary) { display: block !important; }
+      .footer { margin-top: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <div class="hero-top">
+        <div>
+          <p class="eyebrow">NEXPOLY · DATABASE GUIDE</p>
+          <h1>数据库分析<br>从连接到查询</h1>
+          <p class="hero-description">使用管理员授权的只读连接，找到五类分析数据的表，查看字段、查询原始记录，并导出查询结果。</p>
+        </div>
+        <button class="print-button" id="print-button" type="button" hidden>打印 / 保存 PDF</button>
+      </div>
+      <div class="hero-meta">
+        <span class="tag">授权数据库 · 参数需确认</span>
+        <span class="tag">5 类分析数据</span>
+        <span class="tag">源码契约核对：main 684c57d</span>
+        <span class="tag">独立 HTML · 可离线阅读</span>
+      </div>
+      <div class="route" aria-label="操作流程">
+        <span>01 连接数据库</span><b aria-hidden="true">→</b>
+        <span>02 定位数据表</span><b aria-hidden="true">→</b>
+        <span>03 查看字段</span><b aria-hidden="true">→</b>
+        <span>04 查询记录</span><b aria-hidden="true">→</b>
+        <span>05 导出结果</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap layout">
+    <nav class="toc" aria-label="说明目录">
+      <p class="toc-label">操作目录</p>
+      <a href="#connection-info">01 环境与连接信息</a>
+      <a href="#connect">02 连接数据库</a>
+      <a href="#tables">03 五类数据与真实表名</a>
+      <a href="#schema">04 查看表与字段</a>
+      <a href="#queries">05 查询原始数据</a>
+      <a href="#export">06 统计、分页与导出</a>
+      <a href="#web">07 页面与统计快照</a>
+      <a href="#troubleshooting">08 常见问题</a>
+      <small>命令块标注了执行位置：服务器终端、自己的电脑终端、psql 或 SQL 编辑器。</small>
+    </nav>
+
+    <main>
+      <section id="connection-info" aria-labelledby="connection-info-title">
+        <h2 id="connection-info-title"><span class="section-number">01</span>环境与访问边界</h2>
+        <p>本指南依据 main 684c57d 的表结构、数据映射与页面路由编写，不代表已连接或核验任何当前数据库。仅供已获授权的数据维护人员使用；普通平台用户请使用平台提供的数据库分析入口。</p>
+        <p>请由管理员提供专用只读账号和既有安全接入方式。本文件不保存部署地址、数据库账号、口令或运行数据计数，也不要求修改数据库权限、网络绑定或已应用迁移。</p>
+        <dl class="facts"><div><dt>DB_HOST / DB_PORT</dt><dd>管理员提供的数据库接入主机与端口</dd></div><div><dt>DB_NAME</dt><dd>获准查询的数据库名称</dd></div><div><dt>READONLY_USER</dt><dd>获准查询下列表的只读账号</dd></div></dl>
+      </section>
+
+      <section id="connect" aria-labelledby="connect-title">
+        <h2 id="connect-title"><span class="section-number">02</span>连接数据库</h2>
+        <p>先在终端设置上面的非敏感连接参数；下面的 <code>-W</code> 会交互式提示数据库口令。不要把口令写入命令、文档或版本库。</p>
+        <pre><code>psql -X -h "$DB_HOST" -p "$DB_PORT" \
+  -U "$READONLY_USER" -d "$DB_NAME" -W -v ON_ERROR_STOP=1</code></pre>
+        <p>进入 psql 后确认目标，并限制当前会话的操作与单条语句时长：</p>
+        <pre><code>SELECT current_database() AS database_name,
+       current_user AS database_user;
+
+SET default_transaction_read_only = on;
+SET statement_timeout = '15s';</code></pre>
+        <p>只读会话设置不替代账号权限。图形工具使用相同的管理员授权参数，在 SQL 编辑器中执行后续查询；新建连接后需重新设置会话选项。如需 SSH 隧道，使用管理员批准的已有接入配置。</p>
+      </section>
+
+      <section id="tables" aria-labelledby="tables-title">
+        <div class="section-heading"><span class="step" aria-hidden="true">03</span><h2 id="tables-title">五类数据与真实表名</h2></div>
+        <p class="lead">页面展示五类数据；结构–性能和 DFT 各使用两张表。查询时使用完整的 <code>schema.表名</code>。</p>
+        <div class="table-scroll"><table>
+          <caption>main 源码中的表与关联关系；记录量以授权库实际查询为准</caption>
+          <thead><tr><th scope="col">页面数据类别</th><th scope="col">完整表名与关联关系</th><th scope="col">记录量</th></tr></thead>
+          <tbody>
+            <tr><td><a href="#query-process">实验过程数据</a></td><td><code>experimental.process_records</code><span class="sub">主键：record_id</span></td><td>按第 6 节 SQL 查询</td></tr>
+            <tr><td><a href="#query-property">实验性能数据</a></td><td><code>experimental.property_records</code><span class="sub">主键：record_id；性能值字段：value</span></td><td>按第 6 节 SQL 查询</td></tr>
+            <tr><td><a href="#query-structure">结构–性能数据</a></td><td><code>core.polymer_properties</code><br><code>core.polymers</code><span class="sub">用 polymer_id 关联；SMILES 位于 polymers</span></td><td>按第 6 节 SQL 查询</td></tr>
+            <tr><td><a href="#query-dft">DFT 构象数据</a></td><td><code>dft.molecule_final</code><br><code>dft.energy_trace</code><span class="sub">用 mol_id 关联；轨迹主键为 (mol_id, step)</span></td><td>按第 6 节 SQL 查询</td></tr>
+            <tr><td><a href="#query-formulation">配方比例数据</a></td><td><code>knowledge.formulation_records</code><span class="sub">用 knowledge_id 关联 knowledge.documents 查看来源文档</span></td><td>按第 6 节 SQL 查询</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note"><p><strong>在图形工具中定位：</strong>连接 → 数据库 <code>DB_NAME</code> → Schemas → <code>experimental</code> / <code>core</code> / <code>dft</code> / <code>knowledge</code> → Tables。选择表后使用“查看数据”；默认的 <code>public</code> schema 下找不到这些业务表。</p></div>
+      </section>
+
+      <section id="schema" aria-labelledby="schema-title">
+        <div class="section-heading"><span class="step" aria-hidden="true">04</span><h2 id="schema-title">查看表与字段</h2></div>
+        <h3>在 psql 中查看</h3>
+        <p>下面以反斜杠开头的命令只用于 psql，逐条输入即可：</p>
+        <div class="codebox"><div class="codebar"><span>psql · 客户端命令</span><button class="copy-button" type="button" aria-label="复制 psql 查看表与字段命令">复制</button></div><pre><code>\conninfo
+\dt experimental.*
+\dt core.*
+\dt dft.*
+\dt knowledge.*
+
+\d experimental.process_records
+\d experimental.property_records
+\d core.polymer_properties
+\d core.polymers
+\d dft.molecule_final
+\d dft.energy_trace
+\d knowledge.formulation_records</code></pre></div>
+        <p><code>\dt</code> 列出表，<code>\d</code> 查看字段、类型、主键、索引和外键。查询结果进入分页器时，按 <code>q</code> 返回；也可先执行 <code>\pset pager off</code> 关闭分页器。</p>
+
+        <h3>在 SQL 编辑器中查看</h3>
+        <p>下列 SQL 同样适用于 psql。修改 schema 和表名即可查看其他表：</p>
+        <div class="codebox"><div class="codebar"><span>psql 或 SQL 编辑器 · SQL</span><button class="copy-button" type="button" aria-label="复制查询字段的 SQL">复制</button></div><pre><code>SELECT ordinal_position, column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'experimental'
+  AND table_name = 'process_records'
+ORDER BY ordinal_position;</code></pre></div>
+      </section>
+
+      <section id="queries" aria-labelledby="queries-title">
+        <div class="section-heading"><span class="step" aria-hidden="true">05</span><h2 id="queries-title">查询原始数据</h2></div>
+        <p class="lead">本节全部是 SQL，可在 psql 或图形工具 SQL 编辑器执行。预览默认取 20 条；文本预览截取前 200 个字符，查完整记录时按对应主键筛选。</p>
+
+        <article class="query" id="query-process" aria-labelledby="query-process-title">
+          <h3 id="query-process-title">5.1 实验过程数据</h3>
+          <p>查看材料名称、产品名称、过程文本和原始来源位置：</p>
+          <div class="codebox"><div class="codebar"><span>SQL · 过程记录预览</span><button class="copy-button" type="button" aria-label="复制实验过程查询">复制</button></div><pre><code>SELECT record_id, polymer_id, polymer_name, product_name,
+       left(process_flow_original_text, 200) AS process_preview,
+       left(material_original_text, 200) AS material_preview,
+       source_file, source_row_number
+FROM experimental.process_records
+ORDER BY record_id
+LIMIT 20;</code></pre></div>
+          <details><summary>查看一条完整记录与原始 JSON</summary>
+            <p>以下自动取第一条记录；查指定记录时，把子查询替换为预览结果里的实际 <code>record_id</code>。</p>
+            <div class="codebox"><div class="codebar"><span>SQL · 完整过程记录</span><button class="copy-button" type="button" aria-label="复制完整过程记录查询">复制</button></div><pre><code>SELECT record_id, process_flow_original_text,
+       material_original_text, jsonb_pretty(raw_data) AS raw_json
+FROM experimental.process_records
+WHERE record_id = (
+  SELECT record_id FROM experimental.process_records
+  ORDER BY record_id LIMIT 1
+);</code></pre></div>
+          </details>
+        </article>
+
+        <article class="query" id="query-property" aria-labelledby="query-property-title">
+          <h3 id="query-property-title">5.2 实验性能数据</h3>
+          <p>查看性能类别、属性英文名和原始性能值：</p>
+          <div class="codebox"><div class="codebar"><span>SQL · 性能记录预览</span><button class="copy-button" type="button" aria-label="复制实验性能查询">复制</button></div><pre><code>SELECT record_id, polymer_id, polymer_name,
+       property_category, property_name_en, value,
+       source_file, source_row_number
+FROM experimental.property_records
+ORDER BY record_id
+LIMIT 20;</code></pre></div>
+          <details><summary>查看库里有哪些性能类别和属性</summary>
+            <div class="codebox"><div class="codebar"><span>SQL · 性能类别统计</span><button class="copy-button" type="button" aria-label="复制实验性能类别统计">复制</button></div><pre><code>SELECT property_category, property_name_en,
+       count(*) AS record_count
+FROM experimental.property_records
+GROUP BY property_category, property_name_en
+ORDER BY record_count DESC, property_name_en
+LIMIT 20;</code></pre></div>
+          </details>
+          <p><code>value</code> 是文本字段，可能包含单位或其他描述。需要数值区间查询时，使用结构–性能表中的 <code>property_value_num</code>，并核对属性和单位。</p>
+        </article>
+
+        <article class="query" id="query-structure" aria-labelledby="query-structure-title">
+          <h3 id="query-structure-title">5.3 结构–性能数据</h3>
+          <p>性质和 SMILES 分别存放在两张表中，用 <code>polymer_id</code> 关联后查看：</p>
+          <div class="codebox"><div class="codebar"><span>SQL · 结构与性能关联查询</span><button class="copy-button" type="button" aria-label="复制结构性能关联查询">复制</button></div><pre><code>SELECT p.property_id, p.polymer_id,
+       s.smiles, s.canonical_smiles,
+       p.property_category, p.property_name,
+       p.property_value, p.property_value_num,
+       p.property_unit, p.label_source
+FROM core.polymer_properties AS p
+JOIN core.polymers AS s ON s.polymer_id = p.polymer_id
+ORDER BY p.property_id
+LIMIT 20;</code></pre></div>
+          <details><summary>按属性和单位查看数值范围</summary>
+            <div class="codebox"><div class="codebar"><span>SQL · 数值性能范围</span><button class="copy-button" type="button" aria-label="复制数值性能范围查询">复制</button></div><pre><code>SELECT property_name, property_unit,
+       count(*) AS numeric_records,
+       min(property_value_num) AS minimum,
+       max(property_value_num) AS maximum
+FROM core.polymer_properties
+WHERE property_value_num IS NOT NULL
+GROUP BY property_name, property_unit
+ORDER BY numeric_records DESC, property_name, property_unit
+LIMIT 20;</code></pre></div>
+            <p>做条件筛选时，在 <code>WHERE</code> 中同时限定实际属性名、单位与数值范围；同一属性的不同单位应分别处理。</p>
+          </details>
+        </article>
+
+        <article class="query" id="query-dft" aria-labelledby="query-dft-title">
+          <h3 id="query-dft-title">5.4 DFT 构象与优化轨迹</h3>
+          <p><code>molecule_final</code> 每个分子一条最终结果；<code>energy_trace</code> 每个优化步骤一条记录。</p>
+          <div class="codebox"><div class="codebar"><span>SQL · 最终构象结果</span><button class="copy-button" type="button" aria-label="复制 DFT 最终结果查询">复制</button></div><pre><code>SELECT mol_id, range_group, final_step, n_atoms,
+       scf_energy, homo_ev, lumo_ev, gap_ev, is_converged,
+       pca_x, pca_y, pca_z
+FROM dft.molecule_final
+ORDER BY mol_id
+LIMIT 20;</code></pre></div>
+          <p>以下自动取第一个分子的完整优化轨迹。查看指定分子时，将括号内的子查询替换为实际分子编号字符串，例如 <code>WHERE mol_id = '实际编号'</code>。</p>
+          <div class="codebox"><div class="codebar"><span>SQL · 单个分子的优化步骤</span><button class="copy-button" type="button" aria-label="复制 DFT 优化轨迹查询">复制</button></div><pre><code>SELECT mol_id, step, scf_energy, homo_ev, lumo_ev, gap_ev
+FROM dft.energy_trace
+WHERE mol_id = (
+  SELECT mol_id FROM dft.molecule_final
+  ORDER BY mol_id LIMIT 1
+)
+ORDER BY step;</code></pre></div>
+          <p>原子坐标在 <code>dft.molecule_final.coordinates</code> 字段。网页上的三维构象展示可通过第 7 步的 DFT 页面查看。</p>
+        </article>
+
+        <article class="query" id="query-formulation" aria-labelledby="query-formulation-title">
+          <h3 id="query-formulation-title">5.5 配方比例与来源文档</h3>
+          <p>查看配方文本、催化剂、温度、反应时间、溶剂，并关联来源文档标题：</p>
+          <div class="codebox"><div class="codebar"><span>SQL · 配方与来源文档关联查询</span><button class="copy-button" type="button" aria-label="复制配方比例查询">复制</button></div><pre><code>SELECT f.formulation_id, f.knowledge_id, f.polymer_iupac,
+       f.formulation, f.catalyst, f.temperature,
+       f.reaction_time, f.solvent,
+       f.source_file, f.source_row_number,
+       d.title_zh, d.title_en
+FROM knowledge.formulation_records AS f
+JOIN knowledge.documents AS d ON d.knowledge_id = f.knowledge_id
+ORDER BY f.formulation_id
+LIMIT 20;</code></pre></div>
+          <p><code>formulation</code> 保留配方文本。完整摘要、权利要求等来源内容可通过同一 <code>knowledge_id</code> 查询 <code>knowledge.documents</code>。</p>
+        </article>
+      </section>
+
+      <section id="export" aria-labelledby="export-title">
+        <div class="section-heading"><span class="step" aria-hidden="true">06</span><h2 id="export-title">统计、分页与导出</h2></div>
+        <h3>实时核对各表记录数</h3>
+        <div class="codebox"><div class="codebar"><span>SQL · 表记录数</span><button class="copy-button" type="button" aria-label="复制记录数查询">复制</button></div><pre><code>SELECT 'experimental.process_records' AS table_name,
+       count(*) AS record_count FROM experimental.process_records
+UNION ALL
+SELECT 'experimental.property_records', count(*)
+FROM experimental.property_records
+UNION ALL
+SELECT 'core.polymer_properties', count(*) FROM core.polymer_properties
+UNION ALL
+SELECT 'core.polymers', count(*) FROM core.polymers
+UNION ALL
+SELECT 'dft.molecule_final', count(*) FROM dft.molecule_final
+UNION ALL
+SELECT 'dft.energy_trace', count(*) FROM dft.energy_trace
+UNION ALL
+SELECT 'knowledge.formulation_records', count(*)
+FROM knowledge.formulation_records
+ORDER BY table_name;</code></pre></div>
+
+        <h3>条件筛选与分页</h3>
+        <p>将下面的“关键词”替换为材料名或产品名的一部分。<code>ILIKE</code> 用于不区分大小写的文本匹配；<code>%</code> 表示任意文本。</p>
+        <div class="codebox"><div class="codebar"><span>SQL · 关键词筛选与分页</span><button class="copy-button" type="button" aria-label="复制筛选与分页 SQL">复制</button></div><pre><code>SELECT record_id, polymer_name, product_name
+FROM experimental.process_records
+WHERE polymer_name ILIKE '%关键词%'
+   OR product_name ILIKE '%关键词%'
+ORDER BY record_id
+LIMIT 20 OFFSET 0;</code></pre></div>
+        <p>第 1 页用 <code>OFFSET 0</code>，第 2 页用 <code>OFFSET 20</code>。连续翻看大量记录时，可使用上一页最后一个 <code>record_id</code> 作为下一页条件：</p>
+        <div class="codebox"><div class="codebar"><span>SQL · 根据上一页最后一条记录继续查询</span><button class="copy-button" type="button" aria-label="复制按主键继续查询的 SQL">复制</button></div><pre><code>SELECT record_id, polymer_name, product_name
+FROM experimental.process_records
+WHERE record_id &gt; 0 -- 将 0 替换为上一页最后一个 record_id
+ORDER BY record_id
+LIMIT 20;</code></pre></div>
+        <p>如果上一页使用了关键词等筛选条件，下一页也应保留相同条件。</p>
+
+        <h3>导出 CSV 到客户端当前目录</h3>
+        <p>先用 <code>\q</code> 退出 psql，再在<strong>服务器终端</strong>执行。下面导出前 1,000 条过程记录，文件由终端重定向写入运行客户端的当前目录。</p>
+        <div class="codebox"><div class="codebar"><span>客户端终端 · Shell · 导出 CSV</span><button class="copy-button" type="button" aria-label="复制 CSV 导出命令">复制</button></div><pre><code>PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=15000' \
+psql -X -h "$DB_HOST" -p "$DB_PORT" \
+  -U "$READONLY_USER" -d "$DB_NAME" -W -v ON_ERROR_STOP=1 \
+  -c "COPY (
+    SELECT record_id, polymer_name, product_name, source_file
+    FROM experimental.process_records
+    ORDER BY record_id
+    LIMIT 1000
+  ) TO STDOUT WITH (FORMAT csv, HEADER true, ENCODING 'UTF8')" \
+  &gt; experimental-process-preview.csv</code></pre></div>
+        <p>使用 DBeaver / pgAdmin 时，可在查询结果网格中选择导出 CSV；文件保存在运行客户端的电脑上。</p>
+      </section>
+
+      <section id="web" aria-labelledby="web-title">
+        <div class="section-heading"><span class="step" aria-hidden="true">07</span><h2 id="web-title">页面与统计快照</h2></div>
+        <p>登录 NexPoly，进入“数据库分析”，选择对应数据集。图表条目支持下钻查看原始记录；DFT 页面还可查看三维构象和优化步骤。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">页面</th><th scope="col">相对于 NexPoly 前端地址的路径</th></tr></thead>
+          <tbody>
+            <tr><td>全库概览</td><td><code>/database</code></td></tr>
+            <tr><td>实验过程</td><td><code>/database/process</code></td></tr>
+            <tr><td>实验性能</td><td><code>/database/property</code></td></tr>
+            <tr><td>结构–性能</td><td><code>/database/structure-effect</code></td></tr>
+            <tr><td>DFT 构象</td><td><code>/database/dft</code></td></tr>
+            <tr><td>配方比例</td><td><code>/database/formulation</code></td></tr>
+          </tbody>
+        </table></div>
+        <p>在管理员提供的平台地址后附加上表路径；本说明不指定部署地址。</p>
+        <h3>查看页面统计更新时间</h3>
+        <p>页面图表的汇总统计存放在 <code>governance.database_analytics_snapshots</code>。第 5–6 步直接查询业务表中的原始数据。</p>
+        <div class="codebox"><div class="codebar"><span>SQL · 页面统计快照与北京时间</span><button class="copy-button" type="button" aria-label="复制统计快照查询">复制</button></div><pre><code>SELECT snapshot_key,
+       generated_at AT TIME ZONE 'Asia/Shanghai' AS generated_at_beijing,
+       datasets -&gt; 'process' -&gt;&gt; 'rows' AS process_rows,
+       datasets -&gt; 'property' -&gt;&gt; 'rows' AS property_rows,
+       datasets -&gt; 'structureEffect' -&gt;&gt; 'rows' AS structure_property_rows,
+       datasets -&gt; 'dft' -&gt;&gt; 'rows' AS dft_step_rows,
+       datasets -&gt; 'dft' -&gt;&gt; 'molCount' AS dft_molecules,
+       datasets -&gt; 'formulation' -&gt;&gt; 'rows' AS formulation_rows
+FROM governance.database_analytics_snapshots
+WHERE snapshot_key = 'database-browser';</code></pre></div>
+        <p>DFT 的 <code>rows</code> 对应优化步骤数，<code>molCount</code> 对应分子数。核对页面记录量时应分别比较。</p>
+      </section>
+
+      <section id="troubleshooting" aria-labelledby="troubleshooting-title">
+        <h2 id="troubleshooting-title"><span class="section-number">08</span>常见问题</h2>
+        <ul><li>连接失败：核对管理员提供的 DB_HOST、DB_PORT、DB_NAME 和既有接入方式。</li><li>认证失败：核对专用只读账号；SSH 认证和数据库认证分别用于各自连接。</li><li>表不存在：确认 current_database()，并使用完整 schema.表名。</li><li>权限不足：联系管理员确认账号既有授权，不在查询指南中修改权限。</li><li>SQL 编辑器不支持反斜杠命令：使用第 4 节的 information_schema 查询。</li><li>查询超时：优先缩小范围、按主键筛选；本文示例不声明当前库的行数或运行性能。</li><li>页面与原始表统计不同：核对环境、快照时间和统计口径，区分 DFT 分子数与优化步骤数。</li></ul>
+        <p>完成后在 psql 输入 <code>\q</code> 退出；图形工具按其连接管理方式断开。</p>
+      </section>
+
+      <footer class="footer">
+        <p>依据：main 684c57d 的 PostgreSQL 迁移、数据库分析后端和前端路由源码；未执行实机数据库查询。</p>
+        <p>仓库内参考：<a href="../backend/app/routers/database_browser.py">数据集与接口映射</a> · <a href="../backend/app/services/postgres_database_browser.py">原始记录查询与关联</a> · <a href="../frontend/src/routing.ts">页面路径</a>。这些相对链接需在完整仓库中打开。</p>
+      </footer>
+    </main>
+  </div>
+
+  <div class="status" id="copy-status" role="status" aria-live="polite" aria-atomic="true"></div>
+  <script>
+    (() => {
+      document.documentElement.classList.add('js-ready');
+      const printButton = document.getElementById('print-button');
+      printButton.hidden = false;
+      printButton.addEventListener('click', () => window.print());
+      const status = document.getElementById('copy-status');
+      let statusTimer;
+
+      function announce(message) {
+        clearTimeout(statusTimer);
+        status.textContent = message;
+        statusTimer = setTimeout(() => { status.textContent = ''; }, 3500);
+      }
+
+      function copyFallback(text) {
+        const field = document.createElement('textarea');
+        field.value = text;
+        field.setAttribute('readonly', '');
+        field.style.position = 'fixed';
+        field.style.opacity = '0';
+        document.body.appendChild(field);
+        field.select();
+        let copied;
+        try { copied = document.execCommand('copy'); }
+        finally { field.remove(); }
+        if (!copied) throw new Error('Clipboard unavailable');
+      }
+
+      document.querySelectorAll('.copy-button').forEach(button => {
+        button.addEventListener('click', async () => {
+          const code = button.closest('.codebox').querySelector('pre code');
+          const text = code.textContent;
+          let copied = false;
+          if (navigator.clipboard && window.isSecureContext) {
+            try {
+              await navigator.clipboard.writeText(text);
+              copied = true;
+            } catch (_) { /* 本地文件可继续尝试浏览器复制命令。 */ }
+          }
+          if (!copied) {
+            try { copyFallback(text); copied = true; }
+            catch (_) {
+              const range = document.createRange();
+              range.selectNodeContents(code);
+              const selection = window.getSelection();
+              if (selection) {
+                selection.removeAllRanges();
+                selection.addRange(range);
+              }
+            }
+          }
+          button.focus({ preventScroll: true });
+          announce(copied ? '已复制，可粘贴到对应终端或 SQL 编辑器。' : '请选中代码并使用 Ctrl+C / Command+C 复制。');
+        });
+      });
+
+      const detailStates = new Map();
+      window.addEventListener('beforeprint', () => {
+        document.querySelectorAll('details').forEach(detail => {
+          detailStates.set(detail, detail.open);
+          detail.open = true;
+        });
+      });
+      window.addEventListener('afterprint', () => {
+        detailStates.forEach((open, detail) => { detail.open = open; });
+        detailStates.clear();
+      });
+    })();
+  </script>
+</body>
+</html>
