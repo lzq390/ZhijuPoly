@@ -17,6 +17,44 @@ DIGEST_B = "ghcr.io/lzq390/nexpoly-web@sha256:" + "b" * 64
 
 class ComposeDeliveryPolicyTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("docker"), "Docker Compose is not available")
+    def test_development_frontend_proxy_uses_its_compose_project_backend(self) -> None:
+        # Render with fixture values only; do not read local credential files.
+        base_environment = {
+            "PATH": os.environ.get("PATH", os.defpath),
+            "NEXPOLY_ASSET_ROOT": "/tmp/nexpoly-test-assets",
+        }
+        cases = (
+            (None, None, "nexpoly_dev"),
+            ("nexpoly_auth_regression", None, "nexpoly_auth_regression"),
+            (None, "nexpoly_env_regression", "nexpoly_env_regression"),
+            ("nexpoly_cli_regression", "nexpoly_env_regression", "nexpoly_cli_regression"),
+        )
+        for project, environment_project, expected_project in cases:
+            with self.subTest(project=project, environment_project=environment_project):
+                environment = dict(base_environment)
+                if environment_project is not None:
+                    environment["COMPOSE_PROJECT_NAME"] = environment_project
+                command = ["docker", "compose", "--env-file", os.devnull]
+                if project is not None:
+                    command += ["-p", project]
+                for filename in ("docker-compose.yml", "docker-compose.dev.yml"):
+                    command += ["-f", str(REPOSITORY_ROOT / filename)]
+                result = subprocess.run(
+                    command + ["config", "--format", "json", "--no-env-resolution"],
+                    env=environment, text=True, capture_output=True, timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                document = json.loads(result.stdout)
+                self.assertEqual(document["name"], expected_project)
+                frontend = document["services"]["frontend-dev"]
+                backend = document["services"]["backend"]
+                self.assertTrue(set(frontend["networks"]) & set(backend["networks"]))
+                self.assertEqual(
+                    frontend["environment"]["DEV_PROXY_TARGET"],
+                    f"http://{expected_project}-backend-1:8000",
+                )
+
+    @unittest.skipUnless(shutil.which("docker"), "Docker Compose is not available")
     def test_isolated_cpu_and_gpu_healthchecks_use_service_role_and_schema_0018(self) -> None:
         environment = dict(os.environ)
         environment.update({
