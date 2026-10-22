@@ -1,0 +1,36 @@
+{
+  "synthetic": true,
+  "source_file": "Generated synthetic handoff examples",
+  "source_records": 0,
+  "selection": "Generated rows; repeated molecules deliberately support bulk-layout testing. Not database samples.",
+  "counts": {
+    "diamines": {
+      "selected": 120,
+      "unique_valid_structures": 12
+    },
+    "dianhydrides": {
+      "selected": 120,
+      "unique_valid_structures": 1
+    }
+  },
+  "files": [
+    {
+      "name": "smipoly-diamines-120.csv",
+      "bytes": 7195,
+      "sha256": "f6e42cffdc0134fb77d428e00567f43cd81c3f291dbb63d3bc429d613d99da1c"
+    },
+    {
+      "name": "smipoly-dianhydrides-120.csv",
+      "bytes": 10375,
+      "sha256": "9d7d4985ad7c8356f2efaa8661090d5dec342d6d0543b90a12f7a29f75d36d1c"
+    }
+  ],
+  "expected_pairs": 14400,
+  "encoding": "UTF-8 BOM",
+  "mapping": {
+    "smiles_column": "SMILES",
+    "id_column": "id",
+    "name_column": "name"
+  },
+  "target": "polyimide"
+}

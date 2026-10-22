@@ -1,0 +1,54 @@
+{
+  "repository": "https://github.com/google/fonts",
+  "revision": "e44c4b011a820c2cbe2fd2cfa8052037d7edb571",
+  "files": [
+    {
+      "file": "Exo-Variable.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/exo/Exo%5Bwght%5D.ttf",
+      "sha256": "2f08f818f1135ac5798030c0bca252c0845af5c54dfe172a5c74fbdd68843445",
+      "bytes": 175092
+    },
+    {
+      "file": "licenses/Exo-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/exo/OFL.txt",
+      "sha256": "1159ea72ed1f7e7541cea35a0dece48d2abb0317d7c70f75a482f94932382a77",
+      "bytes": 4381
+    },
+    {
+      "file": "IBMPlexSans-Variable.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/ibmplexsans/IBMPlexSans%5Bwdth%2Cwght%5D.ttf",
+      "sha256": "3b031aa4216174205bd8471f88a49b91f093169e9e87bd5262242bc5967fe2e3",
+      "bytes": 537244
+    },
+    {
+      "file": "licenses/IBMPlexSans-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/ibmplexsans/OFL.txt",
+      "sha256": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da",
+      "bytes": 4456
+    },
+    {
+      "file": "RobotoMono-Variable.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/robotomono/RobotoMono%5Bwght%5D.ttf",
+      "sha256": "66a80e79d17e4c7cabd162e2916578a4cc08fd19eef6e2a643305eae9c567b2b",
+      "bytes": 183700
+    },
+    {
+      "file": "licenses/RobotoMono-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/robotomono/OFL.txt",
+      "sha256": "50ab8dd54680d3473f649c9db86fece88434d097c7834475c1c72d2f8c429215",
+      "bytes": 4395
+    },
+    {
+      "file": "Outfit-Variable.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/outfit/Outfit%5Bwght%5D.ttf",
+      "sha256": "fc7287273e66929776e2ba54f144fe699080bec29f61bf649d70d871468aeade",
+      "bytes": 110884
+    },
+    {
+      "file": "licenses/Outfit-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/outfit/OFL.txt",
+      "sha256": "c676351bf8576b9aba743cd5eaa8c0e7ee0d51f805d720447b4df4ddb6a2e416",
+      "bytes": 4389
+    }
+  ]
+}

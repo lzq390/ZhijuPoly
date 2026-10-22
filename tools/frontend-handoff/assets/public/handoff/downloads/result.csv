@@ -1,0 +1,2 @@
+﻿pair_id,monomer_a_id,monomer_b_id,status,polymer_smiles,synthetic
+DEMO-001,001,001,success,*CC*,true

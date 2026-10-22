@@ -1,0 +1,148 @@
+{
+  "schema_version": 2,
+  "calculation_type": "single_point",
+  "engine": "aimnet2",
+  "model": "aimnet2",
+  "input": {
+    "input_type": "smiles",
+    "canonical_smiles": "O",
+    "net_charge": 0,
+    "input_formal_charge": 0,
+    "multiplicity": 1,
+    "electron_count": 10
+  },
+  "atoms": {
+    "count": 3,
+    "atomic_numbers": [
+      8,
+      1,
+      1
+    ],
+    "symbols": [
+      "O",
+      "H",
+      "H"
+    ],
+    "isotope_mass_numbers": [
+      0,
+      0,
+      0
+    ],
+    "atomic_masses_u": [
+      15.999,
+      1.008,
+      1.008
+    ]
+  },
+  "geometry": {
+    "initial_coordinates_angstrom": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        1
+      ],
+      [
+        1,
+        0,
+        0
+      ]
+    ],
+    "final_coordinates_angstrom": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        1
+      ],
+      [
+        1,
+        0,
+        0
+      ]
+    ],
+    "units": "angstrom"
+  },
+  "rdkit": {
+    "seed": 1,
+    "force_field": "MMFF94",
+    "optimization_status": 0,
+    "optimization_performed": true,
+    "optimization_state": "converged"
+  },
+  "properties": {
+    "energy": {
+      "value_eV": -1
+    },
+    "charges": {
+      "values_e": [
+        0,
+        0,
+        0
+      ],
+      "sum_e": 0,
+      "conservation_error_e": 0,
+      "conserved": true
+    },
+    "forces": {
+      "values_eV_per_A": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ]
+      ],
+      "fmax_eV_per_A": 0
+    }
+  },
+  "optimization": null,
+  "scientific_status": {
+    "calculation_completed": true,
+    "geometry_status": "not_optimized",
+    "is_stationary": true,
+    "minimum_assessment": "unassessed",
+    "stationary_point": "not_evaluated",
+    "fmax_eV_per_A": 0
+  },
+  "warnings": [
+    {
+      "code": "synthetic_fixture",
+      "message": "UI-only synthetic result."
+    }
+  ],
+  "timings": {
+    "queue_wait_ms": 1,
+    "model_compute_ms": 4,
+    "total_ms": 8
+  },
+  "provenance": {
+    "rdkit_optimization_performed": true,
+    "rdkit_optimization_status": 0,
+    "rdkit_version": "synthetic",
+    "mass_source": "synthetic",
+    "execution_path": "primary",
+    "gpu_uuid": "synthetic-device",
+    "gpu_budget_mib": 0,
+    "broker_instance_id": "synthetic-broker",
+    "lease_id": "synthetic-lease",
+    "fencing_token": 1
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "synthetic": true,
+  "units": "angstrom",
+  "frames": [
+    {
+      "symbols": [
+        "C",
+        "C"
+      ],
+      "positions": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          1.5,
+          0,
+          0
+        ]
+      ]
+    }
+  ]
+}
