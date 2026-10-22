@@ -242,8 +242,55 @@ def _declared_routes(path):
     for node in ast.walk(tree):
         if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)):
             for decorator in node.decorator_list:
-                if isinstance(decorator,ast.Call) and isinstance(decorator.func,ast.Attribute) and decorator.func.attr in {"get","post","put","patch","delete"}:
-                    yield decorator.func.attr.upper(), prefixes.get(getattr(decorator.func.value,"id",""),"") + ast.literal_eval(decorator.args[0])
+                if not isinstance(decorator,ast.Call) or not isinstance(decorator.func,ast.Attribute):
+                    continue
+                method = decorator.func.attr
+                if method == "api_route":
+                    methods = next((ast.literal_eval(kw.value) for kw in decorator.keywords
+                                    if kw.arg == "methods"), None) or ["GET"]
+                elif method in {"get","post","put","patch","delete","head","options","trace"}:
+                    methods = [method]
+                else:
+                    continue
+                path = prefixes.get(getattr(decorator.func.value,"id",""),"") + ast.literal_eval(decorator.args[0])
+                for declared_method in methods:
+                    yield declared_method.upper(), path
+
+
+
+def test_declared_routes_includes_explicit_api_route_methods(tmp_path):
+    source = tmp_path / "routes.py"
+    source.write_text("""router = APIRouter(prefix="/sample")
+@router.api_route("/asset", methods=["get", "HEAD"])
+async def asset(): pass
+@router.api_route("/default")
+async def default(): pass
+@router.get("/existing")
+async def existing(): pass
+@router.head("/head")
+async def head(): pass
+""")
+    assert list(_declared_routes(source)) == [
+        ("GET", "/sample/asset"), ("HEAD", "/sample/asset"),
+        ("GET", "/sample/default"), ("GET", "/sample/existing"),
+        ("HEAD", "/sample/head"),
+    ]
+
+
+def test_literature_reads_observe_existing_documents_without_new_tasks():
+    paths = (
+        "/api/v1/knowledge/sources",
+        "/api/v1/knowledge/literature/literature:document",
+        "/api/v1/knowledge/literature/literature:document/fulltext",
+        "/api/v1/knowledge/literature/literature:document/files/asset:registered/content",
+    )
+    for path in paths:
+        for method in ("GET", "HEAD"):
+            route = match_usage_route(method, path)
+            assert route is not None, (method, path)
+            assert route.mode == "observe" and route.module is None
+    search = match_usage_route("POST", "/api/v1/knowledge/search")
+    assert search.mode == "sync" and search.module == "knowledge"
 
 
 def test_catalog_classifies_every_registered_router_endpoint():

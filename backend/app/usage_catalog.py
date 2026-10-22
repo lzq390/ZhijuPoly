@@ -59,6 +59,12 @@ ROUTES = (
     *_entries("monomer_md", "native", "POST", ("/api/v1/monomer-md/jobs",)),
     *_entries("monomer_dft", "native", "POST", ("/api/v1/monomer-dft/jobs",)),
     *_entries("polymerization_batch", "native", "POST", ("/api/v1/monomer-polymerization/batch/jobs",)),
+    # Reading a published literature snapshot is observation of existing data.
+    *_entries(None, "observe", "GET", (
+        "/api/v1/knowledge/sources",
+        "/api/v1/knowledge/literature/{document_uid}",
+        "/api/v1/knowledge/literature/{document_uid}/fulltext",
+        "/api/v1/knowledge/literature/{document_uid}/files/{asset_uid}/content")),
     # Saving or retrieving a personal drawing is storage, not a new computation.
     *_entries(None, "observe", "GET", (
         "/api/v1/structure-library/status", "/api/v1/structure-library/records",
