@@ -482,13 +482,15 @@ def test_fresh_supervisor_preserves_a_listening_socket(
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
         server.bind(str(sandbox.socket_path))
         server.listen(8)
-        identity = sandbox.socket_path.stat()
+        metadata = sandbox.socket_path.lstat()
+        os.utime(sandbox.socket_path, ns=(1, metadata.st_mtime_ns))
+        identity = sandbox.socket_path.lstat()
 
         rejected = sandbox.run_runner()
 
         assert rejected.returncode == 2, rejected.stdout + rejected.stderr
         assert "refusing to remove a listening worker socket" in rejected.stderr
-        assert sandbox.socket_path.stat() == identity
+        _assert_socket_preserved(sandbox.socket_path, identity)
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(1.0)
             client.connect(str(sandbox.socket_path))
