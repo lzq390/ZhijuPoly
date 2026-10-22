@@ -770,6 +770,8 @@ def main() -> None:
               'limitations': ['Synthetic UI responses are not scientific validation or backend integration tests.',
                               'OpenScience is represented by a local placeholder.']}
     write_json(stage/'VALIDATION.json', report)
+    # Runtime validation metadata becomes part of the published payload too.
+    audit(stage)
     write_manifest(stage)
     final = contained_path(run/'verified.zip', run)
     make_zip(stage, final, name)

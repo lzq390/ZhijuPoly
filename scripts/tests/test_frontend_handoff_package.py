@@ -591,5 +591,77 @@ assert.throws(() => assert.equal(missingInitial.focusInDrawer, true));
                 with self.assertRaises(package.PackagingError):
                     package.audit(root)
 
+
+    def exercise_final_metadata(self, metadata, *, rejected):
+        # Exercise the real main assembly/publish path with only source capture,
+        # adaptation and external frontend validation replaced by synthetic data.
+        import contextlib
+        import io
+        import json
+        import sys
+        from datetime import timezone
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'synthetic-root'
+            (root / 'tools/frontend-handoff').mkdir(parents=True)
+
+            def snapshot(_root, destination):
+                destination.mkdir()
+                (destination / 'README.md').write_text('Synthetic handoff source.\n')
+                return {p.relative_to(destination).as_posix(): package.digest(p)
+                        for p in package.regular_files(destination)}
+
+            def adapt(stage, _kit, _run):
+                package.write_json(stage / 'VALIDATION.json', {'status': 'not-validated'})
+
+            def validate(_root, run, _name, _node_bin):
+                target = run / 'validation'
+                target.mkdir()
+                with ZipFile(run / 'candidate.zip') as archive:
+                    archive.extractall(target)
+                package.write_json(run / 'validation-environment.json', metadata)
+                return []
+
+            with patch.object(package, 'check_kit', return_value=None), \
+                 patch.object(package, 'stable_snapshot', side_effect=snapshot), \
+                 patch.object(package, 'adapt', side_effect=adapt), \
+                 patch.object(package, 'validate', side_effect=validate), \
+                 patch.object(package, 'validation_summary', return_value={'synthetic': True}), \
+                 patch.object(package, 'ZoneInfo', return_value=timezone.utc), \
+                 patch.object(sys, 'argv', ['package_frontend_handoff.py', '--root', str(root)]), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                if rejected:
+                    with self.assertRaisesRegex(package.PackagingError, 'machine-path'):
+                        package.main()
+                else:
+                    package.main()
+
+            run = next((root / '.runtime/frontend-handoff').iterdir())
+            self.assertEqual(json.loads((run / 'audit.json').read_text())['status'], 'passed')
+            if rejected:
+                self.assertFalse((run / 'published.json').exists())
+                self.assertFalse((run / 'verified.zip').exists())
+                self.assertFalse((root / 'release/frontend-handoff').exists())
+            else:
+                published = json.loads((run / 'published.json').read_text())
+                archive = Path(published['archive'])
+                name = json.loads((run / 'run.json').read_text())['name']
+                self.assertTrue(package.verify_zip(archive, name))
+                self.assertTrue(archive.with_suffix('.zip.sha256').is_file())
+                package.audit(run / 'stage')
+                with ZipFile(archive) as zipped:
+                    final = json.loads(zipped.read(name + '/VALIDATION.json'))
+                self.assertEqual(final['status'], 'passed')
+                self.assertEqual(final['environment'], metadata)
+
+    def test_final_runtime_metadata_is_audited_before_any_release(self):
+        self.exercise_final_metadata(
+            {'synthetic_probe': '/home/devuser/SYNTHETIC_FINAL_METADATA_AUDIT_PROBE'},
+            rejected=True,
+        )
+
+    def test_safe_final_runtime_metadata_publishes_verified_archive(self):
+        self.exercise_final_metadata({'node': 'v22.23.2', 'npm': '10.9.8'}, rejected=False)
+
 if __name__ == '__main__':
     unittest.main()
