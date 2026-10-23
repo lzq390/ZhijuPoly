@@ -790,7 +790,7 @@ function AppContent() {
       {isGuest && <div className="np-guest-service-notice" role="note"><span>游客可浏览各模块和使用本地画板；执行服务任务前，请登录账号。</span><button type="button" onClick={() => requestServiceAccess()}>登录账号</button></div>}
       {auth?.session.account_type === "free" && <div className="np-guest-service-notice" role="note"><span>当前为免费账号：可使用本地画板和公开示例；会员服务与共享工作空间尚未开放。</span></div>}
       <StructureWorkspaceNotice workspace={structureWorkspace.workspace} />
-      <div className={activeModule === "home" ? "h-full" : "hidden"}>
+      <div className={activeModule === "home" ? "min-h-0 flex-1" : "hidden"} aria-hidden={activeModule !== "home"}>
         {canUseSharedWorkspace || isGuest ? <AgentWorkspaceHomePage
           iframeRef={agentWorkspaceIframeRef}
           src={agentWorkspaceFrameUrl}

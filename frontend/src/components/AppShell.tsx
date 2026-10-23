@@ -465,7 +465,7 @@ export function AppShell({
             data-module-phase={moduleTransition?.phase ?? "idle"}
             className={
               isHome
-                ? "h-full"
+                ? "flex h-full min-h-0 flex-col"
                 : [
                     "relative mx-auto flex flex-col",
                     isResearchWorkbench ? "h-full gap-0" : "gap-8",
