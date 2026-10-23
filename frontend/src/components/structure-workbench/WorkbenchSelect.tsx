@@ -2,6 +2,7 @@ import { Check, ChevronDown } from "lucide-react";
 import { useMotionPresence } from "../../hooks/useMotionPresence";
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent
@@ -23,6 +24,9 @@ type WorkbenchSelectProps<T extends string> = {
   disabled?: boolean;
   ariaLabel?: string;
   ariaLabelledBy?: string;
+  ariaDescribedBy?: string;
+  ariaInvalid?: boolean;
+  constrainToScrollParent?: boolean;
 };
 
 export function WorkbenchSelect<T extends string>({
@@ -32,18 +36,63 @@ export function WorkbenchSelect<T extends string>({
   onChange,
   disabled = false,
   ariaLabel,
-  ariaLabelledBy
+  ariaLabelledBy,
+  ariaDescribedBy,
+  ariaInvalid,
+  constrainToScrollParent = false
 }: WorkbenchSelectProps<T>) {
   const [open, setOpen] = useState(false);
   const presence = useMotionPresence<HTMLDivElement>(open);
   const restoreAfterExit = useRef(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [opensUp, setOpensUp] = useState(false);
+  const [menuMaxHeight, setMenuMaxHeight] = useState<number>();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const selectedIndex = options.findIndex((option) => option.value === value);
   const selectedOption = options[selectedIndex] ?? options[0];
   const listboxId = `${id}-listbox`;
+
+  function positionMenu() {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const bounds = trigger.getBoundingClientRect();
+    if (!constrainToScrollParent) {
+      const below = window.innerHeight - bounds.bottom;
+      setOpensUp(below < 300 && bounds.top > below);
+      return;
+    }
+    // An inline menu must fit inside every clipping ancestor, including a
+    // workbench's scroll region beneath its fixed toolbar.
+    let top = 0, bottom = window.innerHeight;
+    for (let parent = rootRef.current?.parentElement; parent; parent = parent.parentElement) {
+      if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) continue;
+      const rect = parent.getBoundingClientRect();
+      top = Math.max(top, rect.top + parent.clientTop);
+      bottom = Math.min(bottom, rect.top + parent.clientTop + parent.clientHeight);
+    }
+    const style = getComputedStyle(rootRef.current!);
+    const gap = parseFloat(style.getPropertyValue("--np-select-menu-gap")) || 6;
+    const maxHeight = parseFloat(style.getPropertyValue("--np-select-menu-max-height")) || 310;
+    const menu = presence.ref.current;
+    const desired = menu ? Math.min(maxHeight, menu.scrollHeight + 2) : maxHeight;
+    const below = Math.max(0, bottom - bounds.bottom - gap - 2);
+    const above = Math.max(0, bounds.top - top - gap - 2);
+    const up = below < desired && above > below;
+    setOpensUp(up);
+    setMenuMaxHeight(Math.min(maxHeight, up ? above : below));
+  }
+
+  useLayoutEffect(() => {
+    if (!open || !constrainToScrollParent) return;
+    positionMenu();
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+    };
+  }, [open, constrainToScrollParent]);
 
   useEffect(() => {
     if (!open) return;
@@ -75,11 +124,7 @@ export function WorkbenchSelect<T extends string>({
 
   function openMenu(direction: 1 | -1 = 1) {
     if (disabled || options.length === 0) return;
-    const triggerBounds = triggerRef.current?.getBoundingClientRect();
-    if (triggerBounds) {
-      const availableBelow = window.innerHeight - triggerBounds.bottom;
-      setOpensUp(availableBelow < 300 && triggerBounds.top > availableBelow);
-    }
+    positionMenu();
     const preferred = selectedIndex >= 0 && !options[selectedIndex]?.disabled
       ? selectedIndex
       : firstEnabledIndex(direction);
@@ -177,6 +222,8 @@ export function WorkbenchSelect<T extends string>({
         role="combobox"
         aria-label={ariaLabel}
         aria-labelledby={ariaLabelledBy ? `${ariaLabelledBy} ${id}-value` : undefined}
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={ariaInvalid}
         aria-controls={listboxId}
         aria-expanded={open}
         aria-haspopup="listbox"
@@ -194,6 +241,7 @@ export function WorkbenchSelect<T extends string>({
 
       {presence.present ? (
         <div ref={presence.ref} {...presence.motionProps} id={listboxId} className="np-sw-select__menu np-motion-popover"
+          style={constrainToScrollParent ? { maxHeight: menuMaxHeight } : undefined}
           aria-hidden={!open} inert={!open} role="listbox" aria-label={ariaLabel} aria-labelledby={ariaLabelledBy}>
           {options.map((option, index) => {
             const selected = option.value === value;
