@@ -1,6 +1,7 @@
 # Frontend handoff tooling source layer
 
-This source-only candidate contains the packaging runner and its boundary tests.
+This source-only candidate contains the packaging runner, data-free page readiness
+and cancellable event-stream helpers, and their boundary tests.
 It preserves stable source capture, environment/private-file exclusions,
 run ownership and resume checks, deterministic archives, manifest verification,
 adaptation hooks, isolated frontend validation and the final metadata audit.
@@ -9,9 +10,10 @@ adaptation hooks, isolated frontend validation and the final metadata audit.
 
 The runner requires a separately reviewed `tools/frontend-handoff` kit under
 the selected source root. That kit supplies the overlay, documentation adapter,
-templates, fonts/licenses and application fixture assets. None of that kit,
+templates, fonts/licenses and application fixture assets. Only selected reviewed
+source modules are included here. The complete adapter and asset kit is absent;
 its download archives, scientific JSON/CSV data, asset generators or equivalent
-payloads are copied into this candidate. There is no automatic fetch, fallback
+payloads are not copied into this candidate. There is no automatic fetch, fallback
 generator or path to the held historical worktrees.
 
 Without the kit, the normal and `--prepare-only` entry points fail before
@@ -35,3 +37,13 @@ Detailed source commit/hash provenance is retained in the local review audit.
 This candidate additionally validates adapter input types before source capture.
 Already integrated proxy, query-guide, metering and DFT maintenance changes
 are not reapplied.
+
+## Data-free adapter checks
+
+Run `node --experimental-strip-types --test tools/frontend-handoff/tests/readiness-and-stream.test.mjs`
+with the existing Node 22 runtime. These checks retain the four original pure
+readiness assertions and cover finite/live event ordering, cancellation,
+pre-aborted signals, synchronous subscription abort and provider errors.
+The stream releases subscriptions and abort listeners once on every covered
+termination path. Original App/mock integration tests require the separate
+scenario-provider dependency and are not replaced by these pure checks.
