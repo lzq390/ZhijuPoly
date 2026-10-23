@@ -1,0 +1,13 @@
+> Source-template notice: this is an input template for an eventual complete handoff, not a generated or validated delivery. The scientific provider/assets are absent from this candidate; packaging preflight refuses it. No earlier scientific/download assets are certified or included by this template.
+
+# 交付内容与数据边界
+
+包含当前React前端源码、构建支持文件、前端测试、设计规范、本地字体、编辑器和合成演示数据。
+
+不包含Git历史、作者/分支/提交记录、后端实现、数据库、模型、Worker、运维部署配置、真实环境文件、凭据、日志、上传记录、依赖安装目录或构建缓存。原仓库两个测试JSON作为包内测试夹具携带，不包含后端代码。论文位图、DOE数据和批量示例替换为合成数据，图像去除文本/EXIF/时间元数据。
+
+所有业务API在交付模式中由本地Mock响应；开发和预览均不代理真实后端。直接下载使用本地合成文件。外部资源通过Mock与CSP限制，第三方许可证和依赖下载地址用于归属和安装，不代表页面运行时调用。
+
+首次npm安装和Playwright浏览器安装需要网络；完成安装后演示页面无需外部服务。不可将真实账号密码、API密钥或用户资料填入演示页面或写入VITE变量。
+
+归档使用固定文件时间，附逐文件SHA-256与ZIP外层校验值。HANDOFF-CHANGES.json记录交付适配路径和摘要，不包含Git信息。
