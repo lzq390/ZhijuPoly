@@ -84,18 +84,6 @@
 
 .np-guest-service-notice{display:flex;align-items:center;justify-content:space-between;gap:16px;flex:none;padding:9px 20px;border-bottom:1px solid #dde7ef;background:#f4f8fd;color:#5a7086;font-size:12px}
 .np-guest-service-notice button{flex:none;border:0;background:none;color:#216ba4;font:inherit;font-weight:600;cursor:pointer}
-.np-guest-conversation{display:flex;min-height:480px;height:100%;flex-direction:column;color:#17344d;background:#f6f9fc}
-.np-guest-conversation>header{padding:24px 24px 8px;background:white;border-bottom:1px solid #dce5ef}
-.np-guest-conversation h1{margin:0 0 20px;font-size:22px;font-weight:650}
-.np-guest-conversation [role=tablist]{display:flex;gap:8px}
-.np-guest-conversation [role=tab]{display:flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid transparent;border-radius:5px;background:none;color:#71879b;font-size:12px}
-.np-guest-conversation [role=tab][aria-selected=true]{border-color:#d3dfeb;color:#17344d;background:#fff;box-shadow:0 1px 3px #18344c0e}
-.np-guest-conversation svg{width:15px;height:15px}
-.np-guest-conversation__body{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:#6f8295;font-size:14px}
-.np-guest-conversation__body button{border:1px solid #cbdbe8;border-radius:7px;padding:8px 14px;background:white;color:#216ba4}
-.np-guest-conversation__composer{display:flex;align-items:flex-end;gap:12px;margin:20px auto;padding:12px;width:calc(100% - 48px);max-width:800px;background:white;border:1px solid #d7e2ec;border-radius:12px}
-.np-guest-conversation__composer textarea{flex:1;min-height:68px;resize:vertical;border:0;background:none;outline:none;font-size:14px}
-.np-guest-conversation__composer button{padding:8px;background:#246db0;color:white;border:0;border-radius:7px}
 
 /* Keep authentication controls on the same desktop breakpoint as the shell. */
 @media (min-width: 2000px) and (min-height: 1120px) {

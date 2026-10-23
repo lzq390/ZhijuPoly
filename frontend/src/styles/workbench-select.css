@@ -2,6 +2,8 @@
 .np-sw-select {
   --np-select-label-size: 12px;
   --np-select-description-size: 10.5px;
+  --np-select-menu-max-height: 310px;
+  --np-select-menu-gap: 6px;
   line-height: 1.5;
 }
 .np-sw-select .np-sw-select__trigger {
@@ -47,11 +49,11 @@
 .np-sw-select .np-sw-select__trigger:disabled { color: #73859a; background: #f1f5f9; }
 .np-sw-select .np-sw-select__menu {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + var(--np-select-menu-gap));
   right: 0;
   left: 0;
   display: grid;
-  max-height: 310px;
+  max-height: var(--np-select-menu-max-height);
   gap: 3px;
   overflow-y: auto;
   border: 1px solid rgba(71, 100, 143, 0.24);
@@ -62,7 +64,7 @@
 }
 .np-sw-select.opens-up .np-sw-select__menu {
   top: auto;
-  bottom: calc(100% + 6px);
+  bottom: calc(100% + var(--np-select-menu-gap));
   box-shadow: 0 -14px 38px rgba(27, 54, 93, 0.14), 0 -3px 10px rgba(27, 54, 93, 0.06);
 }
 .np-sw-select .np-sw-select__menu > button {
@@ -114,6 +116,8 @@
   .np-sw-select {
     --np-select-label-size: 15px;
     --np-select-description-size: 13px;
+    --np-select-menu-max-height: 430px;
+    --np-select-menu-gap: 8px;
   }
   .np-sw-select .np-sw-select__trigger { height: 50px; border-radius: 10px; padding: 0 14px; }
   .np-sw-select .np-sw-select__trigger > svg { width: 19px; height: 19px; }

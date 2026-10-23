@@ -7,9 +7,9 @@
 
 @layer base {
   :root {
-    --font-heading: "Exo", "IBM Plex Sans", "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
-    --font-body: "IBM Plex Sans", "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
-    --font-mono: "Roboto Mono", "SFMono-Regular", "Consolas", monospace;
+    --font-heading: "Exo", "IBM Plex Sans", "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+    --font-body: "IBM Plex Sans", "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+    --font-mono: "Roboto Mono", "SFMono-Regular", "Consolas", "Liberation Mono", "Noto Sans Mono CJK SC", monospace;
     color: #08111f;
     background: linear-gradient(180deg, #f8faf8 0%, #eef2f2 46%, #e8eef0 100%);
     font-family: var(--font-body);
