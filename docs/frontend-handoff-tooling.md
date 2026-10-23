@@ -69,3 +69,28 @@ into this data-free layer. They remain available in the held old worktrees.
 The small bridge preserves that external provider interface, so a complete
 handoff still needs separately reviewed provider and asset inputs. Preflight
 checks their presence before snapshotting; those checks only inspect metadata.
+
+## Generic documentation, archive checks and visual resources
+
+The source layer retains staged documentation adaptation and browser-verifier
+source. The adapter rejects source Git roots and symlinked stage/doc paths,
+prepares changes before writes, preserves fenced examples and deactivates
+out-of-stage links without reading their targets. It has eleven synthetic tests
+and was also checked against the four current public main documents.
+
+Archive inspection is a standalone helper, retaining CRC/size/compression checks
+and rejecting traversal, Windows paths and NUL names. Its tests use temporary
+unit-only ZIPs. The browser-verifier assertions remain in source; they were
+syntax-checked, not executed against a complete application in this candidate.
+
+Four public font files, their OFL texts and pinned source hashes, six explicit
+placeholder SVGs and a local agent placeholder are ordinary visual resources.
+Their inclusion does not include scientific rows, result downloads or generators.
+Templates are retained with an explicit notice that they describe a future full
+handoff, not a validated package currently available from this source layer.
+
+Of the original 62 kit paths, 33 generic/ordinary-resource paths are integrated.
+The 26 scientific data/generator paths and three full-Mock/App-coupled source/test
+paths remain in the original worktrees. Only auth/session control and the four
+pure readiness assertions were separated from the mixed scenario layer.
+No complete dev/preview/browser matrix or scientific result was verified here.

@@ -1,0 +1,18 @@
+> Source-template notice: this is an input template for an eventual complete handoff, not a generated or validated delivery. The scientific provider/assets are absent from this candidate; packaging preflight refuses it. No earlier scientific/download assets are certified or included by this template.
+
+# 修改与回传
+
+1. 解压后保存一份未修改副本，或在接收方本地创建Git仓库作为基线。
+2. 按 design-system/polyprop/MASTER.md 及对应页面规范修改原生界面，保留现有路由、请求字段、状态语义、结构编辑功能和键盘操作。
+3. 完成后提供修改文件、变更清单、手机/桌面/2K截图，以及构建和测试结果。新增资源附来源和许可。
+4. 不回传 node_modules、dist、缓存、个人环境文件、真实数据或浏览器登录状态。
+
+## 合回原项目
+
+HANDOFF-CHANGES.json列出打包适配差异：Mock、handoff Vite插件、启动入口、npm脚本、包内测试夹具、合成数据、本地字体和说明文档。它们是交付适配基线，不能作为接收方界面改动直接覆盖原生产环境。
+
+交付方使用“原始快照→交付基线→接收方修改”的三方比较合回界面变化；保留Mock与业务代码的边界。原始快照和完整适配补丁保存在交付方本地，不在对外ZIP内。两份DFT测试JSON的路径变更仅用于独立源码包。
+
+本次交付副本另修正了单体正向聚合的三个 CSS 选择器优先级，避免构建分块加载顺序使共享样式裁剪批量表单；未改变原属性值。此修复在 HANDOFF-CHANGES.json 中单独体现，合回时应结合原项目构建预览复核。页面验收脚本也保留合成登录响应，使业务错误状态测试可以进入原生页面。
+
+建议变更清单逐项说明：修改页面、公共组件、视觉变化、交互变化、验证命令和已知限制。若确需改变接口或业务行为，单独列明，便于合回时评审。
