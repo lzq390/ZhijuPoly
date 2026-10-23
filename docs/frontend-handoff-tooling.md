@@ -47,3 +47,25 @@ pre-aborted signals, synchronous subscription abort and provider errors.
 The stream releases subscriptions and abort listeners once on every covered
 termination path. Original App/mock integration tests require the separate
 scenario-provider dependency and are not replaced by these pure checks.
+
+## Explicit scenario-provider composition
+
+The Vite transport now receives `fixtureFactory` explicitly. It retains the
+handoff CSP, fixed download mappings, HTTP session continuity, request/response
+headers, cancellation and stream behavior. HTTP-fixture mode fails if no
+provider is supplied; it does not fall back to a production API or fabricated
+business success. The packager wires the external scenario bridge into its
+generated Vite configuration.
+
+`handoffAuthFixture.ts` is a separately testable, synthetic in-memory auth-only
+handler. It preserves guest/member capabilities, demo login/logout and session
+retirement on demo password changes. It never contacts a real auth service,
+stores entered secrets or changes real accounts. Non-auth requests are left
+to an explicit provider; this module is not the full scientific scenario mock.
+
+The original full `handoffMockFetch.ts` contains scientific result construction
+as well as control flow. It and its coupled scenario/App tests are not copied
+into this data-free layer. They remain available in the held old worktrees.
+The small bridge preserves that external provider interface, so a complete
+handoff still needs separately reviewed provider and asset inputs. Preflight
+checks their presence before snapshotting; those checks only inspect metadata.

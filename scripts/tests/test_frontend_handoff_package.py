@@ -685,5 +685,30 @@ assert.throws(() => assert.equal(missingInitial.focusInDrawer, true));
             with self.assertRaisesRegex(package.PackagingError, 'adapter script'):
                 package.check_kit(kit)
 
+
+    def test_partial_kit_rejects_missing_scenario_before_reading_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            kit = Path(tmp) / 'kit'
+            for name in ('overlay', 'assets/public', 'templates'):
+                (kit / name).mkdir(parents=True)
+            (kit / 'adapt_docs.py').write_text('# Unit-only placeholder.\n')
+            with patch.object(package, 'regular_files', side_effect=AssertionError('asset walk forbidden')):
+                with self.assertRaisesRegex(package.PackagingError, 'scenario/asset'):
+                    package.check_kit(kit)
+
+    def test_vite_composition_supplies_explicit_scenario_factory(self):
+        source = "export default ({mode}) => ({plugins:[handoffPlugin({ httpFixtures: mode === 'handoff-fixtures' })]});"
+        result = package.wire_handoff_fixture_factory(source)
+        self.assertEqual(result.count('fixtureFactory: createHandoffMockFetch'), 1)
+        self.assertIn('import { createHandoffMockFetch } from "./build/handoff-fixtures.mjs";', result)
+        self.assertIn("httpFixtures: mode === 'handoff-fixtures'", result)
+
+    def test_vite_composition_rejects_missing_or_ambiguous_plugin_anchor(self):
+        with self.assertRaises(package.PackagingError):
+            package.wire_handoff_fixture_factory('export default {};')
+        repeated = "handoffPlugin({ httpFixtures: true });handoffPlugin({ httpFixtures: false });"
+        with self.assertRaises(package.PackagingError):
+            package.wire_handoff_fixture_factory(repeated)
+
 if __name__ == '__main__':
     unittest.main()

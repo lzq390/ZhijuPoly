@@ -129,6 +129,15 @@ def check_kit(kit: Path) -> None:
     adapter = contained_path(kit / 'adapt_docs.py', kit)
     if not adapter.is_file():
         raise PackagingError('Required frontend handoff adapter script is missing or invalid: adapt_docs.py')
+    # Source-only layers must not look like a complete scenario/data kit.
+    # This preflight checks file metadata only; it never reads fixture values.
+    for name in ('overlay/src/mocks/handoffMockFetch.ts',
+                 'assets/source/highThroughputDoePiRows.ts',
+                 'assets/public/handoff/downloads/dft-bundle.zip',
+                 'assets/public/handoff/downloads/results.zip',
+                 'assets/public/handoff/downloads/scientific_result.json'):
+        if not contained_path(kit / name, kit).is_file():
+            raise PackagingError('Complete handoff scenario/asset input is missing: ' + name)
     for path in regular_files(kit):
         if private_input(path.relative_to(kit)):
             raise PackagingError('Adapter kit contains an excluded configuration file')
@@ -303,6 +312,18 @@ def adapt_workbench_verifiers(frontend: Path) -> None:
                   'checkDrawerReversal(page, { workspace: ".np-monomer-retrosynthesis .np-sw-workspace", drawer: ".np-sw-drawer",')
 
 
+def wire_handoff_fixture_factory(config: str) -> str:
+    pattern = r"handoffPlugin\(\{\s*httpFixtures:\s*([^}]+)\}\)"
+    matches = list(re.finditer(pattern, config))
+    if len(matches) != 1:
+        raise PackagingError('Expected one handoff fixture plugin composition point')
+    match = matches[0]
+    options = match.group(1).strip()
+    replacement = 'handoffPlugin({ httpFixtures: ' + options + ', fixtureFactory: createHandoffMockFetch })'
+    return ('import { createHandoffMockFetch } from "./build/handoff-fixtures.mjs";\n'
+            + config[:match.start()] + replacement + config[match.end():])
+
+
 def adapt(stage: Path, kit: Path, run: Path) -> None:
     frontend = stage / 'frontend'
     # --resume can retain an earlier snapshot from before the handoff allowlist
@@ -397,7 +418,7 @@ def adapt(stage: Path, kit: Path, run: Path) -> None:
       "import.meta.env.VITE_ONLINE_KNOWLEDGE_MODEL": JSON.stringify("synthetic-model")
     } : undefined,
     resolve: { alias:''', 1)
-    vite.write_text(value)
+    vite.write_text(wire_handoff_fixture_factory(value))
     package = json.loads((frontend / 'package.json').read_text())
     keep = {'postinstall', 'verify:ketcher-patches', 'test', 'test:pages', 'test:pages:focus',
             'test:pages:states', 'test:retrosynthesis-browser', 'test:structure-resources', 'test:ketcher-worker',
