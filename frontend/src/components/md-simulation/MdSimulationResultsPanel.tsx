@@ -32,6 +32,7 @@ type ResultsTab = "overview" | "curves" | "trajectory";
 
 type MdSimulationResultsPanelProps = {
   workspaceNavigation: ReactNode;
+  embedded?: boolean;
   loading: boolean;
   error: string | null;
   progress: number;
@@ -363,6 +364,7 @@ function ResultOverview({
 
 export function MdSimulationResultsPanel({
   workspaceNavigation,
+  embedded = false,
   loading,
   error,
   progress,
@@ -435,10 +437,10 @@ export function MdSimulationResultsPanel({
     <section
       id="md-simulation-results-panel"
       className="np-md-results-surface"
-      role="tabpanel"
-      aria-labelledby="md-simulation-results-tab"
+      role={embedded ? undefined : "tabpanel"}
+      aria-labelledby={embedded ? undefined : "md-simulation-results-tab"}
     >
-      <header className="np-md-view-header np-md-results-header">
+      {!embedded ? <header className="np-md-view-header np-md-results-header">
         <div className="np-md-view-heading np-md-results-heading">
           <span className="np-md-surface-mark">
             <Activity aria-hidden="true" />
@@ -454,7 +456,7 @@ export function MdSimulationResultsPanel({
             真实计算结果
           </span>
         </div>
-      </header>
+      </header> : null}
 
       {workspaceNavigation}
 

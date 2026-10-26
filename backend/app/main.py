@@ -38,6 +38,9 @@ from app.postgres_database import postgres_connection
 from app.postgres_preflight import (
     SCHEMA_TARGET_STARTUP,
     SCHEMA_TARGET_CURRENT_ISOLATION,
+    SCHEMA_TARGET_ISOLATION,
+    SCHEMA_TARGET_POLYMER_MD,
+    SCHEMA_TARGET_LITERATURE,
     preflight_blockers,
     run_preflight,
 )
@@ -89,6 +92,10 @@ from app.services.monomer_dft_reconciler import (
 )
 from app.services.monomer_dft_repository import MonomerDftRepository
 from app.services.monomer_dft_worker_client import MonomerDftWorkerClient
+from app.routers.polymer_md import router as polymer_md_router, internal_router as polymer_md_internal_router
+from app.services.polymer_md_repository import PolymerMdRepository
+from app.services.polymer_md_worker_client import PolymerMdWorkerClient
+from app.services.polymer_md_reconciler import PolymerMdReconciler
 from app.services.monomer_job_retention import (
     MonomerDftJobDeletionService,
     MonomerJobRetentionReaper,
@@ -187,8 +194,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 api_app.state.monomer_dft_readiness_controller.start()
             api_app.state.monomer_md_retention_reaper.start()
             api_app.state.monomer_dft_retention_reaper.start()
+            if api_app.state.polymer_md_reconciler is not None:
+                api_app.state.polymer_md_reconciler.start()
             yield
         finally:
+            if api_app.state.polymer_md_reconciler is not None:
+                await api_app.state.polymer_md_reconciler.stop()
+            if api_app.state.polymer_md_worker_client is not None:
+                await api_app.state.polymer_md_worker_client.close()
             await api_app.state.monomer_md_retention_reaper.stop()
             await api_app.state.monomer_dft_retention_reaper.stop()
             if api_app.state.monomer_dft_readiness_controller is not None:
@@ -327,6 +340,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.monomer_dft_repository = MonomerDftRepository(
         app_settings.app_postgres_dsn
     )
+    app.state.polymer_md_repository = PolymerMdRepository(app_settings.app_postgres_dsn)
+    app.state.polymer_md_download_limiter = anyio.CapacityLimiter(2)
+    app.state.polymer_md_worker_client = (
+        PolymerMdWorkerClient(app_settings.polymer_md_worker_uds)
+        if app_settings.polymer_md_dev_enabled and app_settings.polymer_md_worker_uds else None
+    )
+    app.state.polymer_md_reconciler = (
+        PolymerMdReconciler(app.state.polymer_md_repository, app.state.polymer_md_worker_client)
+        if app_settings.polymer_md_dev_enabled and app.state.polymer_md_worker_client else None
+    )
     app.state.monomer_dft_validation_limiter = anyio.CapacityLimiter(
         app_settings.monomer_dft_validation_concurrency
     )
@@ -450,6 +473,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(usage_router)
     app.include_router(entitlements_router)
     app.include_router(monomer_dft_internal_router)
+    app.include_router(polymer_md_internal_router)
+    app.include_router(polymer_md_router)
     app.include_router(deployment_status_router)
     if app_settings.dev_gpu_operator_enabled or gpu_status_only:
         app.include_router(dev_gpu_session_router)
@@ -683,6 +708,9 @@ def _run_database_startup_preflight(api_app: FastAPI, *, required: bool) -> None
             schema_target=SCHEMA_TARGET_CURRENT_ISOLATION,
         )
         errors = preflight_blockers(report)
+        if (getattr(api_app.state.settings, "polymer_md_dev_enabled", False)
+                and report.get("schema_target") not in {SCHEMA_TARGET_POLYMER_MD, SCHEMA_TARGET_LITERATURE}):
+            errors.append("Polymer MD requires a validated current 0023/0024 migration boundary")
         api_app.state.auth.assert_application_ready()
     except Exception as exc:
         errors = [f"database preflight failed: {type(exc).__name__}"]
@@ -690,7 +718,7 @@ def _run_database_startup_preflight(api_app: FastAPI, *, required: bool) -> None
     if not errors:
         return
     message = "Backend database preflight failed: " + "; ".join(errors)
-    if required:
+    if required or getattr(api_app.state.settings, "polymer_md_dev_enabled", False):
         raise RuntimeError(message)
     logger.warning(message)
 

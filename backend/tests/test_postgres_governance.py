@@ -1145,9 +1145,10 @@ def test_static_rebuild_contract_excludes_mutable_tables_and_cascade() -> None:
     connection = CaptureConnection()
     truncate_static_import_tables(connection, set(STATIC_IMPORT_DATASETS))
 
-    # The historical fixture predates 0020; the current rebuild denylist also
-    # protects the independent personal structure store.
-    assert set(_BUSINESS_MUTABLE_TABLE_KEYS) | {("structure_library", "records")} == set(BUSINESS_MUTABLE_TABLES)
+    # Every private mutable store must stay outside the static rebuild surface.
+    private_tables = {("structure_library", "records"),
+                      *( ("polymer_md", name) for name in ("jobs", "job_attempts", "stage_runs", "artifacts") )}
+    assert set(_BUSINESS_MUTABLE_TABLE_KEYS) | private_tables == set(BUSINESS_MUTABLE_TABLES)
     assert rebuild_tables.isdisjoint(BUSINESS_MUTABLE_TABLES)
     assert connection.query is not None
     assert "CASCADE" not in repr(connection.query).upper()

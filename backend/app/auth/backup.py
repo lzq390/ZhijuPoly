@@ -16,7 +16,7 @@ from psycopg.rows import dict_row
 from .cutover import private_data_seal, auth_metadata_seal, backup_state_seal
 from .assets import archive_assets, file_sha256
 from .isolation_ledger import (PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, LIBRARY_VERSION,
-                               USAGE_VERSION, ENTITLEMENT_VERSION, validate_application_migration_ledger,
+                               USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, validate_application_migration_ledger,
                                validate_service_migration_ledger, validate_service_members)
 from .usage_backup import usage_backup_seal
 from .entitlement_backup import entitlement_backup_seal
@@ -25,21 +25,28 @@ from .entitlement_backup import entitlement_backup_seal
 def validate_backup_schema(connection):
     row = connection.execute("SELECT max(version) AS version FROM governance.schema_migrations").fetchone()
     version = row["version"]
-    if version not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION}:
-        raise ValueError("Identity backup requires exact release-known 0017/0018/0019/0020/0021/0022 boundary")
-    ledger = (validate_application_migration_ledger(connection, require_usage=True, require_entitlements=version == ENTITLEMENT_VERSION)
-              if version in {USAGE_VERSION, ENTITLEMENT_VERSION} else validate_service_migration_ledger(connection, version))
+    if version not in {PREPARE_VERSION, CUTOVER_VERSION, CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION}:
+        raise ValueError("Identity backup requires exact release-known 0017/0018/0019/0020/0021/0022/0023/0024 boundary")
+    ledger = (validate_application_migration_ledger(connection, require_usage=True, require_entitlements=version in {ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION})
+              if version in {USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION} else validate_service_migration_ledger(connection, version))
     if version != PREPARE_VERSION:
         from .schema import validate_isolation_schema
         validate_isolation_schema(connection, version)
-    current = version in {CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION}
+    current = version in {CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION}
     privileges = validate_service_members(connection) if current else None
     result = {"migration_ledger": ledger, "current_readiness": current,
               "service_auth_privileges": privileges}
-    if version in {USAGE_VERSION, ENTITLEMENT_VERSION}:
+    if version in {USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION}:
         result["usage_schema"] = {"version": USAGE_VERSION, "validated": True}
-    if version == ENTITLEMENT_VERSION:
+    if version in {ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION}:
         result["entitlement_schema"] = {"version": ENTITLEMENT_VERSION, "validated": True}
+    if version in {POLYMER_VERSION, LITERATURE_VERSION}:
+        result["polymer_md_schema"] = {"version": POLYMER_VERSION, "validated": True}
+    if version == LITERATURE_VERSION:
+        from app.literature_contract import optional_literature_tables
+        if not optional_literature_tables(connection):
+            raise ValueError("Literature backup requires its complete registered table set")
+        result["literature_schema"] = {"version": LITERATURE_VERSION, "validated": True}
     return result
 
 
@@ -124,7 +131,7 @@ def main():
     parser.add_argument('--source-dsn-env',default='AUTH_ADMIN_POSTGRES_DSN')
     parser.add_argument('--restore-dsn-env',default='AUTH_RESTORE_TEST_DSN')
     parser.add_argument('--output',required=True,type=Path)
-    parser.add_argument('--asset-root',action='append',default=[],metavar='NAME=PATH',help='Repeat for batch_imports, batch_jobs, md, dft')
+    parser.add_argument('--asset-root',action='append',default=[],metavar='NAME=PATH',help='Repeat for batch_imports, batch_jobs, md, dft, polymer_md')
     args = parser.parse_args()
     roots = {name:Path(path) for name,path in (value.split('=',1) for value in args.asset_root)}
     receipt = backup_and_verify(os.environ[args.source_dsn_env],os.environ[args.restore_dsn_env],args.output,asset_roots=roots)

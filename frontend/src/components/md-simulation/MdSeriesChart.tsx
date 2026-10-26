@@ -36,10 +36,14 @@ export function MdSeriesChart({
   series,
   color = "#2563eb",
   label = series.label,
+  xAxisLabel = "时间 (ps)",
+  xVariable = "时间",
 }: {
   series: MdDemoSeries;
   color?: string;
   label?: string;
+  xAxisLabel?: string;
+  xVariable?: string;
 }) {
   const gradientId = `md-series-${useId().replace(/:/g, "")}`;
   const geometry = useMemo(() => buildGeometry(series), [series]);
@@ -59,8 +63,8 @@ export function MdSeriesChart({
 
   return (
     <div className="np-md-series-chart">
-      <svg viewBox="0 0 360 220" role="img" aria-label={`${label}随时间变化曲线`}>
-        <title>{label}随时间变化曲线</title>
+      <svg viewBox="0 0 360 220" role="img" aria-label={`${label}随${xVariable}变化曲线`}>
+        <title>{label}随{xVariable}变化曲线</title>
         <defs>
           <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={color} stopOpacity="0.2" />
@@ -102,13 +106,13 @@ export function MdSeriesChart({
         <circle className="np-md-chart-endpoint" cx={firstPoint.x} cy={firstPoint.y} r="3" fill="#fff" stroke={color} />
         <circle className="np-md-chart-endpoint is-final" cx={lastPoint.x} cy={lastPoint.y} r="4" fill={color} stroke="#fff" />
         {yTicks.map((tick, index) => (
-          <text key={`y-${tick}`} x="48" y={185 - index * 71} textAnchor="end">{formatNumber(tick, 3)}</text>
+          <text key={`y-${tick}`} className="np-md-chart-tick" x="48" y={185 - index * 71} textAnchor="end">{formatNumber(tick, 3)}</text>
         ))}
         {xTicks.map((tick, index) => (
-          <text key={`x-${tick}`} x={54 + index * 145} y="202" textAnchor={index === 0 ? "start" : index === 2 ? "end" : "middle"}>{formatNumber(tick, 2)}</text>
+          <text key={`x-${tick}`} className="np-md-chart-tick" x={54 + index * 145} y="202" textAnchor={index === 0 ? "start" : index === 2 ? "end" : "middle"}>{formatNumber(tick, 2)}</text>
         ))}
-        <text x="344" y="216" textAnchor="end">时间 (ps)</text>
-        <text x="8" y="24">{unit}</text>
+        <text className="np-md-chart-axis-label" x="344" y="216" textAnchor="end">{xAxisLabel}</text>
+        <text className="np-md-chart-unit" x="8" y="24">{unit}</text>
       </svg>
       <div className="np-md-chart-meta">
         <span>最小值 <strong>{formatNumber(geometry.yMin, 4)} {unit}</strong></span>

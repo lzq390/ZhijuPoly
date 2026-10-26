@@ -736,10 +736,28 @@ class KnowledgeSearchGroup(BaseModel):
         return normalized
 
 
+class KnowledgeLiteratureFilters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    year_from: int | None = Field(default=None, ge=1000, le=3000)
+    year_to: int | None = Field(default=None, ge=1000, le=3000)
+    has_properties: bool | None = None
+    has_processes: bool | None = None
+    has_original: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_years(self):
+        if self.year_from is not None and self.year_to is not None and self.year_from > self.year_to:
+            raise ValueError("year_from must not exceed year_to")
+        return self
+
+
 class KnowledgeSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     query: str = Field(min_length=1)
+    data_source: Literal["legacy", "extracted_literature"] = "legacy"
+    generation_id: str | None = Field(default=None, max_length=64)
+    filters: KnowledgeLiteratureFilters | None = None
     top_k: int = Field(default=25, ge=1, le=100)
     page: int = Field(default=1, ge=1)
     page_size: int | None = Field(default=None, ge=1, le=100)
@@ -768,6 +786,10 @@ class KnowledgeSearchRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_group_input(self) -> "KnowledgeSearchRequest":
+        if not self.query.strip():
+            raise ValueError("knowledge search query must not be empty")
+        if self.data_source == "legacy" and (self.generation_id is not None or self.filters is not None):
+            raise ValueError("literature filters and generation require extracted_literature")
         if self.groups and self.terms:
             raise ValueError("groups and terms cannot be provided together")
 
@@ -780,9 +802,21 @@ class KnowledgeSearchRequest(BaseModel):
 class KnowledgeDocumentResult(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    knowledge_id: int
-    source_file: str
-    source_row_number: int
+    knowledge_id: int | None = None
+    document_uid: str | None = None
+    data_source: Literal["legacy", "extracted_literature"] = "legacy"
+    generation_id: str | None = None
+    snapshot_uid: str | None = None
+    title: str | None = None
+    authors: list[Any] = Field(default_factory=list)
+    journal: str | None = None
+    year: int | None = None
+    doi: str | None = None
+    keywords: list[str] = Field(default_factory=list)
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    counts: dict[str, Any] = Field(default_factory=dict)
+    source_file: str = ""
+    source_row_number: int = 0
     source_sequence: str | None = None
     title_zh: str | None = None
     title_en: str | None = None
@@ -801,11 +835,26 @@ class KnowledgeDocumentResult(BaseModel):
     matched_terms: list[str] = Field(default_factory=list)
     matched_fields: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def assign_document_uid(self):
+        if self.data_source == "legacy":
+            if self.knowledge_id is None:
+                raise ValueError("legacy document requires knowledge_id")
+            expected = f"legacy:{self.knowledge_id}"
+            if self.document_uid is not None and self.document_uid != expected:
+                raise ValueError("legacy document identity mismatch")
+            self.document_uid = expected
+        elif not self.document_uid or not self.snapshot_uid or not self.generation_id:
+            raise ValueError("literature document requires document, snapshot and generation IDs")
+        return self
+
 
 class KnowledgeSearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str
+    data_source: Literal["legacy", "extracted_literature"] = "legacy"
+    generation_id: str | None = None
     groups: list[KnowledgeSearchGroup] = Field(default_factory=list)
     terms: list[str] = Field(default_factory=list)
     page: int = Field(default=1, ge=1)

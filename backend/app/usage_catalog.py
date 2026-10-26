@@ -59,6 +59,20 @@ ROUTES = (
     *_entries("monomer_md", "native", "POST", ("/api/v1/monomer-md/jobs",)),
     *_entries("monomer_dft", "native", "POST", ("/api/v1/monomer-dft/jobs",)),
     *_entries("polymerization_batch", "native", "POST", ("/api/v1/monomer-polymerization/batch/jobs",)),
+    *_entries("polymer_md", "native", "POST", ("/api/v1/polymer-md/jobs",)),
+    *_entries(None, "observe", "GET", (
+        "/api/v1/polymer-md/capabilities", "/api/v1/polymer-md/status",
+        "/api/v1/polymer-md/jobs", "/api/v1/polymer-md/jobs/{job_id}",
+        "/api/v1/polymer-md/jobs/{job_id}/results", "/api/v1/polymer-md/jobs/{job_id}/stages",
+        "/api/v1/polymer-md/jobs/{job_id}/stages/{stage_run_id}/logs",
+        "/api/v1/polymer-md/jobs/{job_id}/artifacts",
+        "/api/v1/polymer-md/jobs/{job_id}/artifacts/{artifact_id}",
+        "/api/v1/polymer-md/jobs/{job_id}/stages/{stage_run_id}/trajectory")),
+    *_entries(None, "observe", "POST", (
+        "/api/v1/polymer-md/jobs/{job_id}/cancel",
+        "/api/v1/polymer-md/jobs/{job_id}/stages/{stage_run_id}/distance")),
+    *_entries(None, "observe", "DELETE", (
+        "/api/v1/polymer-md/jobs/{job_id}", "/api/v1/polymer-md/jobs/{job_id}/artifacts")),
     # Reading a published literature snapshot is observation of existing data.
     *_entries(None, "observe", "GET", (
         "/api/v1/knowledge/sources",
@@ -138,7 +152,7 @@ def catalog_modules() -> list[dict[str, str]]:
         "retrosynthesis": ("单体逆合成", "models"), "reverse_design": ("逆向设计", "search"),
         "query": ("结构相似性与查询", "search"), "structure": ("分子结构处理", "chemistry"),
         "database_browser": ("材料数据库浏览", "search"), "dft_history": ("DFT 历史查询", "search"),
-        "monomer_md": ("分子动力学", "science"), "monomer_dft": ("DFT 计算", "science"),
+        "monomer_md": ("分子动力学", "science"), "polymer_md": ("聚合物分子动力学", "science"), "monomer_dft": ("DFT 计算", "science"),
         "polymerization": ("单体聚合", "chemistry"),
         "polymerization_batch": ("批量聚合", "chemistry"),
         "batch_preflight": ("批量导入校验", "chemistry"), "md_demo": ("分子动力学演示", "demo"),

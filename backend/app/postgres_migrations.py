@@ -1018,6 +1018,9 @@ def apply_postgres_migrations(
         # dedicated maintenance commands, including on a fresh database.
         deferred_versions: set[str] = {
             "0018_user_isolation_cutover", "0019_service_auth_least_privilege",
+            "0023_polymer_md_jobs",
+            # Literature admission and operator workflow are a separate layer.
+            "0024_literature_projection",
         }
         # All private expansions require the separately approved identity and
         # service contracts. Fresh/legacy bootstrap remains bounded at 0017.
@@ -1204,6 +1207,7 @@ def main() -> None:
             "restore-expand",
             "expand",
             "contract-0012",
+            "polymer-md-dev-0023",
         ),
         default="expand",
         help=(
@@ -1215,6 +1219,15 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+
+    if args.mode == "polymer-md-dev-0023":
+        if args.contract_guard_json is not None or args.contract_guard_sha256 is not None:
+            parser.error("Contract guard arguments require --mode contract-0012")
+        from app.services.polymer_md_schema import apply_polymer_md_dev_migration
+        result=apply_polymer_md_dev_migration(args.dsn,environment=Settings().polymer_md_environment,migrations_dir=args.migrations_dir)
+        status="applied" if result.applied else "skipped"
+        print(f"{result.version}\t{status}\t{result.checksum}")
+        return
 
     if args.mode == "contract-0012":
         if args.contract_guard_json is None or args.contract_guard_sha256 is None:

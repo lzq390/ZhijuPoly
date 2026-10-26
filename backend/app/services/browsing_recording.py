@@ -284,9 +284,11 @@ class BrowsingRecordingStore:
         if record:
             record.searches[search_id] = result
             record.append({"event": "search.completed", "search_id": search_id,
+                           "data_source": result.data_source, "generation_id": result.generation_id,
                            "query": result.query, "groups": [group.model_dump() for group in result.groups],
                            "page": result.page, "page_size": result.page_size, "total": result.total,
-                           "results": [{"knowledge_id": row.knowledge_id, "title_en": row.title_en,
+                           "results": [{"knowledge_id": row.knowledge_id, "document_uid": row.document_uid,
+                                        "snapshot_uid": row.snapshot_uid, "title_en": row.title_en,
                                         "title_zh": row.title_zh} for row in result.results]})
         return RecordedKnowledgeSearchResponse(**result.model_dump(), search_id=search_id)
 
@@ -302,14 +304,19 @@ class BrowsingRecordingStore:
             result = snapshot[0] if snapshot else None
         if result is None:
             raise HTTPException(404, "Search snapshot not found or expired")
-        article = next((row for row in result.results if row.knowledge_id == body.knowledge_id), None)
+        article = next((row for row in result.results if row.document_uid == body.document_uid), None)
         if article is None:
             raise HTTPException(404, "Article is not in this search result")
+        literature = article.data_source == "extracted_literature"
+        if literature and (body.snapshot_uid != article.snapshot_uid or body.generation_id != article.generation_id):
+            raise HTTPException(409, "文献版本与检索快照不一致，请重新搜索")
         observation = {"event": "article.opened", "search_id": body.search_id,
-                "knowledge_id": article.knowledge_id, "source": body.source,
+                "knowledge_id": article.knowledge_id, "document_uid": article.document_uid,
+                "data_source": article.data_source, "generation_id": article.generation_id,
+                "snapshot_uid": article.snapshot_uid, "source": body.source,
                 "query": result.query, "title_en": article.title_en, "title_zh": article.title_zh,
                 "abstract_characters": len(article.abstract)}
-        if body.source == "reaction_tab":
+        if body.source == "reaction_tab" and not literature:
             observation["event"] = "article.reaction_viewed"
             observation["reaction_info"] = article.model_dump(include={
                 "polymer_iupac", "formulation", "catalyst", "solvent", "temperature",
@@ -317,5 +324,10 @@ class BrowsingRecordingStore:
             })
         if record:
             observation["recording_id"] = body.recording_id
-            record.append({**observation, "article": article.model_dump()})
+            # Literature experiments/full text never enter recordings or model evidence.
+            article_evidence = article.model_dump(include={
+                "data_source", "document_uid", "generation_id", "snapshot_uid", "title", "title_en", "title_zh",
+                "authors", "journal", "year", "doi", "abstract",
+            }) if literature else article.model_dump()
+            record.append({**observation, "article": article_evidence})
         return observation

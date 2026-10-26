@@ -113,6 +113,15 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
             "legacy-fallback": source.replace("} else SCHEMA_TARGET_ISOLATION)", "} else SCHEMA_TARGET_STARTUP)"),
             "disabled-resolver": source.replace("if schema_target == SCHEMA_TARGET_CURRENT_ISOLATION:", "if False:"),
         }
+        for boundary, target in (("POLYMER_VERSION", "SCHEMA_TARGET_POLYMER_MD"),
+                                 ("LITERATURE_MIGRATION", "SCHEMA_TARGET_LITERATURE")):
+            predicate = "max(applied_migrations) == " + boundary
+            mutations[boundary + "-unbounded"] = source.replace(predicate, "max(applied_migrations) >= " + boundary)
+            mutations[boundary + "-unknown"] = source.replace(predicate, "max(applied_migrations) == UNREVIEWED_VERSION")
+            mutations[boundary + "-wrong-target"] = source.replace(
+                target + " if applied_migrations",
+                "SCHEMA_TARGET_STRUCTURE_LIBRARY if applied_migrations",
+            )
         for name, mutated in mutations.items():
             with self.subTest(mutation=name):
                 self.assertNotEqual(mutated, source)
@@ -131,6 +140,9 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
             "validate_service_auth_privileges(connection, require_login=True)",
             "database_identity(api) != service_database",
             'api_ledger[-1]["version"] != boundary',
+            "validate_application_migration_ledger(connection, require_usage=True, require_entitlements=True)",
+            "boundary != POLYMER_VERSION",
+            "boundary != LITERATURE_MIGRATION",
         ):
             with self.subTest(protection=required):
                 self.assertIn(required, source)
@@ -140,14 +152,15 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
     def test_current_startup_requires_isolation_membership_and_profiles(self) -> None:
         relative = "backend/app/postgres_preflight.py"
         source = (REPOSITORY_ROOT / relative).read_text()
-        removed = source.replace(
-            "SCHEMA_TARGET_STRUCTURE_LIBRARY, SCHEMA_TARGET_CURRENT_ISOLATION})",
-            "SCHEMA_TARGET_STRUCTURE_LIBRARY})",
-        )
-        self.assertNotEqual(removed, source)
-        self.assertIn("current startup targets must retain all isolation checks",
-                      self._schema_failures_with_sources({relative: removed}))
-        for name in ("SCHEMA_TARGET_CURRENT_ISOLATION", "SCHEMA_TARGET_STRUCTURE_LIBRARY"):
+        for name in ("SCHEMA_TARGET_CURRENT_ISOLATION", "SCHEMA_TARGET_STRUCTURE_LIBRARY",
+                     "SCHEMA_TARGET_POLYMER_MD", "SCHEMA_TARGET_LITERATURE"):
+            with self.subTest(membership=name):
+                removed = re.sub(r'^(ISOLATION_TARGETS = .*?)\b' + name + r'\b,? ?', r'\1', source, flags=re.MULTILINE)
+                self.assertNotEqual(removed, source)
+                self.assertIn("current startup targets must retain all isolation checks",
+                              self._schema_failures_with_sources({relative: removed}))
+        for name in ("SCHEMA_TARGET_CURRENT_ISOLATION", "SCHEMA_TARGET_STRUCTURE_LIBRARY",
+                     "SCHEMA_TARGET_POLYMER_MD", "SCHEMA_TARGET_LITERATURE"):
             with self.subTest(profile=name):
                 mutated = re.sub(rf'^{name} = .*$', f'{name} = "unreviewed"', source, flags=re.MULTILINE)
                 self.assertNotEqual(mutated, source)
@@ -157,15 +170,19 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
     def test_current_startup_requires_every_private_expansion_once(self) -> None:
         relative = "backend/migrations/postgres/manifest.json"
         manifest = json.loads((REPOSITORY_ROOT / relative).read_text())
-        for version in ("0020_structure_library", "0021_usage_metering"):
+        for version in ("0020_structure_library", "0021_usage_metering",
+                        "0022_usage_entitlements", "0023_polymer_md_jobs", "0024_literature_projection"):
             for duplicate in (False, True):
                 with self.subTest(version=version, duplicate=duplicate):
                     entries = [entry for entry in manifest["migrations"] if entry["version"] != version]
                     if duplicate:
                         entries.extend([entry for entry in manifest["migrations"] if entry["version"] == version] * 2)
                     mutated = dict(manifest, migrations=entries)
-                    self.assertIn("current isolation startup requires each intervening private migration exactly once",
-                                  self._schema_failures_with_sources({relative: json.dumps(mutated)}))
+                    failures = self._schema_failures_with_sources({relative: json.dumps(mutated)})
+                    expected = ("current isolation resolver must accept only exact release-known migration boundaries"
+                                if version == "0024_literature_projection" and not duplicate else
+                                "current isolation startup requires each intervening private migration exactly once")
+                    self.assertIn(expected, failures)
 
     def test_isolated_startup_requires_complete_migration_chain(self) -> None:
         relative = "backend/migrations/postgres/manifest.json"
@@ -380,6 +397,17 @@ class MonomerDftReleaseContractTests(unittest.TestCase):
                 "WHERE execution_token IS NOT NULL AND status != 'cancelled'",
             ),
             "v3-version": ("version = 3\n", "version = 2\n"),
+            "v4-schema-presence": ('if polymer["present"]:', "if False:"),
+            "v4-partial-schema-detection": (
+                "OR EXISTS(SELECT FROM governance.schema_migrations WHERE version='0023_polymer_md_jobs')",
+                "AND EXISTS(SELECT FROM governance.schema_migrations WHERE version='0023_polymer_md_jobs')",
+            ),
+            "v4-schema-validation": ("validate_polymer_md_schema(connection)", "None"),
+            "v4-predecessor-schemas": ("if version != 3:", "if version == 3:"),
+            "v4-cleanup-drain": ("OR cleanup_confirmed IS NOT TRUE", "AND cleanup_confirmed IS NOT TRUE"),
+            "v4-running-stage-drain": ("s.status='running'", "s.status='completed'"),
+            "v4-active-statuses": ("list(POLYMER_MD_ACTIVE_STATUSES)", "list(ACTIVE_STATUSES)"),
+            "v4-version": ("version = 4\n", "version = 3\n"),
             "reported-version": (
                 "active_jobs_schema_version=version)",
                 "active_jobs_schema_version=2)",

@@ -21,9 +21,26 @@ class RecordedKnowledgeSearchResponse(KnowledgeSearchResponse):
 class ArticleObservation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     search_id: str = Field(min_length=1, max_length=64)
-    knowledge_id: int = Field(gt=0)
-    source: Literal["result_card", "drawer_reopen", "reaction_tab"]
+    knowledge_id: int | None = Field(default=None, gt=0)
+    document_uid: str | None = Field(default=None, min_length=1, max_length=200)
+    generation_id: str | None = Field(default=None, max_length=64)
+    snapshot_uid: str | None = Field(default=None, max_length=200)
+    source: Literal["result_card", "drawer_reopen", "reaction_tab", "literature_detail", "extracted_tab", "fulltext_tab"]
     recording_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_identity(self):
+        if self.knowledge_id is None and self.document_uid is None:
+            raise ValueError("document_uid or knowledge_id is required")
+        if self.knowledge_id is not None:
+            expected = f"legacy:{self.knowledge_id}"
+            if self.document_uid is not None and self.document_uid != expected:
+                raise ValueError("document_uid and knowledge_id disagree")
+            self.document_uid = expected
+        if self.document_uid and not self.document_uid.startswith("legacy:"):
+            if not self.generation_id or not self.snapshot_uid:
+                raise ValueError("literature observations require generation_id and snapshot_uid")
+        return self
 
 
 class RecordedFilterSearchResponse(PropertyFilterSearchResponse):

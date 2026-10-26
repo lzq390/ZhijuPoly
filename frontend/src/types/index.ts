@@ -984,7 +984,20 @@ export type KnowledgeSearchGroup = {
   terms: string[];
 };
 
+export type KnowledgeDataSource = "legacy" | "extracted_literature";
+
+export type LiteratureFilters = {
+  year_from?: number;
+  year_to?: number;
+  has_properties?: boolean;
+  has_processes?: boolean;
+  has_original?: boolean;
+};
+
 export type KnowledgeSearchRequest = {
+  data_source?: KnowledgeDataSource;
+  generation_id?: string;
+  filters?: LiteratureFilters;
   recording_id?: string;
   query: string;
   top_k: number;
@@ -995,6 +1008,8 @@ export type KnowledgeSearchRequest = {
 };
 
 export type KnowledgeDocumentResult = {
+  data_source?: "legacy";
+  document_uid?: string;
   knowledge_id: number;
   source_file: string;
   source_row_number: number;
@@ -1017,9 +1032,151 @@ export type KnowledgeDocumentResult = {
   matched_fields: string[];
 };
 
+export type LiteratureDocumentResult = {
+  data_source: "extracted_literature";
+  knowledge_id: null;
+  document_uid: string;
+  generation_id: string;
+  snapshot_uid: string;
+  title: string;
+  title_en?: string | null;
+  title_zh?: string | null;
+  authors: string[];
+  journal: string | null;
+  year: number | null;
+  doi: string | null;
+  keywords: string[];
+  abstract: string;
+  abstract_snippet: string;
+  capabilities: Record<string, boolean>;
+  counts: Record<string, number>;
+  matched_terms: string[];
+  matched_fields: string[];
+};
+
+export type KnowledgeSearchResult = KnowledgeDocumentResult | LiteratureDocumentResult;
+
+export type KnowledgeSourcesResponse = {
+  sources: Array<{
+    data_source: KnowledgeDataSource;
+    enabled: boolean;
+    ready: boolean;
+    total: number;
+    generation_id?: string | null;
+    reason?: string | null;
+  }>;
+};
+
+export type LiteratureEvidence = {
+  quote?: string | null;
+  block_id?: string | number | null;
+  md_range?: unknown;
+};
+
+export type LiteratureProperty = {
+  entry_uid: string;
+  name: string | null;
+  abbreviation?: string | null;
+  category?: string | null;
+  value: { single_value?: unknown; min?: unknown; max?: unknown; unit?: string | null; uncertainty?: unknown; raw?: unknown } | null;
+  conditions: unknown;
+  evidence: LiteratureEvidence[];
+  origin?: unknown;
+};
+
+export type LiteratureProcess = {
+  entry_uid: string;
+  product_name: string | null;
+  mass?: unknown;
+  yield_percent?: unknown;
+  materials: Array<{
+    entry_uid: string;
+    name: string | null;
+    type?: string | null;
+    role?: string | null;
+    smiles?: string | null;
+    cas_number?: string | null;
+    formula?: string | null;
+    amounts: Array<{ kind?: string | null; value: unknown }>;
+    evidence: LiteratureEvidence[];
+    origin?: unknown;
+  }>;
+  conditions: unknown;
+  post_treatment: unknown;
+  evidence: LiteratureEvidence[];
+  origin?: unknown;
+};
+
+export type LiteratureSample = {
+  sample_uid: string;
+  name: string | null;
+  identity_code: string | null;
+  category?: string | null;
+  form?: string | null;
+  properties: LiteratureProperty[];
+  processes: LiteratureProcess[];
+  characterization: unknown;
+  evidence: LiteratureEvidence[];
+  origin?: unknown;
+};
+
+export type LiteratureAsset = {
+  asset_uid: string;
+  role?: string;
+  kind?: string;
+  name?: string;
+  filename?: string;
+  file_name?: string;
+  content_type?: string;
+  media_type?: string;
+  size_bytes?: number | null;
+  file_size?: number | null;
+  status?: string;
+  available?: boolean;
+  exact_input_verified?: boolean;
+};
+
+export type LiteratureDetailResponse = {
+  document: Pick<LiteratureDocumentResult, "document_uid" | "title" | "doi" | "authors" | "journal" | "year" | "keywords" | "abstract">;
+  generation_id: string;
+  snapshot_uid: string;
+  extraction: {
+    source_paper_id: string;
+    source_extract_id: string;
+    source_extract_created_at?: string | null;
+    model_version?: string | null;
+    normalizer_version?: string | null;
+    content_sha256?: string | null;
+  };
+  samples: LiteratureSample[];
+  quality_flags: string[];
+  assets: LiteratureAsset[];
+  capabilities: Record<string, boolean>;
+};
+
+export type LiteratureFullTextBlock = {
+  block_id?: string | number;
+  idx?: string | number;
+  type: string;
+  text?: string;
+  heading?: string | null;
+  parts?: Array<{ type: "text"; text: string } | { type: "table"; rows: string[][] }>;
+  meta?: { heading_title?: string; under_heading?: string; heading_level?: number };
+  table?: { headers?: string[]; rows?: string[][] };
+};
+
+export type LiteratureFullTextResponse = {
+  generation_id?: string;
+  snapshot_uid?: string;
+  blocks: LiteratureFullTextBlock[];
+  next_cursor: string | null;
+  exact_input_verified?: boolean;
+};
+
 export type KnowledgeSearchResponse = {
-  // Only the isolated POC backend returns a snapshot ID for observations.
   search_id?: string;
+  data_source?: KnowledgeDataSource;
+  generation_id?: string | null;
   query: string;
   groups: KnowledgeSearchGroup[];
   terms: string[];
@@ -1027,7 +1184,7 @@ export type KnowledgeSearchResponse = {
   page_size: number;
   query_time_ms: number;
   total: number;
-  results: KnowledgeDocumentResult[];
+  results: KnowledgeSearchResult[];
 };
 
 export type KnowledgeNavigationRequest = {
@@ -1039,8 +1196,11 @@ export type KnowledgeNavigationRequest = {
 export type KnowledgeObservationRequest = {
   recording_id?: string;
   search_id: string;
-  knowledge_id: number;
-  source: "result_card" | "drawer_reopen" | "reaction_tab";
+  knowledge_id?: number;
+  document_uid?: string;
+  generation_id?: string;
+  snapshot_uid?: string;
+  source: "result_card" | "drawer_reopen" | "reaction_tab" | "literature_detail" | "extracted_tab" | "fulltext_tab";
 };
 
 export type KnowledgeRecordingEvent = {
@@ -1061,7 +1221,7 @@ export type KnowledgeRecordingEvent = {
   page?: number;
   total?: number;
   status_code?: number;
-  article?: KnowledgeDocumentResult;
+  article?: KnowledgeSearchResult;
 };
 
 export type KnowledgeRecording = {

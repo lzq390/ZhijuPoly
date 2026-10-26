@@ -27,7 +27,11 @@ import {
   runMdDemo,
   calculateMdDemoAtomDistance,
   runMonomerPolymerization,
-  searchPropertyFilterRecords
+  searchPropertyFilterRecords,
+  fetchKnowledgeSources,
+  fetchLiteratureDetail,
+  fetchLiteratureFullText,
+  literatureAssetUrl
 } from "./api";
 
 describe("structure workbench request contracts", () => {
@@ -806,5 +810,30 @@ describe("job polling errors", () => {
       status: 410,
       message: "Job expired"
     });
+  });
+});
+
+describe("literature snapshot request contracts", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("encodes document and snapshot identities and forwards cancellation", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    await fetchKnowledgeSources(controller.signal);
+    await fetchLiteratureDetail("doc/one", "gen a", "snap&1", controller.signal);
+    await fetchLiteratureFullText("doc/one", "gen a", "snap&1", "100", controller.signal);
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/v1/knowledge/sources",
+      "/api/v1/knowledge/literature/doc%2Fone?generation_id=gen+a&snapshot_uid=snap%261",
+      "/api/v1/knowledge/literature/doc%2Fone/fulltext?generation_id=gen+a&snapshot_uid=snap%261&limit=100&cursor=100"
+    ]);
+    expect(fetchMock.mock.calls.every((call) => call[1].signal instanceof AbortSignal)).toBe(true);
+    expect(literatureAssetUrl("doc/one", "gen a", "snap&1", "file/one", true)).toBe("/api/v1/knowledge/literature/doc%2Fone/files/file%2Fone/content?generation_id=gen+a&snapshot_uid=snap%261&session_context=test-session&download=true");
+  });
+
+  it("preserves actionable status and structured backend error messages", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: { code: "generation_expired", message: "该文献快照已更新", retryable: false } }), { status: 410, headers: { "Content-Type": "application/json" } })));
+    await expect(fetchLiteratureDetail("doc", "old-gen", "snap")).rejects.toMatchObject({ status: 410, message: "该文献快照已更新" });
   });
 });

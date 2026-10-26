@@ -232,6 +232,46 @@
           "checksum": "23f950f17126af7f73495938da41544585186e13dc44e060cfecf90bad207f23"
         }
       ]
+    },
+    {
+      "version": "0023_polymer_md_jobs",
+      "kind": "expand",
+      "epoch": 8,
+      "checksum": "e73e00e16b8fc3c72e3716dae523d02d264a3e2e6989671f6019aca3440a1379",
+      "requires_contracts": [
+        {
+          "version": "0012_drop_polytao_jobs",
+          "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+        },
+        {
+          "version": "0018_user_isolation_cutover",
+          "checksum": "0755d9d802eba5fd69225a34f61bc01828b32a63f815802d2905636809c573f2"
+        },
+        {
+          "version": "0019_service_auth_least_privilege",
+          "checksum": "23f950f17126af7f73495938da41544585186e13dc44e060cfecf90bad207f23"
+        }
+      ]
+    },
+    {
+      "version": "0024_literature_projection",
+      "kind": "expand",
+      "epoch": 9,
+      "checksum": "2a5681e4b5000ed9cbf6ec88e1d8d7e6c6c5d0faf82270e802a3a9abb2060cf3",
+      "requires_contracts": [
+        {
+          "version": "0012_drop_polytao_jobs",
+          "checksum": "c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728"
+        },
+        {
+          "version": "0018_user_isolation_cutover",
+          "checksum": "0755d9d802eba5fd69225a34f61bc01828b32a63f815802d2905636809c573f2"
+        },
+        {
+          "version": "0019_service_auth_least_privilege",
+          "checksum": "23f950f17126af7f73495938da41544585186e13dc44e060cfecf90bad207f23"
+        }
+      ]
     }
   ]
 }

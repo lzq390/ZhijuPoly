@@ -22,6 +22,7 @@ MONOMER_DFT_ACTIVE_STATUSES = (
     "running",
     "cancel_requested",
 )
+POLYMER_MD_ACTIVE_STATUSES = ("pending", "queued", "running", "cancel_requested")
 FULL_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -209,6 +210,23 @@ def count_active_postgres_jobs(connection: Any) -> ActiveJobSummary:
             "SELECT count(*) AS count FROM polymerization_batch.jobs WHERE execution_token IS NOT NULL"
         ).fetchone()["count"])
         version = 3
+    polymer = connection.execute("""SELECT to_regnamespace('polymer_md') IS NOT NULL
+        OR EXISTS(SELECT FROM governance.schema_migrations WHERE version='0023_polymer_md_jobs') AS present""").fetchone()
+    if polymer["present"]:
+        # Partial optional installations must block deployment, not disappear
+        # from the activity inventory. Historical 0019 databases stay valid.
+        from .polymer_md_schema import validate_polymer_md_schema
+        validate_polymer_md_schema(connection)
+        if version != 3:
+            raise RuntimeError("polymer MD deployment schema requires the preceding job schemas")
+        # Close new submissions first and let the accepted FIFO drain normally.
+        # Do not freeze dispatch while counting queued jobs: that cannot drain.
+        # A terminal label alone never proves the process tree has exited.
+        counts["polymer_md"] = int(connection.execute("""SELECT count(*) AS count
+            FROM polymer_md.jobs j WHERE status = ANY(%s) OR cleanup_confirmed IS NOT TRUE
+              OR EXISTS(SELECT FROM polymer_md.stage_runs s WHERE s.job_id=j.job_id AND s.status='running')""",
+            (list(POLYMER_MD_ACTIVE_STATUSES),)).fetchone()["count"])
+        version = 4
     return ActiveJobSummary(counts=counts, active_jobs_schema_version=version)
 
 

@@ -63,6 +63,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY backend /app/backend
 COPY gpu_resource /app/gpu_resource
 COPY task_usage /app/task_usage
+COPY polymer_md /app/polymer_md
 RUN mkdir -p /app/model \
     && (getent group 1001 >/dev/null || groupadd --gid 1001 nexpoly) \
     && (getent passwd 1001 >/dev/null || useradd --uid 1001 --gid 1001 --create-home nexpoly) \

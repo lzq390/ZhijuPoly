@@ -7,7 +7,14 @@ import tarfile
 import tempfile
 
 ASSET_TABLES = {'batch_imports':'polymerization_batch.imports','batch_jobs':'polymerization_batch.jobs',
-                'md':'md.monomer_md_jobs','dft':'monomer_dft.jobs'}
+                'md':'md.monomer_md_jobs','dft':'monomer_dft.jobs','polymer_md':'polymer_md.jobs'}
+
+
+def asset_backup_rows(backup_state: dict, table: str):
+    """Only the optional polymer table may be absent from legacy seals."""
+    if table == 'polymer_md.jobs' and table not in backup_state:
+        return 0
+    return backup_state[table]['rows']
 
 
 def file_sha256(path: Path):
@@ -35,7 +42,7 @@ def asset_snapshot(root: Path):
 def archive_assets(roots: dict[str,Path],directory: Path,backup_state: dict):
     if any(directory.resolve().is_relative_to(root.resolve()) for root in roots.values()):
         raise ValueError('Backup output must be outside every source asset directory')
-    missing = [name for name,table in ASSET_TABLES.items() if backup_state[table]['rows'] and name not in roots]
+    missing = [name for name,table in ASSET_TABLES.items() if asset_backup_rows(backup_state,table) and name not in roots]
     if missing:
         raise ValueError('Explicit asset roots are required for existing resources: '+','.join(missing))
     result = {}

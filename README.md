@@ -4,6 +4,8 @@ NexPoly 是面向聚合物研发的内部 Web 平台，覆盖结构处理、数�
 
 本文档是仓库级内部开发入口，会同时出现在 dev 与 prod 工作区。README 的存在不代表当前环境是 dev；执行任何命令前，必须根据 Compose 项目名、使用的配置文件和 `docker compose config` 解析结果确认操作对象。部署、数据库迁移和 Worker 的操作细节以文末专项文档及代码清单为准。
 
+已提取文献的本地索引、同步工具、兼容迁移与回滚说明见 [知识检索文献接入](docs/knowledge-literature.md)。新来源默认关闭。
+
 ## 当前架构
 
 ```text

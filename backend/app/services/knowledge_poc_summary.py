@@ -39,20 +39,27 @@ def build_summary_evidence(events: list[dict]) -> dict:
     for event in events:
         item = {key: event[key] for key in
                 ("sequence", "time", "event", "query", "page", "page_size", "total", "status_code", "source", "knowledge_id", "groups",
+                 "data_source", "document_uid", "generation_id", "snapshot_uid",
                  "filters", "matched_records", "filter_index", "smiles_field")
                 if key in event}
         kind = event["event"]
         if kind in ("search.completed", "search.failed"):
             counts[kind.replace(".", "_")] += 1
         elif kind in ("article.opened", "article.reaction_viewed"):
-            counts[event["source"]] += 1
+            counts[event["source"]] = counts.get(event["source"], 0) + 1
             article = event["article"]
-            key = (event["search_id"], article["knowledge_id"])
+            literature = article.get("data_source") == "extracted_literature"
+            identity = article["document_uid"] if literature else article["knowledge_id"]
+            key = (event["search_id"], identity, article.get("snapshot_uid") if literature else None)
             if key not in articles:
-                articles[key] = {"article_ref": f"{key[0]}:{key[1]}", "citation": f"[文献 #{key[1]}]",
-                                 **{field: article.get(field) for field in ("knowledge_id", "title_en", "title_zh", "abstract")},
+                ref = f"{key[0]}:{key[1]}" + (f":{key[2]}" if literature else "")
+                fields = ("data_source", "document_uid", "generation_id", "snapshot_uid", "title", "title_en", "title_zh",
+                          "authors", "journal", "year", "doi", "abstract") if literature else ("knowledge_id", "title_en", "title_zh", "abstract")
+                citation = f"[文献 DOI:{article['doi']}]" if literature and article.get("doi") else f"[文献 #{key[1]}]"
+                articles[key] = {"article_ref": ref, "citation": citation,
+                                 **{field: article.get(field) for field in fields},
                                  "reaction_info": None}
-            if kind == "article.reaction_viewed":
+            if kind == "article.reaction_viewed" and not literature:
                 articles[key]["reaction_info"] = event["reaction_info"]
             item["article_ref"] = articles[key]["article_ref"]
         elif kind in ("property_filter.measurements_viewed", "property_filter.smiles_viewed"):
@@ -74,7 +81,8 @@ def build_summary_evidence(events: list[dict]) -> dict:
         timeline.append(item)
     counts["unique_articles"] = len({key[1] for key in articles})
     return {"counts": counts, "events": timeline,
-            "articles": sorted(articles.values(), key=lambda article: article["knowledge_id"]),
+            "articles": sorted(articles.values(), key=lambda article: (1, str(article["document_uid"]))
+                               if article.get("document_uid") else (0, article["knowledge_id"])),
             "materials": list(materials.values())}
 
 

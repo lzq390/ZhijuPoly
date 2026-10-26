@@ -70,6 +70,32 @@ afterEach(() => {
 });
 
 describe("MD trajectory selection", () => {
+  it("labels the selected formal stage, frame and distance boundary condition while retaining demo defaults", () => {
+    const props = {
+      points,
+      timePs: 5,
+      selections: [null, null] as MdAtomSelectionSlots,
+      distance: null,
+      distanceLoading: false,
+      distanceError: null,
+      onSelectionChange: vi.fn(),
+      onCalculate: vi.fn(),
+      onClear: vi.fn(),
+    };
+    const view = render(<MdTrajectoryExplorer {...props} />);
+    expect(screen.getByRole("heading", { name: "最终帧原子分布" })).toBeTruthy();
+    expect(screen.getByText("EQ3 · 3 个原子 · 5.00 ps")).toBeTruthy();
+    expect(screen.getByText("距离 PBC 已启用")).toBeTruthy();
+
+    view.rerender(<MdTrajectoryExplorer {...props} stageLabel="RNEMD 热导率" frameLabel="第 2 帧" distanceUsePbc={false} />);
+    expect(screen.getByRole("heading", { name: "第 2 帧原子分布" })).toBeTruthy();
+    expect(screen.getByText("RNEMD 热导率 · 3 个原子 · 5.00 ps")).toBeTruthy();
+    expect(screen.getByText("距离 PBC 已关闭")).toBeTruthy();
+    expect(screen.queryByText("距离 PBC 已启用")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "最终帧原子分布" })).toBeNull();
+    expect(screen.queryByText(/EQ3/)).toBeNull();
+  });
+
   it("keeps two unique atoms and replaces the oldest selection with a third atom", () => {
     const [first, second, third] = selections as MdDemoAtomSelection[];
     expect(nextMdAtomSelection([null, null], first)).toEqual([first, null]);

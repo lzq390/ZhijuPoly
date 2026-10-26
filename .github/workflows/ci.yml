@@ -158,7 +158,8 @@ jobs:
               ! -name 'test_monomer_md_worker_launcher.py' \
               ! -name 'test_user_isolation_release_contract.py' \
               ! -name 'test_monomer_usage_hooks.py' \
-              ! -name 'test_worker_slot_runtime.py' -print | sort
+              ! -name 'test_worker_slot_runtime.py' \
+              ! -name 'test_polymer_md_acceptance_registry_cli.py' -print | sort
           )
           python3 -m unittest -v "${unittest_files[@]}"
 
@@ -340,6 +341,23 @@ jobs:
           if [[ "$SHARD" == "0" ]]; then
             python -m pytest scripts/tests/test_user_isolation_release_contract.py scripts/tests/test_monomer_usage_hooks.py --assert=plain --tb=short
           fi
+
+      - name: Run polymer MD offline Worker and registry tests
+        if: matrix.shard == 0
+        run: |
+          offline_home="$(mktemp -d "$RUNNER_TEMP/polymer-md-offline.XXXXXX")"
+          env -i \
+            PATH="$PATH" HOME="$offline_home" TMPDIR="$offline_home" \
+            PYTHONPATH="$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/backend" \
+            PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+            CUDA_VISIBLE_DEVICES= NVIDIA_VISIBLE_DEVICES=void \
+            AWS_EC2_METADATA_DISABLED=true OMP_NUM_THREADS=1 \
+            OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+            python -m pytest --assert=plain --tb=short -p no:cacheprovider -p anyio.pytest_plugin \
+              workers/polymer_md_worker/tests \
+              scripts/tests/test_polymer_md_acceptance_registry_cli.py \
+              --deselect=workers/polymer_md_worker/tests/test_process_control.py::test_real_scope_contains_and_kills_detached_descendants \
+              --deselect=workers/polymer_md_worker/tests/test_manager.py::test_real_scope_execution_gate_requires_durable_scope_membership
 
   frontend:
     name: Frontend Vitest and build
