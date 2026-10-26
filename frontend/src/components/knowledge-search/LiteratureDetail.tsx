@@ -109,16 +109,21 @@ export function LiteratureDetail({ record, open, sizing, onClose, onOpen, onObse
   const [cursor, setCursor] = useState<string | null>(null);
   const [exactInputVerified, setExactInputVerified] = useState(false);
   const [pendingBlockId, setPendingBlockId] = useState<string | null>(null);
+  const completedDetailKey = useRef<string | null>(null);
+  const fulltextFirstPageCompleted = useRef(false);
   const fulltextAbort = useRef<AbortController | null>(null);
   const blockRefs = useRef(new Map<string, HTMLDivElement>());
 
   useEffect(() => {
+    const key = JSON.stringify([record.document_uid, record.generation_id, record.snapshot_uid, retry]);
+    if (!open || completedDetailKey.current === key) return;
     const controller = new AbortController();
     setLoading(true);
     setError(null);
     void fetchLiteratureDetail(record.document_uid, record.generation_id, record.snapshot_uid, controller.signal)
       .then((data) => {
         if (controller.signal.aborted) return;
+        completedDetailKey.current = key;
         setDetail(data);
         setSampleUid(data.samples[0]?.sample_uid ?? null);
       })
@@ -127,11 +132,22 @@ export function LiteratureDetail({ record, open, sizing, onClose, onOpen, onObse
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [record.document_uid, record.generation_id, record.snapshot_uid, retry]);
+  }, [open, record.document_uid, record.generation_id, record.snapshot_uid, retry]);
 
   useEffect(() => () => fulltextAbort.current?.abort(), []);
 
+  useEffect(() => {
+    if (open) return;
+    fulltextAbort.current?.abort();
+    fulltextAbort.current = null;
+    setFulltextLoading(false);
+    // A completed empty page is cached too. Only an unfinished first page
+    // resumes automatically; later pages retain their cursor for explicit load.
+    if (!fulltextFirstPageCompleted.current) setFulltextStarted(false);
+  }, [open]);
+
   async function loadFulltext(nextCursor?: string) {
+    if (!open) return;
     fulltextAbort.current?.abort();
     const controller = new AbortController();
     fulltextAbort.current = controller;
@@ -141,6 +157,7 @@ export function LiteratureDetail({ record, open, sizing, onClose, onOpen, onObse
     try {
       const data = await fetchLiteratureFullText(record.document_uid, record.generation_id, record.snapshot_uid, nextCursor, controller.signal);
       if (controller.signal.aborted) return;
+      if (nextCursor === undefined) fulltextFirstPageCompleted.current = true;
       setBlocks((previous) => nextCursor ? [...previous, ...data.blocks] : data.blocks);
       setCursor(data.next_cursor);
       setExactInputVerified(data.exact_input_verified === true);
@@ -148,14 +165,15 @@ export function LiteratureDetail({ record, open, sizing, onClose, onOpen, onObse
       if (!controller.signal.aborted) setFulltextError(failure instanceof Error ? failure.message : "全文暂不可用。");
     } finally {
       if (!controller.signal.aborted) setFulltextLoading(false);
+      if (fulltextAbort.current === controller) fulltextAbort.current = null;
     }
   }
 
   useEffect(() => {
-    if (activeTab === "source" && detail?.capabilities.has_fulltext && !fulltextStarted) void loadFulltext();
+    if (open && activeTab === "source" && detail?.capabilities.has_fulltext && !fulltextStarted) void loadFulltext();
     // Full text starts only after the user enters this tab; subsequent pages are explicit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, detail, fulltextStarted]);
+  }, [open, activeTab, detail, fulltextStarted]);
 
   useEffect(() => {
     if (activeTab !== "source" || !pendingBlockId || !exactInputVerified) return;
