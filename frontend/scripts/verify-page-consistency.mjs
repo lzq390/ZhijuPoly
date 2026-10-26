@@ -39,7 +39,7 @@ async function geometry(page, title, viewport, state) {
     const header = h1.parentElement.getBoundingClientRect();
     const body = root.querySelector(".np-module-page-body").getBoundingClientRect();
     const rootStyle = getComputedStyle(root);
-    const surfaces = [...root.querySelectorAll('.np-sw-canvas-stage, .np-md-workbench-surface, .np-mp-surface, .np-batch-surface, .np-mmd-workbench-surface, .np-dft-workbench-surface, .dbf-filter-surface, .dba-analysis-surface, .ks-search-surface, .polytao-generation-surface, .ht-workbench-board')]
+    const surfaces = [...root.querySelectorAll('.np-sw-canvas-stage, .np-md-workbench-surface, .np-pmd-workbench-surface, .np-mp-surface, .np-batch-surface, .np-mmd-workbench-surface, .np-dft-workbench-surface, .dbf-filter-surface, .dba-analysis-surface, .ks-search-surface, .polytao-generation-surface, .ht-workbench-board')]
       .filter(visible).map(e => ({ radius: parseFloat(getComputedStyle(e).borderTopLeftRadius), shadow: getComputedStyle(e).boxShadow, background: getComputedStyle(e).backgroundColor }));
     const entries = [...document.querySelectorAll('[data-recording-entry]')].filter(visible);
     const entry = entries[0];
@@ -207,6 +207,7 @@ async function taskStatusThemes(page, path, title, viewport) {
 
 async function tabs(page, selector, title, viewport) {
   const count = await page.locator(`${selector} [role="tab"]:visible`).count();
+  assert.ok(count > 0, `${title}: expected workspace tabs are missing`);
   for (let i = 0; i < count; i++) {
     const tab = page.locator(`${selector} [role="tab"]:visible`).nth(i);
     if (await tab.isDisabled()) continue;
@@ -216,7 +217,16 @@ async function tabs(page, selector, title, viewport) {
 }
 
 async function serviceFailure(page, path, selector, title, viewport) {
-  const failure = route => route.fulfill({ status: 503, json: { detail: "Local UI state fixture" } });
+  const failure = route => {
+    // Keep this a service-error test: authentication is an independent fixture,
+    // while every tested service request still fails without reaching a server.
+    if (new URL(route.request().url()).pathname === "/api/v1/auth/session") {
+      return route.fulfill({ json: { authenticated: true,
+        user: { id: "10000000-0000-0000-0000-000000000001", username: "Synthetic UI", must_change_password: false },
+        session_id: "synthetic-page-session", csrf_token: "synthetic-page-csrf", capabilities: {} } });
+    }
+    return route.fulfill({ status: 503, json: { detail: "Local UI state fixture" } });
+  };
   await page.route("**/api/**", failure);
   try {
     await page.goto(`${base}${path}?mode=single`, { waitUntil: "domcontentloaded" });
@@ -311,9 +321,9 @@ try {
         }
         if ([1920,2560,390].includes(width)) {
           if (path === "/knowledge") await knowledgeModes(page, viewport);
-          const selectors = { "/monomer-md-simulation": ".np-mmd-main-tabs", "/monomer-dft": ".np-dft-main-tabs", "/md-simulation": ".np-md-workspace-tabs" };
+          const selectors = { "/monomer-md-simulation": ".np-mmd-main-tabs", "/monomer-dft": ".np-dft-main-tabs", "/md-simulation": ".np-pmd-main-tabs" };
           if (selectors[path]) await tabs(page, selectors[path], title, viewport);
-          const services = { "/monomer-polymerization": ".np-mp-service-status", "/md-simulation": ".np-md-service-status", "/monomer-md-simulation": ".np-mmd-service-status", "/monomer-dft": ".np-dft-service-status" };
+          const services = { "/monomer-polymerization": ".np-mp-service-status", "/md-simulation": ".np-pmd-service-status", "/monomer-md-simulation": ".np-mmd-service-status", "/monomer-dft": ".np-dft-service-status" };
           if (services[path]) await serviceFailure(page, path, services[path], title, viewport);
           if (["/monomer-md-simulation", "/monomer-dft"].includes(path)) await taskStatusThemes(page, path, title, viewport);
           if (path === "/database") for (const dataset of ["process","property","structure-effect","dft","formulation"]) {

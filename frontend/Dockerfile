@@ -15,6 +15,7 @@ RUN npm ci
 
 COPY contracts/monomer_dft_api_contract_v1.json /app/contracts/monomer_dft_api_contract_v1.json
 COPY backend/tests/fixtures/monomer_dft_scientific_result_v1_legacy.json /app/backend/tests/fixtures/monomer_dft_scientific_result_v1_legacy.json
+COPY polymer_md/capability_catalog.json polymer_md/user_configuration.json /app/polymer_md/
 COPY frontend ./
 RUN npm run build
 

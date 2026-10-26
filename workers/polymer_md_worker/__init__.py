@@ -1,0 +1,1 @@
+"""Independent CPU RadonPy worker."""

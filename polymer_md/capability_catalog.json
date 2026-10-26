@@ -1,0 +1,1425 @@
+{
+  "catalog_version": 1,
+  "source_sha": "8834b9071ae93d9af36558a3c24545dd52e5ba1a",
+  "description": "connected 仅表示已接入当前开发协议，不代表材料科学验收通过。property_groups说明历史请求的结果字段（含诊断及平台派生量），不是新原生配置的可选性质白名单；新请求选择以user_configuration_spec v2和native_configuration_schema为准。upstream_only、experimental为上游参考，fixed为服务端只读协议。完整PE/PEO与时长、尺寸敏感性基准仍待完成及人工判读。",
+  "native_selection_authority": "user_configuration_spec.fields / native_configuration_schema",
+  "forcefields": [
+    {
+      "id": "GAFF2_mod",
+      "label": "GAFF2_mod",
+      "status": "connected",
+      "description": "上游 radonpy/ff/gaff2_mod.py 的 GAFF2 扩展，增加含氟碳等类型；是当前默认力场。请求可显式选择五种原生聚合物力场，化学类型覆盖和科学质量仍须逐任务核对。",
+      "requirements": [
+        "RDKit",
+        "LAMMPS",
+        "Psi4 与 RESP"
+      ]
+    },
+    {
+      "id": "GAFF",
+      "label": "GAFF",
+      "status": "connected",
+      "description": "上游 radonpy/ff/gaff.py 的通用有机分子全原子力场；请求显式选择后按该参数库建模，不能沿用其他力场的材料验收结论。",
+      "requirements": [
+        "RDKit 原子类型分配",
+        "独立电荷模型",
+        "LAMMPS；重新验证参数覆盖与目标体系"
+      ]
+    },
+    {
+      "id": "GAFF2",
+      "label": "GAFF2",
+      "status": "connected",
+      "description": "上游 radonpy/ff/gaff2.py 的 GAFF 更新参数体系；请求显式选择后记录实际力场与电荷配置。",
+      "requirements": [
+        "RDKit",
+        "独立电荷模型",
+        "LAMMPS；重新验证目标体系"
+      ]
+    },
+    {
+      "id": "Dreiding",
+      "label": "Dreiding",
+      "status": "connected",
+      "description": "上游 radonpy/ff/dreiding.py 的通用力场；请求显式选择后使用对应键角、二面角和反演势，目标化学环境须有参数覆盖。",
+      "requirements": [
+        "RDKit 类型分配",
+        "明确的电荷模型",
+        "LAMMPS 对应键角/二面角/反演势支持"
+      ]
+    },
+    {
+      "id": "Dreiding_UT",
+      "label": "Dreiding_UT",
+      "status": "connected",
+      "description": "上游 radonpy/ff/dreiding.py 的 Dreiding_UT 类及 dreiding_ut.json；LJ 参数重新拟合以配合 RESP 电荷。平台保存请求的实际电荷配置，选择其他电荷不等于该参数化已获科学验证。",
+      "requirements": [
+        "RDKit",
+        "dreiding_ut 参数库与 RESP 电荷",
+        "与该参数库匹配的 LAMMPS 势函数"
+      ]
+    },
+    {
+      "id": "AMBER",
+      "label": "AMBER ff19SB（蛋白质）",
+      "status": "upstream_only",
+      "description": "上游 radonpy/ff/amber.py 调用 LEaP_FF_LAMMPS 并固定加载 leaprc.protein.ff19SB，面向蛋白质残基；不是任意聚合物可直接替换的力场。",
+      "requirements": [
+        "AmberTools tleap",
+        "符合模板的残基/原子命名",
+        "ff19SB 数据及 LAMMPS 对应 bonded/CMAP 支持"
+      ]
+    },
+    {
+      "id": "GLYCAM_06j",
+      "label": "GLYCAM 06j（糖类）",
+      "status": "upstream_only",
+      "description": "上游 radonpy/ff/glycam.py 通过 tleap 加载 leaprc.GLYCAM_06j-1；面向糖类残基，当前单一线性均聚物协议未适配。",
+      "requirements": [
+        "AmberTools tleap",
+        "GLYCAM_06j 数据",
+        "匹配糖类残基命名及拓扑转换"
+      ]
+    },
+    {
+      "id": "TIP3P",
+      "label": "TIP3P（水）",
+      "status": "upstream_only",
+      "description": "上游 radonpy/ff/tip.py 的三点水模型；供含水/溶液体系专门建模，不能作为聚合物链的力场选择。",
+      "requirements": [
+        "水分子专用拓扑/电荷",
+        "LAMMPS 刚性约束",
+        "聚合物-水交叉相互作用及混合体系验收"
+      ]
+    },
+    {
+      "id": "TIP4P",
+      "label": "TIP4P（水）",
+      "status": "upstream_only",
+      "description": "上游 radonpy/ff/tip.py 的四点水模型；需专门的虚拟位点、约束与求解器配置，当前未接入。",
+      "requirements": [
+        "四点水拓扑/虚拟电荷位点",
+        "匹配的 LAMMPS 水模型与长程静电实现",
+        "混合体系验证"
+      ]
+    },
+    {
+      "id": "TIP5P",
+      "label": "TIP5P（水）",
+      "status": "upstream_only",
+      "description": "上游 radonpy/ff/tip.py 的五点水模型；含额外虚拟位点，不能直接套用当前全原子聚合物协议。",
+      "requirements": [
+        "五点水拓扑/虚拟位点",
+        "匹配约束与积分配置",
+        "混合体系验证"
+      ]
+    }
+  ],
+  "calculations": [
+    {
+      "id": "basic",
+      "label": "基础物性",
+      "status": "connected",
+      "description": "QM→建模→EQ1/EQ2/EQ3→基础分析，必要时追加平衡。数值可用性由各性质质量门决定。",
+      "property_groups": [
+        "basic",
+        "thermodynamic",
+        "structure",
+        "dielectric",
+        "diagnostic"
+      ]
+    },
+    {
+      "id": "basic_tc",
+      "label": "基础物性与 RNEMD 热导率",
+      "status": "connected",
+      "description": "基础平衡和取向门通过后执行单方向 Müller–Plathe 总热导率；固定不分解热流。",
+      "property_groups": [
+        "basic",
+        "thermodynamic",
+        "structure",
+        "dielectric",
+        "diagnostic",
+        "thermal"
+      ]
+    },
+    {
+      "id": "tg",
+      "label": "玻璃化转变温度 Tg",
+      "status": "connected",
+      "description": "已接入受控EQMD.step_wise分段降温与修正统计/拟合：800→100K、每10K间隔20ps（10ps恒温+10ps降温），高温平衡0.5ns；从合格平衡态副本运行，保留各温度平台及转变窗口/误差证据，失败不外推。通过native_configuration.properties中的tg选择，主calculation仍为basic/basic_tc。连续/淬火分析和追加占位分支不接入。",
+      "requirements": [
+        "先平衡高温态",
+        "明确降温温区、interval_temp与每个平台步数（非K/ns）",
+        "独立种子、双线拟合不确定度与速率敏感性"
+      ],
+      "selection": {
+        "field": "native_configuration.properties",
+        "properties": [
+          "tg"
+        ],
+        "calculations": [
+          "basic",
+          "basic_tc"
+        ]
+      }
+    },
+    {
+      "id": "solubility_parameter",
+      "label": "溶解度参数/内聚能",
+      "status": "connected",
+      "description": "已接入SPMD.rerun的分子group/group总相互作用能路径与修正物理时间窗口；输出sp_total和sp_ced，至少2条链，0.5ns采样、丢弃0.1ns、1ps输出。覆盖全部分子，只发布Hildebrand总量与CED；不依赖TALLY，不输出vdW/静电分解，不代表任意溶剂的溶解度。通过native_configuration.properties选择，主calculation仍为basic/basic_tc。",
+      "requirements": [
+        "已平衡体系",
+        "分子组覆盖完整且分子数一致",
+        "统一体积、能量/单位与分析窗口"
+      ],
+      "selection": {
+        "field": "native_configuration.properties",
+        "properties": [
+          "sp_total",
+          "sp_ced"
+        ],
+        "calculations": [
+          "basic",
+          "basic_tc"
+        ]
+      }
+    },
+    {
+      "id": "dynamic_dielectric",
+      "label": "频率介电响应",
+      "status": "upstream_only",
+      "description": "上游 radonpy/sim/preset/ef_dp.py 施加交变电场并分析极化响应，可研究介电实部、损耗及相位。电场分支、频率列名精度等需修补；与当前固定电荷零场静态介电不同。",
+      "requirements": [
+        "频率/场强/极化采样协议",
+        "线性响应与稳态周期检查",
+        "入口分支修复及复介电单位验证"
+      ]
+    },
+    {
+      "id": "thermal_langevin",
+      "label": "Langevin 热浴非平衡热导",
+      "status": "upstream_only",
+      "description": "上游 radonpy/sim/preset/tc.py 的 NEMD_Langevin 与分析器：冷热浴能量交换和温度梯度。当前仅接入 MP/RNEMD，不能用本目录提交该方法。",
+      "requirements": [
+        "冷热浴区域及温度",
+        "足够长的稳态生产",
+        "双侧温度梯度与浴能量守恒检查"
+      ]
+    },
+    {
+      "id": "thermal_green_kubo",
+      "label": "Green–Kubo 平衡态热导",
+      "status": "upstream_only",
+      "description": "上游 radonpy/sim/preset/tc.py 的 EMD_GK：热流自相关积分。质心应力与长程静电兼容性、普通 Analyze 返回入口及积分收敛仍需核查，当前不可执行。",
+      "requirements": [
+        "正确的热流/应力实现",
+        "热流自相关采样与积分平台",
+        "独立重复与长程静电兼容性验证"
+      ]
+    },
+    {
+      "id": "thermal_decomposition",
+      "label": "热导/热流分解",
+      "status": "upstream_only",
+      "description": "上游 radonpy/sim/preset/tc.py 支持动能、势能、成键和非键热流分量分析；首期 decomp=False。上游 J 分量 SI 换算和体积归一存在已识别风险，不能发布为已验证性质。",
+      "requirements": [
+        "LAMMPS heat/flux 与应力实现",
+        "单位/体积归一修复",
+        "总量守恒及分量求和验证"
+      ]
+    },
+    {
+      "id": "elongation",
+      "label": "拉伸形变与应力响应",
+      "status": "upstream_only",
+      "description": "上游 radonpy/sim/preset/elong.py 的 Deformation/Deformation_Analysis：形变率、方向、应力和结构演化。尚未接入正式任务或通用弹性模量发布流程。",
+      "requirements": [
+        "已平衡初态",
+        "应变率、边界压力及热浴协议",
+        "应力符号/单位与线性区间核验"
+      ]
+    },
+    {
+      "id": "tensile_modulus_dev",
+      "label": "杨氏模量/泊松比（开发实验）",
+      "status": "experimental",
+      "description": "上游 radonpy/dev/sim/preset/tem.py 含 NEMD_tensile_modulus 与拟合分析；属于开发代码，不能因为存在类就视为科学可用或当前可提交。",
+      "requirements": [
+        "拉伸小应变窗口",
+        "弹性拟合、横向应变及误差验证",
+        "专门力学基准"
+      ]
+    },
+    {
+      "id": "tddft_optical_dispersion",
+      "label": "TDDFT/SOS 极化率与折射率色散",
+      "status": "upstream_only",
+      "description": "冻结源码 radonpy/sim/qm.py 的 polar_sos、polarizability_sos、refractive_index_sos、abbe_number_sos 及 sim/psi4_wrapper.py 的 tddft 已有实际实现。先计算单体/重复单元激发态与频率依赖电子极化率，再结合密度、分子量及组分比例按 Lorentz–Lorenz 估计 n(lambda)，可由486/589/656nm估计阿贝数。当前未接入独立任务或 property_record：单体电子响应不等于已验证体相光学性质，也不等于完整光谱材料验收。默认无波长分支、整数波长键、组分输入与近共振行为需适配核验。",
+      "requirements": [
+        "Psi4 TD-SCF及收敛的单体/重复单元几何、明确的TDDFT方法与基组",
+        "显式波长wavelength（nm）；激发态数n_state或优先比例p_state、TDA及迭代收敛检查",
+        "材料密度（g/cm3）、重复单元分子量；多组分时另需一致的ratio组分比例",
+        "SOS态数收敛、共振极点/展宽适用性、Lorentz–Lorenz有效域与材料光学基准"
+      ]
+    }
+  ],
+  "property_groups": [
+    {
+      "id": "basic",
+      "label": "基本物性",
+      "calculation": "basic",
+      "status": "connected",
+      "properties": [
+        {
+          "key": "density",
+          "label": "密度",
+          "unit": "g/cm3",
+          "status": "connected",
+          "description": "NPT 生产段均值及五区块标准误差；须满足生产样本、能量/密度/温度与构象质量门，数值有限不等于已平衡。",
+          "dependencies": [
+            "thermo.Density",
+            "平衡分析窗口"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "thermodynamic",
+      "label": "热力学响应",
+      "calculation": "basic",
+      "status": "connected",
+      "properties": [
+        {
+          "key": "Cp",
+          "label": "定压比热容",
+          "unit": "J/(kg K)",
+          "status": "connected",
+          "description": "NPT 焓涨落估计；要求正值、五区块误差及稳定采样，不含量子振动校正。",
+          "dependencies": [
+            "thermo.TotEng",
+            "thermo.Volume",
+            "thermo.Density",
+            "temperature_k",
+            "pressure_atm"
+          ]
+        },
+        {
+          "key": "Cv",
+          "label": "定容比热容",
+          "unit": "J/(kg K)",
+          "status": "connected",
+          "description": "由质量比热关系 Cv=Cp-T*alphaV²/(rho*betaT) 推导，rho采用SI质量密度；非正值或区块误差过大将不可用或警告。",
+          "dependencies": [
+            "Cp",
+            "volume_expansion",
+            "compressibility",
+            "density",
+            "temperature_k"
+          ]
+        },
+        {
+          "key": "compressibility",
+          "label": "等温压缩率",
+          "unit": "1/Pa",
+          "status": "connected",
+          "description": "NPT 体积涨落/(kB*T*平均体积)；长相关时间、非正值或区块不稳定均限制可用性。",
+          "dependencies": [
+            "thermo.Volume",
+            "temperature_k"
+          ]
+        },
+        {
+          "key": "isentropic_compressibility",
+          "label": "等熵压缩率",
+          "unit": "1/Pa",
+          "status": "connected",
+          "description": "betaS=betaT-T*alphaV²/(rho*Cp)，Cp为质量比热J/(kg K)，rho为SI质量密度；须满足依赖及正值判据，不能省略质量/密度归一。",
+          "dependencies": [
+            "compressibility",
+            "Cp",
+            "volume_expansion",
+            "density",
+            "temperature_k"
+          ]
+        },
+        {
+          "key": "bulk_modulus",
+          "label": "等温体积模量",
+          "unit": "Pa",
+          "status": "connected",
+          "description": "等温压缩率的倒数；不是拉伸杨氏模量。",
+          "dependencies": [
+            "compressibility"
+          ]
+        },
+        {
+          "key": "isentropic_bulk_modulus",
+          "label": "等熵体积模量",
+          "unit": "Pa",
+          "status": "connected",
+          "description": "等熵压缩率的倒数；依赖涨落与热容估计的质量。",
+          "dependencies": [
+            "isentropic_compressibility"
+          ]
+        },
+        {
+          "key": "volume_expansion",
+          "label": "体积热膨胀系数",
+          "unit": "1/K",
+          "status": "connected",
+          "description": "单温度 NPT 焓-体积协方差估计；不同于温扫密度斜率，符号可正可负，仍需区块收敛。",
+          "dependencies": [
+            "thermo.TotEng",
+            "thermo.Volume",
+            "temperature_k",
+            "pressure_atm"
+          ]
+        },
+        {
+          "key": "linear_expansion",
+          "label": "各向同性线性热膨胀系数",
+          "unit": "1/K",
+          "status": "connected",
+          "description": "体积热膨胀系数/3，仅采用各向同性近似。",
+          "dependencies": [
+            "volume_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "structure",
+      "label": "结构与动力学",
+      "calculation": "basic",
+      "status": "connected",
+      "properties": [
+        {
+          "key": "Rg",
+          "label": "回转半径",
+          "unit": "A",
+          "status": "connected",
+          "description": "按链质量加权回转半径与五区块标准误差；Rg的SE≤均值1%为构象平衡门，须正确展开周期坐标并覆盖充分采样。",
+          "dependencies": [
+            "trajectory.coordinates",
+            "trajectory.topology",
+            "分析时间窗"
+          ]
+        },
+        {
+          "key": "r2",
+          "label": "均方端基距离",
+          "unit": "nm2",
+          "status": "connected",
+          "description": "上游 TU0/TU1 端基标记的最近原子距离平方；使用 nm²，未改称 Å²。依赖有效端基标记和构象采样。",
+          "dependencies": [
+            "trajectory.coordinates",
+            "TU0/TU1 端基标记"
+          ]
+        },
+        {
+          "key": "nematic_order_parameter",
+          "label": "向列取向序参量",
+          "unit": "1",
+          "status": "connected",
+          "description": "mdtraj按残基（indices=residues）取向张量估计；用于RNEMD各向同性准入（<0.1），不是严格链端到端取向或完整结晶度。",
+          "dependencies": [
+            "trajectory.coordinates",
+            "trajectory.residues"
+          ]
+        },
+        {
+          "key": "self-diffusion",
+          "label": "全原子自扩散估计",
+          "unit": "m2/s",
+          "status": "diagnostic",
+          "description": "去整体质心运动的全原子 MSD 线性斜率/6；不是链质心扩散。拟合 R²≥0.95 且五区块误差受限仍不能自动证明已进入长时扩散区。",
+          "dependencies": [
+            "thermo.v_msd",
+            "分析时间窗"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dielectric",
+      "label": "电介质与静态电子派生",
+      "calculation": "basic",
+      "status": "connected",
+      "properties": [
+        {
+          "key": "static_dielectric_const",
+          "label": "固定电荷静态介电常数",
+          "unit": "1",
+          "status": "connected",
+          "description": "周期展开坐标和 RESP 电荷的偶极涨落；不含显式电子极化，要求电荷、体积及偶极采样质量。",
+          "dependencies": [
+            "trajectory.coordinates",
+            "RESP 原子电荷",
+            "trajectory.volume",
+            "temperature_k"
+          ]
+        },
+        {
+          "key": "refractive_index",
+          "label": "静态近似折射率",
+          "unit": "1",
+          "status": "derived",
+          "description": "Lorentz–Lorenz 关系：合格密度、正的 QM 静态极化率/分子量且 0<phi<1 才派生；可用时仍 warning，未传播完整 QM/MD 误差，无频散承诺。",
+          "dependencies": [
+            "density",
+            "qm.qm_polarizability",
+            "qm.mol_weight"
+          ]
+        },
+        {
+          "key": "electronic_corrected_dielectric",
+          "label": "电子修正静态介电常数",
+          "unit": "1",
+          "status": "derived",
+          "description": "固定电荷介电常数+n²-1；还要求静态介电质量 passed。缺少依赖则 null+原因，可用值仍为静态近似 warning。",
+          "dependencies": [
+            "static_dielectric_const",
+            "refractive_index"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "diagnostic",
+      "label": "运行与收敛诊断",
+      "calculation": "basic",
+      "status": "diagnostic",
+      "properties": [
+        {
+          "key": "temperature",
+          "label": "平均生产温度",
+          "unit": "K",
+          "status": "diagnostic",
+          "description": "生产温度均值及区块标准误差；用于检查与目标温度的偏离，不代表独立材料响应性质。",
+          "dependencies": [
+            "thermo.Temp",
+            "分析时间窗"
+          ]
+        },
+        {
+          "key": "total_energy",
+          "label": "平均总能量",
+          "unit": "kJ/mol",
+          "status": "diagnostic",
+          "description": "LAMMPS real 能量换算后的体系总能量均值；依赖拓扑与体系规模，不能直接跨不同原子数比较。",
+          "dependencies": [
+            "thermo.TotEng",
+            "体系组成",
+            "分析时间窗"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "thermal",
+      "label": "热输运",
+      "calculation": "basic_tc",
+      "status": "connected",
+      "properties": [
+        {
+          "key": "thermal_conductivity",
+          "label": "单方向总热导率",
+          "unit": "W/(m K)",
+          "status": "connected",
+          "description": "MP/RNEMD 累计交换面能量斜率/双侧平均温度梯度。须先通过基础平衡及取向门，舍弃800 ps；双侧/交换拟合、块合格率和五区块 SE 均检查。单次有限尺寸值不含独立种子或尺寸外推误差。",
+          "dependencies": [
+            "合格基础平衡",
+            "nematic_order_parameter",
+            "RNEMD 温度层 profile",
+            "RNEMD 交换能量",
+            "有效稳态时间窗"
+          ]
+        },
+        {
+          "key": "thermal_diffusivity",
+          "label": "热扩散率",
+          "unit": "m2/s",
+          "status": "derived",
+          "description": "κ/(rho*Cp)，rho 从 g/cm³ 转为 kg/m³。仅 κ、rho、Cp 全部 passed、有限、正值且单位匹配才派生；其余 null+原因，可用值仍提示未完整传播依赖误差。",
+          "dependencies": [
+            "thermal_conductivity",
+            "density",
+            "Cp"
+          ]
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {
+      "key": "smiles",
+      "label": "重复单元 SMILES",
+      "group": "basic",
+      "status": "connected",
+      "description": "必须含两个 * 连接点；仅单一中性闭壳层线性均聚物，非多组分/支化/交联输入。",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "temp",
+      "label": "目标温度",
+      "group": "basic",
+      "status": "connected",
+      "description": "100–1000 K；目标态选择需结合材料相态与力场适用范围。",
+      "default": 300,
+      "unit": "K",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "pressure",
+      "label": "目标压力",
+      "group": "basic",
+      "status": "connected",
+      "description": "大于0且不超过1000 atm；与 21step 暂态最高压力不同。",
+      "default": 1,
+      "unit": "atm",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "n_atom",
+      "label": "每链目标原子数",
+      "group": "basic",
+      "status": "connected",
+      "description": "100–5000/链；由重复单元与端基取整至实际 DP，实际规模由 build 返回。",
+      "default": 1000,
+      "unit": "atom/chain",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "n_chain",
+      "label": "链数",
+      "group": "basic",
+      "status": "connected",
+      "description": "1–20；基础估算/实际体系≤20000原子，RNEMD复制后≤60000原子。",
+      "default": 10,
+      "unit": "chain",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "forcefield",
+      "label": "聚合物力场",
+      "group": "basic",
+      "status": "connected",
+      "description": "GAFF、GAFF2、GAFF2_mod、Dreiding、Dreiding_UT 五种原生类；默认 GAFF2_mod，请求值、实际建模参数库及指纹共同记录。",
+      "default": "GAFF2_mod",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "calculation",
+      "label": "计算范围",
+      "group": "basic",
+      "status": "connected",
+      "description": "basic 与 basic_tc；原生配置选择 thermal_conductivity 当且仅当 basic_tc。纯单体QM目标可跳过建模和MD；包含体相目标时按必要阶段执行。",
+      "default": "basic",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "terminal_head",
+      "label": "头端基",
+      "group": "basic",
+      "status": "connected",
+      "description": "CH3/H/OH；新原生配置按请求方法准备私有端基电荷，缓存必须匹配完整方法与电荷指纹，不能沿用不匹配的固定RESP资产。",
+      "default": "CH3",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "terminal_tail",
+      "label": "尾端基",
+      "group": "basic",
+      "status": "connected",
+      "description": "CH3/H/OH；端基与重复单元的化学连接须有效。",
+      "default": "CH3",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "tacticity",
+      "label": "立构",
+      "group": "basic",
+      "status": "connected",
+      "description": "atactic/isotactic/syndiotactic；实际识别结果来自 build，不能仅凭请求推定实际立构。",
+      "default": "atactic",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "eq_ns",
+      "label": "EQ3 生产时长",
+      "group": "advanced",
+      "status": "connected",
+      "description": "0.01–20 ns；默认舍弃前2ns，短程可调试但不能产生合格材料基准。",
+      "default": 5,
+      "unit": "ns",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "additional_ns",
+      "label": "每次追加平衡时长",
+      "group": "advanced",
+      "status": "connected",
+      "description": "0.01–20 ns；追加阶段独立分析，不拼接旧窗口冒充新生产样本。",
+      "default": 5,
+      "unit": "ns",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "max_additional",
+      "label": "最多追加平衡次数",
+      "group": "advanced",
+      "status": "connected",
+      "description": "0–2；是物理平衡追加次数，与中断后技术重试分开。",
+      "default": 2,
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "sample_interval_ps",
+      "label": "平衡生产采样间隔",
+      "group": "advanced",
+      "status": "connected",
+      "description": "0.1–10 ps；EQ3/Additional 的 thermo 与轨迹间隔。EQ1有变时间步日程，RNEMD固定0.2ps，不能通过此项修改。",
+      "default": 1,
+      "unit": "ps",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "tc_axis",
+      "label": "RNEMD 传热方向",
+      "group": "advanced",
+      "status": "connected",
+      "description": "x/y/z；只在 basic_tc 使用，单方向结果不能直接宣称各向同性平均。",
+      "default": "x",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "tc_ns",
+      "label": "RNEMD 生产时长",
+      "group": "advanced",
+      "status": "connected",
+      "description": "0.01–10 ns；不含固定2ps预热，分析舍弃800ps，短于该时间不满足稳态样本门。",
+      "default": 1,
+      "unit": "ns",
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "tc_rep",
+      "label": "沿传热方向复制倍数",
+      "group": "advanced",
+      "status": "connected",
+      "description": "1–5；横向复制固定1，复制后实际原子数仍受60000上限控制。",
+      "default": 3,
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "seed",
+      "label": "任务随机种子",
+      "group": "advanced",
+      "status": "connected",
+      "description": "null/省略时首次幂等创建分配并持久化；显式范围1–2147483647。LAMMPS实际速度seed由任务seed派生并另行记录。",
+      "default": null,
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "native_configuration",
+      "label": "原生科研配置",
+      "group": "basic",
+      "status": "connected",
+      "description": "封闭的原生方法与25个结果key配置；MD表单统一基础分析，可选静态折射率、热导/热扩散率、受控Tg与SP/CED追加流程。旧单体QM子集仅保留历史API兼容。",
+      "default": null,
+      "source": "polymer_md/contracts.py"
+    },
+    {
+      "key": "protocol.qm.conformer_count",
+      "label": "QM 构象搜索数",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "重复单元先搜索1000个MM构象，再对候选做显式DFT；不允许所有DFT失败后回退MM当作QM成功。",
+      "default": 1000,
+      "source": "radonpy/sim/qm.py"
+    },
+    {
+      "key": "protocol.qm.dft_conformer_count",
+      "label": "DFT 候选构象上限",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "按MM候选次序最多检查4个构象；只从真实收敛DFT结果选择，不保证4个都收敛。",
+      "default": 4,
+      "source": "workers/polymer_md_worker/app/scientific_runner.py"
+    },
+    {
+      "key": "protocol.qm.optimization",
+      "label": "DFT 优化方法/基组",
+      "group": "protocol",
+      "status": "connected",
+      "description": "native_configuration.opt_method / opt_basis；仅原生配置缺省时使用所列历史默认。几何算法仍按服务端QCHEM、RFO及50次迭代管理。",
+      "source": "radonpy/sim/qm.py",
+      "scope": "request_native_configuration",
+      "legacy_default": "wb97m-d3bj/6-31G(d,p)"
+    },
+    {
+      "key": "protocol.qm.charge_model",
+      "label": "电荷模型",
+      "group": "protocol",
+      "status": "connected",
+      "description": "native_configuration.charge 选择原生六分支；仅原生配置缺省时使用 RESP。gasteiger/zero 不使用量化电势方法。",
+      "source": "radonpy/sim/qm.py",
+      "scope": "request_native_configuration",
+      "legacy_default": "RESP"
+    },
+    {
+      "key": "protocol.qm.resp_method",
+      "label": "RESP 电势方法/基组",
+      "group": "protocol",
+      "status": "connected",
+      "description": "native_configuration.charge_method / charge_basis；RESP/ESP需要对应电势流程，Mulliken/Lowdin需要量化布居，有限值和净电荷仍单独核对。",
+      "source": "radonpy/sim/qm.py",
+      "scope": "request_native_configuration",
+      "legacy_default": "HF/6-31G(d)"
+    },
+    {
+      "key": "protocol.qm.single_point",
+      "label": "单点方法/基组",
+      "group": "protocol",
+      "status": "connected",
+      "description": "native_configuration.sp_method / sp_basis；单体电子量可作为独立目标，不将其当作聚合物体相能量或能带。",
+      "source": "workers/polymer_md_worker/app/scientific_runner.py",
+      "scope": "request_native_configuration",
+      "legacy_default": "wb97m-d3bj/6-311G(d,p)"
+    },
+    {
+      "key": "protocol.qm.polarizability",
+      "label": "静态极化率方法/基组",
+      "group": "protocol",
+      "status": "connected",
+      "description": "native_configuration.polar_method / polar_basis；上游静态有限电场极化率，不能冒充TDDFT或完整折射率色散。",
+      "source": "workers/polymer_md_worker/app/scientific_runner.py",
+      "scope": "request_native_configuration",
+      "legacy_default": "wb97m-d3bj/6-311+G(2d,p)"
+    },
+    {
+      "key": "protocol.qm.total_charge",
+      "label": "QM 总电荷",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "首期仅中性闭壳层，带电和开壳层体系未接入。",
+      "default": 0,
+      "unit": "e",
+      "source": "workers/polymer_md_worker/app/scientific_runner.py"
+    },
+    {
+      "key": "protocol.qm.total_multiplicity",
+      "label": "QM 自旋多重度",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "首期固定单重态，不开放自旋态搜索。",
+      "default": 1,
+      "source": "workers/polymer_md_worker/app/scientific_runner.py"
+    },
+    {
+      "key": "protocol.build.initial_density",
+      "label": "初始装箱密度",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "构建低密度无定形cell后的起点；不是最终密度或packing终点。",
+      "default": 0.05,
+      "unit": "g/cm3",
+      "source": "workers/polymer_md_worker/app/scientific_runner.py"
+    },
+    {
+      "key": "protocol.packing.target_density",
+      "label": "EQ1 装填目标密度",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "固定packing流程缩箱目标，与后续NPT平衡密度不同。",
+      "default": 0.8,
+      "unit": "g/cm3",
+      "source": "radonpy/sim/preset/eq.py"
+    },
+    {
+      "key": "protocol.packing.max_temperature",
+      "label": "EQ1 最高温度",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "装填松弛中的阶段温度，非用户目标温度。",
+      "default": 700,
+      "unit": "K",
+      "source": "radonpy/sim/preset/eq.py"
+    },
+    {
+      "key": "protocol.packing.time_steps",
+      "label": "EQ1 变时间步日程",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "packing固定3段：20000步×0.1fs，随后1000000步×1fs升温、1000000步×1fs装填；轨迹真实时间按日程积分，不按恒定dt解释全部XTC。",
+      "default": [
+        0.1,
+        1,
+        1
+      ],
+      "unit": "fs",
+      "source": "radonpy/sim/preset/eq.py"
+    },
+    {
+      "key": "protocol.eq21step.max_temperature",
+      "label": "EQ2 最高温度",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "21step压缩/解压热循环的高温，与目标温度分别记录。",
+      "default": 600,
+      "unit": "K",
+      "source": "radonpy/sim/preset/eq.py"
+    },
+    {
+      "key": "protocol.eq21step.max_pressure",
+      "label": "EQ2 最高压力",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "仅压缩解压暂态，不能当作生产压力。",
+      "default": 50000,
+      "unit": "atm",
+      "source": "radonpy/sim/preset/eq.py"
+    },
+    {
+      "key": "protocol.eq21step.time_step",
+      "label": "EQ2 时间步长",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "固定21step时间步；修改需重新验证稳定性和时间轴。",
+      "default": 1,
+      "unit": "fs",
+      "source": "radonpy/sim/preset/eq.py"
+    },
+    {
+      "key": "protocol.eq21step.pressure_ratios",
+      "label": "EQ2 压力倍率序列",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "各倍率乘50000atm，最后回到用户目标压力；对应固定21step日程。",
+      "default": [
+        0.02,
+        0.6,
+        1,
+        0.5,
+        0.1,
+        0.01
+      ],
+      "source": "radonpy/sim/preset/eq.py"
+    },
+    {
+      "key": "protocol.eq_production.time_step",
+      "label": "EQ3/Additional 时间步长",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "当前生产NPT使用1fs；用户ns转换为该步数。",
+      "default": 1,
+      "unit": "fs",
+      "source": "radonpy/sim/md.py"
+    },
+    {
+      "key": "protocol.eq_production.ensemble",
+      "label": "生产系综",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "在目标温度与压力下采样经典涨落与构象。",
+      "default": "NPT",
+      "source": "radonpy/sim/preset/eq.py"
+    },
+    {
+      "key": "protocol.eq.thermostat",
+      "label": "EQ 默认恒温器",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "正式预设继承当前Dynamics默认；不提供Langevin/Berendsen等任意切换。",
+      "default": "Nose-Hoover",
+      "source": "radonpy/sim/md.py"
+    },
+    {
+      "key": "protocol.eq.barostat",
+      "label": "EQ 默认恒压器",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "生产及相应NPT段采用冻结默认，不把弱耦合选择当作已适配。",
+      "default": "Nose-Hoover",
+      "source": "radonpy/sim/md.py"
+    },
+    {
+      "key": "protocol.eq.temperature_damping",
+      "label": "EQ 默认恒温阻尼",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "当前Dynamics默认t_dump；packing/不同阶段若覆盖应以生成输入为准。",
+      "default": 100,
+      "unit": "fs",
+      "source": "radonpy/sim/md.py"
+    },
+    {
+      "key": "protocol.eq21step.pressure_damping",
+      "label": "EQ2 恒压阻尼",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "eq21step明确设置p_dump=1000；不表示所有其他阶段共享同一阻尼。",
+      "default": 1000,
+      "unit": "fs",
+      "source": "radonpy/sim/preset/eq.py"
+    },
+    {
+      "key": "protocol.nonbonded.cutoff_inner",
+      "label": "生产非键内截断",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "常规长程静电生产势的内截断；EQ1 packing单独使用软化/短程设置。",
+      "default": 8,
+      "unit": "A",
+      "source": "radonpy/sim/md.py"
+    },
+    {
+      "key": "protocol.nonbonded.cutoff_outer",
+      "label": "生产非键外截断",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "常规lj/charmm/coul/long外截断，不能对packing所有阶段一概套用。",
+      "default": 12,
+      "unit": "A",
+      "source": "radonpy/sim/md.py"
+    },
+    {
+      "key": "protocol.nonbonded.kspace",
+      "label": "生产长程静电",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "常规EQ生产使用PPPM；packing明确关闭长程静电。",
+      "default": "pppm",
+      "source": "radonpy/sim/md.py"
+    },
+    {
+      "key": "protocol.nonbonded.pppm_accuracy",
+      "label": "PPPM 精度",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "冻结生产长程静电容差；更改会改变性能和物理误差。",
+      "default": 1e-06,
+      "source": "radonpy/sim/md.py"
+    },
+    {
+      "key": "protocol.rnemd.method",
+      "label": "热导方法",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "当前唯一热导生产路径为MP/RNEMD，非Green–Kubo或热浴法。",
+      "default": "Muller_Plathe",
+      "source": "radonpy/sim/preset/tc.py"
+    },
+    {
+      "key": "protocol.rnemd.time_step",
+      "label": "RNEMD 时间步长",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "分析生产时钟为Step×0.2fs，从0计时；原生Time的常量偏移经验证后记录，不硬编码2ps修正。用户生产ns显式换算为步数并校验实际输入。",
+      "default": 0.2,
+      "unit": "fs",
+      "source": "radonpy/sim/preset/tc.py"
+    },
+    {
+      "key": "protocol.rnemd.preheat",
+      "label": "RNEMD 原生预热",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "固定10000步NVT后reset_timestep 0进入生产；不计入请求tc_ns。",
+      "default": 2,
+      "unit": "ps",
+      "source": "radonpy/sim/preset/tc.py"
+    },
+    {
+      "key": "protocol.rnemd.slabs",
+      "label": "RNEMD 温度层数",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "固定20层；排除冷热交换层后拟合两侧温度梯度。",
+      "default": 20,
+      "source": "radonpy/sim/preset/tc.py"
+    },
+    {
+      "key": "protocol.rnemd.exchange_steps",
+      "label": "RNEMD 热交换间隔",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "每1000步MP交换及profile/thermo输出，即0.2ps；验证实际生成输入。",
+      "default": 1000,
+      "unit": "step",
+      "source": "radonpy/sim/preset/tc.py"
+    },
+    {
+      "key": "protocol.rnemd.xtc_steps",
+      "label": "RNEMD XTC 间隔",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "上游模板literal 1000步，即0.2ps，不随请求sample_interval_ps变化。",
+      "default": 1000,
+      "unit": "step",
+      "source": "radonpy/sim/preset/tc.py"
+    },
+    {
+      "key": "protocol.rnemd.rep_other",
+      "label": "RNEMD 横向复制",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "仅tc_axis方向的复制倍数公开；横向固定1。",
+      "default": 1,
+      "source": "radonpy/sim/preset/tc.py"
+    },
+    {
+      "key": "protocol.rnemd.decomp",
+      "label": "热流分解",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "首期固定关闭；上游decomp/intra-inter分解未修复和验证前不可开启。",
+      "default": false,
+      "source": "workers/polymer_md_worker/app/scientific_runner.py"
+    },
+    {
+      "key": "protocol.analysis.eq_burn_in",
+      "label": "平衡分析舍弃时长",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "对当前EQ3或Additional阶段按真实时间舍弃2ns；不把不足窗口补成有效样本。",
+      "default": 2000,
+      "unit": "ps",
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.eq_min_samples",
+      "label": "平衡生产最少热力学样本",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "有效生产样本数要求，稀疏采样与短阶段可导致not_converged。",
+      "default": 500,
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.blocks",
+      "label": "区块统计数",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "等长度非重叠时间区块估计标准误差；不替代独立种子或尺寸敏感性。",
+      "default": 5,
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.temperature_tolerance",
+      "label": "平均温度容差",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "生产均温与请求温度比较；以有限值检查为前提。",
+      "default": "max(5 K, 0.02*T)",
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.eq_stability",
+      "label": "平衡区块均值标准差上限",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "按原生thermo量检查五区块均值标准差；范德华绝对限30kJ/mol转换为real kcal/mol，非所有能量同一相对阈值。",
+      "default": {
+        "TotEng_relative": 0.0005,
+        "E_bond_relative": 0.001,
+        "E_angle_relative": 0.001,
+        "E_dihed_relative": 0.002,
+        "E_vdwl_absolute_kcal_mol": 7.1701720841300185,
+        "Density_absolute_g_cm3": 0.001
+      },
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.nematic_limit",
+      "label": "RNEMD 取向准入上限",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "向列取向序参量必须小于0.1，且基础平衡门通过。",
+      "default": 0.1,
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.tc_burn_in",
+      "label": "RNEMD 稳态舍弃时长",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "统一生产Step*dt时间轴；温度块需整个平均支撑区间位于舍弃点之后。",
+      "default": 800,
+      "unit": "ps",
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.tc_fit_r2",
+      "label": "RNEMD 双侧与交换能量 R² 下限",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "双侧平均温度梯度和累计交换能量均检查；不能只看温度曲线视觉线性。",
+      "default": 0.98,
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.tc_profile_r2",
+      "label": "单个温度块双侧 R² 下限",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "每个块独立重置判定，避免上游状态残留。",
+      "default": 0.95,
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.tc_qualified_rate",
+      "label": "温度块合格比例下限",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "合格块/生产块；不把一个合格块视为后续块全部通过。",
+      "default": 0.667,
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.tc_relative_se",
+      "label": "热导五区块 SE 相对上限",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "需要5个有效区块估计，SE不超过均值绝对值25%；不含独立种子/尺寸误差。",
+      "default": 0.25,
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.derived_quality",
+      "label": "派生输入质量",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "折射率/介电派生要求对应输入，热扩散率要求κ/rho/Cp全部passed且有限正值、单位匹配；不伪造误差传播。",
+      "default": "passed",
+      "source": "workers/polymer_md_worker/app/scientific_runner.py"
+    },
+    {
+      "key": "protocol.analysis.scientific_acceptance",
+      "label": "材料科学验收状态",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "connected表示控制与科学适配已接入；完整PE/PEO多种子、时长/复制敏感性与人工判读尚未完成。",
+      "default": "pending_manual_scientific_review",
+      "source": "workers/polymer_md_worker/app/scientific_runner.py"
+    },
+    {
+      "key": "protocol.analysis.trajectory_min_frames",
+      "label": "结构/偶极生产最少帧数",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "丢弃瞬态后至少100个轨迹帧；帧数不足时不发布结构/介电值或热导准入。",
+      "default": 100,
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.response_relative_se",
+      "label": "热力学响应相对 SE 上限",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "Cp/Cv/压缩率/模量/膨胀估计的5区块SE不超过均值绝对值25%，并检查物理正值（膨胀允许符号）。",
+      "default": 0.25,
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.structure_relative_se",
+      "label": "结构量相对 SE 判据",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "Rg的1%误差参与构象平衡准入；端基距离和取向按各自标准差比例检查，不能将所有结构量统一为25%。",
+      "default": {
+        "Rg": 0.01,
+        "r2": 0.25,
+        "nematic_order_parameter": 0.25,
+        "nematic_absolute_floor": 0.001
+      },
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "protocol.analysis.dielectric_se",
+      "label": "固定电荷介电 SE 判据",
+      "group": "protocol",
+      "status": "fixed",
+      "description": "按偶极涨落估计5区块SE；固定电荷介电不是显式电子极化模型。",
+      "default": "max((epsilon-1)*0.25, 0.01)",
+      "source": "workers/polymer_md_worker/app/scientific_analysis.py"
+    },
+    {
+      "key": "upstream.qm.etkdg_ver",
+      "label": "ETKDG 版本",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游构象生成版本可设；当前封装不开放该参数。",
+      "default": 2,
+      "source": "radonpy/sim/qm.py"
+    },
+    {
+      "key": "upstream.qm.rmsthresh",
+      "label": "构象 RMS 阈值",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游构象去重阈值；需随构象/DFT选择策略共同验证。",
+      "default": 0.5,
+      "unit": "A",
+      "source": "radonpy/sim/qm.py"
+    },
+    {
+      "key": "upstream.qm.tfdthresh",
+      "label": "构象 TFD 阈值",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游扭转指纹聚类阈值；当前未开放。",
+      "default": 0.02,
+      "source": "radonpy/sim/qm.py"
+    },
+    {
+      "key": "upstream.qm.clustering",
+      "label": "构象聚类方法",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游可配置构象聚类；当前沿用冻结默认而非任意选择。",
+      "default": "TFD",
+      "source": "radonpy/sim/qm.py"
+    },
+    {
+      "key": "upstream.qm.charge",
+      "label": "其他电荷模型",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "原生 RESP/ESP/Mulliken/Lowdin/gasteiger/zero 已由 native_configuration.charge 选择；此上游说明不增加其他任意字符串或求解器参数。",
+      "default": null,
+      "source": "radonpy/sim/qm.py"
+    },
+    {
+      "key": "upstream.qm.geometry",
+      "label": "DFT 优化算法与收敛",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "native_configuration 提供封闭方法/基组选择；geom_iter/geom_conv/geom_algorithm 仍由平台统一管理，不接收任意脚本或求解器关键字。",
+      "default": null,
+      "source": "radonpy/sim/qm.py"
+    },
+    {
+      "key": "upstream.qm.dynamic_polarizability",
+      "label": "TDDFT 波长/频率相关极化率",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游qm.polarizability_sos/refractive_index_sos/abbe_number_sos接受波长wavelength（nm；None表示静态），以及td_method/td_basis、n_state/p_state（比例优先）、tda与tdscf_maxiter。折射率另依赖密度、分子量及必要的组分ratio；当前不新增可提交字段，未发布独立体相色散性质。默认None分支、整数波长结果键及近共振行为需适配核验。",
+      "default": null,
+      "source": "radonpy/sim/qm.py"
+    },
+    {
+      "key": "upstream.eq.step_list",
+      "label": "自定义21step步数表",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游step_list为7组各3段；当前固定默认日程，不能由请求注入任意LAMMPS脚本。",
+      "default": null,
+      "unit": "step",
+      "source": "radonpy/sim/preset/eq.py"
+    },
+    {
+      "key": "upstream.eq.press_ratio",
+      "label": "自定义压缩压力序列",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游press_ratio可改；改变暂态路径可能影响热降解/构象滞后，需重新建立基准。",
+      "default": null,
+      "source": "radonpy/sim/preset/eq.py"
+    },
+    {
+      "key": "upstream.md.thermostat",
+      "label": "其他恒温器",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游Dynamics含Nose-Hoover/Langevin/Berendsen/csvr/csld等分支；当前API不提供这些选择。",
+      "default": null,
+      "source": "radonpy/sim/md.py"
+    },
+    {
+      "key": "upstream.md.barostat",
+      "label": "其他恒压器",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游含Nose-Hoover/Berendsen分支；采样系综与涨落性质须重新确认。",
+      "default": null,
+      "source": "radonpy/sim/md.py"
+    },
+    {
+      "key": "upstream.md.cutoff_pppm",
+      "label": "自定义截断/静电精度",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游MD/Preset的cutoff_in/out、kspace_style/accuracy及邻居列表可设；当前只是协议信息，非可提交参数。",
+      "default": null,
+      "source": "radonpy/sim/md.py"
+    },
+    {
+      "key": "upstream.rnemd.slab_exchg",
+      "label": "自定义温度层/交换频率",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游slab/exchg及相关Nfreq/Nevery/rep_other可影响梯度与散射；当前固定值由输入校验锁定。",
+      "default": null,
+      "source": "radonpy/sim/preset/tc.py"
+    },
+    {
+      "key": "upstream.rnemd.decomp_intermol",
+      "label": "分子间/分子内热流分解",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "依赖相应热流实现、正确SI归一和分量列格式，当前不可执行。",
+      "default": false,
+      "source": "radonpy/sim/preset/tc.py"
+    },
+    {
+      "key": "upstream.tg.cooling_rate",
+      "label": "Tg 分段降温平台步数 cooling_rate",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "原生step_wise的cooling_rate表示每个温差间隔的总步数，不是K/ns也不是step/K；默认上游1000。当前平台受控协议固定20000步/10K、1fs步长，拆成10000步恒温及10000步降温，用户不直接修改。",
+      "default": 1000,
+      "unit": "step/interval_temp",
+      "source": "radonpy/sim/preset/tg.py"
+    },
+    {
+      "key": "upstream.sp.analysis_window",
+      "label": "内聚能/溶解度分析窗口",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "原生SP分析器的2000:5000硬编码窗口不直接采信；当前适配器对0.5ns采样按物理时间丢弃前0.1ns，每1ps输出并检查有效样本、全部分子组和有限正CED。用户不直接设置采样窗口。",
+      "default": null,
+      "unit": "ps",
+      "source": "radonpy/sim/preset/sp.py"
+    },
+    {
+      "key": "upstream.ef_dp.field_frequency",
+      "label": "交变电场与频率",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游field/frequency/direction与稳态周期分析需单独接入；手动场值分支和列名精度存在风险。",
+      "default": null,
+      "source": "radonpy/sim/preset/ef_dp.py"
+    },
+    {
+      "key": "upstream.elong.strain",
+      "label": "拉伸方向/应变率",
+      "group": "upstream",
+      "status": "upstream_only",
+      "description": "上游形变率、方向、温度与横向压力可设；当前未开放且不发布力学模量。",
+      "default": null,
+      "source": "radonpy/sim/preset/elong.py"
+    },
+    {
+      "key": "model_configuration",
+      "label": "聚合物模型与组成",
+      "group": "advanced",
+      "status": "connected",
+      "description": "可选版本化模型配置：线性均聚、交替/随机/嵌段共聚及多聚合物共混；1–4个重复单元、原子数/DP/分子量链长目标，嵌段显式顺序和DP，共混各组分链数。缺失时保留旧均聚流程；提交前逐组分化学校验并核算规模，建模后再次检查实际原子数。",
+      "default": null,
+      "source": "polymer_md/contracts.py"
+    }
+  ]
+}

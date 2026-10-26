@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import logging
 import ipaddress
+import re
 
 import anyio
 from starlette.datastructures import Headers
@@ -31,8 +32,9 @@ class AuthenticationMiddleware:
         if method == 'OPTIONS':
             return await self.app(scope, receive, send)
         if policy == 'internal':
-            if path.startswith('/internal/monomer-dft/'):
-                expected = getattr(scope['app'].state.settings,'monomer_dft_start_authorization_token','')
+            if path.startswith(('/internal/monomer-dft/', '/internal/polymer-md/')):
+                token_setting = 'polymer_md_start_authorization_token' if path.startswith('/internal/polymer-md/') else 'monomer_dft_start_authorization_token'
+                expected = getattr(scope['app'].state.settings,token_setting,'')
                 supplied = Headers(scope=scope).get('authorization','')
                 if not expected or not hmac.compare_digest(supplied.encode('utf-8'),('Bearer '+expected).encode('utf-8')):
                     return await JSONResponse({'detail':'内部服务身份未获授权。'},status_code=403)(scope,receive,send)
@@ -88,7 +90,15 @@ class AuthenticationMiddleware:
                     if not member:
                         return await reject(403, 'Acceptance capability requires the native member tier', 'capability_forbidden')
 
-            if headers.get('x-session-context') != str(session['session_id']):
+            session_context = headers.get('x-session-context')
+            # Native PDF viewers and downloads cannot attach application
+            # headers. Bind only this authenticated file route to the page's
+            # session context; a supplied header always takes precedence.
+            if ('x-session-context' not in headers and method in {'GET', 'HEAD'}
+                    and re.fullmatch(r'/api/v1/knowledge/literature/[^/]+/files/[^/]+/content', path)):
+                contexts = Request(scope).query_params.getlist('session_context')
+                session_context = contexts[0] if len(contexts) == 1 else None
+            if session_context != str(session['session_id']):
                 return await reject(409, '页面身份已变化，请重新确认登录状态。', 'session_context_mismatch')
             if method not in {'GET','HEAD','OPTIONS'} and not hmac.compare_digest(headers.get('x-csrf-token', '').encode('utf-8'), csrf_token(token).encode('ascii')):
                 return await reject(403, '会话校验失败。', 'csrf_mismatch')

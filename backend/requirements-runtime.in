@@ -32,3 +32,5 @@ openpyxl==3.1.5
 defusedxml==0.7.1
 
 argon2-cffi==25.1.0
+
+minio==7.2.20

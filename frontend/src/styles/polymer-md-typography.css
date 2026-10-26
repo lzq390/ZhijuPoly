@@ -1,0 +1,413 @@
+/* One type scale for formal configuration, tasks, results and example mode.
+   Keep geometry in the workbench styles and technical values in --font-mono. */
+.np-polymer-md-page,
+.np-polymer-md-dialog-layer {
+  --np-pmd-type-title: 18px;
+  --np-pmd-type-section: 16px;
+  --np-pmd-type-subsection: 14px;
+  --np-pmd-type-body: 13px;
+  --np-pmd-type-label: 12px;
+  --np-pmd-type-caption: 11px;
+  --np-pmd-type-tab: 13px;
+  --np-pmd-type-code: 12px;
+  --np-pmd-type-metric: 17px;
+}
+
+.np-polymer-md-page.np-structure-workbench,
+.np-polymer-md-dialog-layer .np-polymer-md-dialog {
+  font: 400 var(--np-pmd-type-body)/1.65 var(--font-body);
+  letter-spacing: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.np-polymer-md-page.np-md-simulation :is(h2, h3, h4, h5),
+.np-polymer-md-dialog-layer h2 {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation :is(h2, .np-pmd-section-heading h3),
+.np-polymer-md-page.np-md-simulation .np-pmd-results :is(.np-pmd-overview-section > h3, .np-polymer-md-chart h3, .np-polymer-md-artifacts h3, .np-polymer-md-evidence > section > h3) {
+  font-size: var(--np-pmd-type-section);
+}
+
+.np-polymer-md-page.np-md-simulation :is(h3, h4, .np-polymer-md-platform-note h2) {
+  font-size: var(--np-pmd-type-subsection);
+}
+
+.np-polymer-md-page.np-md-simulation h5 {
+  font-size: var(--np-pmd-type-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-view-heading h2,
+.np-polymer-md-page.np-md-simulation :is(.np-pmd-empty-state h3, .np-pmd-result-empty h3),
+.np-polymer-md-dialog-layer h2 {
+  font-size: var(--np-pmd-type-title);
+}
+
+.np-polymer-md-page.np-md-simulation :is(button, select),
+.np-polymer-md-dialog-layer button {
+  font-family: var(--font-body);
+  font-size: var(--np-pmd-type-body);
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page button {
+  font-weight: 600;
+}
+
+.np-polymer-md-page.np-md-simulation :is(input, textarea) {
+  font-family: var(--font-body);
+  font-size: var(--np-pmd-type-body);
+  font-weight: 400;
+  line-height: 1.65;
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation select {
+  font-weight: 400;
+}
+
+.np-polymer-md-page.np-md-simulation :is(strong, th) {
+  font-weight: 600;
+}
+
+.np-polymer-md-page.np-md-simulation :is(p, table, dl, .np-polymer-md-stages > li, .np-polymer-md-evidence-list, .np-polymer-md-notice, .np-polymer-md-readonly, .np-polymer-md-execution-state) {
+  font-size: var(--np-pmd-type-body);
+  line-height: 1.65;
+}
+
+.np-polymer-md-page.np-md-simulation :is(label, legend, summary, .np-polymer-md-field, .np-polymer-md-automatic-property > span) {
+  font-family: var(--font-body);
+  font-size: var(--np-pmd-type-label);
+  line-height: 1.65;
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation :is(legend, .np-polymer-md-field > span, .np-polymer-md-base-disclosure > summary, .np-polymer-md-disclosure > summary strong, .np-polymer-md-evidence > summary) {
+  font-weight: 600;
+}
+
+.np-polymer-md-page.np-md-simulation :is(small, .np-polymer-md-muted, .np-polymer-md-system-limits, .np-polymer-md-applicability, .np-polymer-md-method, .np-polymer-md-tag, .np-polymer-md-protocol-list dt),
+.np-polymer-md-page.np-md-simulation .np-polymer-md-field :is(small, em),
+.np-polymer-md-page.np-md-simulation .np-polymer-md-choice-help :is(summary, p, small),
+.np-polymer-md-page.np-md-simulation .np-polymer-md-property-selection-groups .np-polymer-md-flow-description,
+.np-polymer-md-page.np-md-simulation :is(.np-polymer-md-platform-note, .np-polymer-md-readonly) > p {
+  font-family: var(--font-body);
+  font-size: var(--np-pmd-type-caption);
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.65;
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation .np-polymer-md-eyebrow,
+.np-polymer-md-page.np-md-simulation .np-md-preview__label,
+.np-polymer-md-page.np-md-simulation .np-md-structure-editor > label {
+  font: 600 var(--np-pmd-type-caption)/1.65 var(--font-body);
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation :is(.np-pmd-main-tabs, .np-pmd-mode-switch, .np-pmd-result-tabs) strong {
+  font: 700 var(--np-pmd-type-tab)/1.5 var(--font-heading);
+}
+
+.np-polymer-md-page.np-md-simulation :is(.np-pmd-main-tabs, .np-pmd-mode-switch, .np-pmd-result-tabs) small {
+  font: 400 var(--np-pmd-type-caption)/1.5 var(--font-body);
+}
+
+.np-polymer-md-page.np-md-simulation :is(.np-pmd-service-status > span, .np-pmd-service-status > button, .np-pmd-service-copy strong) {
+  font-size: var(--np-pmd-type-body);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-service-copy small {
+  line-height: 1.3;
+}
+
+.np-polymer-md-page.np-md-simulation :is(.np-pmd-view-badge, .np-pmd-status-pill) {
+  font-size: var(--np-pmd-type-caption);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.np-polymer-md-page.np-md-simulation :is(.np-pmd-submit-summary > span, .np-pmd-submit-summary > small, .np-pmd-pagination, .np-pmd-task-identity > small, .np-pmd-task-identity > span) {
+  font-size: var(--np-pmd-type-caption);
+  line-height: 1.65;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-submit-summary > strong {
+  font: 700 var(--np-pmd-type-subsection)/1.5 var(--font-heading);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-task-identity > strong {
+  font-size: var(--np-pmd-type-body);
+  line-height: 1.65;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-section-heading h3 {
+  font-size: var(--np-pmd-type-section);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-task-actions button,
+.np-polymer-md-page.np-md-simulation .np-pmd-pagination button {
+  font-size: var(--np-pmd-type-label);
+}
+
+.np-polymer-md-page.np-md-simulation .np-polymer-md-summary dt {
+  font-size: var(--np-pmd-type-caption);
+  font-weight: 400;
+}
+
+.np-polymer-md-page.np-md-simulation .np-polymer-md-summary dd {
+  font-size: var(--np-pmd-type-metric);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* Scientific strings and numeric values share the same monospace family. */
+.np-polymer-md-page.np-md-simulation :is(code, pre, .np-pmd-code, .np-polymer-md-id, .np-pmd-numeric-value, input[type="number"], textarea),
+.np-polymer-md-dialog-layer code {
+  font-family: var(--font-mono);
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation :is(pre, .np-polymer-md-id, textarea),
+.np-polymer-md-dialog-layer code {
+  font-size: var(--np-pmd-type-code);
+  line-height: 1.65;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-task-identity > .np-pmd-code {
+  font-size: var(--np-pmd-type-code);
+}
+
+.np-polymer-md-page.np-md-simulation .np-polymer-md-disclosure > summary::before {
+  font: 400 var(--np-pmd-type-title)/1 var(--font-mono);
+}
+
+/* Shared scientific widgets keep the same roles in formal and example views. */
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(.np-md-field > span, .np-md-atom-fields label > span, .np-md-result-identity, .np-md-canvas-hud) {
+  font-family: var(--font-body);
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(.np-md-step-copy h3, .np-md-result-card h3, .np-md-series-summary > div > strong) {
+  font: 700 var(--np-pmd-type-section)/1.5 var(--font-heading);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(.np-md-identity-copy > span, .np-md-card-code, .np-md-series-summary > div > small, .np-md-canvas-hud span, .np-md-trajectory-meta, .np-md-pbc-badge) {
+  font: 400 var(--np-pmd-type-caption)/1.65 var(--font-body);
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(.np-md-result-card header p, .np-md-series-summary > div > p, .np-md-scale-footnote) {
+  font: 400 var(--np-pmd-type-caption)/1.65 var(--font-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(.np-md-field > span, .np-md-atom-fields label > span, .np-md-compact-metrics dt, .np-md-stage-detail dt, .np-md-request-snapshot dt) {
+  font: 600 var(--np-pmd-type-label)/1.65 var(--font-body);
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(.np-md-compact-metrics dd, .np-md-stage-detail dd, .np-md-request-snapshot dd) {
+  font-size: var(--np-pmd-type-body);
+  font-weight: 600;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-result-identity .np-md-identity-copy > strong {
+  font: 600 var(--np-pmd-type-code)/1.65 var(--font-mono);
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-result-kpis strong {
+  font: 700 var(--np-pmd-type-metric)/1.5 var(--font-mono);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-result-kpis > div > div > span {
+  font: 400 var(--np-pmd-type-label)/1.65 var(--font-body);
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(.np-md-stage-tabs span, .np-md-series-summary dd, .np-md-atom-pair-rail span) {
+  font-weight: 600;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-sw-popover__header h2 {
+  font: 700 var(--np-pmd-type-title)/1.5 var(--font-heading);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-sw-popover__header small {
+  font: 400 var(--np-pmd-type-caption)/1.65 var(--font-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-field input {
+  font: 400 var(--np-pmd-type-body)/1.65 var(--font-mono);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-forcefield-picker__option strong {
+  font-weight: 600;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-forcefield-picker__option strong {
+  font: 600 var(--np-pmd-type-body)/1.5 var(--font-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-forcefield-picker__selection strong {
+  font: 400 var(--np-pmd-type-body)/1.5 var(--font-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(.np-md-forcefield-picker__selection small, .np-md-forcefield-picker__option small, .np-md-parameter-group > header small) {
+  font: 400 var(--np-pmd-type-caption)/1.5 var(--font-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-parameter-group > header strong {
+  font: 600 var(--np-pmd-type-subsection)/1.5 var(--font-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-result-tabs strong {
+  font: 700 var(--np-pmd-type-tab)/1.5 var(--font-heading);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-result-tabs small {
+  font: 400 var(--np-pmd-type-caption)/1.5 var(--font-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-md-series-chart svg text {
+  font: 400 10px/1.5 var(--font-mono);
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation .np-md-series-chart svg .np-md-chart-axis-label {
+  font-family: var(--font-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-md-chart-meta {
+  font: 400 var(--np-pmd-type-caption)/1.65 var(--font-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-md-chart-meta strong {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+/* Shared widgets also contain text outside headings and paragraphs. Give those
+   labels the same scale instead of inheriting their former miniature styles. */
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(
+  .np-polymer-md-system-limits p,
+  .np-polymer-md-disclosure > summary small,
+  .np-md-field-hint,
+  .np-md-demo-boundary,
+  .np-md-service-message,
+  .np-md-input-footer p,
+  .np-md-input-footer span,
+  .np-md-input-footer small,
+  .np-md-scale-footnote strong,
+  .np-md-scale-footnote span,
+  .np-md-series-summary dt,
+  .np-md-result-kpis small,
+  .np-md-parameters__footer p,
+  .np-md-trajectory-view__toolbar > span,
+  .np-md-canvas-hud b,
+  .np-md-canvas-legend strong,
+  .np-md-canvas-legend span,
+  .np-md-distance-state p,
+  .np-md-distance-state > div > span,
+  .np-md-distance-stats span,
+  .np-md-progress-heading > div > span,
+  .np-md-progress-heading p,
+  .np-md-progress-steps p,
+  .np-md-result-identity em,
+  .np-md-section__header > span,
+  .np-md-preview__state > span
+) {
+  font: 400 var(--np-pmd-type-caption)/1.65 var(--font-body);
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(
+  .np-md-stage-tabs button > strong,
+  .np-md-series-selector button strong,
+  .np-md-distance-state strong,
+  .np-md-progress-steps strong,
+  .np-md-input-footer strong,
+  .np-md-parameters__footer strong
+) {
+  font: 600 var(--np-pmd-type-label)/1.65 var(--font-body);
+  letter-spacing: normal;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(
+  .np-md-compact-metrics dd,
+  .np-md-stage-detail dd,
+  .np-md-request-snapshot dd,
+  .np-md-series-summary dd,
+  .np-md-distance-stats strong
+) {
+  font: 400 var(--np-pmd-type-body)/1.65 var(--font-mono);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page :is(
+  .np-md-stage-tabs button > span,
+  .np-md-compact-metrics > div > span,
+  .np-md-canvas-axis span,
+  .np-md-atom-pair-rail span,
+  .np-md-atom-fields label > span b,
+  .np-md-progress-steps > li > span
+) {
+  font: 600 var(--np-pmd-type-caption)/1.5 var(--font-mono);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-series-selector button small {
+  font: 400 var(--np-pmd-type-caption)/1.5 var(--font-mono);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-input-footer code {
+  font: 400 var(--np-pmd-type-code)/1.65 var(--font-mono);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-progress-heading b {
+  font: 700 var(--np-pmd-type-metric)/1.5 var(--font-mono);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-md-progress-heading strong {
+  font: 700 var(--np-pmd-type-section)/1.5 var(--font-heading);
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-page .np-sw-result-state > strong {
+  font: 700 var(--np-pmd-type-title)/1.5 var(--font-heading);
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-polymer-md-page,
+  .np-polymer-md-dialog-layer {
+    --np-pmd-type-title: 24px;
+    --np-pmd-type-section: 23px;
+    --np-pmd-type-subsection: 19px;
+    --np-pmd-type-body: 16px;
+    --np-pmd-type-label: 15px;
+    --np-pmd-type-caption: 14px;
+    --np-pmd-type-tab: 18px;
+    --np-pmd-type-code: 15px;
+    --np-pmd-type-metric: 21px;
+  }
+
+  .np-polymer-md-page.np-md-simulation .np-md-series-chart svg text {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 560px) {
+  .np-polymer-md-page.np-md-simulation {
+    --np-pmd-type-tab: 11px;
+  }
+
+  .np-polymer-md-page.np-md-simulation .np-pmd-view-heading h2 {
+    font-size: var(--np-pmd-type-section);
+  }
+}

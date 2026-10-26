@@ -416,24 +416,32 @@ export function MdTrajectoryPointCloudCanvas({
 type MdTrajectoryExplorerProps = {
   points: MdDemoTrajectoryPoint[];
   timePs: number;
+  stageLabel?: string;
+  frameLabel?: string;
+  distanceUsePbc?: boolean;
   selections: MdAtomSelectionSlots;
   distance: MdDemoAtomDistanceResponse | null;
   distanceLoading: boolean;
   distanceError: string | null;
   onSelectionChange: (selection: MdAtomSelectionSlots) => void;
   onCalculate: () => void;
+  distanceEnabled?: boolean;
   onClear: () => void;
 };
 
 export function MdTrajectoryExplorer({
   points,
   timePs,
+  stageLabel = "EQ3",
+  frameLabel = "最终帧",
+  distanceUsePbc = true,
   selections,
   distance,
   distanceLoading,
   distanceError,
   onSelectionChange,
   onCalculate,
+  distanceEnabled = true,
   onClear
 }: MdTrajectoryExplorerProps) {
   const atomLookup = useMemo(() => new Map(points.map((point) => [point.atom_id, selectionFromPoint(point)])), [points]);
@@ -479,12 +487,12 @@ export function MdTrajectoryExplorer({
               <Atom aria-hidden="true" />
             </span>
             <div>
-              <h3>最终帧原子分布</h3>
+              <h3>{frameLabel}原子分布</h3>
               <p>拖拽与缩放浏览空间结构，点击可选择原子。</p>
             </div>
           </div>
           <span className="np-md-trajectory-meta">
-            <i /> EQ3 · {points.length} 个原子 · {timePs.toFixed(2)} ps
+            <i /> {stageLabel} · {points.length} 个原子 · {timePs.toFixed(2)} ps
           </span>
         </header>
         <MdTrajectoryPointCloudCanvas
@@ -508,9 +516,9 @@ export function MdTrajectoryExplorer({
               <p>选择两个原子，分析随时间变化的三维距离。</p>
             </div>
           </div>
-          <span className="np-md-pbc-badge">
-            <ShieldCheck aria-hidden="true" /> PBC 已启用
-          </span>
+          {distanceEnabled ? <span className="np-md-pbc-badge">
+            <ShieldCheck aria-hidden="true" /> 距离 PBC {distanceUsePbc ? "已启用" : "已关闭"}
+          </span> : null}
         </header>
         <div className="np-md-atom-pair-rail" aria-hidden="true">
           <span>A</span>
@@ -528,6 +536,7 @@ export function MdTrajectoryExplorer({
               </span>
               <input
                 type="number"
+                aria-label={`原子 ${index + 1} 编号`}
                 min="1"
                 inputMode="numeric"
                 value={idValues[index]}
@@ -560,7 +569,7 @@ export function MdTrajectoryExplorer({
           <button
             type="button"
             className="is-primary"
-            disabled={distanceLoading || !selections[0] || !selections[1]}
+            disabled={!distanceEnabled || distanceLoading || !selections[0] || !selections[1]}
             onClick={onCalculate}
           >
             {distanceLoading ? <LoaderCircle className="np-sw-spin" /> : <Play />}
@@ -595,7 +604,7 @@ export function MdTrajectoryExplorer({
               <div className="np-md-distance-stats">
                 <span><i />{distance.stats.n_frames} 个采样帧</span>
                 <span><i />源轨迹 {distance.stats.source_n_frames} 帧</span>
-                <span><i />PBC 已启用</span>
+                <span><i />{distance.stats.use_pbc ? "PBC 已启用" : "PBC 已关闭"}</span>
               </div>
             </div>
           ) : (

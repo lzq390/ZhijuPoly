@@ -257,6 +257,27 @@ function startSimulation() {
 }
 
 describe("MdSimulationDemoPage", () => {
+  it("embeds under host navigation and keeps the same result when the host changes views", async () => {
+    const onWorkspaceViewChange = vi.fn();
+    const structure = makeStructure();
+    const props = { structure, onEditStructure: vi.fn(), resultRevealDelayMs: 0, embedded: true, onWorkspaceViewChange };
+    const view = render(<MdSimulationDemoPage {...props} />);
+    await settleDefaultsAndPreview();
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    expect(screen.queryByRole("tablist", { name: "MD 模拟工作区" })).toBeNull();
+    startSimulation();
+    expect(onWorkspaceViewChange).toHaveBeenCalledWith("results");
+    await finishRun();
+    expect(apiMocks.run).toHaveBeenCalledOnce();
+    view.rerender(<MdSimulationDemoPage {...props} workspaceView="input" />);
+    expect((screen.getByLabelText("SMILES") as HTMLTextAreaElement).value).toBe(defaultRequest.smiles);
+    view.rerender(<MdSimulationDemoPage {...props} workspaceView="results" />);
+    expect(screen.getByText("结果体系规模")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "曲线" }));
+    expect(screen.getByRole("img", { name: "密度随时间变化曲线" })).toBeTruthy();
+    expect(apiMocks.run).toHaveBeenCalledOnce();
+  });
+
   it("does not let late defaults or a refresh overwrite user input", async () => {
     const pending = deferred<MdDemoDefaultsResponse>();
     apiMocks.defaults.mockReset().mockReturnValueOnce(pending.promise);

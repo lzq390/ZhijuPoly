@@ -19,7 +19,7 @@ AUTH_COLUMNS = {
                            "expires_at", "revoked_at"}),
 }
 PRIVATE_SCHEMAS = ("usage", "usage_entitlements", "structure_library", "auth", "governance", "online_knowledge", "md", "monomer_dft",
-                   "polymerization_batch")
+                   "polymerization_batch", "polymer_md", "knowledge")
 FORBIDDEN_AUTHORITY_ROLES = frozenset({
     "pg_read_server_files", "pg_write_server_files", "pg_execute_server_program",
     "pg_read_all_data", "pg_write_all_data",

@@ -256,6 +256,7 @@ ACTIVE_JOB_FIELDS_V1 = frozenset(
 )
 ACTIVE_JOB_FIELDS_V2 = ACTIVE_JOB_FIELDS_V1 | {"monomer_dft"}
 ACTIVE_JOB_FIELDS_V3 = ACTIVE_JOB_FIELDS_V2 | {"polymerization_batch"}
+ACTIVE_JOB_FIELDS_V4 = ACTIVE_JOB_FIELDS_V3 | {"polymer_md"}
 BUSINESS_MUTABLE_TABLES = (
     ("online_knowledge", "history"),
     ("online_knowledge", "jobs"),
@@ -321,6 +322,13 @@ STATIC_IMPORT_TABLES = (
     ("experimental", "process_records"),
     ("experimental", "property_records"),
     ("model_registry", "assets"),
+)
+# Independently synchronized shared projections. Kept separate so historical
+# production-v7 static inventories remain exactly verifiable.
+POST_0020_LITERATURE_TABLES = (
+    ("knowledge", "literature_generations"),
+    ("knowledge", "literature_catalog"),
+    ("knowledge", "literature_snapshots"),
 )
 MIGRATION_LEDGER_TABLE = ("governance", "schema_migrations")
 CONTRACT_0012_EXCEPTION_TABLE = ("generation", "polytao_jobs")
@@ -484,10 +492,25 @@ USER_ISOLATION_MIGRATION_LEDGER = (*CANONICAL_MIGRATION_LEDGER,
 USER_ISOLATION_V2_MIGRATION_LEDGER = (*USER_ISOLATION_MIGRATION_LEDGER,
     ('0019_service_auth_least_privilege', '23f950f17126af7f73495938da41544585186e13dc44e060cfecf90bad207f23'),
 )
+# Finite bridge accepted by the current identity workflow only. The historical
+# production v7 capture and its canonical ledger/inventory remain unchanged.
+LITERATURE_EXPAND_LEDGER = (
+    "0024_literature_projection",
+    "2a5681e4b5000ed9cbf6ec88e1d8d7e6c6c5d0faf82270e802a3a9abb2060cf3",
+)
 
 
 # Current private-library evidence is separate from the frozen v7 inventory.
 POST_0020_BUSINESS_MUTABLE_TABLES = (("structure_library", "records"),)
+
+# The opt-in polymer schema uses the explicit identity-cutover/backup seal.
+# Its private tables do not extend the frozen production v7 inventory.
+POST_0023_BUSINESS_MUTABLE_TABLES = (
+    ("polymer_md", "jobs"),
+    ("polymer_md", "job_attempts"),
+    ("polymer_md", "stage_runs"),
+    ("polymer_md", "artifacts"),
+)
 USER_ISOLATION_V3_MIGRATION_LEDGER = (*USER_ISOLATION_V2_MIGRATION_LEDGER,
     ("0020_structure_library", "4f8ff9a2d9c1f7cf41140d3517f70dcb52b045fadac84a09d292bdf8095aa0b7"),
 )
@@ -528,6 +551,42 @@ def validate_user_isolation_ledger(records: object) -> list[dict[str, str]]:
     expected = [{"version": version, "checksum": checksum} for version, checksum in USER_ISOLATION_MIGRATION_LEDGER]
     if records != expected:
         raise SiteHelperContractError("user isolation requires the exact canonical ledger through 0018")
+    return [dict(record) for record in expected]
+
+
+
+LITERATURE_MIGRATION_LEDGER = (
+    ('0001_app_data_governance', 'd5fc9f3d063f1cba476834f3530519b7970cd54f3c3711d05aba1f1cb2fd34f9'),
+    ('0002_lab_identity_defaults', '580ed6dc7c34970aabd662bc47765e9d02446c28aea1c4fa8fb2a99f05b1ac2f'),
+    ('0003_runtime_postgres_cutover', '0888ac9abd1b6b642f0addd42274b5408981a26c27f1140b7b656ff34ad73ce3'),
+    ('0004_monomer_md_jobs', 'b3ad64728f399f42b2bf9edb47ad035ac70f09fce6ced48e7b422ea74d5a7e8e'),
+    ('0005_byteff2_formal_monomer_md', 'c9ec808c50915b82a696ab482ed676c62bc75f00a9af21baf9e7f66b185bacb5'),
+    ('0006_property_filter_records', '57b103dc656334cf5e52bdc9512576a303ae0044ec5fb64eb7cba802021eceaa'),
+    ('0007_polytao_jobs', 'b15268a475e8daf8dd58be988a228a0440e59a31dbf11d5d6b52e0974c3daab5'),
+    ('0008_polytao_backend_runtime', 'd0d8b2187aad8657269600873d3d2630e30c7d72da2f6662e18ab22031deff90'),
+    ('0009_monomer_md_job_leases', 'ef1757a81976f351459e8257bd492aa6267cbf507c4ea85506fefa2d465d2db8'),
+    ('0010_deployment_control', 'f7fad29bcf1da1c6903a688a7312a67216bc11002ac558209ff56e25f69cf7cd'),
+    ('0011_monomer_md_demo_steps', '9a03f38329199aa707818c2099b9811d46366bafe0ddaeb39ae53bc20d0a68ed'),
+    ('0012_drop_polytao_jobs', 'c59b6f1efe9f926ad135379bd1a7141a7920730fa93c0e802646b1b913511728'),
+    ('0013_monomer_dft_jobs', 'ab633a6253887dad45103c288d54a0d02d4d69ce1f9a14c1271338d448f9acbc'),
+    ('0014_monomer_md_task_queue_cancel', '7d91b451371eaf10542440c8b947c9ac50b51e3d553cb205a76aca196eaf8df6'),
+    ('0015_property_filter_performance', 'e0159576c09d31de8a7da46f728d36553f67aa75adba344f93cdc302cf000732'),
+    ('0016_monomer_polymerization_batch', 'c79b22540864ee3d7cbfb66d63870da1a65dff22250cf85acf47b688dbd9c976'),
+    ('0017_user_isolation_prepare', '0eeef0058fbda71770627005fe617f5a56261cf25e236c4a159d0b059db76adb'),
+    ('0018_user_isolation_cutover', '0755d9d802eba5fd69225a34f61bc01828b32a63f815802d2905636809c573f2'),
+    ('0019_service_auth_least_privilege', '23f950f17126af7f73495938da41544585186e13dc44e060cfecf90bad207f23'),
+    ('0020_structure_library', '4f8ff9a2d9c1f7cf41140d3517f70dcb52b045fadac84a09d292bdf8095aa0b7'),
+    ('0021_usage_metering', '3e79f0fcefe0bdfff5e6c00f184e22cf17621d5a1cc46a5ddb6fb8f296680f62'),
+    ('0022_usage_entitlements', 'fe536a6256493931f6d773197a3e1e742b17bacc3c675e4fcbc32864e0747bb5'),
+    ('0023_polymer_md_jobs', 'e73e00e16b8fc3c72e3716dae523d02d264a3e2e6989671f6019aca3440a1379'),
+    ('0024_literature_projection', '2a5681e4b5000ed9cbf6ec88e1d8d7e6c6c5d0faf82270e802a3a9abb2060cf3'),
+)
+
+def validate_literature_ledger(records: object) -> list[dict[str, str]]:
+    """The full pinned 0024 ledger, distinct from historical v2 admission."""
+    expected = [{"version": version, "checksum": checksum} for version, checksum in LITERATURE_MIGRATION_LEDGER]
+    if records != expected:
+        raise SiteHelperContractError("literature requires the complete canonical ledger through 0024")
     return [dict(record) for record in expected]
 
 
@@ -903,10 +962,10 @@ def validate_active_jobs(document: object) -> dict[str, Any]:
     }:
         raise SiteHelperContractError("active-jobs evidence has an invalid shape")
     version = document.get("active_jobs_schema_version", 1)
-    if isinstance(version, bool) or version not in {1, 2, 3}:
+    if type(version) is not int or version not in {1, 2, 3, 4}:
         raise SiteHelperContractError("active-jobs evidence schema is unsupported")
     _require_bool(document, "ingress_isolated", True)
-    expected = {1: ACTIVE_JOB_FIELDS_V1, 2: ACTIVE_JOB_FIELDS_V2, 3: ACTIVE_JOB_FIELDS_V3}[version]
+    expected = {1: ACTIVE_JOB_FIELDS_V1, 2: ACTIVE_JOB_FIELDS_V2, 3: ACTIVE_JOB_FIELDS_V3, 4: ACTIVE_JOB_FIELDS_V4}[version]
     jobs = document.get("active_jobs")
     if not isinstance(jobs, dict) or set(jobs) != set(expected):
         raise SiteHelperContractError("active-jobs evidence categories differ")

@@ -1,0 +1,1309 @@
+{
+  "configuration_version": 2,
+  "source_sha": "8834b9071ae93d9af36558a3c24545dd52e5ba1a",
+  "description": "固定RadonPy 1.0b2的严格原生配置：参数值来自其函数默认/样例明确使用的名称，性质来自完整的原生计算入口。保留的选择须被NativeConfiguration显式绑定执行，不能保存后静默回退或丢弃。",
+  "fields": [
+    {
+      "id": "forcefield",
+      "label": "聚合物力场",
+      "section": "model",
+      "selection": "single",
+      "default": "GAFF2_mod",
+      "description": "冻结RadonPy中的五个完整聚合物力场类；ff_assign负责原子类型和成键参数，返回True且覆盖具体分子后才能运行。不同力场/电荷搭配不视为物理等价。",
+      "source": {
+        "path": "radonpy/ff/gaff2_mod.py",
+        "symbol": "GAFF2_mod",
+        "line": 16
+      },
+      "options": [
+        {
+          "value": "GAFF",
+          "label": "GAFF",
+          "description": "通用有机分子全原子参数；需匹配电荷模型和原子类型覆盖。",
+          "scope": "model",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/ff/gaff.py",
+            "symbol": "GAFF",
+            "line": 20
+          },
+          "prerequisites": [
+            "有效RDKit分子和正确键级/芳香性",
+            "ff_assign成功且原子/键角/二面角/反演参数覆盖完整",
+            "LAMMPS支持对应势函数，电荷方案与模型匹配"
+          ]
+        },
+        {
+          "value": "GAFF2",
+          "label": "GAFF2",
+          "description": "GAFF更新参数体系；与GAFF2_mod是不同选择。",
+          "scope": "model",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/ff/gaff2.py",
+            "symbol": "GAFF2",
+            "line": 16
+          },
+          "prerequisites": [
+            "有效RDKit分子和正确键级/芳香性",
+            "ff_assign成功且原子/键角/二面角/反演参数覆盖完整",
+            "LAMMPS支持对应势函数，电荷方案与模型匹配"
+          ]
+        },
+        {
+          "value": "GAFF2_mod",
+          "label": "GAFF2_mod",
+          "description": "GAFF2扩展，含氟碳等额外类型；当前执行协议采用此模型。",
+          "scope": "model",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/ff/gaff2_mod.py",
+            "symbol": "GAFF2_mod",
+            "line": 16
+          },
+          "prerequisites": [
+            "有效RDKit分子和正确键级/芳香性",
+            "ff_assign成功且原子/键角/二面角/反演参数覆盖完整",
+            "LAMMPS支持对应势函数，电荷方案与模型匹配"
+          ]
+        },
+        {
+          "value": "Dreiding",
+          "label": "Dreiding",
+          "description": "通用全原子势；电荷策略与键角/反演势需匹配。",
+          "scope": "model",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/ff/dreiding.py",
+            "symbol": "Dreiding",
+            "line": 20
+          },
+          "prerequisites": [
+            "有效RDKit分子和正确键级/芳香性",
+            "ff_assign成功且原子/键角/二面角/反演参数覆盖完整",
+            "LAMMPS支持对应势函数，电荷方案与模型匹配"
+          ]
+        },
+        {
+          "value": "Dreiding_UT",
+          "label": "Dreiding_UT",
+          "description": "LJ参数重新拟合以配合RESP电荷的Dreiding变体。",
+          "scope": "model",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/ff/dreiding.py",
+            "symbol": "Dreiding_UT",
+            "line": 823
+          },
+          "prerequisites": [
+            "有效RDKit分子和正确键级/芳香性",
+            "ff_assign成功且原子/键角/二面角/反演参数覆盖完整",
+            "LAMMPS支持对应势函数，电荷方案与模型匹配"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "opt_method",
+      "label": "几何优化方法",
+      "section": "quantum",
+      "selection": "single",
+      "default": "wb97m-d3bj",
+      "description": "原生opt_method参数，用于几何优化。仅列冻结RadonPy明确使用的HF/ωB97M-D3BJ方法名；这是字符串调用参数，不宣称上游固定枚举。",
+      "source": {
+        "path": "radonpy/sim/qm.py",
+        "symbol": "conformation_search",
+        "line": 59
+      },
+      "options": [
+        {
+          "value": "HF",
+          "label": "HF（Hartree–Fock）",
+          "description": "RadonPy电荷计算默认使用的HF名称；不是DFT。经原生method字符串参数传入同一Psi4 SCF调用。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "assign_charges",
+            "line": 21
+          }
+        },
+        {
+          "value": "wb97m-d3bj",
+          "label": "ωB97M-D3(BJ)",
+          "description": "RadonPy构象优化、单点与静态极化率默认使用的具体方法名；保持该完整拼写。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          }
+        }
+      ]
+    },
+    {
+      "id": "opt_basis",
+      "label": "几何优化基组",
+      "section": "quantum",
+      "selection": "single",
+      "default": "6-31G(d,p)",
+      "description": "原生主基组字符串；仅列冻结RadonPy明确使用的四个基组名。basis_gen逐元素指定优先于主基组；下列元素覆盖随调用阶段记录，不能把主基组名称当作每个原子的实际基组。",
+      "source": {
+        "path": "radonpy/sim/qm.py",
+        "symbol": "conformation_search",
+        "line": 59
+      },
+      "options": [
+        {
+          "value": "6-31G(d)",
+          "label": "6-31G(d)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "assign_charges",
+            "line": 21
+          }
+        },
+        {
+          "value": "6-31G(d,p)",
+          "label": "6-31G(d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "conformation_search",
+            "line": 59
+          }
+        },
+        {
+          "value": "6-311G(d,p)",
+          "label": "6-311G(d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          }
+        },
+        {
+          "value": "6-311+G(2d,p)",
+          "label": "6-311+G(2d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "polarizability",
+            "line": 172
+          }
+        }
+      ],
+      "element_basis_overrides": {
+        "Br": "6-31G(d,p)",
+        "I": "lanl2dz"
+      }
+    },
+    {
+      "id": "charge",
+      "label": "原子电荷模型",
+      "section": "quantum",
+      "selection": "single",
+      "default": "RESP",
+      "description": "RadonPy assign_charges实际实现的六个分支；量化分支要求SCF/电势计算成功。zero是逐原子全零，不是对原有电荷做中和。",
+      "source": {
+        "path": "radonpy/sim/qm.py",
+        "symbol": "assign_charges",
+        "line": 21
+      },
+      "options": [
+        {
+          "value": "RESP",
+          "label": "RESP",
+          "description": "在量化静电势拟合上加约束/收缩的原子部分电荷；常用HF/6-31G(d)电势。不是显式可极化力场。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/core/calc.py",
+            "symbol": "assign_charges",
+            "line": 412
+          },
+          "prerequisites": [
+            "有效分子与匹配的电荷/多重态",
+            "Psi4及电荷计算依赖可用；收敛且所有原子电荷有限"
+          ]
+        },
+        {
+          "value": "ESP",
+          "label": "ESP",
+          "description": "按量化静电势拟合原子部分电荷；上游通过RESP实现路径取得未加同类约束的ESP电荷。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/core/calc.py",
+            "symbol": "assign_charges",
+            "line": 420
+          },
+          "prerequisites": [
+            "有效分子与匹配的电荷/多重态",
+            "Psi4及电荷计算依赖可用；收敛且所有原子电荷有限"
+          ]
+        },
+        {
+          "value": "Mulliken",
+          "label": "Mulliken",
+          "description": "Mulliken电子布居分析电荷，对基组依赖较强；不同于静电势拟合。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/core/calc.py",
+            "symbol": "assign_charges",
+            "line": 428
+          },
+          "prerequisites": [
+            "有效分子与匹配的电荷/多重态",
+            "Psi4及电荷计算依赖可用；收敛且所有原子电荷有限"
+          ]
+        },
+        {
+          "value": "Lowdin",
+          "label": "Löwdin",
+          "description": "Löwdin正交化布居分析电荷，源代码枚举拼写为Lowdin。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/core/calc.py",
+            "symbol": "assign_charges",
+            "line": 435
+          },
+          "prerequisites": [
+            "有效分子与匹配的电荷/多重态",
+            "Psi4及电荷计算依赖可用；收敛且所有原子电荷有限"
+          ]
+        },
+        {
+          "value": "gasteiger",
+          "label": "Gasteiger",
+          "description": "RDKit的经验电荷均衡估计，不需要该量化方法/基组；不是QM-RESP电势拟合。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/core/calc.py",
+            "symbol": "assign_charges",
+            "line": 384
+          },
+          "prerequisites": [
+            "有效分子与匹配的电荷/多重态"
+          ]
+        },
+        {
+          "value": "zero",
+          "label": "全零部分电荷",
+          "description": "把每个原子的部分电荷设为0；不是自动中和原有电荷，不代表该分子的真实电子分布或带电体系。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/core/calc.py",
+            "symbol": "assign_charges",
+            "line": 380
+          },
+          "prerequisites": [
+            "有效分子与匹配的电荷/多重态"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "charge_method",
+      "label": "电荷量化方法",
+      "section": "quantum",
+      "selection": "single",
+      "default": "HF",
+      "description": "原生charge_method参数；RESP/ESP/Mulliken/Lowdin采用该量化方法。gasteiger与zero分支不执行此量化步骤。",
+      "source": {
+        "path": "radonpy/sim/qm.py",
+        "symbol": "assign_charges",
+        "line": 21
+      },
+      "options": [
+        {
+          "value": "HF",
+          "label": "HF（Hartree–Fock）",
+          "description": "RadonPy电荷计算默认使用的HF名称；不是DFT。经原生method字符串参数传入同一Psi4 SCF调用。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "assign_charges",
+            "line": 21
+          }
+        },
+        {
+          "value": "wb97m-d3bj",
+          "label": "ωB97M-D3(BJ)",
+          "description": "RadonPy构象优化、单点与静态极化率默认使用的具体方法名；保持该完整拼写。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          }
+        }
+      ]
+    },
+    {
+      "id": "charge_basis",
+      "label": "电荷量化基组",
+      "section": "quantum",
+      "selection": "single",
+      "default": "6-31G(d)",
+      "description": "原生主基组字符串；仅列冻结RadonPy明确使用的四个基组名。basis_gen逐元素指定优先于主基组；下列元素覆盖随调用阶段记录，不能把主基组名称当作每个原子的实际基组。",
+      "source": {
+        "path": "radonpy/sim/qm.py",
+        "symbol": "assign_charges",
+        "line": 21
+      },
+      "options": [
+        {
+          "value": "6-31G(d)",
+          "label": "6-31G(d)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "assign_charges",
+            "line": 21
+          }
+        },
+        {
+          "value": "6-31G(d,p)",
+          "label": "6-31G(d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "conformation_search",
+            "line": 59
+          }
+        },
+        {
+          "value": "6-311G(d,p)",
+          "label": "6-311G(d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          }
+        },
+        {
+          "value": "6-311+G(2d,p)",
+          "label": "6-311+G(2d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "polarizability",
+            "line": 172
+          }
+        }
+      ],
+      "element_basis_overrides": {
+        "Br": "6-31G(d)",
+        "I": "lanl2dz"
+      }
+    },
+    {
+      "id": "sp_method",
+      "label": "单点电子结构方法",
+      "section": "quantum",
+      "selection": "single",
+      "default": "wb97m-d3bj",
+      "description": "原生sp_method参数，用于sp_prop的总能量、前线分子轨道与偶极计算，不把单体轨道能称为体相能带。",
+      "source": {
+        "path": "radonpy/sim/qm.py",
+        "symbol": "sp_prop",
+        "line": 104
+      },
+      "options": [
+        {
+          "value": "HF",
+          "label": "HF（Hartree–Fock）",
+          "description": "RadonPy电荷计算默认使用的HF名称；不是DFT。经原生method字符串参数传入同一Psi4 SCF调用。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "assign_charges",
+            "line": 21
+          }
+        },
+        {
+          "value": "wb97m-d3bj",
+          "label": "ωB97M-D3(BJ)",
+          "description": "RadonPy构象优化、单点与静态极化率默认使用的具体方法名；保持该完整拼写。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          }
+        }
+      ]
+    },
+    {
+      "id": "sp_basis",
+      "label": "单点电子结构基组",
+      "section": "quantum",
+      "selection": "single",
+      "default": "6-311G(d,p)",
+      "description": "原生主基组字符串；仅列冻结RadonPy明确使用的四个基组名。basis_gen逐元素指定优先于主基组；下列元素覆盖随调用阶段记录，不能把主基组名称当作每个原子的实际基组。",
+      "source": {
+        "path": "radonpy/sim/qm.py",
+        "symbol": "sp_prop",
+        "line": 104
+      },
+      "options": [
+        {
+          "value": "6-31G(d)",
+          "label": "6-31G(d)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "assign_charges",
+            "line": 21
+          }
+        },
+        {
+          "value": "6-31G(d,p)",
+          "label": "6-31G(d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "conformation_search",
+            "line": 59
+          }
+        },
+        {
+          "value": "6-311G(d,p)",
+          "label": "6-311G(d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          }
+        },
+        {
+          "value": "6-311+G(2d,p)",
+          "label": "6-311+G(2d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "polarizability",
+            "line": 172
+          }
+        }
+      ],
+      "element_basis_overrides": {
+        "Br": "6-311G(d,p)",
+        "I": "lanl2dz"
+      }
+    },
+    {
+      "id": "polar_method",
+      "label": "静态极化率方法",
+      "section": "quantum",
+      "selection": "single",
+      "default": "wb97m-d3bj",
+      "description": "原生polar_method参数，用于正负静态有限电场SCF偶极差分；不等同TDDFT或指定波长响应。",
+      "source": {
+        "path": "radonpy/sim/qm.py",
+        "symbol": "polarizability",
+        "line": 172
+      },
+      "options": [
+        {
+          "value": "HF",
+          "label": "HF（Hartree–Fock）",
+          "description": "RadonPy电荷计算默认使用的HF名称；不是DFT。经原生method字符串参数传入同一Psi4 SCF调用。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "assign_charges",
+            "line": 21
+          }
+        },
+        {
+          "value": "wb97m-d3bj",
+          "label": "ωB97M-D3(BJ)",
+          "description": "RadonPy构象优化、单点与静态极化率默认使用的具体方法名；保持该完整拼写。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          }
+        }
+      ]
+    },
+    {
+      "id": "polar_basis",
+      "label": "静态极化率基组",
+      "section": "quantum",
+      "selection": "single",
+      "default": "6-311+G(2d,p)",
+      "description": "原生主基组字符串；仅列冻结RadonPy明确使用的四个基组名。basis_gen逐元素指定优先于主基组；下列元素覆盖随调用阶段记录，不能把主基组名称当作每个原子的实际基组。",
+      "source": {
+        "path": "radonpy/sim/qm.py",
+        "symbol": "polarizability",
+        "line": 172
+      },
+      "options": [
+        {
+          "value": "6-31G(d)",
+          "label": "6-31G(d)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "assign_charges",
+            "line": 21
+          }
+        },
+        {
+          "value": "6-31G(d,p)",
+          "label": "6-31G(d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "conformation_search",
+            "line": 59
+          }
+        },
+        {
+          "value": "6-311G(d,p)",
+          "label": "6-311G(d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          }
+        },
+        {
+          "value": "6-311+G(2d,p)",
+          "label": "6-311+G(2d,p)",
+          "description": "RadonPy原生默认方案中明确使用的Pople基组；具体阶段的Br/I覆盖按basis_gen生效，需匹配元素与ECP。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "polarizability",
+            "line": 172
+          }
+        }
+      ],
+      "element_basis_overrides": {
+        "Br": "6-311G(d,p)",
+        "I": "lanl2dz"
+      }
+    },
+    {
+      "id": "properties",
+      "label": "计算性质",
+      "section": "properties",
+      "selection": "multiple",
+      "default": [
+        "density",
+        "Rg",
+        "self-diffusion",
+        "Cp",
+        "Cv",
+        "compressibility",
+        "isentropic_compressibility",
+        "bulk_modulus",
+        "isentropic_bulk_modulus",
+        "volume_expansion",
+        "linear_expansion",
+        "r2",
+        "static_dielectric_const",
+        "nematic_order_parameter",
+        "refractive_index"
+      ],
+      "description": "基础14项共享合格平衡段分析；可选静态折射率、RNEMD热导/热扩散率、Tg分段降温及溶解度参数/内聚能密度。共25个原生结果key；历史单体QM子集只保留低层接口兼容。Tg/SP是独立追加流程，不能由EQ3单温轨迹直接得到。",
+      "source": {
+        "path": "radonpy/sim/lammps.py",
+        "symbol": "Analyze.get_all_prop",
+        "line": 2391
+      },
+      "options": [
+        {
+          "value": "density",
+          "label": "密度",
+          "description": "Analyze.get_all_prop原生density键，来源Density生产数据统计；不是用户装箱目标密度。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "g/cm3",
+          "category": "thermodynamic",
+          "category_label": "热力学",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "result_key": "density",
+            "prerequisites": [
+              "thermo.Density与Time有效",
+              "生产平均窗口足够，非有限结果不得发布"
+            ]
+          }
+        },
+        {
+          "value": "Rg",
+          "label": "回转半径",
+          "description": "原生get_all_prop的Rg键；calc_rg读取LAMMPS gyration/chunk profile并取mean_mean，单位Å。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "A",
+          "category": "structure",
+          "category_label": "结构",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.calc_rg",
+            "result_key": "Rg",
+            "prerequisites": [
+              "有效的逐链gyration profile",
+              "链组完整且分析范围存在"
+            ]
+          }
+        },
+        {
+          "value": "self-diffusion",
+          "label": "自扩散系数",
+          "description": "原生self-diffusion键；Analyze.self_diffusion对v_msd相对于真实时间拟合并除6。当前全原子MSD不等于链质心扩散。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "m2/s",
+          "category": "transport",
+          "category_label": "输运",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.self_diffusion",
+            "result_key": "self-diffusion",
+            "prerequisites": [
+              "thermo.v_msd与Time有效",
+              "MSD已正确展开/处理整体平移，并检验长时线性区间"
+            ]
+          }
+        },
+        {
+          "value": "Cp",
+          "label": "定压比热容",
+          "description": "原生Cp键；按体系质量归一的NPT焓涨落。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "J/(kg K)",
+          "category": "thermodynamic",
+          "category_label": "热力学",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.heat_capacity_Cp",
+            "result_key": "Cp",
+            "prerequisites": [
+              "平衡NPT生产段的Temp/Volume或Lx-Ly-Lz/Density/TotEng列",
+              "real单位输入；足够有效样本并明确分析窗口；质量检查独立记录"
+            ]
+          }
+        },
+        {
+          "value": "Cv",
+          "label": "定容比热容",
+          "description": "原生Cv键；由原生Cp、体积膨胀及等温压缩率关系得到质量比热。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "J/(kg K)",
+          "category": "thermodynamic",
+          "category_label": "热力学",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.heat_capacity_Cv",
+            "result_key": "Cv",
+            "prerequisites": [
+              "平衡NPT生产段的Temp/Volume或Lx-Ly-Lz/Density/TotEng列",
+              "real单位输入；足够有效样本并明确分析窗口；质量检查独立记录"
+            ]
+          }
+        },
+        {
+          "value": "compressibility",
+          "label": "等温压缩率",
+          "description": "原生compressibility键；NPT体积涨落估计。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "1/Pa",
+          "category": "thermodynamic",
+          "category_label": "热力学",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.isothermal_compressibility",
+            "result_key": "compressibility",
+            "prerequisites": [
+              "平衡NPT生产段的Temp/Volume或Lx-Ly-Lz/Density/TotEng列",
+              "real单位输入；足够有效样本并明确分析窗口；质量检查独立记录"
+            ]
+          }
+        },
+        {
+          "value": "isentropic_compressibility",
+          "label": "等熵压缩率",
+          "description": "原生isentropic_compressibility键；等温压缩率乘Cv/Cp。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "1/Pa",
+          "category": "thermodynamic",
+          "category_label": "热力学",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.isentropic_compressibility",
+            "result_key": "isentropic_compressibility",
+            "prerequisites": [
+              "平衡NPT生产段的Temp/Volume或Lx-Ly-Lz/Density/TotEng列",
+              "real单位输入；足够有效样本并明确分析窗口；质量检查独立记录"
+            ]
+          }
+        },
+        {
+          "value": "bulk_modulus",
+          "label": "等温体积模量",
+          "description": "原生bulk_modulus键；等温压缩率的倒数，不是杨氏模量。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "Pa",
+          "category": "thermodynamic",
+          "category_label": "热力学",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.bulk_modulus",
+            "result_key": "bulk_modulus",
+            "prerequisites": [
+              "平衡NPT生产段的Temp/Volume或Lx-Ly-Lz/Density/TotEng列",
+              "real单位输入；足够有效样本并明确分析窗口；质量检查独立记录"
+            ]
+          }
+        },
+        {
+          "value": "isentropic_bulk_modulus",
+          "label": "等熵体积模量",
+          "description": "原生isentropic_bulk_modulus键；等熵压缩率的倒数。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "Pa",
+          "category": "thermodynamic",
+          "category_label": "热力学",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.isentropic_bulk_modulus",
+            "result_key": "isentropic_bulk_modulus",
+            "prerequisites": [
+              "平衡NPT生产段的Temp/Volume或Lx-Ly-Lz/Density/TotEng列",
+              "real单位输入；足够有效样本并明确分析窗口；质量检查独立记录"
+            ]
+          }
+        },
+        {
+          "value": "volume_expansion",
+          "label": "体积热膨胀系数",
+          "description": "原生volume_expansion键；NPT焓与体积协方差，不是温扫密度斜率。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "1/K",
+          "category": "thermodynamic",
+          "category_label": "热力学",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.volume_expansion",
+            "result_key": "volume_expansion",
+            "prerequisites": [
+              "平衡NPT生产段的Temp/Volume或Lx-Ly-Lz/Density/TotEng列",
+              "real单位输入；足够有效样本并明确分析窗口；质量检查独立记录"
+            ]
+          }
+        },
+        {
+          "value": "linear_expansion",
+          "label": "各向同性线性热膨胀系数",
+          "description": "原生linear_expansion键；体积热膨胀系数/3，各向同性假设。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "1/K",
+          "category": "thermodynamic",
+          "category_label": "热力学",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.linear_expansion",
+            "result_key": "linear_expansion",
+            "prerequisites": [
+              "平衡NPT生产段的Temp/Volume或Lx-Ly-Lz/Density/TotEng列",
+              "real单位输入；足够有效样本并明确分析窗口；质量检查独立记录"
+            ]
+          }
+        },
+        {
+          "value": "r2",
+          "label": "均方端基距离",
+          "description": "原生r2键；TU0/TU1端基残基的最近原子距离平方，原生nm²。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "nm2",
+          "category": "structure",
+          "category_label": "结构",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.analyze_traj",
+            "result_key": "r2",
+            "prerequisites": [
+              "mdtraj、轨迹及匹配拓扑",
+              "每条链恰有一对TU0/TU1端基标记；周期坐标正确展开"
+            ]
+          }
+        },
+        {
+          "value": "static_dielectric_const",
+          "label": "固定电荷静态介电常数",
+          "description": "原生static_dielectric_const键；原生轨迹分析调用mdtraj.static_dielectric，以固定部分电荷和温度估计。平台保留正确窗口/NaN适配，不回退到上游不足窗口的NaN结果。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "1",
+          "category": "dielectric",
+          "category_label": "介电",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.analyze_traj",
+            "result_key": "static_dielectric_const",
+            "prerequisites": [
+              "mdtraj、展开后的轨迹、正体积与匹配原子电荷",
+              "有效温度及充分偶极采样；分析窗口与原生滚动统计支持一致"
+            ]
+          }
+        },
+        {
+          "value": "nematic_order_parameter",
+          "label": "残基向列取向序参量",
+          "description": "原生nematic_order_parameter键；mdtraj残基取向张量估计，不是链端方向或结晶度。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.get_all_prop",
+            "line": 2391
+          },
+          "unit": "1",
+          "category": "structure",
+          "category_label": "结构",
+          "native_call": {
+            "path": "radonpy/sim/lammps.py",
+            "symbol": "Analyze.analyze_traj",
+            "result_key": "nematic_order_parameter",
+            "prerequisites": [
+              "mdtraj与正确的残基拓扑",
+              "足够的生产轨迹与有限的方向张量"
+            ]
+          }
+        },
+        {
+          "value": "qm_total_energy",
+          "label": "单体QM总能量",
+          "description": "原生sp_prop返回qm_total_energy；给定分子、几何、方法与基组的电子总能，不是体相内能或结合能。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          },
+          "unit": "kJ/mol",
+          "category": "molecular",
+          "category_label": "单体量化",
+          "native_call": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "result_key": "qm_total_energy",
+            "prerequisites": [
+              "有效3D构象、可用Psi4及匹配基组/电荷/多重态",
+              "所需优化与单点SCF成功，error_flag和非有限结果必须检查"
+            ]
+          }
+        },
+        {
+          "value": "qm_homo",
+          "label": "单体HOMO能级",
+          "description": "原生sp_prop返回qm_homo；单体alpha占据前线分子轨道能，不是体相价带顶或直接电离能。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          },
+          "unit": "eV",
+          "category": "molecular",
+          "category_label": "单体量化",
+          "native_call": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "result_key": "qm_homo",
+            "prerequisites": [
+              "有效3D构象、可用Psi4及匹配基组/电荷/多重态",
+              "所需优化与单点SCF成功，error_flag和非有限结果必须检查"
+            ]
+          }
+        },
+        {
+          "value": "qm_lumo",
+          "label": "单体LUMO能级",
+          "description": "原生sp_prop返回qm_lumo；单体alpha未占据轨道能，不是体相导带底或直接电子亲和能。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          },
+          "unit": "eV",
+          "category": "molecular",
+          "category_label": "单体量化",
+          "native_call": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "result_key": "qm_lumo",
+            "prerequisites": [
+              "有效3D构象、可用Psi4及匹配基组/电荷/多重态",
+              "所需优化与单点SCF成功，error_flag和非有限结果必须检查"
+            ]
+          }
+        },
+        {
+          "value": "qm_dipole",
+          "label": "单体永久偶极矩",
+          "description": "原生sp_prop返回qm_dipole，为三个分量的向量模，不是体相介电常数。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "line": 104
+          },
+          "unit": "D",
+          "category": "molecular",
+          "category_label": "单体量化",
+          "native_call": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "sp_prop",
+            "result_key": "qm_dipole",
+            "prerequisites": [
+              "有效3D构象、可用Psi4及匹配基组/电荷/多重态",
+              "所需优化与单点SCF成功，error_flag和非有限结果必须检查"
+            ]
+          }
+        },
+        {
+          "value": "qm_polarizability",
+          "label": "单体静态电子极化率",
+          "description": "原生polarizability返回qm_polarizability及张量；静态有限场中心差分，不是频率极化率或体相介电张量。",
+          "scope": "molecular",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "polarizability",
+            "line": 172
+          },
+          "unit": "angstrom^3",
+          "category": "molecular",
+          "category_label": "单体量化",
+          "native_call": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "polarizability",
+            "result_key": "qm_polarizability",
+            "prerequisites": [
+              "有效3D构象、Psi4及所选SCF方法",
+              "六个受扰场SCF均成功，所有极化率张量元素有限"
+            ]
+          }
+        },
+        {
+          "value": "refractive_index",
+          "label": "静态近似折射率",
+          "description": "原生qm.refractive_index返回refractive_index；core.calc.refractive_index为Lorentz–Lorenz公式。需独立体相密度与分子极化率/分子量，不是频散或完整光谱。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/qm.py",
+            "symbol": "refractive_index",
+            "line": 246
+          },
+          "unit": "1",
+          "category": "optical",
+          "category_label": "光学",
+          "native_call": {
+            "path": "radonpy/core/calc.py",
+            "symbol": "refractive_index",
+            "result_key": "refractive_index",
+            "prerequisites": [
+              "合格体相密度g/cm3、正的静态分子极化率与分子量",
+              "单组分或一致归一的组分比例；Lorentz–Lorenz极化分数在0和1之间"
+            ]
+          }
+        },
+        {
+          "value": "thermal_conductivity",
+          "label": "MP/RNEMD总热导率",
+          "description": "原生NEMD_MP_Analyze.calc_tc设置prop_df.thermal_conductivity并返回TC标量；只使用decomp=False的总热导分支。既有输出guard兼容与独立质量检查保留，不采信上游状态残留的逐块合格标志。",
+          "scope": "bulk",
+          "current_execution": true,
+          "source": {
+            "path": "radonpy/sim/preset/tc.py",
+            "symbol": "NEMD_MP_Analyze.calc_tc",
+            "line": 497
+          },
+          "unit": "W/(m K)",
+          "category": "transport",
+          "category_label": "输运",
+          "native_call": {
+            "path": "radonpy/sim/preset/tc.py",
+            "symbol": "NEMD_MP_Analyze.calc_tc",
+            "result_key": "thermal_conductivity",
+            "prerequisites": [
+              "先获得合格平衡初态及MP温度层profile/交换能量日志",
+              "decomp=False；固定输出guard兼容补丁；明确生产时间窗",
+              "独立检查双侧梯度/交换线性及区块质量，不能只依赖上游Tgrad_rate"
+            ]
+          }
+        },
+        {
+          "value": "thermal_diffusivity",
+          "label": "热扩散率",
+          "description": "原生core.calc.thermal_diffusivity(tc,density,Cp)返回热扩散率；需同一协议下有效热导率、密度和质量定压热容，任一依赖无效则空值。不是单独的EQ3输出。",
+          "scope": "bulk",
+          "current_execution": true,
+          "unit": "m2/s",
+          "category": "transport",
+          "category_label": "输运",
+          "source": {
+            "path": "radonpy/core/calc.py",
+            "symbol": "thermal_diffusivity",
+            "line": 1204
+          },
+          "native_call": {
+            "path": "radonpy/core/calc.py",
+            "symbol": "thermal_diffusivity",
+            "result_key": "thermal_diffusivity",
+            "prerequisites": [
+              "有效RNEMD热导率W/(m K)、密度g/cm3、Cp J/(kg K)",
+              "三项依赖均通过质量检查；结果保留依赖阶段与各自分析窗口"
+            ]
+          }
+        },
+        {
+          "value": "tg",
+          "label": "玻璃化转变温度 Tg",
+          "description": "原生EQMD.step_wise提供分段降温输入，TGMD_analyze.step_wise的tg结果对应密度/比容两段拟合交点。平台固定800→100 K、间隔10 K，在合格平衡态副本上独立热初始化和分段冷却；使用修正时间掩码、有限值与分段拟合质量门，转变不在窗口内时返回空值，不外推。 高温平衡0.5ns，每10K间隔20ps（10ps恒温与10ps降温），最后100K再恒温10ps。",
+          "scope": "bulk",
+          "current_execution": true,
+          "unit": "K",
+          "category": "transition",
+          "category_label": "玻璃化转变",
+          "source": {
+            "path": "radonpy/sim/preset/tg.py",
+            "symbol": "EQMD.step_wise / TGMD_analyze.step_wise",
+            "line": 120
+          },
+          "native_call": {
+            "path": "radonpy/sim/preset/tg.py",
+            "symbol": "EQMD.step_wise / TGMD_analyze.step_wise",
+            "result_key": "tg",
+            "prerequisites": [
+              "合格平衡初态；800→100 K分段冷却，每10 K一个平台",
+              "独立检查采样、有限值、拟合两支和转变区间；Tg追加/连续降温占位分支不使用",
+              "温区和步数由平台科学协议管理，保留全部温度平台与拟合证据"
+            ]
+          }
+        },
+        {
+          "value": "sp_total",
+          "label": "溶解度参数 SP",
+          "description": "原生SPMD.rerun与SPMD_analyze.Solubility_Parameter提供sp_total；使用合格平衡态和独立分子相互作用能rerun，修正上游硬编码统计窗口，严格覆盖全部分子。与内聚能密度共享一次追加流程；至少2条链。本轮不开放分解分量。 平台采样0.5ns，排除前0.1ns，每1ps输出；仅使用分子group/group总相互作用能。",
+          "scope": "bulk",
+          "current_execution": true,
+          "unit": "MPa^0.5",
+          "category": "solubility",
+          "category_label": "溶解度与内聚能",
+          "source": {
+            "path": "radonpy/sim/preset/sp.py",
+            "symbol": "SPMD.rerun / SPMD_analyze.Solubility_Parameter",
+            "line": 110
+          },
+          "native_call": {
+            "path": "radonpy/sim/preset/sp.py",
+            "symbol": "SPMD.rerun / SPMD_analyze.Solubility_Parameter",
+            "result_key": "sp_total",
+            "prerequisites": [
+              "合格平衡态、至少2条聚合物链，逐分子相互作用组覆盖完整",
+              "物理时间窗口与有限/正CED检查；总SP和CED共享数据与质量证据",
+              "单位sqrt(J/cm3)=MPa^0.5，不输出vdW/静电分解"
+            ]
+          }
+        },
+        {
+          "value": "sp_ced",
+          "label": "内聚能密度 CED",
+          "description": "原生SPMD_analyze.Solubility_Parameter的sp_ced键；单位J/cm³，数值等于MPa。与Hildebrand总溶解度参数共享同一分子能量rerun和窗口；需要至少2条聚合物链，不能通过单条链计算有效分子间内聚能密度。 平台采样0.5ns，排除前0.1ns，每1ps输出；仅使用分子group/group总相互作用能。",
+          "scope": "bulk",
+          "current_execution": true,
+          "unit": "J/cm3",
+          "category": "solubility",
+          "category_label": "溶解度与内聚能",
+          "source": {
+            "path": "radonpy/sim/preset/sp.py",
+            "symbol": "SPMD_analyze.Solubility_Parameter",
+            "line": 110
+          },
+          "native_call": {
+            "path": "radonpy/sim/preset/sp.py",
+            "symbol": "SPMD.rerun / SPMD_analyze.Solubility_Parameter",
+            "result_key": "sp_ced",
+            "prerequisites": [
+              "合格平衡态和至少2条聚合物链",
+              "全分子组覆盖、有效体积和质量、明确物理时间窗口",
+              "分子内外能量差与CED有限且正；失败返回空值与原因"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "method_catalog_semantics": "QM菜单仅保留RadonPy明确使用的HF/wb97m-d3bj及四个原生默认基组名称，通过真实method/basis字符串参数绑定；不依据Psi4全部注册表扩充，不宣称任意方法/基组/元素组合普遍可用。逐元素basis_gen覆盖属于实际协议。",
+  "execution_semantics": "本规格current_execution全部true表示本轮纳入实际原生绑定，既有必要的兼容与分析窗口修复继续保留；不表示材料统计收敛或实验一致性已通过。每个原生调用仍需检查成功状态、有限值、单位和前置协议。",
+  "post_equilibrium_protocols": {
+    "tg": {
+      "method": "step_wise",
+      "minimum_temperature_k": 100,
+      "maximum_temperature_k": 800,
+      "interval_temperature_k": 10,
+      "temperature_platforms": 71,
+      "sampling_authority": "server",
+      "requires_equilibrium": true,
+      "high_temperature_equilibration_ps": 500,
+      "time_step_fs": 1,
+      "temperature_interval_ps": 20,
+      "temperature_hold_ps": 10,
+      "cooling_ramp_ps": 10,
+      "cooling_ramps": 70
+    },
+    "sp": {
+      "method": "molecular_interaction_rerun",
+      "properties": [
+        "sp_total",
+        "sp_ced"
+      ],
+      "minimum_chain_count": 2,
+      "decomposition": false,
+      "sampling_authority": "server",
+      "requires_equilibrium": true,
+      "sampling_ps": 500,
+      "burn_in_ps": 100,
+      "sample_interval_ps": 1,
+      "time_step_fs": 1
+    }
+  }
+}

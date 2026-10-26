@@ -321,6 +321,10 @@ BUSINESS_MUTABLE_TABLES = frozenset(
         ("monomer_dft", "jobs"),
         ("monomer_dft", "job_attempts"),
         ("monomer_dft", "artifacts"),
+        ("polymer_md", "jobs"),
+        ("polymer_md", "job_attempts"),
+        ("polymer_md", "stage_runs"),
+        ("polymer_md", "artifacts"),
     }
 )
 STATIC_IMPORT_DATASETS = frozenset(

@@ -1,0 +1,152 @@
+{
+  "synthetic": true,
+  "purpose": "Pure test fixture from real loader; no scientific approval or deployed registry",
+  "runtime": {
+    "source_sha": "2222222222222222222222222222222222222222",
+    "patch_version": "synthetic-fixture-v1",
+    "runtime_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+    "adapter_scientific_validation": "pending",
+    "scientific_acceptance": "pending",
+    "accepted_protocols": []
+  },
+  "scientific_protocol": {
+    "version": 1,
+    "polymer_type": "neutral_linear_polymers_and_blends",
+    "model_configuration_source": "scientific_request.model_configuration; absent uses legacy homopolymer",
+    "forcefield": "scientific_request.forcefield",
+    "forcefield_default": "GAFF2_mod",
+    "cpu_count": 16,
+    "max_mpi_processes": 16,
+    "gpu_count": 0,
+    "resource_limits_source": "capabilities.resource_limits; measured Worker health, null when unavailable",
+    "mpi_selection": {
+      "authority": "server",
+      "formula": "min(16, max(1, ceil(actual_atom_count / 500)))",
+      "monomer_mm_processes": 1,
+      "quantum_optimization": "serial"
+    },
+    "initial_density_g_cm3": 0.05,
+    "packing": {
+      "target_density_g_cm3": 0.8,
+      "max_temperature_k": 700
+    },
+    "equilibration": {
+      "scheme": "21step",
+      "time_step_fs": 1.0,
+      "max_temperature_k": 600,
+      "max_pressure_atm": 50000
+    },
+    "equilibrium_analysis": {
+      "burn_in_ps": 2000,
+      "minimum_production_samples": 500,
+      "uncertainty_blocks": 5
+    },
+    "rnemd": {
+      "method": "Muller_Plathe",
+      "time_step_fs": 0.2,
+      "burn_in_ps": 800,
+      "preheat_ps": 2,
+      "replication_other_axes": 1,
+      "decomposition": false,
+      "requires_equilibrium_and_orientation": true
+    },
+    "qm": {
+      "conformer_search_count": 1000,
+      "dft_conformer_count": 4,
+      "configuration_source": "scientific_request.native_configuration",
+      "optimization": "native_configuration.opt_method/native_configuration.opt_basis",
+      "charges": "native_configuration.charge; native_configuration.charge_method/native_configuration.charge_basis",
+      "single_point": "native_configuration.sp_method/native_configuration.sp_basis",
+      "static_polarizability": "native_configuration.polar_method/native_configuration.polar_basis",
+      "legacy_defaults": {
+        "optimization": "wb97m-d3bj/6-31G(d,p)",
+        "charges": "RESP HF/6-31G(d)",
+        "single_point": "wb97m-d3bj/6-311G(d,p)",
+        "static_polarizability": "wb97m-d3bj/6-311+G(2d,p)"
+      },
+      "legacy_defaults_apply": "only_when_native_configuration_is_absent",
+      "molecular_only": "selected QM targets skip polymer construction and MD"
+    },
+    "retention": {
+      "artifact_days": 7,
+      "metadata_days": 30,
+      "clock": "server_terminal_finished_at",
+      "requires_confirmed_cleanup": true
+    }
+  },
+  "acceptance_summary": {
+    "scientific_acceptance": "scoped_external_review",
+    "adapter_scientific_validation": "pending",
+    "accepted_protocols": [
+      "synthetic-exact-request-fixture"
+    ],
+    "accepted_protocol_count": 1,
+    "source": "external_registry",
+    "registry_status": "verified",
+    "binding": {
+      "runtime_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+      "source_sha": "2222222222222222222222222222222222222222",
+      "patch_version": "synthetic-fixture-v1",
+      "scientific_protocol_sha256": "b52058f15f277ab5e893e8713d7bc48d60927ef98ffd045bc2827aac658f4ac2"
+    },
+    "accepted_scopes": [
+      {
+        "receipt_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "receipt_sha256": "5e015c05ecf7e5732bd376057a58ca5beb37d693afe5d11fd66a1b8eecd62148",
+        "protocol_id": "synthetic-exact-request-fixture",
+        "request_sha256": "34a062d0c9ba47be9b57e59237583445c64ebec23a52cf5692a7d0abdf422b6f",
+        "material_label": "Synthetic PE fixture",
+        "model_mode": "homopolymer",
+        "forcefield": "GAFF2_mod",
+        "qm": {
+          "opt_method": "wb97m-d3bj",
+          "opt_basis": "6-31G(d,p)",
+          "charge": "RESP",
+          "charge_method": "HF",
+          "charge_basis": "6-31G(d)",
+          "sp_method": "wb97m-d3bj",
+          "sp_basis": "6-311G(d,p)",
+          "polar_method": "wb97m-d3bj",
+          "polar_basis": "6-311+G(2d,p)"
+        },
+        "conditions": {
+          "temperature_k": 300.0,
+          "pressure_atm": 1.0,
+          "eq_ns": 5.0,
+          "additional_ns": 5.0,
+          "max_additional": 2,
+          "sample_interval_ps": 1.0,
+          "tc_axis": "x",
+          "tc_ns": 1.0,
+          "tc_rep": 3,
+          "seed": 1729
+        },
+        "properties": [
+          "Cp",
+          "density"
+        ],
+        "reviewed_at": "2026-10-19T00:00:00+00:00",
+        "reviewer_ref": "0074eed557abe10e9375c41959f0e76c7784c8d964acdb6b7407af609ae75a6b",
+        "decision_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "evidence": [
+          {
+            "label": "independent_recompute",
+            "sha256": "cf8845beb740cf0c93d2160aee8899819ffeba8c9359a4c059f750fc8ea3c274",
+            "size_bytes": 54
+          },
+          {
+            "label": "raw_benchmark",
+            "sha256": "cf8845beb740cf0c93d2160aee8899819ffeba8c9359a4c059f750fc8ea3c274",
+            "size_bytes": 54
+          },
+          {
+            "label": "review_report",
+            "sha256": "cf8845beb740cf0c93d2160aee8899819ffeba8c9359a4c059f750fc8ea3c274",
+            "size_bytes": 54
+          }
+        ],
+        "scope_policy": "exact_scientific_request_only"
+      }
+    ]
+  }
+}

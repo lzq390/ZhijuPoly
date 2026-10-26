@@ -18,6 +18,19 @@ def release_contract():
     except (OSError,ValueError,TypeError,KeyError,IndexError) as exc:
         raise EntitlementPolicyError("The entitlement release contract is unavailable or invalid") from exc
 
+# This suffix is an approved optional expansion, never a wildcard for later SQL.
+OPTIONAL_MIGRATION = {"version": "0023_polymer_md_jobs", "checksum": "e73e00e16b8fc3c72e3716dae523d02d264a3e2e6989671f6019aca3440a1379"}
+
+# A second exact suffix requires the complete reviewed polymer prefix.
+LITERATURE_MIGRATION = {"version": "0024_literature_projection", "checksum": "2a5681e4b5000ed9cbf6ec88e1d8d7e6c6c5d0faf82270e802a3a9abb2060cf3"}
+
+
+def accepted_release_ledgers():
+    base = release_contract()["ledger"]
+    polymer = [*base, dict(OPTIONAL_MIGRATION)]
+    return [base, polymer, [*polymer, dict(LITERATURE_MIGRATION)]]
+
+
 def resolve_access_tier(connection,*,owner_user_id):
     """Read only, no commits/auth locks/fallback on errors; caller owns start lock."""
     try: owner=str(UUID(str(owner_user_id)))
@@ -33,7 +46,7 @@ def resolve_access_tier(connection,*,owner_user_id):
             if any(row["version"].endswith("_usage_entitlements") for row in ledger):
                 raise EntitlementPolicyError("Entitlement migration claims a missing access-tier table")
             return "member"  # Preserve pre-cutover authentication initialization.
-        if ledger!=release_contract()["ledger"]:
+        if ledger not in accepted_release_ledgers():
             raise EntitlementPolicyError("Access tiers require the exact release-known migration ledger")
         cursor.execute("SELECT relkind,relrowsecurity,relforcerowsecurity FROM pg_class WHERE oid=%s::regclass",("usage_entitlements.owner_entitlements",))
         table=cursor.fetchone()

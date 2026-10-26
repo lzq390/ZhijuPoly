@@ -19,7 +19,7 @@ const pages = {
   homopolymerPrediction: page(() => import("./components/HomopolymerPropertyPredictionPage"), m => m.HomopolymerPropertyPredictionPage),
   knowledge: page(() => import("./components/KnowledgeSearch"), m => m.KnowledgeSearch),
   labData: page(() => import("./components/LabDataPage"), m => m.LabDataPage),
-  mdSimulationDemo: page(() => import("./components/MdSimulationDemoPage"), m => m.MdSimulationDemoPage),
+  mdSimulationDemo: page(() => import("./components/PolymerMdSimulationPage"), m => m.PolymerMdSimulationPage),
   monomerMdSimulation: page(() => import("./components/MonomerMdSimulationPage"), m => m.MonomerMdSimulationPage),
   monomerDft: page(() => import("./components/MonomerDftPage"), m => m.MonomerDftPage),
   monomerPolymerization: page(() => import("./components/MonomerPolymerizationPage"), m => m.MonomerPolymerizationPage),
@@ -40,7 +40,7 @@ export const HighThroughputWorkflowDemoPage = pages.highThroughputWorkflowDemo.P
 export const HomopolymerPropertyPredictionPage = pages.homopolymerPrediction.Page;
 export const KnowledgeSearch = pages.knowledge.Page;
 export const LabDataPage = pages.labData.Page;
-export const MdSimulationDemoPage = pages.mdSimulationDemo.Page;
+export const PolymerMdSimulationPage = pages.mdSimulationDemo.Page;
 export const MonomerMdSimulationPage = pages.monomerMdSimulation.Page;
 export const MonomerDftPage = pages.monomerDft.Page;
 export const MonomerPolymerizationPage = pages.monomerPolymerization.Page;

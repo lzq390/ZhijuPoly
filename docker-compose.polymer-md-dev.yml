@@ -1,0 +1,29 @@
+# Opt-in overlay for the existing development Backend. No production defaults change.
+# A separately prepared Host Worker/socket and private configuration are required.
+# This overlay does not create a Worker, database, credentials, or acceptance registry.
+services:
+  backend:
+    environment:
+      POLYMER_MD_DEV_ENABLED: "true"
+      POLYMER_MD_SUBMIT_ENABLED: "${POLYMER_MD_SUBMIT_ENABLED:-false}"
+      POLYMER_MD_ENVIRONMENT: dev
+      NEXPOLY_POSTGRES_PREFLIGHT_ARGS: "--strict --schema-target polymer-md-0023 --service-context"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      POLYMER_MD_WORKER_UDS: /app/polymer-md-socket/worker.sock
+      POLYMER_MD_ARTIFACT_ROOT: /app/polymer-md-artifacts
+      POLYMER_MD_START_AUTHORIZATION_TOKEN: "${POLYMER_MD_START_AUTHORIZATION_TOKEN:?source the private polymer MD dev.env}"
+    volumes:
+      - type: bind
+        source: ${POLYMER_MD_SOCKET_DIR:?set to the init command socket_directory}
+        target: /app/polymer-md-socket
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${POLYMER_MD_JOB_ROOT:?set private polymer MD job root}
+        target: /app/polymer-md-artifacts
+        read_only: true
+        bind:
+          create_host_path: false

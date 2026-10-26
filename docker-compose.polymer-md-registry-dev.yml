@@ -1,0 +1,15 @@
+# Optional external scientific acceptance registry. This overlay does not enable
+# polymer MD or submission. Apply only during a reviewed, drained deployment.
+# Keep the full immutable registry outside runtime/job roots and mount it read-only.
+services:
+  backend:
+    user: "${POLYMER_MD_ACCEPTANCE_UID:?set to the private registry owner UID}:${POLYMER_MD_ACCEPTANCE_GID:?set to the private registry owner GID}"
+    environment:
+      POLYMER_MD_ACCEPTANCE_ROOT: /app/polymer-md-acceptance
+    volumes:
+      - type: bind
+        source: ${POLYMER_MD_ACCEPTANCE_HOST_ROOT:?set to the existing private acceptance registry directory}
+        target: /app/polymer-md-acceptance
+        read_only: true
+        bind:
+          create_host_path: false

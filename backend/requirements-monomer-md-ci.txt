@@ -23,3 +23,5 @@ smipoly==1.1.2
 
 argon2-cffi==25.1.0
 uvicorn==0.32.0
+
+minio==7.2.20

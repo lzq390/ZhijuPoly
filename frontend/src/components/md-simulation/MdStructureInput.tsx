@@ -7,10 +7,12 @@ import {
   Eraser,
   ImageOff,
   LoaderCircle,
+  LockKeyhole,
   PencilRuler
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchStructure2D } from "../../services/api";
+import { useAuth } from "../../auth/AuthProvider";
 import { StructureSvg } from "../StructureSvg";
 
 type PreviewState = {
@@ -49,6 +51,7 @@ export function MdStructureInput({
   onTouched,
   onEditStructure
 }: MdStructureInputProps) {
+  const guest = useAuth()?.status === "guest";
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewRevisionRef = useRef(0);
   const previewValueRef = useRef("");
@@ -64,7 +67,7 @@ export function MdStructureInput({
     previewValueRef.current = smiles;
     const revision = previewRevisionRef.current + 1;
     previewRevisionRef.current = revision;
-    if (!smiles) {
+    if (!smiles || guest) {
       previewAbortRef.current = null;
       setPreview(EMPTY_PREVIEW);
       return;
@@ -87,16 +90,25 @@ export function MdStructureInput({
     } finally {
       if (previewAbortRef.current === controller) previewAbortRef.current = null;
     }
-  }, []);
+  }, [guest]);
 
   useEffect(() => {
     const smiles = value.trim();
+    // Identity retirement must cancel even when the input string is unchanged.
+    if (guest) {
+      previewRevisionRef.current += 1;
+      previewAbortRef.current?.abort();
+      previewAbortRef.current = null;
+      previewValueRef.current = "";
+      setPreview(EMPTY_PREVIEW);
+      return;
+    }
     if (previewValueRef.current === smiles) return;
     previewRevisionRef.current += 1;
     previewAbortRef.current?.abort();
     const timeout = window.setTimeout(() => void loadPreview(value), 420);
     return () => window.clearTimeout(timeout);
-  }, [loadPreview, value]);
+  }, [guest, loadPreview, value]);
 
   useEffect(() => {
     return () => {
@@ -195,7 +207,9 @@ export function MdStructureInput({
           {previewIsStale ? <small>对应上次输入</small> : null}
         </div>
         <div className="np-md-preview__canvas">
-          {preview.loading ? (
+          {guest && value.trim() ? (
+            <div className="np-md-preview__state"><LockKeyhole aria-hidden="true" /><span>登录后生成 2D 预览</span></div>
+          ) : preview.loading ? (
             <div className="np-md-preview__state"><LoaderCircle className="np-sw-spin" /><span>正在生成预览</span></div>
           ) : preview.svg ? (
             <StructureSvg

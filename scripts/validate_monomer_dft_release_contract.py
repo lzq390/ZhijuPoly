@@ -800,15 +800,25 @@ def _validate_current_isolation_resolver(
         for node in tree.body if isinstance(node, ast.Assign)
         for target in node.targets if isinstance(target, ast.Name)
     }
-    for name, value in (
+    profiles = [
         ("SCHEMA_TARGET_CURRENT_ISOLATION", "user-isolation-current"),
         ("SCHEMA_TARGET_STRUCTURE_LIBRARY", "user-isolation-0020"),
-    ):
+    ]
+    if "POLYMER_VERSION" in boundary_names:
+        profiles.append(("SCHEMA_TARGET_POLYMER_MD", "polymer-md-0023"))
+    if "LITERATURE_MIGRATION" in boundary_names:
+        profiles.append(("SCHEMA_TARGET_LITERATURE", "literature-0024"))
+    for name, value in profiles:
         if ast.dump(assignments.get(name, ast.Constant(None))) != expression(repr(value)):
             failures.append(f"Postgres current-isolation schema profile is missing: {name}")
     targets = assignments.get("ISOLATION_TARGETS")
     target_names = {node.id for node in ast.walk(targets) if isinstance(node, ast.Name)} if targets else set()
-    if not {"SCHEMA_TARGET_CURRENT_ISOLATION", "SCHEMA_TARGET_STRUCTURE_LIBRARY"} <= target_names:
+    required_targets = {"SCHEMA_TARGET_CURRENT_ISOLATION", "SCHEMA_TARGET_STRUCTURE_LIBRARY"}
+    for boundary, target in (("POLYMER_VERSION", "SCHEMA_TARGET_POLYMER_MD"),
+                             ("LITERATURE_MIGRATION", "SCHEMA_TARGET_LITERATURE")):
+        if boundary in boundary_names:
+            required_targets.add(target)
+    if not required_targets <= target_names:
         failures.append("current startup targets must retain all isolation checks")
 
     run = next((node for node in tree.body if isinstance(node, ast.FunctionDef)
@@ -816,10 +826,18 @@ def _validate_current_isolation_resolver(
     nodes = list(ast.walk(run)) if run else []
     resolvers = [node for node in nodes if isinstance(node, ast.If)
                  and ast.dump(node.test) == expression("schema_target == SCHEMA_TARGET_CURRENT_ISOLATION")]
-    expected = expression(
+    resolver_source = (
         "SCHEMA_TARGET_STRUCTURE_LIBRARY if applied_migrations and max(applied_migrations) in {"
-        + ", ".join(boundary_names) + "} else SCHEMA_TARGET_ISOLATION"
+        + ", ".join(name for name in boundary_names
+                    if name not in {"POLYMER_VERSION", "LITERATURE_MIGRATION"})
+        + "} else SCHEMA_TARGET_ISOLATION"
     )
+    for boundary, target in (("POLYMER_VERSION", "SCHEMA_TARGET_POLYMER_MD"),
+                             ("LITERATURE_MIGRATION", "SCHEMA_TARGET_LITERATURE")):
+        if boundary in boundary_names:
+            resolver_source = (f"{target} if applied_migrations and max(applied_migrations) == {boundary} "
+                               f"else {resolver_source}")
+    expected = expression(resolver_source)
     resolutions = [node.value for resolver in resolvers for node in ast.walk(resolver)
                    if isinstance(node, ast.Assign)
                    and any(isinstance(target, ast.Name) and target.id == "schema_target"
@@ -845,6 +863,14 @@ def _validate_current_isolation_resolver(
     ):
         if expression(required) not in isolation_expressions:
             failures.append(f"current isolation startup protection is missing: {required}")
+    if "POLYMER_VERSION" in boundary_names:
+        for required in (
+            "validate_application_migration_ledger(connection, require_usage=True, require_entitlements=True)",
+            "boundary != POLYMER_VERSION",
+            *(["boundary != LITERATURE_MIGRATION"] if "LITERATURE_MIGRATION" in boundary_names else []),
+        ):
+            if expression(required) not in isolation_expressions:
+                failures.append(f"current isolation startup protection is missing: {required}")
 
 
 def validate_database_schema_state_contract(
@@ -935,6 +961,18 @@ def validate_database_schema_state_contract(
         'WHERE execution_token IS NOT NULL"\n'
         '        ).fetchone()["count"])',
         "version = 3\n"
+        "    polymer = connection.execute(",
+        "SELECT to_regnamespace('polymer_md') IS NOT NULL\n"
+        "        OR EXISTS(SELECT FROM governance.schema_migrations WHERE version='0023_polymer_md_jobs') AS present",
+        'if polymer["present"]:',
+        "validate_polymer_md_schema(connection)",
+        "if version != 3:\n"
+        '            raise RuntimeError("polymer MD deployment schema requires the preceding job schemas")',
+        'counts["polymer_md"] = int(connection.execute("""SELECT count(*) AS count\n'
+        "            FROM polymer_md.jobs j WHERE status = ANY(%s) OR cleanup_confirmed IS NOT TRUE\n"
+        "              OR EXISTS(SELECT FROM polymer_md.stage_runs s WHERE s.job_id=j.job_id AND s.status='running')\"\"\",\n"
+        '            (list(POLYMER_MD_ACTIVE_STATUSES),)).fetchone()["count"])',
+        "version = 4\n"
         "    return ActiveJobSummary(counts=counts, active_jobs_schema_version=version)",
     ):
         if marker not in deployment_control:
@@ -962,6 +1000,8 @@ def validate_database_schema_state_contract(
         ("0020_structure_library", "LIBRARY_VERSION"),
         ("0021_usage_metering", "USAGE_VERSION"),
         ("0022_usage_entitlements", "ENTITLEMENT_VERSION"),
+        ("0023_polymer_md_jobs", "POLYMER_VERSION"),
+        ("0024_literature_projection", "LITERATURE_MIGRATION"),
     )
     current_isolation = any(version in versions for version, _name in private_boundaries)
     isolated = current_isolation or any(version in versions for version in isolation_versions)

@@ -280,3 +280,36 @@ def test_backup_restore_contract_at_each_maintenance_boundary(maintenance_databa
     finally:
         with psycopg.connect(db["base"], autocommit=True) as connection:
             connection.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(target)))
+
+
+@pytest.mark.parametrize("boundary", ["0022_usage_entitlements", "0023_polymer_md_jobs"])
+def test_approved_expansion_retry_is_metadata_only_offline(monkeypatch, boundary):
+    from app.auth import service_privileges as module, isolation_ledger
+    from types import SimpleNamespace
+    statements = []
+    checked = []
+
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def execute(self, query, params=()):
+            statements.append(query)
+            assert not query.lstrip().upper().startswith(("INSERT", "UPDATE", "CREATE", "GRANT", "REVOKE"))
+            if "current_database() AS name" in query:
+                value = {"name": "offline", "oid": 1, "system_identifier": "123"}
+            elif "SELECT max(version)" in query:
+                value = {"version": boundary}
+            elif "SELECT 1 FROM governance.schema_migrations" in query:
+                value = {"present": 1}
+            else:
+                value = None
+            return SimpleNamespace(fetchone=lambda: value)
+
+    monkeypatch.setattr(module.psycopg, "connect", lambda *args, **kwargs: Connection())
+    monkeypatch.setattr(module, "validate_service_migration_ledger", lambda connection, through: isolation_ledger.expected_isolation_ledger(through))
+    monkeypatch.setattr(isolation_ledger, "validate_application_migration_ledger", lambda connection, **kwargs: checked.append(kwargs))
+    monkeypatch.setattr(module, "validate_service_auth_privileges", lambda *args, **kwargs: {"password_select": False})
+    result = module.apply_service_auth_least_privilege("offline", service_roles=["offline_service"], expected_database="offline")
+    assert result["already_applied"] and result["migration_ledger"][-1]["version"] == boundary
+    assert checked == [{"require_usage": True, "require_entitlements": True}]
+    assert not result["credential_values_read"]

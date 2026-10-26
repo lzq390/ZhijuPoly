@@ -92,11 +92,13 @@ class SiteHelperContractTests(unittest.TestCase):
             | set(CONTRACTS.POST_0013_BUSINESS_MUTABLE_TABLES)
             | set(CONTRACTS.POST_0016_BUSINESS_MUTABLE_TABLES)
             | set(CONTRACTS.POST_0020_BUSINESS_MUTABLE_TABLES)
+            | set(CONTRACTS.POST_0023_BUSINESS_MUTABLE_TABLES)
             | set(usage_seal_tables)
             | set(entitlement_seal_tables)
             | set(CONTRACTS.USER_IDENTITY_AUDIT_TABLES)
             | set(CONTRACTS.GOVERNED_CONTROL_TABLES)
             | set(CONTRACTS.STATIC_IMPORT_TABLES)
+            | set(CONTRACTS.POST_0020_LITERATURE_TABLES)
             | {
                 CONTRACTS.MIGRATION_LEDGER_TABLE,
                 CONTRACTS.CONTRACT_0012_EXCEPTION_TABLE,
@@ -109,11 +111,13 @@ class SiteHelperContractTests(unittest.TestCase):
                 CONTRACTS.POST_0013_BUSINESS_MUTABLE_TABLES,
                 CONTRACTS.POST_0016_BUSINESS_MUTABLE_TABLES,
                 CONTRACTS.POST_0020_BUSINESS_MUTABLE_TABLES,
+                CONTRACTS.POST_0023_BUSINESS_MUTABLE_TABLES,
                 usage_seal_tables,
                 entitlement_seal_tables,
                 CONTRACTS.USER_IDENTITY_AUDIT_TABLES,
                 CONTRACTS.GOVERNED_CONTROL_TABLES,
                 CONTRACTS.STATIC_IMPORT_TABLES,
+                CONTRACTS.POST_0020_LITERATURE_TABLES,
                 (
                     CONTRACTS.MIGRATION_LEDGER_TABLE,
                     CONTRACTS.CONTRACT_0012_EXCEPTION_TABLE,

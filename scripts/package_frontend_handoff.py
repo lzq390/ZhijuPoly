@@ -53,6 +53,9 @@ EXTERNAL_FIXTURES = {
     'contracts/monomer_dft_api_contract_v1.json':
         'frontend/src/test/fixtures/monomer_dft_api_contract_v1.json',
 }
+# Public UI specifications retain their import paths; never copy this package's
+# Python executors, local runtime state or other unreviewed data alongside them.
+SOURCE_DEPENDENCIES = ('polymer_md/user_configuration.json', 'polymer_md/capability_catalog.json')
 TEXT_SUFFIXES = {'.ts', '.tsx', '.js', '.mjs', '.cjs', '.css', '.json', '.html', '.md', '.txt', '.csv', '.patch'}
 HANDOFF_ENV = ('VITE_HANDOFF_MOCK=true\nVITE_API_BASE_URL=/api/v1\nVITE_AGENT_WORKSPACE_URL=\n'
                'VITE_STRUCTURE_EDITOR_ENGINE=react\nVITE_DEV_GPU_SESSION_CONTROL=false\n'
@@ -202,6 +205,8 @@ def selected_files(root: Path) -> dict[str, Path]:
         add(root / 'docs' / name)
     for name in EXTERNAL_FIXTURES:
         add(root / name)
+    for name in SOURCE_DEPENDENCIES:
+        add(root / name)
     return selected
 
 def stable_snapshot(root: Path, destination: Path, attempts: int = 3) -> dict:
@@ -257,10 +262,12 @@ def adapt_page_fixture_routes(page_check: Path) -> None:
     # Business-state fixtures delegate auth to the existing local GET/HEAD guard
     # and isolated HTTP Mock; they must not manufacture an authenticated session.
     replace_exact(page_check,
-                  'const failure = route => route.fulfill({ status: 503, json: { detail: "Local UI state fixture" } });',
-                  'const failure = route => new URL(route.request().url()).pathname.endsWith("/auth/session")'
-                  ' ? route.fallback()'
-                  ' : route.fulfill({ status: 503, json: { detail: "Local UI state fixture" } });')
+                  '    if (new URL(route.request().url()).pathname === "/api/v1/auth/session") {\n'
+                  '      return route.fulfill({ json: { authenticated: true,\n'
+                  '        user: { id: "10000000-0000-0000-0000-000000000001", username: "Synthetic UI", must_change_password: false },\n'
+                  '        session_id: "synthetic-page-session", csrf_token: "synthetic-page-csrf", capabilities: {} } });\n'
+                  '    }',
+                  '    if (new URL(route.request().url()).pathname === "/api/v1/auth/session") return route.fallback();')
     replace_exact(page_check,
                   'const url = new URL(route.request().url());\n    const payload = fixture.response(url);',
                   'const url = new URL(route.request().url());\n'

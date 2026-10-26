@@ -1,4 +1,4 @@
-import { assertSessionEpoch, getSessionEpoch, privateFetch } from "../auth/session";
+import { assertSessionEpoch, getSession, getSessionEpoch, privateFetch } from "../auth/session";
 import type {
   PropertyFilterObservationRequest,
   ConditionalGenerationJobCreateResponse,
@@ -17,6 +17,9 @@ import type {
   FormulationBrowseResponse,
   KnowledgeSearchRequest,
   KnowledgeSearchResponse,
+  KnowledgeSourcesResponse,
+  LiteratureDetailResponse,
+  LiteratureFullTextResponse,
   KnowledgeObservationRequest,
   KnowledgeRecording,
   KnowledgeRecordingSummary,
@@ -575,10 +578,38 @@ export function searchKnowledge(
   return postJSON("/knowledge/search", payload, signal);
 }
 
+export function fetchKnowledgeSources(signal?: AbortSignal): Promise<KnowledgeSourcesResponse> {
+  return getJSON("/knowledge/sources", { signal });
+}
+
+function literatureDocumentPath(documentUid: string, generationId: string, snapshotUid: string, suffix = "") {
+  const params = new URLSearchParams({ generation_id: generationId, snapshot_uid: snapshotUid });
+  return `/knowledge/literature/${encodeURIComponent(documentUid)}${suffix}?${params}`;
+}
+
+export function fetchLiteratureDetail(documentUid: string, generationId: string, snapshotUid: string, signal?: AbortSignal): Promise<LiteratureDetailResponse> {
+  return getJSON(literatureDocumentPath(documentUid, generationId, snapshotUid), { signal });
+}
+
+export function fetchLiteratureFullText(documentUid: string, generationId: string, snapshotUid: string, cursor?: string, signal?: AbortSignal): Promise<LiteratureFullTextResponse> {
+  const path = literatureDocumentPath(documentUid, generationId, snapshotUid, "/fulltext");
+  const params = new URLSearchParams({ limit: "100", ...(cursor ? { cursor } : {}) });
+  return getJSON(`${path}&${params}`, { signal });
+}
+
+export function literatureAssetUrl(documentUid: string, generationId: string, snapshotUid: string, assetUid: string, download = false): string {
+  const path = literatureDocumentPath(documentUid, generationId, snapshotUid, `/files/${encodeURIComponent(assetUid)}/content`);
+  // Native document navigation cannot send the privateFetch context header.
+  // The server still authenticates the cookie and verifies this public context.
+  const sessionId = getSession().session_id;
+  return `${API_BASE_URL}${path}${sessionId ? `&session_context=${encodeURIComponent(sessionId)}` : ""}${download ? "&download=true" : ""}`;
+}
+
 export function postKnowledgeObservation(payload: KnowledgeObservationRequest): Promise<{
-  event: "article.opened" | "article.reaction_viewed";
+  event: string;
   search_id: string;
-  knowledge_id: number;
+  knowledge_id?: number;
+  document_uid?: string;
 }> {
   return postJSON("/knowledge/observations", payload);
 }

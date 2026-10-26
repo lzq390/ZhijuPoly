@@ -5,6 +5,12 @@ and cancellable event-stream helpers, and their boundary tests.
 It preserves stable source capture, environment/private-file exclusions,
 run ownership and resume checks, deterministic archives, manifest verification,
 adaptation hooks, isolated frontend validation and the final metadata audit.
+The source allowlist includes only `polymer_md/user_configuration.json` and
+`polymer_md/capability_catalog.json` from the shared Polymer MD package. These
+public UI specifications keep their relative import paths; executors, runtime
+state and other files from that package remain excluded. Adapted browser service
+fixtures delegate authentication to the isolated lower transport and retain
+their explicit business failures.
 
 ## Asset and adapter dependency
 

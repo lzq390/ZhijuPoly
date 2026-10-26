@@ -42,7 +42,7 @@ def _resolve_access_tier(self, *, owner_user_id, connection=None):
                         raise ValueError('Entitlement migration claims a missing access-tier table')
                 return "member"
         ledger=validate_application_migration_ledger(active, require_usage=False, require_entitlements=False)
-        if ledger[-1]["version"]!=ENTITLEMENT_VERSION:
+        if not any(row["version"] == ENTITLEMENT_VERSION for row in ledger):
             raise ValueError('Access-tier table has no exact entitlement migration')
         from app.services.entitlement_schema import validate_entitlement_schema
         validate_entitlement_schema(active)
@@ -66,7 +66,7 @@ def _saved_schema_available(active):
                     raise ValueError("Entitlement migration claims missing saved-operation tables")
             return False
     ledger=validate_application_migration_ledger(active,require_usage=False,require_entitlements=False)
-    if ledger[-1]["version"]!=ENTITLEMENT_VERSION:
+    if not any(row["version"] == ENTITLEMENT_VERSION for row in ledger):
         raise ValueError("Saved entitlement schema has no exact known migration")
     validate_entitlement_schema(active)
     return True

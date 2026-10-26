@@ -31,7 +31,7 @@ import type { StructureSyncResult } from "./structure/workspace";
 import {
   PersonalUsagePage, ConditionalGenerationPage, DatabaseAnalysis, DatabaseFilterPage, DatabaseQueryPage,
   ExperimentWorkflowDemoPage, HighThroughputWorkflowDemoPage, HomopolymerPropertyPredictionPage,
-  KnowledgeSearch, LabDataPage, MdSimulationDemoPage, MonomerMdSimulationPage, MonomerDftPage,
+  KnowledgeSearch, LabDataPage, PolymerMdSimulationPage, MonomerMdSimulationPage, MonomerDftPage,
   MonomerPolymerizationPage, MonomerRetrosynthesisPage, PolytaoGenerationPage, ReverseDesignPage,
   PolymerSimilarityExplorerPage, StructureWorkbenchPage, preloadPage
 } from "./pages";
@@ -656,7 +656,7 @@ function AppContent() {
         {
           id: "mdSimulationDemo",
           label: "MD 模拟",
-          description: "输入 SMILES 和默认参数，演示分子动力学流程与轨迹结果。",
+          description: "配置聚合物体系与计算参数，提交正式 MD 计算并分析结果。",
           route: "/md-simulation",
           icon: <Activity className="h-4 w-4" />,
           isActive: activeModule === "mdSimulationDemo",
@@ -872,7 +872,7 @@ function AppContent() {
       ) : null}
 
       {activeModule === "mdSimulationDemo" ? (
-        <MdSimulationDemoPage
+        <PolymerMdSimulationPage
           structure={structureWorkspace}
           onEditStructure={openStructureWorkbench}
         />

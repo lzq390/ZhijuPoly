@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getSessionEpoch, onSessionRetired } from "../auth/session";
 import {
   calculateMdDemoAtomDistance,
   fetchMdDemoDefaults,
@@ -113,6 +114,11 @@ function waitForReveal(delay: number, signal: AbortSignal) {
 
 export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; enabled?: boolean } = {}) {
   const resultRevealDelayMs = options.resultRevealDelayMs ?? RESULT_REVEAL_AT_MS;
+  const enabledRef = useRef(options.enabled !== false);
+  enabledRef.current = options.enabled !== false;
+  const mounted = useRef(true);
+  const identity = useRef(getSessionEpoch());
+  const valid = useCallback(() => mounted.current && enabledRef.current && identity.current === getSessionEpoch(), []);
   const [state, setState] = useState<MdSimulationDemoState>({
     defaults: null,
     defaultsLoading: options.enabled !== false,
@@ -141,15 +147,16 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
   }, []);
 
   const refreshDefaults = useCallback(async () => {
+    if (!valid()) return null;
     defaultsAbortRef.current?.abort();
     const controller = new AbortController();
     const revision = defaultsRevisionRef.current + 1;
     defaultsRevisionRef.current = revision;
     defaultsAbortRef.current = controller;
-    setState((current) => ({ ...current, defaultsLoading: options.enabled !== false, defaultsError: null }));
+    setState((current) => ({ ...current, defaultsLoading: true, defaultsError: null }));
     try {
       const defaults = await fetchMdDemoDefaults(controller.signal);
-      if (controller.signal.aborted || defaultsRevisionRef.current !== revision) return null;
+      if (!valid() || controller.signal.aborted || defaultsRevisionRef.current !== revision) return null;
       setState((current) => ({
         ...current,
         defaults,
@@ -158,7 +165,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
       }));
       return defaults;
     } catch (error) {
-      if (controller.signal.aborted || defaultsRevisionRef.current !== revision || isAbortError(error)) return null;
+      if (!valid() || controller.signal.aborted || defaultsRevisionRef.current !== revision || isAbortError(error)) return null;
       setState((current) => ({
         ...current,
         defaultsLoading: false,
@@ -168,7 +175,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
     } finally {
       if (defaultsAbortRef.current === controller) defaultsAbortRef.current = null;
     }
-  }, []);
+  }, [valid]);
 
   const clearDistance = useCallback(() => {
     distanceRevisionRef.current += 1;
@@ -183,6 +190,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
   }, []);
 
   const run = useCallback(async (request: MdDemoRunRequest) => {
+    if (!valid()) return null;
     runRevisionRef.current += 1;
     runAbortRef.current?.abort();
     distanceRevisionRef.current += 1;
@@ -203,6 +211,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
       distanceError: null
     }));
     progressTimerRef.current = window.setInterval(() => {
+      if (!valid() || controller.signal.aborted || runRevisionRef.current !== revision) return;
       setState((current) => ({ ...current, progress: scriptedProgress(window.performance.now() - startedAt) }));
     }, 140);
 
@@ -210,7 +219,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
       const data = await runMdDemo(request, controller.signal);
       const remaining = resultRevealDelayMs - (window.performance.now() - startedAt);
       await waitForReveal(remaining, controller.signal);
-      if (controller.signal.aborted || runRevisionRef.current !== revision) return null;
+      if (!valid() || controller.signal.aborted || runRevisionRef.current !== revision) return null;
       stopProgress();
       setState((current) => ({
         ...current,
@@ -221,7 +230,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
       }));
       return data;
     } catch (error) {
-      if (controller.signal.aborted || runRevisionRef.current !== revision || isAbortError(error)) return null;
+      if (!valid() || controller.signal.aborted || runRevisionRef.current !== revision || isAbortError(error)) return null;
       stopProgress();
       setState((current) => ({
         ...current,
@@ -233,9 +242,10 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
     } finally {
       if (runAbortRef.current === controller) runAbortRef.current = null;
     }
-  }, [resultRevealDelayMs, stopProgress]);
+  }, [resultRevealDelayMs, stopProgress, valid]);
 
   const calculateDistance = useCallback(async (payload: MdDemoAtomDistanceRequest) => {
+    if (!valid()) return null;
     distanceRevisionRef.current += 1;
     distanceAbortRef.current?.abort();
     const controller = new AbortController();
@@ -249,7 +259,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
     }));
     try {
       const distance = await calculateMdDemoAtomDistance(payload, controller.signal);
-      if (controller.signal.aborted || distanceRevisionRef.current !== revision) return null;
+      if (!valid() || controller.signal.aborted || distanceRevisionRef.current !== revision) return null;
       setState((current) => ({
         ...current,
         distance,
@@ -258,7 +268,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
       }));
       return distance;
     } catch (error) {
-      if (controller.signal.aborted || distanceRevisionRef.current !== revision || isAbortError(error)) return null;
+      if (!valid() || controller.signal.aborted || distanceRevisionRef.current !== revision || isAbortError(error)) return null;
       setState((current) => ({
         ...current,
         distance: null,
@@ -269,7 +279,7 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
     } finally {
       if (distanceAbortRef.current === controller) distanceAbortRef.current = null;
     }
-  }, []);
+  }, [valid]);
 
   const clearResults = useCallback(() => {
     runRevisionRef.current += 1;
@@ -291,18 +301,36 @@ export function useMdSimulationDemo(options: { resultRevealDelayMs?: number; ena
     }));
   }, [stopProgress]);
 
+  const invalidateRequests = useCallback(() => {
+    defaultsRevisionRef.current += 1;
+    runRevisionRef.current += 1;
+    distanceRevisionRef.current += 1;
+    defaultsAbortRef.current?.abort();
+    runAbortRef.current?.abort();
+    distanceAbortRef.current?.abort();
+    defaultsAbortRef.current = null;
+    runAbortRef.current = null;
+    distanceAbortRef.current = null;
+    stopProgress();
+  }, [stopProgress]);
+
+  useEffect(() => {
+    mounted.current = true;
+    const retire = onSessionRetired(() => {
+      invalidateRequests();
+      setState({ defaults: null, defaultsLoading: false, defaultsError: null,
+        data: null, runLoading: false, runError: null, progress: 0,
+        distance: null, distanceLoading: false, distanceError: null });
+    });
+    return () => { mounted.current = false; retire(); invalidateRequests(); };
+  }, [invalidateRequests]);
+
   useEffect(() => {
     if (options.enabled !== false) void refreshDefaults();
-    return () => {
-      defaultsRevisionRef.current += 1;
-      runRevisionRef.current += 1;
-      distanceRevisionRef.current += 1;
-      defaultsAbortRef.current?.abort();
-      runAbortRef.current?.abort();
-      distanceAbortRef.current?.abort();
-      stopProgress();
-    };
-  }, [options.enabled, refreshDefaults, stopProgress]);
+    else setState(current => ({ ...current, defaultsLoading: false, runLoading: false,
+      distanceLoading: false, progress: current.data ? 100 : 0 }));
+    return invalidateRequests;
+  }, [options.enabled, refreshDefaults, invalidateRequests]);
 
   return {
     ...state,

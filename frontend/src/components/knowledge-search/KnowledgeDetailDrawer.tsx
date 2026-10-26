@@ -39,6 +39,7 @@ type KnowledgeDetailDrawerProps = {
   onClose: () => void;
   onOpen: () => void;
   onTabChange?: (tabId: string) => void;
+  activeTabId?: string;
 };
 
 type KnowledgeDrawerWidthProfile = {
@@ -151,7 +152,8 @@ export function KnowledgeDetailDrawer({
   onWidthChange,
   onClose,
   onOpen,
-  onTabChange
+  onTabChange,
+  activeTabId
 }: KnowledgeDetailDrawerProps) {
   const presence = useMotionPresence<HTMLElement>(open, { enter: "drawerEnter", exit: "drawerExit", property: "transform" });
   const drawerRef = presence.ref;
@@ -162,15 +164,18 @@ export function KnowledgeDetailDrawer({
   const wasOpenRef = useRef(false);
   const [everOpened, setEverOpened] = useState(open);
   const [activeTab, setActiveTab] = useState(tabs[0]?.id ?? "");
+  // A controlled tab must be rendered in the same commit as its parent's state,
+  // so effects that navigate into that tab can access the newly mounted content.
+  const visibleTabId = activeTabId && tabs.some((tab) => tab.id === activeTabId) ? activeTabId : activeTab;
   const mobile = useMobileDrawer();
   const resize = useDrawerResize({ width, minWidth: widthProfile.min, maxWidth: widthProfile.max, onWidthChange, enabled: open && !mobile });
   useLayoutEffect(() => { if (resize.resizing) presence.finish(); }, [resize.resizing, presence.finish]);
   useLayoutEffect(() => { presence.finish(); }, [mode, presence.finish]);
-  useContentMotion(bodyRef, activeTab, "tab");
+  useContentMotion(bodyRef, visibleTabId, "tab");
   const modalFocusActive = useModalFocus({ active: mobile && presence.present, open, scopeRef: drawerRef, panelRef: drawerRef,
     initialFocusRef: closeButtonRef, onClose, ownerId: id });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setActiveTab(tabs[0]?.id ?? "");
   }, [contentKey]);
 
@@ -224,7 +229,7 @@ export function KnowledgeDetailDrawer({
   }
 
   function selectTab(tabId: string) {
-    if (tabId === (tabs.find((tab) => tab.id === activeTab) ?? tabs[0])?.id) return;
+    if (tabId === (tabs.find((tab) => tab.id === visibleTabId) ?? tabs[0])?.id) return;
     setActiveTab(tabId);
     onTabChange?.(tabId);
   }
@@ -243,7 +248,7 @@ export function KnowledgeDetailDrawer({
     });
   }
 
-  const selectedTab = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
+  const selectedTab = tabs.find((tab) => tab.id === visibleTabId) ?? tabs[0];
   const titleId = `${id}-title`;
 
   return (
@@ -265,6 +270,7 @@ export function KnowledgeDetailDrawer({
           className={`ks-drawer-reopen${verticalReopen ? " is-vertical" : ""}`}
           type="button"
           onClick={onOpen}
+          aria-label={reopenLabel}
           aria-expanded="false"
           aria-controls={id}
         >

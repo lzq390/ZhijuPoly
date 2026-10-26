@@ -14,19 +14,26 @@ from psycopg.rows import dict_row
 
 from app.migration_policy import validate_migration_manifest_entries
 from app.postgres_migrations import MIGRATIONS_DIR
-from .isolation_ledger import CURRENT_VERSION, LIBRARY_VERSION, expected_isolation_ledger, validate_service_members
+from app.literature_contract import optional_literature_tables
+from .isolation_ledger import (CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION, expected_isolation_ledger, validate_service_members, validate_application_migration_ledger)
 
 VERSION = '0018_user_isolation_cutover'
 TABLES = ('online_knowledge.history','online_knowledge.jobs','md.monomer_md_jobs',
           'monomer_dft.jobs','polymerization_batch.imports','polymerization_batch.jobs')
 BACKUP_TABLES = (*TABLES,'monomer_dft.job_attempts','monomer_dft.artifacts','polymerization_batch.chunks',
                 'polymerization_batch.worker_status','auth.users','auth.sessions')
+POLYMER_TABLES = ('polymer_md.jobs','polymer_md.job_attempts','polymer_md.stage_runs','polymer_md.artifacts')
+
+
+def optional_polymer_tables(connection):
+    return POLYMER_TABLES if connection.execute("SELECT to_regnamespace('polymer_md') IS NOT NULL AS present").fetchone()['present'] else ()
 
 
 def backup_tables(connection):
     # Preserve old receipts while including every new private record after 0020.
     present = connection.execute("SELECT to_regclass('structure_library.records') IS NOT NULL AS present").fetchone()["present"]
-    return (*BACKUP_TABLES, *(("structure_library.records",) if present else ()))
+    return (*BACKUP_TABLES, *(("structure_library.records",) if present else ()), *optional_polymer_tables(connection),
+            *optional_literature_tables(connection))
 
 
 def backup_state_seal(connection):
@@ -53,7 +60,7 @@ def backup_state_seal(connection):
 def private_data_seal(connection):
     """Only counts/digests escape this function; no values/credentials in audit."""
     seal = {}
-    for relation in TABLES:
+    for relation in (*TABLES,*optional_polymer_tables(connection)):
         query = sql.SQL('''SELECT encode(sha256(convert_to((to_jsonb(t)-'owner_user_id'-'start_authorized_at')::text,'UTF8')),'hex') digest
             FROM {} t ORDER BY digest''').format(sql.Identifier(*relation.split('.')))
         digest, count = hashlib.sha256(), 0
@@ -94,10 +101,12 @@ def apply_identity_cutover(dsn: str, owner_user_id: str, *, expected_business_da
         connection.execute("SET LOCAL statement_timeout='10min'")
         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended('nexpoly-identity-cutover',0))")
         rows = [dict(row) for row in connection.execute('SELECT version,checksum FROM governance.schema_migrations ORDER BY version')]
-        if rows in (expected_isolation_ledger(CURRENT_VERSION), expected_isolation_ledger(LIBRARY_VERSION)):
+        if rows in tuple(expected_isolation_ledger(boundary) for boundary in (CURRENT_VERSION, LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION)):
             # Do not run historical 0018 grants or read any data seal on 0019.
             from .schema import validate_isolation_schema
-            validate_isolation_schema(connection)
+            boundary = rows[-1]["version"]
+            validate_application_migration_ledger(connection, require_usage=boundary >= USAGE_VERSION, require_entitlements=boundary >= ENTITLEMENT_VERSION)
+            validate_isolation_schema(connection, boundary)
             validate_service_members(connection)
             return {'version':VERSION,'already_applied':True,'current_version':rows[-1]['version'],
                     'current_readiness':False}
@@ -141,7 +150,7 @@ def apply_identity_cutover(dsn: str, owner_user_id: str, *, expected_business_da
 
 
 def validate_backup_receipt(path: Path, dsn: str):
-    from .assets import file_sha256, validate_assets, ASSET_TABLES
+    from .assets import file_sha256, validate_assets, ASSET_TABLES, asset_backup_rows
     receipt = json.loads(path.read_text())
     backup = Path(receipt['backup_path'])
     if not receipt.get('restore_verified') or file_sha256(backup) != receipt.get('backup_sha256'):
@@ -158,7 +167,7 @@ def validate_backup_receipt(path: Path, dsn: str):
         raise ValueError('Backup receipt is missing its complete restorable-data seal')
     if not isinstance(receipt.get('assets'),dict):
         raise ValueError('Backup receipt is missing its file restoration evidence')
-    if any(receipt['backup_state'][table]['rows'] and name not in receipt['assets'] for name,table in ASSET_TABLES.items()):
+    if any(asset_backup_rows(receipt['backup_state'],table) and name not in receipt['assets'] for name,table in ASSET_TABLES.items()):
         raise ValueError('Existing private resources are missing their file backup')
     validate_assets(receipt['assets'],verify_source=False)
     return receipt

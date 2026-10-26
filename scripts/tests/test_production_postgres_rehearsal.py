@@ -535,10 +535,22 @@ class ProductionPostgresRehearsalTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT.parent / "backend/migrations/postgres/manifest.json").read_text()
         )["migrations"]
-        self.assertEqual(manifest[-1]["version"], "0022_usage_entitlements")
-        with mock.patch.object(self, "manifest", return_value=manifest):
-            with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal target"):
-                self.build_mocked_plan(self.source_evidence())
+        versions = [entry["version"] for entry in manifest]
+        self.assertIn("0023_polymer_md_jobs", versions)
+        self.assertIn("0024_literature_projection", versions)
+        # The legacy rehearsal authority ends at 0016. Every newer prefix,
+        # including future expansions of today's manifest, must remain refused.
+        for target_count in range(len(self.reviewed_manifest()) + 1, len(manifest) + 1):
+            with (
+                self.subTest(target=manifest[target_count - 1]["version"]),
+                mock.patch.object(self, "manifest", return_value=manifest[:target_count]),
+            ):
+                with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal target"):
+                    self.build_mocked_plan(self.source_evidence())
+                with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal target"):
+                    REHEARSAL._parse_migration_records("", self.manifest(), existing_count=1)
+                with self.assertRaisesRegex(REHEARSAL.RehearsalError, "exact reviewed rehearsal target"):
+                    self.validate(self.report())
 
     def test_new_profiles_reject_migration_output_tampering(self) -> None:
         for source_count, target_count in ((15, 15), (15, 16), (16, 16)):

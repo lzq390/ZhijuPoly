@@ -12029,11 +12029,8 @@ class StrictLifecycleEvidenceTests(unittest.TestCase):
                     )
 
     def active_payload(self, *, version: int = 1) -> dict[str, object]:
-        fields = (
-            CONTROLLER.ACTIVE_JOB_FIELDS_V1
-            if version == 1
-            else CONTROLLER.ACTIVE_JOB_FIELDS_V2
-        )
+        fields = {1: CONTROLLER.ACTIVE_JOB_FIELDS_V1, 2: CONTROLLER.ACTIVE_JOB_FIELDS_V2,
+                  3: CONTROLLER.ACTIVE_JOB_FIELDS_V3, 4: CONTROLLER.ACTIVE_JOB_FIELDS_V4}[version]
         return {
             "active_jobs_schema_version": version,
             "drain": {
@@ -12052,11 +12049,8 @@ class StrictLifecycleEvidenceTests(unittest.TestCase):
         self, *, version: int | None = None
     ) -> dict[str, object]:
         selected = 1 if version is None else version
-        fields = (
-            CONTROLLER.PERSISTENT_JOB_FIELDS_V1
-            if selected == 1
-            else CONTROLLER.PERSISTENT_JOB_FIELDS_V2
-        )
+        fields = {1: CONTROLLER.PERSISTENT_JOB_FIELDS_V1, 2: CONTROLLER.PERSISTENT_JOB_FIELDS_V2,
+                  3: CONTROLLER.PERSISTENT_JOB_FIELDS_V3, 4: CONTROLLER.PERSISTENT_JOB_FIELDS_V4}[selected]
         payload: dict[str, object] = {
             "drain": {
                 "enabled": False,
@@ -23912,6 +23906,44 @@ class BatchDeploymentCompatibilityTests(unittest.TestCase):
         payload['active_total'] = 1
         with self.assertRaises(CONTROLLER.PullDeployError):
             CONTROLLER.validate_active_jobs_evidence(payload, require_drained=True)
+
+    def test_all_four_activity_versions_remain_exact_and_supported(self):
+        fixtures = StrictLifecycleEvidenceTests()
+        for version in (1, 2, 3, 4):
+            with self.subTest(version=version):
+                payload = fixtures.active_payload(version=version)
+                persistent = fixtures.persistent_payload(version=version)
+                CONTROLLER.validate_active_jobs_evidence(payload, require_drained=True)
+                CONTROLLER.validate_persistent_drain_evidence(persistent)
+                bootstrap = {'active_jobs_schema_version': version, 'ingress_isolated': True,
+                    'active_jobs': payload['active_jobs'], 'active_total': 0}
+                CONTROLLER.validate_bootstrap_quiesce_evidence(bootstrap)
+                CONTROLLER._site_helper_contracts.validate_active_jobs(bootstrap)
+                self.assertEqual('polymer_md' in payload['active_jobs'], version == 4)
+
+    def test_accepted_or_unclean_polymer_work_blocks_zero_work_deployment(self):
+        fixtures = StrictLifecycleEvidenceTests()
+        payload = fixtures.active_payload(version=4)
+        payload['active_jobs']['polymer_md'] = 1
+        payload['active_total'] = 1
+        CONTROLLER.validate_active_jobs_evidence(payload, require_drained=False)
+        with self.assertRaisesRegex(CONTROLLER.PullDeployError, 'zero-work'):
+            CONTROLLER.validate_active_jobs_evidence(payload, require_drained=True)
+        bootstrap = {'active_jobs_schema_version': 4, 'ingress_isolated': True,
+            'active_jobs': payload['active_jobs'], 'active_total': 1}
+        with self.assertRaisesRegex(CONTROLLER.PullDeployError, 'zero-work'):
+            CONTROLLER.validate_bootstrap_quiesce_evidence(bootstrap)
+
+    def test_v4_cannot_hide_polymer_work_by_omitting_or_relabelling_category(self):
+        fixtures = StrictLifecycleEvidenceTests()
+        payload = fixtures.active_payload(version=4)
+        payload['active_jobs'].pop('polymer_md')
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            CONTROLLER.validate_active_jobs_evidence(payload, require_drained=True)
+        persistent = fixtures.persistent_payload(version=4)
+        persistent['active_jobs_schema_version'] = 3
+        with self.assertRaises(CONTROLLER.PullDeployError):
+            CONTROLLER.validate_persistent_drain_evidence(persistent)
 
     def batch_evidence(self):
         evidence = mutable_data_evidence(ledger_length=16)

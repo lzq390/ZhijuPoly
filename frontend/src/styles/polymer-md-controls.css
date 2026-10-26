@@ -1,0 +1,171 @@
+/* Reuse the platform select, with the polymer workbench's shared type scale. */
+.np-polymer-md-page.np-md-simulation .np-pmd-select-field > label {
+  color: var(--np-theme-ink);
+  font-weight: 600;
+}
+
+.np-polymer-md-page.np-md-simulation .np-pmd-select-field > .np-sw-select {
+  --np-select-label-size: var(--np-pmd-type-body);
+  --np-select-description-size: var(--np-pmd-type-caption);
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+.np-polymer-md-page.np-md-simulation .np-sw-select .np-sw-select__trigger {
+  height: 38px;
+  border-color: var(--np-theme-input-border);
+  color: var(--np-theme-ink);
+  background: var(--np-theme-surface);
+  font-size: var(--np-pmd-type-body);
+}
+
+.np-polymer-md-page.np-md-simulation .np-sw-select .np-sw-select__trigger strong,
+.np-polymer-md-page.np-md-simulation .np-md-forcefield-picker__selection strong {
+  font-weight: 400;
+}
+
+.np-polymer-md-page.np-md-simulation .np-sw-select .np-sw-select__trigger[aria-invalid="true"] {
+  border-color: var(--np-theme-danger-border);
+}
+
+.np-polymer-md-page.np-md-simulation .np-sw-select .np-sw-select__trigger:is(:hover, :focus-visible),
+.np-polymer-md-page.np-md-simulation .np-sw-select.is-open .np-sw-select__trigger {
+  border-color: var(--np-theme-blue);
+}
+
+.np-polymer-md-page.np-md-simulation .np-sw-select .np-sw-select__menu {
+  border-color: var(--np-theme-border);
+  background: var(--np-theme-panel);
+  scrollbar-width: thin;
+}
+
+.np-polymer-md-page.np-md-simulation .np-sw-select .np-sw-select__menu > button {
+  justify-content: space-between;
+  border-color: transparent;
+  color: var(--np-theme-ink);
+  background: transparent;
+}
+
+.np-polymer-md-page.np-md-simulation .np-sw-select .np-sw-select__menu > button:is(.is-active, :hover) {
+  border-color: var(--np-theme-info-border);
+  color: var(--np-theme-blue-strong);
+  background: var(--np-theme-info-soft);
+}
+
+.np-polymer-md-page.np-md-simulation .np-sw-select .np-sw-select__menu > button.is-selected {
+  border-color: var(--np-theme-info-border);
+  color: var(--np-theme-blue);
+  background: var(--np-theme-info-soft);
+}
+
+.np-polymer-md-page.np-md-simulation .np-sw-select .np-sw-select__menu small {
+  color: var(--np-theme-muted);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.np-polymer-md-page.np-md-simulation .np-polymer-md-actions > .np-pmd-select-field {
+  min-width: min(240px, 100%);
+}
+
+/* Details keep native keyboard and onToggle behavior, with one disclosure style. */
+.np-polymer-md-page.np-md-simulation details > summary {
+  position: relative;
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--np-theme-border-soft);
+  border-radius: 7px;
+  color: var(--np-theme-muted);
+  background: var(--np-theme-surface);
+  cursor: pointer;
+  list-style: none;
+  transition: color var(--np-motion-control) var(--np-ease-enter), background var(--np-motion-control) var(--np-ease-enter), border-color var(--np-motion-control) var(--np-ease-enter);
+}
+
+.np-polymer-md-page.np-md-simulation details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.np-polymer-md-page.np-md-simulation details > summary::before {
+  display: none;
+}
+
+.np-polymer-md-page.np-md-simulation details > summary::after {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  margin: -3px 2px 0 0;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  content: "";
+  transform: rotate(45deg);
+  transition: transform var(--np-motion-control) var(--np-ease-enter);
+}
+
+.np-polymer-md-page.np-md-simulation details > summary:hover {
+  border-color: var(--np-theme-info-border);
+  color: var(--np-theme-blue-strong);
+  background: var(--np-theme-info-soft);
+}
+
+.np-polymer-md-page.np-md-simulation details[open] > summary {
+  border-color: var(--np-theme-info-border);
+  color: var(--np-theme-ink);
+  background: var(--np-theme-surface);
+}
+
+.np-polymer-md-page.np-md-simulation details[open] > summary:is(:hover, :focus-visible) {
+  color: var(--np-theme-blue-strong);
+  background: var(--np-theme-info-soft);
+}
+
+.np-polymer-md-page.np-md-simulation details[open] > summary::after {
+  margin-top: 3px;
+  transform: rotate(225deg);
+}
+
+.np-polymer-md-page.np-md-simulation .np-polymer-md-choice-help > summary {
+  min-height: 28px;
+  width: fit-content;
+  gap: 10px;
+  padding: 4px 8px;
+}
+
+.np-polymer-md-page.np-md-simulation .np-polymer-md-choice-help[open] > summary {
+  margin-bottom: 8px;
+}
+
+@media (min-width: 2000px) and (min-height: 1120px) {
+  .np-polymer-md-page.np-md-simulation .np-sw-select .np-sw-select__trigger {
+    height: 52px;
+  }
+
+  .np-polymer-md-page.np-md-simulation details > summary {
+    min-height: 46px;
+    padding: 10px 14px;
+    border-radius: 9px;
+  }
+
+  .np-polymer-md-page.np-md-simulation .np-polymer-md-choice-help > summary {
+    min-height: 36px;
+    padding: 6px 10px;
+  }
+
+  .np-polymer-md-page.np-md-simulation details > summary::after {
+    width: 9px;
+    height: 9px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np-polymer-md-page.np-md-simulation details > summary,
+  .np-polymer-md-page.np-md-simulation details > summary::after {
+    transition: none;
+  }
+}

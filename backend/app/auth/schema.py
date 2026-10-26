@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.services.monomer_dft_schema import probe_monomer_dft_schema
 
-PRIVATE_SCHEMAS = ("usage", "usage_entitlements", "structure_library", "auth", "governance", "online_knowledge", "md", "monomer_dft", "polymerization_batch")
+PRIVATE_SCHEMAS = ("usage", "usage_entitlements", "structure_library", "auth", "governance", "online_knowledge", "md", "monomer_dft", "polymerization_batch", "polymer_md", "knowledge")
 OWNER_TABLES = {
     "online_knowledge.history": "history_id", "online_knowledge.jobs": "job_id",
     "md.monomer_md_jobs": "job_id", "monomer_dft.jobs": "job_id",
@@ -17,10 +17,22 @@ CHILD_TABLES = {
 
 
 def owner_tables(connection, through: str | None = None):
-    from .isolation_ledger import LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION
+    from .isolation_ledger import LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION
     if through is None:
         through = connection.execute("SELECT max(version) AS version FROM governance.schema_migrations").fetchone()["version"]
-    return {**OWNER_TABLES, **({"structure_library.records": "id"} if through in {LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION} else {})}
+    return {**OWNER_TABLES, **({"structure_library.records": "id"} if through in {LIBRARY_VERSION, USAGE_VERSION, ENTITLEMENT_VERSION, POLYMER_VERSION, LITERATURE_VERSION} else {})}
+
+
+def ownership_tables(connection, through: str | None = None):
+    """Retain all main owner tables and reject a partial MD expansion."""
+    owners, children = owner_tables(connection, through), dict(CHILD_TABLES)
+    present = connection.execute("SELECT to_regnamespace('polymer_md') IS NOT NULL OR EXISTS(SELECT FROM governance.schema_migrations WHERE version='0023_polymer_md_jobs') AS present").fetchone()["present"]
+    if present:
+        owners["polymer_md.jobs"] = "job_id"
+        children.update({f"polymer_md.{table}": ("polymer_md.jobs", "job_id", key) for table, key in (
+            ("job_attempts", "job_id,attempt"), ("stage_runs", "job_id,stage_run_id"),
+            ("artifacts", "job_id,artifact_id"))})
+    return owners, children
 
 
 def validate_runtime_role(connection, required_group: str):
@@ -51,20 +63,20 @@ def validate_runtime_role(connection, required_group: str):
 
 
 def validate_isolation_policies(connection, through: str | None = None):
-    tables = owner_tables(connection, through)
+    owners, children = ownership_tables(connection, through)
     rows = connection.execute("""SELECT n.nspname||'.'||c.relname AS relation,p.polname AS name,
         p.polcmd AS command,p.polpermissive AS permissive,
         ARRAY(SELECT pg_get_userbyid(role_oid)::text FROM unnest(p.polroles) role_oid ORDER BY pg_get_userbyid(role_oid)::text) AS roles,
         pg_get_expr(p.polqual,p.polrelid) AS using_expression,
         pg_get_expr(p.polwithcheck,p.polrelid) AS check_expression
         FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-        WHERE n.nspname||'.'||c.relname=ANY(%s) ORDER BY 1,2""", (list(tables) + list(CHILD_TABLES),)).fetchall()
+        WHERE n.nspname||'.'||c.relname=ANY(%s) ORDER BY 1,2""", (list(owners) + list(children),)).fetchall()
     owner = "(owner_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid)"
     expected = []
-    for relation in sorted((*tables, *CHILD_TABLES)):
+    for relation in sorted((*owners, *children)):
         owner_using, owner_check = owner, owner
-        if relation in CHILD_TABLES:
-            parent, parent_key, _ = CHILD_TABLES[relation]
+        if relation in children:
+            parent, parent_key, _ = children[relation]
             child = relation.split(".")[1]
             owner_using = f"(EXISTS ( SELECT FROM {parent} p WHERE ((p.{parent_key} = {child}.job_id) AND (p.owner_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid))))"
             owner_check = None
@@ -129,7 +141,8 @@ def validate_isolation_schema(connection, through: str | None = None):
     with connection.transaction():
         previous = connection.execute("SELECT current_setting('search_path') AS value").fetchone()["value"]
         connection.execute("SET LOCAL search_path=pg_catalog")
-        for relation in owner_tables(connection, through):
+        owners, children = ownership_tables(connection, through)
+        for relation in owners:
             relation_oid = _relation_oid(connection, relation)
             row = connection.execute("""SELECT c.relrowsecurity,c.relforcerowsecurity,a.attnotnull
                 FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='owner_user_id'
@@ -144,13 +157,16 @@ def validate_isolation_schema(connection, through: str | None = None):
                   AND k.convalidated AND k.confdeltype='a' AND a.atttypid='uuid'::regtype) AS valid""", (relation_oid,)).fetchone()
             if not foreign_key["valid"]:
                 raise ValueError("owner foreign-key contract missing for " + relation)
-        for relation in CHILD_TABLES:
+        for relation in children:
             row = connection.execute("SELECT relrowsecurity AND relforcerowsecurity AS protected FROM pg_class WHERE oid=%s::regclass", (relation,)).fetchone()
             if row is None or not row["protected"]:
                 raise ValueError("child RLS contract missing for " + relation)
         policies = validate_isolation_policies(connection, through)
         if "structure_library.records" in owner_tables(connection, through):
             validate_structure_library_privileges(connection)
+        if "polymer_md.jobs" in owners:
+            from app.services.polymer_md_schema import validate_polymer_md_schema
+            validate_polymer_md_schema(connection)
         dft = probe_monomer_dft_schema(connection)
         if not dft.ready:
             raise ValueError("DFT schema is not canonical: " + dft.reason)

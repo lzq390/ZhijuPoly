@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 from pathlib import Path
@@ -100,6 +101,73 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
                 selected[job_name] = {Path(path).name for path in result.stdout.splitlines()}
             self.assertEqual(selected["lightweight-backend-tests"], names - {"test_regular_script.py"})
             self.assertEqual(selected["script-tests"], {"test_regular_script.py"})
+
+    def test_polymer_md_operator_tests_use_the_locked_offline_pytest_runtime(self) -> None:
+        failures: list[str] = []
+        policy.validate_polymer_md_script_tests(CI_TEXT, failures)
+        self.assertEqual(failures, [])
+
+    def test_polymer_md_operator_tests_cannot_leak_into_unittest_or_lose_coverage(self) -> None:
+        for name in policy.POLYMER_MD_OPERATOR_TESTS:
+            for marker in (f"! -name '{name}'", f"              scripts/tests/{name} \\\n"):
+                with self.subTest(name=name, marker=marker):
+                    self.assertEqual(CI_TEXT.count(marker), 1)
+                    failures: list[str] = []
+                    policy.validate_polymer_md_script_tests(CI_TEXT.replace(marker, "", 1), failures)
+                    self.assertTrue(failures)
+            marker = f"              scripts/tests/{name} \\\n"
+            failures = []
+            policy.validate_polymer_md_script_tests(CI_TEXT.replace(marker, marker * 2, 1), failures)
+            self.assertTrue(failures)
+
+    def test_polymer_md_operator_tests_require_locked_dependencies_isolation_and_gate(self) -> None:
+        backend = policy.workflow_job_body(CI_TEXT, "backend-tests", [])
+        for marker in (
+            "python -m pip install --require-hashes -r backend/requirements-ci.lock",
+            "        if: matrix.shard == 0\n",
+            "          env -i \\\n",
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
+            "python -m pytest --assert=plain --tb=short",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, backend)
+                changed = CI_TEXT.replace(backend, backend.replace(marker, "", 1), 1)
+                failures: list[str] = []
+                policy.validate_polymer_md_script_tests(changed, failures)
+                self.assertTrue(failures)
+        failures = []
+        policy.validate_polymer_md_script_tests(CI_TEXT.replace("      - backend-tests\n", "", 1), failures)
+        self.assertTrue(any("ci-gate" in failure for failure in failures))
+
+    def test_every_script_test_module_has_exactly_one_compatible_runner(self) -> None:
+        selections = {}
+        for job_name in ("script-tests", "lightweight-backend-tests"):
+            job = policy.workflow_job_body(CI_TEXT, job_name, [])
+            command = re.search(r"find scripts/tests.*?-print \| sort", job, re.DOTALL)
+            self.assertIsNotNone(command)
+            result = subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c", command.group()],
+                cwd=ROOT, check=True, capture_output=True, text=True,
+            )
+            selections[job_name] = [Path(path).name for path in result.stdout.splitlines()]
+        for job_name in ("backend-tests", "worker-tests"):
+            job = policy.workflow_job_body(CI_TEXT, job_name, [])
+            selections[job_name] = re.findall(r"\bscripts/tests/(test_[A-Za-z0-9_]+\.py)\b", job)
+        paths = sorted((ROOT / "scripts/tests").glob("test_*.py"))
+        assigned = [name for names in selections.values() for name in names]
+        self.assertCountEqual(assigned, [path.name for path in paths])
+        pytest_modules = set(assigned) - set(selections["script-tests"])
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            imports_pytest = any(
+                (isinstance(node, ast.Import) and any(alias.name == "pytest" for alias in node.names))
+                or (isinstance(node, ast.ImportFrom) and node.module == "pytest")
+                for node in ast.walk(tree)
+            )
+            functions = {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            if imports_pytest or (any(name.startswith("test_") for name in functions) and "load_tests" not in functions):
+                with self.subTest(pytest_module=path.name):
+                    self.assertIn(path.name, pytest_modules)
 
     def test_adopted_git_permission_documentation_is_complete(self) -> None:
         failures: list[str] = []

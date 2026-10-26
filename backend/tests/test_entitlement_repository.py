@@ -29,7 +29,8 @@ def entitlement_db(usage_db):
         c.execute((ROOT/"backend/migrations/postgres"/(ent.MIGRATION_VERSION+".sql")).read_text())
         c.execute("DELETE FROM governance.schema_migrations")
         for entry in validate_migration_manifest_entries(ROOT/"backend/migrations/postgres"):
-            c.execute("INSERT INTO governance.schema_migrations(version,checksum) VALUES(%s,%s)",(entry.version,entry.checksum))
+            if entry.version <= ent.MIGRATION_VERSION:
+                c.execute("INSERT INTO governance.schema_migrations(version,checksum) VALUES(%s,%s)",(entry.version,entry.checksum))
     yield usage_db
 
 @pytest.fixture
@@ -446,12 +447,21 @@ def test_auth_initialization_without_entitlement_ledger_compatible(entitlement_d
         with psycopg.connect(entitlement_db,autocommit=True) as c: c.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
 
 def test_worker_release_contract_exactly_matches_full_manifest():
-    from task_usage.entitlement_access import release_contract
-    expected=[{"version":entry.version,"checksum":entry.checksum}
-              for entry in validate_migration_manifest_entries(ROOT/"backend/migrations/postgres")]
-    contract=release_contract()
-    assert contract["ledger"]==expected
-    assert contract["entitlement_sql_sha256"]==expected[-1]["checksum"]
+    from task_usage.entitlement_access import (release_contract, accepted_release_ledgers,
+                                               OPTIONAL_MIGRATION, LITERATURE_MIGRATION)
+    entries = validate_migration_manifest_entries(ROOT / "backend/migrations/postgres")
+    prefix = lambda version: [{"version": row.version, "checksum": row.checksum}
+                              for row in entries if row.version <= version]
+    contract = release_contract()
+    base = prefix(ent.MIGRATION_VERSION)
+    assert contract["ledger"] == base
+    assert contract["entitlement_sql_sha256"] == base[-1]["checksum"]
+    assert accepted_release_ledgers() == [base, prefix("0023_polymer_md_jobs"),
+                                         prefix("0024_literature_projection")]
+    for pin, epoch in ((OPTIONAL_MIGRATION, 8), (LITERATURE_MIGRATION, 9)):
+        entry = next(row for row in entries if row.version == pin["version"])
+        assert entry.kind == "expand" and entry.epoch == epoch
+        assert entry.checksum == pin["checksum"]
 
 def test_worker_access_resolver_is_always_on_and_service_can_lock_account(entitlement_db,owner,monkeypatch):
     with connection(entitlement_db,owner,"nexpoly_service") as c:
@@ -593,3 +603,65 @@ def test_current_preflight_full_entitlement_chain_keeps_library_target(entitleme
             c.execute("DELETE FROM governance.schema_migrations WHERE version=%s",(future,))
             for role in roles.values():
                 c.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
+
+
+class _AccessCursor:
+    def __init__(self, connection):
+        self.connection, self.rows = connection, []
+    def __enter__(self): return self
+    def __exit__(self, *_): pass
+    def execute(self, query, params=()):
+        if query.startswith("SELECT to_regclass"):
+            self.rows = [{"tiers": "usage_entitlements.owner_entitlements", "ledger": "governance.schema_migrations"}]
+        elif query.startswith("SELECT version,checksum"):
+            self.rows = self.connection.ledger
+        elif query.startswith("SELECT relkind"):
+            self.rows = [{"relkind": "r", "relrowsecurity": True, "relforcerowsecurity": True}]
+        elif query.startswith("SELECT tier"):
+            self.connection.tier_reads += 1
+            self.rows = [{"tier": "free"}]
+        else:
+            raise AssertionError("Unexpected synthetic access-tier query")
+    def fetchone(self): return self.rows[0] if self.rows else None
+    def __iter__(self): return iter(self.rows)
+
+
+class _AccessConnection:
+    def __init__(self, ledger):
+        self.ledger, self.tier_reads = ledger, 0
+    def cursor(self, **_): return _AccessCursor(self)
+
+
+@pytest.mark.parametrize("boundary", ["0022_usage_entitlements", "0023_polymer_md_jobs", "0024_literature_projection"])
+@pytest.mark.parametrize("collection", ["false", "true"])
+def test_access_tier_accepts_only_reviewed_prefixes_even_without_collection(monkeypatch, boundary, collection):
+    from task_usage.entitlement_access import resolve_access_tier
+    monkeypatch.setenv("USAGE_ENTITLEMENTS_ENABLED", collection)
+    entries = validate_migration_manifest_entries(ROOT / "backend/migrations/postgres")
+    connection = _AccessConnection([{"version": row.version, "checksum": row.checksum}
+                                    for row in entries if row.version <= boundary])
+    assert resolve_access_tier(connection, owner_user_id="10000000-0000-0000-0000-000000000001") == "free"
+    assert connection.tier_reads == 1
+
+
+@pytest.mark.parametrize("mutation", ["missing20", "missing21", "missing22", "missing23", "wrong-history",
+                                     "wrong23", "wrong24", "unknown", "duplicate", "reordered"])
+@pytest.mark.parametrize("collection", ["false", "true"])
+def test_access_tier_rejects_ledger_drift_before_reading_a_tier(monkeypatch, mutation, collection):
+    from task_usage.entitlement_access import resolve_access_tier
+    monkeypatch.setenv("USAGE_ENTITLEMENTS_ENABLED", collection)
+    entries = validate_migration_manifest_entries(ROOT / "backend/migrations/postgres")
+    ledger = [{"version": row.version, "checksum": row.checksum}
+              for row in entries if row.version <= "0024_literature_projection"]
+    if mutation.startswith("missing"):
+        ledger = [row for row in ledger if not row["version"].startswith("00" + mutation[-2:] + "_")]
+    elif mutation.startswith("wrong"):
+        index = 0 if mutation == "wrong-history" else -2 if mutation == "wrong23" else -1
+        ledger[index]["checksum"] = "0" * 64
+    elif mutation == "unknown": ledger.append({"version": "9999_unknown", "checksum": "0" * 64})
+    elif mutation == "duplicate": ledger.insert(1, dict(ledger[0]))
+    else: ledger[0], ledger[1] = ledger[1], ledger[0]
+    connection = _AccessConnection(ledger)
+    with pytest.raises(ent.EntitlementPolicyError, match="exact release-known"):
+        resolve_access_tier(connection, owner_user_id="10000000-0000-0000-0000-000000000001")
+    assert connection.tier_reads == 0

@@ -1,0 +1,313 @@
+/* Shared scientific widgets retain their geometry and data colours. Their UI
+   text and control surfaces use the same roles as the formal workbench. */
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-section__header h2,
+  .np-sw-popover__header h2,
+  .np-md-field-hint code,
+  .np-polymer-md-field > span,
+  .np-pmd-select-field > label,
+  legend,
+  .np-md-result-card h3,
+  .np-md-parameter-group strong,
+  .np-md-parameters__footer strong,
+  .np-md-input-footer strong,
+  .np-md-result-kpis strong,
+  .np-md-identity-copy strong,
+  .np-md-compact-metrics dd,
+  .np-md-stage-detail dd,
+  .np-md-request-snapshot dd,
+  .np-md-series-summary strong,
+  .np-md-series-summary dd,
+  .np-md-field > span,
+  .np-md-atom-fields label > span,
+  .np-md-structure-editor > label,
+  .np-md-structure-editor textarea,
+  .np-md-field input,
+  .np-md-atom-fields input,
+  .np-md-progress-heading strong,
+  .np-md-progress-heading b,
+  .np-md-progress-steps strong,
+  .np-md-distance-state strong,
+  .np-md-forcefield-picker__selection strong,
+  .np-md-forcefield-picker__option strong
+) {
+  color: var(--np-theme-ink);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-field-hint,
+  .np-sw-result-state p,
+  .np-sw-popover__header small,
+  .np-md-parameters__footer small,
+  .np-md-stage-detail > p > span,
+  .np-md-atom-fields label > small,
+  .np-md-series-selector button small,
+  .np-md-chart-meta > span,
+  .np-md-canvas-axis span,
+  .np-md-preview__label,
+  .np-md-preview__state,
+  .np-md-section__header p,
+  .np-md-input-footer span,
+  .np-md-input-footer code,
+  .np-md-identity-copy > span,
+  .np-md-card-code,
+  .np-md-result-kpis > div > div > span,
+  .np-md-result-kpis small,
+  .np-md-result-card header p,
+  .np-md-result-tab-copy small,
+  .np-md-compact-metrics dt,
+  .np-md-compact-metrics > div > span,
+  .np-md-stage-detail dt,
+  .np-md-request-snapshot dt,
+  .np-md-scale-footnote,
+  .np-md-scale-footnote strong,
+  .np-md-series-summary small,
+  .np-md-series-summary p,
+  .np-md-series-summary dt,
+  .np-md-chart-meta,
+  .np-md-parameter-group small,
+  .np-md-number-input small,
+  .np-md-trajectory-view__toolbar > span,
+  .np-md-canvas-hud,
+  .np-md-canvas-hud b,
+  .np-md-canvas-legend,
+  .np-md-canvas-legend strong,
+  .np-md-canvas-legend span,
+  .np-md-trajectory-meta,
+  .np-md-pbc-badge,
+  .np-md-distance-state > div > span,
+  .np-md-distance-stats span,
+  .np-md-progress-heading > div > span,
+  .np-md-progress-heading p,
+  .np-md-progress-steps p,
+  .np-md-empty-chart,
+  .np-md-trajectory-empty,
+  .np-md-forcefield-picker__selection small,
+  .np-md-forcefield-picker__option small
+) {
+  color: var(--np-theme-muted);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(input, textarea)::placeholder {
+  color: var(--np-theme-muted);
+  font-family: var(--font-body);
+  font-size: var(--np-pmd-type-body);
+  font-weight: 400;
+  letter-spacing: normal;
+  opacity: 1;
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-input-actions button,
+  .np-md-trajectory-view__toolbar button,
+  .np-md-distance-actions button,
+  .np-md-service-status > button,
+  .np-md-parameter-trigger,
+  .np-sw-icon-button,
+  .np-sw-secondary-button,
+  .np-md-forcefield-picker__trigger
+) {
+  border-color: var(--np-theme-input-border);
+  color: var(--np-theme-ink);
+  background: var(--np-theme-surface);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-result-tabs button,
+  .np-md-stage-tabs button,
+  .np-md-series-selector button
+) {
+  color: var(--np-theme-muted);
+  background: var(--np-theme-surface);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-input-actions button,
+  .np-md-trajectory-view__toolbar button,
+  .np-md-distance-actions button,
+  .np-md-service-status > button,
+  .np-md-parameter-trigger,
+  .np-sw-secondary-button,
+  .np-md-forcefield-picker__trigger,
+  .np-md-result-tabs button,
+  .np-md-stage-tabs button,
+  .np-md-series-selector button,
+  .np-md-forcefield-picker__option
+):hover:not(:disabled) {
+  border-color: var(--np-theme-info-border);
+  color: var(--np-theme-blue-strong);
+  background: var(--np-theme-info-soft);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-result-tabs button,
+  .np-md-stage-tabs button,
+  .np-md-series-selector button,
+  .np-md-parameter-trigger,
+  .np-md-forcefield-picker__option
+).is-active,
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page .np-md-forcefield-picker__option[aria-selected="true"] {
+  border-color: var(--np-theme-info-border);
+  color: var(--np-theme-blue-strong);
+  background: var(--np-theme-info-soft);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-forcefield-picker__option strong,
+  .np-md-result-tab-copy strong,
+  .np-md-stage-tabs strong,
+  .np-md-series-selector strong
+) {
+  color: inherit;
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-result-card,
+  .np-md-result-card > header,
+  .np-md-curves-panel,
+  .np-md-series-summary,
+  .np-md-series-summary dl > div,
+  .np-md-series-card,
+  .np-md-stage-detail > p,
+  .np-md-scale-footnote,
+  .np-md-result-identity > div,
+  .np-md-parameters,
+  .np-md-parameter-group,
+  .np-md-parameter-group > header,
+  .np-md-parameters__footer,
+  .np-md-forcefield-picker__list,
+  .np-md-canvas-hud,
+  .np-md-canvas-legend
+) {
+  border-color: var(--np-theme-border);
+  background: var(--np-theme-surface);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-structure-editor,
+  .np-md-number-input,
+  .np-md-atom-fields input,
+  .np-md-series-chart svg,
+  .np-md-chart-meta > span,
+  .np-md-distance-output,
+  .np-md-forcefield-picker__option
+) {
+  border-color: var(--np-theme-border);
+  background: var(--np-theme-surface);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page .np-md-preview {
+  border-color: var(--np-theme-border);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-result-identity em
+) {
+  border-color: var(--np-theme-success-border);
+  color: var(--np-theme-success-text);
+  background: var(--np-theme-success-soft);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page .np-md-demo-boundary {
+  border-color: var(--np-theme-info-border);
+  color: var(--np-theme-info-text);
+  background: var(--np-theme-info-soft);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page .np-md-stale-notice {
+  border-color: var(--np-theme-warning-border);
+  color: var(--np-theme-warning-text);
+  background: var(--np-theme-warning-soft);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-field-error,
+  .np-md-field > em,
+  .np-md-inline-error,
+  .np-md-service-message,
+  .np-md-run-error,
+  .np-sw-result-state.is-danger
+) {
+  border-color: var(--np-theme-danger-border);
+  color: var(--np-theme-danger-text);
+  background: var(--np-theme-danger-soft);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  button.is-primary,
+  button.np-sw-primary-button
+) {
+  border-color: var(--np-theme-blue);
+  color: var(--np-theme-on-accent);
+  background: var(--np-theme-blue);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  button.is-primary,
+  button.np-sw-primary-button
+):hover:not(:disabled) {
+  border-color: var(--np-theme-blue-strong);
+  color: var(--np-theme-on-accent);
+  background: var(--np-theme-blue-strong);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-md-series-chart svg text {
+  fill: var(--np-theme-muted);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page .np-md-chart-meta strong {
+  color: var(--np-theme-ink);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-stage-tabs button > span,
+  .np-md-progress-steps > li > span
+) {
+  border-color: var(--np-theme-border);
+  color: var(--np-theme-muted);
+  background: var(--np-theme-surface);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page .np-md-stage-tabs button.is-active > span {
+  border-color: var(--np-theme-blue);
+  color: var(--np-theme-on-accent);
+  background: var(--np-theme-blue);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page .np-md-progress-steps > li.is-active > span {
+  border-color: var(--np-theme-info-border);
+  color: var(--np-theme-info-text);
+  background: var(--np-theme-info-soft);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page .np-md-progress-steps > li.is-complete > span {
+  border-color: var(--np-theme-success-border);
+  color: var(--np-theme-success-text);
+  background: var(--np-theme-success-soft);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page .np-md-preview__state.is-error {
+  color: var(--np-theme-warning-text);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page .np-sw-result-state.is-danger :is(strong, p) {
+  color: inherit;
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page .np-sw-result-state > strong {
+  color: var(--np-theme-ink);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-forcefield-picker__chevron,
+  .np-sw-select__trigger > svg
+) {
+  color: var(--np-theme-muted);
+}
+
+.np-polymer-md-page.np-md-simulation.np-structure-workbench .np-pmd-page :is(
+  .np-md-forcefield-picker.is-open .np-md-forcefield-picker__chevron,
+  .np-sw-select.is-open .np-sw-select__trigger > svg
+) {
+  color: var(--np-theme-blue-strong);
+}

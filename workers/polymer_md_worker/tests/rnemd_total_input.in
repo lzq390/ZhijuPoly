@@ -1,0 +1,136 @@
+# Protocol-only text fixture extracted from frozen upstream; no MD is executed.
+variable axis string x
+variable rep equal 3
+variable repo equal 1
+variable slab equal 20
+variable exchg equal 1000
+variable Nevery equal 1
+variable TimeSt equal 0.200000
+variable NStep equal 5000000
+variable Ttemp equal 300.000000
+variable seed equal 43210
+variable dumpf string None
+variable xtcf string fixture.xtc
+
+log             ${logf} append
+
+units           real
+atom_style      full
+boundary        p p p
+
+bond_style      ${bondst}  
+angle_style     ${anglest}
+dihedral_style  ${dihedst}
+improper_style  ${improst}
+
+pair_style      ${pairst} ${cutoff1} ${cutoff2}
+pair_modify     mix arithmetic
+special_bonds   amber
+neighbor        2.0 bin
+neigh_modify    delay 0 every 1 check yes
+kspace_style    pppm 1e-6
+
+
+read_data       ${dataf} 
+
+thermo_modify   flush yes
+thermo          1000
+
+
+
+##########################################################
+## Preparation
+##########################################################
+variable        NA     equal 6.02214076*1.0e23
+variable        kcal2j equal 4.184*1000
+variable        ang2m  equal 1.0e-10
+variable        fs2s   equal 1.0e-15
+
+
+
+if "${axis} == x" then &
+  "replicate    ${rep} ${repo} ${repo}" &
+  "variable     ahi   equal  xhi" &
+  "variable     alo   equal  xlo" &
+  "variable     Jarea equal  ly*lz" &
+  "variable     idx   equal  1" &
+elif "${axis} == y" &
+  "replicate    ${repo} ${rep} ${repo}" &
+  "variable     ahi   equal  yhi" &
+  "variable     alo   equal  ylo" &
+  "variable     Jarea equal  lx*lz" &
+  "variable     idx   equal  2" &
+elif "${axis} == z" &
+  "replicate    ${repo} ${repo} ${rep}" &
+  "variable     ahi   equal  zhi" &
+  "variable     alo   equal  zlo" &
+  "variable     Jarea equal  lx*ly" &
+  "variable     idx   equal  3"
+
+
+
+variable        Nfreq   equal  ${exchg}/${Nevery}       # Number of data points to compute temperature during exchange interval 
+variable        invslab equal  1/${slab}
+variable        width   equal  (${ahi}-${alo})/${slab}
+variable        llo     equal  ${alo}+${width}*1.0
+variable        lhi     equal  ${alo}+(${slab}/2)*${width}
+variable        rlo     equal  ${alo}+(1+${slab}/2)*${width}
+variable        rhi     equal  ${ahi}
+
+if "${axis} == x" then &
+  "region       lhalf   block    ${llo}  ${lhi}  INF  INF  INF  INF  units box" &
+  "region       rhalf   block    ${rlo}  ${rhi}  INF  INF  INF  INF  units box" &
+elif "${axis} == y" &
+  "region       lhalf   block    INF  INF  ${llo}  ${lhi}  INF  INF  units box" &
+  "region       rhalf   block    INF  INF  ${rlo}  ${rhi}  INF  INF  units box" &
+elif "${axis} == z" &
+  "region       lhalf   block    INF  INF  INF  INF  ${llo}  ${lhi}  units box" &
+  "region       rhalf   block    INF  INF  INF  INF  ${rlo}  ${rhi}  units box"
+##########################################################
+
+
+
+##########################################################
+## Initial equilibration to control temperature
+##########################################################
+velocity        all create ${Ttemp} ${seed} mom yes rot yes dist gaussian
+timestep        ${TimeSt}
+fix             NVT all nvt temp ${Ttemp} ${Ttemp} 100
+
+thermo_style    custom step time temp press enthalpy etotal ke pe ebond eangle edihed eimp evdwl ecoul elong etail vol lx ly lz density pxx pyy pzz pxy pxz pyz
+thermo_modify   flush yes
+thermo          ${exchg}
+
+run             10000
+unfix           NVT
+
+reset_timestep  0
+
+
+
+##########################################################
+## NEMD with kinetic energy exchange (RNEMD)
+##########################################################
+fix             NVE all nve
+fix             mp  all thermal/conductivity ${exchg} ${axis} ${slab}
+
+# Generate temperature profile of layers
+compute         layers all chunk/atom bin/1d ${axis} lower ${invslab} units reduced
+fix             2 all ave/chunk ${Nevery} ${Nfreq} ${exchg} layers temp density/mass file ${Tprof} norm sample
+
+# Output
+if "0" then &
+    "dump            1 all custom 1000 ${dumpf} id type mol xs ys zs ix iy iz"
+if "1" then &    
+    "dump            2 all xtc 1000 ${xtcf}" &
+    "dump_modify     2 unwrap yes"
+restart         100000 ${rstf1} ${rstf2}
+
+variable        heatflux   equal   (f_mp*${kcal2j}/${NA})/(2*${Jarea}*${ang2m}*${ang2m})   # J/m^2 = Ws/m^2
+thermo_style    custom step time temp press enthalpy etotal ke pe ebond eangle edihed eimp evdwl ecoul elong etail vol lx ly lz density pxx pyy pzz pxy pxz pyz f_mp v_heatflux
+thermo_modify   flush yes
+thermo          ${exchg}
+
+run             ${NStep}
+
+

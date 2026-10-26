@@ -49,6 +49,10 @@ type MdSimulationDemoPageProps = {
   structure: StructureWorkspaceContext;
   onEditStructure: () => void;
   resultRevealDelayMs?: number;
+  embedded?: boolean;
+  active?: boolean;
+  workspaceView?: WorkspaceTab;
+  onWorkspaceViewChange?: (view: WorkspaceTab) => void;
 };
 
 type TouchedState = Partial<Record<MdSimulationField, boolean>>;
@@ -148,8 +152,14 @@ export function MdSimulationDemoPage({
   structure,
   onEditStructure,
   resultRevealDelayMs,
+  embedded = false,
+  active = true,
+  workspaceView,
+  onWorkspaceViewChange,
 }: MdSimulationDemoPageProps) {
   const identityEpoch = useRef(getSessionEpoch());
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const saveMdSimulationDraft = (...args: Parameters<typeof persistPrivateDraft>) => {
     if (identityEpoch.current === getSessionEpoch()) persistPrivateDraft(...args);
   };
@@ -167,7 +177,12 @@ export function MdSimulationDemoPage({
   const [touched, setTouched] = useState<TouchedState>({});
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [hasAttempt, setHasAttempt] = useState(false);
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("input");
+  const [localWorkspaceTab, setLocalWorkspaceTab] = useState<WorkspaceTab>("input");
+  const workspaceTab = workspaceView ?? localWorkspaceTab;
+  const setWorkspaceTab = (next: WorkspaceTab) => {
+    setLocalWorkspaceTab(next);
+    if (activeRef.current) onWorkspaceViewChange?.(next);
+  };
   const tabContentRef = useRef<HTMLDivElement | null>(null);
   useContentMotion(tabContentRef, workspaceTab, "tab");
   const [parametersOpen, setParametersOpen] = useState(false);
@@ -185,18 +200,23 @@ export function MdSimulationDemoPage({
   const restoreFocusFrameRef = useRef<number | null>(null);
   requestRef.current = request;
   const guest = useAuth()?.status === "guest";
-  const simulation = useMdSimulationDemo({ resultRevealDelayMs, enabled: !guest });
+  const simulation = useMdSimulationDemo({ resultRevealDelayMs, enabled: active && !guest });
 
   const closeParameters = useCallback((restoreFocus = true) => {
     setParametersOpen(false);
-    if (!restoreFocus) return;
     if (restoreFocusFrameRef.current !== null)
       window.cancelAnimationFrame(restoreFocusFrameRef.current);
+    restoreFocusFrameRef.current = null;
+    if (!restoreFocus) return;
     restoreFocusFrameRef.current = window.requestAnimationFrame(() => {
       restoreFocusFrameRef.current = null;
       parameterButtonRef.current?.focus();
     });
   }, []);
+
+  useEffect(() => {
+    if (!active) closeParameters(false);
+  }, [active, closeParameters]);
 
   useEffect(() => {
     if (!parametersOpen) return;
@@ -218,7 +238,6 @@ export function MdSimulationDemoPage({
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
-    if (!requestServiceAccess()) return;
       closeParameters(true);
     }
     document.addEventListener("pointerdown", handlePointerDown);
@@ -321,7 +340,7 @@ export function MdSimulationDemoPage({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!requestServiceAccess()) return;
+    if (!activeRef.current || !requestServiceAccess()) return;
     setSubmitAttempted(true);
     if (!canRun) {
       if (validationErrors.smiles) setWorkspaceTab("input");
@@ -333,7 +352,7 @@ export function MdSimulationDemoPage({
     setWorkspaceTab("results");
     closeParameters(false);
     const result = await simulation.run(snapshot);
-    if (result) {
+    if (result && activeRef.current && identityEpoch.current === getSessionEpoch()) {
       setHasAttempt(true);
       setResultSnapshot(normalizeMdDemoRequest(result.input));
     }
@@ -359,17 +378,17 @@ export function MdSimulationDemoPage({
 
   return (
     <div
-      className="np-module-page np-structure-workbench np-md-simulation"
+      className={embedded ? "np-pmd-demo-embedded" : "np-module-page np-structure-workbench np-md-simulation"}
       data-module="md-simulation"
     >
-      <ModulePageHeader actions={<BrowsingRecordingControls module="mdSimulationDemo" />}>MD 模拟</ModulePageHeader>
+      {!embedded ? <ModulePageHeader actions={<BrowsingRecordingControls module="mdSimulationDemo" />}>MD 模拟</ModulePageHeader> : null}
       <div className="np-sw-page np-module-page-body np-md-page">
         <div className="np-sw-layout">
           <main className="np-sw-workspace">
             <div className="np-md-module-toolbar" aria-label="MD 模拟工具栏">
               <div className="np-md-toolbar-actions">
                 <div className="np-md-service-status">
-                  <span className={`is-${serviceState}`} role="status">
+                  {!embedded ? <span className={`is-${serviceState}`} role="status">
                     {serviceState === "loading" ? (
                       <LoaderCircle className="np-sw-spin" />
                     ) : null}
@@ -379,7 +398,7 @@ export function MdSimulationDemoPage({
                     {serviceState === "unavailable" ? <CircleOff /> : null}
                     {serviceState === "error" ? <TriangleAlert /> : null}
                     {serviceLabel}
-                  </span>
+                  </span> : null}
                   <button
                     type="button"
                     aria-label="重新加载 MD 模拟配置"
@@ -389,7 +408,7 @@ export function MdSimulationDemoPage({
                     <RefreshCw
                       className={simulation.defaultsLoading ? "np-sw-spin" : ""}
                     />
-                    刷新
+                    {embedded ? "刷新示例" : "刷新"}
                   </button>
                 </div>
                 <button
@@ -417,10 +436,10 @@ export function MdSimulationDemoPage({
                       <section
                         id="md-simulation-input-panel"
                         className="np-md-surface"
-                        role="tabpanel"
-                        aria-labelledby="md-simulation-input-tab"
+                        role={embedded ? undefined : "tabpanel"}
+                        aria-labelledby={embedded ? undefined : "md-simulation-input-tab"}
                       >
-                        <header className="np-md-view-header np-md-surface__header">
+                        {!embedded ? <header className="np-md-view-header np-md-surface__header">
                           <div className="np-md-view-heading np-md-surface-heading">
                             <span className="np-md-surface-mark">
                               <FlaskConical />
@@ -434,14 +453,14 @@ export function MdSimulationDemoPage({
                             <Info />
                             真实示例结构
                           </span>
-                        </header>
+                        </header> : null}
 
-                        <WorkspaceTabs
+                        {!embedded ? <WorkspaceTabs
                           activeTab={workspaceTab}
                           hasAttempt={hasAttempt}
                           loading={simulation.runLoading}
                           onChange={setWorkspaceTab}
-                        />
+                        /> : null}
 
                         <div className="np-md-demo-boundary">
                           <Info aria-hidden="true" />
@@ -464,7 +483,7 @@ export function MdSimulationDemoPage({
                             title="聚合物结构"
                             description="示例 SMILES 已预置，可直接打开右上角参数设置开始模拟。"
                           />
-                          <MdStructureInput
+                          {active ? <MdStructureInput
                             value={request.smiles}
                             error={visibleErrors.smiles ?? null}
                             onChange={(smiles) => updateRequest({ smiles })}
@@ -476,7 +495,7 @@ export function MdSimulationDemoPage({
                             }
 
                             onEditStructure={openStructureEditor}
-                          />
+                          /> : null}
                         </section>
 
                         <footer className="np-md-input-footer">
@@ -489,13 +508,14 @@ export function MdSimulationDemoPage({
                       </section>
                     ) : (
                       <MdSimulationResultsPanel
+                        embedded={embedded}
                         workspaceNavigation={
-                          <WorkspaceTabs
+                          !embedded ? <WorkspaceTabs
                             activeTab={workspaceTab}
                             hasAttempt={hasAttempt}
                             loading={simulation.runLoading}
                             onChange={setWorkspaceTab}
-                          />
+                          /> : null
                         }
                         loading={simulation.runLoading}
                         error={simulation.runError}

@@ -105,6 +105,7 @@ class Settings:
         pi_reverse_backend: str | None = None,
         app_postgres_dsn: str | None = None,
         structured_data_backend: str | None = None,
+        literature_enabled: bool | None = None,
         deployment_drain_enabled: bool | None = None,
         pi_postgres_dsn: str | None = None,
         lab_data_postgres_dsn: str | None = None,
@@ -138,6 +139,13 @@ class Settings:
         monomer_dft_validation_concurrency: int | None = None,
         monomer_dft_download_max_concurrent: int | None = None,
         monomer_dft_download_spool_root: str | None = None,
+        polymer_md_dev_enabled: bool | None = None,
+        polymer_md_submit_enabled: bool | None = None,
+        polymer_md_worker_uds: str | None = None,
+        polymer_md_start_authorization_token: str | None = None,
+        polymer_md_environment: str | None = None,
+        polymer_md_artifact_root: str | None = None,
+        polymer_md_acceptance_root: str | None = None,
         allowed_origins: str | None = None,
         dev_gpu_operator_enabled: bool | None = None,
         dev_gpu_operator_frontend_port: int | None = None,
@@ -266,6 +274,9 @@ class Settings:
             "STRUCTURED_DATA_BACKEND",
             env_values.get("STRUCTURED_DATA_BACKEND", "postgres"),
         )
+        raw_literature_enabled = literature_enabled
+        if raw_literature_enabled is None:
+            raw_literature_enabled = os.getenv("KNOWLEDGE_LITERATURE_ENABLED", env_values.get("KNOWLEDGE_LITERATURE_ENABLED", "false"))
         raw_deployment_drain_enabled = deployment_drain_enabled
         if raw_deployment_drain_enabled is None:
             raw_deployment_drain_enabled = os.getenv(
@@ -941,6 +952,7 @@ class Settings:
         if self.pi_reverse_backend != "postgres":
             raise ValueError("PI_REVERSE_BACKEND must be 'postgres'")
         self.structured_data_backend = raw_structured_data_backend.strip().lower()
+        self.literature_enabled = _strict_bool("KNOWLEDGE_LITERATURE_ENABLED", raw_literature_enabled)
         if self.structured_data_backend != "postgres":
             raise ValueError("STRUCTURED_DATA_BACKEND must be 'postgres'")
         self.deployment_drain_enabled = bool(raw_deployment_drain_enabled)
@@ -1027,6 +1039,20 @@ class Settings:
                 "MONOMER_DFT_SUBMIT_ENABLED is true"
             )
         self.allowed_origins = raw_allowed_origins
+        self.polymer_md_dev_enabled = _strict_bool("POLYMER_MD_DEV_ENABLED", polymer_md_dev_enabled if polymer_md_dev_enabled is not None else os.getenv("POLYMER_MD_DEV_ENABLED", "false"))
+        self.polymer_md_submit_enabled = _strict_bool("POLYMER_MD_SUBMIT_ENABLED", polymer_md_submit_enabled if polymer_md_submit_enabled is not None else os.getenv("POLYMER_MD_SUBMIT_ENABLED", "false"))
+        self.polymer_md_environment = polymer_md_environment or os.getenv("POLYMER_MD_ENVIRONMENT", "disabled")
+        self.polymer_md_worker_uds = polymer_md_worker_uds or os.getenv("POLYMER_MD_WORKER_UDS", "")
+        self.polymer_md_download_spool_root = _absolute_from_root(os.getenv("POLYMER_MD_DOWNLOAD_SPOOL_ROOT", ".runtime/polymer-md-downloads"))
+        raw_polymer_md_artifact_root = polymer_md_artifact_root if polymer_md_artifact_root is not None else os.getenv("POLYMER_MD_ARTIFACT_ROOT", "")
+        self.polymer_md_artifact_root = _absolute_from_root(raw_polymer_md_artifact_root) if raw_polymer_md_artifact_root else ""
+        raw_polymer_md_acceptance_root = polymer_md_acceptance_root if polymer_md_acceptance_root is not None else os.getenv("POLYMER_MD_ACCEPTANCE_ROOT", "")
+        self.polymer_md_acceptance_root = _absolute_from_root(raw_polymer_md_acceptance_root) if raw_polymer_md_acceptance_root else ""
+        self.polymer_md_start_authorization_token = polymer_md_start_authorization_token or os.getenv("POLYMER_MD_START_AUTHORIZATION_TOKEN", "")
+        if self.polymer_md_dev_enabled and self.polymer_md_environment != "dev":
+            raise ValueError("polymer MD is available only with POLYMER_MD_ENVIRONMENT=dev")
+        if self.polymer_md_submit_enabled and (not self.polymer_md_dev_enabled or not self.polymer_md_worker_uds or not self.polymer_md_start_authorization_token):
+            raise ValueError("polymer MD submission requires explicit development enablement, Unix socket and start authorization token")
         self.monomer_dft_start_authorization_token = monomer_dft_start_authorization_token or os.getenv("MONOMER_DFT_START_AUTHORIZATION_TOKEN", "")
         self.dev_gpu_operator_enabled = bool(raw_dev_gpu_operator_enabled)
         self.dev_gpu_operator_frontend_port = int(
