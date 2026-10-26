@@ -40,6 +40,10 @@ def isolated_assets_db(monkeypatch, tmp_path):
             migrations = Path(__file__).parents[1] / "migrations" / "postgres"
             from app.migration_policy import validate_migration_manifest_entries
             for entry in validate_migration_manifest_entries(migrations):
+                if entry.version > "0022_usage_entitlements":
+                    # Shared asset isolation uses the regular migration prefix;
+                    # optional MD/literature DDL belongs to its dedicated fixtures.
+                    continue
                 path=migrations/(entry.version+".sql")
                 if path.name.startswith("0018"):
                     connection.execute("INSERT INTO auth.users(user_id,username,password_hash,must_change_password) VALUES(%s,'alice','!',false),(%s,'bob','!',false)", (A.user_id, B.user_id))

@@ -369,6 +369,8 @@ def test_database_management_authority_is_rejected(service_acl_database, authori
 def test_private_owner_scope_stays_consistent_with_runtime_validator():
     from app.auth.schema import PRIVATE_SCHEMAS as runtime_scope
     assert PRIVATE_SCHEMAS == runtime_scope
+    # Both new stores need protection even if the two validators drift together.
+    assert {"polymer_md", "knowledge"} <= set(PRIVATE_SCHEMAS)
 
 
 @pytest.mark.parametrize("column", sorted(SELECT_COLUMNS))
