@@ -69,7 +69,17 @@ class PolymerMdRegistryComposeTests(unittest.TestCase):
             self.assertEqual(len(mounts), 1)
             self.assertEqual(mounts[0]["source"], str(missing))
             self.assertTrue(mounts[0]["read_only"])
-            self.assertFalse(mounts[0]["bind"]["create_host_path"])
+            # New Compose JSON omits false bind options. Independently require
+            # the source to opt out explicitly before accepting that omission.
+            overlay = (ROOT / "docker-compose.polymer-md-registry-dev.yml").read_text()
+            self.assertIn(
+                f"        target: {REGISTRY_TARGET}\n"
+                "        read_only: true\n"
+                "        bind:\n"
+                "          create_host_path: false\n",
+                overlay,
+            )
+            self.assertIs(mounts[0].get("bind", {}).get("create_host_path", False), False)
             self.assertFalse(missing.exists())
             for name, service in services.items():
                 if name != "backend":

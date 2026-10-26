@@ -159,6 +159,9 @@ jobs:
               ! -name 'test_user_isolation_release_contract.py' \
               ! -name 'test_monomer_usage_hooks.py' \
               ! -name 'test_worker_slot_runtime.py' \
+              ! -name 'test_polymer_md_api_services.py' \
+              ! -name 'test_polymer_md_backend_full.py' \
+              ! -name 'test_polymer_md_backup_dev.py' \
               ! -name 'test_polymer_md_acceptance_registry_cli.py' -print | sort
           )
           python3 -m unittest -v "${unittest_files[@]}"
@@ -356,6 +359,9 @@ jobs:
             python -m pytest --assert=plain --tb=short -p no:cacheprovider -p anyio.pytest_plugin \
               workers/polymer_md_worker/tests \
               scripts/tests/test_polymer_md_acceptance_registry_cli.py \
+              scripts/tests/test_polymer_md_api_services.py \
+              scripts/tests/test_polymer_md_backend_full.py \
+              scripts/tests/test_polymer_md_backup_dev.py \
               --deselect=workers/polymer_md_worker/tests/test_process_control.py::test_real_scope_contains_and_kills_detached_descendants \
               --deselect=workers/polymer_md_worker/tests/test_manager.py::test_real_scope_execution_gate_requires_durable_scope_membership
 

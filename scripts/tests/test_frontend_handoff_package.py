@@ -40,6 +40,27 @@ class HandoffPackageTests(unittest.TestCase):
                     self.assertIn(target.relative_to(package.ROOT).as_posix(), selected)
         self.assertGreater(imports, 0)
 
+    def test_shared_ui_specs_keep_an_explicit_source_boundary(self):
+        expected = {'polymer_md/user_configuration.json', 'polymer_md/capability_catalog.json'}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'design-system/polyprop').mkdir(parents=True)
+            for name in (*expected, 'polymer_md/unreviewed.json', 'polymer_md/app.env',
+                         'polymer_md/contracts.py', 'polymer_md/.runtime/job.json'):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('{}\n')
+            with patch.object(package, 'TREE_DIRS', ()), patch.object(package, 'ROOT_FILES', ()), \
+                 patch.object(package, 'SCRIPTS', ()), patch.object(package, 'DOCS', ()), \
+                 patch.object(package, 'EXTERNAL_FIXTURES', {}):
+                selected = package.selected_files(root)
+                self.assertEqual(set(selected), expected)
+                dependency = root / 'polymer_md/user_configuration.json'
+                dependency.unlink()
+                dependency.symlink_to(root / 'polymer_md/unreviewed.json')
+                with self.assertRaisesRegex(package.PackagingError, 'Symlink'):
+                    package.selected_files(root)
+
 
     def test_page_fixture_routes_preserve_lower_auth_and_business_failures(self):
         node = shutil.which('node')
@@ -338,7 +359,7 @@ assert.throws(() => assert.equal(missingInitial.focusInDrawer, true));
                 (source / name).write_text('synthetic fixture')
             with patch.object(package, 'TREE_DIRS', ('src',)), patch.object(package, 'ROOT_FILES', ()), \
                  patch.object(package, 'SCRIPTS', ()), patch.object(package, 'DOCS', ()), \
-                 patch.object(package, 'EXTERNAL_FIXTURES', {}):
+                 patch.object(package, 'EXTERNAL_FIXTURES', {}), patch.object(package, 'SOURCE_DEPENDENCIES', ()):
                 selected = package.selected_files(root)
             self.assertEqual(set(selected), {'frontend/src/safe.ts', 'frontend/src/env.d.ts'})
 

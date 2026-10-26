@@ -66,6 +66,11 @@ ANY_ACTION = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)")
 WORKFLOW_JOB_HEADER = re.compile(r"(?m)^  (?P<name>[A-Za-z0-9_-]+):\n")
 WORKFLOW_STEP_ITEM = re.compile(r"(?m)^      - ")
 WORKFLOW_STEP_KEY = re.compile(r"^        [A-Za-z_][A-Za-z0-9_-]*:")
+POLYMER_MD_OPERATOR_TESTS = (
+    "test_polymer_md_api_services.py",
+    "test_polymer_md_backend_full.py",
+    "test_polymer_md_backup_dev.py",
+)
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 SAFE_DATASET = re.compile(r"^[A-Za-z0-9_.-]+$")
 FROZEN_ASSET_DOC = re.compile(
@@ -1258,6 +1263,42 @@ def validate_lightweight_backend_tests(ci_text: str, failures: list[str]) -> Non
             failures.append(f"lightweight-backend-tests is missing: {marker}")
     if "      - lightweight-backend-tests\n" not in gate:
         failures.append("ci-gate must require lightweight-backend-tests")
+
+
+def validate_polymer_md_script_tests(ci_text: str, failures: list[str]) -> None:
+    script = workflow_job_body(ci_text, "script-tests", failures)
+    backend = workflow_job_body(ci_text, "backend-tests", failures)
+    gate = workflow_job_body(ci_text, "ci-gate", failures)
+    if script is None or backend is None or gate is None:
+        return
+    header = "      - name: Run polymer MD offline Worker and registry tests\n"
+    steps = [step for step in workflow_step_blocks(backend) if step.startswith(header)]
+    if len(steps) != 1:
+        failures.append("backend-tests must run exactly one polymer MD offline pytest step")
+        return
+    step = steps[0]
+    for name in POLYMER_MD_OPERATOR_TESTS:
+        if script.count(f"! -name '{name}'") != 1:
+            failures.append(f"script-tests must exclude polymer MD pytest module {name}")
+        if step.count(f"              scripts/tests/{name} \\\n") != 1:
+            failures.append(f"polymer MD offline pytest must collect {name} exactly once")
+    for marker in (
+        "        if: matrix.shard == 0\n",
+        "          env -i \\\n",
+        '            PYTHONPATH="$GITHUB_WORKSPACE:$GITHUB_WORKSPACE/backend"',
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
+        "python -m pytest --assert=plain --tb=short",
+    ):
+        if marker not in step:
+            failures.append(f"polymer MD offline pytest is missing: {marker.strip()}")
+    require_ordered_markers(
+        backend,
+        (("hashed backend dependencies", "python -m pip install --require-hashes -r backend/requirements-ci.lock"),
+         ("offline pytest", header)),
+        label="polymer MD script test runtime", failures=failures,
+    )
+    if "      - backend-tests\n" not in gate:
+        failures.append("ci-gate must require backend-tests for polymer MD pytest")
 
 
 def validate_gpu_session_compose_policy(
@@ -2872,6 +2913,7 @@ def main() -> int:
     validate_complete_history_checkouts(ci_text, failures)
     validate_script_tests_budget(ci_text, failures)
     validate_lightweight_backend_tests(ci_text, failures)
+    validate_polymer_md_script_tests(ci_text, failures)
     validate_gpu_session_compose_policy(ci_text, failures)
     validate_exact_b_job(ci_text, failures)
     validate_isolation_image_smoke(ci_text, failures)
