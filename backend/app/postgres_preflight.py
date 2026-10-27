@@ -518,6 +518,7 @@ def run_preflight(
 
     try:
         with postgres_connection(target_dsn) as connection:
+            literature_table_counts = {}
             version = connection.execute("SELECT current_database() AS database, current_user AS user, version() AS version").fetchone()
             applied_migrations, duplicate_migrations = _postgres_applied_migrations(
                 connection
@@ -601,6 +602,10 @@ def run_preflight(
                         if schema_target == SCHEMA_TARGET_LITERATURE:
                             from app.services.literature_preflight import validate_literature_api_schema
                             validate_literature_api_schema(api)
+                            literature_table_counts = {
+                                f"{schema}.{table}": _postgres_count(api, schema, table)
+                                for schema, table in LITERATURE_POSTGRES_TABLES
+                            }
                             report["literature_schema_ready"] = True
                     report["runtime_database"] = service_database
             dft_schema = probe_monomer_dft_schema(connection)
@@ -612,6 +617,7 @@ def run_preflight(
                 for schema, table in STARTUP_RUNTIME_TABLES
                 if schema_target not in ISOLATION_TARGETS or schema != "lab"
             }
+            table_counts.update(literature_table_counts)
             table_counts.update(
                 {
                     f"{schema}.{table}": _postgres_count(
