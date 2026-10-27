@@ -11,7 +11,7 @@ import unittest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
-def docker_build_copies(root: Path) -> list[tuple[Path, str]]:
+def docker_build_copies(root: Path, *, before_npm_ci: bool = False) -> list[tuple[Path, str]]:
     """Resolve local COPY inputs in the frontend's first build stage."""
     text = (root / "frontend/Dockerfile").read_text(encoding="utf-8")
     text = re.sub(r"\\\n\s*", " ", text)
@@ -27,6 +27,8 @@ def docker_build_copies(root: Path) -> list[tuple[Path, str]]:
                 break
         elif stage == 1 and instruction == "WORKDIR":
             working_directory = posixpath.normpath(posixpath.join(working_directory, value.strip()))
+        elif stage == 1 and instruction == "RUN" and before_npm_ci and value.strip() == "npm ci":
+            break
         elif stage == 1 and instruction == "COPY":
             arguments = json.loads(value) if value.startswith("[") else shlex.split(value)
             if any(argument.startswith("--from=") for argument in arguments):
@@ -52,6 +54,26 @@ def stage_location(path: Path, copies: list[tuple[Path, str]]) -> str | None:
 
 
 class FrontendDockerBuildInputTests(unittest.TestCase):
+    def test_postinstall_verifier_inputs_are_present_before_npm_ci(self) -> None:
+        root = REPOSITORY_ROOT
+        frontend = root / "frontend"
+        copies = docker_build_copies(root, before_npm_ci=True)
+        manifest = json.loads((frontend / "patches/ketcher-manifest.json").read_text())
+        required = {"patches/ketcher-manifest.json", *manifest["patches"], *manifest["fragments"]}
+        required.update(path for path in manifest["files"] if not path.startswith("node_modules/"))
+        pending = ["scripts/verify-ketcher-patches.mjs"]
+        while pending:
+            path = pending.pop()
+            if path in required:
+                continue
+            required.add(path)
+            source = frontend / path
+            for dependency in re.findall(r"from\s*['\"](\.[^'\"]+)['\"]", source.read_text()):
+                pending.append(posixpath.normpath(posixpath.join(posixpath.dirname(path), dependency)))
+        missing = [path for path in sorted(required)
+                   if stage_location(frontend / path, copies) != "/app/frontend/" + path]
+        self.assertEqual(missing, [], "Postinstall verifier inputs must be copied before npm ci")
+
     def test_relative_json_imports_are_present_at_their_build_stage_locations(self) -> None:
         root = REPOSITORY_ROOT
         frontend = root / "frontend"

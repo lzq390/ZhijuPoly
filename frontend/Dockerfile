@@ -9,8 +9,9 @@ ENV VITE_STRUCTURE_EDITOR_ENGINE="${VITE_STRUCTURE_EDITOR_ENGINE}"
 
 COPY frontend/package*.json ./
 COPY frontend/patches ./patches
-COPY frontend/scripts/verify-ketcher-patches.mjs ./scripts/verify-ketcher-patches.mjs
+COPY frontend/scripts/verify-ketcher-patches.mjs frontend/scripts/patch-ketcher-iframe.mjs ./scripts/
 COPY frontend/sdk/core-fragment.js frontend/sdk/editor-fragment.js frontend/sdk/macro-controller.mjs frontend/sdk/indigo-transport.mjs ./sdk/
+COPY frontend/public/ketcher/static/js/main.8617f334.js ./public/ketcher/static/js/main.8617f334.js
 RUN npm ci
 
 COPY contracts/monomer_dft_api_contract_v1.json /app/contracts/monomer_dft_api_contract_v1.json
