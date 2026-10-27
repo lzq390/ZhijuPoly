@@ -1208,6 +1208,7 @@ def main() -> None:
             "expand",
             "contract-0012",
             "polymer-md-dev-0023",
+            "literature-dev-0024",
         ),
         default="expand",
         help=(
@@ -1218,7 +1219,44 @@ def main() -> None:
             "exposed destructive operation and is checksum-pinned."
         ),
     )
+    parser.add_argument("--dsn-env", help="Maintenance DSN environment variable; required only for literature-dev-0024.")
+    parser.add_argument("--backup-receipt", type=Path)
+    parser.add_argument("--maintenance-evidence", type=Path)
+    parser.add_argument("--writers-stopped", action="store_true")
+    parser.add_argument("--audit-output", type=Path)
     args = parser.parse_args()
+
+    if args.mode == "literature-dev-0024":
+        if (not args.dsn_env or not args.backup_receipt or not args.maintenance_evidence
+                or not args.writers_stopped or not args.audit_output):
+            parser.error("literature-dev-0024 requires --dsn-env, --backup-receipt, --maintenance-evidence, --writers-stopped and --audit-output")
+        if args.contract_guard_json is not None or args.contract_guard_sha256 is not None:
+            parser.error("Contract guard arguments require --mode contract-0012")
+        import json
+        import os
+        from app.services.literature_schema import apply_literature_dev_migration
+        # Reserve the private audit path before starting a transaction. Never
+        # echo a DSN, credential or raw database exception in CLI diagnostics.
+        descriptor = os.open(args.audit_output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "w") as output:
+            try:
+                result = apply_literature_dev_migration(
+                    os.environ[args.dsn_env], environment=Settings().polymer_md_environment,
+                    backup_receipt=args.backup_receipt, maintenance_evidence=args.maintenance_evidence,
+                    writers_stopped=args.writers_stopped, migrations_dir=args.migrations_dir)
+            except Exception as exc:
+                output.write(json.dumps({"status": "failed", "error_type": type(exc).__name__}) + "\n")
+                output.flush()
+                os.fsync(output.fileno())
+                raise SystemExit("Literature maintenance failed; keep writers stopped and review the private evidence") from None
+            output.write(json.dumps({"status": "passed", **result}, indent=2) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        print(f"{result['version']}\t{'applied' if result['applied'] else 'skipped'}\t{result['checksum']}")
+        return
+
+    if any((args.dsn_env, args.backup_receipt, args.maintenance_evidence, args.writers_stopped, args.audit_output)):
+        parser.error("Literature maintenance arguments require --mode literature-dev-0024")
 
     if args.mode == "polymer-md-dev-0023":
         if args.contract_guard_json is not None or args.contract_guard_sha256 is not None:

@@ -4,6 +4,15 @@ umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+# Explicit command/operator inputs take precedence over sourced dotenv defaults.
+declare -A RESEARCH_LAUNCH_INPUTS=()
+for research_input in NEXPOLY_DEV_POLYMER_MD_ENABLED NEXPOLY_DEV_LITERATURE_ENABLED \
+  NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED NEXPOLY_DEV_RESEARCH_ENV_FILE \
+  NEXPOLY_DEV_EXPECTED_RESEARCH_CONFIG_SHA256; do
+  if [[ -v "$research_input" ]]; then RESEARCH_LAUNCH_INPUTS["$research_input"]="${!research_input}"; fi
+done
+readonly RESEARCH_LAUNCH_INPUTS
+unset research_input
 readonly NATIVE_COHORT_CONFIG_INPUT="${NEXPOLY_DEV_GPU_COHORT_CONFIG:-}"
 readonly NATIVE_COHORT_SHA256_INPUT="${NEXPOLY_DEV_GPU_COHORT_SHA256:-}"
 readonly NATIVE_RECOVERY_SESSION_INPUT="${NEXPOLY_DEV_GPU_SESSION_ID:-}"
@@ -110,6 +119,123 @@ if [[ "$COHORT_FROZEN_SOURCE_MODE" != "true" ]]; then
 fi
 export NEXPOLY_DEV_USER_ISOLATION_ENABLED="${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}"
 
+load_research_environment() {
+  local name payload assignment
+  if declare -p RESEARCH_LAUNCH_INPUTS >/dev/null 2>&1; then
+    for name in "${!RESEARCH_LAUNCH_INPUTS[@]}"; do export "$name=${RESEARCH_LAUNCH_INPUTS[$name]}"; done
+  fi
+  for name in NEXPOLY_DEV_POLYMER_MD_ENABLED NEXPOLY_DEV_LITERATURE_ENABLED NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED; do
+    case "${!name:-false}" in
+      true|false) export "$name=${!name:-false}" ;;
+      *) echo "$name must be exactly true or false." >&2; return 2 ;;
+    esac
+  done
+  RESEARCH_COMPOSE_FILES=()
+  RESEARCH_BUILD_CONFIG_FILES=()
+  export NEXPOLY_DEV_SCHEMA_TARGET=user-isolation-current
+  if [[ "$NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED" == true && "$NEXPOLY_DEV_POLYMER_MD_ENABLED" != true ]]; then
+    echo "The research registry requires the explicit Polymer MD opt-in." >&2; return 2
+  fi
+  if [[ "$NEXPOLY_DEV_POLYMER_MD_ENABLED" == false && "$NEXPOLY_DEV_LITERATURE_ENABLED" == false ]]; then
+    [[ -z "${NEXPOLY_DEV_EXPECTED_RESEARCH_CONFIG_SHA256:-}" ]] || {
+      echo "Research recovery requires the operator's frozen feature selection." >&2; return 2
+    }
+    return 0
+  fi
+  [[ -z "${NATIVE_COHORT_CONFIG_INPUT:-}" && "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == true ]] || {
+    echo "Research overlays require the ordinary isolated development stack, not a frozen cohort." >&2; return 2
+  }
+  [[ "${USAGE_ENTITLEMENTS_ENABLED:-false}" == false ]] || {
+    echo "Research deployment must retain disabled entitlement enforcement." >&2; return 2
+  }
+  # Literal, bounded dotenv data only. Never execute this private file as shell
+  # code or import source/DSN settings from a historical standalone deployment.
+  payload="$(/usr/bin/python3 -I - "${NEXPOLY_DEV_RESEARCH_ENV_FILE:-}" <<'PY'
+import hashlib, os, re, stat, sys
+allowed = {
+    'POLYMER_MD_SOCKET_DIR', 'POLYMER_MD_JOB_ROOT', 'POLYMER_MD_START_AUTHORIZATION_TOKEN',
+    'POLYMER_MD_SUBMIT_ENABLED', 'POLYMER_MD_ACCEPTANCE_HOST_ROOT',
+    'POLYMER_MD_ACCEPTANCE_UID', 'POLYMER_MD_ACCEPTANCE_GID',
+    'LITERATURE_MINIO_ENDPOINT', 'LITERATURE_MINIO_ACCESS_KEY',
+    'LITERATURE_MINIO_SECRET_KEY', 'LITERATURE_MINIO_SECURE',
+}  # Only literal research inputs; never a database identity.
+try:
+    path = sys.argv[1]
+    if not os.path.isabs(path) or os.path.realpath(path) != path: raise ValueError()
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
+                or before.st_size > 65536): raise ValueError()
+        body = bytearray()
+        while len(body) <= 65536:
+            part = os.read(fd, 65537-len(body))
+            if not part: break
+            body.extend(part)
+        if len(body) > 65536: raise ValueError()
+        after = os.fstat(fd)
+        linked = os.stat(path, follow_symlinks=False)
+        fields = lambda s: (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+        if fields(before) != fields(after) or fields(after) != fields(linked): raise ValueError()
+    finally: os.close(fd)
+    values = {}
+    for line in body.decode('utf-8').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'): continue
+        key, separator, value = line.partition('=')
+        if separator != '=' or key not in allowed or key in values: raise ValueError()
+        value = value.strip()
+        if value.startswith(('"', "'")):
+            if len(value) < 2 or value[-1] != value[0]: raise ValueError()
+            value = value[1:-1]
+        if any(ord(c) < 32 or ord(c) == 127 for c in value): raise ValueError()
+        values[key] = value
+    for key, value in values.items(): print(key+'='+value)
+    print('NEXPOLY_DEV_RESEARCH_CONFIG_SHA256=sha256:'+hashlib.sha256(body).hexdigest())
+except (OSError, ValueError, UnicodeError):
+    raise SystemExit('Research configuration requires a stable owner-private 0600 literal dotenv file with only allowed keys.')
+PY
+)" || return 2
+  for name in POLYMER_MD_SOCKET_DIR POLYMER_MD_JOB_ROOT POLYMER_MD_START_AUTHORIZATION_TOKEN \
+    POLYMER_MD_SUBMIT_ENABLED POLYMER_MD_ACCEPTANCE_HOST_ROOT POLYMER_MD_ACCEPTANCE_UID \
+    POLYMER_MD_ACCEPTANCE_GID LITERATURE_MINIO_ENDPOINT LITERATURE_MINIO_ACCESS_KEY \
+    LITERATURE_MINIO_SECRET_KEY LITERATURE_MINIO_SECURE; do unset "$name"; done
+  while IFS= read -r assignment; do export "$assignment"; done <<< "$payload"
+  if [[ -n "${NEXPOLY_DEV_EXPECTED_RESEARCH_CONFIG_SHA256:-}" &&
+    "$NEXPOLY_DEV_RESEARCH_CONFIG_SHA256" != "$NEXPOLY_DEV_EXPECTED_RESEARCH_CONFIG_SHA256" ]]; then
+    echo "Research configuration changed since the operator launch identity; restart through the reviewed deployment workflow." >&2; return 2
+  fi
+  if [[ "$NEXPOLY_DEV_POLYMER_MD_ENABLED" == true ]]; then
+    [[ "${POLYMER_MD_SOCKET_DIR:-}" == /* && "${POLYMER_MD_JOB_ROOT:-}" == /* && -n "${POLYMER_MD_START_AUTHORIZATION_TOKEN:-}" ]] || {
+      echo "Polymer MD requires its new private socket/job roots and authorization token." >&2; return 2
+    }
+    case "${POLYMER_MD_SUBMIT_ENABLED:-false}" in true|false) ;; *) return 2 ;; esac
+    RESEARCH_BUILD_CONFIG_FILES+=(docker-compose.polymer-md-dev.yml)
+    export NEXPOLY_DEV_SCHEMA_TARGET=polymer-md-0023
+    if [[ "$NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED" == true ]]; then
+      [[ "${POLYMER_MD_ACCEPTANCE_HOST_ROOT:-}" == /* &&
+        "${POLYMER_MD_ACCEPTANCE_UID:-}" == 1001 && "${POLYMER_MD_ACCEPTANCE_GID:-}" == 1001 ]] || {
+        echo "The main development registry requires an absolute root and the fixed 1001:1001 Backend identity." >&2; return 2
+      }
+      RESEARCH_BUILD_CONFIG_FILES+=(docker-compose.polymer-md-registry-dev.yml)
+    fi
+  else
+    export POLYMER_MD_SUBMIT_ENABLED=false
+  fi
+  if [[ "$NEXPOLY_DEV_LITERATURE_ENABLED" == true ]]; then
+    [[ -n "${LITERATURE_MINIO_ENDPOINT:-}" && -n "${LITERATURE_MINIO_ACCESS_KEY:-}" && -n "${LITERATURE_MINIO_SECRET_KEY:-}" ]] || {
+      echo "Literature requires explicit online object-store configuration." >&2; return 2
+    }
+    case "${LITERATURE_MINIO_SECURE:-true}" in true|false) ;; *) return 2 ;; esac
+    RESEARCH_BUILD_CONFIG_FILES+=(docker-compose.literature-dev.yml)
+    export NEXPOLY_DEV_SCHEMA_TARGET=literature-0024
+  fi
+  RESEARCH_BUILD_CONFIG_FILES+=(docker-compose.research-dev.yml)
+  for name in "${RESEARCH_BUILD_CONFIG_FILES[@]}"; do RESEARCH_COMPOSE_FILES+=(-f "$name"); done
+}
+load_research_environment
+
 case "${NEXPOLY_DEV_GPU_LAUNCHER_ENABLED:-false}" in
   true|false) ;;
   *)
@@ -162,6 +288,7 @@ BACKEND_BUILD_CONFIG_FILES=(
 if [[ "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == "true" ]]; then
   BACKEND_BUILD_CONFIG_FILES+=(docker-compose.user-isolation-dev.yml)
 fi
+BACKEND_BUILD_CONFIG_FILES+=("${RESEARCH_BUILD_CONFIG_FILES[@]}")
 if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
   BACKEND_BUILD_CONFIG_FILES+=("$NEXPOLY_DEV_GPU_COHORT_COMPOSE_FILE")
 fi
@@ -198,11 +325,12 @@ if [[ -n "${NATIVE_COHORT_CONFIG_INPUT:-}" ]]; then
   DEV_COMPOSE_PROJECT="$NEXPOLY_DEV_COMPOSE_PROJECT"
   DEV_COMPOSE_FILES+=(-f "$NEXPOLY_DEV_GPU_COHORT_COMPOSE_FILE")
 fi
-COMPOSE=(docker compose -p "$DEV_COMPOSE_PROJECT" "${DEV_COMPOSE_FILES[@]}" "${DEV_COMPOSE_ENV_FILES[@]}")
+COMPOSE=(docker compose -p "$DEV_COMPOSE_PROJECT" "${DEV_COMPOSE_FILES[@]}" "${RESEARCH_COMPOSE_FILES[@]}" "${DEV_COMPOSE_ENV_FILES[@]}")
 GPU_COMPOSE=(
   docker compose -p "$DEV_COMPOSE_PROJECT"
   "${DEV_COMPOSE_FILES[@]}"
   -f docker-compose.dev-gpu-session.yml
+  "${RESEARCH_COMPOSE_FILES[@]}"
   "${DEV_COMPOSE_ENV_FILES[@]}"
 )
 GPU_SESSION_CONTROLLER="$ROOT_DIR/scripts/dev_gpu_session.py"
@@ -373,6 +501,7 @@ gpu_operator_request() {
 gpu_operator_status_is_current() {
   gpu_operator_request status | python3 -c '
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -383,6 +512,14 @@ assert value.get("source_sha") == sys.argv[1], value
 assert value.get("source_tree") == sys.argv[2], value
 identity = json.loads(Path(sys.argv[4]).read_text())
 assert identity.get("user_isolation_enabled", False) is (sys.argv[3] == "true"), "GPU operator user isolation configuration differs"
+keys=("NEXPOLY_DEV_POLYMER_MD_ENABLED","NEXPOLY_DEV_LITERATURE_ENABLED","NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED")
+research={key:os.getenv(key,"false") for key in keys}
+if any(value=="true" for value in research.values()):
+    for key in ("NEXPOLY_DEV_RESEARCH_ENV_FILE","NEXPOLY_DEV_RESEARCH_CONFIG_SHA256"):
+        research[key]=os.getenv(key,"")
+else:
+    research={}
+assert identity.get("research_configuration",{})==research, "GPU operator research configuration differs"
 ' "$CURRENT_SOURCE_REVISION" "$CURRENT_SOURCE_TREE" "${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" "$GPU_OPERATOR_IDENTITY"
 }
 
@@ -474,6 +611,11 @@ gpu_operator_up() {
       --working-directory="$ROOT_DIR" \
       --setenv="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
       --setenv="NEXPOLY_DEV_USER_ISOLATION_ENABLED=${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" \
+      --setenv="NEXPOLY_DEV_POLYMER_MD_ENABLED=${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" \
+      --setenv="NEXPOLY_DEV_LITERATURE_ENABLED=${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" \
+      --setenv="NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED=${NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED:-false}" \
+      --setenv="NEXPOLY_DEV_RESEARCH_ENV_FILE=${NEXPOLY_DEV_RESEARCH_ENV_FILE:-}" \
+      --setenv="NEXPOLY_DEV_RESEARCH_CONFIG_SHA256=${NEXPOLY_DEV_RESEARCH_CONFIG_SHA256:-}" \
       --property="StandardOutput=append:$GPU_OPERATOR_LOG" \
       --property="StandardError=append:$GPU_OPERATOR_LOG" \
       "$GPU_SESSION_PYTHON" -I "$GPU_OPERATOR_SCRIPT" serve \
@@ -997,6 +1139,49 @@ print(hashlib.sha256(payload).hexdigest())
 '
 }
 
+verify_research_runtime() {
+  [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true ]] || return 0
+  local container_id="$1" mode="$2" configuration
+  configuration="$(mktemp)"
+  if [[ "$mode" == gpu ]]; then
+    "${GPU_COMPOSE[@]}" config --format json >"$configuration" || { rm -f "$configuration"; return 1; }
+  else
+    "${COMPOSE[@]}" config --format json >"$configuration" || { rm -f "$configuration"; return 1; }
+  fi
+  local result=0
+  docker inspect "$container_id" | python3 -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    expected=json.load(source)["services"]["backend"]
+actual=json.load(sys.stdin)[0]
+runtime=dict(item.split("=",1) for item in actual["Config"].get("Env",[]) if "=" in item)
+environment=expected.get("environment") or {}
+keys={key for key in set(environment)|set(runtime) if key.startswith(("POLYMER_MD_","LITERATURE_MINIO_"))}
+keys.update({"KNOWLEDGE_LITERATURE_ENABLED","DEPLOYMENT_DRAIN_ENABLED","USAGE_ENTITLEMENTS_ENABLED","NEXPOLY_POSTGRES_PREFLIGHT_ARGS"})
+for key in sorted(keys):
+    if runtime.get(key)!=environment.get(key):
+        raise SystemExit("Research runtime environment differs: "+key)
+if runtime.get("DEPLOYMENT_DRAIN_ENABLED")!="true" or runtime.get("USAGE_ENTITLEMENTS_ENABLED")!="false":
+    raise SystemExit("Research admission/enforcement guard differs")
+label="com.nexpoly.dev.research-config"
+if (actual["Config"].get("Labels") or {}).get(label)!=(expected.get("labels") or {}).get(label):
+    raise SystemExit("Research configuration identity differs")
+mounts={m["Destination"]:m for m in actual.get("Mounts",[])}
+targets={"/app/polymer-md-socket","/app/polymer-md-artifacts","/app/polymer-md-acceptance"}
+configured={m["target"]:m for m in expected.get("volumes",[]) if m["target"] in targets}
+for target in targets:
+    desired=configured.get(target);found=mounts.get(target)
+    if desired is None:
+        if found is not None: raise SystemExit("Unexpected research runtime mount: "+target)
+    elif (found is None or found.get("Source")!=desired["source"] or found.get("RW") is not False):
+        raise SystemExit("Research runtime readonly mount differs: "+target)
+if "/app/polymer-md-acceptance" in configured and actual["Config"].get("User")!=expected.get("user"):
+    raise SystemExit("Research registry UID/GID differs")
+' "$configuration" || result=$?
+  rm -f "$configuration"
+  return "$result"
+}
+
 wait_backend_configured() {
   local container_id health
   for _ in $(seq 1 180); do
@@ -1094,6 +1279,9 @@ elif operator_mount:
 ' "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" "$ROOT_DIR"
   if [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]]; then
     gpu_operator_status_is_current >/dev/null
+  fi
+  if [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true ]]; then
+    verify_research_runtime "$container_id" cpu
   fi
 }
 
@@ -2033,6 +2221,9 @@ PY
   if [[ "$NEXPOLY_DEV_GPU_LAUNCHER_ENABLED" == "true" ]]; then
     gpu_operator_status_is_current >/dev/null
   fi
+  if [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true ]]; then
+    verify_research_runtime "$container_id" gpu
+  fi
 }
 
 verify_backend_image_build_identity() {
@@ -2724,6 +2915,60 @@ gpu_session_restore_cpu_internal() {
   verify_backend_drift
 }
 
+require_deployment_drained() {
+  "${COMPOSE[@]}" run --rm --no-deps backend python -c '
+import os
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+    from app.config import get_settings
+    from app.auth.settings import AuthSettings
+    from app.services.deployment_control import get_drain_state
+    settings=get_settings()
+    if not settings.deployment_drain_enabled or os.getenv("USAGE_ENTITLEMENTS_ENABLED","false")!="false":
+        raise ValueError("admission guard")
+    auth=AuthSettings.from_settings(settings)
+    with psycopg.connect(auth.service_dsn, row_factory=dict_row, connect_timeout=5,
+            options="-c default_transaction_read_only=on -c statement_timeout=5000 -c lock_timeout=1000") as connection:
+        connection.execute("SET TRANSACTION READ ONLY")
+        if not get_drain_state(connection).enabled: raise ValueError("drain disabled")
+        connection.rollback()
+except Exception:
+    raise SystemExit("Maintenance requires the existing persistent deployment drain and disabled entitlement enforcement; no safety state was changed.")
+'
+}
+
+assert_maintenance_services_stopped() {
+  local running
+  running="$("${COMPOSE[@]}" ps --status running -q frontend-dev polymerization-batch-worker)" || return 1
+  [[ -z "$running" ]] || {
+    echo "Drain and stop the existing frontend/batch before maintenance startup." >&2; return 1
+  }
+}
+
+maintenance_start_prebuilt() {
+  [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true ]] || {
+    echo "Maintenance startup requires explicit research configuration." >&2; return 2
+  }
+  assert_maintenance_services_stopped
+  local DEV_START_WITHOUT_TRAFFIC=true
+  up_prebuilt
+  require_deployment_drained
+  echo "CPU Backend/operator ready behind persistent drain; frontend/batch remain stopped. GPU startup remains a separate native gpu-session-up operation."
+}
+
+maintenance_resume() {
+  [[ "${NEXPOLY_DEV_POLYMER_MD_ENABLED:-false}" == true || "${NEXPOLY_DEV_LITERATURE_ENABLED:-false}" == true ]] || return 2
+  require_deployment_drained
+  # This verifies the ordinary CPU or exact activated GPU session, including
+  # its source/Worker/candidate identities. It never recreates that Backend.
+  gpu_session_status >/dev/null
+  "${COMPOSE[@]}" up -d --no-deps --wait --wait-timeout 120 polymerization-batch-worker
+  "${COMPOSE[@]}" up -d --no-deps frontend-dev
+  require_deployment_drained
+  echo "Frontend/batch restored behind persistent drain. Resume admission separately with the existing owner-fenced deployment control."
+}
+
 up_prebuilt() {
   [[ "${NEXPOLY_DEV_USER_ISOLATION_ENABLED:-false}" == "true" &&
     "${NEXPOLY_DEV_GPU_DIRECT_START:-0}" == "1" &&
@@ -2739,15 +2984,18 @@ up_prebuilt() {
   prepare_canary_state_directory
   prepare_worker_runtime_directories
   prepare_dft_runtime_directories
+  if [[ "${DEV_START_WITHOUT_TRAFFIC:-false}" == true ]]; then require_deployment_drained; fi
   gpu_operator_up
   # This read-only gate deliberately never bootstraps or applies migrations.
   "${COMPOSE[@]}" run --rm --no-deps backend python -m app.postgres_preflight \
-    --strict --schema-target user-isolation-current --service-context
+    --strict --schema-target "${NEXPOLY_DEV_SCHEMA_TARGET:-user-isolation-current}" --service-context
   "${COMPOSE[@]}" up -d --no-deps --force-recreate backend
   wait_backend_configured
   verify_backend_drift
-  "${COMPOSE[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 120 polymerization-batch-worker
-  "${COMPOSE[@]}" up -d --no-deps frontend-dev
+  if [[ "${DEV_START_WITHOUT_TRAFFIC:-false}" != true ]]; then
+    "${COMPOSE[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 120 polymerization-batch-worker
+    "${COMPOSE[@]}" up -d --no-deps frontend-dev
+  fi
 }
 
 test_backend() (
@@ -3028,6 +3276,16 @@ NEXPOLY_DEV_CONFIG_HASH="$(compute_backend_config_hash)"
 export NEXPOLY_DEV_CONFIG_HASH
 
 case "${1:-up}" in
+  build-backend)
+    build_backend_image
+    verify_backend_image_build_identity
+    ;;
+  maintenance-up-prebuilt)
+    maintenance_start_prebuilt
+    ;;
+  maintenance-resume)
+    maintenance_resume
+    ;;
   up-prebuilt)
     up_prebuilt
     ;;
@@ -3073,7 +3331,7 @@ case "${1:-up}" in
   preflight)
     postgres_preflight_args=(--mode runtime --strict)
     if [[ "$NEXPOLY_DEV_USER_ISOLATION_ENABLED" == "true" ]]; then
-      postgres_preflight_args+=(--schema-target user-isolation-current --service-context)
+      postgres_preflight_args+=(--schema-target "$NEXPOLY_DEV_SCHEMA_TARGET" --service-context)
     fi
     "${COMPOSE[@]}" exec -T backend python -m app.postgres_preflight "${postgres_preflight_args[@]}"
     preflight_session_payload="$($GPU_SESSION_PYTHON -I "$GPU_SESSION_CONTROLLER" status)"
@@ -3159,7 +3417,7 @@ case "${1:-up}" in
     echo "ssh -N -L ${NEXPOLY_DEV_FRONTEND_PORT:-9001}:127.0.0.1:${NEXPOLY_DEV_FRONTEND_PORT:-9001} -L 9011:127.0.0.1:9011 ${NEXPOLY_DEV_SSH_USER:-$USER}@$NEXPOLY_DEV_SSH_HOST"
     ;;
   *)
-    echo "usage: $0 {up|up-prebuilt|stop|down|ps|logs|preflight|refresh-data|contract-migrate|smoke|worker-base-identity|worker-venv|worker-up|worker-stop|worker-status|gpu-session-up|gpu-session-status|gpu-session-down|gpu-session-maintenance-stop|test-backend|build-frontend|check-frontend|cleanup-legacy-builder|tunnel}" >&2
+    echo "usage: $0 {up|build-backend|up-prebuilt|maintenance-up-prebuilt|maintenance-resume|stop|down|ps|logs|preflight|refresh-data|contract-migrate|smoke|worker-base-identity|worker-venv|worker-up|worker-stop|worker-status|gpu-session-up|gpu-session-status|gpu-session-down|gpu-session-maintenance-stop|test-backend|build-frontend|check-frontend|cleanup-legacy-builder|tunnel}" >&2
     exit 2
     ;;
 esac
