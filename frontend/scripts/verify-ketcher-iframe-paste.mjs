@@ -1,4 +1,4 @@
-// Real SDK regression: hold only the initial paste's merge timer, leave the
+// Real SDK regression: hold the paste's merge timers, enter and leave the
 // canvas, then release it. No business APIs, scientific jobs or wall-clock sleeps.
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -12,6 +12,7 @@ await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ executablePath: process.env.STRUCTURE_CHROMIUM_PATH || undefined,
   headless: true, args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
 const report = { errors: [] };
+let page;
 try {
   const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
@@ -20,7 +21,7 @@ try {
     return url.origin === new URL(base).origin && ['GET', 'HEAD'].includes(request.method())
       ? route.continue() : route.abort();
   });
-  const page = await context.newPage();
+  page = await context.newPage();
   page.on('pageerror', error => report.errors.push(error.stack || error.message));
   await page.goto(base + '/ketcher/index.html');
   await page.waitForFunction(() => Boolean(window.ketcher?.editor));
@@ -36,12 +37,23 @@ try {
     return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
   });
   await page.mouse.click(point.x, point.y);
+  // Clipboard import can briefly place UI under an unmoved pointer. Start
+  // outside so the later leave has an observed, deliberate canvas entry.
+  await page.mouse.move(5, 5);
   await page.evaluate(() => {
     const editor = window.ketcher.editor, tool = editor.tool;
     const nativeTimeout = window.setTimeout.bind(window), nativeClear = window.clearTimeout.bind(window);
     const nativeNow = Date.now.bind(Date), pending = new Map();
     let capturing = false, id = 1000000000, advance = 0;
-    window.__pasteRegression = { ready: 0, canceled: 0 };
+    window.__pasteRegression = { ready: 0, canceled: 0, moves: 0, events: [] };
+    for (const type of ['mouseover', 'mousemove', 'mouseleave']) {
+      editor.render.clientArea.addEventListener(type, event => {
+        const events = window.__pasteRegression.events;
+        events.push({ type, trusted: event.isTrusted, target: event.target.nodeName,
+          x: event.clientX, y: event.clientY });
+        if (events.length > 12) events.shift();
+      });
+    }
     window.addEventListener('itemsToMergeInitializationComplete', () => window.__pasteRegression.ready++);
     Date.now = () => nativeNow() + advance;
     window.setTimeout = function (callback, delay, ...args) {
@@ -59,10 +71,18 @@ try {
       finally {
         capturing = false;
         if (args[0] === 'paste') {
-          const paste = this._tool, cancel = paste.cancel;
+          const paste = this._tool, cancel = paste.cancel, move = paste.mousemove;
           paste.cancel = function (...values) {
             window.__pasteRegression.canceled++;
             return cancel.apply(this, values);
+          };
+          paste.mousemove = function (...values) {
+            capturing = true;
+            try {
+              const result = move.apply(this, values);
+              window.__pasteRegression.moves++;
+              return result;
+            } finally { capturing = false; }
           };
         }
       }
@@ -70,11 +90,17 @@ try {
     window.__pasteRegression.snapshot = () => ({
       atoms: editor.struct().atoms.size, action: Boolean(editor._tool.action),
       pasteTool: Boolean(editor._tool.struct?.atoms), pending: pending.size,
-      ready: window.__pasteRegression.ready, canceled: window.__pasteRegression.canceled
+      ready: window.__pasteRegression.ready, canceled: window.__pasteRegression.canceled,
+      moves: window.__pasteRegression.moves, events: window.__pasteRegression.events.slice(),
+      canvas: (() => {
+        const area = editor.render.clientArea, rect = area.getBoundingClientRect();
+        return { connected: area.isConnected, hovered: area.matches(':hover'),
+          x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      })()
     });
     window.__pasteRegression.release = () => {
       // Lodash checks elapsed time again when its timer fires. Advance this
-      // page's clock before delivering exactly the captured initial callbacks.
+      // page's clock before delivering exactly the captured merge callbacks.
       advance += 1000;
       const work = [...pending.values()];
       pending.clear();
@@ -92,6 +118,24 @@ try {
   assert.equal(report.preview.action, true);
   assert.equal(report.preview.pending, 1);
   assert.equal(report.preview.ready, 0);
+  await page.evaluate(() => { window.__pasteRegression.initialAction = window.ketcher.editor._tool.action; });
+  const placementHandle = await page.waitForFunction(() => {
+    const area = window.ketcher.editor.render.clientArea, rect = area.getBoundingClientRect();
+    const point = { x: rect.x + rect.width / 2 + 1, y: rect.y + rect.height / 2 };
+    const hit = document.elementFromPoint(point.x, point.y);
+    return area.isConnected && area.contains(hit) && hit.nodeName !== 'DIV' && point;
+  });
+  const placement = await placementHandle.jsonValue();
+  await placementHandle.dispose();
+  await page.mouse.move(placement.x, placement.y);
+  await page.waitForFunction(() => {
+    const state = window.__pasteRegression, editor = window.ketcher.editor;
+    return state.moves > 0 && editor._tool.action && editor._tool.action !== state.initialAction &&
+      editor.render.clientArea.matches(':hover');
+  });
+  report.placedPreview = await page.evaluate(() => window.__pasteRegression.snapshot());
+  assert.equal(report.placedPreview.pending, 1);
+  assert.equal(report.placedPreview.ready, 0);
   // A real mouseLeaveClientArea event must roll back this preview.
   await page.mouse.move(5, 5);
   await page.waitForFunction(() => window.__pasteRegression.canceled > 0 &&
@@ -105,7 +149,12 @@ try {
   await page.waitForFunction(() => window.__pasteRegression.released === window.__pasteRegression.expected);
   assert.deepEqual(report.errors, [], 'Canceled paste merge callback read rolled-back preview atoms');
   assert.equal(report.canceled.pending, 0, 'Cancel left the initial merge callback pending');
-  await page.mouse.move(point.x + 1, point.y);
+  await page.mouse.move(placement.x, placement.y);
+  await page.waitForFunction(() => window.__pasteRegression.moves > 1 && Boolean(window.ketcher.editor._tool.action));
+  // Release this new, valid merge callback after proving cancellation disposed
+  // the old one. Reentry is still a real SDK mousemove, with no synthetic events.
+  await page.evaluate(() => window.__pasteRegression.release());
+  await page.waitForFunction(() => window.__pasteRegression.released === window.__pasteRegression.expected);
   await page.waitForFunction(() => window.__pasteRegression.ready === 1 && Boolean(window.ketcher.editor._tool.action));
   report.resumed = await page.evaluate(() => window.__pasteRegression.snapshot());
   await page.mouse.down();
@@ -117,6 +166,11 @@ try {
   assert.deepEqual(report.committed, { atoms: 3, smiles: 'CCN', pasteTool: false });
   assert.deepEqual(report.errors, []);
   report.passed = true;
+} catch (error) {
+  report.failure = error.stack || error.message;
+  try { report.failureSnapshot = await page.evaluate(() => window.__pasteRegression?.snapshot()); } catch { /* Page closed. */ }
+  console.error(JSON.stringify(report, null, 2));
+  throw error;
 } finally {
   await writeFile(resolve(output, 'paste-cancellation.json'), JSON.stringify(report, null, 2) + '\n');
   await browser.close();
