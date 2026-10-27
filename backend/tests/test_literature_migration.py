@@ -132,10 +132,11 @@ def test_catalog_insert_rechecks_status_after_publication(auth_database):
                 writer.rollback()
 
 
-def test_combined_optional_schema_passes_current_service_and_api_contracts(auth_database):
+@pytest.mark.parametrize("schema_target", ["user-isolation-current", "literature-0024"])
+def test_combined_optional_schema_passes_current_service_and_api_contracts(auth_database, monkeypatch, schema_target):
+    from app import postgres_preflight as preflight
     from app.config import Settings
-    from app.postgres_preflight import (run_preflight, SCHEMA_TARGET_CURRENT_ISOLATION,
-                                       SCHEMA_TARGET_LITERATURE)
+    from app.postgres_preflight import run_preflight, SCHEMA_TARGET_LITERATURE
     dsn = auth_database["admin"]
     apply_postgres_migrations(dsn, allowed_kinds={"baseline", "expand"})
     install_literature_test_projection(dsn, full_ledger=True)
@@ -143,11 +144,41 @@ def test_combined_optional_schema_passes_current_service_and_api_contracts(auth_
                         pi_postgres_dsn=auth_database["api"],
                         literature_enabled=True, polymer_md_dev_enabled=True,
                         polymer_md_environment="dev")
+    # The module-scoped database can contain generations from preceding tests.
+    with psycopg.connect(auth_database["api"], row_factory=dict_row) as api:
+        expected_counts = api.execute("""SELECT
+            (SELECT count(*) FROM knowledge.literature_generations) AS generations,
+            (SELECT count(*) FROM knowledge.literature_catalog) AS catalog,
+            (SELECT count(*) FROM knowledge.literature_snapshots) AS snapshots""").fetchone()
+    literature_reads = []
+    count = preflight._postgres_count
+
+    def count_with_api_identity(connection, schema, table):
+        if (schema, table) in preflight.LITERATURE_POSTGRES_TABLES:
+            literature_reads.append((schema, table, connection.info.user))
+        return count(connection, schema, table)
+
+    monkeypatch.setattr(preflight, "_postgres_count", count_with_api_identity)
     report = run_preflight(settings, dsn=auth_database["service"], mode="schema",
-                           strict=True, schema_target=SCHEMA_TARGET_CURRENT_ISOLATION)
+                           strict=True, schema_target=schema_target)
     assert "isolation_contract_error" not in report, report.get("isolation_contract_error")
     assert report["schema_target"] == SCHEMA_TARGET_LITERATURE
     assert report["literature_schema_ready"] is True
     assert report["postgres"]["reachable"] is True
     assert report["migrations"]["missing"] == []
     assert report["migrations"]["checksum_mismatches"] == []
+    assert report["strict_ok"] is True, report["strict_errors"]
+    assert report["current_readiness"] is True
+    assert {
+        name: report["postgres"]["tables"][name]
+        for name in ("knowledge.literature_generations", "knowledge.literature_catalog",
+                     "knowledge.literature_snapshots")
+    } == {
+        "knowledge.literature_generations": expected_counts["generations"],
+        "knowledge.literature_catalog": expected_counts["catalog"],
+        "knowledge.literature_snapshots": expected_counts["snapshots"],
+    }
+    api_login = psycopg.conninfo.conninfo_to_dict(auth_database["api"])["user"]
+    assert literature_reads == [
+        (schema, table, api_login) for schema, table in preflight.LITERATURE_POSTGRES_TABLES
+    ]
