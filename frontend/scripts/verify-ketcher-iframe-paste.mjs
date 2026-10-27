@@ -80,7 +80,10 @@ try {
             capturing = true;
             try {
               const result = move.apply(this, values);
-              window.__pasteRegression.moves++;
+              const moveId = ++window.__pasteRegression.moves;
+              // The SDK releases its mousemove guard in its own RAF, queued
+              // before this one. Observe that frame before another move.
+              requestAnimationFrame(() => { window.__pasteRegression.renderedMove = moveId; });
               return result;
             } finally { capturing = false; }
           };
@@ -91,7 +94,8 @@ try {
       atoms: editor.struct().atoms.size, action: Boolean(editor._tool.action),
       pasteTool: Boolean(editor._tool.struct?.atoms), pending: pending.size,
       ready: window.__pasteRegression.ready, canceled: window.__pasteRegression.canceled,
-      moves: window.__pasteRegression.moves, events: window.__pasteRegression.events.slice(),
+      moves: window.__pasteRegression.moves, renderedMove: window.__pasteRegression.renderedMove,
+      events: window.__pasteRegression.events.slice(),
       canvas: (() => {
         const area = editor.render.clientArea, rect = area.getBoundingClientRect();
         return { connected: area.isConnected, hovered: area.matches(':hover'),
@@ -130,7 +134,8 @@ try {
   await page.mouse.move(placement.x, placement.y);
   await page.waitForFunction(() => {
     const state = window.__pasteRegression, editor = window.ketcher.editor;
-    return state.moves > 0 && editor._tool.action && editor._tool.action !== state.initialAction &&
+    return state.moves > 0 && state.renderedMove === state.moves &&
+      editor._tool.action && editor._tool.action !== state.initialAction &&
       editor.render.clientArea.matches(':hover');
   });
   report.placedPreview = await page.evaluate(() => window.__pasteRegression.snapshot());
@@ -150,7 +155,8 @@ try {
   assert.deepEqual(report.errors, [], 'Canceled paste merge callback read rolled-back preview atoms');
   assert.equal(report.canceled.pending, 0, 'Cancel left the initial merge callback pending');
   await page.mouse.move(placement.x, placement.y);
-  await page.waitForFunction(() => window.__pasteRegression.moves > 1 && Boolean(window.ketcher.editor._tool.action));
+  await page.waitForFunction(() => window.__pasteRegression.moves > 1 &&
+    window.__pasteRegression.renderedMove === window.__pasteRegression.moves && Boolean(window.ketcher.editor._tool.action));
   // Release this new, valid merge callback after proving cancellation disposed
   // the old one. Reentry is still a real SDK mousemove, with no synthetic events.
   await page.evaluate(() => window.__pasteRegression.release());
