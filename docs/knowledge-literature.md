@@ -10,7 +10,7 @@
 - DOI 仅去首尾、前缀和转小写；合法 SICI DOI 中的分号、括号、尖括号保留。每 DOI 一张卡，源 paper ID 全部保留。不同 DOI 不按题名合并。
 - 规范化器只使用选定的单份 raw JSON，不通过共享材料关联补齐其他论文的参数。中英文适配、空模板排除、DOI 冲突、零值、范围、误差、多条位置依据和未知字段保留均有测试。新样品和条目 UID 绑定快照与 JSON 路径。
 - `normalized_json` 是阅读投影；`raw_json` 保留审计依据。两者分别限制 2 MiB，超限排除并报告。大整数来源 ID 在接口中是字符串。
-- 当前导入解析器为 `literature-v1.1`，保留只有实际收率的工艺（包括 0%）。读取兼容 `literature-v1` 的历史快照；规则改变通过新版本产生新快照，不覆盖历史批次。
+- 当前导入解析器为 `literature-v2`，保留只有实际收率的工艺（包括 0%）。读取兼容 `literature-v1`、`literature-v1.1` 的历史快照；规则改变通过新版本产生新快照，不覆盖历史批次。
 - 原知识导入器和旧静态重建器继续操作原表，不执行新文献表的清空或重建。
 
 主实现：`backend/app/services/literature_normalizer.py`、`literature_source.py`、`literature_repository.py`、`literature_assets.py` 和 `backend/app/import_literature.py`。前端位于现有知识检索组件，文献详情为 `LiteratureDetail.tsx`。
@@ -27,6 +27,8 @@
 | `LITERATURE_MINIO_SECURE` | 不带协议的 endpoint 是否使用 TLS，默认 true |
 
 同步进程单独配置 `LITERATURE_SOURCE_DSN` 和 `LITERATURE_IMPORT_DSN`。不要把源 DSN 放入 Web 后端的环境文件。源账号只授予所需 DWD/PDEE 目录的 SELECT；MinIO 只需要读取对象元数据和对象。凭证通过权限为 0600 的运维文件或凭证管理器注入，不写进命令参数、报告、仓库或浏览器。
+
+离线同步进程可单独设置 `LITERATURE_SOURCE_STATEMENT_TIMEOUT_MS`：默认 45000 毫秒，仅接受 1000–300000 范围内的 ASCII 整数字符串，空值、单位、符号、空白和越界值在连接源库前拒绝。全量数据或受控代理链路超过默认预算时，在私有离线导入环境中显式提高，最高 300000 毫秒；实际值记入 `source_summary.source_statement_timeout_ms`。该变量只影响源库每条 SQL 的执行预算，不改变只读、REPEATABLE READ 或 2000 毫秒锁等待门槛，也不影响目标库及 MinIO；不要注入在线后端环境。
 
 0024 创建 `nexpoly_literature_import` NOLOGIN 权限组。运维单独创建 LOGIN 并加入该组：可构建新目录、插入快照及切换批次，不能修改快照或已发布目录。在线 `nexpoly_api`、`nexpoly_service` 对三表只有 SELECT；审计组有 schema USAGE 和 SELECT。不要让 API 账号继承同步组。备份仍使用既有受控 owner 身份。
 
@@ -45,11 +47,58 @@ SQL、manifest、`app.literature_contract` 与审计工具中的登记必须一�
 分两次交付应用：
 
 1. 先发布兼容包，文献保持关闭，且不执行 0024。兼容包至少包含 `app/literature_contract.py`、`postgres_preflight.py`、`auth/isolation_ledger.py`、`auth/cutover.py`、`auth/backup.py` 与对应审计兼容改动。兼容桥接仅允许完整的 0023 账本扩展到唯一登记的 0024；历史身份回执仍各自要求精确账本，不能从 0019 直接追加 0024。缺项、checksum 漂移和未知版本继续拒绝。确认所有应用、审计和恢复验证节点均已更新。
-2. 再发布含 0024 SQL、manifest 和功能代码的版本，在明确的 dev 栈先验证，然后沿用身份隔离后的生产维护流程执行 `python -m app.postgres_migrations --mode expand`。功能仍关闭。旧生产 v7 Pull 控制器会拒绝跨 0017 认证边界；不修改或绕过这一门禁。
+2. 再发布含 0024 SQL、manifest 和维护入口的版本，在明确的 dev 栈按下节执行 `--mode literature-dev-0024`。普通 `expand` 始终跳过 0023/0024，不能用于文献启用；该维护入口也不能用于生产。功能仍关闭。旧生产 v7 Pull 控制器会拒绝跨 0017 认证边界；不修改或绕过这一门禁。
 3. 用独立同步身份 prepare，审核收录/异常报告，再 publish。启用在线开关，检查 `/api/v1/knowledge/sources`。
 4. 验证旧知识检索、登录、浏览记录、总结以及新来源，再恢复常规流量。保留应用版本、数据库身份、迁移回执、批次和报告指纹。
 
 兼容包是之后代码回滚的最低版本。功能回滚优先关闭开关，数据回滚切换历史 generation，不删表、不删除快照、不改旧 migration 账本。
+
+### 显式开发库维护
+
+先封闭提交入口、排空任务和租约，正常停止 Backend、batch、monomer MD/DFT、polymer MD 和文献同步进程；未部署的组件也要明确登记。使用受控 owner 身份运行 `app.auth.backup`，完成私有整库 dump、空库恢复、数据及资产校验。不要复用运行中取得、之后又发生写入的备份。数据库/MinIO 密钥只通过私有环境注入，不放入命令参数。
+
+维护证据和备份回执均为当前操作者拥有、无链接、单硬链接的 0600 JSON 文件。维护证据格式为：
+
+```json
+{
+  "version": 1,
+  "purpose": "literature-dev-0024",
+  "database_identity": {
+    "database": "DEV_DATABASE", "database_oid": 0,
+    "host": "SERVER_ADDRESS", "port": 5432
+  },
+  "backup_receipt_sha256": "SHA256_OF_RECEIPT_FILE",
+  "writers_stopped": true,
+  "submission_disabled": true,
+  "active_jobs": 0,
+  "active_leases": 0,
+  "writer_states": {
+    "backend": "stopped", "batch": "stopped",
+    "monomer_md": "stopped", "monomer_dft": "stopped",
+    "polymer_md": "not_deployed", "literature_import": "not_deployed"
+  }
+}
+```
+
+`database_identity` 必须来自目标连接上的 `app.auth.isolation_ledger.database_identity`，不能手填示例值或仅凭数据库名匹配。`writer_states` 逐项记录实际正常停服/未部署状态；这些是运维声明，命令不会代为停服。命令另行锁定业务、用量和权益表，重新检查真实活动任务/租约为零，以及备份完整数据、账号、用量、权益和资产 seals；任何漂移都要求重新备份恢复验证。
+
+`usage.attempts` 是用量观察投影，不是执行状态权威。历史缺少终态的 queued/running 观察保持原值，完整锁定和 seal 后仅将数量记入迁移审计，不为维护补造终态。停止 Backend 时还必须确认 conditional generation、PolyTao 等内存任务没有活动请求或执行进程；原生任务、租约和权益 operation 的零活动门槛不变。
+
+在锁定依赖环境、backend 目录运行；`AUTH_ADMIN_POSTGRES_DSN` 指向明确的开发库 owner，且具备受控角色创建权限：
+
+```bash
+POLYMER_MD_ENVIRONMENT=dev python -m app.postgres_migrations \
+  --mode literature-dev-0024 --dsn-env AUTH_ADMIN_POSTGRES_DSN \
+  --backup-receipt /private/backup/receipt.json \
+  --maintenance-evidence /private/maintenance.json --writers-stopped \
+  --audit-output /private/migration-result.json
+```
+
+该命令仅接受完整、精确校验和的 0022 或 0023 前缀：从 0022 时在同一事务内追加原始 0023 和 0024，从 0023 时仅追加 0024。持有既有 0023 advisory lock 与迁移账本锁，最终验证隔离、服务权限、PMD schema 和文献列/键/索引/不可变触发器/ACL；任一步失败则两项 DDL、角色及账本一起回滚。已在 0024 时仍要求该状态下的新备份/维护证据，验证后返回 no-op。失败保留关闭的入口，审计文件只保存结果或错误类型，不输出 DSN。
+
+已有 `nexpoly_literature_import` 集群角色或未登记的文献对象必须拒绝并单独审查来源；不自动接管、不改历史 SQL/checksum、不跳过校验。迁移创建的是 NOLOGIN 组，之后单独配置同步 LOGIN，在线身份不得继承该组。最终完整 0024 库的健康检查使用 `literature-0024`，同时验证已存在的 PMD schema；固定要求精确 0023 的健康检查不能用于该组合。
+
+迁移成功不代表文献已发布或 PMD 已允许提交。继续按下面的导入步骤生成/审核/发布批次，再开启在线功能。旧开发应用如果只识别 0022，不能直接切回；要么保留兼容 0024 的应用并关闭功能，要么在受控停机状态恢复升级前整库及同一切点的资产。
 
 ## 手动同步
 
@@ -105,7 +154,9 @@ python -m app.import_literature rollback PREVIOUS_PUBLISHED_GENERATION_UUID
 
 ## 备份、恢复和验收
 
-使用既有 `python -m app.auth.backup` 的私有全库 dump 和空库恢复验证；0024 在有限兼容账本范围内。`backup_state_seal` 包括三张新表的内容摘要。MinIO 远端文件不复制进数据库备份，需对象存储独立备份/版本保留；数据库清单冻结的对象丢失会明确报错。`scripts/user_isolation_audit.py` 在登记 0024 后附加 `literature_tables` 指纹和 knowledge schema 备份要求，历史证据保持原形状。
+使用既有 `python -m app.auth.backup` 的私有全库 dump 和空库恢复验证；0024 在有限兼容账本范围内。`backup_state_seal` 包括三张新表的内容摘要。MinIO 远端文件不复制进数据库备份，需对象存储独立备份/版本保留；数据库清单冻结的对象丢失会明确报错。
+
+`scripts/user_isolation_audit.py --schema-version 5` 的维护回执仍绑定完整 0022 账本，不能作为 0024 的切换入口，也不能改写历史回执以绕过版本检查。0024 使用上述全库备份恢复回执、显式 `literature-dev-0024` 维护命令，以及 `python -m app.postgres_preflight --strict --schema-target literature-0024 --service-context` 的运行权限检查；历史证据保持原形状。
 
 测试均使用隔离 PostgreSQL 和受控对象存储替身，源库没有写入。回归覆盖身份、解析、发布/回滚、归属、故障/Range/取消、录制白名单，以及旧知识 API。前端覆盖来源切换、提交条件分页、样品和工艺分离、安全表格、离线及过期响应。执行 TypeScript/Vite 构建；页面检查 1440×900、1024×768、390×844。
 

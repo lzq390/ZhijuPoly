@@ -1,5 +1,5 @@
 {
-  "revision": "nexpoly-3.8.0-r4",
+  "revision": "nexpoly-3.8.0-r4-iframe-paste-r1",
   "versions": {
     "ketcher-core": "3.8.0",
     "ketcher-macromolecules": "3.8.0",
@@ -73,6 +73,10 @@
     "node_modules/ketcher-standalone/dist/infrastructure/services/struct/standaloneStructService.d.ts": {
       "upstream": "bfa6303c5e44c68ee593c4d9084a82597bfdd1a77129da4c9e3ecf4d40d566be",
       "patched": "3981610f7cc8fcd01ec55934d76ce90a84e7cb88017aeffa542300991efc9e14"
+    },
+    "public/ketcher/static/js/main.8617f334.js": {
+      "upstream": "eb4fa894fcb85b766fe18406c7581fe40944ed3af79e373ba35eb5d22f239f8f",
+      "patched": "0ed377afc81126536bf2d161444cd8efc171ae734193f59b15068255f2febb16"
     }
   },
   "patches": {
@@ -85,6 +89,7 @@
     "sdk/core-fragment.js": "aec2962144fc51f52841a4aa1ec484dbee54eb87f39c867c2792c5fb9c8f7d49",
     "sdk/editor-fragment.js": "91516ce5a30efd570b2919e5495ef2e63b7fe43d5799ffc5699056bf3b230e77",
     "sdk/macro-controller.mjs": "9ba30b9e06837c241f5eedafed9dcad7a232a779b9da5b5df658ed7d106998a4",
-    "sdk/indigo-transport.mjs": "ecfc58b1d063648ac2004267207de904c06405a9aaccf30063e84098ab34bc15"
+    "sdk/indigo-transport.mjs": "ecfc58b1d063648ac2004267207de904c06405a9aaccf30063e84098ab34bc15",
+    "patches/ketcher-iframe-paste.json": "1a202904da74967063d9ea33b2ada39e1c48d0e800be31197ad548a591f27bfb"
   }
 }

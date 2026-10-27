@@ -1,0 +1,11 @@
+# Existing development API only; imports and publication are separate operations.
+services:
+  backend:
+    environment:
+      KNOWLEDGE_LITERATURE_ENABLED: "true"
+      LITERATURE_MINIO_ENDPOINT: "${LITERATURE_MINIO_ENDPOINT:?set the online literature object-store endpoint}"
+      LITERATURE_MINIO_ACCESS_KEY: "${LITERATURE_MINIO_ACCESS_KEY:?set the private literature object-store identity}"
+      LITERATURE_MINIO_SECRET_KEY: "${LITERATURE_MINIO_SECRET_KEY:?set the private literature object-store credential}"
+      LITERATURE_MINIO_SECURE: "${LITERATURE_MINIO_SECURE:-true}"
+    extra_hosts:
+      - host.docker.internal:host-gateway

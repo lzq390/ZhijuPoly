@@ -1,5 +1,19 @@
 # Ketcher 3.8.0 / NexPoly r4
 
+The separate committed iframe distribution is Ketcher 3.7.0. Its paste tool used
+to roll back preview atoms on mouseleave while leaving a 50 ms merge callback
+pending. That callback then dereferenced the removed atoms. The narrowly scoped
+`ketcher-iframe-paste.json` recipe cancels the owning tool's timer and guards the
+callback against a canceled or retired tool. Reentry still builds a new preview.
+`node scripts/patch-ketcher-iframe.mjs` verifies both patched bytes and the reverse
+patch against the pinned upstream digest; `--write` only transforms that exact
+upstream bundle. Normal install/build verification also runs this check. This is
+independent of the npm 3.8.0 patches below; those are unchanged by this repair.
+`test:ketcher-iframe-paste` holds the real initial merge timer, triggers actual
+canvas mouseleave, then checks cancellation and a successful reentry commit.
+It is included in `test:structure-engines`; the unpatched bundle deterministically
+raises the removed-atom `pp` exception in this regression.
+
 These patches apply to the published 3.8.0 packages, including the macro editor
 bundled in ketcher-react's lazy ESM/CJS chunks. They preserve the upstream license.
 

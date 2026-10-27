@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { verifyIframePatch } from './patch-ketcher-iframe.mjs';
 const root = new URL('../', import.meta.url);
 const read = path => readFile(new URL(path, root));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -22,4 +23,5 @@ for (const [fragment, modules, transform] of [
     throw new Error(`Audited fragment ${fragment} differs from installed ${module}. Regenerate the versioned patch and reinstall.`);
   }
 }
+await verifyIframePatch();
 console.log(`Verified ${manifest.revision}: ${Object.keys(manifest.files).length} SDK artifacts and ${Object.keys(manifest.patches).length} versioned patches.`);

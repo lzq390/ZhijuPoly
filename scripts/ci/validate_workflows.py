@@ -1685,6 +1685,15 @@ def validate_postgres_client_bootstrap(
             ),
         ),
         (
+            "backend-tests",
+            "Install PostgreSQL 16 backup and restore client",
+            (
+                "      - name: Install PostgreSQL 16 backup and restore client",
+                "        timeout-minutes: 9",
+                f"        run: {helper}",
+            ),
+        ),
+        (
             "exact-b-bridge",
             "Install PostgreSQL 16 client",
             (
@@ -1721,7 +1730,7 @@ def validate_postgres_client_bootstrap(
     if ci_text.count(helper) != len(jobs):
         failures.append(
             "ci.yml must invoke the governed PostgreSQL 16 client bootstrap "
-            "in exactly the three database integration jobs"
+            "in exactly the four database integration jobs"
         )
     actual_bootstrap_sha256 = hashlib.sha256(bootstrap_payload).hexdigest()
     if actual_bootstrap_sha256 != EXPECTED_POSTGRES_CLIENT_BOOTSTRAP_SHA256:

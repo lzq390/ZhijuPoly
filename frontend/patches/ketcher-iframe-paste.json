@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sdkVersion": "3.7.0",
+  "file": "public/ketcher/static/js/main.8617f334.js",
+  "upstream": "eb4fa894fcb85b766fe18406c7581fe40944ed3af79e373ba35eb5d22f239f8f",
+  "patched": "0ed377afc81126536bf2d161444cd8efc171ae734193f59b15068255f2febb16",
+  "replacements": [
+    {
+      "reason": "A retired or canceled paste must not read rolled-back preview atoms.",
+      "before": "KM=(0,p.debounce)(function(U,F,Q){",
+      "after": "KM=(0,p.debounce)(function(U,F,Q){if(U._tool!==Q||!Q.action)return;"
+    },
+    {
+      "reason": "Cancel the owning paste debounce before rolling back its preview; a retired tool cannot cancel its successor.",
+      "before": "var U=this.editor.render;this.editor.hover(null),this.action&&(this.action.perform(U.ctab),delete this.action,U.update())",
+      "after": "var U=this.editor.render;this.editor._tool===this&&KM.cancel(),this.editor.hover(null),this.action&&(this.action.perform(U.ctab),delete this.action,U.update())"
+    }
+  ]
+}

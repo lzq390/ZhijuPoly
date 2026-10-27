@@ -26,10 +26,7 @@ from psycopg.types.json import Jsonb
 
 from app.services.literature_normalizer import NORMALIZER_VERSION, canonical_json, select_snapshots
 from app.services.literature_source import read_source, verify_extraction_inputs
-
-
-class ImportStateError(ValueError):
-    pass
+from app.services.literature_publication import ImportStateError, activate_generation as _activate_generation
 
 
 def _required_env(name: str) -> str:
@@ -136,22 +133,7 @@ def prepare_generation(source_dsn: str, target_dsn: str, *, limit: int | None = 
 def activate_generation(target_dsn: str, generation_id: str, *, rollback: bool = False, allow_partial: bool = False) -> dict:
     generation_id = str(uuid.UUID(generation_id))
     with _target_connection(target_dsn) as connection:
-        connection.execute("SELECT pg_advisory_xact_lock(hashtext('nexpoly_literature_publish'))")
-        generation = connection.execute("SELECT * FROM knowledge.literature_generations WHERE generation_id=%s FOR UPDATE", (generation_id,)).fetchone()
-        if not generation:
-            raise ImportStateError("GENERATION_NOT_FOUND")
-        if rollback and generation["status"] != "published":
-            raise ImportStateError("ROLLBACK_REQUIRES_PUBLISHED_GENERATION")
-        if not rollback and generation["status"] not in {"ready", "published"}:
-            raise ImportStateError("GENERATION_NOT_READY")
-        if generation["source_summary"].get("partial") and not allow_partial:
-            raise ImportStateError("PARTIAL_GENERATION_REQUIRES_ALLOW_PARTIAL")
-        count = connection.execute("SELECT count(*) n FROM knowledge.literature_catalog WHERE generation_id=%s", (generation_id,)).fetchone()["n"]
-        if not count or count != generation["report"].get("ready_documents"):
-            raise ImportStateError("GENERATION_CATALOG_COUNT_MISMATCH")
-        connection.execute("UPDATE knowledge.literature_generations SET is_active=false WHERE is_active=true")
-        connection.execute("UPDATE knowledge.literature_generations SET is_active=true,status='published',published_at=COALESCE(published_at,now()) WHERE generation_id=%s", (generation_id,))
-    return {"generation_id": generation_id, "status": "published", "is_active": True, "documents": count, "action": "rollback" if rollback else "publish"}
+        return _activate_generation(connection, generation_id, rollback=rollback, allow_partial=allow_partial)
 
 
 def _positive(value: str) -> int:

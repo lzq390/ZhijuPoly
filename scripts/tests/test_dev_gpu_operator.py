@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import socket
 import stat
@@ -12,7 +13,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from scripts.dev_gpu_operator import DevGpuOperator, prepare_runtime
+from scripts.dev_gpu_operator import DevGpuOperator, OperatorError, prepare_runtime, research_configuration
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +23,37 @@ SOURCE_TREE = "b" * 40
 
 
 class DevGpuOperatorTests(unittest.TestCase):
+    def test_research_identity_retains_legacy_defaults_and_rejects_partial_inputs(self):
+        self.assertEqual(research_configuration({}), {})
+        for environment in [
+            {"NEXPOLY_DEV_POLYMER_MD_ENABLED":"invalid"},
+            {"NEXPOLY_DEV_POLYMER_MD_ENABLED":"true"},
+            {"NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED":"true"},
+        ]:
+            with self.assertRaises(OperatorError): research_configuration(environment)
+
+    def test_recovery_freezes_only_nonsecret_research_inputs_across_operator(self):
+        research = {"NEXPOLY_DEV_POLYMER_MD_ENABLED":"true", "NEXPOLY_DEV_LITERATURE_ENABLED":"true",
+            "NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED":"false", "NEXPOLY_DEV_RESEARCH_ENV_FILE":"/private/research.env",
+            "NEXPOLY_DEV_RESEARCH_CONFIG_SHA256":"sha256:"+"c"*64}
+        with tempfile.TemporaryDirectory() as raw:
+            repository = Path(raw); prepare_runtime(repository)
+            with patch.dict(os.environ, research):
+                operator=DevGpuOperator(repository=repository,source_sha=SOURCE_SHA,source_tree=SOURCE_TREE)
+            operation=operator._new_operation("starting","starting");operator._write_operation(operation)
+            statuses=iter([{"schema_version":1,"status":"stopped","gpu_index":1},
+                           {"schema_version":1,"status":"ready","gpu_index":1}])
+            operator._controller_status=lambda:next(statuses)
+            with patch.dict(os.environ, {"POLYMER_MD_START_AUTHORIZATION_TOKEN":"synthetic-private-token",
+                    "LITERATURE_MINIO_SECRET_KEY":"synthetic-private-secret"}), patch("scripts.dev_gpu_operator.subprocess.Popen") as popen:
+                popen.return_value.wait.return_value=0
+                operator._run_recovery(operation["operation_id"],time.monotonic()+5)
+            child=popen.call_args.kwargs["env"]
+            for key,value in research.items():self.assertEqual(child[key],value)
+            self.assertEqual(child["NEXPOLY_DEV_EXPECTED_RESEARCH_CONFIG_SHA256"],research["NEXPOLY_DEV_RESEARCH_CONFIG_SHA256"])
+            self.assertNotIn("POLYMER_MD_START_AUTHORIZATION_TOKEN",child)
+            self.assertNotIn("LITERATURE_MINIO_SECRET_KEY",child)
+
     def test_missing_md_is_recoverable_and_reports_controller_observation_time(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             repository = Path(raw)
@@ -135,6 +167,10 @@ class DevGpuOperatorTests(unittest.TestCase):
             self.assertEqual(
                 kwargs["env"]["NEXPOLY_DEV_GPU_DIRECT_START"], "1"
             )
+            for key in ("NEXPOLY_DEV_POLYMER_MD_ENABLED", "NEXPOLY_DEV_LITERATURE_ENABLED",
+                        "NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED"):
+                self.assertEqual(kwargs["env"][key], "false")
+            self.assertNotIn("NEXPOLY_DEV_EXPECTED_RESEARCH_CONFIG_SHA256", kwargs["env"])
             self.assertEqual(
                 popen.call_args.args[0][-1],
                 "gpu-session-up",

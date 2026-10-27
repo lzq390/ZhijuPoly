@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 import io
 import json
 
@@ -14,6 +16,8 @@ from literature_test_support import install_literature_test_projection
 
 from app import import_literature
 from app.services import literature_normalizer as normalizer
+from app.services import literature_publication
+from app.services import literature_source
 from app.services.literature_source import SourceDataset, build_asset_manifests, read_source, verify_extraction_inputs
 
 
@@ -315,6 +319,40 @@ def test_generation_prepare_publish_rollback_and_snapshot_immutability(literatur
     import_literature.activate_generation(postgres_test_dsn, partial["generation_id"], allow_partial=True)
 
 
+def test_real_cli_publishes_and_rolls_back_current_v2(literature_import_dsn, monkeypatch, capsys):
+    data = SourceDataset([paper("701", "10.1234/cli-current")],
+                         [extract("702", "701", raw=raw_english(doi="10.1234/cli-current"))], {}, {"partial": False})
+    monkeypatch.setattr(import_literature, "read_source", lambda *args, **kwargs: data)
+    monkeypatch.setenv("LITERATURE_IMPORT_DSN", literature_import_dsn)
+    generations = [import_literature.prepare_generation("synthetic-readonly-source", literature_import_dsn) for _ in range(2)]
+    assert import_literature.ImportStateError is literature_publication.ImportStateError
+    for generation in generations:
+        assert import_literature.main(["publish", generation["generation_id"]]) == 0
+        published = json.loads(capsys.readouterr().out)
+        assert published == {"generation_id": generation["generation_id"], "status": "published", "is_active": True,
+                             "documents": 1, "action": "publish"}
+    assert import_literature.main(["rollback", generations[0]["generation_id"]]) == 0
+    assert json.loads(capsys.readouterr().out)["action"] == "rollback"
+
+
+@pytest.mark.parametrize("version", ["unsupported-format", "literature-v1", "literature-v1.1"])
+def test_real_cli_rejects_noncurrent_generation_without_replacing_active(literature_import_dsn, monkeypatch, capsys, version):
+    data = SourceDataset([paper("711", "10.1234/cli-format")],
+                         [extract("712", "711", raw=raw_english(doi="10.1234/cli-format"))], {}, {"partial": False})
+    monkeypatch.setattr(import_literature, "read_source", lambda *args, **kwargs: data)
+    monkeypatch.setenv("LITERATURE_IMPORT_DSN", literature_import_dsn)
+    active = import_literature.prepare_generation("synthetic-readonly-source", literature_import_dsn)
+    assert import_literature.main(["publish", active["generation_id"]]) == 0
+    capsys.readouterr()
+    rejected = import_literature.prepare_generation("synthetic-readonly-source", literature_import_dsn)
+    with psycopg.connect(literature_import_dsn) as connection:
+        connection.execute("UPDATE knowledge.literature_generations SET normalizer_version=%s WHERE generation_id=%s", (version, rejected["generation_id"]))
+    assert import_literature.main(["publish", rejected["generation_id"]]) == 1
+    assert json.loads(capsys.readouterr().err)["error_code"] == "GENERATION_FORMAT_UNSUPPORTED"
+    with psycopg.connect(literature_import_dsn) as connection:
+        assert str(connection.execute("SELECT generation_id FROM knowledge.literature_generations WHERE is_active").fetchone()[0]) == active["generation_id"]
+
+
 @pytest.mark.parametrize("legacy_version", ["literature-v1", "literature-v1.1"])
 def test_legacy_and_current_snapshots_coexist_and_remain_readable(literature_import_dsn, monkeypatch, legacy_version):
     from app.services.literature_preflight import check_literature_readiness
@@ -330,7 +368,11 @@ def test_legacy_and_current_snapshots_coexist_and_remain_readable(literature_imp
     with monkeypatch.context() as old_version:
         old_version.setattr(normalizer, "NORMALIZER_VERSION", legacy_version)
         old_version.setattr(import_literature, "NORMALIZER_VERSION", legacy_version)
+        old_version.setattr(literature_publication, "NORMALIZER_VERSION", legacy_version)
         old = import_literature.prepare_generation("readonly-source", literature_import_dsn)
+        # This generation was published by the historical release, not newly
+        # admitted through the current v2 publisher.
+        import_literature.activate_generation(literature_import_dsn, old["generation_id"])
     new = import_literature.prepare_generation("readonly-source", literature_import_dsn)
     assert new["report"]["new_snapshots"] == 1
     assert new["report"]["reused_snapshots"] == 0
@@ -343,10 +385,9 @@ def test_legacy_and_current_snapshots_coexist_and_remain_readable(literature_imp
     assert previous["document_uid"] == current["document_uid"]
     assert previous["content_sha256"] == current["content_sha256"]
     assert previous["snapshot_uid"] != current["snapshot_uid"]
-    for generation in (old, new):
-        import_literature.activate_generation(literature_import_dsn, generation["generation_id"])
-        with psycopg.connect(literature_import_dsn, row_factory=dict_row) as connection:
-            assert check_literature_readiness(connection, role_override="nexpoly_api")["ready"] is True
+    import_literature.activate_generation(literature_import_dsn, new["generation_id"])
+    with psycopg.connect(literature_import_dsn, row_factory=dict_row) as connection:
+        assert check_literature_readiness(connection, role_override="nexpoly_api")["ready"] is True
     # A newer active generation must not invalidate fixed historical citations.
     with psycopg.connect(literature_import_dsn, row_factory=dict_row) as connection:
         for snapshot in snapshots:
@@ -370,7 +411,19 @@ def test_failed_prepare_does_not_change_active_generation(literature_import_dsn,
         assert connection.execute("SELECT count(*) n FROM knowledge.literature_generations WHERE status='failed'").fetchone()["n"] >= 1
 
 
-def test_source_reader_really_uses_read_only_repeatable_snapshot(postgres_test_dsn):
+@pytest.mark.parametrize("value", ["", "0", "999", "300001", "-1000", "+45000", "45000.0", "45s",
+                                    " 45000", "45000 ", "４５０００", "9999999999999999999999"])
+def test_source_timeout_rejects_invalid_configuration_before_connect(monkeypatch, value):
+    monkeypatch.setenv("LITERATURE_SOURCE_STATEMENT_TIMEOUT_MS", value)
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid timeout must be rejected before opening a source connection")
+    monkeypatch.setattr(literature_source, "psycopg", SimpleNamespace(connect=forbidden))
+    with pytest.raises(ValueError, match="^LITERATURE_SOURCE_STATEMENT_TIMEOUT_MS_INVALID$"):
+        read_source("unused-source")
+
+
+@pytest.fixture(scope="module")
+def literature_source_dsn(postgres_test_dsn):
     # All writes below target the disposable test database, never the external
     # source. Real source-reader SQL then exercises the immutable source session.
     with psycopg.connect(postgres_test_dsn) as connection:
@@ -383,9 +436,32 @@ def test_source_reader_really_uses_read_only_repeatable_snapshot(postgres_test_d
         """)
         connection.execute("INSERT INTO public.dwd_paper(id,doi,title) VALUES(1,'10.1234/example','test')")
         connection.execute("INSERT INTO public.dwd_paper_extract_record VALUES(100,1,'success','model','2026-01-01',%s)", (Jsonb(raw_english()),))
-    data = read_source(postgres_test_dsn)
+    return postgres_test_dsn
+
+
+@pytest.mark.parametrize("timeout,expected_setting", [(None, "45s"), ("1000", "1s"), ("300000", "5min")])
+def test_source_reader_really_uses_read_only_repeatable_snapshot(literature_source_dsn, monkeypatch, timeout, expected_setting):
+    if timeout is None:
+        monkeypatch.delenv("LITERATURE_SOURCE_STATEMENT_TIMEOUT_MS", raising=False)
+    else:
+        monkeypatch.setenv("LITERATURE_SOURCE_STATEMENT_TIMEOUT_MS", timeout)
+    observed = {}
+    @contextmanager
+    def observe_connection(*args, **kwargs):
+        with psycopg.connect(*args, **kwargs) as connection:
+            yield connection
+            observed.update(connection.execute("""SELECT current_setting('statement_timeout') statement_timeout,
+                current_setting('lock_timeout') lock_timeout,
+                current_setting('default_transaction_read_only') default_read_only,
+                current_setting('transaction_read_only') read_only,
+                current_setting('transaction_isolation') isolation""").fetchone())
+    monkeypatch.setattr(literature_source, "psycopg", SimpleNamespace(connect=observe_connection))
+    data = read_source(literature_source_dsn)
     assert data.summary["source_read_only"] is True
     assert data.summary["source_isolation"] == "repeatable read"
+    assert data.summary["source_statement_timeout_ms"] == (45000 if timeout is None else int(timeout))
+    assert observed == {"statement_timeout": expected_setting, "lock_timeout": "2s",
+                        "default_read_only": "on", "read_only": "on", "isolation": "repeatable read"}
     assert data.summary["partial"] is False
     assert data.extracts[0]["created_at"].tzinfo is not None
     assert normalizer.select_snapshots(data.papers, data.extracts)[1]["ready_documents"] == 1

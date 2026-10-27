@@ -1,5 +1,6 @@
 import { pollBrowser } from "./browser-poll.mjs";
 import { verifyKetcherNativeMenu } from "./verify-ketcher-native-menu.mjs";
+import { clearForClipboardPaste, pasteClipboardAt, clipboardProbeState } from "./ketcher-clipboard-probe.mjs";
 // Real editor/browser verification. Business requests are fixtures; no jobs or records are submitted.
 import assert from "node:assert/strict";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
@@ -27,7 +28,7 @@ const renderWarnings = [];
 let molfile3D = "";
 const libraryRecords = [];
 const polymerizationRequests = [];
-page.on("pageerror", (error) => errors.push(error.message));
+page.on("pageerror", (error) => errors.push(error.stack || error.message));
 page.on("console", message => { if (/Cannot update a component|Cannot update .*while rendering|unmounted root/.test(message.text())) renderWarnings.push(message.text()); });
 context.on("request", request => {
   if (/ketcher|Ketcher|\/assets\/|\.css(?:\?|$)/.test(request.url())) resources.push(request.url());
@@ -343,6 +344,7 @@ try {
   result.independentDftDraft = true;
   // Seed an explicit nitrogen drawing for the viewport pointer-hit regression below.
   await input().fill('CCN');
+  await page.waitForFunction(() => !document.querySelector('[data-workbench-tool="3d"]').disabled);
   await pollBrowser(page, async () => (await window.__probeEditor()?.getSmiles()) === 'CCN');
 
   if (result.engine === 'react') {
@@ -432,6 +434,16 @@ try {
       await page.evaluate(() => {
         window.__probeCopyComplete = false;
         const win = document.querySelector('[data-structure-editor] iframe')?.contentWindow || window;
+        window.__probeClipboardKeys = [];
+        window.__probeClipboardOnKey = event => {
+          const keys = window.__probeClipboardKeys;
+          keys.push({ key: event.key, ctrl: event.ctrlKey, target: event.target.nodeName,
+            active: win.document.activeElement?.outerHTML?.slice(0, 180), prevented: event.defaultPrevented,
+            atoms: window.__probeEditor().editor.struct().atoms.size,
+            selection: window.__probeEditor().editor.selection()?.atoms });
+          if (keys.length > 12) keys.shift();
+        };
+        win.document.addEventListener('keydown', window.__probeClipboardOnKey);
         win.addEventListener('copyOrCutComplete', () => { window.__probeCopyComplete = true; }, { once: true });
       });
       await page.keyboard.press('Control+c');
@@ -446,14 +458,17 @@ try {
         throw error;
       });
       assert.match(copied, /V2000|V3000|CCN/);
-      await page.evaluate(() => window.__probeEditor().setMolecule(''));
+      await clearForClipboardPaste(page);
       await page.mouse.click(point.x, point.y);
-      await page.keyboard.press('Control+v');
-      await page.waitForFunction(() => Boolean(window.__probeEditor().editor._tool?.struct?.atoms));
-      await page.mouse.click(point.x, point.y);
+      result.clipboardPaste = await pasteClipboardAt(page, point, { exerciseCancel: result.engine === 'iframe' });
       await page.waitForFunction(() => window.__probeEditor().editor.struct().atoms.size === 3);
       await pollBrowser(page, async () => (await window.__probeEditor().getSmiles()) === 'CCN');
       result.clipboardShortcuts = true;
+      await page.evaluate(() => {
+        const win = document.querySelector('[data-structure-editor] iframe')?.contentWindow || window;
+        win.document.removeEventListener('keydown', window.__probeClipboardOnKey);
+        delete window.__probeClipboardOnKey;
+      });
     }
     result.viewports.push({ ...viewport, editor: box, atomVisible: true, atomHit: true, contextMenu: true });
     await page.screenshot({ path: resolve(output, `${viewport.width}.png`) });
@@ -487,6 +502,7 @@ try {
   result.passed = true;
 } catch (error) {
   result.passed = false;
+  result.clipboardState = await clipboardProbeState(page).catch(() => null);
   result.failure = error.stack;
   await page.screenshot({ path: resolve(output, "failure.png") });
   process.exitCode = 1;

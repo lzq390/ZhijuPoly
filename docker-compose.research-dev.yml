@@ -1,0 +1,14 @@
+# Apply after optional PMD/literature overlays, including on the GPU candidate.
+# This enables the persistent deployment-drain guard, not admission itself.
+services:
+  backend:
+    environment:
+      POLYMER_MD_DEV_ENABLED: "${NEXPOLY_DEV_POLYMER_MD_ENABLED:?select the explicit Polymer MD feature state}"
+      POLYMER_MD_SUBMIT_ENABLED: "${POLYMER_MD_SUBMIT_ENABLED:-false}"
+      POLYMER_MD_ENVIRONMENT: dev
+      KNOWLEDGE_LITERATURE_ENABLED: "${NEXPOLY_DEV_LITERATURE_ENABLED:?select the explicit literature feature state}"
+      DEPLOYMENT_DRAIN_ENABLED: "true"
+      USAGE_ENTITLEMENTS_ENABLED: "false"
+      NEXPOLY_POSTGRES_PREFLIGHT_ARGS: "--strict --schema-target ${NEXPOLY_DEV_SCHEMA_TARGET:?select the research schema boundary} --service-context"
+    labels:
+      com.nexpoly.dev.research-config: "${NEXPOLY_DEV_RESEARCH_CONFIG_SHA256:?load the explicit private research configuration}"

@@ -932,6 +932,16 @@ class StructuredWorkflowPolicyTests(unittest.TestCase):
             failures,
         )
 
+    def test_backend_backup_tests_require_governed_postgres_client(self) -> None:
+        changed = CI_TEXT.replace(
+            "      - name: Install PostgreSQL 16 backup and restore client\n"
+            "        timeout-minutes: 9\n"
+            "        run: scripts/ci/ensure_postgresql_16_client.sh\n", "", 1,
+        )
+        failures = []
+        policy.validate_postgres_client_bootstrap(changed, POSTGRES_CLIENT_BOOTSTRAP, failures)
+        self.assertTrue(any("backend-tests" in failure for failure in failures), failures)
+
     def test_postgres_client_bootstrap_requires_each_step_timeout(self) -> None:
         changed = CI_TEXT.replace("        timeout-minutes: 9\n", "", 1)
         failures: list[str] = []

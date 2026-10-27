@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import mimetypes
 import json
+import os
+import re
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -252,7 +254,11 @@ def read_source(dsn: str, *, limit: int | None = None, verify_assets: bool = Fal
     This deliberately does not use the application's service-context factory.
     Explicit connection options enforce read-only mode before the first query.
     """
-    with psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10, options="-c default_transaction_read_only=on -c statement_timeout=45000 -c lock_timeout=2000", application_name="nexpoly_literature_readonly_import") as connection:
+    raw_timeout = os.environ.get("LITERATURE_SOURCE_STATEMENT_TIMEOUT_MS", "45000")
+    if not re.fullmatch(r"[0-9]{1,6}", raw_timeout) or not 1000 <= int(raw_timeout) <= 300000:
+        raise ValueError("LITERATURE_SOURCE_STATEMENT_TIMEOUT_MS_INVALID")
+    statement_timeout_ms = int(raw_timeout)
+    with psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10, options=f"-c default_transaction_read_only=on -c statement_timeout={statement_timeout_ms} -c lock_timeout=2000", application_name="nexpoly_literature_readonly_import") as connection:
         connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         state = connection.execute("SELECT current_setting('transaction_read_only') read_only, current_setting('TimeZone') source_timezone, transaction_timestamp() captured_at, txid_current_snapshot()::text snapshot").fetchone()
         if state["read_only"] != "on":
@@ -307,7 +313,7 @@ def read_source(dsn: str, *, limit: int | None = None, verify_assets: bool = Fal
               LEFT JOIN public.ods_pdee_file_record_convert cv
                 ON cv.result_bucket=pr.result_bucket AND cv.result_md_object_key=pr.convert_md_object_key AND cv.status='SUCCESS'
               ORDER BY er.pdee_extract_id,pr.id,cv.id""", (dois, dois)).fetchall()
-        summary = {"candidate_paper_rows": len(papers), "linked_extract_rows": len(extracts), **source_counts, "source_timezone": state["source_timezone"], "source_transaction_snapshot": state["snapshot"], "source_captured_at": state["captured_at"].isoformat(), "source_read_only": True, "source_isolation": "repeatable read", "partial": limit is not None, "limit": limit, "pdee_preprocess_link_rows": len(preprocess), "file_metadata_rows": len(files)}
+        summary = {"candidate_paper_rows": len(papers), "linked_extract_rows": len(extracts), **source_counts, "source_timezone": state["source_timezone"], "source_transaction_snapshot": state["snapshot"], "source_captured_at": state["captured_at"].isoformat(), "source_read_only": True, "source_isolation": "repeatable read", "source_statement_timeout_ms": statement_timeout_ms, "partial": limit is not None, "limit": limit, "pdee_preprocess_link_rows": len(preprocess), "file_metadata_rows": len(files)}
     manifests = build_asset_manifests(preprocess, files)
     if verify_assets:
         manifests = verify_asset_manifests(manifests, workers=asset_workers)

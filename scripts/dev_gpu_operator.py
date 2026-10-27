@@ -55,6 +55,29 @@ CONTROLLER_RECOVERY_STATES = {
     "startup-failed",
 }
 ACTIVE_OPERATION_PHASES = {"queued", "starting"}
+RESEARCH_SELECTORS = (
+    "NEXPOLY_DEV_POLYMER_MD_ENABLED", "NEXPOLY_DEV_LITERATURE_ENABLED",
+    "NEXPOLY_DEV_POLYMER_MD_REGISTRY_ENABLED",
+)
+RESEARCH_INPUTS = (*RESEARCH_SELECTORS, "NEXPOLY_DEV_RESEARCH_ENV_FILE", "NEXPOLY_DEV_RESEARCH_CONFIG_SHA256")
+
+
+def research_configuration(environment: dict[str, str]) -> dict[str, str]:
+    """Freeze non-secret launch identity, preserving legacy no-research records."""
+    selectors = {key: environment.get(key, "false") for key in RESEARCH_SELECTORS}
+    if any(value not in {"true", "false"} for value in selectors.values()):
+        raise OperatorError("GPU operator research selectors are invalid")
+    if all(value == "false" for value in selectors.values()):
+        return {}
+    if selectors[RESEARCH_SELECTORS[2]] == "true" and selectors[RESEARCH_SELECTORS[0]] != "true":
+        raise OperatorError("GPU operator research registry requires Polymer MD")
+    path = environment.get("NEXPOLY_DEV_RESEARCH_ENV_FILE", "")
+    digest = environment.get("NEXPOLY_DEV_RESEARCH_CONFIG_SHA256", "")
+    if (not Path(path).is_absolute() or any(ord(c) < 32 for c in path)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None):
+        raise OperatorError("GPU operator research identity is incomplete")
+    return {**selectors, "NEXPOLY_DEV_RESEARCH_ENV_FILE": path,
+            "NEXPOLY_DEV_RESEARCH_CONFIG_SHA256": digest}
 
 
 class OperatorError(RuntimeError):
@@ -190,6 +213,7 @@ class DevGpuOperator:
         self.source_sha = source_sha
         self.source_tree = source_tree
         self.python_executable = python_executable
+        self.research_configuration = research_configuration(dict(os.environ))
         self._lock = threading.Lock()
         self._shutdown = threading.Event()
         self._operation_thread: threading.Thread | None = None
@@ -464,6 +488,18 @@ class DevGpuOperator:
                     f"\n[{_utc_now()}] recovery {operation_id}\n".encode(),
                 )
                 environment = os.environ.copy()
+                for key in tuple(environment):
+                    if key.startswith(("POLYMER_MD_", "LITERATURE_MINIO_")):
+                        environment.pop(key)
+                for key in RESEARCH_INPUTS:
+                    environment.pop(key, None)
+                environment.pop("NEXPOLY_DEV_EXPECTED_RESEARCH_CONFIG_SHA256", None)
+                # Legacy operators freeze the disabled selection too; a later
+                # dotenv edit must not silently opt their recovery into research.
+                environment.update({key: "false" for key in RESEARCH_SELECTORS})
+                environment.update(self.research_configuration)
+                if self.research_configuration:
+                    environment["NEXPOLY_DEV_EXPECTED_RESEARCH_CONFIG_SHA256"] = self.research_configuration["NEXPOLY_DEV_RESEARCH_CONFIG_SHA256"]
                 environment["NEXPOLY_DEV_GPU_SESSION_EXECUTE"] = "1"
                 environment["NEXPOLY_DEV_GPU_DIRECT_START"] = "1"
                 child = subprocess.Popen(
@@ -625,6 +661,7 @@ class DevGpuOperator:
                     "source_sha": self.source_sha,
                     "source_tree": self.source_tree,
                     "user_isolation_enabled": os.getenv("NEXPOLY_DEV_USER_ISOLATION_ENABLED", "false") == "true",
+                    "research_configuration": self.research_configuration,
                 },
             )
             server.listen(8)
