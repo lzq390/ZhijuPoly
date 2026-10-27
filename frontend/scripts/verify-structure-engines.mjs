@@ -44,6 +44,8 @@ try {
   const iframeUrl = await serve(4281, 'iframe', iframe);
   const sdkUrl = await serve(4282, 'react', sdk, '/ketcher-compat.html');
   const devUrl = await serve(5280, 'react');
+  await run(['run', 'test:ketcher-iframe-paste'], { STRUCTURE_BASE_URL: iframeUrl,
+    STRUCTURE_ARTIFACT_DIR: resolve(output, 'iframe-paste-cancellation') });
   for (const [mode, url] of [['development', devUrl], ['production', sdkUrl]]) {
     await run(['run', 'test:ketcher-compat'], { KETCHER_COMPAT_MODE: mode, KETCHER_COMPAT_URL: `${url}/ketcher-compat.html`, KETCHER_COMPAT_ARTIFACTS: resolve(output, `sdk-${mode}`) });
   }

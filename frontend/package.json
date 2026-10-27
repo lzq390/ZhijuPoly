@@ -24,6 +24,7 @@
     "prebuild:ketcher-compat": "npm run verify:ketcher-patches",
     "test:ketcher-worker": "node --test scripts/verify-ketcher-worker.mjs",
     "test:ketcher-runtime": "node --test sdk/*.test.mjs scripts/verify-ketcher-runtime-http.mjs",
+    "test:ketcher-iframe-paste": "node scripts/verify-ketcher-iframe-paste.mjs",
     "test:ketcher-deferred": "node scripts/verify-ketcher-deferred.mjs",
     "build:ketcher-runtime": "node build/ketcher-runtime.mjs",
     "test:structure-loading": "node scripts/verify-ketcher-loading.mjs",

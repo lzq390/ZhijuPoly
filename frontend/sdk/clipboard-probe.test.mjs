@@ -3,7 +3,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { clearForClipboardPaste, pasteClipboardAt } from '../scripts/ketcher-clipboard-probe.mjs';
 
-function browserFixture({ iframe = false, failDown = false } = {}) {
+function browserFixture({ iframe = false, failDown = false, cancelBeforeInitialReady = false } = {}) {
   const top = new EventTarget(), frame = new EventTarget();
   const atoms = new Map([[0, {}], [1, {}], [2, {}]]);
   let selected = [], commandsEnabled = false;
@@ -16,6 +16,12 @@ function browserFixture({ iframe = false, failDown = false } = {}) {
   top.document = frame.document = document;
   const context = vm.createContext({ window: top, document });
   const win = iframe ? frame : top;
+  function cancelPreview() {
+    delete editor._tool.action;
+    atoms.clear();
+    pending.length = 0;
+    events.push('cancel-preview');
+  }
   function initialize() {
     const tool = editor._tool, current = tool.action;
     pending.push(() => {
@@ -55,11 +61,14 @@ function browserFixture({ iframe = false, failDown = false } = {}) {
       events.push('paste-preview');
       initialize();
       if (iframe) top.dispatchEvent(new Event('itemsToMergeInitializationComplete'));
+      if (cancelBeforeInitialReady) cancelPreview();
     } },
     mouse: {
       move: async (x, y) => {
         events.push(['move', x, y]);
         if (editor._tool.struct) {
+          if (x === 1 && y === 1) { cancelPreview(); return; }
+          for (const id of editor._tool.struct.atoms.keys()) atoms.set(id, {});
           editor._tool.mergeItems = null;
           editor._tool.action = { id: ++action };
           initialize();
@@ -104,5 +113,15 @@ for (const iframe of [false, true]) test(`paste waits for initial and target rea
 test('paste removes its probe after a pointer failure', async () => {
   const { page, top } = browserFixture({ failDown: true });
   await assert.rejects(pasteClipboardAt(page, { x: 100, y: 100 }), /pointer failed/);
+  assert.equal(top.__probePaste, undefined);
+});
+
+for (const cancelBeforeInitialReady of [false, true]) test(`iframe paste recovers a canceled preview (already canceled: ${cancelBeforeInitialReady})`, async () => {
+  const { page, editor, events, top } = browserFixture({ iframe: true, cancelBeforeInitialReady });
+  assert.deepEqual(await pasteClipboardAt(page, { x: 100, y: 100 }, { exerciseCancel: true }),
+    { readyEvents: 2, committed: true, canceledPreviewResumed: true });
+  assert.equal(editor.struct().atoms.size, 3);
+  assert.ok(events.includes('cancel-preview'));
+  assert.ok(events.indexOf('cancel-preview') < events.indexOf('ready'));
   assert.equal(top.__probePaste, undefined);
 });

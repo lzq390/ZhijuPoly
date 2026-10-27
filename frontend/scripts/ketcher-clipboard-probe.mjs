@@ -15,7 +15,7 @@ export async function clearForClipboardPaste(page) {
   await page.waitForFunction(() => window.__probeEditor().editor.struct().atoms.size === 0);
 }
 
-export async function pasteClipboardAt(page, point) {
+export async function pasteClipboardAt(page, point, { exerciseCancel = false } = {}) {
   // Ensure the later move has a different coordinate even when the canvas was
   // just clicked at point. A click's implicit move must not race paste commit.
   await page.mouse.move(point.x + 1, point.y);
@@ -37,9 +37,27 @@ export async function pasteClipboardAt(page, point) {
   });
   try {
     await page.keyboard.press('Control+v');
+    await page.waitForFunction(() => Boolean(window.__probePaste.editor._tool?.struct?.atoms));
+    await page.evaluate(() => {
+      const state = window.__probePaste;
+      state.tool = state.editor._tool;
+    });
+    if (exerciseCancel) {
+      // A paste remains the active tool after leaving the canvas, but its
+      // preview is rolled back. Exercise real pointer cancellation, including
+      // when that legal cancellation happened before the initial ready event.
+      await page.mouse.move(1, 1);
+      await page.waitForFunction(() => {
+        const state = window.__probePaste;
+        return state.editor._tool === state.tool && !state.tool.action &&
+          state.editor.struct().atoms.size === 0;
+      });
+      await page.evaluate(() => { window.__probePaste.readyAction = null; });
+      await page.mouse.move(point.x + 1, point.y);
+    }
     await page.waitForFunction(() => {
       const state = window.__probePaste;
-      return state.tool && state.editor._tool === state.tool && state.readyAction === state.tool.action;
+      return state.tool.action && state.editor._tool === state.tool && state.readyAction === state.tool.action;
     });
     await page.evaluate(() => {
       const state = window.__probePaste;
@@ -58,7 +76,9 @@ export async function pasteClipboardAt(page, point) {
     await page.mouse.up();
     // The preview already contains atoms. Tool exit proves the paste committed.
     await page.waitForFunction(() => window.__probePaste.editor._tool !== window.__probePaste.tool);
-    return await page.evaluate(() => ({ readyEvents: window.__probePaste.events, committed: true }));
+    const result = await page.evaluate(() => ({ readyEvents: window.__probePaste.events, committed: true }));
+    if (exerciseCancel) result.canceledPreviewResumed = true;
+    return result;
   } catch (error) {
     const state = await page.evaluate(() => {
       const state = window.__probePaste, tool = state.editor._tool;

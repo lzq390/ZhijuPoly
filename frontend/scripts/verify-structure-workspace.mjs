@@ -450,7 +450,7 @@ try {
       assert.match(copied, /V2000|V3000|CCN/);
       await clearForClipboardPaste(page);
       await page.mouse.click(point.x, point.y);
-      result.clipboardPaste = await pasteClipboardAt(page, point);
+      result.clipboardPaste = await pasteClipboardAt(page, point, { exerciseCancel: result.engine === 'iframe' });
       await page.waitForFunction(() => window.__probeEditor().editor.struct().atoms.size === 3);
       await pollBrowser(page, async () => (await window.__probeEditor().getSmiles()) === 'CCN');
       result.clipboardShortcuts = true;
