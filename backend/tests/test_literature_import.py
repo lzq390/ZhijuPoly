@@ -14,6 +14,7 @@ from literature_test_support import install_literature_test_projection
 
 from app import import_literature
 from app.services import literature_normalizer as normalizer
+from app.services import literature_publication
 from app.services.literature_source import SourceDataset, build_asset_manifests, read_source, verify_extraction_inputs
 
 
@@ -315,6 +316,40 @@ def test_generation_prepare_publish_rollback_and_snapshot_immutability(literatur
     import_literature.activate_generation(postgres_test_dsn, partial["generation_id"], allow_partial=True)
 
 
+def test_real_cli_publishes_and_rolls_back_current_v2(literature_import_dsn, monkeypatch, capsys):
+    data = SourceDataset([paper("701", "10.1234/cli-current")],
+                         [extract("702", "701", raw=raw_english(doi="10.1234/cli-current"))], {}, {"partial": False})
+    monkeypatch.setattr(import_literature, "read_source", lambda *args, **kwargs: data)
+    monkeypatch.setenv("LITERATURE_IMPORT_DSN", literature_import_dsn)
+    generations = [import_literature.prepare_generation("synthetic-readonly-source", literature_import_dsn) for _ in range(2)]
+    assert import_literature.ImportStateError is literature_publication.ImportStateError
+    for generation in generations:
+        assert import_literature.main(["publish", generation["generation_id"]]) == 0
+        published = json.loads(capsys.readouterr().out)
+        assert published == {"generation_id": generation["generation_id"], "status": "published", "is_active": True,
+                             "documents": 1, "action": "publish"}
+    assert import_literature.main(["rollback", generations[0]["generation_id"]]) == 0
+    assert json.loads(capsys.readouterr().out)["action"] == "rollback"
+
+
+@pytest.mark.parametrize("version", ["unsupported-format", "literature-v1", "literature-v1.1"])
+def test_real_cli_rejects_noncurrent_generation_without_replacing_active(literature_import_dsn, monkeypatch, capsys, version):
+    data = SourceDataset([paper("711", "10.1234/cli-format")],
+                         [extract("712", "711", raw=raw_english(doi="10.1234/cli-format"))], {}, {"partial": False})
+    monkeypatch.setattr(import_literature, "read_source", lambda *args, **kwargs: data)
+    monkeypatch.setenv("LITERATURE_IMPORT_DSN", literature_import_dsn)
+    active = import_literature.prepare_generation("synthetic-readonly-source", literature_import_dsn)
+    assert import_literature.main(["publish", active["generation_id"]]) == 0
+    capsys.readouterr()
+    rejected = import_literature.prepare_generation("synthetic-readonly-source", literature_import_dsn)
+    with psycopg.connect(literature_import_dsn) as connection:
+        connection.execute("UPDATE knowledge.literature_generations SET normalizer_version=%s WHERE generation_id=%s", (version, rejected["generation_id"]))
+    assert import_literature.main(["publish", rejected["generation_id"]]) == 1
+    assert json.loads(capsys.readouterr().err)["error_code"] == "GENERATION_FORMAT_UNSUPPORTED"
+    with psycopg.connect(literature_import_dsn) as connection:
+        assert str(connection.execute("SELECT generation_id FROM knowledge.literature_generations WHERE is_active").fetchone()[0]) == active["generation_id"]
+
+
 @pytest.mark.parametrize("legacy_version", ["literature-v1", "literature-v1.1"])
 def test_legacy_and_current_snapshots_coexist_and_remain_readable(literature_import_dsn, monkeypatch, legacy_version):
     from app.services.literature_preflight import check_literature_readiness
@@ -330,7 +365,11 @@ def test_legacy_and_current_snapshots_coexist_and_remain_readable(literature_imp
     with monkeypatch.context() as old_version:
         old_version.setattr(normalizer, "NORMALIZER_VERSION", legacy_version)
         old_version.setattr(import_literature, "NORMALIZER_VERSION", legacy_version)
+        old_version.setattr(literature_publication, "NORMALIZER_VERSION", legacy_version)
         old = import_literature.prepare_generation("readonly-source", literature_import_dsn)
+        # This generation was published by the historical release, not newly
+        # admitted through the current v2 publisher.
+        import_literature.activate_generation(literature_import_dsn, old["generation_id"])
     new = import_literature.prepare_generation("readonly-source", literature_import_dsn)
     assert new["report"]["new_snapshots"] == 1
     assert new["report"]["reused_snapshots"] == 0
@@ -343,10 +382,9 @@ def test_legacy_and_current_snapshots_coexist_and_remain_readable(literature_imp
     assert previous["document_uid"] == current["document_uid"]
     assert previous["content_sha256"] == current["content_sha256"]
     assert previous["snapshot_uid"] != current["snapshot_uid"]
-    for generation in (old, new):
-        import_literature.activate_generation(literature_import_dsn, generation["generation_id"])
-        with psycopg.connect(literature_import_dsn, row_factory=dict_row) as connection:
-            assert check_literature_readiness(connection, role_override="nexpoly_api")["ready"] is True
+    import_literature.activate_generation(literature_import_dsn, new["generation_id"])
+    with psycopg.connect(literature_import_dsn, row_factory=dict_row) as connection:
+        assert check_literature_readiness(connection, role_override="nexpoly_api")["ready"] is True
     # A newer active generation must not invalidate fixed historical citations.
     with psycopg.connect(literature_import_dsn, row_factory=dict_row) as connection:
         for snapshot in snapshots:

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import socket
 import stat
+import tempfile
 import threading
 
 import pytest
@@ -24,8 +25,16 @@ def private_json(path, value):
 
 
 @pytest.fixture
-def deployment(tmp_path_factory):
-    home = tmp_path_factory.mktemp("pmd")
+def deployment():
+    # CI's isolated TMPDIR can itself consume the Unix socket path budget.
+    temporary = tempfile.TemporaryDirectory(prefix="pmd-", dir="/tmp")
+    try:
+        yield deployment_files(Path(temporary.name))
+    finally:
+        temporary.cleanup()
+
+
+def deployment_files(home):
     home.chmod(0o700)
     runtime = home / "runtime"
     runtime.mkdir(mode=0o700)
@@ -97,6 +106,20 @@ def test_frozen_release_and_external_md10_engine_are_verified_without_execution(
     assert digest == config.path("release_root").name
     assert not config.path("runner_python").is_relative_to(config.path("runtime_root"))
     assert not list(config.path("release_root").rglob("__pycache__"))
+
+
+def test_configured_unix_socket_must_fit_the_platform_limit(deployment):
+    path, values, _ = deployment
+    original = path.parent
+    longer = original.with_name("runtime-" + "x" * 100)
+    original.rename(longer)
+    values = {key: str(longer) + value[len(str(original)):] if isinstance(value, str)
+              and value.startswith(str(original)) else value for key, value in values.items()}
+    path = longer / path.name
+    private_json(path, values)
+    assert len(os.fsencode(values["socket_path"])) > 107
+    with pytest.raises(ValueError, match="Unix socket path is too long"):
+        worker.load_configuration(path)
 
 
 @pytest.mark.parametrize("name", ["__pycache__", "cached.pyc", "cached.pyo"])

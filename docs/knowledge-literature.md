@@ -152,7 +152,9 @@ python -m app.import_literature rollback PREVIOUS_PUBLISHED_GENERATION_UUID
 
 ## 备份、恢复和验收
 
-使用既有 `python -m app.auth.backup` 的私有全库 dump 和空库恢复验证；0024 在有限兼容账本范围内。`backup_state_seal` 包括三张新表的内容摘要。MinIO 远端文件不复制进数据库备份，需对象存储独立备份/版本保留；数据库清单冻结的对象丢失会明确报错。`scripts/user_isolation_audit.py` 在登记 0024 后附加 `literature_tables` 指纹和 knowledge schema 备份要求，历史证据保持原形状。
+使用既有 `python -m app.auth.backup` 的私有全库 dump 和空库恢复验证；0024 在有限兼容账本范围内。`backup_state_seal` 包括三张新表的内容摘要。MinIO 远端文件不复制进数据库备份，需对象存储独立备份/版本保留；数据库清单冻结的对象丢失会明确报错。
+
+`scripts/user_isolation_audit.py --schema-version 5` 的维护回执仍绑定完整 0022 账本，不能作为 0024 的切换入口，也不能改写历史回执以绕过版本检查。0024 使用上述全库备份恢复回执、显式 `literature-dev-0024` 维护命令，以及 `python -m app.postgres_preflight --strict --schema-target literature-0024 --service-context` 的运行权限检查；历史证据保持原形状。
 
 测试均使用隔离 PostgreSQL 和受控对象存储替身，源库没有写入。回归覆盖身份、解析、发布/回滚、归属、故障/Range/取消、录制白名单，以及旧知识 API。前端覆盖来源切换、提交条件分页、样品和工艺分离、安全表格、离线及过期响应。执行 TypeScript/Vite 构建；页面检查 1440×900、1024×768、390×844。
 
