@@ -180,7 +180,7 @@ def scientific_environment() -> dict[str, str]:
                "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "LD_LIBRARY_PATH", "POLYMER_MD_RUNTIME_MANIFEST"}
     environment = {key: value for key, value in os.environ.items() if key in allowed or key.startswith("LC_")}
     environment.update(CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1",
-                       MKL_NUM_THREADS="1", POLYMER_MD_CPU_COUNT="16")
+                       MKL_NUM_THREADS="1", POLYMER_MD_CPU_COUNT="16", PYTHONDONTWRITEBYTECODE="1")
     repo = str(Path(__file__).resolve().parents[3])
     environment["PYTHONPATH"] = repo
     return environment

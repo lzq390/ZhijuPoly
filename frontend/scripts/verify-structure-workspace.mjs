@@ -28,7 +28,7 @@ const renderWarnings = [];
 let molfile3D = "";
 const libraryRecords = [];
 const polymerizationRequests = [];
-page.on("pageerror", (error) => errors.push(error.message));
+page.on("pageerror", (error) => errors.push(error.stack || error.message));
 page.on("console", message => { if (/Cannot update a component|Cannot update .*while rendering|unmounted root/.test(message.text())) renderWarnings.push(message.text()); });
 context.on("request", request => {
   if (/ketcher|Ketcher|\/assets\/|\.css(?:\?|$)/.test(request.url())) resources.push(request.url());
@@ -344,6 +344,7 @@ try {
   result.independentDftDraft = true;
   // Seed an explicit nitrogen drawing for the viewport pointer-hit regression below.
   await input().fill('CCN');
+  await page.waitForFunction(() => !document.querySelector('[data-workbench-tool="3d"]').disabled);
   await pollBrowser(page, async () => (await window.__probeEditor()?.getSmiles()) === 'CCN');
 
   if (result.engine === 'react') {

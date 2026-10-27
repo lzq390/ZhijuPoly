@@ -48,6 +48,21 @@ def test_scientific_subprocess_has_no_backend_credentials(monkeypatch):
     assert environment["CUDA_VISIBLE_DEVICES"] == ""
 
 
+def test_scientific_import_never_writes_shared_dependency_bytecode(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "0")
+    dependency = tmp_path / "shared_dependency.py"
+    dependency.write_text("VALUE = 7\n")
+    environment = scientific_environment()
+    assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
+    result = subprocess.run(
+        [sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); "
+         "import shared_dependency; assert shared_dependency.VALUE == 7", str(tmp_path)],
+        env=environment, capture_output=True, timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "__pycache__").exists()
+
+
 def test_real_scope_contains_and_kills_detached_descendants(tmp_path):
     scope = ScopeControl()
     if not scope.probe()["ready"]:

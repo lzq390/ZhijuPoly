@@ -1,9 +1,17 @@
 // Browser probe only: both supported SDKs dispatch this event after their
 // debounced paste merge candidates have been initialized in the editor window.
 export async function clearForClipboardPaste(page) {
-  await page.evaluate(() => window.__probeEditor().setMolecule(''));
-  // SDK 3.7 resolves before its worker import updates the canvas. Overlapping
-  // that clear with a paste can delete the atoms used by its delayed merge.
+  // Copy deselects the graph. Select it again and delete through the native
+  // keyboard path, without another asynchronous import before the paste.
+  await page.keyboard.press('Control+a');
+  await page.waitForFunction(() => {
+    const editor = window.__probeEditor().editor;
+    const win = document.querySelector('[data-structure-editor] iframe')?.contentWindow || window;
+    const count = editor.struct().atoms.size;
+    const cut = win.document.querySelector('[data-testid="cut-button"]');
+    return count > 0 && editor.selection()?.atoms?.length === count && cut && !cut.disabled;
+  });
+  await page.keyboard.press('Delete');
   await page.waitForFunction(() => window.__probeEditor().editor.struct().atoms.size === 0);
 }
 
@@ -51,6 +59,14 @@ export async function pasteClipboardAt(page, point) {
     // The preview already contains atoms. Tool exit proves the paste committed.
     await page.waitForFunction(() => window.__probePaste.editor._tool !== window.__probePaste.tool);
     return await page.evaluate(() => ({ readyEvents: window.__probePaste.events, committed: true }));
+  } catch (error) {
+    const state = await page.evaluate(() => {
+      const state = window.__probePaste, tool = state.editor._tool;
+      return { readyEvents: state.events, atomIds: [...state.editor.struct().atoms.keys()],
+        pasteTool: Boolean(tool?.struct?.atoms), action: Boolean(tool?.action) };
+    });
+    error.stack += `\nPaste state: ${JSON.stringify(state)}`;
+    throw error;
   } finally {
     await page.evaluate(() => {
       const state = window.__probePaste;

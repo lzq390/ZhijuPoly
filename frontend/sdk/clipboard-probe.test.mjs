@@ -6,16 +6,15 @@ import { clearForClipboardPaste, pasteClipboardAt } from '../scripts/ketcher-cli
 function browserFixture({ iframe = false, failDown = false } = {}) {
   const top = new EventTarget(), frame = new EventTarget();
   const atoms = new Map([[0, {}], [1, {}], [2, {}]]);
-  const editor = { _tool: {}, struct: () => ({ atoms }) };
+  let selected = [], commandsEnabled = false;
+  const editor = { _tool: {}, struct: () => ({ atoms }), selection: () => ({ atoms: selected }) };
   const events = [], pending = [];
   let initializedAction = null, action = 0;
-  top.__probeEditor = () => ({ editor, setMolecule: value => {
-    assert.equal(value, '');
-    pending.push(() => atoms.clear());
-  } });
-  const context = vm.createContext({ window: top, document: {
-    querySelector: () => iframe ? { contentWindow: frame } : null
-  } });
+  top.__probeEditor = () => ({ editor, setMolecule: () => { throw new Error('unexpected asynchronous import'); } });
+  const document = { querySelector: selector => selector.includes('iframe')
+    ? iframe ? { contentWindow: frame } : null : { disabled: !commandsEnabled } };
+  top.document = frame.document = document;
+  const context = vm.createContext({ window: top, document });
   const win = iframe ? frame : top;
   function initialize() {
     const tool = editor._tool, current = tool.action;
@@ -39,6 +38,18 @@ function browserFixture({ iframe = false, failDown = false } = {}) {
       throw new Error('condition did not become true');
     },
     keyboard: { press: async key => {
+      if (key === 'Control+a') {
+        selected = [...atoms.keys()];
+        pending.push(() => { commandsEnabled = true; });
+        events.push('select-all');
+        return;
+      }
+      if (key === 'Delete') {
+        assert.ok(commandsEnabled && selected.length === atoms.size);
+        events.push('delete-selected');
+        pending.push(() => atoms.clear());
+        return;
+      }
       assert.equal(key, 'Control+v');
       editor._tool = { struct: { atoms: new Map([[0, {}], [1, {}], [2, {}]]) }, action: { id: ++action } };
       events.push('paste-preview');
@@ -65,13 +76,12 @@ function browserFixture({ iframe = false, failDown = false } = {}) {
   return { page, editor, events, top };
 }
 
-test('clear waits for the actual canvas after setMolecule resolves early', async () => {
-  const premature = browserFixture();
-  await premature.page.evaluate(() => window.__probeEditor().setMolecule(''));
-  assert.equal(premature.editor.struct().atoms.size, 3);
-  const { page, editor } = browserFixture();
+test('clear deletes the copied selection and waits without starting an import', async () => {
+  const { page, editor, events } = browserFixture();
+  assert.equal(editor.selection().atoms.length, 0); // SDK copy deselects.
   await clearForClipboardPaste(page);
   assert.equal(editor.struct().atoms.size, 0);
+  assert.deepEqual(events, ['select-all', 'delete-selected']);
 });
 
 test('a truthy paste preview permits commit before its deferred initialization', async () => {
