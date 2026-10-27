@@ -28,6 +28,8 @@
 
 同步进程单独配置 `LITERATURE_SOURCE_DSN` 和 `LITERATURE_IMPORT_DSN`。不要把源 DSN 放入 Web 后端的环境文件。源账号只授予所需 DWD/PDEE 目录的 SELECT；MinIO 只需要读取对象元数据和对象。凭证通过权限为 0600 的运维文件或凭证管理器注入，不写进命令参数、报告、仓库或浏览器。
 
+离线同步进程可单独设置 `LITERATURE_SOURCE_STATEMENT_TIMEOUT_MS`：默认 45000 毫秒，仅接受 1000–300000 范围内的 ASCII 整数字符串，空值、单位、符号、空白和越界值在连接源库前拒绝。全量数据或受控代理链路超过默认预算时，在私有离线导入环境中显式提高，最高 300000 毫秒；实际值记入 `source_summary.source_statement_timeout_ms`。该变量只影响源库每条 SQL 的执行预算，不改变只读、REPEATABLE READ 或 2000 毫秒锁等待门槛，也不影响目标库及 MinIO；不要注入在线后端环境。
+
 0024 创建 `nexpoly_literature_import` NOLOGIN 权限组。运维单独创建 LOGIN 并加入该组：可构建新目录、插入快照及切换批次，不能修改快照或已发布目录。在线 `nexpoly_api`、`nexpoly_service` 对三表只有 SELECT；审计组有 schema USAGE 和 SELECT。不要让 API 账号继承同步组。备份仍使用既有受控 owner 身份。
 
 开发 Compose 的 `.env.dev.ai`、生产的受控 `app.env` 可注入在线变量；它们不授予迁移或同步权限。执行任何维护前先检查 Compose 项目、解析后的配置以及目标数据库身份。

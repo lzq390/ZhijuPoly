@@ -1,5 +1,6 @@
 import { pollBrowser } from "./browser-poll.mjs";
 import { verifyKetcherNativeMenu } from "./verify-ketcher-native-menu.mjs";
+import { clearForClipboardPaste, pasteClipboardAt } from "./ketcher-clipboard-probe.mjs";
 // Real editor/browser verification. Business requests are fixtures; no jobs or records are submitted.
 import assert from "node:assert/strict";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
@@ -446,11 +447,9 @@ try {
         throw error;
       });
       assert.match(copied, /V2000|V3000|CCN/);
-      await page.evaluate(() => window.__probeEditor().setMolecule(''));
+      await clearForClipboardPaste(page);
       await page.mouse.click(point.x, point.y);
-      await page.keyboard.press('Control+v');
-      await page.waitForFunction(() => Boolean(window.__probeEditor().editor._tool?.struct?.atoms));
-      await page.mouse.click(point.x, point.y);
+      result.clipboardPaste = await pasteClipboardAt(page, point);
       await page.waitForFunction(() => window.__probeEditor().editor.struct().atoms.size === 3);
       await pollBrowser(page, async () => (await window.__probeEditor().getSmiles()) === 'CCN');
       result.clipboardShortcuts = true;
