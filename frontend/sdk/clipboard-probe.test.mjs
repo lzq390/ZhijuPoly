@@ -6,13 +6,19 @@ import { clearForClipboardPaste, pasteClipboardAt } from '../scripts/ketcher-cli
 function browserFixture({ iframe = false, failDown = false, cancelBeforeInitialReady = false } = {}) {
   const top = new EventTarget(), frame = new EventTarget();
   const atoms = new Map([[0, {}], [1, {}], [2, {}]]);
+  const draft = { value: 'CCN', disabled: false };
   let selected = [], commandsEnabled = false;
-  const editor = { _tool: {}, struct: () => ({ atoms }), selection: () => ({ atoms: selected }) };
+  const editor = { _tool: {}, struct: () => ({ atoms }), selection: () => ({ atoms: selected }),
+    render: { clientArea: { contains: () => true } } };
   const events = [], pending = [];
   let initializedAction = null, action = 0;
   top.__probeEditor = () => ({ editor, setMolecule: () => { throw new Error('unexpected asynchronous import'); } });
   const document = { querySelector: selector => selector.includes('iframe')
-    ? iframe ? { contentWindow: frame } : null : { disabled: !commandsEnabled } };
+    ? iframe ? { contentWindow: frame, getBoundingClientRect: () => ({ x: 0, y: 0, width: 1000 }) } : null
+    : selector.includes('aria-label') ? draft : { disabled: !commandsEnabled },
+    elementFromPoint: () => ({ nodeName: 'svg' }) };
+  top.innerWidth = frame.innerWidth = 1000;
+  top.requestAnimationFrame = frame.requestAnimationFrame = callback => { events.push('frame'); callback(0); };
   top.document = frame.document = document;
   const context = vm.createContext({ window: top, document });
   const win = iframe ? frame : top;
@@ -24,6 +30,7 @@ function browserFixture({ iframe = false, failDown = false, cancelBeforeInitialR
   }
   function initialize() {
     const tool = editor._tool, current = tool.action;
+    pending.length = 0; // The real SDK debounce replaces the previous move.
     pending.push(() => {
       initializedAction = current;
       // No overlapping atoms is a valid initialized result.
@@ -33,10 +40,12 @@ function browserFixture({ iframe = false, failDown = false, cancelBeforeInitialR
     });
   }
   const page = {
-    evaluate: async fn => structuredClone(await vm.runInContext(`(${fn.toString()})()`, context)),
-    waitForFunction: async fn => {
+    locator: selector => selector.includes('iframe') ? { count: async () => Number(iframe) } : clearLocator(false, selector),
+    frameLocator: () => ({ locator: selector => clearLocator(true, selector) }),
+    evaluate: async (fn, arg) => structuredClone(await vm.runInContext(`(${fn.toString()})(${JSON.stringify(arg) ?? 'undefined'})`, context)),
+    waitForFunction: async (fn, arg) => {
       for (let i = 0; i < 10; i++) {
-        if (await page.evaluate(fn)) return;
+        if (await page.evaluate(fn, arg)) return;
         // A deterministic delayed SDK callback: a truthy preview predicate
         // returns before this runs, while an event predicate must wait for it.
         pending.shift()?.();
@@ -82,15 +91,28 @@ function browserFixture({ iframe = false, failDown = false, cancelBeforeInitialR
       up: async () => { editor._tool = {}; events.push('committed'); }
     }
   };
-  return { page, editor, events, top };
+  function clearLocator(inFrame, selector) {
+    assert.equal(inFrame, iframe, 'clear action must use the active editor window');
+    assert.equal(selector, '[data-testid="clear-canvas"]:visible:enabled');
+    return { click: async () => {
+      events.push('clear-canvas');
+      draft.disabled = true;
+      pending.push(() => atoms.clear());
+      // Host publication happens after the synchronous SDK graph clear.
+      pending.push(() => { draft.value = ''; draft.disabled = false; events.push('host-published-empty'); });
+    } };
+  }
+  return { page, editor, events, top, draft };
 }
 
-test('clear deletes the copied selection and waits without starting an import', async () => {
-  const { page, editor, events } = browserFixture();
+for (const iframe of [false, true]) test(`native clear waits for the graph and host publication (${iframe ? 'iframe' : 'native'})`, async () => {
+  const { page, editor, events, draft } = browserFixture({ iframe });
   assert.equal(editor.selection().atoms.length, 0); // SDK copy deselects.
   await clearForClipboardPaste(page);
   assert.equal(editor.struct().atoms.size, 0);
-  assert.deepEqual(events, ['select-all', 'delete-selected']);
+  assert.equal(draft.value, '');
+  assert.equal(draft.disabled, false);
+  assert.deepEqual(events, ['clear-canvas', 'host-published-empty']);
 });
 
 test('a truthy paste preview permits commit before its deferred initialization', async () => {
@@ -106,8 +128,15 @@ test('a truthy paste preview permits commit before its deferred initialization',
 for (const iframe of [false, true]) test(`paste waits for initial and target readiness (${iframe ? 'iframe' : 'native'})`, async () => {
   const { page, events, top } = browserFixture({ iframe });
   assert.deepEqual(await pasteClipboardAt(page, { x: 100, y: 100 }), { readyEvents: 2, committed: true });
-  assert.deepEqual(events, [['move', 101, 100], 'paste-preview', 'ready', ['move', 100, 100], 'ready', 'down', 'committed']);
+  assert.deepEqual(events, [['move', 1, 1], 'paste-preview', ['move', 101, 100], 'ready',
+    'frame', ['move', 100, 100], 'ready', 'down', 'committed']);
   assert.equal(top.__probePaste, undefined);
+});
+
+for (const iframe of [false, true]) test(`paste enters with a new ready action after initial cancellation (${iframe ? 'iframe' : 'native'})`, async () => {
+  const { page, editor } = browserFixture({ iframe, cancelBeforeInitialReady: true });
+  assert.deepEqual(await pasteClipboardAt(page, { x: 100, y: 100 }), { readyEvents: 2, committed: true });
+  assert.equal(editor.struct().atoms.size, 3);
 });
 
 test('paste removes its probe after a pointer failure', async () => {
@@ -119,9 +148,13 @@ test('paste removes its probe after a pointer failure', async () => {
 for (const cancelBeforeInitialReady of [false, true]) test(`iframe paste recovers a canceled preview (already canceled: ${cancelBeforeInitialReady})`, async () => {
   const { page, editor, events, top } = browserFixture({ iframe: true, cancelBeforeInitialReady });
   assert.deepEqual(await pasteClipboardAt(page, { x: 100, y: 100 }, { exerciseCancel: true }),
-    { readyEvents: 2, committed: true, canceledPreviewResumed: true });
+    { readyEvents: 3, committed: true, canceledPreviewResumed: true });
   assert.equal(editor.struct().atoms.size, 3);
   assert.ok(events.includes('cancel-preview'));
-  assert.ok(events.indexOf('cancel-preview') < events.indexOf('ready'));
+  const cancel = events.lastIndexOf('cancel-preview');
+  assert.ok(events.slice(0, cancel).includes('frame'), 'real entry must finish before deliberate leave');
+  assert.equal(events.slice(cancel + 1).filter(event => event === 'ready').length, 2);
+  assert.deepEqual(events.filter(Array.isArray), [['move', 1, 1], ['move', 101, 100],
+    ['move', 1, 1], ['move', 101, 100], ['move', 100, 100]]);
   assert.equal(top.__probePaste, undefined);
 });

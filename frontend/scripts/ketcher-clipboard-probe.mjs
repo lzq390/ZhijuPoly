@@ -1,24 +1,39 @@
 // Browser probe only: both supported SDKs dispatch this event after their
 // debounced paste merge candidates have been initialized in the editor window.
 export async function clearForClipboardPaste(page) {
-  // Copy deselects the graph. Select it again and delete through the native
-  // keyboard path, without another asynchronous import before the paste.
-  await page.keyboard.press('Control+a');
+  // Delete is context sensitive: over an atom it erases that atom even when
+  // the whole graph is selected. Use the SDK's explicit native clear action.
+  const iframe = await page.locator('[data-structure-editor] iframe').count();
+  const ui = iframe ? page.frameLocator('[data-structure-editor] iframe') : page;
+  await ui.locator('[data-testid="clear-canvas"]:visible:enabled').click();
   await page.waitForFunction(() => {
     const editor = window.__probeEditor().editor;
-    const win = document.querySelector('[data-structure-editor] iframe')?.contentWindow || window;
-    const count = editor.struct().atoms.size;
-    const cut = win.document.querySelector('[data-testid="cut-button"]');
-    return count > 0 && editor.selection()?.atoms?.length === count && cut && !cut.disabled;
+    const draft = document.querySelector('[aria-label="SMILES 输入，自动同步到画板"]');
+    // The raw graph clears synchronously; the host publishes that change later.
+    return editor.struct().atoms.size === 0 && draft?.value === '' && !draft.disabled;
   });
-  await page.keyboard.press('Delete');
-  await page.waitForFunction(() => window.__probeEditor().editor.struct().atoms.size === 0);
+}
+
+export async function clipboardProbeState(page) {
+  return page.evaluate(() => {
+    const editor = window.__probeEditor().editor;
+    const win = document.querySelector('[data-structure-editor] iframe')?.contentWindow || window;
+    const draft = document.querySelector('[aria-label="SMILES 输入，自动同步到画板"]');
+    const hovered = {};
+    for (const [kind, items] of Object.entries(editor.render?.ctab || {})) {
+      if (items instanceof win.Map) hovered[kind] = [...items].filter(([, item]) => item.hover).map(([id]) => id);
+    }
+    return { atomIds: [...editor.struct().atoms.keys()], selection: editor.selection(), hovered,
+      tool: editor._tool?.constructor?.name, active: win.document.activeElement?.outerHTML?.slice(0, 300),
+      focused: win.document.hasFocus(), macro: win.isPolymerEditorTurnedOn,
+      keys: window.__probeClipboardKeys || [], draft: draft && { value: draft.value, disabled: draft.disabled } };
+  });
 }
 
 export async function pasteClipboardAt(page, point, { exerciseCancel = false } = {}) {
-  // Ensure the later move has a different coordinate even when the canvas was
-  // just clicked at point. A click's implicit move must not race paste commit.
-  await page.mouse.move(point.x + 1, point.y);
+  // Preserve canvas keyboard focus while establishing an outside pointer.
+  // Async clipboard UI can change which element is under an unmoved pointer.
+  await page.mouse.move(1, 1);
   await page.evaluate(() => {
     const editor = window.__probeEditor().editor;
     const win = document.querySelector('[data-structure-editor] iframe')?.contentWindow || window;
@@ -42,7 +57,17 @@ export async function pasteClipboardAt(page, point, { exerciseCancel = false } =
       const state = window.__probePaste;
       state.tool = state.editor._tool;
     });
+    await page.evaluate(() => { window.__probePaste.beforeEntry = window.__probePaste.tool.action; });
+    await waitCanvasHit(page, { x: point.x + 1, y: point.y });
+    await page.mouse.move(point.x + 1, point.y);
+    await page.waitForFunction(() => {
+      const state = window.__probePaste;
+      return state.editor._tool === state.tool && state.tool.action && state.tool.action !== state.beforeEntry &&
+        state.readyAction === state.tool.action;
+    });
     if (exerciseCancel) {
+      // The SDK releases its mousemove guard on its next animation frame.
+      await page.evaluate(() => new Promise(resolve => window.__probePaste.win.requestAnimationFrame(resolve)));
       // A paste remains the active tool after leaving the canvas, but its
       // preview is rolled back. Exercise real pointer cancellation, including
       // when that legal cancellation happened before the initial ready event.
@@ -53,12 +78,14 @@ export async function pasteClipboardAt(page, point, { exerciseCancel = false } =
           state.editor.struct().atoms.size === 0;
       });
       await page.evaluate(() => { window.__probePaste.readyAction = null; });
+      await waitCanvasHit(page, { x: point.x + 1, y: point.y });
       await page.mouse.move(point.x + 1, point.y);
     }
     await page.waitForFunction(() => {
       const state = window.__probePaste;
       return state.tool.action && state.editor._tool === state.tool && state.readyAction === state.tool.action;
     });
+    await page.evaluate(() => new Promise(resolve => window.__probePaste.win.requestAnimationFrame(resolve)));
     await page.evaluate(() => {
       const state = window.__probePaste;
       state.initialAction = state.tool.action;
@@ -94,4 +121,15 @@ export async function pasteClipboardAt(page, point, { exerciseCancel = false } =
       delete window.__probePaste;
     });
   }
+}
+
+async function waitCanvasHit(page, point) {
+  await page.waitForFunction(point => {
+    const frame = document.querySelector('[data-structure-editor] iframe');
+    const win = frame?.contentWindow || window;
+    const rect = frame?.getBoundingClientRect();
+    const scale = rect ? rect.width / win.innerWidth : 1;
+    const hit = win.document.elementFromPoint((point.x - (rect?.x || 0)) / scale, (point.y - (rect?.y || 0)) / scale);
+    return window.__probePaste.editor.render.clientArea.contains(hit) && hit?.nodeName !== 'DIV';
+  }, point);
 }

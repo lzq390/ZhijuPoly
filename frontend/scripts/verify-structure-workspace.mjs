@@ -1,6 +1,6 @@
 import { pollBrowser } from "./browser-poll.mjs";
 import { verifyKetcherNativeMenu } from "./verify-ketcher-native-menu.mjs";
-import { clearForClipboardPaste, pasteClipboardAt } from "./ketcher-clipboard-probe.mjs";
+import { clearForClipboardPaste, pasteClipboardAt, clipboardProbeState } from "./ketcher-clipboard-probe.mjs";
 // Real editor/browser verification. Business requests are fixtures; no jobs or records are submitted.
 import assert from "node:assert/strict";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
@@ -434,6 +434,16 @@ try {
       await page.evaluate(() => {
         window.__probeCopyComplete = false;
         const win = document.querySelector('[data-structure-editor] iframe')?.contentWindow || window;
+        window.__probeClipboardKeys = [];
+        window.__probeClipboardOnKey = event => {
+          const keys = window.__probeClipboardKeys;
+          keys.push({ key: event.key, ctrl: event.ctrlKey, target: event.target.nodeName,
+            active: win.document.activeElement?.outerHTML?.slice(0, 180), prevented: event.defaultPrevented,
+            atoms: window.__probeEditor().editor.struct().atoms.size,
+            selection: window.__probeEditor().editor.selection()?.atoms });
+          if (keys.length > 12) keys.shift();
+        };
+        win.document.addEventListener('keydown', window.__probeClipboardOnKey);
         win.addEventListener('copyOrCutComplete', () => { window.__probeCopyComplete = true; }, { once: true });
       });
       await page.keyboard.press('Control+c');
@@ -454,6 +464,11 @@ try {
       await page.waitForFunction(() => window.__probeEditor().editor.struct().atoms.size === 3);
       await pollBrowser(page, async () => (await window.__probeEditor().getSmiles()) === 'CCN');
       result.clipboardShortcuts = true;
+      await page.evaluate(() => {
+        const win = document.querySelector('[data-structure-editor] iframe')?.contentWindow || window;
+        win.document.removeEventListener('keydown', window.__probeClipboardOnKey);
+        delete window.__probeClipboardOnKey;
+      });
     }
     result.viewports.push({ ...viewport, editor: box, atomVisible: true, atomHit: true, contextMenu: true });
     await page.screenshot({ path: resolve(output, `${viewport.width}.png`) });
@@ -487,6 +502,7 @@ try {
   result.passed = true;
 } catch (error) {
   result.passed = false;
+  result.clipboardState = await clipboardProbeState(page).catch(() => null);
   result.failure = error.stack;
   await page.screenshot({ path: resolve(output, "failure.png") });
   process.exitCode = 1;
