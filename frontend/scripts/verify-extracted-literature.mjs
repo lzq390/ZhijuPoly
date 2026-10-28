@@ -48,7 +48,7 @@ const detail = {
 
 async function measureControls(scope) {
   return scope.evaluate((element) => {
-    const controls = [...element.querySelectorAll("input,select,button")];
+    const controls = [...element.querySelectorAll("input,select,button")].filter((control) => !control.closest('[inert], [hidden], [aria-hidden="true"]'));
     const rects = controls.map((control) => { const r = control.getBoundingClientRect(); return { x:r.x,y:r.y,right:r.right,bottom:r.bottom,w:r.width,h:r.height }; });
     let overlaps = 0;
     for (let i=0; i<rects.length; i++) for (let j=i+1; j<rects.length; j++) {
@@ -128,30 +128,62 @@ try {
       const yearFrom = conditionsDialog.getByRole("combobox", { name: "文献起始年份", exact: true });
       const yearTo = conditionsDialog.getByRole("combobox", { name: "文献结束年份", exact: true });
       const currentYear = new Date().getUTCFullYear();
-      const yearOptions = await yearFrom.locator("option").evaluateAll((options) => options.map((option) => option.value));
-      assert.equal(yearOptions[0], "", "year dropdown lost its unlimited option");
-      assert.equal(yearOptions[1], String(currentYear), "year dropdown does not start at the current year");
-      assert.equal(yearOptions.at(-1), "1900", "year dropdown has an incorrect historical lower bound");
+      const menu = (label) => conditionsDialog.getByRole("listbox", { name: label, exact: true });
+      const choose = async (label, optionLabel) => {
+        await conditionsDialog.getByRole("combobox", { name: label, exact: true }).click();
+        const list = menu(label);
+        await list.getByRole("option", { name: optionLabel, exact: true }).click();
+        await list.waitFor({ state: "hidden" });
+      };
+      assert.equal(await conditionsDialog.locator("xpath=..").evaluate((element) => element.classList.contains("np-workbench-theme")), true, "portal lost the platform theme");
+      await yearFrom.click();
+      const yearList = menu("文献起始年份");
+      await yearList.waitFor();
+      await yearList.getByRole("option", { name:"不限", exact:true }).waitFor();
+      const yearOptions = (await yearList.locator('[role="option"]').allTextContents()).map((label) => label.trim());
+      assert.equal(yearOptions[0], "不限", "year dropdown lost its unlimited option");
+      assert.equal(yearOptions[1], `${currentYear}年`, "year dropdown does not start at the current year");
+      assert.equal(yearOptions.at(-1), "1900年", "year dropdown has an incorrect historical lower bound");
       assert.equal(yearOptions.length, currentYear - 1900 + 2);
-      await yearFrom.selectOption("2025");
-      await page.waitForFunction(() => document.querySelector('select[aria-label="文献结束年份"] option[value="2024"]')?.disabled === true);
-      assert.equal(await yearTo.locator('option[value="2024"]').evaluate((option) => option.disabled), true, "end dropdown allows a year before its start");
-      await yearTo.selectOption("2025");
-      await page.waitForFunction(() => document.querySelector('select[aria-label="文献起始年份"] option[value="2026"]')?.disabled === true);
-      assert.equal(await yearFrom.locator('option[value="2026"]').evaluate((option) => option.disabled), true, "start dropdown allows a year after its end");
+      const yearMenuGeometry = await yearList.evaluate((element) => {
+        const r = element.getBoundingClientRect(), body = element.closest(".ks-conditions-body").getBoundingClientRect();
+        return { height:r.height, top:r.top, bottom:r.bottom, bodyTop:body.top, bodyBottom:body.bottom, scrollable:element.scrollHeight>element.clientHeight, themeBlue:getComputedStyle(element).getPropertyValue("--np-theme-blue").trim() };
+      });
+      assert.ok(yearMenuGeometry.height > 50 && yearMenuGeometry.height <= 210, "year menu is too tall or unusably short");
+      assert.equal(yearMenuGeometry.scrollable, true, "full year range does not scroll");
+      assert.equal(yearMenuGeometry.themeBlue, "#2563eb", "dropdown lost shared theme tokens");
+      assert.ok(yearMenuGeometry.top >= yearMenuGeometry.bodyTop - 1 && yearMenuGeometry.bottom <= yearMenuGeometry.bodyBottom + 1, "year menu is clipped by the modal body");
+      await page.screenshot({ path: resolve(output, `literature-${width}x${height}-year-menu.png`) });
+      await page.keyboard.press("Escape");
+      await yearList.waitFor({ state: "hidden" });
+      assert.equal(await conditionsDialog.isVisible(), true, "first Escape closed the parent modal");
+      await choose("文献起始年份", "2025年");
+      await yearTo.click();
+      assert.equal(await menu("文献结束年份").getByRole("option", { name:"2024年", exact:true }).isDisabled(), true, "end dropdown allows a year before its start");
+      await menu("文献结束年份").getByRole("option", { name:"2025年", exact:true }).click();
+      await menu("文献结束年份").waitFor({ state:"hidden" });
+      await yearFrom.click();
+      assert.equal(await yearList.getByRole("option", { name:"2026年", exact:true }).isDisabled(), true, "start dropdown allows a year after its end");
+      await page.keyboard.press("Escape");
+      await yearList.waitFor({ state:"hidden" });
       assert.equal(await conditionsDialog.getByRole("button", { name: "应用条件", exact: true }).isEnabled(), true, "equal start/end years are rejected");
-      await yearFrom.selectOption("2020");
-      await yearTo.selectOption("2024");
+      await choose("文献起始年份", "2020年");
+      await choose("文献结束年份", "2024年");
       await yearFrom.focus();
       await page.keyboard.press("ArrowDown");
-      await page.waitForFunction(() => document.querySelector('select[aria-label="文献起始年份"]')?.value === "2019");
-      assert.equal(await yearFrom.inputValue(), "2019", "native year dropdown keyboard scrolling failed");
-      await yearFrom.selectOption("2020");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      await yearList.waitFor({ state:"hidden" });
+      assert.equal((await yearFrom.innerText()).trim(), "2019年", "year dropdown keyboard navigation failed");
+      await choose("文献起始年份", "2020年");
       assert.equal(await conditionsDialog.getByRole("button", { name: /重新检查来源|刷新知识库状态/ }).count(), 0, "removed source refresh action is still visible");
       await conditionsDialog.getByRole("checkbox", { name: "有性质信息", exact: true }).check();
       const pageSize = conditionsDialog.getByRole("combobox", { name: "每库每页数量", exact: true });
-      assert.deepEqual(await pageSize.locator("option").evaluateAll((options) => options.map((option) => option.value)), ["20", "50", "100"]);
-      await pageSize.selectOption("50");
+      await pageSize.click();
+      await menu("每库每页数量").getByRole("option", { name:"20 条", exact:true }).waitFor();
+      assert.deepEqual((await menu("每库每页数量").getByRole("option").allTextContents()).map((label) => label.trim()), ["20 条", "50 条", "100 条"]);
+      await menu("每库每页数量").getByRole("option", { name:"50 条", exact:true }).click();
+      await menu("每库每页数量").waitFor({ state:"hidden" });
       const conditions = await measureControls(conditionsDialog);
       assert.equal(conditions.overlaps, 0, "condition controls overlap");
       assert.equal(conditions.horizontalOverflow, false, "conditions overflow viewport");
@@ -235,9 +267,9 @@ try {
       await page.getByRole("button", { name: "条件设置", exact: true }).click();
       await conditionsDialog.waitFor();
       await conditionsDialog.getByRole("checkbox", { name: "现有专利知识库", exact: true }).check();
-      await conditionsDialog.getByLabel("文献起始年份", { exact: true }).selectOption("2022");
+      await choose("文献起始年份", "2022年");
       await conditionsDialog.getByRole("checkbox", { name: "有工艺信息", exact: true }).check();
-      await pageSize.selectOption("100");
+      await choose("每库每页数量", "100 条");
       await conditionsDialog.getByRole("button", { name: "取消", exact: true }).click();
       await conditionsDialog.waitFor({ state: "hidden" });
       await literatureCard.waitFor();
@@ -247,15 +279,15 @@ try {
       await conditionsDialog.waitFor();
       assert.equal(await conditionsDialog.getByRole("checkbox", { name: "现有专利知识库", exact: true }).isChecked(), false, "cancelled source selection was applied");
       assert.equal(await conditionsDialog.getByRole("checkbox", { name: "提取文献库", exact: true }).isChecked(), true);
-      assert.equal(await conditionsDialog.getByLabel("文献起始年份", { exact: true }).inputValue(), "2020", "cancelled year filter was applied");
-      assert.equal(await conditionsDialog.getByLabel("文献结束年份", { exact: true }).inputValue(), "2024");
+      assert.equal((await yearFrom.innerText()).trim(), "2020年", "cancelled year filter was applied");
+      assert.equal((await yearTo.innerText()).trim(), "2024年");
       assert.equal(await conditionsDialog.getByRole("checkbox", { name: "有工艺信息", exact: true }).isChecked(), false, "cancelled capability filter was applied");
-      assert.equal(await pageSize.inputValue(), "50", "cancelled page size was applied");
+      assert.equal((await pageSize.innerText()).trim(), "50 条", "cancelled page size was applied");
 
       // Applying two sources clears old results, then one explicit submission
       // queries each source. Switching their result tabs reuses those results.
       await conditionsDialog.getByRole("checkbox", { name: "现有专利知识库", exact: true }).check();
-      await pageSize.selectOption("100");
+      await choose("每库每页数量", "100 条");
       await conditionsDialog.getByRole("button", { name: "应用条件", exact: true }).click();
       await conditionsDialog.waitFor({ state: "hidden" });
       await page.getByRole("heading", { name: "准备检索已提取文献", exact: true }).waitFor();
@@ -294,7 +326,7 @@ try {
       assert.equal(searchCalls().length, beforeConditionChanges + 2, "switching result sources issued another search");
       await page.screenshot({ path: resolve(output, `literature-${width}x${height}-dual-source.png`) });
       assert.equal(errors.length,0,errors.join("\n"));
-      results.push({ viewport:[width,height], initialForm, conditions, keyboard, years:{ min:1900, max:currentYear, nativeDropdown:true, invertedOptionsDisabled:true, equalYearsAllowed:true, keyboardScrolling:true }, sourceRefreshActionRemoved:true, form, geometry, evidence, searchRequests:searchCalls().map((call) => ({ source:call.body.data_source ?? "legacy", pageSize:call.body.page_size, filters:call.body.filters })), observations:calls.filter(c=>c.path.endsWith("/observations")).map(c=>c.body.source), apiCalls:calls.length });
+      results.push({ viewport:[width,height], initialForm, conditions, keyboard, years:{ min:1900, max:currentYear, sharedThemeDropdown:true, menu:yearMenuGeometry, invertedOptionsDisabled:true, equalYearsAllowed:true, keyboardScrolling:true }, sourceRefreshActionRemoved:true, form, geometry, evidence, searchRequests:searchCalls().map((call) => ({ source:call.body.data_source ?? "legacy", pageSize:call.body.page_size, filters:call.body.filters })), observations:calls.filter(c=>c.path.endsWith("/observations")).map(c=>c.body.source), apiCalls:calls.length });
     } catch(error) {
       failures.push({viewport:[width,height],message:error.message,errors});
       await page.screenshot({path:resolve(output,`failure-${width}.png`)});

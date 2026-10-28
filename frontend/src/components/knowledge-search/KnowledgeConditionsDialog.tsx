@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { BookOpenText, Database, RotateCcw, SlidersHorizontal, X } from "lucide-react";
 import { ModalFocusSuspendedContext, useModalFocus } from "../../hooks/useModalFocus";
 import type { KnowledgeDataSource, KnowledgeSourcesResponse } from "../../types";
+import { WorkbenchSelect, type WorkbenchSelectOption } from "../structure-workbench/WorkbenchSelect";
+import "../../styles/workbench-theme.css";
 import "./knowledge-conditions.css";
 
 export type FilterDraft = {
@@ -126,15 +128,15 @@ function KnowledgeConditionsDialogContent({ settings, onApply, onClose, sources,
     });
   }
 
-  function yearOptions(key: "year_from" | "year_to") {
+  function yearOptions(key: "year_from" | "year_to"): WorkbenchSelectOption<string>[] {
     const current = draft.filters[key].trim();
     const opposite = draft.filters[key === "year_from" ? "year_to" : "year_from"].trim();
     const limit = selectableYear(opposite) ? Number(opposite) : null;
-    return <>
-      <option value="">不限</option>
-      {current && !selectableYear(current) ? <option value={current} disabled>{current}（超出可选范围）</option> : null}
-      {YEAR_OPTIONS.map((year) => <option key={year} value={year} disabled={limit !== null && (key === "year_from" ? year > limit : year < limit)}>{year}年</option>)}
-    </>;
+    return [
+      { value: "", label: "不限" },
+      ...(current && !selectableYear(current) ? [{ value: current, label: `${current}（超出可选范围）`, disabled: true }] : []),
+      ...YEAR_OPTIONS.map((year) => ({ value: String(year), label: `${year}年`, disabled: limit !== null && (key === "year_from" ? year > limit : year < limit) }))
+    ];
   }
 
   function apply(event: FormEvent<HTMLFormElement>) {
@@ -145,17 +147,17 @@ function KnowledgeConditionsDialogContent({ settings, onApply, onClose, sources,
 
   if (typeof document === "undefined") return null;
   return createPortal(
-    <div ref={layerRef} className="ks-conditions-layer" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div ref={layerRef} className="ks-conditions-layer np-workbench-theme" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <form ref={panelRef} className="ks-conditions-dialog" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`} noValidate onSubmit={apply} tabIndex={-1}>
         <header className="ks-conditions-header">
-          <div className="ks-conditions-heading"><span className="ks-conditions-heading-icon"><SlidersHorizontal aria-hidden="true" /></span><div><h2 id={`${id}-title`}>条件设置</h2><p id={`${id}-description`}>选择知识库，设置检索范围和结果数量。</p></div></div>
+          <div className="ks-conditions-heading"><span className="ks-conditions-heading-icon"><SlidersHorizontal aria-hidden="true" /></span><div><h2 id={`${id}-title`}>条件设置</h2><p id={`${id}-description`}>设置来源、年份与结果数量。</p></div></div>
           <button ref={closeRef} type="button" className="ks-conditions-close" aria-label="关闭条件设置" onClick={onClose}><X aria-hidden="true" /></button>
         </header>
 
         <div className="ks-conditions-body">
           <fieldset className="ks-conditions-section">
             <legend>检索来源</legend>
-            <p className="ks-conditions-note">可同时选择两个知识库，结果按来源分别展示。</p>
+            <p className="ks-conditions-note">可多选，结果按知识库分别展示。</p>
             <div className="ks-conditions-sources">
               {SOURCE_OPTIONS.map(({ value, label, Icon }) => {
                 const entry = sources?.sources.find((item) => item.data_source === value);
@@ -172,14 +174,14 @@ function KnowledgeConditionsDialogContent({ settings, onApply, onClose, sources,
 
           <section className="ks-conditions-section" aria-labelledby={`${id}-literature-title`}>
             <div className="ks-conditions-section-heading"><h3 id={`${id}-literature-title`}>文献筛选</h3><button type="button" className="ks-conditions-link" onClick={() => setDraft((value) => ({ ...value, filters: { ...EMPTY_FILTERS } }))}><RotateCcw aria-hidden="true" />清空文献筛选</button></div>
-            <p className="ks-conditions-note" id={`${id}-literature-note`}>以下条件仅对提取文献库生效；未勾选的条件不作限制。</p>
+            <p className="ks-conditions-note" id={`${id}-literature-note`}>仅对提取文献库生效，未勾选项不限。</p>
             <fieldset className="ks-conditions-literature" disabled={!literatureSelected} aria-label="文献筛选条件" aria-describedby={`${id}-literature-note`}>
               <div className="ks-conditions-years">
-                <label className="ks-conditions-field"><span>起始年份</span><select aria-label="文献起始年份" aria-describedby={`${id}-year-note`} aria-invalid={Boolean(literatureSelected && yearError(draft.filters))} value={draft.filters.year_from.trim()} disabled={!literatureSelected} onChange={(event) => changeYear("year_from", event.target.value)}>{yearOptions("year_from")}</select></label>
+                <div className="ks-conditions-field"><label htmlFor={`${id}-year-from`}>起始年份</label><WorkbenchSelect id={`${id}-year-from`} ariaLabel="文献起始年份" ariaDescribedBy={`${id}-year-note`} ariaInvalid={Boolean(literatureSelected && yearError(draft.filters))} value={draft.filters.year_from.trim()} options={yearOptions("year_from")} disabled={!literatureSelected} onChange={(value) => changeYear("year_from", value)} constrainToScrollParent /></div>
                 <span className="ks-conditions-year-separator" aria-hidden="true">—</span>
-                <label className="ks-conditions-field"><span>结束年份</span><select aria-label="文献结束年份" aria-describedby={`${id}-year-note`} aria-invalid={Boolean(literatureSelected && yearError(draft.filters))} value={draft.filters.year_to.trim()} disabled={!literatureSelected} onChange={(event) => changeYear("year_to", event.target.value)}>{yearOptions("year_to")}</select></label>
+                <div className="ks-conditions-field"><label htmlFor={`${id}-year-to`}>结束年份</label><WorkbenchSelect id={`${id}-year-to`} ariaLabel="文献结束年份" ariaDescribedBy={`${id}-year-note`} ariaInvalid={Boolean(literatureSelected && yearError(draft.filters))} value={draft.filters.year_to.trim()} options={yearOptions("year_to")} disabled={!literatureSelected} onChange={(value) => changeYear("year_to", value)} constrainToScrollParent /></div>
               </div>
-              <p className="ks-conditions-note ks-conditions-year-note" id={`${id}-year-note`}>可选年份：{KNOWLEDGE_YEAR_MIN}–{KNOWLEDGE_YEAR_MAX}年，起始年份不得晚于结束年份。起止均选“不限”时包含未标年份的文献。</p>
+              <p className="ks-conditions-note ks-conditions-year-note" id={`${id}-year-note`}>{KNOWLEDGE_YEAR_MIN}–{KNOWLEDGE_YEAR_MAX} 年，起始不晚于结束。均不限时包含未标年份文献。</p>
               <div className="ks-conditions-checks">
                 {([['has_properties', '有性质信息'], ['has_processes', '有工艺信息'], ['has_original', '有可用原文']] as const).map(([key, label]) => <label key={key}><input type="checkbox" checked={draft.filters[key]} disabled={!literatureSelected} onChange={(event) => setDraft((value) => ({ ...value, filters: { ...value.filters, [key]: event.target.checked } }))} />{label}</label>)}
               </div>
@@ -187,7 +189,7 @@ function KnowledgeConditionsDialogContent({ settings, onApply, onClose, sources,
           </section>
 
           <section className="ks-conditions-section ks-conditions-page-size">
-            <label className="ks-conditions-field"><span>每库每页数量</span><select aria-label="每库每页数量" value={draft.pageSize} onChange={(event) => setDraft((value) => ({ ...value, pageSize: Number(event.target.value) as KnowledgeConditionSettings['pageSize'] }))}>{([20, 50, 100] as const).map((count) => <option value={count} key={count}>{count} 条</option>)}</select></label>
+            <div className="ks-conditions-field"><label htmlFor={`${id}-page-size`}>每库每页数量</label><WorkbenchSelect id={`${id}-page-size`} ariaLabel="每库每页数量" value={String(draft.pageSize)} options={([20, 50, 100] as const).map((count) => ({ value: String(count), label: `${count} 条` }))} onChange={(count) => setDraft((value) => ({ ...value, pageSize: Number(count) as KnowledgeConditionSettings['pageSize'] }))} constrainToScrollParent /></div>
             <p className="ks-conditions-note">两个知识库各自分页。</p>
           </section>
           {validationError ? <p className="ks-conditions-error" role="alert" id={`${id}-error`}>{validationError}</p> : null}

@@ -458,7 +458,8 @@ describe("KnowledgeSearch", () => {
     const beforeConditions = apiMocks.searchKnowledge.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "条件设置" }));
     const conditions = await screen.findByRole("dialog", { name: "条件设置" });
-    fireEvent.change(within(conditions).getByRole("combobox", { name: "每库每页数量" }), { target: { value: "50" } });
+    fireEvent.click(within(conditions).getByRole("combobox", { name: "每库每页数量" }));
+    fireEvent.click(within(conditions).getByRole("option", { name: "50 条" }));
     fireEvent.click(within(conditions).getByRole("button", { name: "应用条件" }));
     expect(apiMocks.searchKnowledge).toHaveBeenCalledTimes(beforeConditions);
     expect(screen.queryByRole("dialog", { name: "知识记录详情" })).toBeNull();

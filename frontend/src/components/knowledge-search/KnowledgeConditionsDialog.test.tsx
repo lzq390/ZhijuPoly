@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { useState, type ComponentProps } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeSourcesResponse } from "../../types";
 import { ModalFocusSuspendedContext } from "../../hooks/useModalFocus";
@@ -40,8 +40,23 @@ function renderDialog(overrides: Partial<ComponentProps<typeof KnowledgeConditio
 }
 
 const checkbox = (name: string) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
-const year = (name: string) => screen.getByRole("combobox", { name }) as HTMLSelectElement;
-const yearOption = (field: HTMLSelectElement, value: string) => Array.from(field.options).find((option) => option.value === value)!;
+const year = (name: string) => screen.getByRole("combobox", { name }) as HTMLButtonElement;
+function openOptions(field: HTMLButtonElement) {
+  if (field.getAttribute("aria-expanded") !== "true") {
+    fireEvent.pointerDown(field);
+    fireEvent.click(field);
+  }
+  return screen.getByRole("listbox", { name: field.getAttribute("aria-label")! });
+}
+function option(field: HTMLButtonElement, label: string) {
+  return within(openOptions(field)).getByRole("option", { name: label }) as HTMLButtonElement;
+}
+function selectYear(name: string, value: string) {
+  fireEvent.click(option(year(name), value ? `${value}年` : "不限"));
+}
+function selectPageSize(value: number) {
+  fireEvent.click(option(year("每库每页数量"), `${value} 条`));
+}
 const applyButton = () => screen.getByRole("button", { name: "应用条件" }) as HTMLButtonElement;
 
 afterEach(() => cleanup());
@@ -55,7 +70,7 @@ describe("knowledge condition settings dialog", () => {
     expect(screen.getByText("可用 · 12 条")).toBeTruthy();
     expect(screen.getByText("可用 · 34 条")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /重新检查来源|刷新知识库状态/ })).toBeNull();
-    expect((screen.getByLabelText("每库每页数量") as HTMLSelectElement).value).toBe("20");
+    expect(year("每库每页数量").textContent).toBe("20 条");
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "关闭条件设置" })));
   });
 
@@ -65,8 +80,8 @@ describe("knowledge condition settings dialog", () => {
       filters: { ...defaults().filters, year_from: "2020" },
     };
     const view = renderDialog({ settings });
-    fireEvent.change(year("文献起始年份"), { target: { value: "2024" } });
-    fireEvent.change(screen.getByLabelText("每库每页数量"), { target: { value: "100" } });
+    selectYear("文献起始年份", "2024");
+    selectPageSize(100);
     fireEvent.click(checkbox("现有专利知识库"));
     fireEvent.click(checkbox("有性质信息"));
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
@@ -78,19 +93,19 @@ describe("knowledge condition settings dialog", () => {
     });
     view.unmount();
     renderDialog({ settings });
-    expect(year("文献起始年份").value).toBe("2020");
+    expect(year("文献起始年份").textContent).toBe("2020年");
     expect(checkbox("现有专利知识库").checked).toBe(true);
     expect(checkbox("有性质信息").checked).toBe(false);
-    expect((screen.getByLabelText("每库每页数量") as HTMLSelectElement).value).toBe("20");
+    expect(year("每库每页数量").textContent).toBe("20 条");
   });
 
   it.each([50, 100] as const)("applies both sources, all literature filters and page size %i", (pageSize) => {
     const { props } = renderDialog();
     fireEvent.click(checkbox("提取文献库"));
-    fireEvent.change(year("文献起始年份"), { target: { value: String(KNOWLEDGE_YEAR_MIN) } });
-    fireEvent.change(year("文献结束年份"), { target: { value: String(KNOWLEDGE_YEAR_MAX) } });
+    selectYear("文献起始年份", String(KNOWLEDGE_YEAR_MIN));
+    selectYear("文献结束年份", String(KNOWLEDGE_YEAR_MAX));
     for (const name of ["有性质信息", "有工艺信息", "有可用原文"]) fireEvent.click(checkbox(name));
-    fireEvent.change(screen.getByLabelText("每库每页数量"), { target: { value: String(pageSize) } });
+    selectPageSize(pageSize);
     expect(applyButton().disabled).toBe(false);
     fireEvent.click(applyButton());
     expect(props.onApply).toHaveBeenCalledExactlyOnceWith({
@@ -112,46 +127,76 @@ describe("knowledge condition settings dialog", () => {
     expect(applyButton().disabled).toBe(false);
   });
 
-  it("offers native descending year dropdowns from 1900 through the current UTC year, with no-limit options", () => {
+  it("offers themed year menus from 1900 through the current UTC year, with no-limit options", () => {
     renderDialog({ settings: { ...defaults(), sources: ["extracted_literature"] } });
     expect(KNOWLEDGE_YEAR_MIN).toBe(1900);
     expect(KNOWLEDGE_YEAR_MAX).toBe(new Date().getUTCFullYear());
+    expect(screen.getByRole("dialog", { name: "条件设置" }).parentElement?.classList.contains("np-workbench-theme")).toBe(true);
     for (const name of ["文献起始年份", "文献结束年份"]) {
-      const select = year(name);
-      expect(select.tagName).toBe("SELECT");
-      expect(select.value).toBe("");
-      expect(Array.from(select.options, (option) => option.value)).toEqual([
-        "", ...Array.from({ length: KNOWLEDGE_YEAR_MAX - KNOWLEDGE_YEAR_MIN + 1 }, (_, index) => String(KNOWLEDGE_YEAR_MAX - index)),
+      const field = year(name);
+      expect(field.tagName).toBe("BUTTON");
+      expect(field.textContent).toBe("不限");
+      const menu = openOptions(field);
+      expect(within(menu).getAllByRole("option").map((choice) => choice.textContent)).toEqual([
+        "不限", ...Array.from({ length: KNOWLEDGE_YEAR_MAX - KNOWLEDGE_YEAR_MIN + 1 }, (_, index) => `${KNOWLEDGE_YEAR_MAX - index}年`),
       ]);
-      expect(select.options[0].textContent).toBe("不限");
-      expect(yearOption(select, "2020").textContent).toBe("2020年");
+      expect(menu.closest(".np-workbench-theme")).toBeTruthy();
     }
-    expect(screen.getByText(/起止均选“不限”时包含未标年份的文献/)).toBeTruthy();
+    expect(screen.getByText(/均不限时包含未标年份文献/)).toBeTruthy();
   });
 
   it("disables conflicting options on either side, allows the same year, and restores options when cleared", () => {
     const { props } = renderDialog({ settings: { ...defaults(), sources: ["extracted_literature"] } });
     const from = year("文献起始年份"), to = year("文献结束年份");
-    fireEvent.change(from, { target: { value: "2020" } });
-    expect(yearOption(to, "2019").disabled).toBe(true);
-    expect(yearOption(to, "2020").disabled).toBe(false);
-    // A synthetic change must not bypass the native disabled option guard.
-    fireEvent.change(to, { target: { value: "2019" } });
-    expect(to.value).toBe("");
-    fireEvent.change(to, { target: { value: "2020" } });
-    expect(yearOption(from, "2021").disabled).toBe(true);
-    expect(yearOption(from, "2020").disabled).toBe(false);
-    fireEvent.change(from, { target: { value: "2021" } });
-    expect(from.value).toBe("2020");
+    selectYear("文献起始年份", "2020");
+    expect(option(to, "2019年").disabled).toBe(true);
+    expect(option(to, "2020年").disabled).toBe(false);
+    fireEvent.click(option(to, "2019年"));
+    expect(to.textContent).toBe("不限");
+    selectYear("文献结束年份", "2020");
+    expect(option(from, "2021年").disabled).toBe(true);
+    expect(option(from, "2020年").disabled).toBe(false);
+    fireEvent.click(option(from, "2021年"));
+    expect(from.textContent).toBe("2020年");
     expect(applyButton().disabled).toBe(false);
     fireEvent.click(applyButton());
     expect(props.onApply).toHaveBeenCalledExactlyOnceWith({
       ...defaults(), sources: ["extracted_literature"], filters: { ...defaults().filters, year_from: "2020", year_to: "2020" },
     });
-    fireEvent.change(from, { target: { value: "" } });
-    expect(yearOption(to, "2019").disabled).toBe(false);
-    fireEvent.change(to, { target: { value: "" } });
-    expect(yearOption(from, "2021").disabled).toBe(false);
+    selectYear("文献起始年份", "");
+    expect(option(to, "2019年").disabled).toBe(false);
+    selectYear("文献结束年份", "");
+    expect(option(from, "2021年").disabled).toBe(false);
+  });
+
+  it("skips disabled year options when selecting with the keyboard", () => {
+    const { props } = renderDialog({ settings: {
+      ...defaults(), sources: ["extracted_literature"],
+      filters: { ...defaults().filters, year_from: "2020", year_to: "2020" },
+    } });
+    const to = year("文献结束年份");
+    fireEvent.keyDown(to, { key: "ArrowDown" });
+    fireEvent.keyDown(to, { key: "ArrowDown" });
+    fireEvent.keyDown(to, { key: "Enter" });
+    expect(to.textContent).toBe("不限");
+    expect(to.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(applyButton());
+    expect(props.onApply).toHaveBeenCalledExactlyOnceWith({
+      ...defaults(), sources: ["extracted_literature"], filters: { ...defaults().filters, year_from: "2020" },
+    });
+  });
+
+  it("closes an open year menu on Escape before dismissing the conditions dialog", () => {
+    const { props } = renderDialog({ settings: { ...defaults(), sources: ["extracted_literature"] } });
+    const from = year("文献起始年份");
+    openOptions(from);
+    fireEvent.keyDown(from, { key: "Escape" });
+    expect(from.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("listbox", { name: "文献起始年份" })).toBeNull();
+    expect(props.onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(from, { key: "Escape" });
+    expect(props.onClose).toHaveBeenCalledExactlyOnceWith();
+    expect(props.onApply).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -163,8 +208,11 @@ describe("knowledge condition settings dialog", () => {
       ...defaults(), sources: ["extracted_literature"],
       filters: { ...defaults().filters, year_from: yearFrom, year_to: yearTo },
     } });
-    expect(year("文献起始年份").value).toBe(yearFrom);
-    expect(year("文献结束年份").value).toBe(yearTo);
+    for (const [name, value] of [["文献起始年份", yearFrom], ["文献结束年份", yearTo]]) {
+      const label = !value ? "不限" : /^\d{4}$/.test(value) && Number(value) >= KNOWLEDGE_YEAR_MIN && Number(value) <= KNOWLEDGE_YEAR_MAX
+        ? `${value}年` : `${value}（超出可选范围）`;
+      expect(year(name).textContent).toBe(label);
+    }
     expect(applyButton().disabled).toBe(true);
     expect(screen.getByRole("alert").textContent).toBeTruthy();
     fireEvent.submit(screen.getByRole("dialog", { name: "条件设置" }));
@@ -185,8 +233,8 @@ describe("knowledge condition settings dialog", () => {
       checkbox("有性质信息"), checkbox("有工艺信息"), checkbox("有可用原文"),
     ]) expect(field.disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "清空文献筛选" }));
-    expect(year("文献起始年份").value).toBe("");
-    expect(year("文献结束年份").value).toBe("");
+    expect(year("文献起始年份").textContent).toBe("不限");
+    expect(year("文献结束年份").textContent).toBe("不限");
     for (const name of ["有性质信息", "有工艺信息", "有可用原文"]) expect(checkbox(name).checked).toBe(false);
     expect(checkbox("现有专利知识库").checked).toBe(true);
     expect(checkbox("提取文献库").checked).toBe(false);

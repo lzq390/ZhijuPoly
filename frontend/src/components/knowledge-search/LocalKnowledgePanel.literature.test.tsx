@@ -68,6 +68,22 @@ async function openConditions() {
   return screen.findByRole("dialog", { name: "条件设置" });
 }
 
+function conditionField(dialog: HTMLElement, name: string) {
+  return within(dialog).getByRole("combobox", { name }) as HTMLButtonElement;
+}
+function conditionOptions(dialog: HTMLElement, name: string) {
+  const trigger = conditionField(dialog, name);
+  if (trigger.getAttribute("aria-expanded") !== "true") {
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+  }
+  return screen.getByRole("listbox", { name });
+}
+function setCondition(dialog: HTMLElement, name: string, value: string) {
+  const label = name === "每库每页数量" ? `${value} 条` : value ? `${value}年` : "不限";
+  fireEvent.click(within(conditionOptions(dialog, name)).getByRole("option", { name: label }));
+}
+
 function setSources(dialog: HTMLElement, sources: Array<"legacy" | "extracted_literature">) {
   for (const [source, label] of [["legacy", "现有专利知识库"], ["extracted_literature", "提取文献库"]] as const) {
     const checkbox = within(dialog).getByRole("checkbox", { name: label }) as HTMLInputElement;
@@ -115,8 +131,8 @@ describe("extracted literature in local knowledge", () => {
     expect(mocks.search.mock.calls[0][0].data_source).toBeUndefined();
     const dialog = await openConditions();
     setSources(dialog, ["extracted_literature"]);
-    fireEvent.change(within(dialog).getByLabelText("文献起始年份"), { target: { value: "2020" } });
-    fireEvent.change(within(dialog).getByLabelText("每库每页数量"), { target: { value: "50" } });
+    setCondition(dialog, "文献起始年份", "2020");
+    setCondition(dialog, "每库每页数量", "50");
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("legacy");
     expect(screen.getByRole("button", { name: /^原有聚合物知识/ })).toBeTruthy();
@@ -124,11 +140,11 @@ describe("extracted literature in local knowledge", () => {
     const reopened = await openConditions();
     expect((within(reopened).getByRole("checkbox", { name: "现有专利知识库" }) as HTMLInputElement).checked).toBe(true);
     expect((within(reopened).getByRole("checkbox", { name: "提取文献库" }) as HTMLInputElement).checked).toBe(false);
-    expect((within(reopened).getByLabelText("文献起始年份") as HTMLSelectElement).value).toBe("");
-    expect((within(reopened).getByLabelText("每库每页数量") as HTMLSelectElement).value).toBe("20");
+    expect(conditionField(reopened, "文献起始年份").textContent).toBe("不限");
+    expect(conditionField(reopened, "每库每页数量").textContent).toBe("20 条");
     setSources(reopened, ["extracted_literature"]);
-    fireEvent.change(within(reopened).getByLabelText("文献起始年份"), { target: { value: "2020" } });
-    fireEvent.change(within(reopened).getByLabelText("每库每页数量"), { target: { value: "50" } });
+    setCondition(reopened, "文献起始年份", "2020");
+    setCondition(reopened, "每库每页数量", "50");
     fireEvent.click(within(reopened).getByRole("button", { name: "应用条件" }));
     expect(mocks.search).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: /^原有聚合物知识/ })).toBeNull();
@@ -145,14 +161,14 @@ describe("extracted literature in local knowledge", () => {
     const reset = await openConditions();
     expect((within(reset).getByRole("checkbox", { name: "现有专利知识库" }) as HTMLInputElement).checked).toBe(true);
     expect((within(reset).getByRole("checkbox", { name: "提取文献库" }) as HTMLInputElement).checked).toBe(false);
-    expect((within(reset).getByLabelText("文献起始年份") as HTMLSelectElement).value).toBe("");
-    expect((within(reset).getByLabelText("每库每页数量") as HTMLSelectElement).value).toBe("20");
+    expect(conditionField(reset, "文献起始年份").textContent).toBe("不限");
+    expect(conditionField(reset, "每库每页数量").textContent).toBe("20 条");
   });
 
   it("pins pagination to submitted filters and generation while new drafts remain unsubmitted", async () => {
     render(<LocalKnowledgePanel modeNavigation={null} />);
     await applyLiteratureConditions((dialog) => {
-      fireEvent.change(within(dialog).getByLabelText("文献起始年份"), { target: { value: "2020" } });
+      setCondition(dialog, "文献起始年份", "2020");
       fireEvent.click(within(dialog).getByLabelText("有性质信息"));
       fireEvent.click(within(dialog).getByLabelText("有可用原文"));
     });
@@ -161,7 +177,7 @@ describe("extracted literature in local knowledge", () => {
     await screen.findByRole("button", { name: "下一页" });
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "unsubmitted draft" } });
     const dialog = await openConditions();
-    fireEvent.change(within(dialog).getByLabelText("文献起始年份"), { target: { value: "2025" } });
+    setCondition(dialog, "文献起始年份", "2025");
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     await waitFor(() => expect(mocks.search).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -171,7 +187,7 @@ describe("extracted literature in local knowledge", () => {
     await screen.findByRole("button", { name: "下一页" });
     const count = mocks.search.mock.calls.length;
     const pageSettings = await openConditions();
-    fireEvent.change(within(pageSettings).getByLabelText("每库每页数量"), { target: { value: "50" } });
+    setCondition(pageSettings, "每库每页数量", "50");
     fireEvent.click(within(pageSettings).getByRole("button", { name: "应用条件" }));
     expect(mocks.search).toHaveBeenCalledTimes(count);
     expect(screen.queryByRole("button", { name: "下一页" })).toBeNull();
@@ -185,15 +201,14 @@ describe("extracted literature in local knowledge", () => {
     const dialog = await openConditions();
     setSources(dialog, ["extracted_literature"]);
     const doi = "https://doi.org/10.1002/(sici)1097-4628(19961024)62:4<687::aid-app12>3.0.co;2-t";
-    const yearFrom = within(dialog).getByRole("combobox", { name: "文献起始年份" }) as HTMLSelectElement;
-    const yearTo = within(dialog).getByRole("combobox", { name: "文献结束年份" }) as HTMLSelectElement;
-    fireEvent.change(yearFrom, { target: { value: "2025" } });
-    expect((within(yearTo).getByRole("option", { name: "2020年" }) as HTMLOptionElement).disabled).toBe(true);
-    // Even a synthetic change cannot bypass the disabled inverted-year option.
-    fireEvent.change(yearTo, { target: { value: "2020" } });
-    expect(yearTo.value).toBe("");
+    const yearTo = conditionField(dialog, "文献结束年份");
+    setCondition(dialog, "文献起始年份", "2025");
+    const invertedOption = within(conditionOptions(dialog, "文献结束年份")).getByRole("option", { name: "2020年" }) as HTMLButtonElement;
+    expect(invertedOption.disabled).toBe(true);
+    fireEvent.click(invertedOption);
+    expect(yearTo.textContent).toBe("不限");
     expect(mocks.search).not.toHaveBeenCalled();
-    fireEvent.change(yearTo, { target: { value: "2026" } });
+    setCondition(dialog, "文献结束年份", "2026");
     fireEvent.click(within(dialog).getByRole("button", { name: "应用条件" }));
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: doi } });
     fireEvent.click(screen.getByRole("button", { name: "运行检索" }));
@@ -206,9 +221,9 @@ describe("extracted literature in local knowledge", () => {
     mocks.search.mockImplementation((payload: KnowledgeSearchRequest) => payload.data_source === "extracted_literature" ? literature.promise : legacy.promise);
     render(<LocalKnowledgePanel modeNavigation={null} />);
     await applyBothSources((dialog) => {
-      fireEvent.change(within(dialog).getByLabelText("文献起始年份"), { target: { value: "2020" } });
+      setCondition(dialog, "文献起始年份", "2020");
       fireEvent.click(within(dialog).getByLabelText("有性质信息"));
-      fireEvent.change(within(dialog).getByLabelText("每库每页数量"), { target: { value: "50" } });
+      setCondition(dialog, "每库每页数量", "50");
     });
     expect(mocks.search).not.toHaveBeenCalled();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "polyimide" } });
@@ -264,7 +279,7 @@ describe("extracted literature in local knowledge", () => {
       results: payload.data_source === "extracted_literature" ? [paper] : [{ ...legacyRecord, knowledge_id: payload.page || 1 }]
     }));
     render(<LocalKnowledgePanel modeNavigation={null} />);
-    await applyBothSources((dialog) => fireEvent.change(within(dialog).getByLabelText("文献起始年份"), { target: { value: "2020" } }));
+    await applyBothSources((dialog) => setCondition(dialog, "文献起始年份", "2020"));
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "polyimide" } });
     fireEvent.click(screen.getByRole("button", { name: "运行检索" }));
     await screen.findByRole("button", { name: /^原有聚合物知识/ });
@@ -303,7 +318,7 @@ describe("extracted literature in local knowledge", () => {
       return Promise.resolve({ ...response(payload), search_id: payload.data_source === "extracted_literature" ? "lit-retry" : "legacy-success" });
     });
     render(<LocalKnowledgePanel modeNavigation={null} />);
-    await applyBothSources((dialog) => fireEvent.change(within(dialog).getByLabelText("文献起始年份"), { target: { value: "2020" } }));
+    await applyBothSources((dialog) => setCondition(dialog, "文献起始年份", "2020"));
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "polyimide" } });
     fireEvent.click(screen.getByRole("button", { name: "运行检索" }));
     await screen.findByRole("button", { name: /^原有聚合物知识/ });
