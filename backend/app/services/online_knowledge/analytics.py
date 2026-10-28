@@ -2,76 +2,99 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
 SynthesisRow = dict[str, Any]
 
 
-def standardize_temperature(temp_str: Any) -> tuple[int | None, str | None]:
-    if temp_str is None:
-        return None, None
-
-    text = str(temp_str).lower().strip()
-    if not text:
-        return None, None
-
-    temp_mappings = {
-        "room temperature": (25, "Room Temperature (RT, ~25°C)"),
-        "rt": (25, "Room Temperature (RT, ~25°C)"),
-        "ambient": (25, "Room Temperature (RT, ~25°C)"),
-        "ambient temperature": (25, "Room Temperature (RT, ~25°C)"),
-        "25°c": (25, "Room Temperature (RT, ~25°C)"),
-        "25 °c": (25, "Room Temperature (RT, ~25°C)"),
-        "25℃": (25, "Room Temperature (RT, ~25°C)"),
-        "ice bath": (0, "Ice Bath (~0°C)"),
-        "ice-bath": (0, "Ice Bath (~0°C)"),
-        "0°c": (0, "Ice Bath (~0°C)"),
-        "0 °c": (0, "Ice Bath (~0°C)"),
-        "reflux": (100, "Reflux"),
-        "refluxing": (100, "Reflux"),
-        "heating": (80, "Heating"),
-        "heated": (80, "Heating"),
-        "elevated temperature": (60, "Elevated Temperature"),
-        "elevated": (60, "Elevated Temperature"),
-        "low temperature": (4, "Low Temperature"),
-        "cold": (4, "Low Temperature"),
-        "cooling": (4, "Low Temperature"),
-        "body temperature": (37, "Body Temperature (37°C)"),
-        "physiological": (37, "Body Temperature (37°C)"),
-        "37°c": (37, "Body Temperature (37°C)"),
-        "37 °c": (37, "Body Temperature (37°C)"),
-    }
-
-    for key, (value, label) in temp_mappings.items():
-        if key in text:
-            return value, label
-
-    for pattern in [
-        r"(\d+)\s*[-–]\s*(\d+)\s*[°℃]?\s*c",
-        r"(\d+)\s*(?:to)\s*(\d+)\s*[°℃]?\s*c",
-        r"(\d+)\s*[°℃]\s*c",
-        r"(\d+)\s*°\s*c",
-        r"(\d+)\s*℃",
-        r"(\d+)\s*c\b",
-        r"(\d+)\s*k\b",
-    ]:
-        match = re.search(pattern, text)
-        if not match:
-            continue
-        groups = match.groups()
-        if len(groups) == 2 and groups[1] is not None:
-            val1, val2 = int(groups[0]), int(groups[1])
-            return (val1 + val2) // 2, f"{val1}-{val2}°C"
-        value = int(groups[0])
-        if "k" in text and value > 200:
-            value -= 273
-        return value, f"{value}°C"
-
-    return None, text
+_TEMPERATURE_NUMBER = r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)"
+_TEMPERATURE_UNIT = r"(?:°\s*c\b|℃|c\b|k\b)"
+_TEMPERATURE_RANGE = re.compile(
+    rf"(?<![\w.+-])(?P<low>{_TEMPERATURE_NUMBER})\s*"
+    rf"(?P<low_unit>{_TEMPERATURE_UNIT})?\s*(?:[-–—]|\bto\b)\s*"
+    rf"(?P<high>{_TEMPERATURE_NUMBER})\s*(?P<high_unit>{_TEMPERATURE_UNIT})",
+    re.IGNORECASE,
+)
+_TEMPERATURE_SINGLE = re.compile(
+    rf"(?<![\w.+-])(?P<value>{_TEMPERATURE_NUMBER})\s*(?P<unit>{_TEMPERATURE_UNIT})",
+    re.IGNORECASE,
+)
+_TEMPERATURE_BOUND = re.compile(
+    r"(?:[<>]\s*=?|[≤≥≈~]|\b(?:above|below|under|over|up to|at least|at most|"
+    r"less than|more than|about|approximately))\s*$",
+    re.IGNORECASE,
+)
 
 
-def categorize_temperature(temp_value: int | None) -> str:
+@dataclass(frozen=True)
+class _TemperatureEvidence:
+    lower: Decimal | None
+    upper: Decimal | None
+    label: str | None
+
+
+def _celsius(number: str, unit: str) -> Decimal:
+    value = Decimal(number)
+    if unit.casefold() == "k":
+        value -= Decimal("273.15")
+    if not value.is_finite() or value < Decimal("-273.15"):
+        raise ValueError("Invalid absolute temperature")
+    return value
+
+
+def _temperature_evidence(temp_str: Any) -> _TemperatureEvidence:
+    raw = str(temp_str).strip() if temp_str is not None else ""
+    unknown = _TemperatureEvidence(None, None, raw or None)
+    if not raw:
+        return unknown
+    text = raw.replace("−", "-")
+    ranges = list(_TEMPERATURE_RANGE.finditer(text))
+    singles = [match for match in _TEMPERATURE_SINGLE.finditer(text)
+               if not any(part.start() <= match.start() < part.end() for part in ranges)]
+    # Never reduce multiple stages, inequalities or uncertainties to one observation.
+    if len(ranges) + len(singles) != 1 or re.search(r"±|\+\s*/\s*-|°\s*f\b|℉", text, re.I):
+        return unknown
+    match = (ranges or singles)[0]
+    if _TEMPERATURE_BOUND.search(text[:match.start()]):
+        return unknown
+    if re.search(r"\b(?:then|followed by|subsequently)\b", text, re.I):
+        return unknown
+    if re.search(r"(?:\bto\b|[-–—])\s*$", text[:match.start()], re.I):
+        return unknown
+    if re.match(r"\s*(?:\bto\b|[-–—]|/|\bper\b)", text[match.end():], re.I):
+        return unknown
+    if re.match(r"\s*(?:[<>≤≥]|(?:and|or)\s+(?:above|below|higher|lower)\b)", text[match.end():], re.I):
+        return unknown
+    # A unitless neighbouring value (e.g. "80 and 100 C") is ambiguous too.
+    if re.search(r"\d\s*(?:and|or|/|,|[-–—])\s*$", text[:match.start()], re.I):
+        return unknown
+    if re.match(r"\s*(?:and|or|,)\s*[+-]?(?:\d|\.\d)", text[match.end():], re.I):
+        return unknown
+    try:
+        if ranges:
+            high_unit = match["high_unit"]
+            low = _celsius(match["low"], match["low_unit"] or high_unit)
+            high = _celsius(match["high"], high_unit)
+            if low > high:
+                return unknown
+            return _TemperatureEvidence(low, high, raw)
+        value = _celsius(match["value"], match["unit"])
+        return _TemperatureEvidence(value, value, f"{value.normalize():f}°C")
+    except (InvalidOperation, ValueError):
+        return unknown
+
+
+def standardize_temperature(temp_str: Any) -> tuple[float | None, str | None]:
+    evidence = _temperature_evidence(temp_str)
+    # Ranges keep their source label; no midpoint is presented as a measured value.
+    value = evidence.lower if evidence.lower == evidence.upper else None
+    return (float(value) if value is not None else None), evidence.label
+
+
+def categorize_temperature(temp_value: float | Decimal | None) -> str:
     if temp_value is None:
         return "Unknown"
     if temp_value <= 0:
@@ -190,9 +213,9 @@ def build_property_points(rows: list[SynthesisRow], limit: int = 30) -> list[dic
 def temperature_distribution(rows: list[SynthesisRow]) -> list[dict[str, Any]]:
     categories = []
     for row in rows:
-        value, _ = standardize_temperature(row.get("temperature"))
-        category = categorize_temperature(value)
-        if category != "Unknown":
+        evidence = _temperature_evidence(row.get("temperature"))
+        category = categorize_temperature(evidence.lower)
+        if category != "Unknown" and category == categorize_temperature(evidence.upper):
             categories.append(category)
     return _counter_table(Counter(categories), limit=9)
 

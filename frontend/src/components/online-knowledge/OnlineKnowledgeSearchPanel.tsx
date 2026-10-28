@@ -263,6 +263,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
   const [csvError, setCsvError] = useState<string | null>(null);
   const [historyActionError, setHistoryActionError] = useState<string | null>(null);
   const [lastPayload, setLastPayload] = useState<OnlineKnowledgeSearchRequest | null>(null);
+  const [restoredWhileRunning, setRestoredWhileRunning] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [drawerView, setDrawerView] = useState<DrawerView>("detail");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -329,6 +330,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
 
   async function submitPayload(payload: OnlineKnowledgeSearchRequest) {
     if (!hasModelAccess || searchState.isLoading) return;
+    setRestoredWhileRunning(false);
     setLastPayload(payload);
     setSelectedIndex(null);
     setDrawerOpen(false);
@@ -364,6 +366,9 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
   }
 
   function restoreHistory(item: OnlineKnowledgeHistoryItem) {
+    setRestoredWhileRunning(searchState.isLoading);
+    setCsvError(null);
+    setLastPayload(null);
     setMaterial(item.material);
     setMode(item.mode);
     setMaxPapers(item.max_papers || ONLINE_KNOWLEDGE_DEFAULT_MAX_PAPERS);
@@ -461,6 +466,7 @@ export function OnlineKnowledgeSearchPanel({ initialMaterial = "", modeNavigatio
             </header>
 
             <div className="ks-results-body">
+              {restoredWhileRunning ? <div className="ks-inline-alert" role="status"><History aria-hidden="true" /><span>已恢复历史结果；此操作不会取消后台检索，完成后可刷新历史查看。</span></div> : null}
               {searchState.isLoading ? <OnlineProgress state={searchState} /> : null}
               {!searchState.isLoading && searchState.error ? (
                 <div className="ks-state is-error" role="alert"><span><AlertTriangle aria-hidden="true" /></span><h3>在线检索任务失败</h3><p>{searchState.error}</p>{lastPayload ? <button className="ks-button" type="button" onClick={() => void submitPayload(lastPayload)}><RefreshCw aria-hidden="true" />重试本次任务</button> : null}</div>

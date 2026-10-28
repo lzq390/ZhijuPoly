@@ -5,8 +5,12 @@ from typing import Any
 from openai import DefaultHttpxClient, OpenAI
 
 
+INVALID_EXTRACTION_RESULT = "模型返回的提取结果格式无效"
+
+
 _CLEAN_PROVIDER_ERRORS = frozenset(
     {
+        INVALID_EXTRACTION_RESULT,
         "AI provider authentication or access was rejected.",
         "AI provider capacity or quota is temporarily unavailable.",
         "AI provider request timed out.",

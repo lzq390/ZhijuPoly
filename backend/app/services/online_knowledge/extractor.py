@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from app.services.ai_client import clean_ai_provider_error, create_openai_client
+from app.services.ai_client import INVALID_EXTRACTION_RESULT, clean_ai_provider_error, create_openai_client
 from app.services.usage_provider import provider_call
 from app.services.private_quotas import PrivateQuotaSettings
 
@@ -13,6 +13,105 @@ from app.services.private_quotas import PrivateQuotaSettings
 Paper = dict[str, Any]
 ExtractionResult = dict[str, Any]
 SynthesisRow = dict[str, Any]
+
+
+class InvalidExtractionResult(ValueError):
+    def __init__(self) -> None:
+        super().__init__(INVALID_EXTRACTION_RESULT)
+
+
+def _optional_text_fields(value: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+    result = {field: value.get(field) for field in fields}
+    if any(item is not None and not isinstance(item, str) for item in result.values()):
+        raise InvalidExtractionResult()
+    return result
+
+
+def _has_scientific_value(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_has_scientific_value(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_scientific_value(item) for item in value)
+    return False
+
+
+def _validate_synthesis_reaction(value: dict[str, Any]) -> dict[str, Any]:
+    result = _optional_text_fields(value, ("reaction_type", "product_name", "product_abbreviation"))
+    number = value.get("reaction_number")
+    if number is not None and (type(number) is not int or number < 1):
+        raise InvalidExtractionResult()
+    result["reaction_number"] = number
+
+    reactants = value.get("reactants")
+    if reactants is not None and (
+        not isinstance(reactants, list) or any(not isinstance(item, str) for item in reactants)
+    ):
+        raise InvalidExtractionResult()
+    result["reactants"] = reactants
+
+    properties = value.get("properties")
+    if properties is not None:
+        if not isinstance(properties, list) or any(not isinstance(item, dict) for item in properties):
+            raise InvalidExtractionResult()
+        properties = [
+            _optional_text_fields(item, ("property_name", "value", "unit", "measurement_condition"))
+            for item in properties
+        ]
+        if any(not _has_scientific_value(item.get("property_name")) and not _has_scientific_value(item.get("value"))
+               for item in properties):
+            raise InvalidExtractionResult()
+    result["properties"] = properties
+
+    conditions = value.get("reaction_conditions")
+    if conditions is not None:
+        if not isinstance(conditions, dict):
+            raise InvalidExtractionResult()
+        conditions = _optional_text_fields(
+            conditions, ("temperature", "time", "catalyst", "solvent", "atmosphere", "pressure", "initiator", "other")
+        )
+    result["reaction_conditions"] = conditions
+    if not _has_scientific_value(result):
+        raise InvalidExtractionResult()
+    return result
+
+
+def _validate_extraction_result(value: Any, mode: str) -> ExtractionResult:
+    if not isinstance(value, dict):
+        raise InvalidExtractionResult()
+    if mode == "synthesis":
+        flag, count, collection = "has_polymerization", "total_reactions", "reactions"
+    elif mode == "property":
+        flag, count, collection = "has_polymer", "total_data_points", "data_points"
+    else:
+        raise InvalidExtractionResult()
+    if type(value.get(flag)) is not bool or type(value.get(count)) is not int or value[count] < 0:
+        raise InvalidExtractionResult()
+    records = value.get(collection)
+    if not isinstance(records, list) or value[count] != len(records):
+        raise InvalidExtractionResult()
+    if not value[flag] and records:
+        raise InvalidExtractionResult()
+    if mode == "synthesis" and value[flag] and not records:
+        raise InvalidExtractionResult()
+
+    validated = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise InvalidExtractionResult()
+        if mode == "synthesis":
+            result = _validate_synthesis_reaction(record)
+        else:
+            result = _optional_text_fields(record, (
+                "polymer_type", "polymer_name", "condition_name", "condition_value",
+                "property_name", "property_value", "relationship",
+            ))
+            if not _has_scientific_value(result):
+                raise InvalidExtractionResult()
+        validated.append(result)
+    # Model metadata and control fields (including error) never enter the result.
+    return {flag: value[flag], count: value[count], collection: validated}
 
 
 class PolymerExtractor:
@@ -61,6 +160,7 @@ class PolymerExtractor:
 - For reactant names, use FULL CHEMICAL NAMES, NOT abbreviations.
 - If information is not mentioned, use null.
 - Do NOT invent or assume any information.
+- total_reactions must equal the length of reactions. Do not return empty placeholder reactions.
 
 **IMPORTANT FOR TEMPERATURE**:
 - Extract temperature even if expressed in TEXT form, such as:
@@ -130,6 +230,11 @@ Required JSON format:
   ]
 }}
 
+If no polymer is described, return has_polymer=false, total_data_points=0, and data_points=[].
+If a polymer is described but no property-condition data is stated, return has_polymer=true,
+total_data_points=0, and data_points=[]. Use null for individual fields not stated in the abstract.
+Do not invent information or return placeholder data points. total_data_points must equal the array length.
+
 Return only valid JSON. No markdown."""
 
     def extract_from_abstract(self, title: str, abstract: str, paper_id: str, mode: str) -> ExtractionResult:
@@ -143,12 +248,19 @@ Return only valid JSON. No markdown."""
                 temperature=0,
                 max_tokens=4000,
             )
-            result_text = response.choices[0].message.content or ""
+            try:
+                result_text = response.choices[0].message.content
+            except (AttributeError, IndexError, TypeError):
+                raise InvalidExtractionResult() from None
+            if not isinstance(result_text, str):
+                raise InvalidExtractionResult()
             if len(result_text.encode("utf-8")) > PrivateQuotaSettings.from_environment().model_output_bytes:
                 raise ValueError("Model output exceeds retention quota")
-            result = json.loads(_strip_json_fence(result_text))
-            if not isinstance(result, dict):
-                raise ValueError("model returned a non-object JSON value")
+            try:
+                decoded = json.loads(_strip_json_fence(result_text))
+            except (ValueError, TypeError):
+                raise InvalidExtractionResult() from None
+            result = _validate_extraction_result(decoded, mode)
             result["paper_id"] = paper_id
             result["title"] = title
             return result
