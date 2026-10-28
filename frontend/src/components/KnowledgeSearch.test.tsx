@@ -23,6 +23,7 @@ function KnowledgeSearch(props: ComponentProps<typeof KnowledgeSearchPage>) {
 
 const apiMocks = vi.hoisted(() => ({
   searchKnowledge: vi.fn(),
+  fetchKnowledgeSources: vi.fn(),
   postKnowledgeObservation: vi.fn(),
   startKnowledgeRecording: vi.fn(),
   stopKnowledgeRecording: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock("../services/api", async () => {
   return {
     ...actual,
     searchKnowledge: apiMocks.searchKnowledge,
+    fetchKnowledgeSources: apiMocks.fetchKnowledgeSources,
     postKnowledgeObservation: apiMocks.postKnowledgeObservation,
     startKnowledgeRecording: apiMocks.startKnowledgeRecording,
     stopKnowledgeRecording: apiMocks.stopKnowledgeRecording,
@@ -129,6 +131,7 @@ const onlineResult: OnlineKnowledgeSearchResponse = {
 beforeEach(() => {
   Object.values(apiMocks).forEach((mock) => mock.mockReset());
   apiMocks.searchKnowledge.mockImplementation((payload: KnowledgeSearchRequest) => Promise.resolve(localResponse(payload)));
+  apiMocks.fetchKnowledgeSources.mockResolvedValue({ sources: [{ data_source: "legacy", enabled: true, ready: true, total: 3949 }, { data_source: "extracted_literature", enabled: true, ready: true, total: 80, generation_id: "generation-a" }] });
   apiMocks.postKnowledgeObservation.mockResolvedValue({ event: "article.opened" });
   apiMocks.startKnowledgeRecording.mockImplementation((recording_id: string) => Promise.resolve({ recording_id }));
   apiMocks.stopKnowledgeRecording.mockResolvedValue({
@@ -452,7 +455,15 @@ describe("KnowledgeSearch", () => {
     fireEvent.click(reopenButton);
     expect(screen.getByRole("dialog", { name: "知识记录详情" })).not.toBeNull();
 
-    fireEvent.change(screen.getByRole("combobox", { name: "本地知识库每页数量" }), { target: { value: "50" } });
+    const beforeConditions = apiMocks.searchKnowledge.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "条件设置" }));
+    const conditions = await screen.findByRole("dialog", { name: "条件设置" });
+    fireEvent.click(within(conditions).getByRole("combobox", { name: "每库每页数量" }));
+    fireEvent.click(within(conditions).getByRole("option", { name: "50 条" }));
+    fireEvent.click(within(conditions).getByRole("button", { name: "应用条件" }));
+    expect(apiMocks.searchKnowledge).toHaveBeenCalledTimes(beforeConditions);
+    expect(screen.queryByRole("dialog", { name: "知识记录详情" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "运行检索" }));
     await waitFor(() => expect(apiMocks.searchKnowledge).toHaveBeenLastCalledWith(
       expect.objectContaining({ page: 1, page_size: 50 }),
       expect.any(AbortSignal)

@@ -1206,9 +1206,11 @@ class AssetBootstrapTests(unittest.TestCase):
                 elif mutation == "replace":
                     self.git(root, "replace", commit, commit)
                 elif mutation == "alternates":
+                    external = workspace / "external-objects"
+                    external.mkdir()
                     alternate = root / ".git" / "objects" / "info" / "alternates"
                     alternate.write_text(
-                        str(workspace / "external-objects") + "\n",
+                        str(external) + "\n",
                         encoding="utf-8",
                     )
                 else:
