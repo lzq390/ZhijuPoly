@@ -12,6 +12,7 @@ from app.services.online_knowledge import postgres_history_repository as online,
 from app.routers import online_knowledge as route
 from test_entitlement_repository import entitlement_db, usage_db, connection, policy
 from test_usage_repository import A, B
+from test_online_knowledge_extraction_validation import model_responses, negative, positive
 
 
 @pytest.fixture(autouse=True)
@@ -34,12 +35,12 @@ def configured(entitlement_db, monkeypatch):
     return value
 
 
-def create(dsn, *, owner=None, job_id=None, key=None, running=True):
+def create(dsn, *, owner=None, job_id=None, key=None, running=True, mode="synthesis"):
     owner = owner or A
     job_id, key = job_id or uuid4().hex, key or uuid4().hex
     with connection(dsn, owner, "nexpoly_service") as conn:
         result = online.create_online_job_postgres(conn, owner_user_id=owner, job_id=job_id,
-            material="synthetic test", mode="synthesis", max_papers=2,
+            material="synthetic test", mode=mode, max_papers=2,
             idempotency_key=key, request_fingerprint="a" * 64)
         assert result["created"]
         assert ne.begin_native_dispatch(conn, owner_user_id=owner, module="online_knowledge",
@@ -202,6 +203,56 @@ def test_search_counts_actual_extractor_outcomes_without_exposing_them_as_scienc
     assert facts == {"successful_extractions": 1, "failed_extractions": 1}
     assert result["exampleUsed"] is False
     assert "successful_extractions" not in result  # Private evidence, not a fabricated science metric.
+
+
+@pytest.mark.parametrize("mode", ["synthesis", "property"])
+@pytest.mark.parametrize("scenario,job_status,settlement,rows", [
+    ("invalid", "failed", "released", None),
+    ("negative", "completed", "succeeded", 0),
+    ("positive", "completed", "succeeded", 1),
+    ("mixed", "completed", "released", 1),
+])
+def test_validated_model_results_drive_real_job_history_and_settlement(
+    entitlement_db, configured, monkeypatch, model_responses, mode, scenario, job_status, settlement, rows,
+):
+    from app.auth.context import Identity, user_context
+    from app.models import OnlineKnowledgeSearchRequest
+    from app.services.ai_client import INVALID_EXTRACTION_RESULT
+
+    outputs = {"invalid": [{}], "negative": [negative(mode)], "positive": [positive(mode)],
+               "mixed": [{}, positive(mode)]}[scenario]
+    model_responses.responses.extend(outputs)
+    papers = [{"title": f"Fixture {index}", "abstract": "Synthetic evidence", "doi": f"fixture-{index}"}
+              for index in range(len(outputs))]
+
+    class Searcher:
+        DEFAULT_SOURCES = ("fixture",)
+        def __init__(self, **kwargs): pass
+        def search_all(self, *args, **kwargs): return papers
+        def deduplicate(self, values): return values
+        def enrich_batch_with_crossref(self, values): return values
+
+    monkeypatch.setattr(search, "SimpleLiteratureSearcher", Searcher)
+    monkeypatch.setattr(route, "postgres_connection", lambda dsn: connection(dsn, A, "nexpoly_service"))
+    job_id, _ = create(entitlement_db, running=False, mode=mode)
+    body = OnlineKnowledgeSearchRequest(material="synthetic test", mode=mode, max_papers=2, extraction_delay_seconds=0)
+    access = route.OnlineModelAccess(api_key="fixture", base_url="https://invalid.example/v1", model="fixture", proxy_url="")
+    with user_context(Identity(A)):
+        route._execute_online_knowledge_job(job_id, entitlement_db, body, access)
+    job, operation = read(entitlement_db, job_id)
+    assert job["status"] == job_status
+    assert operation["state"] == settlement
+    with connection(entitlement_db, A) as conn:
+        history = online.list_online_history_postgres(conn, owner_user_id=A)
+    if rows is None:
+        assert job["result"] is None
+        assert INVALID_EXTRACTION_RESULT in job["error_message"]
+        assert history == []
+    else:
+        assert len(job["result"]["dataframe"]) == rows
+        assert len(history) == 1 and history[0]["result_data"] == job["result"]
+    assert len(model_responses.calls) == len(outputs)
+    model_responses.clients[0].close.assert_called_once()
 
 
 @pytest.mark.parametrize("collection_enabled", [True, False])

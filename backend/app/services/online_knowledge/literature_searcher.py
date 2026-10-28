@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import re
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
+from html import unescape
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -13,6 +16,33 @@ from app.services.usage_provider import provider_http_request
 
 
 Paper = dict[str, Any]
+
+
+def _crossref_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return unescape(re.sub(r"<[^>]+>", "", value)).strip()
+
+
+def _crossref_title(value: Any) -> str:
+    # Keep words, numbers and punctuation: similarity is not paper identity.
+    return " ".join(unicodedata.normalize("NFC", _crossref_text(value)).casefold().split())
+
+
+def _crossref_doi(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    doi = value.strip()
+    if not re.fullmatch(r"10\.\d{4,9}/[^\s<>]+", doi):
+        return None
+    return doi.casefold()
+
+
+def _crossref_title_matches(record: dict[str, Any], title: str) -> bool:
+    titles = record.get("title")
+    return bool(title) and isinstance(titles, list) and any(
+        _crossref_title(candidate) == title for candidate in titles
+    )
 
 
 class SimpleLiteratureSearcher:
@@ -26,18 +56,31 @@ class SimpleLiteratureSearcher:
         self.max_workers = max_workers
 
     def get_doi_from_crossref(self, title: str) -> str | None:
+        normalized_title = _crossref_title(title)
+        if not normalized_title:
+            return None
         try:
             response = provider_http_request(requests.get,
                 "https://api.crossref.org/works",
-                params={"query.title": title, "rows": 1},
+                params={"query.title": title, "rows": 5},
                 headers=self.headers,
                 timeout=15,
             )
             response.raise_for_status()
-            items = response.json().get("message", {}).get("items", [])
-            if items:
-                return items[0].get("DOI")
-        except requests.RequestException:
+            payload = response.json()
+            message = payload.get("message") if isinstance(payload, dict) else None
+            items = message.get("items") if isinstance(message, dict) else None
+            if not isinstance(items, list):
+                return None
+            matches = {
+                doi
+                for item in items[:5]
+                if isinstance(item, dict) and _crossref_title_matches(item, normalized_title)
+                if (doi := _crossref_doi(item.get("DOI"))) is not None
+            }
+            if len(matches) == 1:
+                return next(iter(matches))
+        except (requests.RequestException, ValueError):
             return None
         return None
 
@@ -45,25 +88,35 @@ class SimpleLiteratureSearcher:
         if paper.get("abstract"):
             return paper
 
-        doi = paper.get("doi") or self.get_doi_from_crossref(str(paper.get("title") or ""))
+        existing_doi = paper.get("doi")
+        doi = (
+            _crossref_doi(existing_doi)
+            if existing_doi
+            else self.get_doi_from_crossref(str(paper.get("title") or ""))
+        )
         if not doi:
             return paper
 
-        paper["doi"] = doi
         try:
             response = provider_http_request(requests.get,
-                f"https://api.crossref.org/works/{doi}",
+                f"https://api.crossref.org/works/{quote(doi, safe='/')}",
                 headers=self.headers,
                 timeout=15,
             )
             response.raise_for_status()
-            abstract = response.json().get("message", {}).get("abstract", "")
-            if abstract:
-                paper["abstract"] = re.sub(r"<[^>]+>", "", abstract).strip()
-                paper["abstract_source"] = "Crossref"
-        except requests.RequestException:
+            payload = response.json()
+            message = payload.get("message") if isinstance(payload, dict) else None
+            if not isinstance(message, dict) or _crossref_doi(message.get("DOI")) != doi:
+                return paper
+            if not existing_doi and not _crossref_title_matches(message, _crossref_title(paper.get("title"))):
+                return paper
+            abstract = _crossref_text(message.get("abstract"))
+            if not abstract:
+                return paper
+        except (requests.RequestException, ValueError):
             return paper
 
+        paper.update(doi=existing_doi or doi, abstract=abstract, abstract_source="Crossref")
         return paper
 
     def search_semantic_scholar(self, query: str, limit: int = 200) -> list[Paper]:

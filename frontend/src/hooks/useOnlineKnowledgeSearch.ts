@@ -179,8 +179,13 @@ export function useOnlineKnowledgeSearch() {
   }
 
   function restoreFromHistory(item: OnlineKnowledgeHistoryItem) {
+    // Viewing history ends this client observation, not the server-owned task.
+    pollTokenRef.current += 1;
+    pollAbortRef.current?.abort();
+    pollAbortRef.current = null;
     setState((current) => ({
       ...current,
+      isLoading: false,
       data: item.result_data,
       error: null,
       jobId: null,

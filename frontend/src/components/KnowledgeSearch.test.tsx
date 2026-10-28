@@ -5,12 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   KnowledgeSearchRequest,
   KnowledgeSearchResponse,
+  OnlineKnowledgeHistoryItem,
+  OnlineKnowledgeJobResponse,
   OnlineKnowledgeSearchResponse
 } from "../types";
 import { KnowledgeSearch as KnowledgeSearchPage } from "./KnowledgeSearch";
 import { useState, type ComponentProps } from "react";
 import { KnowledgeRecordingProvider } from "../hooks/useKnowledgeRecording";
 import { BrowsingRecordingUIProvider } from "./browsing-recording/BrowsingRecording";
+import * as privateObjectUrls from "../auth/objectUrls";
 
 function KnowledgeSearch(props: ComponentProps<typeof KnowledgeSearchPage>) {
   const [local, setLocal] = useState(true);
@@ -546,6 +549,104 @@ describe("KnowledgeSearch", () => {
     Object.defineProperty(exitComplete, "propertyName", { value: "transform" });
     fireEvent(drawer, exitComplete);
     expect(screen.getByRole("button", { name: "查看记录详情" }).classList.contains("is-vertical")).toBe(true);
+  });
+
+  it("运行时恢复历史会隔离迟到结果，表单、详情和 CSV 保持同一份历史", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const saved: OnlineKnowledgeHistoryItem = {
+      history_id: 1, material: "PLA", mode: "property", max_papers: 7,
+      timestamp: "2026-10-28T00:00:00Z", papers_found: 8, reactions_extracted: 1,
+      result_data: { ...onlineResult, max_papers: 7 }
+    };
+    apiMocks.fetchHistory.mockResolvedValue({ history: [saved] });
+    let resolveOld!: (value: OnlineKnowledgeJobResponse) => void;
+    apiMocks.fetchJob.mockImplementation(() => new Promise<OnlineKnowledgeJobResponse>((resolve) => { resolveOld = resolve; }));
+    const createUrl = vi.spyOn(privateObjectUrls, "createPrivateObjectURL").mockReturnValue("blob:history-result");
+    vi.spyOn(privateObjectUrls, "revokePrivateObjectURL").mockImplementation(() => {});
+    const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /在线文献/ }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    fireEvent.change(screen.getByRole("textbox", { name: "在线检索材料名称" }), { target: { value: "Old material" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "在线检索抽取模式" }), { target: { value: "synthesis" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "在线检索论文上限" }), { target: { value: "42" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始检索" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_200); });
+    const signal = apiMocks.fetchJob.mock.calls[0][1] as AbortSignal;
+    fireEvent.click(screen.getByRole("button", { name: /检索历史 1/ }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
+
+    expect(signal.aborted).toBe(true);
+    expect((screen.getByRole("textbox", { name: "在线检索材料名称" }) as HTMLInputElement).value).toBe("PLA");
+    expect((screen.getByRole("combobox", { name: "在线检索抽取模式" }) as HTMLSelectElement).value).toBe("property");
+    expect((screen.getByRole("spinbutton", { name: "在线检索论文上限" }) as HTMLInputElement).value).toBe("7");
+    expect((screen.getByRole("button", { name: "开始检索" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText(/此操作不会取消后台检索/)).not.toBeNull();
+    const drawer = screen.getByRole("dialog", { name: "性质关系详情" });
+    expect(within(drawer).getByText("tensile strength · 62 MPa")).not.toBeNull();
+    expect(within(drawer).getByText("PLA · 在线文献")).not.toBeNull();
+    expect(within(drawer).getAllByText("PLA").length).toBeGreaterThan(0);
+
+    await act(async () => {
+      resolveOld({
+        job_id: "online-job", status: "completed", material: "Old material", mode: "property", max_papers: 42,
+        progress_stage: "completed", progress_message: "Completed", processed_papers: 1, total_papers: 1,
+        created_at: "2026-10-28T00:00:00Z", updated_at: "2026-10-28T00:00:01Z", error_message: null,
+        result: { ...onlineResult, material: "Old material", propertyPoints: [{ ...onlineResult.propertyPoints[0], property_name: "Obsolete property" }] }
+      });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(screen.queryByText(/Obsolete property/)).toBeNull();
+    expect(screen.getAllByText("tensile strength · 62 MPa").length).toBeGreaterThan(0);
+    expect(apiMocks.createJob).toHaveBeenCalledOnce();
+    expect(apiMocks.fetchJob).toHaveBeenCalledOnce();
+    expect(apiMocks.fetchHistory).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", { name: "导出 CSV" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(apiMocks.exportCsv).toHaveBeenCalledWith(saved.result_data.dataframe, "PLA_property_results.csv");
+    expect(createUrl).toHaveBeenCalledWith(expect.any(Blob));
+    expect(download).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", { name: "开始检索" }));
+    expect(screen.queryByText(/此操作不会取消后台检索/)).toBeNull();
+    await act(async () => { await Promise.resolve(); });
+  });
+
+  it("恢复历史清除原结果的 CSV 错误和已失败任务的重试状态", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const saved: OnlineKnowledgeHistoryItem = {
+      history_id: 1, material: "Saved PLA", mode: "property", max_papers: 7,
+      timestamp: "2026-10-28T00:00:00Z", papers_found: 8, reactions_extracted: 1,
+      result_data: { ...onlineResult, material: "Saved PLA", max_papers: 7 }
+    };
+    apiMocks.fetchHistory.mockResolvedValue({ history: [saved] });
+    apiMocks.exportCsv.mockRejectedValue(new Error("Old CSV export failed"));
+    render(<KnowledgeSearch onBackHome={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /在线文献/ }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    fireEvent.change(screen.getByRole("textbox", { name: "在线检索材料名称" }), { target: { value: "PLA" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始检索" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_200); });
+    fireEvent.click(screen.getByRole("button", { name: "导出 CSV" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText("Old CSV export failed")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /检索历史 1/ }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
+    expect(screen.queryByText("Old CSV export failed")).toBeNull();
+    expect(screen.queryByText(/此操作不会取消后台检索/)).toBeNull();
+
+    apiMocks.createJob.mockRejectedValueOnce(new Error("New task failed"));
+    fireEvent.click(screen.getByRole("button", { name: "开始检索" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByRole("button", { name: "重试本次任务" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /检索历史 1/ }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
+    expect(screen.queryByText("New task failed")).toBeNull();
+    expect(screen.queryByRole("button", { name: "重试本次任务" })).toBeNull();
+    expect(screen.getAllByText("tensile strength · 62 MPa").length).toBeGreaterThan(0);
   });
 
   it("PDF 只校验文件并在 950ms 后展示六篇固定结果", async () => {
